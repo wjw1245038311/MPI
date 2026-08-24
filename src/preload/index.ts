@@ -23,6 +23,7 @@ const api = {
     searchThreads: (query: string) => ipcRenderer.invoke("app:searchThreads", query),
     getTotalUsage: () => ipcRenderer.invoke("app:getTotalUsage"),
     openProject: (absPath: string) => ipcRenderer.invoke("app:openProject", absPath),
+    openFolderInExplorer: (absPath: string) => ipcRenderer.invoke("app:openFolderInExplorer", absPath),
     prewarm: (cwd: string) => ipcRenderer.invoke("app:prewarm", cwd),
     unpinProject: (absPath: string) => ipcRenderer.invoke("app:unpinProject", absPath),
     setProjectPinned: (args: { cwd: string; pinned: boolean }) => ipcRenderer.invoke("app:setProjectPinned", args),

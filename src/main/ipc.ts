@@ -1656,6 +1656,15 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { cwd: absPath, name };
   });
 
+  ipcMain.handle("app:openFolderInExplorer", async (_e, absPath: string) => {
+    if (!absPath || !existsSync(absPath) || !statSync(absPath).isDirectory()) {
+      throw new Error("Project folder not found: " + absPath);
+    }
+    const error = await shell.openPath(absPath);
+    if (error) throw new Error(error);
+    return { ok: true };
+  });
+
   ipcMain.handle("app:unpinProject", (_e, absPath: string) => {
     const cfg = getConfig();
     const target = typeof absPath === "string" ? absPath.toLowerCase() : "";

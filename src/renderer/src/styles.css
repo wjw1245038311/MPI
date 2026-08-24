@@ -21,6 +21,13 @@
   --surface: #ffffff;
   --surface-muted: #faf9f4;
   --control: #f3f3ee;
+  --control-hover: #ecece7;
+  --preview-bg: #ffffff;
+  --preview-surface: #ffffff;
+  --preview-surface-muted: #faf9f4;
+  --preview-text: #1d1e1b;
+  --preview-text-dim: #6c7066;
+  --preview-grid: #e7e7e1;
   --shadow-sm: 0 1px 2px rgba(20, 22, 18, 0.06);
   --shadow-md: 0 1px 2px rgba(20, 22, 18, 0.06), 0 10px 30px rgba(20, 22, 18, 0.08);
   --radius: 12px;
@@ -1851,7 +1858,7 @@ body.sidebar-resizing * {
   padding: 5px 10px;
   border: 1px solid transparent;
   border-radius: 9px;
-  background: #f2f2ee;
+  background: var(--control);
   color: var(--text);
   font-size: 12.5px;
   font-weight: 560;
@@ -1859,7 +1866,7 @@ body.sidebar-resizing * {
 .composer-project-pill:hover,
 .composer-project-pill.open {
   border-color: var(--border-strong);
-  background: #ecece7;
+  background: var(--control-hover);
 }
 .composer-project-pill > span {
   overflow: hidden;
@@ -1925,8 +1932,8 @@ body.sidebar-resizing * {
   padding: 8px;
   border: 1px solid var(--border-strong);
   border-radius: 13px;
-  background: #fff;
-  box-shadow: 0 14px 38px rgba(25, 28, 23, .16);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
 }
 .project-menu-search {
   display: flex;
@@ -1971,7 +1978,7 @@ body.sidebar-resizing * {
 .project-menu-option:hover,
 .project-menu-option.active,
 .project-menu-new:hover {
-  background: #f1f1ed;
+  background: var(--control);
 }
 .project-menu-option span,
 .project-menu-new span {
@@ -2903,7 +2910,7 @@ body.preview-resizing * {
 .preview-body.html-preview-active {
   overflow: hidden;
   padding: 0;
-  background: #fff;
+  background: var(--preview-bg);
 }
 .pv-empty {
   height: 100%;
@@ -2925,7 +2932,7 @@ body.preview-resizing * {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #fff;
+  background: var(--preview-surface);
   box-shadow: var(--shadow-sm);
 }
 .pv-code-toolbar {
@@ -2973,7 +2980,7 @@ body.preview-resizing * {
 .pv-code-content {
   margin: 0;
   padding: 9px 0 11px;
-  background: #fff;
+  background: var(--preview-surface);
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1.62;
@@ -2992,9 +2999,9 @@ body.preview-resizing * {
   left: 0;
   flex: 0 0 46px;
   padding-right: 12px;
-  border-right: 1px solid #f0f0eb;
-  background: #fafaf7;
-  color: #b0b4ab;
+  border-right: 1px solid var(--preview-grid);
+  background: var(--preview-surface-muted);
+  color: var(--preview-text-dim);
   text-align: right;
   user-select: none;
 }
@@ -3091,7 +3098,7 @@ body.preview-resizing * {
   color: var(--text);
 }
 .pv-md {
-  background: #fff;
+  background: var(--preview-surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 16px 18px;
@@ -3119,7 +3126,7 @@ body.preview-resizing * {
   border-radius: 4px;
 }
 .pv-docx {
-  background: #fff;
+  background: var(--preview-surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 22px 26px;
@@ -3136,7 +3143,7 @@ body.preview-resizing * {
   flex-wrap: wrap;
 }
 .pv-xlsx .sheet-tab {
-  background: #fff;
+  background: var(--preview-surface);
   border: 1px solid var(--border);
   border-radius: 7px 7px 0 0;
   padding: 4px 10px;
@@ -3149,19 +3156,21 @@ body.preview-resizing * {
 }
 .pv-xlsx table {
   border-collapse: collapse;
-  background: #fff;
+  background: var(--preview-surface);
+  color: var(--preview-text);
   font-size: 12.5px;
   width: 100%;
 }
 .pv-xlsx th,
 .pv-xlsx td {
-  border: 1px solid var(--border);
+  border: 1px solid var(--preview-grid);
+  color: var(--preview-text);
   padding: 3px 8px;
   text-align: left;
   white-space: nowrap;
 }
 .pv-xlsx th {
-  background: #faf9f4;
+  background: var(--preview-surface-muted);
   position: sticky;
   top: 0;
 }
@@ -5454,24 +5463,31 @@ mark.hl {
    ============================================================ */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #171a17;
-  --rail: linear-gradient(180deg, #1d2a20 0%, #252922 52%, #1d2720 100%);
-  --rail-solid: #202620;
-  --rail-2: #1c211d;
-  --border: #303a32;
-  --border-strong: #48564a;
-  --text: #e4ece3;
-  --text-dim: #a9b7aa;
-  --text-faint: #7e8b80;
-  --accent: #72c790;
-  --accent-soft: #244331;
-  --send: #5da978;
-  --send-hover: #70bd89;
-  --code-bg: #1d241f;
-  --user-bubble: #25362a;
-  --surface: #202620;
-  --surface-muted: #1c231e;
-  --control: #29332b;
+  --bg: #111619;
+  --rail: linear-gradient(180deg, #1a2225 0%, #1d2528 52%, #182023 100%);
+  --rail-solid: #1a2124;
+  --rail-2: #171e21;
+  --border: #303c43;
+  --border-strong: #53636c;
+  --text: #e8eef0;
+  --text-dim: #b6c2c8;
+  --text-faint: #8b98a0;
+  --accent: #7bd6a1;
+  --accent-soft: #214333;
+  --send: #75c995;
+  --send-hover: #8cdda9;
+  --code-bg: #151c20;
+  --user-bubble: #263830;
+  --surface: #1b2327;
+  --surface-muted: #202a2f;
+  --control: #273239;
+  --control-hover: #33434a;
+  --preview-bg: #12181c;
+  --preview-surface: #181f23;
+  --preview-surface-muted: #202a2f;
+  --preview-text: #e8eef0;
+  --preview-text-dim: #b6c2c8;
+  --preview-grid: #405057;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
   --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.28), 0 14px 36px rgba(0, 0, 0, 0.32);
 }
@@ -5614,6 +5630,59 @@ mark.hl {
   color: #f0aaa1;
   border-color: #70413d;
 }
+:root[data-theme="dark"] .extui-card {
+  border-color: #53615a;
+  background: #20282a;
+  color: var(--text);
+}
+:root[data-theme="dark"] .extui-card.sandbox-card {
+  border-color: #6b5731;
+  background: #282a25;
+}
+:root[data-theme="dark"] .extui-card-icon {
+  background: #4a3b20;
+  color: #f2c96e;
+}
+:root[data-theme="dark"] .extui-card-kicker {
+  color: #f2c96e;
+}
+:root[data-theme="dark"] .extui-card-title {
+  color: #e8eef0;
+}
+:root[data-theme="dark"] .extui-card-message {
+  color: #b8c4c9;
+}
+:root[data-theme="dark"] .extui-card-close {
+  color: #a8b5ba;
+}
+:root[data-theme="dark"] .extui-card-close:hover {
+  background: rgba(255, 255, 255, .08);
+  color: #e8eef0;
+}
+:root[data-theme="dark"] .extui-card-options button {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: #e8eef0;
+}
+:root[data-theme="dark"] .extui-card-options button small {
+  color: #a8b5ba;
+}
+:root[data-theme="dark"] .extui-card-options button.recommended {
+  border-color: #5b8c6b;
+  background: #21372c;
+}
+:root[data-theme="dark"] .extui-card-options button.deny {
+  color: #ffaaa8;
+}
+:root[data-theme="dark"] .extui-card-options button.deny:hover {
+  border-color: #85514a;
+  background: #3d252a;
+}
+:root[data-theme="dark"] .extui-card-options button:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: #f0f7f2;
+}
 :root[data-theme="dark"] .tool-card.is-open {
   background: rgba(255, 255, 255, 0.025);
 }
@@ -5639,6 +5708,48 @@ mark.hl {
   background: #493d27;
   color: #ecc987;
 }
+:root[data-theme="dark"] .msg-user-file {
+  border-color: #3b5b48;
+  background: #1d2c27;
+  color: var(--text);
+}
+:root[data-theme="dark"] .msg-user-file:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #294738;
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+:root[data-theme="dark"] .msg-user-file-icon {
+  background: #2d4d3b;
+  color: #92e1ad;
+}
+:root[data-theme="dark"] .msg-user-file-name {
+  color: #e8eef0;
+}
+:root[data-theme="dark"] .msg-user-file-meta {
+  color: #9eafa6;
+}
+:root[data-theme="dark"] .msg-user-file-meta.error {
+  color: #ffaaa8;
+}
+:root[data-theme="dark"] .pending-fu {
+  border-color: #385d48;
+  border-left-color: var(--accent);
+  background: linear-gradient(135deg, #20362b, #1b2c25);
+  color: var(--text);
+}
+:root[data-theme="dark"] .pending-fu .pf-label {
+  color: #8fe4ac;
+}
+:root[data-theme="dark"] .pending-fu .pf-sub {
+  color: #9eafa6;
+}
+:root[data-theme="dark"] .pending-fu .pf-text {
+  color: #e8eef0;
+}
+:root[data-theme="dark"] .pending-fu .pf-btn:not(.steer):hover {
+  background: #2d3d44;
+  color: #e8eef0;
+}
 :root[data-theme="dark"] .composer,
 :root[data-theme="dark"] .composer-shell {
   background: var(--surface);
@@ -5654,10 +5765,212 @@ mark.hl {
 :root[data-theme="dark"] .pill-btn {
   border-color: var(--border);
 }
+
+/*
+ * Dark preview surfaces
+ *
+ * The preview pane renders several file types directly in the renderer. Keep
+ * those surfaces separate from the app chrome so a document cannot inherit
+ * the low-contrast green-on-green palette used by the original night theme.
+ * HTML/PDF/image content keeps its own document colors; only its surrounding
+ * preview surface is themed here.
+ */
 :root[data-theme="dark"] .preview-body.html-preview-active,
-:root[data-theme="dark"] .pv-slide-canvas,
-:root[data-theme="dark"] .pv-xlsx table {
-  background: #fff;
+:root[data-theme="dark"] .pv-html,
+:root[data-theme="dark"] .pv-code,
+:root[data-theme="dark"] .pv-md,
+:root[data-theme="dark"] .pv-docx,
+:root[data-theme="dark"] .pv-xlsx,
+:root[data-theme="dark"] .pv-slide-canvas {
+  background: var(--preview-surface);
+  color: var(--preview-text);
+}
+:root[data-theme="dark"] .pv-code {
+  border-color: var(--preview-grid);
+}
+:root[data-theme="dark"] .code-block {
+  border-color: var(--preview-grid);
+  background: var(--code-bg);
+  color: var(--preview-text);
+}
+:root[data-theme="dark"] .code-block-bar {
+  border-color: var(--preview-grid);
+  background: var(--preview-surface-muted);
+}
+:root[data-theme="dark"] .code-block-lang,
+:root[data-theme="dark"] .code-copy {
+  color: var(--preview-text-dim);
+}
+:root[data-theme="dark"] .code-copy {
+  border-color: var(--preview-grid);
+}
+:root[data-theme="dark"] .pv-code-toolbar,
+:root[data-theme="dark"] .pv-html-toolbar,
+:root[data-theme="dark"] .pv-pptx-summary {
+  border-color: var(--preview-grid);
+  background: rgba(32, 42, 47, .96);
+  color: var(--preview-text-dim);
+}
+:root[data-theme="dark"] .pv-code-language {
+  color: #a7e7bd;
+}
+:root[data-theme="dark"] .pv-code-lines,
+:root[data-theme="dark"] .pv-code-toolbar button,
+:root[data-theme="dark"] .pv-html-save-status {
+  color: var(--preview-text-dim);
+}
+:root[data-theme="dark"] .pv-code-toolbar button:hover,
+:root[data-theme="dark"] .preview-zoom-btn:hover,
+:root[data-theme="dark"] .pv-html-toolbar button:hover {
+  background: #2a3a42;
+  color: var(--preview-text);
+}
+:root[data-theme="dark"] .pv-code-content {
+  background: var(--preview-surface);
+  color: var(--preview-text);
+}
+:root[data-theme="dark"] .pv-code-line:hover {
+  background: #233139;
+}
+:root[data-theme="dark"] .pv-code-number {
+  border-right-color: var(--preview-grid);
+  background: var(--preview-surface-muted);
+  color: #8998a1;
+}
+:root[data-theme="dark"] .pv-code-truncated {
+  border-top-color: #695b35;
+  background: #3a321f;
+  color: #f2d58f;
+}
+
+/* High-contrast highlight.js palette for both chat markdown and file code. */
+:root[data-theme="dark"] .code-block .hljs,
+:root[data-theme="dark"] .pv-code-source .hljs {
+  background: transparent !important;
+  color: var(--preview-text);
+}
+:root[data-theme="dark"] .hljs-doctag,
+:root[data-theme="dark"] .hljs-keyword,
+:root[data-theme="dark"] .hljs-meta .hljs-keyword,
+:root[data-theme="dark"] .hljs-template-tag,
+:root[data-theme="dark"] .hljs-template-variable,
+:root[data-theme="dark"] .hljs-type,
+:root[data-theme="dark"] .hljs-variable.language_ {
+  color: #ff82b2;
+}
+:root[data-theme="dark"] .hljs-title,
+:root[data-theme="dark"] .hljs-title.class_,
+:root[data-theme="dark"] .hljs-title.class_.inherited__,
+:root[data-theme="dark"] .hljs-title.function_ {
+  color: #d0a5ff;
+}
+:root[data-theme="dark"] .hljs-attr,
+:root[data-theme="dark"] .hljs-attribute,
+:root[data-theme="dark"] .hljs-literal,
+:root[data-theme="dark"] .hljs-meta,
+:root[data-theme="dark"] .hljs-number,
+:root[data-theme="dark"] .hljs-operator,
+:root[data-theme="dark"] .hljs-variable,
+:root[data-theme="dark"] .hljs-selector-attr,
+:root[data-theme="dark"] .hljs-selector-class,
+:root[data-theme="dark"] .hljs-selector-id {
+  color: #ffca80;
+}
+:root[data-theme="dark"] .hljs-regexp,
+:root[data-theme="dark"] .hljs-string,
+:root[data-theme="dark"] .hljs-meta .hljs-string {
+  color: #b8e58f;
+}
+:root[data-theme="dark"] .hljs-built_in,
+:root[data-theme="dark"] .hljs-symbol {
+  color: #70d9e8;
+}
+:root[data-theme="dark"] .hljs-comment,
+:root[data-theme="dark"] .hljs-code,
+:root[data-theme="dark"] .hljs-formula {
+  color: #91a0aa;
+}
+:root[data-theme="dark"] .hljs-name,
+:root[data-theme="dark"] .hljs-quote,
+:root[data-theme="dark"] .hljs-selector-tag,
+:root[data-theme="dark"] .hljs-selector-pseudo {
+  color: #85dfaa;
+}
+:root[data-theme="dark"] .hljs-subst,
+:root[data-theme="dark"] .hljs-emphasis,
+:root[data-theme="dark"] .hljs-strong {
+  color: var(--preview-text);
+}
+:root[data-theme="dark"] .hljs-section {
+  color: #79caff;
+}
+:root[data-theme="dark"] .hljs-bullet {
+  color: #f3d17d;
+}
+:root[data-theme="dark"] .hljs-addition {
+  color: #9be6b7;
+  background-color: #1b3b2a;
+}
+:root[data-theme="dark"] .hljs-deletion {
+  color: #ffaaa8;
+  background-color: #3d252a;
+}
+
+:root[data-theme="dark"] .pv-md,
+:root[data-theme="dark"] .pv-docx {
+  border-color: var(--preview-grid);
+}
+:root[data-theme="dark"] .pv-xlsx .sheet-tab {
+  border-color: var(--preview-grid);
+  background: var(--preview-surface-muted);
+  color: var(--preview-text-dim);
+}
+:root[data-theme="dark"] .pv-xlsx .sheet-tab.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: #a7e7bd;
+}
+:root[data-theme="dark"] .pv-xlsx-sheet {
+  border-color: var(--preview-grid);
+  background: var(--preview-surface);
+}
+:root[data-theme="dark"] .pv-xlsx table,
+:root[data-theme="dark"] .pv-xlsx tbody,
+:root[data-theme="dark"] .pv-xlsx tr,
+:root[data-theme="dark"] .pv-xlsx th,
+:root[data-theme="dark"] .pv-xlsx td {
+  background: var(--preview-surface);
+  border-color: var(--preview-grid);
+  color: var(--preview-text);
+}
+:root[data-theme="dark"] .pv-xlsx th {
+  background: var(--preview-surface-muted);
+  color: #f0f5f6;
+}
+:root[data-theme="dark"] .pv-slide-canvas {
+  border-color: var(--preview-grid);
+  background:
+    linear-gradient(135deg, rgba(123, 214, 161, .09), transparent 40%),
+    var(--preview-surface);
+  box-shadow: 0 5px 18px rgba(0, 0, 0, .28);
+}
+:root[data-theme="dark"] .pv-slide-canvas h2 {
+  color: #f0f5f6;
+}
+:root[data-theme="dark"] .pv-slide-copy {
+  color: #c7d1d5;
+}
+:root[data-theme="dark"] .pv-html iframe {
+  background: var(--preview-bg);
+}
+:root[data-theme="dark"] .pv-html-save-status.saved {
+  color: #9be6b7;
+}
+:root[data-theme="dark"] .pv-html-save-status.saving {
+  color: #f2d58f;
+}
+:root[data-theme="dark"] .pv-html-save-status.error {
+  color: #ffaaa8;
 }
 :root[data-theme="dark"] .set-btn.primary,
 :root[data-theme="dark"] .btn.primary {

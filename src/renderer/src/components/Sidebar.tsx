@@ -175,6 +175,19 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
     setDeleteConfirm({ cwd, file, name });
   };
 
+  const openProjectInExplorer = async (cwd: string) => {
+    setProjectMenu(null);
+    try {
+      await window.pi.app.openFolderInExplorer(cwd);
+    } catch (error: any) {
+      const detail = error?.message || String(error);
+      useStore.getState().pushToast(
+        "error",
+        language === "zh" ? `打开项目文件夹失败：${detail}` : `Could not open project folder: ${detail}`,
+      );
+    }
+  };
+
   return (
     <aside className="sidebar" style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
       <div
@@ -439,6 +452,12 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
           role="menu"
         >
           <div className="project-context-name" title={projectMenu.cwd}>{projectMenu.name}</div>
+          <button
+            role="menuitem"
+            onClick={() => void openProjectInExplorer(projectMenu.cwd)}
+          >
+            {language === "zh" ? "在资源管理器中打开" : "Open in File Explorer"}
+          </button>
           <button
             role="menuitem"
             onClick={() => {
