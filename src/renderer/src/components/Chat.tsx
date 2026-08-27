@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getDisplayThreadTitle, normalizeThreadFile, parseSkillBlock, useStore } from "../store";
 import { Markdown } from "../lib/markdown";
 import { formatClock, formatTokens } from "../lib/format";
@@ -23,6 +23,9 @@ export function Chat() {
   const renameThread = useStore((s) => s.renameThread);
   const switchThreadFolder = useStore((s) => s.switchThreadFolder);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollPositionsRef = useRef(new Map<string, number>());
+  const previousActiveThreadIdRef = useRef(activeThreadId);
+  const lastAutoScrollThreadIdRef = useRef<string | null>(null);
   const highlightedUserMessageRef = useRef<HTMLElement | null>(null);
   const jumpHighlightTimerRef = useRef<number | null>(null);
   const [editing, setEditing] = useState(false);
@@ -41,13 +44,65 @@ export function Chat() {
   const streaming = thread?.streaming;
   const count = (thread?.messages.length || 0) + (streaming ? 1 : 0);
 
+  const rememberScrollPosition = () => {
+    const el = scrollRef.current;
+    if (!el || !activeThreadId) return;
+    scrollPositionsRef.current.set(activeThreadId, el.scrollTop);
+  };
+
   // auto-scroll to bottom on new content
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    const switchedThread =
+      lastAutoScrollThreadIdRef.current !== null &&
+      lastAutoScrollThreadIdRef.current !== activeThreadId;
+    lastAutoScrollThreadIdRef.current = activeThreadId;
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
-    if (near) el.scrollTop = el.scrollHeight;
-  }, [count, streaming?.blocks?.length, thread?.messages.length]);
+    // A restored position is authoritative during a thread switch. Only
+    // follow the bottom for new content within the already active thread.
+    if (!switchedThread && near) {
+      el.scrollTop = el.scrollHeight;
+      rememberScrollPosition();
+    } else if (!switchedThread && activeThreadId && !scrollPositionsRef.current.has(activeThreadId)) {
+      // Capture the initial position too, including an intentional scroll at
+      // the top, so it can be restored even if no scroll event fires later.
+      rememberScrollPosition();
+    }
+  }, [activeThreadId, count, streaming?.blocks?.length, thread?.messages.length]);
+
+  // The chat DOM is reused when activeThreadId changes. Without an explicit
+  // per-thread position, the browser clamps the reused scroll container to
+  // the new transcript's top, so returning to a thread loses its last view.
+  useLayoutEffect(() => {
+    const previousThreadId = previousActiveThreadIdRef.current;
+    const el = scrollRef.current;
+    if (
+      previousThreadId &&
+      previousThreadId !== activeThreadId &&
+      el &&
+      !scrollPositionsRef.current.has(previousThreadId)
+    ) {
+      scrollPositionsRef.current.set(previousThreadId, el.scrollTop);
+    }
+    previousActiveThreadIdRef.current = activeThreadId;
+  }, [activeThreadId]);
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !activeThreadId || thread?.loading) return;
+    const saved = scrollPositionsRef.current.get(activeThreadId);
+    if (saved === undefined) return;
+
+    const restore = () => {
+      const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+      el.scrollTop = Math.min(saved, maxScrollTop);
+    };
+
+    restore();
+    const frame = window.requestAnimationFrame(restore);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeThreadId, count, streaming?.blocks?.length, thread?.loading]);
 
   useEffect(() => {
     if (!previewImage) return;
@@ -291,7 +346,7 @@ export function Chat() {
       </div>
 
       <div className="chat-stage">
-        <div className="chat-scroll" ref={scrollRef}>
+        <div className="chat-scroll" ref={scrollRef} onScroll={rememberScrollPosition}>
           <div className="messages">
             {headGroups.map((g) => (
               <MessageGroup key={g.key} threadId={activeThreadId} group={g} toolRuns={thread.toolRuns} locked={thread.isStreaming} onPreviewImage={setPreviewImage} />
