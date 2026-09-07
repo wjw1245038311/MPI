@@ -2738,6 +2738,14 @@ body.sidebar-resizing * {
 .ctx-bar.hi .ctx-bar-fill {
   background: #c0392b;
 }
+.ctx-bar.est .ctx-bar-fill {
+  opacity: 0.55;
+}
+.ctx-hint {
+  margin: -6px 0 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
 .ctx-rows {
   display: flex;
   flex-direction: column;

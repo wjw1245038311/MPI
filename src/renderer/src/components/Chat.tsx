@@ -234,11 +234,22 @@ export function Chat() {
     if (next) loadCtx();
   };
 
+  // Refresh usage stats once a compaction run finishes (pi reports tokens=null until the next reply).
+  const compacting = !!thread?.compacting;
+  const prevCompactingRef = useRef(false);
+  useEffect(() => {
+    if (ctxOpen && prevCompactingRef.current && !compacting) loadCtx();
+    prevCompactingRef.current = compacting;
+  }, [compacting, ctxOpen]);
+
   const ctxUsage = ctxStats?.contextUsage;
-  const ctxUsed = ctxUsage?.tokens ?? 0;
+  // After compaction pi reports tokens=null until the next LLM response; fall back to the post-compaction estimate.
+  const ctxIsEstimate = !!ctxUsage && typeof ctxUsage.tokens !== "number";
+  const ctxUsed = !ctxUsage ? 0 : (typeof ctxUsage.tokens === "number" ? ctxUsage.tokens : thread?.contextEstimate ?? 0);
+  const ctxHasValue = !ctxUsage || (!ctxIsEstimate || typeof thread?.contextEstimate === "number");
   const ctxTotal = ctxUsage?.contextWindow ?? 0;
   const ctxRemaining = Math.max(0, ctxTotal - ctxUsed);
-  const ctxPct = ctxUsage ? ctxUsage.percent ?? (ctxTotal ? Math.round((ctxUsed / ctxTotal) * 100) : 0) : 0;
+  const ctxPct = ctxUsage ? (typeof ctxUsage.percent === "number" ? ctxUsage.percent : ctxTotal ? Math.round((ctxUsed / ctxTotal) * 100) : 0) : 0;
 
   return (
     <section className="main">
@@ -307,16 +318,19 @@ export function Chat() {
               ) : ctxUsage ? (
                 <>
                   <div className="ctx-bignum">
-                    {formatTokens(ctxUsed)}
+                    {ctxHasValue ? `${ctxIsEstimate ? "~" : ""}${formatTokens(ctxUsed)}` : "—"}
                     <span className="ctx-of"> / {formatTokens(ctxTotal)}</span>
                   </div>
-                  <div className={`ctx-bar ${ctxPct >= 85 ? "hi" : ctxPct >= 60 ? "mid" : ""}`}>
-                    <div className="ctx-bar-fill" style={{ width: `${Math.min(100, ctxPct)}%` }} />
+                  <div className={`ctx-bar ${ctxPct >= 85 ? "hi" : ctxPct >= 60 ? "mid" : ""} ${ctxIsEstimate ? "est" : ""}`}>
+                    <div className="ctx-bar-fill" style={{ width: `${Math.min(100, ctxHasValue ? ctxPct : 0)}%` }} />
                   </div>
+                  {ctxIsEstimate && (
+                    <div className="ctx-hint">压缩后估算值，下次回复后更新</div>
+                  )}
                   <div className="ctx-rows">
                     <div className="ctx-row">
-                      <span>已使用</span>
-                      <b>{formatTokens(ctxUsed)}</b>
+                      <span>已使用{ctxIsEstimate ? "（估）" : ""}</span>
+                      <b>{ctxHasValue ? `${ctxIsEstimate ? "~" : ""}${formatTokens(ctxUsed)}` : "—"}</b>
                     </div>
                     <div className="ctx-row">
                       <span>总上下文</span>

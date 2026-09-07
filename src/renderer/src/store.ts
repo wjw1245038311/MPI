@@ -744,8 +744,12 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
     }
     case "compaction_start":
       return { ...t, compacting: true };
-    case "compaction_end":
-      return { ...t, compacting: false };
+    case "compaction_end": {
+      // pi reports context tokens as null after compaction until the next LLM
+      // response; keep the post-compaction estimate for display in between.
+      const estimated = typeof event?.result?.estimatedTokensAfter === "number" ? event.result.estimatedTokensAfter : t.contextEstimate;
+      return { ...t, compacting: false, contextEstimate: estimated };
+    }
     case "message_start": {
       const m = event.message;
       if (!m) return t;

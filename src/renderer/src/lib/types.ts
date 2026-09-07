@@ -204,6 +204,8 @@ export interface ThreadState {
   isStreaming: boolean;
   /** True while a manual compaction run (pi /compact) is in flight. */
   compacting?: boolean;
+  /** Post-compaction token estimate from the last successful compaction_end; pi reports context tokens as null until the next LLM response, so this keeps the usage popover meaningful in between. */
+  contextEstimate?: number | null;
   messages: ViewMessage[];
   streaming: ViewMessage | null;
   toolRuns: Record<string, ToolRun>;
