@@ -50,6 +50,17 @@ export function Chat() {
     scrollPositionsRef.current.set(activeThreadId, el.scrollTop);
   };
 
+  // Length of the last streaming block's content. blocks.length only changes
+  // when a NEW block starts; without this, text/thinking deltas inside one
+  // block never re-run the effect and long replies stop following the bottom
+  // (same bug as Pi-Studio issue #5).
+  const streamTailLen = (() => {
+    const blocks = streaming?.blocks;
+    if (!blocks || blocks.length === 0) return 0;
+    const last = blocks[blocks.length - 1];
+    return last.type === "text" ? last.text.length : last.type === "thinking" ? last.thinking.length : 0;
+  })();
+
   // auto-scroll to bottom on new content
   useEffect(() => {
     const el = scrollRef.current;
@@ -69,7 +80,7 @@ export function Chat() {
       // the top, so it can be restored even if no scroll event fires later.
       rememberScrollPosition();
     }
-  }, [activeThreadId, count, streaming?.blocks?.length, thread?.messages.length]);
+  }, [activeThreadId, count, streamTailLen, streaming?.blocks?.length, thread?.messages.length]);
 
   // The chat DOM is reused when activeThreadId changes. Without an explicit
   // per-thread position, the browser clamps the reused scroll container to
@@ -250,6 +261,9 @@ export function Chat() {
   const ctxTotal = ctxUsage?.contextWindow ?? 0;
   const ctxRemaining = Math.max(0, ctxTotal - ctxUsed);
   const ctxPct = ctxUsage ? (typeof ctxUsage.percent === "number" ? ctxUsage.percent : ctxTotal ? Math.round((ctxUsed / ctxTotal) * 100) : 0) : 0;
+  // Threshold bands for "should I compact?": ≤60% green, 60–74% yellow,
+  // 75–89% orange, ≥90% red.
+  const ctxBand = ctxPct >= 90 ? "hi" : ctxPct >= 75 ? "mid" : ctxPct >= 60 ? "warn" : "low";
 
   return (
     <section className="main">
@@ -317,11 +331,16 @@ export function Chat() {
                 </div>
               ) : ctxUsage ? (
                 <>
-                  <div className="ctx-bignum">
+                  <div className={`ctx-bignum ${ctxBand}`}>
                     {ctxHasValue ? `${ctxIsEstimate ? "~" : ""}${formatTokens(ctxUsed)}` : "—"}
                     <span className="ctx-of"> / {formatTokens(ctxTotal)}</span>
+                    {ctxUsage && ctxHasValue && (
+                      <span className={`ctx-pct ${ctxBand}`} title={language === "zh" ? "上下文占用比例" : "Context usage ratio"}>
+                        {ctxPct}%
+                      </span>
+                    )}
                   </div>
-                  <div className={`ctx-bar ${ctxPct >= 85 ? "hi" : ctxPct >= 60 ? "mid" : ""} ${ctxIsEstimate ? "est" : ""}`}>
+                  <div className={`ctx-bar ${ctxBand} ${ctxIsEstimate ? "est" : ""}`}>
                     <div className="ctx-bar-fill" style={{ width: `${Math.min(100, ctxHasValue ? ctxPct : 0)}%` }} />
                   </div>
                   {ctxIsEstimate && (
@@ -402,6 +421,24 @@ export function Chat() {
       <div className="composer-confirmation-region" aria-live="assertive">
         <ExtUiPromptCard threadId={activeThreadId} />
       </div>
+      {thread.bricked && (
+        <div className="brick-banner" role="alert">
+          <div className="brick-text">
+            {language === "zh" ? (
+              <>会话文件已损坏，后续每条消息都会失败（{thread.bricked.kind === "whitespace" ? "工具输出为空被 provider 拒绝" : "压缩记录位置异常导致 tool call 配对断裂"}）。可一键修复。</>
+            ) : (
+              <>Session file is bricked — every further message will fail ({thread.bricked.kind === "whitespace" ? "empty tool output rejected by the provider" : "a stale compaction entry breaks a tool-call pair"}). One-click repair available.</>
+            )}
+          </div>
+          <button
+            className="brick-fix"
+            disabled={!!thread.repairing}
+            onClick={() => void useStore.getState().repairSession(activeThreadId)}
+          >
+            {language === "zh" ? (thread.repairing ? "修复中…" : "一键修复并重新加载") : thread.repairing ? "Repairing…" : "Repair & reload"}
+          </button>
+        </div>
+      )}
       <Composer threadId={activeThreadId} />
       {previewImage && (
         <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" onMouseDown={() => setPreviewImage(null)}>

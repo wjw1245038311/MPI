@@ -104,6 +104,7 @@ const api = {
       ipcRenderer.invoke("thread:followUp", args),
     abort: (threadId: string) => ipcRenderer.invoke("thread:abort", threadId),
     compact: (args: { threadId: string; instructions?: string }) => ipcRenderer.invoke("thread:compact", args),
+    repairSession: (args: { threadId?: string; sessionFile: string }) => ipcRenderer.invoke("thread:repair-session", args),
     setModel: (args: { threadId: string; provider: string; modelId: string }) => ipcRenderer.invoke("thread:setModel", args),
     getModels: (threadId: string) => ipcRenderer.invoke("thread:getModels", threadId),
     refreshModels: (threadId: string) => ipcRenderer.invoke("thread:refreshModels", threadId),

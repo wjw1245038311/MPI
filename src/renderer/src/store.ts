@@ -741,6 +741,19 @@ function threadFromResponse(res: any, fallback: ThreadState, pendingEditorText?:
  * Event reducer (one thread)
  * ------------------------------------------------------------------ */
 
+/** Provider 400s that mean the session HISTORY itself is invalid — every
+ * subsequent turn fails identically until the session file is repaired
+ * (upstream #8720 whitespace-only tool result, #8667 stale compaction mid-pair). */
+function detectBricked(errMsg?: unknown): { kind: "whitespace" | "stale-compaction"; message: string } | null {
+  if (!errMsg) return null;
+  const s = String(errMsg);
+  if (/empty or only whitespace/i.test(s)) return { kind: "whitespace", message: s };
+  if (/unexpected tool_use_id|tool_result.*without (a )?matching|orphaned tool/i.test(s)) {
+    return { kind: "stale-compaction", message: s };
+  }
+  return null;
+}
+
 function reduceThread(t: ThreadState, event: any): ThreadState {
   if (!event || typeof event !== "object") return t;
   switch (event.type) {
@@ -839,7 +852,9 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
           errorMessage: m.errorMessage,
           timestamp: m.timestamp || t.streaming.timestamp,
         };
-        return { ...t, streaming: null, messages: [...t.messages, final], toolRuns: reconciled.toolRuns };
+        // Flag permanently bricked sessions so the composer offers one-click repair.
+        const brick = detectBricked(m.errorMessage);
+        return { ...t, streaming: null, messages: [...t.messages, final], toolRuns: reconciled.toolRuns, bricked: brick ?? t.bricked };
       }
       return t;
     }
@@ -1097,6 +1112,7 @@ interface PiStore {
   abortThread: (id: string) => Promise<void>;
   /** Manually compact the thread's context (pi /compact). */
   compactContext: (threadId: string, instructions?: string) => Promise<void>;
+  repairSession: (threadId: string) => Promise<void>;
   setSoundOnComplete: (on: boolean) => Promise<void>;
   refreshOpenThreadModels: () => Promise<void>;
   setModel: (id: string, provider: string, modelId: string) => Promise<void>;
@@ -1948,6 +1964,33 @@ export const useStore = create<PiStore>()((set, get) => ({
       } else {
         get().pushToast("error", e?.message || (zh ? "压缩失败" : "compaction failed"));
       }
+    }
+  },
+
+  repairSession: async (threadId) => {
+    const t = get().threads[threadId];
+    if (!t?.sessionFile || t.repairing) return;
+    set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], repairing: true } } } : s));
+    const zh = get().config?.language === "zh";
+    try {
+      const res: any = await window.pi.thread.repairSession({ threadId, sessionFile: t.sessionFile });
+      if (res?.ok && res.changed > 0) {
+        get().pushToast("success", zh ? `会话已修复（${res.changed} 处），正在重新加载…` : `Session repaired (${res.changed} change(s)), reloading…`);
+        // The running pi process still holds the old context — reopen so it
+        // reloads from the repaired file.
+        const cwd = t.cwd;
+        const file = t.sessionFile;
+        await get().closeThread(threadId);
+        await get().goToThread(cwd, file);
+      } else if (res?.ok) {
+        get().pushToast("info", zh ? "未发现可自动修复的问题，错误可能来自其他原因" : "No auto-repairable issues found — the error may have another cause");
+      } else {
+        get().pushToast("error", res?.error || (zh ? "会话修复失败" : "Session repair failed"));
+      }
+    } catch (e: any) {
+      get().pushToast("error", e?.message || (zh ? "会话修复失败" : "Session repair failed"));
+    } finally {
+      set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], repairing: false } } } : s));
     }
   },
 

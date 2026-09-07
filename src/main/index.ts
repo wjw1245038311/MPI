@@ -235,13 +235,20 @@ if (!gotLock) {
   });
 }
 
-app.on("before-quit", () => {
+// Graceful quit: in-flight turns/compactions are aborted and given a bounded
+// moment to settle so session files don't end on a dangling tool call
+// (upstream #9124). Idle bridges resolve immediately, so the common path stays fast.
+let quitInFlight = false;
+app.on("before-quit", (e) => {
+  // Second pass after the graceful wait below — let the quit proceed.
+  if (quitInFlight) return;
+  e.preventDefault();
   isQuitting = true;
-  if (tray) {
-    tray.destroy();
-    tray = null;
-  }
   try {
+    if (tray) {
+      tray.destroy();
+      tray = null;
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       const bounds = mainWindow.getBounds();
       updateConfig({ windowBounds: { ...bounds, maximized: mainWindow.isMaximized() } });
@@ -250,15 +257,23 @@ app.on("before-quit", () => {
     /* ignore */
   }
   stopScheduler();
-  stopAutomations();
   stopRemoteHost();
-  stopAllBridges();
+  quitInFlight = true;
+  // Safety net in case a bridge ever fails to settle (stopGraceful is bounded
+  // at ~4s internally; this caps the whole sequence well beyond that).
+  const hardStop = setTimeout(() => app.quit(), 8000);
+  Promise.all([stopAllBridges(), stopAutomations()])
+    .catch(() => undefined)
+    .finally(() => {
+      clearTimeout(hardStop);
+      app.quit();
+    });
 });
 
 app.on("window-all-closed", () => {
+  // Safety net: on non-darwin this fires during the quit sequence above, after
+  // bridges are already stopped (both calls then no-op).
   stopScheduler();
-  stopAutomations();
-  stopRemoteHost();
-  stopAllBridges();
+  void Promise.all([stopAllBridges(), stopAutomations()]).catch(() => undefined);
   if (process.platform !== "darwin") app.quit();
 });

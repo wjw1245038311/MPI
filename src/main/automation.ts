@@ -123,15 +123,19 @@ export function stopScheduler(): void {
   bootTimer = null;
 }
 
-/** Stop currently running automation child processes during app shutdown. */
-export function stopAutomations(): void {
+/** Stop currently running automation child processes during app shutdown.
+ * In-flight runs are aborted and given a bounded moment to settle first so
+ * their session files don't end on a dangling tool call (see stopAllBridges). */
+export function stopAutomations(): Promise<void> {
+  const stops: Promise<void>[] = [];
   for (const bridge of activeBridges) {
     try {
-      bridge.stop();
+      stops.push(bridge.stopGraceful());
     } catch {
       /* ignore shutdown races */
     }
   }
+  return Promise.all(stops).then(() => undefined);
 }
 
 const RUN_TIMEOUT_MS = 30 * 60 * 1000;
@@ -192,7 +196,7 @@ async function execute(task: AutomationTask): Promise<void> {
       const timeout = setTimeout(() => {
         finish(() => reject(new Error("运行超时（30 分钟），任务已停止")));
         try {
-          bridge?.stop();
+          void bridge?.stopGraceful();
         } catch {
           /* cleanup in finally */
         }
@@ -270,7 +274,7 @@ async function execute(task: AutomationTask): Promise<void> {
   } finally {
     const b = bridge as PiBridge | null;
     try {
-      b?.stop();
+      void b?.stopGraceful();
     } catch {
       /* ignore */
     }

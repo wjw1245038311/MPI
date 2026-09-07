@@ -212,6 +212,11 @@ export interface ThreadState {
   contextEstimate?: number | null;
   /** Last failed compaction (compaction_end with errorMessage); cleared on success or when a new attempt starts. */
   compactionFailure?: { message: string; aborted: boolean } | null;
+  /** Permanently bricked session detected from a provider 400 (upstream #8720/#8667):
+   * every further turn fails identically until the session file is repaired. */
+  bricked?: { kind: "whitespace" | "stale-compaction"; message: string } | null;
+  /** True while repairSession() runs for this thread. */
+  repairing?: boolean;
   messages: ViewMessage[];
   streaming: ViewMessage | null;
   toolRuns: Record<string, ToolRun>;

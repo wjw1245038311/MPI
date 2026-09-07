@@ -32,6 +32,7 @@ import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtim
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
 import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readThreadHistory, scanProjects, searchThreads, type ThreadSearchHit } from "./session-store";
+import { repairSessionFile } from "./session-repair";
 import {
   getAdditionalSkillPaths,
   getSkillCommands,
@@ -546,11 +547,23 @@ function resolvePermission(sessionFile: string | undefined, requested: Permissio
   return "sandbox"; // default
 }
 
-export function stopAllBridges(): void {
+/** Stop every local bridge. Bridges with an in-flight turn/compaction are
+ * aborted and given a bounded moment to settle first so their session files
+ * don't end on a dangling tool call (upstream #9124). Idle bridges stop
+ * immediately, so this resolves fast on the common path. */
+export function stopAllBridges(): Promise<void> {
   warmEnabled = false; // no respawns while shutting down
-  for (const h of bridges.values()) h.bridge.stop();
+  const stops: Promise<void>[] = [];
+  for (const h of bridges.values()) {
+    try {
+      stops.push(h.bridge.stopGraceful());
+    } catch {
+      /* ignore */
+    }
+  }
   bridges.clear();
-  dropWarmBridge();
+  dropWarmBridge(); // idle standby — immediate kill is fine
+  return Promise.all(stops).then(() => undefined);
 }
 
 export function stopRemoteHost(): void {
@@ -1942,6 +1955,22 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ok: true };
   });
 
+  // One-click repair for permanently bricked sessions (upstream #8720/#8667):
+  // rewrites the session JSONL so the provider stops rejecting every turn.
+  ipcMain.handle("thread:repair-session", (_e, args: { threadId?: string; sessionFile?: string }) => {
+    const h = typeof args?.threadId === "string" ? bridges.get(args.threadId) : undefined;
+    if (h?.bridge.hasActiveRun) {
+      return { ok: false, changed: 0, details: [] as string[], error: "Thread is busy — wait for the current turn to finish and retry." };
+    }
+    let file: string;
+    try {
+      file = assertDeletableSessionFile(typeof args?.sessionFile === "string" ? args.sessionFile : "");
+    } catch (e: any) {
+      return { ok: false, changed: 0, details: [] as string[], error: e?.message || "invalid session path" };
+    }
+    return repairSessionFile(file);
+  });
+
   ipcMain.handle("thread:delete", async (_e, file: string) => {
     const target = assertDeletableSessionFile(typeof file === "string" ? file : "");
 
@@ -1980,7 +2009,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("thread:close", (_e, threadId: string) => {
     const h = bridges.get(threadId);
     if (h) {
-      h.bridge.stop();
+      // Abort + settle in the background so a running tool's result is persisted
+      // before the process dies; the UI closes the tab immediately.
+      void h.bridge.stopGraceful();
       bridges.delete(threadId);
     }
     return true;

@@ -40,3 +40,4 @@ Thumbs.db
 # Local QA output
 qa-*.png
 nul
+tmp/

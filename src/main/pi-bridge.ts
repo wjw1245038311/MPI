@@ -331,6 +331,9 @@ export class PiBridge {
   private stderrBuf = "";
   private started = false;
   private exited = false;
+  /** Depth of in-flight work (turns + compactions). >0 means killing now can
+   * leave a dangling tool call in the session JSONL (upstream #9124). */
+  private runDepth = 0;
   /** True once stop() was called; the resulting exit is intentional, not a crash. */
   private stopRequested = false;
 
@@ -420,6 +423,10 @@ export class PiBridge {
       this.opts.onExtUi(msg as ExtUiRequest);
       return;
     }
+
+    // Track in-flight work so stopGraceful() can settle before killing.
+    if (msg.type === "agent_start" || msg.type === "compaction_start") this.runDepth++;
+    else if (msg.type === "agent_settled" || msg.type === "compaction_end") this.runDepth = Math.max(0, this.runDepth - 1);
 
     // everything else is an agent event
     this.opts.onEvent(msg);
@@ -534,6 +541,40 @@ export class PiBridge {
     } catch {
       /* ignore */
     }
+  }
+
+  /** Graceful stop: when a turn or compaction is in flight, ask pi to abort and
+   * wait (bounded) for it to settle so the aborted tool result gets persisted
+   * before we kill — a hard SIGKILL mid-tool-run leaves a dangling tool call in
+   * the session JSONL that corrupts context on resume (upstream #9124). Idle
+   * bridges resolve immediately. */
+  stopGraceful(timeoutMs = 4000): Promise<void> {
+    if (!this.proc || this.exited) return Promise.resolve();
+    if (this.runDepth === 0) {
+      this.stop();
+      return Promise.resolve();
+    }
+    try {
+      void this.send("abort").catch(() => {});
+    } catch {
+      /* ignore */
+    }
+    const startedAt = Date.now();
+    return new Promise((resolve) => {
+      const finish = () => {
+        if (this.proc && !this.exited) this.stop();
+        resolve();
+      };
+      const check = () => {
+        if (this.runDepth === 0 || this.exited || Date.now() - startedAt >= timeoutMs) return finish();
+        setTimeout(check, 150);
+      };
+      check();
+    });
+  }
+
+  get hasActiveRun(): boolean {
+    return !!this.proc && !this.exited && this.runDepth > 0;
   }
 
   get running(): boolean {

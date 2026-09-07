@@ -2720,13 +2720,35 @@ body.sidebar-resizing * {
   place-items: center;
   padding: 14px 0;
 }
+/* Context usage threshold colors: green ≤60% < yellow 60–74% < orange 75–89% < red ≥90%. */
+:root {
+  --ctx-warn: #ca8a04;
+  --ctx-mid: #d97706;
+  --ctx-hi: #c0392b;
+}
+:root[data-theme="dark"] {
+  --ctx-warn: #eab308;
+  --ctx-mid: #fb923c;
+  --ctx-hi: #f2726a;
+}
 .ctx-bignum {
   font-family: var(--mono);
   font-size: 22px;
   font-weight: 700;
   color: var(--text);
   line-height: 1.2;
+  display: flex;
+  align-items: baseline;
 }
+.ctx-pct {
+  margin-left: auto;
+  font-size: 14px;
+  font-weight: 700;
+}
+.ctx-bignum.low, .ctx-pct.low { color: var(--accent); }
+.ctx-bignum.warn, .ctx-pct.warn { color: var(--ctx-warn); }
+.ctx-bignum.mid, .ctx-pct.mid { color: var(--ctx-mid); }
+.ctx-bignum.hi, .ctx-pct.hi { color: var(--ctx-hi); }
 .ctx-of {
   font-size: 12px;
   font-weight: 500;
@@ -2745,11 +2767,14 @@ body.sidebar-resizing * {
   background: var(--accent);
   transition: width 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+.ctx-bar.warn .ctx-bar-fill {
+  background: var(--ctx-warn);
+}
 .ctx-bar.mid .ctx-bar-fill {
-  background: #d9930d;
+  background: var(--ctx-mid);
 }
 .ctx-bar.hi .ctx-bar-fill {
-  background: #c0392b;
+  background: var(--ctx-hi);
 }
 .ctx-bar.est .ctx-bar-fill {
   opacity: 0.55;
@@ -6085,4 +6110,49 @@ mark.hl {
 }
 :root[data-theme="dark"] .skills-hub-install-command code {
   background: var(--surface-muted);
+}
+
+/* ---- Bricked session banner (upstream #8720/#8667) ---------------------- */
+.brick-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 16px 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #fdecea;
+  border: 1px solid #f5c6c0;
+  color: #7a1f16;
+}
+.brick-text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.brick-fix {
+  flex-shrink: 0;
+  border: none;
+  cursor: pointer;
+  background: #c0392b;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 9px;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.brick-fix:hover:not(:disabled) {
+  background: #a93226;
+}
+.brick-fix:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.brick-fix:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+:root[data-theme="dark"] .brick-banner {
+  background: #2a1714;
+  border-color: #5c2b23;
+  color: #f0aaa1;
 }
