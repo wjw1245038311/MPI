@@ -210,6 +210,8 @@ export interface ThreadState {
   compacting?: boolean;
   /** Post-compaction token estimate from the last successful compaction_end; pi reports context tokens as null until the next LLM response, so this keeps the usage popover meaningful in between. */
   contextEstimate?: number | null;
+  /** Last failed compaction (compaction_end with errorMessage); cleared on success or when a new attempt starts. */
+  compactionFailure?: { message: string; aborted: boolean } | null;
   messages: ViewMessage[];
   streaming: ViewMessage | null;
   toolRuns: Record<string, ToolRun>;

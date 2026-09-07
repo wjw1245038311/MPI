@@ -758,7 +758,12 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
       // pi reports context tokens as null after compaction until the next LLM
       // response; keep the post-compaction estimate for display in between.
       const estimated = typeof event?.result?.estimatedTokensAfter === "number" ? event.result.estimatedTokensAfter : t.contextEstimate;
-      return { ...t, compacting: false, contextEstimate: estimated };
+      // Record failures (errorMessage/aborted) so compactContext can tell a
+      // user-initiated cancel apart from a real error; clear on success.
+      const failure = event?.errorMessage
+        ? { message: String(event.errorMessage), aborted: !!event.aborted }
+        : null;
+      return { ...t, compacting: false, contextEstimate: estimated, compactionFailure: failure };
     }
     case "message_start": {
       const m = event.message;
@@ -1196,6 +1201,7 @@ function scheduleEventFlush(): void {
     // Group per thread and remember which threads settled this frame.
     const byThread = new Map<string, any[]>();
     const settledIds: string[] = [];
+    const autoCompactionFailures: { message: string }[] = [];
     for (const { threadId, event } of batch) {
       let arr = byThread.get(threadId);
       if (!arr) {
@@ -1204,6 +1210,10 @@ function scheduleEventFlush(): void {
       }
       arr.push(event);
       if (event?.type === "agent_settled") settledIds.push(threadId);
+      // Auto-compaction failures are otherwise silent; manual ones toast via compactContext.
+      if (event?.type === "compaction_end" && event.errorMessage && event.reason !== "manual") {
+        autoCompactionFailures.push({ message: String(event.errorMessage) });
+      }
     }
 
     useStore.setState((s) => {
@@ -1225,6 +1235,15 @@ function scheduleEventFlush(): void {
     // Completion chime: one ding per flush even if several threads settle together.
     if (settledIds.length > 0 && useStore.getState().config?.soundOnComplete !== false) {
       playCompletionChime();
+    }
+
+    // Surface auto-compaction failures (manual ones are reported by compactContext).
+    if (autoCompactionFailures.length > 0) {
+      const zh = useStore.getState().config?.language === "zh";
+      for (const f of autoCompactionFailures.slice(0, 3)) {
+        const detail = f.message.replace(/^Compaction failed: /, "");
+        useStore.getState().pushToast("warning", zh ? `自动压缩失败：${detail}` : `Auto-compaction failed: ${detail}`);
+      }
     }
 
     // Deliver queued follow-ups after the settled state is applied.
@@ -1905,7 +1924,7 @@ export const useStore = create<PiStore>()((set, get) => ({
   compactContext: async (threadId, instructions) => {
     const t = get().threads[threadId];
     if (!t || !t.connected || t.isStreaming || t.compacting) return;
-    set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], compacting: true } } } : s));
+    set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], compacting: true, compactionFailure: null } } } : s));
     try {
       const res: any = await window.pi.thread.compact({ threadId, instructions });
       set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], compacting: false } } } : s));
@@ -1920,7 +1939,15 @@ export const useStore = create<PiStore>()((set, get) => ({
     } catch (e: any) {
       set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], compacting: false } } } : s));
       const zh = get().config?.language === "zh";
-      get().pushToast("error", e?.message || (zh ? "压缩失败" : "compaction failed"));
+      // The compaction_end event (emitted before the RPC response) carries
+      // pi's authoritative aborted flag; give its flush a frame to land.
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const rec = get().threads[threadId]?.compactionFailure;
+      if (rec?.aborted) {
+        get().pushToast("info", zh ? "压缩已取消" : "Compaction cancelled");
+      } else {
+        get().pushToast("error", e?.message || (zh ? "压缩失败" : "compaction failed"));
+      }
     }
   },
 
