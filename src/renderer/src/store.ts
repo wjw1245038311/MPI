@@ -1068,7 +1068,7 @@ interface PiStore {
   sendPendingSteering: (threadId: string) => Promise<void>;
   abortThread: (id: string) => Promise<void>;
   /** Manually compact the thread's context (pi /compact). */
-  compactContext: (threadId: string) => Promise<void>;
+  compactContext: (threadId: string, instructions?: string) => Promise<void>;
   setSoundOnComplete: (on: boolean) => Promise<void>;
   refreshOpenThreadModels: () => Promise<void>;
   setModel: (id: string, provider: string, modelId: string) => Promise<void>;
@@ -1738,6 +1738,25 @@ export const useStore = create<PiStore>()((set, get) => ({
     const hasImg = !!images && images.length > 0;
     const hasAtt = !!attachments && attachments.length > 0;
     if (!trimmed && !hasImg && !hasAtt) return;
+
+    // Built-in TUI slash commands cannot be executed through the RPC prompt
+    // path (pi would hand them to the model as literal text). Route the ones
+    // MPI supports to their dedicated calls instead.
+    if (!hasImg && !hasAtt) {
+      const compactMatch = trimmed.match(/^\/compact(?:\s+([\s\S]*))?$/i);
+      if (compactMatch) {
+        const t = get().threads[threadId];
+        if (t?.isStreaming || t?.compacting) {
+          const zh = get().config?.language === "zh";
+          get().pushToast("info", zh ? "当前有任务进行中，结束后再压缩" : "A task is still running — compact after it finishes");
+          return;
+        }
+        const tid = await get().ensureConnected(threadId);
+        if (!tid) return; // connection failed: nothing to compact against
+        await get().compactContext(tid, compactMatch[1]?.trim() || undefined);
+        return;
+      }
+    }
     const wasStreaming = !!get().threads[threadId]?.isStreaming;
     const optimisticTitle = getDisplayThreadTitle(null, trimmed, get().config?.language || "en").trim().slice(0, 80);
     const optimistic: ViewMessage = {
@@ -1830,12 +1849,12 @@ export const useStore = create<PiStore>()((set, get) => ({
     }
   },
 
-  compactContext: async (threadId) => {
+  compactContext: async (threadId, instructions) => {
     const t = get().threads[threadId];
     if (!t || !t.connected || t.isStreaming || t.compacting) return;
     set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], compacting: true } } } : s));
     try {
-      const res: any = await window.pi.thread.compact({ threadId });
+      const res: any = await window.pi.thread.compact({ threadId, instructions });
       set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], compacting: false } } } : s));
       const zh = get().config?.language === "zh";
       const before = typeof res?.tokensBefore === "number" ? res.tokensBefore.toLocaleString() : null;

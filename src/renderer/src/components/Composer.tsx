@@ -340,6 +340,11 @@ export function Composer({ threadId }: { threadId: string }) {
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (compacting) {
+        // pi hard-rejects prompts while compaction is in flight; say so instead.
+        pushToast("info", language === "zh" ? "压缩进行中，请稍候再发送" : "Compaction in progress — please wait");
+        return;
+      }
       if (isStreaming) {
         // Alt+Enter interrupts now (steering); Enter stages a pending follow-up.
         if (e.altKey) send("steer");
@@ -376,9 +381,23 @@ export function Composer({ threadId }: { threadId: string }) {
   // not open the menu prematurely.
   const slashMatch = text.match(/(?:^|\s)\/([^\s]*)$/);
   const slashQuery = (slashMatch?.[1] || "").toLowerCase();
-  const slashItems = useMemo(
-    () =>
-      (commands || [])
+  // /compact is a built-in TUI command that RPC mode cannot run via prompt;
+  // MPI routes it to the dedicated compact call, so advertise it in the menus.
+  const builtinCommands = useMemo(
+    () => [
+      {
+        name: "compact",
+        description: language === "zh" ? "压缩上下文（等同模型面板中的按钮）" : "Compact context (same as the button in the model panel)",
+        source: "builtin",
+      },
+    ],
+    [language],
+  );
+
+  const slashItems = useMemo(() => {
+    const all = [...builtinCommands, ...((commands || []).filter((command: any) => command.name !== "compact"))];
+    return (
+      all
         .filter((command: any) => {
           const displayName = command.source === "skill" ? String(command.name).replace(/^skill:/, "") : String(command.name);
           return (
@@ -387,14 +406,15 @@ export function Composer({ threadId }: { threadId: string }) {
             (command.source !== "skill" && String(command.description || "").toLowerCase().includes(slashQuery))
           );
         })
-        .slice(0, 30),
-    [commands, slashQuery],
-  );
+        .slice(0, 30)
+    );
+  }, [commands, slashQuery, builtinCommands]);
   const commandItems = useMemo(() => {
     const query = commandQuery.trim().toLowerCase();
     // The command popup is already scrollable; keep the complete collection
     // so commands that appear later in the list remain reachable without a search.
-    return (commands || []).filter((command: any) => {
+    const all = [...builtinCommands, ...((commands || []).filter((command: any) => command.name !== "compact"))];
+    return all.filter((command: any) => {
       const rawName = String(command.name || "");
       const displayName = command.source === "skill" ? rawName.replace(/^skill:/, "") : rawName;
       const haystack = [rawName, displayName, String(command.description || ""), String(command.source || "")]
@@ -402,7 +422,7 @@ export function Composer({ threadId }: { threadId: string }) {
         .toLowerCase();
       return !query || haystack.includes(query);
     });
-  }, [commands, commandQuery]);
+  }, [commands, commandQuery, builtinCommands]);
   const slashMenuOpen = !!slashMatch && !slashDismissed && slashItems.length > 0;
 
   useEffect(() => {
@@ -850,7 +870,12 @@ export function Composer({ threadId }: { threadId: string }) {
                 </button>
               </>
             ) : (
-              <button className="send-btn" title={language === "zh" ? "发送" : "Send"} onClick={() => send()} disabled={!text.trim() && !htmlReferences.length && !images.length && !files.length}>
+              <button
+                className="send-btn"
+                title={compacting ? (language === "zh" ? "压缩进行中…" : "Compaction in progress…") : language === "zh" ? "发送" : "Send"}
+                onClick={() => send()}
+                disabled={compacting || (!text.trim() && !htmlReferences.length && !images.length && !files.length)}
+              >
                 <Send size={15} />
               </button>
             )}
