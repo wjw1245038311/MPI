@@ -425,7 +425,7 @@ function referencedRunIds(m: ViewMessage): string[] {
  *  (a whole agent round) rendered under a single avatar. */
 interface MsgGroup {
   key: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "custom";
   items: ViewMessage[];
 }
 
@@ -436,7 +436,7 @@ function groupMessages(messages: ViewMessage[]): MsgGroup[] {
     if (m.role === "assistant" && last && last.role === "assistant") {
       last.items.push(m);
     } else {
-      groups.push({ key: m.key, role: m.role === "assistant" ? "assistant" : "user", items: [m] });
+      groups.push({ key: m.key, role: m.role === "custom" ? "custom" : m.role === "assistant" ? "assistant" : "user", items: [m] });
     }
   }
   return groups;
@@ -597,6 +597,18 @@ function MessageGroupInner({
   }, [artifactCheckKey]);
 
   const visibleArtifacts = artifacts.filter((artifact) => artifactExists[artifact.path.toLowerCase()] !== false);
+
+  // Extension command output (/mem0-status, …): a quiet centered note.
+  if (group.role === "custom") {
+    const m = group.items[0];
+    return (
+      <div className="msg custom">
+        <div className="msg-body">
+          <Markdown text={m.text || ""} />
+        </div>
+      </div>
+    );
+  }
 
   if (group.role === "user") {
     const m = group.items[0];

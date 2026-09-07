@@ -140,7 +140,9 @@ export interface ViewMessage {
   key: string;
   /** Stable Pi session entry id used by message-level branching. */
   branchEntryId?: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "custom";
+  /** Extension command output (pi.sendMessage with display:true), e.g. /mem0-status. */
+  customType?: string;
   timestamp?: number;
   /** user/system plain text (may include image blocks for user) */
   text?: string;
@@ -202,6 +204,8 @@ export interface ThreadState {
    *  transcript (read from disk) while still disconnected; interaction connects. */
   connected?: boolean;
   isStreaming: boolean;
+  /** Wall-clock time of the most recent agent_start; used to tell real LLM turns apart from extension commands that never start one. */
+  lastAgentStart?: number;
   /** True while a manual compaction run (pi /compact) is in flight. */
   compacting?: boolean;
   /** Post-compaction token estimate from the last successful compaction_end; pi reports context tokens as null until the next LLM response, so this keeps the usage popover meaningful in between. */

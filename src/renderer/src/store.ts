@@ -666,6 +666,16 @@ function historyToView(
         stopReason: m.stopReason,
         errorMessage: m.errorMessage,
       });
+    } else if (m.role === "custom") {
+      const text = textOfContent(m.content);
+      if (!text) return;
+      views.push({
+        key: `hc-${i}`,
+        role: "custom",
+        customType: typeof m.customType === "string" ? m.customType : undefined,
+        text,
+        timestamp: m.timestamp,
+      });
     }
   });
   return { views: attachBranchEntryIds(views, branchMessages), toolRuns };
@@ -735,7 +745,7 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
   if (!event || typeof event !== "object") return t;
   switch (event.type) {
     case "agent_start":
-      return { ...t, isStreaming: true, error: undefined };
+      return { ...t, isStreaming: true, lastAgentStart: Date.now(), error: undefined };
     case "agent_settled": {
       // If a streaming assistant message never got message_end, finalize it.
       const streaming = t.streaming;
@@ -795,6 +805,19 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
       }
       if (m.role === "assistant") {
         return { ...t, streaming: newAssistant() };
+      }
+      if (m.role === "custom") {
+        // Extension command output (e.g. /mem0-status via pi.sendMessage).
+        const text = textOfContent(m.content);
+        if (!text) return t;
+        const view: ViewMessage = {
+          key: `c-${uid()}`,
+          role: "custom",
+          customType: typeof m.customType === "string" ? m.customType : undefined,
+          text,
+          timestamp: m.timestamp,
+        };
+        return { ...t, messages: [...t.messages, view] };
       }
       return t;
     }
@@ -1758,6 +1781,9 @@ export const useStore = create<PiStore>()((set, get) => ({
       }
     }
     const wasStreaming = !!get().threads[threadId]?.isStreaming;
+    // Marks the moment this prompt was issued; a real LLM turn's agent_start
+    // (emitted within milliseconds of the RPC response) will be >= sentAt.
+    const sentAt = Date.now();
     const optimisticTitle = getDisplayThreadTitle(null, trimmed, get().config?.language || "en").trim().slice(0, 80);
     const optimistic: ViewMessage = {
       key: `opt-${uid()}`,
@@ -1819,6 +1845,33 @@ export const useStore = create<PiStore>()((set, get) => ({
       }
       // Pi creates/persists a new session lazily on its first prompt.
       await get().refreshProjects();
+      if (!wasStreaming) {
+        // Extension commands (/mem0-status, …) complete without starting an LLM
+        // turn, so no agent_start/agent_settled will ever arrive to release the
+        // optimistic streaming lock set above. Reconcile after a short grace
+        // period: if a real turn had started, its agent_start already recorded
+        // lastAgentStart >= sentAt and we must not touch it.
+        setTimeout(() => {
+          const t2 = get().threads[tid];
+          if (!t2 || !t2.isStreaming || t2.streaming) return;
+          if (t2.lastAgentStart && t2.lastAgentStart >= sentAt) return; // real turn started
+          set((s) => {
+            const th = s.threads[tid];
+            if (!th) return s;
+            let messages = th.messages;
+            for (let i = messages.length - 1; i >= 0; i--) {
+              if (messages[i].key.startsWith("opt-")) {
+                // Promote the un-promoted command bubble so it renders as a
+                // normal user message instead of staying in pending state.
+                messages = [...messages];
+                messages[i] = { ...messages[i], key: `u-${uid()}` };
+                break;
+              }
+            }
+            return { threads: { ...s.threads, [tid]: { ...th, isStreaming: false, messages } } };
+          });
+        }, 800);
+      }
     } catch (e: any) {
       set((s) => {
         const t = s.threads[tid];

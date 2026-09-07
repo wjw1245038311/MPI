@@ -1072,6 +1072,19 @@ body.sidebar-resizing * {
   border-radius: 10px;
   padding: 7px 11px;
 }
+.msg.custom {
+  justify-content: center;
+}
+.msg.custom .msg-body {
+  flex: 0 1 auto;
+  max-width: min(85%, 560px);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  background: #faf9f4;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
 
 /* markdown content */
 .md {
@@ -5609,6 +5622,7 @@ mark.hl {
   background: rgba(49, 69, 54, 0.5);
 }
 :root[data-theme="dark"] .msg.system .msg-body,
+:root[data-theme="dark"] .msg.custom .msg-body,
 :root[data-theme="dark"] .thinking-body,
 :root[data-theme="dark"] .tool-args,
 :root[data-theme="dark"] .tool-result,
