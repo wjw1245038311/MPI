@@ -142,7 +142,8 @@ function locatePiPackage() {
   }
 
   try {
-    const globalRoot = execFileSync(npmBinary(), ["root", "-g"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    // shell:true is required on Windows: Node refuses to spawn .cmd shims directly (EINVAL).
+    const globalRoot = execFileSync(npmBinary(), ["root", "-g"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], shell: true }).trim();
     const globalPackage = join(globalRoot, "@earendil-works", "pi-coding-agent");
     if (isExpectedPiPackage(globalPackage)) return globalPackage;
   } catch {
