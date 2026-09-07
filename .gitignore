@@ -1,0 +1,42 @@
+# Dependencies and generated builds
+node_modules/
+android/.gradle/
+android/.idea/
+android/.kotlin/
+android/local.properties
+android/**/build/
+cloudflare-signaling/node_modules/
+cloudflare-signaling/.wrangler/
+out/
+dist/
+release/
+resources/bundled/
+runtime-release/
+resources/runtime-manifest.json
+.runtime-stage/
+.legacy-resources-bundled-*/
+
+# Local app, QA, and agent data
+.claude/
+.codex-remote-attachments/
+.qa-appdata/
+.qa-browser-data/
+.qa-user-data/
+.tmp-*/
+pi-studio-gates/
+
+# Secrets and logs
+.env
+.env.*
+!.env.example
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local QA output
+qa-*.png
+nul

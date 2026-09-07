@@ -1,93 +1,118 @@
-# MPI
+# Pi Studio
 
+[English](README.md) · [简体中文](README.zh-CN.md)
 
+Pi Studio is an independent Electron desktop client for the [Pi coding agent](https://github.com/earendil-works/pi). It brings Pi projects, threads, model configuration, extensions, permission controls, automation, and file previews into one desktop workspace.
 
-## Getting started
+> Pi Studio is an independent community project. It is not affiliated with or endorsed by the Pi maintainers.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Screenshots
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+The current interface brings the main workspace, plugin manager, public Skills Hub, and Android remote-control settings into one desktop client.
 
-## Add your files
+<table>
+  <tr>
+    <td width="50%"><img src="imageassets/newpi01.png" alt="Pi Studio home workspace" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi03.png" alt="Pi Studio plugin manager" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center">Home workspace</td>
+    <td align="center">Plugin manager</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="imageassets/newpi04.png" alt="Pi Studio Skills Hub" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi02.png" alt="Pi Studio Android remote-control settings" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center">Skills Hub</td>
+    <td align="center">Android remote-control settings</td>
+  </tr>
+</table>
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## Recent additions
 
+- **Plugin manager** — Search, install, update, enable, disable, and remove Pi extension packages from npm, GitHub, or local paths. The same panel also lists skills discovered in Pi's shared and project directories.
+- **Skills Hub** — Browse and search the public [skills.sh](https://skills.sh/) directory, inspect a skill's details and install command, and install it directly into Pi.
+- **Android remote companion** — Pair an Android device with a desktop host through a short-lived QR ticket, configure the Signal WSS endpoint, view connection state, and manage trusted devices. The remote transport uses direct WebRTC with STUN discovery; TURN/relay candidates are intentionally rejected. Remote project-relative previews include bounded Excel/CSV table snapshots for Pi-Studio-Remote 0.2.
+- **Bilingual UI** — Switch the desktop UI between English and Simplified Chinese.
+
+## Features
+
+- Manage local projects and Pi threads from a desktop sidebar.
+- Chat with streaming responses and configurable model and thinking levels.
+- Read and preview Markdown, HTML, source code, images, and common office documents.
+- Configure providers and models through Pi's shared `models.json` configuration.
+- Use Pi extensions and plugins from the shared Pi agent directory.
+- Browse and install public skills through the integrated Skills Hub.
+- Pair with the Android companion for remote thread viewing and approved controls.
+- Run scheduled automations with an explicit sandbox or full-access permission level.
+- Keep a versioned Pi/Node runtime embedded in each installer and support app-managed runtime updates.
+- Use a permission gate for shell commands, project boundaries, and extension actions.
+
+## Download
+
+Download the latest `Pi-Studio-Setup-<version>.exe` for Windows x64 or `Pi-Studio-<version>-arm64.dmg` for Apple Silicon macOS from GitHub Releases. The installers are currently unsigned, so Windows SmartScreen or macOS Gatekeeper may show a warning.
+
+Each installer contains a native pinned Node.js + Pi runtime. On first launch, Pi Studio verifies and extracts that embedded runtime into the user data directory. Later app updates reuse the extracted runtime without any runtime download.
+
+## Development requirements
+
+- Windows x64 and macOS arm64 are the supported packaging targets.
+- Node.js `24.14.0` or newer within the Node 24 major version for development and packaging.
+- npm.
+- A global Pi coding agent installation is required by the packaging script:
+
+```powershell
+npm install -g @earendil-works/pi-coding-agent@0.84.1
 ```
-cd existing_repo
-git remote add origin http://workstation.tail38d5a.ts.net:8081/ai/MPI.git
-git branch -M main
-git push -uf origin main
+
+## Development
+
+```powershell
+npm install
+npm run typecheck
+npm run test:permission
+npm run dev
 ```
 
-## Integrate with your tools
+Useful commands:
 
-* [Set up project integrations](http://workstation.tail38d5a.ts.net:8081/ai/MPI/-/settings/integrations)
+```powershell
+npm run build             # Build the Electron application
+npm run bundle             # Build the runtime archive embedded by the installer
+npm run dist              # Bundle, build, and create the installer
+npm run pack              # Create an unpacked directory build
+```
 
-## Collaborate with your team
+Build output is written to `release/`. `npm run dist` creates the Electron installer with the runtime archive embedded inside it; the generated archive in `release/` is retained for QA and does not need to be uploaded separately. The repository pins Pi runtime `0.84.1` in `package.json`, and the packaging script verifies that version before creating the archive. To package from a specific local installation, set `PI_PACKAGE_DIR` to its package directory.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## Configuration and data
 
-## Test and Deploy
+Pi Studio shares Pi's agent configuration under `~/.pi/agent`, including model, provider, authentication, and extension settings. The desktop application's own settings are stored in Electron's user data directory.
 
-Use the built-in continuous integration in GitLab.
+API keys are user data. Do not commit `auth.json`, `models.json`, session files, screenshots containing keys, or local configuration directories to this repository.
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+## Permissions and security
 
-***
+Pi can read and write project files and execute tools on the user's behalf. Pi Studio starts new threads in sandbox mode by default. Sandbox automatically runs operations that can be verified as low-risk and explicit, while destructive or recursive deletion, sensitive paths, external code execution, network state changes, and uncertain operations still require confirmation. Full access must be selected explicitly for a thread or automation task. These controls reduce accidental actions but do not replace operating-system isolation or user review.
 
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+Do not paste API keys or other secrets into public issues, pull requests, screenshots, or example files. For a security issue, contact the project maintainer privately through GitHub before public disclosure.
 
 ## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+Bug reports and pull requests are welcome. Before submitting a change:
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+1. Keep changes focused and explain user-visible behavior.
+2. Run `npm run typecheck`.
+3. Run `npm run test:permission` when permission or tool execution code changes.
+4. Do not include local data, generated bundles, installers, credentials, or QA browser profiles.
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+## Third-party software
+
+Pi Studio uses Electron, React, Vite, Pi coding agent, Node.js, and other open-source packages. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the component inventory and license references.
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+The Pi Studio source code is licensed under the [MIT License](LICENSE).
+
+The Pi name, project name, logos, and other trademarks remain the property of their respective owners. The MIT license does not grant trademark rights.
