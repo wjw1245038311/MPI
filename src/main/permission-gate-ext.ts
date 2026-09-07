@@ -691,7 +691,7 @@ function redactInput(value: unknown): string {
 }
 
 export default function permissionGate(pi: any) {
-  const modeFile = process.env.PI_STUDIO_GATE_MODE_FILE || "";
+  const modeFile = process.env.MPI_GATE_MODE_FILE || "";
   const approvedExact = new Set<string>();
   const approvedPrefixes = new Set<string>();
   const approvedTools = new Set<string>();
@@ -866,7 +866,7 @@ export default function permissionGate(pi: any) {
     );
   });
 
-  pi.registerCommand("pi-studio-branch-at", {
+  pi.registerCommand("mpi-branch-at", {
     description: "Internal MPI branch operation",
     handler: async (args: string, ctx: any) => {
       const entryId = args.trim();
@@ -876,7 +876,7 @@ export default function permissionGate(pi: any) {
     },
   });
 
-  pi.registerCommand("pi-studio-refresh-models", {
+  pi.registerCommand("mpi-refresh-models", {
     description: "Internal MPI model registry refresh",
     handler: async (_args: string, ctx: any) => {
       await ctx.modelRegistry.refresh();

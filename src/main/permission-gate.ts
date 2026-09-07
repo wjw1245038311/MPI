@@ -23,7 +23,7 @@ let cachedGateDir: string | null = null;
 /** Write the gate extension into userData (once) and return its absolute path. */
 export function ensureGateExtension(userDataDir: string): string {
   if (cachedPath) return cachedPath;
-  const file = join(userDataDir, "pi-studio-permission-gate.ts");
+  const file = join(userDataDir, "mpi-permission-gate.ts");
   writeFileSync(file, gateSource, "utf8");
   cachedPath = file;
   return file;
@@ -31,13 +31,13 @@ export function ensureGateExtension(userDataDir: string): string {
 
 function gateDir(userDataDir: string): string {
   if (cachedGateDir) return cachedGateDir;
-  cachedGateDir = join(userDataDir, "pi-studio-gates");
+  cachedGateDir = join(userDataDir, "mpi-gates");
   mkdirSync(cachedGateDir, { recursive: true });
   return cachedGateDir;
 }
 
 /** Create a per-thread gate mode file holding the initial permission level and
- * return its absolute path (passed to the pi process as PI_STUDIO_GATE_MODE_FILE). */
+ * return its absolute path (passed to the pi process as MPI_GATE_MODE_FILE). */
 export function createGateModeFile(userDataDir: string, permission: string): string {
   const file = join(gateDir(userDataDir), `${randomUUID()}.mode`);
   writeFileSync(file, permission, "utf8");

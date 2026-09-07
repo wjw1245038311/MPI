@@ -23,7 +23,7 @@ resources/runtime-manifest.json
 .qa-browser-data/
 .qa-user-data/
 .tmp-*/
-pi-studio-gates/
+mpi-gates/
 
 # Secrets and logs
 .env

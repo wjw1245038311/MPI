@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const schema = JSON.parse(readFileSync(resolve(root, "protocol", "remote-v1.schema.json"), "utf8"));
 
-assert.equal(schema.$id, "https://pi-studio.dev/protocol/remote-v1.schema.json");
+assert.equal(schema.$id, "https://mpi.dev/protocol/remote-v1.schema.json");
 assert.equal(schema.properties.v.const, 1);
 assert.deepEqual(schema.required, ["v", "type", "sessionId", "sentAt"]);
 assert.ok(schema.properties.type.maxLength <= 80);
@@ -29,15 +29,15 @@ assert.match(desktopIpc, /\["text", "markdown", "html", "image", "xlsx"\]/);
 
 const previewService = readFileSync(resolve(root, "src", "main", "preview-service.ts"), "utf8");
 assert.match(previewService, /export function readRemotePreview/);
-assert.match(previewService, /pi-studio-xlsx-v1/);
+assert.match(previewService, /mpi-xlsx-v1/);
 assert.match(previewService, /REMOTE_SHEET_MAX_JSON_CHARS/);
 
-const androidProtocol = readFileSync(resolve(root, "android", "app", "src", "main", "java", "com", "pistudio", "remote", "RemoteProtocol.kt"), "utf8");
+const androidProtocol = readFileSync(resolve(root, "android", "app", "src", "main", "java", "com", "mpi", "remote", "RemoteProtocol.kt"), "utf8");
 assert.match(androidProtocol, /data class RemoteModelOption/);
 assert.match(androidProtocol, /data class RemoteSkill/);
 assert.match(androidProtocol, /data class RemoteFileArtifact/);
 
-const androidMain = readFileSync(resolve(root, "android", "app", "src", "main", "java", "com", "pistudio", "remote", "MainActivity.kt"), "utf8");
+const androidMain = readFileSync(resolve(root, "android", "app", "src", "main", "java", "com", "mpi", "remote", "MainActivity.kt"), "utf8");
 assert.match(androidMain, /isAllowedHtmlPreviewUri/);
 assert.match(androidMain, /requestDisallowInterceptTouchEvent/);
 assert.match(androidMain, /return !isAllowedHtmlPreviewUri/);
@@ -48,7 +48,7 @@ assert.match(source, /relay-candidate-rejected/);
 assert.doesNotMatch(source, /turns?:/i);
 
 const config = readFileSync(resolve(root, "src", "main", "config.ts"), "utf8");
-assert.match(config, /wss:\/\/pi-studio-remote\.scholarcn\.com\/ws/);
+assert.match(config, /wss:\/\/mpi-remote\.scholarcn\.com\/ws/);
 for (const stunUrl of [
   "stun:stun.miwifi.com:3478",
   "stun:stun.chat.bilibili.com:3478",
@@ -68,7 +68,7 @@ assert.match(transport, /transportStatus/);
 assert.match(transport, /pi-remote-heartbeat-v1:ping/);
 assert.match(transport, /heartbeat-timeout/);
 
-const android = readFileSync(resolve(root, "android", "app", "src", "main", "java", "com", "pistudio", "remote", "WebRtcClient.kt"), "utf8");
+const android = readFileSync(resolve(root, "android", "app", "src", "main", "java", "com", "mpi", "remote", "WebRtcClient.kt"), "utf8");
 assert.match(android, /startsWith\("stun:/i);
 assert.match(android, /direct-connection-rejected-relay/);
 assert.doesNotMatch(android, /turn:/i);

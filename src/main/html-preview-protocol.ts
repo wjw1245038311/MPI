@@ -21,7 +21,7 @@ const sessions = new Map<string, PreviewSession>();
  */
 const HTML_ANNOTATION_BRIDGE = `<script>
 (() => {
-  const SOURCE = "pi-studio-html-preview";
+  const SOURCE = "mpi-html-preview";
   let enabled = false;
   let editable = false;
   let editing = false;

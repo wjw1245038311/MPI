@@ -100,7 +100,7 @@
     ],
     "win": {
       "icon": "resources/icon.ico",
-      "executableName": "Pi Studio",
+      "executableName": "MPI",
       "target": [
         {
           "target": "nsis",

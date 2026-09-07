@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Configure an HTTPS/WSS reverse proxy for the Pi Studio signaling service.
+# Configure an HTTPS/WSS reverse proxy for the MPI signaling service.
 #
 # Interactive usage:
 #   bash scripts/configure-nginx-signaling.sh
@@ -13,7 +13,7 @@ set -Eeuo pipefail
 #     /etc/letsencrypt/live/relay.example.com/privkey.pem \
 #     http://127.0.0.1:8787
 
-SITE_NAME="pi-studio-signaling"
+SITE_NAME="mpi-signaling"
 SITE_AVAILABLE="/etc/nginx/sites-available/${SITE_NAME}"
 SITE_ENABLED="/etc/nginx/sites-enabled/${SITE_NAME}"
 ACME_ROOT="/var/www/acme"

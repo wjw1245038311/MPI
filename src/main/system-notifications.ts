@@ -66,7 +66,7 @@ export function createSystemNotificationCenter(getWindow: WindowGetter): SystemN
     if (!Notification.isSupported()) return;
     const window = getWindow();
     // The in-app confirmation card and transcript are already visible when Pi
-    // Studio owns the foreground. Native banners are for other apps/desktops.
+    // MPI owns the foreground. Native banners are for other apps/desktops.
     if (window && !window.isDestroyed() && window.isFocused()) return;
 
     let notification: Notification;

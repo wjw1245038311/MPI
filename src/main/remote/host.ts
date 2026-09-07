@@ -222,7 +222,7 @@ export class RemoteHost {
       hostId: this.identity.hostId,
       challenge: connection.challenge,
       hostPublicKeyPem: this.identity.publicKeyPem,
-      signature: signText(this.identity.privateKeyPem, `pi-studio-remote-v1|${this.identity.hostId}|${connection.connectionId}|${connection.challenge}`),
+      signature: signText(this.identity.privateKeyPem, `mpi-remote-v1|${this.identity.hostId}|${connection.connectionId}|${connection.challenge}`),
       directOnly: true,
     }));
   }
@@ -574,7 +574,7 @@ export class RemoteHost {
       this.sendFrame(connection, errorFor(request, "AUTH_REQUIRED", "Invalid device identity"));
       return;
     }
-    const signed = `pi-studio-remote-v1|${this.identity.hostId}|${connection.connectionId}|${connection.challenge}|${deviceId}`;
+    const signed = `mpi-remote-v1|${this.identity.hostId}|${connection.connectionId}|${connection.challenge}|${deviceId}`;
     if (!verifyText(publicKeyPem, signed, signature)) {
       this.sendFrame(connection, errorFor(request, "AUTH_REQUIRED", "Device signature is invalid"));
       return;

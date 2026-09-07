@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Build the standalone Pi Studio runtime asset.
+ * Build the standalone MPI runtime asset.
  *
  * This script creates the versioned Node.js + Pi archive that electron-builder
  * embeds in the desktop installer and writes its integrity manifest into
@@ -212,7 +212,7 @@ function main() {
   if (runtimeVersion !== EXPECTED_PI_VERSION) {
     throw new Error(`Pi runtime version mismatch: expected v${EXPECTED_PI_VERSION}, found v${runtimeVersion}`);
   }
-  const fileName = `Pi-Studio-Runtime-${runtimeVersion}-${platformSlug}-${process.arch}.tar.gz`;
+  const fileName = `MPI-Runtime-${runtimeVersion}-${platformSlug}-${process.arch}.tar.gz`;
   const archive = join(RUNTIME_OUT, fileName);
   rmSync(archive, { force: true });
 

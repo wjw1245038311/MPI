@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 
-const DEFAULT_SIGNALING_URL = "wss://pi-studio-remote.scholarcn.com/ws";
+const DEFAULT_SIGNALING_URL = "wss://mpi-remote.scholarcn.com/ws";
 
 type Pairing = {
   hostId: string;
@@ -30,7 +30,7 @@ function base64Url(value: string): string {
 }
 
 function pairingUri(pairing: Pairing): string {
-  return `pi-studio://pair?payload=${base64Url(JSON.stringify(pairing))}`;
+  return `mpi://pair?payload=${base64Url(JSON.stringify(pairing))}`;
 }
 
 function statusClass(state: string): string {

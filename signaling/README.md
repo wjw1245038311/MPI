@@ -1,4 +1,4 @@
-# Pi Studio signaling service
+# MPI signaling service
 
 This service only exchanges short-lived pairing tickets, SDP and ICE
 candidates. It never receives Pi messages or application data. After a device

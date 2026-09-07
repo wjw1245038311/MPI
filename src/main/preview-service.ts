@@ -308,7 +308,7 @@ export function readRemotePreview(absPath: string): PreviewPayload {
       name: sheet.name,
       rows: sheet.rows.map((row) => [...row]),
     }));
-    let text = JSON.stringify({ format: "pi-studio-xlsx-v1", sheets: boundedSheets });
+    let text = JSON.stringify({ format: "mpi-xlsx-v1", sheets: boundedSheets });
     // Cell limits are counted before JSON escaping. Remove complete trailing
     // rows/sheets if escaping pushes the valid JSON envelope over the remote
     // transport budget; never slice JSON into an invalid document.
@@ -317,13 +317,13 @@ export function readRemotePreview(absPath: string): PreviewPayload {
       if (lastSheet.rows.length > 1) lastSheet.rows.pop();
       else boundedSheets.pop();
       truncated = true;
-      text = JSON.stringify({ format: "pi-studio-xlsx-v1", sheets: boundedSheets });
+      text = JSON.stringify({ format: "mpi-xlsx-v1", sheets: boundedSheets });
     }
     const { base64: _base64, ...withoutBinary } = preview;
     return {
       ...withoutBinary,
       text,
-      lang: "pi-studio-xlsx-v1",
+      lang: "mpi-xlsx-v1",
       truncated,
     };
   } catch {

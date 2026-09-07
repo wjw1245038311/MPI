@@ -141,5 +141,5 @@ wss.on("connection", (ws) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
-  console.log(`[pi-studio-signaling] listening on :${port}`);
+  console.log(`[mpi-signaling] listening on :${port}`);
 });

@@ -168,7 +168,7 @@ export function probePiStartup(timeoutMs = 20_000): Promise<{ ok: boolean; outpu
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const requestId = `pi-studio-plugin-probe-${Date.now()}`;
+    const requestId = `mpi-plugin-probe-${Date.now()}`;
     let stdout = "";
     let stderr = "";
     let settled = false;

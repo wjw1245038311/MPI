@@ -1,12 +1,12 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "pi-studio-signaling",
+  "name": "mpi-signaling",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
   "workers_dev": false,
   "routes": [
     {
-      "pattern": "pi-studio-remote.scholarcn.com",
+      "pattern": "mpi-remote.scholarcn.com",
       "custom_domain": true
     }
   ],

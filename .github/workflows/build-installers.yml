@@ -94,7 +94,7 @@ jobs:
       - name: Upload installer artifact
         uses: actions/upload-artifact@v7
         with:
-          name: pi-studio-${{ matrix.name }}
+          name: mpi-${{ matrix.name }}
           path: release/
           if-no-files-found: error
           retention-days: 14
@@ -110,7 +110,7 @@ jobs:
       - name: Download packaged release artifacts
         uses: actions/download-artifact@v7
         with:
-          pattern: pi-studio-*
+          pattern: mpi-*
           path: release-artifacts
           merge-multiple: false
 
@@ -120,13 +120,13 @@ jobs:
           set -euo pipefail
           mkdir -p release-upload
           shopt -s nullglob
-          for artifact_dir in release-artifacts/pi-studio-*; do
+          for artifact_dir in release-artifacts/mpi-*; do
             artifact_name="${artifact_dir##*/}"
             for file in "$artifact_dir"/*; do
               [ -f "$file" ] || continue
               base="$(basename "$file")"
-              if [ "$base" = "Pi-Studio-Runtime-manifest.json" ]; then
-                base="Pi-Studio-Runtime-manifest-${artifact_name#pi-studio-}.json"
+              if [ "$base" = "MPI-Runtime-manifest.json" ]; then
+                base="MPI-Runtime-manifest-${artifact_name#mpi-}.json"
               fi
               cp "$file" "release-upload/$base"
             done
@@ -147,6 +147,6 @@ jobs:
             gh release create "$tag" release-upload/* \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --title "Pi Studio $tag" \
+              --title "MPI $tag" \
               --generate-notes
           fi

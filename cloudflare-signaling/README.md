@@ -1,6 +1,6 @@
-# Pi Studio Cloudflare signaling
+# MPI Cloudflare signaling
 
-This Worker is the public signaling endpoint for the isolated Pi Studio remote
+This Worker is the public signaling endpoint for the isolated MPI remote
 companion. It forwards only WebRTC signaling messages between a Windows host and
 an Android client. Prompts, Pi events, project data and files stay on the direct
 WebRTC DataChannel.
@@ -17,7 +17,7 @@ npm run deploy
 The deployed client URL is:
 
 ```text
-wss://pi-studio-signaling.<account-subdomain>.workers.dev/ws
+wss://mpi-signaling.<account-subdomain>.workers.dev/ws
 ```
 
 The local Windows and Android clients use `register-host`, `ticket`, `join`,

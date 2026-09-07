@@ -187,8 +187,8 @@ export function Composer({ threadId }: { threadId: string }) {
       setExpandedHtmlReferences({});
       requestAnimationFrame(() => taRef.current?.focus());
     };
-    window.addEventListener("pi-studio-html-element-reference", onElementReference);
-    return () => window.removeEventListener("pi-studio-html-element-reference", onElementReference);
+    window.addEventListener("mpi-html-element-reference", onElementReference);
+    return () => window.removeEventListener("mpi-html-element-reference", onElementReference);
   }, [threadId]);
 
   const autoGrow = () => {

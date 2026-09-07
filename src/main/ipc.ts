@@ -121,7 +121,7 @@ interface Attachment {
 }
 
 const CLIPBOARD_FILE_MAX_BYTES = 50_000_000;
-const CLIPBOARD_FILE_DIR = "pi-studio-clipboard";
+const CLIPBOARD_FILE_DIR = "mpi-clipboard";
 const CLIPBOARD_MIME_EXT: Record<string, string> = {
   "text/plain": ".txt",
   "text/csv": ".csv",
@@ -424,7 +424,7 @@ function synchronizedCommands(raw: unknown, cwd: string): any[] {
   const commands = Array.isArray(raw) ? raw : [];
 
   for (const command of commands) {
-    if (!command || typeof command !== "object" || (command as any).name === "pi-studio-branch-at") continue;
+    if (!command || typeof command !== "object" || (command as any).name === "mpi-branch-at") continue;
     if ((command as any).source === "skill") {
       const name = String((command as any).name || "");
       const canonical = byName.get(name);
@@ -1467,7 +1467,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   const remoteService = new RemoteService(remoteBackend);
   const remoteHost = new RemoteHost({
     userDataDir: getConfigDir(),
-    signalingUrl: process.env.PI_STUDIO_REMOTE_SIGNALING_URL || getConfig().remoteSignalingUrl || DEFAULT_REMOTE_SIGNALING_URL,
+    signalingUrl: process.env.MPI_REMOTE_SIGNALING_URL || getConfig().remoteSignalingUrl || DEFAULT_REMOTE_SIGNALING_URL,
     stunUrls: [...BUILT_IN_REMOTE_STUN_URLS],
     sendToRenderer: send,
     service: remoteService,

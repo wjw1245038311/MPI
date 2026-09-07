@@ -52,7 +52,7 @@ export interface AppConfig {
   remoteStunUrls: string[];
 }
 
-export const DEFAULT_REMOTE_SIGNALING_URL = "wss://pi-studio-remote.scholarcn.com/ws";
+export const DEFAULT_REMOTE_SIGNALING_URL = "wss://mpi-remote.scholarcn.com/ws";
 
 /** Fixed transport bootstrap endpoints. These are intentionally not user-editable. */
 export const BUILT_IN_REMOTE_STUN_URLS = [

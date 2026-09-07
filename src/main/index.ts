@@ -8,7 +8,7 @@ import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
 import { stopAutomations, stopScheduler } from "./automation";
 
 const IS_DEV_BUILD = !app.isPackaged;
-const APP_USER_MODEL_ID = IS_DEV_BUILD ? "com.pi-studio.app.dev" : "com.pi-studio.app";
+const APP_USER_MODEL_ID = IS_DEV_BUILD ? "com.mpi.app.dev" : "com.mpi.app";
 
 // Establish the product identity before Electron creates any windows or jump
 // list entries. Packaged builds also carry the matching executable metadata;

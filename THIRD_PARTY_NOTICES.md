@@ -1,6 +1,6 @@
 # Third-party notices
 
-Pi Studio is distributed under the MIT License for the Pi Studio code only. This file records the major components used by the source tree and the packaged application. Third-party software remains under its own license.
+MPI (a personal fork of Pi Studio) is distributed under the MIT License for its own code only. This file records the major components used by the source tree and the packaged application. Third-party software remains under its own license.
 
 When redistributing a built application, keep this notice together with the application and retain the license and copyright files shipped with the bundled dependencies.
 
@@ -15,7 +15,7 @@ When redistributing a built application, keep this notice together with the appl
 - Source: <https://github.com/earendil-works/pi/tree/main/packages/coding-agent>
 - License text: <https://github.com/earendil-works/pi/blob/main/LICENSE>
 
-Pi Studio launches the Pi coding agent as a bundled runtime. Pi's own source, trademarks, and dependencies are not relicensed by Pi Studio.
+MPI launches the Pi coding agent as a bundled runtime. Pi's own source, trademarks, and dependencies are not relicensed by MPI.
 
 ### Node.js
 
@@ -61,7 +61,7 @@ Build-time packages are listed separately because they are used to create the ap
 
 The Pi runtime and the Electron application include transitive npm dependencies. Their package manifests and license files are retained in the generated runtime tree where applicable. The authoritative inventories are:
 
-- `package-lock.json` for the Pi Studio source dependencies.
+- `package-lock.json` for the MPI source dependencies.
 - The generated runtime manifest and embedded runtime archive for the Pi runtime.
 - The license files distributed beside the corresponding packages in the packaged application.
 

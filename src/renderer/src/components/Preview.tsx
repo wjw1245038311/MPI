@@ -13,11 +13,11 @@ Object.entries(CODE_LANGUAGE_ALIASES).forEach(([name, aliases]) => {
   hljs.registerAliases(aliases, { languageName: name });
 });
 
-const PREVIEW_WIDTH_KEY = "pi-studio.preview-width";
+const PREVIEW_WIDTH_KEY = "mpi.preview-width";
 const PREVIEW_DEFAULT_WIDTH = 420;
 const PREVIEW_MIN_WIDTH = 300;
 const PREVIEW_MAX_WIDTH = 900;
-const HTML_PREVIEW_MESSAGE_SOURCE = "pi-studio-html-preview";
+const HTML_PREVIEW_MESSAGE_SOURCE = "mpi-html-preview";
 const HTML_ZOOM_MIN = 0.5;
 const HTML_ZOOM_MAX = 2;
 const HTML_ZOOM_WHEEL_SENSITIVITY = 1000;
@@ -115,7 +115,7 @@ export function Preview() {
     setHtmlEditMode(false);
     setSelectedHtmlTag(element.tagName ? `<${element.tagName.toLowerCase()}>` : null);
     if (!activeThreadId) return;
-    window.dispatchEvent(new CustomEvent("pi-studio-html-element-reference", {
+    window.dispatchEvent(new CustomEvent("mpi-html-element-reference", {
       detail: {
         threadId: activeThreadId,
         reference: formatHtmlElementReference(element, language),

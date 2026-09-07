@@ -111,7 +111,7 @@ export async function testModelAvailability(
   modelId: string,
 ): Promise<ModelAvailabilityResult> {
   const started = Date.now();
-  const testDir = mkdtempSync(join(tmpdir(), "pi-studio-model-test-"));
+  const testDir = mkdtempSync(join(tmpdir(), "mpi-model-test-"));
   try {
     const targetModel = (provider.models || []).find((model) => model.id === modelId);
     // Some reasoning-only gateways reject enable_thinking=false outright.

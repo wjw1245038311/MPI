@@ -7,7 +7,7 @@ import type { FileNode } from "../lib/types";
 import { Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, At, Search, Settings, Help, Refresh, Gauge, Smartphone, Sidebar as SidebarIcon } from "./icons";
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
-const SIDEBAR_WIDTH_KEY = "pi-studio.sidebar-width";
+const SIDEBAR_WIDTH_KEY = "mpi.sidebar-width";
 const SIDEBAR_DEFAULT_WIDTH = 286;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 520;

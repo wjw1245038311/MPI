@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pi-studio.dev/protocol/remote-v1.schema.json",
-  "title": "Pi Studio Remote Protocol v1",
+  "$id": "https://mpi.dev/protocol/remote-v1.schema.json",
+  "title": "MPI Remote Protocol v1",
   "description": "Versioned envelope for the direct WebRTC companion protocol. Model, skill, and file-output metadata is host-provided display data; skill invocation uses a validated slash command.",
   "x-request-types": [
     "projects.list",

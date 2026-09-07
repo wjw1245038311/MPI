@@ -166,7 +166,7 @@ function parseMinNodeVersion(range: string): string | null {
 
 async function fetchJson<T>(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<T> {
   const res = await fetch(url, {
-    headers: { accept: "application/json", "user-agent": "pi-studio-updater" },
+    headers: { accept: "application/json", "user-agent": "mpi-updater" },
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);

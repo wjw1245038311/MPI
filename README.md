@@ -1,10 +1,10 @@
-# Pi Studio
+# MPI
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Pi Studio is an independent Electron desktop client for the [Pi coding agent](https://github.com/earendil-works/pi). It brings Pi projects, threads, model configuration, extensions, permission controls, automation, and file previews into one desktop workspace.
+MPI is an independent Electron desktop client for the [Pi coding agent](https://github.com/earendil-works/pi). It brings Pi projects, threads, model configuration, extensions, permission controls, automation, and file previews into one desktop workspace.
 
-> Pi Studio is an independent community project. It is not affiliated with or endorsed by the Pi maintainers.
+> MPI is a personal fork of Pi Studio. It is not affiliated with or endorsed by the Pi maintainers.
 
 ## Screenshots
 
@@ -12,16 +12,16 @@ The current interface brings the main workspace, plugin manager, public Skills H
 
 <table>
   <tr>
-    <td width="50%"><img src="imageassets/newpi01.png" alt="Pi Studio home workspace" width="100%"></td>
-    <td width="50%"><img src="imageassets/newpi03.png" alt="Pi Studio plugin manager" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi01.png" alt="MPI home workspace" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi03.png" alt="MPI plugin manager" width="100%"></td>
   </tr>
   <tr>
     <td align="center">Home workspace</td>
     <td align="center">Plugin manager</td>
   </tr>
   <tr>
-    <td width="50%"><img src="imageassets/newpi04.png" alt="Pi Studio Skills Hub" width="100%"></td>
-    <td width="50%"><img src="imageassets/newpi02.png" alt="Pi Studio Android remote-control settings" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi04.png" alt="MPI Skills Hub" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi02.png" alt="MPI Android remote-control settings" width="100%"></td>
   </tr>
   <tr>
     <td align="center">Skills Hub</td>
@@ -33,7 +33,7 @@ The current interface brings the main workspace, plugin manager, public Skills H
 
 - **Plugin manager** — Search, install, update, enable, disable, and remove Pi extension packages from npm, GitHub, or local paths. The same panel also lists skills discovered in Pi's shared and project directories.
 - **Skills Hub** — Browse and search the public [skills.sh](https://skills.sh/) directory, inspect a skill's details and install command, and install it directly into Pi.
-- **Android remote companion** — Pair an Android device with a desktop host through a short-lived QR ticket, configure the Signal WSS endpoint, view connection state, and manage trusted devices. The remote transport uses direct WebRTC with STUN discovery; TURN/relay candidates are intentionally rejected. Remote project-relative previews include bounded Excel/CSV table snapshots for Pi-Studio-Remote 0.2.
+- **Android remote companion** — Pair an Android device with a desktop host through a short-lived QR ticket, configure the Signal WSS endpoint, view connection state, and manage trusted devices. The remote transport uses direct WebRTC with STUN discovery; TURN/relay candidates are intentionally rejected. Remote project-relative previews include bounded Excel/CSV table snapshots for MPI-Remote 0.2.
 - **Bilingual UI** — Switch the desktop UI between English and Simplified Chinese.
 
 ## Features
@@ -51,9 +51,9 @@ The current interface brings the main workspace, plugin manager, public Skills H
 
 ## Download
 
-Download the latest `Pi-Studio-Setup-<version>.exe` for Windows x64 or `Pi-Studio-<version>-arm64.dmg` for Apple Silicon macOS from GitHub Releases. The installers are currently unsigned, so Windows SmartScreen or macOS Gatekeeper may show a warning.
+Download the latest `MPI-Setup-<version>.exe` for Windows x64 or `MPI-<version>-arm64.dmg` for Apple Silicon macOS from GitHub Releases. The installers are currently unsigned, so Windows SmartScreen or macOS Gatekeeper may show a warning.
 
-Each installer contains a native pinned Node.js + Pi runtime. On first launch, Pi Studio verifies and extracts that embedded runtime into the user data directory. Later app updates reuse the extracted runtime without any runtime download.
+Each installer contains a native pinned Node.js + Pi runtime. On first launch, MPI verifies and extracts that embedded runtime into the user data directory. Later app updates reuse the extracted runtime without any runtime download.
 
 ## Development requirements
 
@@ -88,13 +88,13 @@ Build output is written to `release/`. `npm run dist` creates the Electron insta
 
 ## Configuration and data
 
-Pi Studio shares Pi's agent configuration under `~/.pi/agent`, including model, provider, authentication, and extension settings. The desktop application's own settings are stored in Electron's user data directory.
+MPI shares Pi's agent configuration under `~/.pi/agent`, including model, provider, authentication, and extension settings. The desktop application's own settings are stored in Electron's user data directory.
 
 API keys are user data. Do not commit `auth.json`, `models.json`, session files, screenshots containing keys, or local configuration directories to this repository.
 
 ## Permissions and security
 
-Pi can read and write project files and execute tools on the user's behalf. Pi Studio starts new threads in sandbox mode by default. Sandbox automatically runs operations that can be verified as low-risk and explicit, while destructive or recursive deletion, sensitive paths, external code execution, network state changes, and uncertain operations still require confirmation. Full access must be selected explicitly for a thread or automation task. These controls reduce accidental actions but do not replace operating-system isolation or user review.
+Pi can read and write project files and execute tools on the user's behalf. MPI starts new threads in sandbox mode by default. Sandbox automatically runs operations that can be verified as low-risk and explicit, while destructive or recursive deletion, sensitive paths, external code execution, network state changes, and uncertain operations still require confirmation. Full access must be selected explicitly for a thread or automation task. These controls reduce accidental actions but do not replace operating-system isolation or user review.
 
 Do not paste API keys or other secrets into public issues, pull requests, screenshots, or example files. For a security issue, contact the project maintainer privately through GitHub before public disclosure.
 
@@ -109,10 +109,10 @@ Bug reports and pull requests are welcome. Before submitting a change:
 
 ## Third-party software
 
-Pi Studio uses Electron, React, Vite, Pi coding agent, Node.js, and other open-source packages. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the component inventory and license references.
+MPI uses Electron, React, Vite, Pi coding agent, Node.js, and other open-source packages. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the component inventory and license references.
 
 ## License
 
-The Pi Studio source code is licensed under the [MIT License](LICENSE).
+The MPI source code is licensed under the [MIT License](LICENSE).
 
 The Pi name, project name, logos, and other trademarks remain the property of their respective owners. The MIT license does not grant trademark rights.

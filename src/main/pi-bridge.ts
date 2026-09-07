@@ -303,7 +303,7 @@ export interface PiBridgeOptions {
   /** Skill directories/files to load explicitly for deterministic discovery. */
   skills?: string[];
   /** Per-thread gate mode file exposed to the gate extension as
-   * PI_STUDIO_GATE_MODE_FILE so sandbox/full can be toggled without a restart. */
+   * MPI_GATE_MODE_FILE so sandbox/full can be toggled without a restart. */
   gateModeFile?: string;
   onEvent: (event: unknown) => void;
   onExtUi: (request: ExtUiRequest) => void;
@@ -349,7 +349,7 @@ export class PiBridge {
     for (const skill of this.opts.skills || []) args.push("--skill", skill);
 
     const env: NodeJS.ProcessEnv = { ...process.env };
-    if (this.opts.gateModeFile) env.PI_STUDIO_GATE_MODE_FILE = this.opts.gateModeFile;
+    if (this.opts.gateModeFile) env.MPI_GATE_MODE_FILE = this.opts.gateModeFile;
 
     this.proc = spawn(rt.node, [rt.cli, ...args], {
       cwd: this.opts.cwd,
@@ -487,7 +487,7 @@ export class PiBridge {
     return this.send("get_entries", since ? { since } : {});
   }
   branchAt(entryId: string): Promise<unknown> {
-    return this.prompt(`/pi-studio-branch-at ${entryId}`);
+    return this.prompt(`/mpi-branch-at ${entryId}`);
   }
   setModel(provider: string, modelId: string): Promise<unknown> {
     return this.send("set_model", { provider, modelId });
@@ -496,7 +496,7 @@ export class PiBridge {
     return this.send("get_available_models");
   }
   async refreshModels(): Promise<unknown> {
-    await this.prompt("/pi-studio-refresh-models");
+    await this.prompt("/mpi-refresh-models");
     return this.getAvailableModels();
   }
   setThinkingLevel(level: string): Promise<unknown> {
