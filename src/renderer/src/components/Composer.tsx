@@ -4,7 +4,7 @@ import { modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { HtmlElementReference, ModelInfo, PendingFile, PendingImage } from "../lib/types";
-import { Plus, Paperclip, ImageIcon, Send, Stop, Smile, At, Shield, Edit, Zap, Folder, Search, Check, ChevronRight } from "./icons";
+import { Plus, Paperclip, ImageIcon, Send, Stop, Smile, At, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress } from "./icons";
 
 let _pid = 0;
 const pid = () => `p${_pid++}`;
@@ -115,6 +115,14 @@ export function Composer({ threadId }: { threadId: string }) {
   const sendPendingSteering = useStore((s) => s.sendPendingSteering);
   const changeDraftThreadFolder = useStore((s) => s.changeDraftThreadFolder);
   const pushToast = useStore((s) => s.pushToast);
+  const compacting = useStore((s) => !!s.threads[threadId]?.compacting);
+  const connected = useStore((s) => !!s.threads[threadId]?.connected);
+  const hasMessages = useStore(
+    (s) => (s.threads[threadId]?.messages || []).some((message) => message.role === "user" || message.role === "assistant"),
+  );
+  const soundOnComplete = useStore((s) => s.config?.soundOnComplete !== false);
+  const compactContext = useStore((s) => s.compactContext);
+  const setSoundOnComplete = useStore((s) => s.setSoundOnComplete);
 
   const [text, setText] = useState("");
   const [images, setImages] = useState<PendingImage[]>([]);
@@ -796,6 +804,33 @@ export function Composer({ threadId }: { threadId: string }) {
                       </div>
                     </>
                   )}
+                  <div className="pop-divider" />
+                  <div className="pop-head">{language === "zh" ? "会话工具" : "Session tools"}</div>
+                  <button
+                    type="button"
+                    className={`opt tool-opt ${compacting ? "busy" : ""}`}
+                    disabled={!connected || isStreaming || compacting || !hasMessages}
+                    title={language === "zh" ? "总结较早的对话以释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}
+                    onClick={() => void compactContext(threadId)}
+                  >
+                    <span className="o1">
+                      <Compress size={13} />
+                      {compacting ? (language === "zh" ? "压缩中…" : "Compacting…") : language === "zh" ? "压缩上下文" : "Compact context"}
+                    </span>
+                    <span className="o2">{language === "zh" ? "总结较早的对话，释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`opt tool-opt ${soundOnComplete ? "active" : ""}`}
+                    onClick={() => void setSoundOnComplete(!soundOnComplete)}
+                  >
+                    <span className="o1">
+                      <Bell size={13} />
+                      {language === "zh" ? "完成提示音" : "Completion chime"}
+                      <span className={`tool-switch ${soundOnComplete ? "on" : ""}`}>{soundOnComplete ? (language === "zh" ? "开" : "on") : language === "zh" ? "关" : "off"}</span>
+                    </span>
+                    <span className="o2">{language === "zh" ? "智能体完成任务时播放提示音" : "Play a short chime when the agent finishes a task"}</span>
+                  </button>
                 </div>
               )}
             </div>

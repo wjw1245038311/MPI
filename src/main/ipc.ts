@@ -2019,6 +2019,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return true;
   });
 
+  // Manual context compaction (pi /compact). Resolves with the compaction
+  // result so the renderer can report token savings; progress itself arrives
+  // as compaction_start/compaction_end agent events.
+  ipcMain.handle("thread:compact", async (_e, args: { threadId: string; instructions?: string }) => {
+    const h = bridges.get(args.threadId);
+    if (!h) throw new Error("Thread not open: " + args.threadId);
+    const instructions = typeof args.instructions === "string" ? args.instructions.trim() : "";
+    return h.bridge.compact(instructions || undefined);
+  });
+
   ipcMain.handle("thread:setModel", async (_e, args: { threadId: string; provider: string; modelId: string }) => {
     const h = bridges.get(args.threadId);
     if (!h) throw new Error("Thread not open");

@@ -103,6 +103,7 @@ const api = {
     followUp: (args: { threadId: string; text: string; images?: unknown[]; attachments?: { abs: string; name: string }[] }) =>
       ipcRenderer.invoke("thread:followUp", args),
     abort: (threadId: string) => ipcRenderer.invoke("thread:abort", threadId),
+    compact: (args: { threadId: string; instructions?: string }) => ipcRenderer.invoke("thread:compact", args),
     setModel: (args: { threadId: string; provider: string; modelId: string }) => ipcRenderer.invoke("thread:setModel", args),
     getModels: (threadId: string) => ipcRenderer.invoke("thread:getModels", threadId),
     refreshModels: (threadId: string) => ipcRenderer.invoke("thread:refreshModels", threadId),

@@ -202,6 +202,8 @@ export interface ThreadState {
    *  transcript (read from disk) while still disconnected; interaction connects. */
   connected?: boolean;
   isStreaming: boolean;
+  /** True while a manual compaction run (pi /compact) is in flight. */
+  compacting?: boolean;
   messages: ViewMessage[];
   streaming: ViewMessage | null;
   toolRuns: Record<string, ToolRun>;
@@ -258,6 +260,8 @@ export interface AppConfig {
   windowBounds?: { x?: number; y?: number; width: number; height: number; maximized?: boolean };
   theme: "dark" | "light" | "system";
   language: "en" | "zh";
+  /** Play a short chime when an agent turn completes. */
+  soundOnComplete?: boolean;
   remoteSignalingUrl: string;
   remoteSignalingEnabled: boolean;
   remoteStunUrls: string[];

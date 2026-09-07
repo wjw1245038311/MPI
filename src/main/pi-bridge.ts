@@ -477,6 +477,11 @@ export class PiBridge {
   abort(): Promise<unknown> {
     return this.send("abort");
   }
+  /** Manually compact the conversation context (same as /compact in the TUI).
+   * Resolves with { summary, firstKeptEntryId, tokensBefore, estimatedTokensAfter, ... }. */
+  compact(customInstructions?: string): Promise<unknown> {
+    return this.send("compact", customInstructions ? { customInstructions } : {});
+  }
   getState(): Promise<unknown> {
     return this.send("get_state");
   }

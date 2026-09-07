@@ -38,6 +38,8 @@ export interface AppConfig {
   theme: "dark" | "light" | "system";
   /** UI language. English is the default for new installations. */
   language: "en" | "zh";
+  /** Play a short chime in the renderer when an agent turn completes. */
+  soundOnComplete: boolean;
   /** Per-thread permission level, keyed by session file path. Defaults to "sandbox" when absent. */
   threadPermissions: Record<string, "sandbox" | "full">;
   /** cwd of the most recently opened thread; seeds the warm spare's project. */
@@ -97,6 +99,7 @@ const DEFAULTS: AppConfig = {
   archivedThreads: [],
   theme: "light",
   language: "en",
+  soundOnComplete: true,
   threadPermissions: {},
   automationTasks: [],
   remoteSignalingUrl: DEFAULT_REMOTE_SIGNALING_URL,

@@ -22,6 +22,7 @@ import type {
   ViewMessage,
 } from "./lib/types";
 import { cleanOutput, extensionsAlreadyLatest, hasLibuvAssertion, lastLine, stripAnsi } from "./lib/update";
+import { playCompletionChime } from "./lib/sound";
 
 /* ------------------------------------------------------------------ *
  * Pure helpers
@@ -741,6 +742,10 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
       if (!streaming) return { ...t, isStreaming: false };
       return { ...t, isStreaming: false, streaming: null, messages: [...t.messages, streaming] };
     }
+    case "compaction_start":
+      return { ...t, compacting: true };
+    case "compaction_end":
+      return { ...t, compacting: false };
     case "message_start": {
       const m = event.message;
       if (!m) return t;
@@ -1058,6 +1063,9 @@ interface PiStore {
   setPendingFollowUp: (threadId: string, pending: PendingFollowUp | null) => void;
   sendPendingSteering: (threadId: string) => Promise<void>;
   abortThread: (id: string) => Promise<void>;
+  /** Manually compact the thread's context (pi /compact). */
+  compactContext: (threadId: string) => Promise<void>;
+  setSoundOnComplete: (on: boolean) => Promise<void>;
   refreshOpenThreadModels: () => Promise<void>;
   setModel: (id: string, provider: string, modelId: string) => Promise<void>;
   setThinking: (id: string, level: string) => Promise<void>;
@@ -1186,6 +1194,11 @@ function scheduleEventFlush(): void {
       }
       return changed ? { threads } : s;
     });
+
+    // Completion chime: one ding per flush even if several threads settle together.
+    if (settledIds.length > 0 && useStore.getState().config?.soundOnComplete !== false) {
+      playCompletionChime();
+    }
 
     // Deliver queued follow-ups after the settled state is applied.
     for (const threadId of settledIds) {
@@ -1810,6 +1823,37 @@ export const useStore = create<PiStore>()((set, get) => ({
       await window.pi.thread.abort(id);
     } catch (e: any) {
       get().pushToast("error", e?.message || "abort failed");
+    }
+  },
+
+  compactContext: async (threadId) => {
+    const t = get().threads[threadId];
+    if (!t || !t.connected || t.isStreaming || t.compacting) return;
+    set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], compacting: true } } } : s));
+    try {
+      const res: any = await window.pi.thread.compact({ threadId });
+      set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], compacting: false } } } : s));
+      const zh = get().config?.language === "zh";
+      const before = typeof res?.tokensBefore === "number" ? res.tokensBefore.toLocaleString() : null;
+      const after = typeof res?.estimatedTokensAfter === "number" ? res.estimatedTokensAfter.toLocaleString() : null;
+      if (before && after) {
+        get().pushToast("success", zh ? `上下文已压缩：${before} → 约 ${after} tokens` : `Context compacted: ${before} → ~${after} tokens`);
+      } else {
+        get().pushToast("success", zh ? "上下文已压缩" : "Context compacted");
+      }
+    } catch (e: any) {
+      set((s) => (s.threads[threadId] ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], compacting: false } } } : s));
+      const zh = get().config?.language === "zh";
+      get().pushToast("error", e?.message || (zh ? "压缩失败" : "compaction failed"));
+    }
+  },
+
+  setSoundOnComplete: async (on) => {
+    try {
+      const config = await window.pi.app.setConfig({ soundOnComplete: on });
+      set({ config });
+    } catch (e: any) {
+      get().pushToast("error", e?.message || "Failed to update settings");
     }
   },
 

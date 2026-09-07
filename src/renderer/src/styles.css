@@ -2589,6 +2589,45 @@ body.sidebar-resizing * {
   color: rgba(255, 255, 255, 0.78);
 }
 
+/* session tools inside the model popover (compact context / completion chime) */
+.pill-pop .opt.tool-opt .o1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pill-pop .opt.tool-opt svg {
+  color: var(--text-dim);
+  flex: none;
+}
+.pill-pop .opt.tool-opt.active svg {
+  color: var(--accent);
+}
+.pill-pop .opt.tool-opt:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.pill-pop .opt.tool-opt.busy .o1 svg {
+  animation: tool-spin 1s linear infinite;
+}
+@keyframes tool-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.tool-switch {
+  margin-left: auto;
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: #eceae4;
+  color: var(--text-faint);
+}
+.tool-switch.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 /* ---------- usage popovers (thread context + pi total) ---------- */
 .ctx-wrap,
 .usage-wrap {
@@ -5600,6 +5639,9 @@ mark.hl {
 :root[data-theme="dark"] .modal-option,
 :root[data-theme="dark"] .attach-chip,
 :root[data-theme="dark"] .pill-btn {
+  background: var(--control);
+}
+:root[data-theme="dark"] .tool-switch {
   background: var(--control);
 }
 :root[data-theme="dark"] .search-foot,

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore } from "./store";
 import { usePiEvents } from "./lib/usePiEvents";
+import { unlockAudio } from "./lib/sound";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
 import { Chat } from "./components/Chat";
@@ -58,6 +59,10 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Prime the WebAudio context on the first user gesture so the completion
+  // chime can play later without a fresh gesture requirement.
+  useEffect(() => unlockAudio(), []);
 
   const newTask = async () => {
     let cwd: string | null = useStore.getState().activeProjectCwd;
