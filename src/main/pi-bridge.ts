@@ -198,7 +198,7 @@ export async function resolvePiRuntime(cliOverride?: string): Promise<ResolvedRu
       if (!existsSync(cli)) throw new Error(`Configured pi cli path does not exist: ${cli}`);
       const shimDir = dirname(cli);
       const node = locateNode(shimDir);
-      if (!node) throw new Error("A system `node` binary was not found on PATH. Install Node.js, then restart Pi Studio.");
+      if (!node) throw new Error("A system `node` binary was not found on PATH. Install Node.js, then restart MPI.");
       resolvedRuntime = { node, cli };
       resolvedKind = "override";
       return resolvedRuntime;
@@ -259,7 +259,7 @@ export async function resolvePiRuntime(cliOverride?: string): Promise<ResolvedRu
     const cli = loc.cli;
     const node = locateNode(loc.shimDir);
     if (!node) {
-      throw new Error("A system `node` binary was not found on PATH. Install Node.js, then restart Pi Studio.");
+      throw new Error("A system `node` binary was not found on PATH. Install Node.js, then restart MPI.");
     }
     resolvedRuntime = { node, cli };
     resolvedKind = "system";

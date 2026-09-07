@@ -30,7 +30,7 @@ export function isSandboxApprovalRequest(request: unknown): boolean {
   return /^(?:Sandbox\s+authorization|Sandbox\s+请求授权|沙盒\s*请求授权|请求授权)\s*[:：]/i.test(value.title.trim());
 }
 
-/** Extract only the operation label; the full command remains inside Pi Studio. */
+/** Extract only the operation label; the full command remains inside MPI. */
 export function sandboxOperationFromTitle(title: unknown, language: NotificationLanguage = "en"): string {
   if (typeof title !== "string") return language === "zh" ? "命令行" : "Shell";
   const firstLine = title.split(/\r?\n/, 1)[0] || "";
@@ -97,12 +97,12 @@ export function createSystemNotificationCenter(getWindow: WindowGetter): SystemN
     notifySandboxApproval(threadId, language, operation) {
       const label = truncateNotificationText(operation || (language === "zh" ? "命令行" : "Shell"), 80);
       show(threadId, language, {
-        title: language === "zh" ? "Pi Studio · 需要确认" : "Pi Studio · Approval required",
+        title: language === "zh" ? "MPI · 需要确认" : "MPI · Approval required",
         subtitle: label,
         body:
           language === "zh"
-            ? `沙盒正在等待确认（${label}）。点击此提醒返回 Pi Studio。`
-            : `Sandbox is waiting for approval (${label}). Click to return to Pi Studio.`,
+            ? `沙盒正在等待确认（${label}）。点击此提醒返回 MPI。`
+            : `Sandbox is waiting for approval (${label}). Click to return to MPI.`,
         persistent: true,
       });
     },
@@ -113,7 +113,7 @@ export function createSystemNotificationCenter(getWindow: WindowGetter): SystemN
       const reply = truncateNotificationText(details.reply, 220);
       const body = reply || (language === "zh" ? "点击此提醒查看完整回复。" : "Click to view the completed reply.");
       show(threadId, language, {
-        title: language === "zh" ? "Pi Studio · 任务完成" : "Pi Studio · Task completed",
+        title: language === "zh" ? "MPI · 任务完成" : "MPI · Task completed",
         subtitle: prompt || undefined,
         body,
       });

@@ -439,7 +439,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
         <button
           className="iconbtn"
           title={language === "zh" ? "帮助" : "Help"}
-          onClick={() => useStore.getState().pushToast("info", language === "zh" ? "Pi Studio · 继承终端 pi" : "Pi Studio · inherits terminal pi")}
+          onClick={() => useStore.getState().pushToast("info", language === "zh" ? "MPI · 继承终端 pi" : "MPI · inherits terminal pi")}
         >
           <Help size={15} />
         </button>

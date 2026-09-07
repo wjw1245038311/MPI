@@ -330,7 +330,7 @@ export function readRemotePreview(absPath: string): PreviewPayload {
     const { base64: _base64, ...withoutBinary } = preview;
     return {
       ...withoutBinary,
-      message: "Excel preview could not be parsed on the Pi Studio host",
+      message: "Excel preview could not be parsed on the MPI host",
     };
   }
 }

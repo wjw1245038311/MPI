@@ -1440,7 +1440,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         }
       }
       const allowed = models.some((model) => model.provider === provider && model.id === modelId);
-      if (!allowed) throw new RemoteProtocolError("MODEL_UNAVAILABLE", "That model is not available on the Pi Studio host");
+      if (!allowed) throw new RemoteProtocolError("MODEL_UNAVAILABLE", "That model is not available on the MPI host");
       await handle.bridge.setModel(provider, modelId);
       return remoteSnapshot(threadId, { live: true });
     },

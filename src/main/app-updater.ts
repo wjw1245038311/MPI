@@ -3,6 +3,9 @@ import { autoUpdater, type ProgressInfo, type UpdateCheckResult, type UpdateInfo
 
 const REPOSITORY = "flowflic/Pi-Studio";
 const RELEASES_LATEST_URL = "https://github.com/" + REPOSITORY + "/releases/latest";
+// MPI 个人 fork：禁用应用自更新，避免上游 flowflic/Pi-Studio 发布覆盖本地魔改。
+// Pi 核心更新（core-updater.ts，走 npm registry）不受影响。
+const APP_UPDATE_DISABLED = true;
 
 export type AppUpdateStage = "checking" | "downloading" | "ready" | "installing" | "error";
 
@@ -161,7 +164,7 @@ function configureUpdater(): void {
     const pct = Number.isFinite(info.percent) ? Math.max(0, Math.min(100, Math.round(info.percent))) : undefined;
     emitProgress({
       stage: "downloading",
-      message: "正在下载 Pi Studio v" + normalizeVersion(latestUpdateInfo?.version || "") + "…",
+      message: "正在下载 MPI v" + normalizeVersion(latestUpdateInfo?.version || "") + "…",
       ...(pct === undefined ? {} : { pct }),
     });
   });
@@ -171,7 +174,7 @@ function configureUpdater(): void {
     downloadedVersion = normalizeVersion(info.version);
     emitProgress({
       stage: "ready",
-      message: "Pi Studio v" + downloadedVersion + " 已下载，可以安装并重启",
+      message: "MPI v" + downloadedVersion + " 已下载，可以安装并重启",
       pct: 100,
     });
   });
@@ -194,6 +197,7 @@ async function checkWithUpdater(): Promise<UpdateCheckResult | null> {
 export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
   configureUpdater();
   const current = normalizeVersion(app.getVersion());
+  if (APP_UPDATE_DISABLED) return emptyStatus(current);
   lastUpdaterError = null;
   latestUpdateInfo = null;
 
@@ -214,13 +218,14 @@ export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
 
 export async function downloadAppUpdate(onProgress?: (progress: AppUpdateProgress) => void): Promise<AppUpdateResult> {
   configureUpdater();
+  if (APP_UPDATE_DISABLED) return { ok: false, downloaded: false, message: "MPI 为个人 fork，应用自更新已禁用" };
   const previousSink = progressSink;
   progressSink = onProgress || null;
   lastUpdaterError = null;
 
   try {
     if (!isPackagedInstallable()) {
-      throw new Error("当前环境不能自动安装应用更新，请使用已安装的 Pi Studio");
+      throw new Error("当前环境不能自动安装应用更新，请使用已安装的 MPI");
     }
 
     const result = await checkWithUpdater();
@@ -235,23 +240,23 @@ export async function downloadAppUpdate(onProgress?: (progress: AppUpdateProgres
         ok: true,
         downloaded: false,
         version: status.current,
-        message: "Pi Studio 已经是最新版本（v" + status.current + "）",
+        message: "MPI 已经是最新版本（v" + status.current + "）",
       };
     }
     if (!status.supported) throw new Error("更新服务没有返回 Windows 安装包");
 
     const version = normalizeVersion(info.version);
     if (downloadedVersion === version) {
-      emitProgress({ stage: "ready", message: "Pi Studio v" + version + " 已下载，可以安装并重启", pct: 100 });
+      emitProgress({ stage: "ready", message: "MPI v" + version + " 已下载，可以安装并重启", pct: 100 });
       return {
         ok: true,
         downloaded: true,
         version,
-        message: "Pi Studio v" + version + " 已下载，可以安装并重启",
+        message: "MPI v" + version + " 已下载，可以安装并重启",
       };
     }
 
-    emitProgress({ stage: "downloading", message: "正在下载 Pi Studio v" + version + "…", pct: 0 });
+    emitProgress({ stage: "downloading", message: "正在下载 MPI v" + version + "…", pct: 0 });
     if (!downloadPromise) {
       downloadPromise = autoUpdater.downloadUpdate().finally(() => {
         downloadPromise = null;
@@ -266,13 +271,13 @@ export async function downloadAppUpdate(onProgress?: (progress: AppUpdateProgres
       ok: true,
       downloaded: true,
       version,
-      message: "Pi Studio v" + version + " 已下载，可以安装并重启",
+      message: "MPI v" + version + " 已下载，可以安装并重启",
     };
   } catch (error: any) {
     const message = error?.message || String(error);
     lastUpdaterError = message;
     emitProgress({ stage: "error", message });
-    return { ok: false, downloaded: false, message: "Pi Studio 更新失败：" + message };
+    return { ok: false, downloaded: false, message: "MPI 更新失败：" + message };
   } finally {
     if (progressSink === onProgress) progressSink = previousSink;
   }
@@ -280,6 +285,7 @@ export async function downloadAppUpdate(onProgress?: (progress: AppUpdateProgres
 
 export function installAppUpdate(): AppUpdateResult {
   configureUpdater();
+  if (APP_UPDATE_DISABLED) return { ok: false, downloaded: false, message: "MPI 为个人 fork，应用自更新已禁用" };
   if (!downloadedVersion) {
     return { ok: false, downloaded: false, message: "请先下载应用更新" };
   }
@@ -294,7 +300,7 @@ export function installAppUpdate(): AppUpdateResult {
 
   const version = downloadedVersion;
   lastUpdaterError = null;
-  emitProgress({ stage: "installing", message: "正在安装 Pi Studio v" + version + "，应用将自动重启" });
+  emitProgress({ stage: "installing", message: "正在安装 MPI v" + version + "，应用将自动重启" });
   try {
     // electron-updater invokes the NSIS updater, waits for this process to
     // exit, installs the downloaded package, and relaunches the app.
@@ -306,7 +312,7 @@ export function installAppUpdate(): AppUpdateResult {
       ok: true,
       downloaded: true,
       version,
-      message: "正在安装 Pi Studio v" + version + "，应用将自动重启",
+      message: "正在安装 MPI v" + version + "，应用将自动重启",
     };
   } catch (error: any) {
     const message = error?.message || String(error);

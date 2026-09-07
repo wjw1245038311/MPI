@@ -193,7 +193,7 @@ function skillsCliPath(): string {
   try {
     return appRequire.resolve("skills/bin/cli.mjs");
   } catch {
-    throw new Error("The bundled skills CLI is unavailable. Reinstall Pi Studio or its dependencies.");
+    throw new Error("The bundled skills CLI is unavailable. Reinstall MPI or its dependencies.");
   }
 }
 

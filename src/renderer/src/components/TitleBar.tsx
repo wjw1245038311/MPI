@@ -90,7 +90,7 @@ export function TitleBar() {
     {
       id: "help",
       label: "帮助",
-      items: [{ label: "关于 Pi Studio", onClick: act(() => st().pushToast("info", "Pi Studio · 终端 pi 的 Windows 桌面端")) }],
+      items: [{ label: "关于 MPI", onClick: act(() => st().pushToast("info", "MPI · 终端 pi 的 Windows 桌面端")) }],
     },
   ];
 
@@ -112,7 +112,7 @@ export function TitleBar() {
       ? language === "zh" ? "Pi 已就绪" : "Pi ready"
       : runtime
         ? language === "zh" ? "Pi 不可用" : "Pi unavailable"
-        : "Pi Studio";
+        : "MPI";
   const statusTitle = active?.error || runtime?.error || status;
 
   return (
@@ -127,7 +127,7 @@ export function TitleBar() {
       </button>
       <div className="tb-brand">
         <img className="tb-brand-icon" src={appIconUrl} alt="" aria-hidden="true" />
-        Pi Studio
+        MPI
       </div>
       <div className="tb-menu" ref={menuRef}>
         {MENUS.map((m) => (

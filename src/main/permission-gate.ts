@@ -7,7 +7,7 @@ import gateSource from "./permission-gate-ext.ts?raw";
  * Pi has no built-in sandbox or approval modes (see pi docs/security.md:
  * "No Built-in Sandbox"). The idiomatic way to gate sensitive operations is an
  * extension that hooks the `tool_call` event and confirms dangerous shell
- * commands via `ctx.ui.select` — which surfaces in Pi Studio as the existing
+ * commands via `ctx.ui.select` — which surfaces in MPI as the existing
  * extension-UI modal.
  *
  * The gate extension lives as a real source file (permission-gate-ext.ts) and

@@ -640,7 +640,7 @@ function MessageGroupInner({
                     className="msg-user-file"
                     key={`${attachment.name}-${index}`}
                     disabled={!attachment.path}
-                    title={attachment.path ? language === "zh" ? "在 Pi Studio 中查看附件" : "View attachment in Pi Studio" : attachment.name}
+                    title={attachment.path ? language === "zh" ? "在 MPI 中查看附件" : "View attachment in MPI" : attachment.name}
                     aria-label={attachment.path ? `${language === "zh" ? "查看附件" : "View attachment"}: ${attachment.name}` : attachment.name}
                     onClick={() => void openAttachment(attachment)}
                   >
@@ -706,7 +706,7 @@ function MessageGroupInner({
   };
   return (
     <div className="msg assistant">
-      <div className="msg-avatar" aria-label={language === "zh" ? "Pi Studio 智能体" : "Pi Studio Agent"}>
+      <div className="msg-avatar" aria-label={language === "zh" ? "MPI 智能体" : "MPI Agent"}>
         <img className="msg-app-icon" src={appIconUrl} alt="" />
       </div>
       <div className="msg-body">
@@ -726,7 +726,7 @@ function MessageGroupInner({
                 <button
                   key={artifact.path.toLowerCase()}
                   className="msg-artifact"
-                  title={`${language === "zh" ? "在 Pi Studio 中查看" : "View in Pi Studio"} · ${artifact.path}`}
+                  title={`${language === "zh" ? "在 MPI 中查看" : "View in MPI"} · ${artifact.path}`}
                   onClick={() => void openArtifact(artifact)}
                   onContextMenu={(event) => {
                     event.preventDefault();

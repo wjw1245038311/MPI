@@ -867,7 +867,7 @@ export default function permissionGate(pi: any) {
   });
 
   pi.registerCommand("pi-studio-branch-at", {
-    description: "Internal Pi Studio branch operation",
+    description: "Internal MPI branch operation",
     handler: async (args: string, ctx: any) => {
       const entryId = args.trim();
       if (!entryId || !/^[a-zA-Z0-9_-]+$/.test(entryId)) throw new Error("Invalid session entry id");
@@ -877,7 +877,7 @@ export default function permissionGate(pi: any) {
   });
 
   pi.registerCommand("pi-studio-refresh-models", {
-    description: "Internal Pi Studio model registry refresh",
+    description: "Internal MPI model registry refresh",
     handler: async (_args: string, ctx: any) => {
       await ctx.modelRegistry.refresh();
     },

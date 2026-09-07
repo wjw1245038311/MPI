@@ -13,12 +13,12 @@ const APP_USER_MODEL_ID = IS_DEV_BUILD ? "com.pi-studio.app.dev" : "com.pi-studi
 // Establish the product identity before Electron creates any windows or jump
 // list entries. Packaged builds also carry the matching executable metadata;
 // development builds still run as electron.exe at the OS process level.
-app.setName(IS_DEV_BUILD ? "Pi Studio Dev" : "Pi Studio");
-// Keep `npm run dev` independent from an installed Pi Studio instance. Both
+app.setName(IS_DEV_BUILD ? "MPI Dev" : "MPI");
+// Keep `npm run dev` independent from an installed MPI instance. Both
 // otherwise share Electron's default userData lock, so the dev process can
 // silently hand its launch to the already-running packaged app and show old
 // window/tray behavior instead of the source currently being edited.
-if (IS_DEV_BUILD) app.setPath("userData", join(app.getPath("appData"), "Pi Studio Dev"));
+if (IS_DEV_BUILD) app.setPath("userData", join(app.getPath("appData"), "MPI Dev"));
 if (process.platform === "win32") app.setAppUserModelId(APP_USER_MODEL_ID);
 
 registerHtmlPreviewScheme();
@@ -67,10 +67,10 @@ function updateTrayMenu(): void {
   const show = () => showMainWindow();
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: zh ? "显示 Pi Studio" : "Show Pi Studio", click: show },
+      { label: zh ? "显示 MPI" : "Show MPI", click: show },
       { type: "separator" },
       {
-        label: zh ? "退出 Pi Studio" : "Quit Pi Studio",
+        label: zh ? "退出 MPI" : "Quit MPI",
         click: () => {
           isQuitting = true;
           app.quit();
@@ -86,7 +86,7 @@ function createTray(): void {
   if (!trayIcon) return;
 
   tray = new Tray(trayIcon);
-  tray.setToolTip("Pi Studio");
+  tray.setToolTip("MPI");
   const show = () => showMainWindow();
   tray.on("click", show);
   tray.on("double-click", show);
@@ -108,7 +108,7 @@ function createWindow(): void {
     show: false,
     frame: false,
     backgroundColor: "#0e0f12",
-    title: "Pi Studio",
+    title: "MPI",
     icon: windowIcon,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),

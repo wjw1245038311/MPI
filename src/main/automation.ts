@@ -6,7 +6,7 @@ import { createGateModeFile, ensureGateExtension, removeGateModeFile } from "./p
  * Scheduled automation. Tasks are user-defined prompts (which may invoke
  * skills) run in a chosen working folder on an hourly/daily/weekly schedule.
  *
- * The scheduler lives in the main process and only runs while Pi Studio is
+ * The scheduler lives in the main process and only runs while MPI is
  * open. Each fire spawns a fresh pi session in the task's folder, sends the
  * prompt, and waits for `agent_settled`. pi persists the session automatically,
  * so the result appears in the sidebar as a normal, reviewable thread.
@@ -78,7 +78,7 @@ function patchTask(id: string, patch: Partial<AutomationTask>): boolean {
 
 function tick(): void {
   const now = new Date();
-  // The renderer normally deletes through this process, but another Pi Studio
+  // The renderer normally deletes through this process, but another MPI
   // process or an older build may have written config.json. Re-read before
   // every tick so a deleted task cannot continue from a stale memory snapshot.
   const tasks = persistedTasks();

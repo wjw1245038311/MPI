@@ -357,7 +357,7 @@ export function PluginsPanel() {
           <div className="muted plugins-note">
             {zh
               ? "开关写入 ~/.pi/agent/settings.json，与终端 pi 共享；显示 ~/.pi/agent/skills 和 ~/.agents/skills，Pi 目录同名技能优先。"
-              : "Changes are written to ~/.pi/agent/settings.json and shared with terminal Pi. Pi Studio displays ~/.pi/agent/skills and ~/.agents/skills; Pi skills win duplicate names."}
+              : "Changes are written to ~/.pi/agent/settings.json and shared with terminal Pi. MPI displays ~/.pi/agent/skills and ~/.agents/skills; Pi skills win duplicate names."}
           </div>
 
           <div className="plugins-toolbar">

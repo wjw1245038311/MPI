@@ -144,13 +144,13 @@ const exact: Record<string, string> = {
   "可更新": "Update available",
   "检查并更新中…": "Checking and updating…",
   "检查并更新 Pi": "Check and update Pi",
-  "立即重启 Pi Studio": "Restart Pi Studio now",
+  "立即重启 MPI": "Restart MPI now",
   "未检测到 pi：": "Pi was not detected: ",
   "请填写任务名称": "Enter a task name",
   "请选择工作文件夹": "Choose a working folder",
   "请填写要执行的 prompt": "Enter a prompt to run",
   "请填写要执行的提示词": "Enter a prompt to run",
-  "定时执行可使用 skill 的自定义 prompt（仅在 Pi Studio 运行时调度）": "Schedule custom prompts that can use skills (runs while Pi Studio is open)",
+  "定时执行可使用 skill 的自定义 prompt（仅在 MPI 运行时调度）": "Schedule custom prompts that can use skills (runs while MPI is open)",
   "共": "Total",
   "个任务": "tasks",
   "尚无定时任务。点“新建任务”创建一个。": "No scheduled tasks yet. Select New task to create one.",
@@ -246,7 +246,7 @@ const exact: Record<string, string> = {
   "打开 models.json": "Open models.json",
   "编辑会写入": "Changes are written to",
   "，与终端 pi 共享。": " and shared with terminal Pi.",
-  "这些文件由桌面端与终端 pi 共享。在此面板保存会原子写回并保留你手写的高级字段；也可用上方按钮直接在外部编辑。": "These files are shared by Pi Studio and terminal Pi. Saving here writes atomically and preserves advanced fields; the buttons above open them for external editing.",
+  "这些文件由桌面端与终端 pi 共享。在此面板保存会原子写回并保留你手写的高级字段；也可用上方按钮直接在外部编辑。": "These files are shared by MPI and terminal Pi. Saving here writes atomically and preserves advanced fields; the buttons above open them for external editing.",
   "新建对话": "New conversation",
   "打开文件夹…": "Open folder…",
   "剪切": "Cut",
@@ -256,8 +256,8 @@ const exact: Record<string, string> = {
   "展开侧栏": "Expand sidebar",
   "切换预览面板": "Toggle preview panel",
   "帮助": "Help",
-  "关于 Pi Studio": "About Pi Studio",
-  "Pi Studio · 终端 pi 的 Windows 桌面端": "Pi Studio · Windows desktop client for terminal Pi",
+  "关于 MPI": "About MPI",
+  "MPI · 终端 pi 的 Windows 桌面端": "MPI · Windows desktop client for terminal Pi",
   "Pi 合计 token 用量": "Total Pi token usage",
   "条 ·": "messages ·",
   "个会话": "sessions",
@@ -283,8 +283,8 @@ const exact: Record<string, string> = {
   "已切换到完全权限。": "Switched to full access.",
   "Pi 已是最新版本。": "Pi is already up to date.",
   "Pi 已更新到最新版本。": "Pi was updated to the latest version.",
-  "Pi 更新命令已执行，但进程退出时出现已知 Windows 兼容问题。请重启 Pi Studio 以使用新版本。": "The Pi update ran, but the process hit a known Windows exit issue. Restart Pi Studio to use the new version.",
-  "Pi 更新状态不确定（进程退出异常）。请重启 Pi Studio 后检查版本。": "Pi update status is uncertain because the process exited unexpectedly. Restart Pi Studio and check the version.",
+  "Pi 更新命令已执行，但进程退出时出现已知 Windows 兼容问题。请重启 MPI 以使用新版本。": "The Pi update ran, but the process hit a known Windows exit issue. Restart MPI to use the new version.",
+  "Pi 更新状态不确定（进程退出异常）。请重启 MPI 后检查版本。": "Pi update status is uncertain because the process exited unexpectedly. Restart MPI and check the version.",
   "请输入提供商标识符（如 my-proxy）": "Enter a provider ID, such as my-proxy",
   "标识符已存在": "That ID already exists",
   "请先修正标红的高级 JSON 字段": "Fix the highlighted advanced JSON fields first",
@@ -292,8 +292,8 @@ const exact: Record<string, string> = {
   "思考默认值已保存到 settings.json。": "Thinking defaults were saved to settings.json.",
   "有未保存的更改，确定放弃并关闭？": "Discard unsaved changes and close?",
   "将丢弃未保存的模型编辑并重新读取 models.json，继续？": "Discard unsaved model changes and reload models.json?",
-  "Pi 核心由 Pi Studio 统一管理（内置副本不可被": "Pi Studio manages the Pi core. The bundled copy cannot be updated in place by",
-  "原地更新）。点击下方按钮后，Pi Studio 会自行下载并安装新版本到应用数据目录，更新完成后新开的线程使用新版本。扩展请在「插件」面板更新。": ". Use the button below to download and install a new version into app data. New threads use it after the update. Update extensions in the Plugins panel.",
+  "Pi 核心由 MPI 统一管理（内置副本不可被": "MPI manages the Pi core. The bundled copy cannot be updated in place by",
+  "原地更新）。点击下方按钮后，MPI 会自行下载并安装新版本到应用数据目录，更新完成后新开的线程使用新版本。扩展请在「插件」面板更新。": ". Use the button below to download and install a new version into app data. New threads use it after the update. Update extensions in the Plugins panel.",
   "运行": "Run",
   "更新 pi CLI 本体（不含扩展，扩展请在「插件」面板更新）。会先检查是否为最新版本，结果以提示呈现。更新完成后新开的线程使用新版本。": "to update the Pi CLI itself. Extensions are updated separately in the Plugins panel. Pi checks the current version first, and new threads use the updated version.",
   "正在检查最新版本…": "Checking for updates…",
@@ -334,7 +334,7 @@ const prefixes: Array<[string, string]> = [
   ["检查失败：", "Check failed: "],
   ["自动化任务完成：", "Automation task completed: "],
   ["自动化任务失败：", "Automation task failed: "],
-  ["Pi Studio 更新失败：", "Pi Studio update failed: "],
+  ["MPI 更新失败：", "MPI update failed: "],
   ["启动安装程序失败：", "Failed to start the installer: "],
   ["永久删除线程失败：", "Failed to permanently delete thread: "],
   ["Pi 运行时包安装失败：", "Pi runtime package installation failed: "],
@@ -376,7 +376,7 @@ const englishExact: Record<string, string> = {
   "Output": "输出",
   "Read": "读取",
   "attachment": "附件",
-  "Pi Studio Agent": "Pi Studio 智能体",
+  "MPI Agent": "MPI 智能体",
   "Commands, plugins & skills": "命令、插件和技能",
   "image": "图像",
   "Add files": "添加文件",
@@ -411,7 +411,7 @@ const englishExact: Record<string, string> = {
   "This is a folder": "这是一个文件夹",
   "Binary file": "二进制文件",
   "No preview available for this file type": "暂不支持预览此文件类型",
-  "Excel preview could not be parsed on the Pi Studio host": "Pi Studio 无法解析此 Excel 预览",
+  "Excel preview could not be parsed on the MPI host": "MPI 无法解析此 Excel 预览",
   "docx parse failed": "DOCX 解析失败",
   "xlsx parse failed": "XLSX 解析失败",
   "pptx parse failed": "PPTX 解析失败",
@@ -476,10 +476,10 @@ function translateToEnglish(value: string): string {
     .replace(/^正在安装依赖（(.+?)）…$/, "Installing dependencies ($1)…")
     .replace(/^已更新到\s+v(.+)$/, "Updated to v$1")
     .replace(/^Pi 核心已更新到\s+v(.+)，新开的线程将使用新版本。$/, "Pi core updated to v$1. New threads will use it.")
-    .replace(/^正在下载 Pi Studio v(.+)…$/, "Downloading Pi Studio v$1…")
-    .replace(/^Pi Studio v(.+) 已下载，可以安装并重启$/, "Pi Studio v$1 downloaded and ready to install")
-    .replace(/^Pi Studio 已经是最新版本（v(.+)）$/, "Pi Studio is already up to date (v$1)")
-    .replace(/^正在安装 Pi Studio v(.+)，应用将自动重启$/, "Installing Pi Studio v$1; the app will restart")
+    .replace(/^正在下载 MPI v(.+)…$/, "Downloading MPI v$1…")
+    .replace(/^MPI v(.+) 已下载，可以安装并重启$/, "MPI v$1 downloaded and ready to install")
+    .replace(/^MPI 已经是最新版本（v(.+)）$/, "MPI is already up to date (v$1)")
+    .replace(/^正在安装 MPI v(.+)，应用将自动重启$/, "Installing MPI v$1; the app will restart")
     .replace(/^Pi 运行时 v(.+) 已就绪$/, "Pi runtime v$1 is ready")
     .replace(/^正在准备内置 Pi 运行时 v(.+)$/, "Preparing embedded Pi runtime v$1")
     .replace(/^正在解压内置 Pi 运行时$/, "Extracting embedded Pi runtime")

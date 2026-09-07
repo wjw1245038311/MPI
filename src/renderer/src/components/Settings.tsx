@@ -720,7 +720,7 @@ export function Settings() {
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updatedTo, setUpdatedTo] = useState<string | null>(null);
 
-  // ---- Pi Studio application update ----
+  // ---- MPI application update ----
   const [appUpdating, setAppUpdating] = useState(false);
   const [appUpdateStatus, setAppUpdateStatus] = useState<{
     current: string;
@@ -797,9 +797,9 @@ export function Settings() {
       const result: any = await window.pi.app.downloadAppUpdate();
       if (result?.ok && result?.downloaded) {
         setAppUpdateReady(true);
-        pushToast("success", language === "zh" ? result.message : `Pi Studio v${result.version || ""} is ready to install.`);
+        pushToast("success", language === "zh" ? result.message : `MPI v${result.version || ""} is ready to install.`);
       } else if (result?.ok) {
-        pushToast("info", language === "zh" ? result.message : "Pi Studio is already up to date.");
+        pushToast("info", language === "zh" ? result.message : "MPI is already up to date.");
       } else {
         setAppUpdateError(result?.message || (language === "zh" ? "应用更新失败" : "App update failed"));
       }
@@ -854,9 +854,9 @@ export function Settings() {
           if (/already up to date/i.test(text)) {
             pushToast("info", "Pi 已是最新版本。");
           } else if (/Updating/i.test(text)) {
-            pushToast("warning", "Pi 更新命令已执行，但进程退出时出现已知 Windows 兼容问题。请重启 Pi Studio 以使用新版本。");
+            pushToast("warning", "Pi 更新命令已执行，但进程退出时出现已知 Windows 兼容问题。请重启 MPI 以使用新版本。");
           } else {
-            pushToast("warning", "Pi 更新状态不确定（进程退出异常）。请重启 Pi Studio 后检查版本。");
+            pushToast("warning", "Pi 更新状态不确定（进程退出异常）。请重启 MPI 后检查版本。");
           }
         } else {
           pushToast("error", "Pi 更新失败：" + (lastLine(text) || "未知错误"));
@@ -1107,7 +1107,7 @@ export function Settings() {
             </span>
             <div>
               <div className="set-brand-title">设置</div>
-              <div className="set-brand-sub">Pi Studio</div>
+              <div className="set-brand-sub">MPI</div>
             </div>
           </div>
           <nav className="set-tabs">
@@ -1477,11 +1477,11 @@ export function Settings() {
             {tab === "update" && (
               <>
                 <div className="set-card">
-                  <div className="set-card-title">{language === "zh" ? "Pi Studio 应用更新" : "Pi Studio app update"}</div>
+                  <div className="set-card-title">{language === "zh" ? "MPI 应用更新" : "MPI app update"}</div>
                   <div className="set-hint" style={{ marginBottom: 12 }}>
                     {language === "zh"
                       ? "从 GitHub 发布页检查最新正式版本。发现新版本后，可在此下载 Windows 安装包并安装重启。"
-                      : "Check the latest stable release from GitHub Releases. Download and install a Windows update here, then restart Pi Studio."}
+                      : "Check the latest stable release from GitHub Releases. Download and install a Windows update here, then restart MPI."}
                   </div>
                   <div className="set-diag-grid" style={{ marginBottom: 12 }}>
                     <div className="set-diag-k">{language === "zh" ? "当前版本" : "Current version"}</div>
@@ -1551,7 +1551,7 @@ export function Settings() {
                 <div className="set-card-title">更新 Pi 核心</div>
                 <div className="set-hint" style={{ marginBottom: 12 }}>
                   {diag?.bundled ? (
-                    <>Pi 核心由 Pi Studio 统一管理（内置副本不可被 <code>pi update</code> 原地更新）。点击下方按钮后，Pi Studio 会自行下载并安装新版本到应用数据目录，更新完成后新开的线程使用新版本。扩展请在「插件」面板更新。</>
+                    <>Pi 核心由 MPI 统一管理（内置副本不可被 <code>pi update</code> 原地更新）。点击下方按钮后，MPI 会自行下载并安装新版本到应用数据目录，更新完成后新开的线程使用新版本。扩展请在「插件」面板更新。</>
                   ) : (
                     <>运行 <code>pi update</code> 更新 pi CLI 本体（不含扩展，扩展请在「插件」面板更新）。会先检查是否为最新版本，结果以提示呈现。更新完成后新开的线程使用新版本。</>
                   )}
@@ -1586,7 +1586,7 @@ export function Settings() {
                   </button>
                   {updatedTo && (
                     <button className="set-btn" style={{ marginLeft: 8 }} onClick={() => window.pi.app.relaunch()}>
-                      立即重启 Pi Studio
+                      立即重启 MPI
                     </button>
                   )}
                 </div>
@@ -1608,7 +1608,7 @@ export function Settings() {
 
             {tab === "about" && (
               <div className="set-card set-about-card">
-                <div className="set-card-title">{language === "zh" ? "关于 Pi Studio" : "About Pi Studio"}</div>
+                <div className="set-card-title">{language === "zh" ? "关于 MPI" : "About MPI"}</div>
                 <div className="set-about-list">
                   <div className="set-about-row">
                     <span>{language === "zh" ? "软件版本" : "Software version"}</span>

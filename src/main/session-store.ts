@@ -25,7 +25,7 @@ export interface ThreadSummary {
   updatedAt: number;
   /** Conversation turns: user prompts plus agent final replies. */
   messageCount: number;
-  /** Whether the session is pinned in the Pi Studio sidebar. */
+  /** Whether the session is pinned in the MPI sidebar. */
   pinned?: boolean;
 }
 
@@ -35,7 +35,7 @@ export interface ProjectSummary {
   /** Folder name shown in the sidebar. */
   name: string;
   threads: ThreadSummary[];
-  /** Whether the project is pinned in the Pi Studio sidebar. */
+  /** Whether the project is pinned in the MPI sidebar. */
   pinned?: boolean;
   /** Set only for projects opened during the current desktop session. */
   openedAt?: number;

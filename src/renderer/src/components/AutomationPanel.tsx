@@ -96,7 +96,7 @@ export function AutomationPanel() {
             </span>
             <div>
               <div className="set-brand-title">自动化</div>
-              <div className="set-brand-sub">{language === "zh" ? "定时执行可使用技能的自定义提示词（仅在 Pi Studio 运行时调度）" : "Schedule custom prompts that can use skills (runs while Pi Studio is open)"}</div>
+              <div className="set-brand-sub">{language === "zh" ? "定时执行可使用技能的自定义提示词（仅在 MPI 运行时调度）" : "Schedule custom prompts that can use skills (runs while MPI is open)"}</div>
             </div>
           </div>
           <button className="set-iconbtn" title="关闭" onClick={close}>

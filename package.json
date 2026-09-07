@@ -1,13 +1,13 @@
 {
-  "name": "pi-studio",
+  "name": "mpi",
   "version": "0.4.2",
   "piRuntimeVersion": "0.84.1",
   "private": true,
   "license": "MIT",
   "author": {
-    "name": "Pi Studio"
+    "name": "MPI"
   },
-  "description": "Pi Studio - a cross-platform desktop client for the pi coding agent (models, harness, extensions, sessions).",
+  "description": "MPI - personal agent UI forked from Pi Studio (a desktop client for the pi coding agent).",
   "engines": {
     "node": ">=24.14.0 <25"
   },
@@ -63,8 +63,8 @@
     "esbuild@0.21.5": true
   },
   "build": {
-    "appId": "com.pi-studio.app",
-    "productName": "Pi Studio",
+    "appId": "com.mpi.app",
+    "productName": "MPI",
     "publish": [
       {
         "provider": "github",
@@ -109,7 +109,7 @@
           ]
         }
       ],
-      "artifactName": "Pi-Studio-Setup-${version}.${ext}"
+      "artifactName": "MPI-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -118,21 +118,21 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Pi Studio"
+      "shortcutName": "MPI"
     },
     "mac": {
       "icon": "resources/icon.icns",
       "target": [
         "dmg"
       ],
-      "artifactName": "Pi-Studio-${version}-${arch}.${ext}"
+      "artifactName": "MPI-${version}-${arch}.${ext}"
     },
     "linux": {
       "icon": "resources/icon.png",
       "target": [
         "AppImage"
       ],
-      "artifactName": "Pi-Studio-${version}-${arch}.${ext}"
+      "artifactName": "MPI-${version}-${arch}.${ext}"
     }
   }
 }

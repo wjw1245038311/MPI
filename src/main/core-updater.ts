@@ -26,9 +26,9 @@ import {
 } from "./runtime-package";
 
 /**
- * In-app updater for the pi core that Pi Studio manages itself.
+ * In-app updater for the pi core that MPI manages itself.
  *
- * The runtime managed by Pi Studio is NOT a global npm/pnpm install, so
+ * The runtime managed by MPI is NOT a global npm/pnpm install, so
  * `pi update` refuses to touch it (detectInstallMethod returns "unknown").
  * New releases embed a standalone runtime archive in the installer and use
  * the npm path only as a compatibility fallback when it does not match the
@@ -503,7 +503,7 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
       const min = parseMinNodeVersion(requiredNode);
       const nodeVersion = await runNodeVersion(bundled.node);
       if (min && nodeVersion && compareVersions(nodeVersion, min) < 0) {
-        throw new Error(`新版本要求 Node ${requiredNode}，而内置 Node 为 v${nodeVersion}。请更新 Pi Studio 本体。`);
+        throw new Error(`新版本要求 Node ${requiredNode}，而内置 Node 为 v${nodeVersion}。请更新 MPI 本体。`);
       }
     }
 
