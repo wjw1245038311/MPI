@@ -1518,6 +1518,18 @@ export const useStore = create<PiStore>()((set, get) => {
   },
   movePinned: async (kind, id, target) => {
     try {
+      if (typeof window.pi.app.reorderPinned !== "function") {
+        // Stale dev instance: preload/main predate this feature and are not
+        // hot-reloaded. Say so instead of failing cryptically.
+        const zh = get().config?.language === "zh";
+        get().pushToast(
+          "warning",
+          zh
+            ? "置顶排序功能未加载——请完整重启应用（dev 热更新不含主进程/preload）"
+            : "Pin reordering not loaded — fully restart the app (dev hot-reload skips main/preload)"
+        );
+        return;
+      }
       const config = await window.pi.app.reorderPinned({ kind, id, target });
       set({ config });
       await get().refreshProjects();
