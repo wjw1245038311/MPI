@@ -296,9 +296,9 @@ export interface AppConfig {
   diffViewMode?: "unified" | "blocks";
   /** Permission level applied to brand-new conversations; existing threads keep their own level. */
   defaultPermission?: PermissionLevel;
-  /** Custom user avatar as a data URL; absent = built-in emoji. */
+  /** Custom user avatar as a data URL; absent = built-in Nobita avatar. */
   userAvatar?: string;
-  /** Custom agent avatar as a data URL; absent = app icon. */
+  /** Custom agent avatar as a data URL; absent = built-in Doraemon avatar. */
   agentAvatar?: string;
   remoteSignalingUrl: string;
   remoteSignalingEnabled: boolean;

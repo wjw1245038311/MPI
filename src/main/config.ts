@@ -77,9 +77,9 @@ export interface AppConfig {
   defaultPermission: PermissionLevel;
   /** Per-thread permission level, keyed by session file path. Defaults to defaultPermission when absent. */
   threadPermissions: Record<string, PermissionLevel>;
-  /** Custom user avatar as a data URL (downscaled in the renderer); absent = built-in emoji. */
+  /** Custom user avatar as a data URL (downscaled in the renderer); absent = built-in Nobita avatar. */
   userAvatar?: string;
-  /** Custom agent avatar as a data URL; absent = app icon. */
+  /** Custom agent avatar as a data URL; absent = built-in Doraemon avatar. */
   agentAvatar?: string;
   /** cwd of the most recently opened thread; seeds the warm spare's project. */
   lastThreadCwd?: string;

@@ -7,6 +7,8 @@ import { translateUiText } from "../lib/i18n";
 import { Archive, Check, Close, Edit, Plus, Refresh, Folder } from "./icons";
 import { ChangelogModal } from "./ChangelogModal";
 import appIconUrl from "../../../../resources/icon.png";
+import doraemonAvatarUrl from "../../../../resources/doraemon.png";
+import nobitaAvatarUrl from "../../../../resources/nobita.png";
 
 /* ------------------------------------------------------------------ *
  * Constants
@@ -1322,8 +1324,8 @@ export function Settings() {
                   label={language === "zh" ? "头像" : "Avatars"}
                   hint={
                     language === "zh"
-                      ? "聊天消息左侧的头像。上传的图片会自动压缩后保存；恢复默认使用内置图标。"
-                      : "Avatars shown beside chat messages. Uploaded images are downscaled before saving; reset restores the built-in icons."
+                      ? "聊天消息左侧的头像（默认：用户=大雄、智能体=哆啦A梦）。上传的图片会自动压缩后保存；恢复默认回到内置角色。"
+                      : "Avatars shown beside chat messages (defaults: User = Nobita, Agent = Doraemon). Uploaded images are downscaled before saving; reset restores the built-in characters."
                   }
                 >
                   <div className="avatar-row">
@@ -1331,7 +1333,7 @@ export function Settings() {
                     <input ref={agentAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "agent")} />
                     <div className="avatar-slot">
                       <span className="avatar-preview">
-                        {config?.userAvatar ? <img src={config.userAvatar} alt="" /> : <span aria-hidden="true">🧑</span>}
+                        {config?.userAvatar ? <img src={config.userAvatar} alt="" /> : <img src={nobitaAvatarUrl} alt="" />}
                       </span>
                       <div className="avatar-slot-actions">
                         <button type="button" className="set-btn" onClick={() => userAvatarInputRef.current?.click()}>
@@ -1347,7 +1349,7 @@ export function Settings() {
                     </div>
                     <div className="avatar-slot">
                       <span className="avatar-preview">
-                        {config?.agentAvatar ? <img src={config.agentAvatar} alt="" /> : <img src={appIconUrl} alt="" />}
+                        {config?.agentAvatar ? <img src={config.agentAvatar} alt="" /> : <img src={doraemonAvatarUrl} alt="" />}
                       </span>
                       <div className="avatar-slot-actions">
                         <button type="button" className="set-btn" onClick={() => agentAvatarInputRef.current?.click()}>

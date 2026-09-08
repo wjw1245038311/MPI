@@ -11,7 +11,8 @@ import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from ".
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Gauge, Branch, ChevronRight, ChevronsDown } from "./icons";
-import appIconUrl from "../../../../resources/icon.png";
+import doraemonAvatarUrl from "../../../../resources/doraemon.png";
+import nobitaAvatarUrl from "../../../../resources/nobita.png";
 
 // Minimum user messages before the left dot rail appears. Kept low (2) so it
 // shows up in essentially every real conversation — a single message has
@@ -856,9 +857,7 @@ function MessageGroupInner({
           {userAvatar ? (
             <img className="msg-avatar-img" src={userAvatar} alt="" />
           ) : (
-            <span className="msg-user-character" aria-hidden="true">
-              🧑
-            </span>
+            <img className="msg-avatar-img" src={nobitaAvatarUrl} alt="" />
           )}
         </div>
       </div>
@@ -893,7 +892,7 @@ function MessageGroupInner({
   return (
     <div className="msg assistant">
       <div className="msg-avatar" aria-label={language === "zh" ? "MPI 智能体" : "MPI Agent"}>
-        <img className="msg-app-icon" src={agentAvatar || appIconUrl} alt="" />
+        <img className="msg-avatar-img" src={agentAvatar || doraemonAvatarUrl} alt="" />
       </div>
       <div className="msg-body">
         {renderAssistantBlocks(group.items, toolRuns, language)}
