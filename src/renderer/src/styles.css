@@ -1427,6 +1427,52 @@ body.sidebar-resizing * {
 .tool-code-section + .tool-code-section {
   margin-top: 4px;
 }
+/* Unified (single-column) diff for edit-tool results. */
+.udiff {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.udiff-row {
+  display: flex;
+}
+.udiff-no {
+  width: 40px;
+  padding: 0 6px;
+  text-align: right;
+  color: var(--text-faint);
+  user-select: none;
+  background: var(--surface-muted);
+  border-right: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.udiff-marker {
+  width: 18px;
+  padding: 0 5px;
+  color: var(--text-dim);
+  user-select: none;
+  text-align: center;
+  flex-shrink: 0;
+}
+.udiff-text {
+  padding-right: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.udiff-row.removed .udiff-text,
+.udiff-row.removed .udiff-no,
+.udiff-row.removed .udiff-marker {
+  background: rgba(248, 113, 113, 0.13);
+}
+.udiff-row.added .udiff-text,
+.udiff-row.added .udiff-no,
+.udiff-row.added .udiff-marker {
+  background: rgba(34, 197, 94, 0.12);
+}
+.udiff-row.removed .udiff-marker { color: #d64545; font-weight: 700; }
+.udiff-row.added .udiff-marker { color: #1a9e4b; font-weight: 700; }
 .tool-result {
   color: var(--text-dim);
   background: transparent;

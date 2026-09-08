@@ -40,6 +40,9 @@ export interface AppConfig {
   language: "en" | "zh";
   /** Play a short chime in the renderer when an agent turn completes. */
   soundOnComplete: boolean;
+  /** How edit-tool results render in the transcript: unified single-column
+   * diff (default) or before/after blocks. */
+  diffViewMode: "unified" | "blocks";
   /** Per-thread permission level, keyed by session file path. Defaults to "sandbox" when absent. */
   threadPermissions: Record<string, "sandbox" | "full">;
   /** cwd of the most recently opened thread; seeds the warm spare's project. */
@@ -100,6 +103,7 @@ const DEFAULTS: AppConfig = {
   theme: "light",
   language: "en",
   soundOnComplete: true,
+  diffViewMode: "unified",
   threadPermissions: {},
   automationTasks: [],
   remoteSignalingUrl: DEFAULT_REMOTE_SIGNALING_URL,
@@ -136,6 +140,7 @@ export function loadConfig(userDataDir: string): AppConfig {
         remoteSignalingEnabled: typeof parsed.remoteSignalingEnabled === "boolean"
           ? parsed.remoteSignalingEnabled
           : DEFAULTS.remoteSignalingEnabled,
+        diffViewMode: parsed.diffViewMode === "blocks" ? "blocks" : DEFAULTS.diffViewMode,
         // Older config files may contain a custom list. Always replace it with
         // the built-in list so this transport setting cannot be changed via
         // persisted data or a generic config update.

@@ -284,6 +284,8 @@ export interface AppConfig {
   language: "en" | "zh";
   /** Play a short chime when an agent turn completes. */
   soundOnComplete?: boolean;
+  /** Edit-tool result rendering: unified single-column diff or before/after blocks. */
+  diffViewMode?: "unified" | "blocks";
   remoteSignalingUrl: string;
   remoteSignalingEnabled: boolean;
   remoteStunUrls: string[];

@@ -4,6 +4,7 @@ import { Markdown } from "../lib/markdown";
 import { formatClock, formatTokens } from "../lib/format";
 import { collectFileArtifacts } from "../lib/artifacts";
 import { parseHtmlReferenceText } from "../lib/html-reference";
+import { diffLines } from "../lib/diff";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
@@ -1050,7 +1051,8 @@ function toolDuration(run?: ToolRun): string {
 const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language }: { id: string; name: string; blockArgs?: unknown; run?: ToolRun; language: "en" | "zh" }) {
   const [open, setOpen] = useState(false);
   const running = run?.running;
-  const argsView = renderToolArgs(name, run, blockArgs, language);
+  const diffViewMode = useStore((s) => s.config?.diffViewMode || "unified");
+  const argsView = renderToolArgs(name, run, blockArgs, language, diffViewMode);
   const result = run?.resultText ?? run?.partialText ?? "";
   const status = toolStatus(run);
   const summary = toolSummary(name, run, blockArgs, language);
@@ -1229,7 +1231,40 @@ function ToolCode({ text, language }: { text: string; language?: string }) {
   return <Markdown text={codeFence(text, language)} />;
 }
 
-function renderToolArgs(name: string, run: ToolRun | undefined, fallbackArgs: unknown, language: "en" | "zh"): ReactNode {
+/** Unified (single-column) diff for edit-tool results — git-style rows with
+ * old/new line numbers. Falls back to plain before/after blocks when the
+ * inputs are too large for the LCS table. */
+const UnifiedDiffView = memo(function UnifiedDiffView({ oldText, newText, codeLang, uiLang }: { oldText: string; newText: string; codeLang?: string; uiLang: "en" | "zh" }) {
+  const rows = useMemo(() => diffLines(oldText, newText), [oldText, newText]);
+  if (!rows) {
+    return (
+      <>
+        <div className="tool-code-section">
+          <div className="tool-code-label removed">{uiLang === "zh" ? "原内容" : "Before"}</div>
+          <ToolCode text={oldText} language={codeLang} />
+        </div>
+        <div className="tool-code-section">
+          <div className="tool-code-label">{uiLang === "zh" ? "新内容" : "After"}</div>
+          <ToolCode text={newText} language={codeLang} />
+        </div>
+      </>
+    );
+  }
+  return (
+    <div className="udiff">
+      {rows.map((row, index) => (
+        <div key={index} className={`udiff-row ${row.kind}`}>
+          <span className="udiff-no">{row.kind !== "added" ? row.oldNo : ""}</span>
+          <span className="udiff-no">{row.kind !== "removed" ? row.newNo : ""}</span>
+          <span className="udiff-marker">{row.kind === "context" ? "\u00a0" : row.kind === "removed" ? "-" : "+"}</span>
+          <span className="udiff-text">{row.text || "\u00a0"}</span>
+        </div>
+      ))}
+    </div>
+  );
+});
+
+function renderToolArgs(name: string, run: ToolRun | undefined, fallbackArgs: unknown, language: "en" | "zh", diffViewMode: "unified" | "blocks"): ReactNode {
   const args = parseToolArgs(run, fallbackArgs);
   const command = toolArg(args, ["command", "cmd", "script"]);
   if (matchesTool(name, ["bash", "shell", "sh", "zsh", "exec", "execute", "command", "run", "python"])) {
@@ -1261,21 +1296,31 @@ function renderToolArgs(name: string, run: ToolRun | undefined, fallbackArgs: un
     const newText = normalizeTranscriptText(toolArg(args, ["newText", "new_text", "new", "after", "replacement", "content", "text"]));
     const patch = normalizeTranscriptText(toolArg(args, ["patch", "diff"]));
     const content = isEdit ? newText || patch : normalizeTranscriptText(toolArg(args, ["content", "text", "data", "newText", "new_text"]));
-    const language = languageForPath(path);
+    const codeLang = languageForPath(path);
+    // Unified single-column diff for edits (the default); before/after blocks
+    // remain available via the Diff view setting.
+    if (isEdit && oldText && content && diffViewMode === "unified") {
+      return (
+        <div className="tool-operation">
+          <div className="tool-operation-title">{language === "zh" ? "编辑" : "Edit"}{path ? ` · ${path}` : ""}</div>
+          <UnifiedDiffView oldText={oldText} newText={content} codeLang={codeLang} uiLang={language} />
+        </div>
+      );
+    }
     const sections: ReactNode[] = [];
     if (isEdit && oldText) {
       sections.push(
         <div className="tool-code-section" key="old">
-          <div className="tool-code-label removed">原内容</div>
-          <ToolCode text={oldText} language={language} />
+          <div className="tool-code-label removed">{language === "zh" ? "原内容" : "Before"}</div>
+          <ToolCode text={oldText} language={codeLang} />
         </div>,
       );
     }
     if (content) {
       sections.push(
         <div className="tool-code-section" key="new">
-          <div className="tool-code-label">{isEdit ? "新内容" : "写入内容"}</div>
-          <ToolCode text={content} language={language} />
+          <div className="tool-code-label">{isEdit ? (language === "zh" ? "新内容" : "After") : language === "zh" ? "写入内容" : "Written content"}</div>
+          <ToolCode text={content} language={codeLang} />
         </div>,
       );
     }

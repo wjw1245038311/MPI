@@ -8,6 +8,7 @@ MPI —— 基于 Pi coding agent（Pi Studio fork）的桌面客户端。本文
 
 1. **GFM autolink 吞 CJK 文本修复**：`读https://example.com，然后来解决一下` 这类「URL 后紧跟中文」的文本，remark-gfm 的 autolink literal 会把后续所有非 ASCII 字符吞进链接（点击跳到百分号编码的无效 URL）。新增 `remark-autolink-trim` 插件在 gfm 之后把首个非 ASCII 字符起的尾部拆回普通文本；显式 `[文本](url)` 链接与纯 ASCII/百分号编码 URL 不受影响。测试：`npm run test:markdown`。
 2. **Composer 草稿持久化**：未发送的输入（文本、粘贴图片、附件文件、HTML 元素引用）现按线程落盘保存，应用重启/崩溃后重新打开对应会话或项目的新任务时自动恢复；发送、排队后续消息或删除最后一个字符时清除。主进程以 LRU 语义保留最近使用的 40 份草稿（更新已存在条目时先删后插，避免 FIFO 截断误丢活跃草稿），单条超 2MB 时优先丢弃 base64 图片再落盘；文件存于应用配置目录 `drafts.json`（dev/prod 各自独立）。切换任务文件夹（composer 项目下拉或聊天顶栏按钮）时未发送文本跟随迁移，目标已有草稿则两者都保留。
+3. **edit 工具结果 unified diff 视图**：编辑类工具（edit/patch/replace/update）的参数展示从「原内容/新内容」两个全文块改为 git 风格的单栏 unified 视图——上下文行 + `-`/`+` 着色行，带新旧两侧行号，一眼看出改了什么；设置侧栏新增「Diff 显示」开关（统一/前后分块），默认统一。输入过大超出 LCS 表上限时自动回退分块视图。测试：`npm run test:diff`。
 
 ## v0.4.6（2026-09-08）
 

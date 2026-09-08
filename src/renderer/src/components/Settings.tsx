@@ -1092,6 +1092,11 @@ export function Settings() {
     useStore.setState({ config: next });
   };
 
+  const changeDiffViewMode = async (diffViewMode: "unified" | "blocks") => {
+    const next = await window.pi.app.setConfig({ diffViewMode });
+    useStore.setState({ config: next });
+  };
+
   const openFile = async (abs: string) => {
     const r = await window.pi.settings.openPath(abs);
     if (r && r.ok === false) pushToast("error", "打开失败：" + (r.error || ""));
@@ -1141,6 +1146,13 @@ export function Settings() {
               <select value={config?.language || "en"} onChange={(e) => changeLanguage(e.target.value as "en" | "zh")}>
                 <option value="en">{language === "zh" ? "英文" : "English"}</option>
                 <option value="zh">{language === "zh" ? "中文" : "Chinese"}</option>
+              </select>
+            </label>
+            <label className="set-language">
+              <span>{language === "zh" ? "Diff 显示" : "Diff view"}</span>
+              <select value={config?.diffViewMode || "unified"} onChange={(e) => changeDiffViewMode(e.target.value as "unified" | "blocks")}>
+                <option value="unified">{language === "zh" ? "统一（单栏）" : "Unified (single column)"}</option>
+                <option value="blocks">{language === "zh" ? "前后分块" : "Before / after blocks"}</option>
               </select>
             </label>
             编辑会写入 <code>~/.pi/agent</code>，与终端 pi 共享。

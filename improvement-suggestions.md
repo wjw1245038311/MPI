@@ -57,10 +57,8 @@ dev（`%APPDATA%\MPI Dev`）与 prod（`%APPDATA%\MPI`）各自独立 config.jso
 
 ### A 组：高价值，建议排期
 
-#### A1 · edit 工具结果增加 unified（单栏）diff 视图 — [#52](https://github.com/abcwyc/pi-agent-desktop/issues/52) / PR #53（已合并）
-- **问题**：edit 结果固定左右双栏，窄窗口下每列只剩 ~40 字符宽，长行换行严重难以阅读。
-- **方案**：新增单栏交错布局（`-`/`+` 前缀），与 git diff / GitHub unified 视图一致；用户可切换两种模式。对方仓库已有文件级 `DiffView` 渲染器可参考复用。
-- **MPI 现状**：我们的 edit toolCall 结果渲染是双栏，窄窗口同样难受。**直接可做**。
+#### A1 · edit 工具结果增加 unified（单栏）diff 视图 ✅ 已完成（Unreleased）— [#52](https://github.com/abcwyc/pi-agent-desktop/issues/52) / PR #53
+~~edit 结果难以看出改动位置~~ 已实现：`lib/diff.ts` LCS 行级 diff（>2M 单元格回退分块），`Chat.tsx` UnifiedDiffView 单栏渲染（上下文 + `-`/`+` 着色 + 新旧双行号，git 风格）；设置侧栏「Diff 显示」开关（unified/blocks，默认 unified）。注：MPI 原实现是上下堆叠两个全文块而非左右双栏，痛点主要是大改动里找差异难。测试 `npm run test:diff`。
 
 #### A2 · GFM autolink 吞 CJK 文本 ✅ 已完成（Unreleased）— [#50](https://github.com/abcwyc/pi-agent-desktop/issues/50) / PR #51
 ~~URL 后紧跟中文时 remark-gfm autolink literal 把后续非 ASCII 字符吞进 `<a>`~~ **已验证复现**（`读https://example.com，然后来解决一下` → url 含 CJK）。已移植 `lib/remark-autolink-trim.ts`（PR #51+#54 类型版）：仅处理 autolink literal（link 唯一子节点 text === url），首个非 ASCII 字符起拆回普通文本；显式 `[文本](url)` 与百分号编码 URL 不受影响。接入 `markdown.tsx` REMARK_PLUGINS（gfm 之后）。测试 `npm run test:markdown`（含无插件时 bug 存在的 sanity 断言，防上游修复后插件失效无感知）。
@@ -121,6 +119,6 @@ dev（`%APPDATA%\MPI Dev`）与 prod（`%APPDATA%\MPI`）各自独立 config.jso
 ## 建议的下一步（供你拍板）
 1. ~~**先做 A2**（GFM CJK autolink）~~ ✅ 已完成（见上）。
 2. **A3（RPC 工厂型小组件）**：差异化价值最高，建议排期；可先装 `@juicesharp/rpiv-todo` 在 MPI 里实测现状确认缺口。
-3. **A1（unified diff）+ A7（custom.css）**：体验类改进，各半天到一天。
+3. ~~**A1（unified diff）**~~ ✅ 已完成；**A7（custom.css）**：体验类改进，半天到一天。
 4. **A4/A5**：审计型工作，一次过 store.ts + composer 发送路径，产出风险清单。
 5. B 组按使用痛点再挑；C 组不动。
