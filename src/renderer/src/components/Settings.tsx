@@ -644,7 +644,7 @@ function ProviderCard({
  * Main panel
  * ------------------------------------------------------------------ */
 
-type Tab = "models" | "thinking" | "archive" | "diag" | "update" | "about";
+type Tab = "general" | "models" | "thinking" | "archive" | "diag" | "update" | "about";
 
 interface NewProviderDraft {
   id: string;
@@ -693,7 +693,7 @@ export function Settings() {
   const refreshOpenThreadModels = useStore((s) => s.refreshOpenThreadModels);
   const language = config?.language || "en";
 
-  const [tab, setTab] = useState<Tab>("models");
+  const [tab, setTab] = useState<Tab>("general");
   const [draft, setDraft] = useState<ModelsFile>({ providers: {} });
   const [initialProviders, setInitialProviders] = useState("{}");
   const [thinking, setThinking] = useState<ThinkingDefaults>({});
@@ -876,7 +876,7 @@ export function Settings() {
 
   useEffect(() => {
     if (!open) return;
-    setTab("models");
+    setTab("general");
     setInvalidJson({});
     setAdding(false);
     setNewProvider(emptyNewProvider());
@@ -1120,6 +1120,7 @@ export function Settings() {
           </div>
           <nav className="set-tabs">
             {([
+              ["general", language === "zh" ? "通用设置" : "General"],
               ["models", "模型与提供商"],
               ["thinking", "思考默认值"],
               ["archive", "已归档项目"],
@@ -1136,37 +1137,19 @@ export function Settings() {
             ))}
           </nav>
           <div className="set-side-foot">
-            <label className="set-language">
-              <span>{language === "zh" ? "主题模式" : "Theme"}</span>
-              <select value={config?.theme || "light"} onChange={(e) => changeTheme(e.target.value as "dark" | "light" | "system")}>
-                <option value="system">{language === "zh" ? "跟随系统" : "System"}</option>
-                <option value="light">{language === "zh" ? "浅色" : "Light"}</option>
-                <option value="dark">{language === "zh" ? "夜间" : "Dark"}</option>
-              </select>
-            </label>
-            <label className="set-language">
-              <span>{language === "zh" ? "语言" : "Language"}</span>
-              <select value={config?.language || "en"} onChange={(e) => changeLanguage(e.target.value as "en" | "zh")}>
-                <option value="en">{language === "zh" ? "英文" : "English"}</option>
-                <option value="zh">{language === "zh" ? "中文" : "Chinese"}</option>
-              </select>
-            </label>
-            <label className="set-language">
-              <span>{language === "zh" ? "Diff 显示" : "Diff view"}</span>
-              <select value={config?.diffViewMode || "unified"} onChange={(e) => changeDiffViewMode(e.target.value as "unified" | "blocks")}>
-                <option value="unified">{language === "zh" ? "统一（单栏）" : "Unified (single column)"}</option>
-                <option value="blocks">{language === "zh" ? "前后分块" : "Before / after blocks"}</option>
-              </select>
-            </label>
-            编辑会写入 <code>~/.pi/agent</code>，与终端 pi 共享。
+            模型/思考设置写入 <code>~/.pi/agent</code>，与终端 pi 共享；通用设置存于应用配置目录。
           </div>
         </aside>
 
         <section className="set-main">
           <header className="set-head">
             <h2>
-              {tab === "models"
-                ? "模型与提供商"
+              {tab === "general"
+                ? language === "zh"
+                  ? "通用设置"
+                  : "General"
+                : tab === "models"
+                  ? "模型与提供商"
                 : tab === "thinking"
                   ? "思考默认值"
                     : tab === "archive"
@@ -1206,6 +1189,49 @@ export function Settings() {
           </header>
 
           <div className="set-body">
+            {tab === "general" && (
+              <div className="set-card">
+                <Field label={language === "zh" ? "主题模式" : "Theme"}>
+                  <select
+                    className="set-select"
+                    value={config?.theme || "light"}
+                    onChange={(e) => changeTheme(e.target.value as "dark" | "light" | "system")}
+                  >
+                    <option value="system">{language === "zh" ? "跟随系统" : "System"}</option>
+                    <option value="light">{language === "zh" ? "浅色" : "Light"}</option>
+                    <option value="dark">{language === "zh" ? "夜间" : "Dark"}</option>
+                  </select>
+                </Field>
+                <Field label={language === "zh" ? "语言" : "Language"}>
+                  <select
+                    className="set-select"
+                    value={config?.language || "en"}
+                    onChange={(e) => changeLanguage(e.target.value as "en" | "zh")}
+                  >
+                    <option value="en">{language === "zh" ? "英文" : "English"}</option>
+                    <option value="zh">{language === "zh" ? "中文" : "Chinese"}</option>
+                  </select>
+                </Field>
+                <Field
+                  label={language === "zh" ? "Diff 显示" : "Diff view"}
+                  hint={
+                    language === "zh"
+                      ? "聊天中编辑类工具结果的展示方式；统一为 git 风格单栏 -/+ 视图。"
+                      : "How edit-tool results render in the transcript; unified is a git-style single-column +/- view."
+                  }
+                >
+                  <select
+                    className="set-select"
+                    value={config?.diffViewMode || "unified"}
+                    onChange={(e) => changeDiffViewMode(e.target.value as "unified" | "blocks")}
+                  >
+                    <option value="unified">{language === "zh" ? "统一（单栏）" : "Unified (single column)"}</option>
+                    <option value="blocks">{language === "zh" ? "前后分块" : "Before / after blocks"}</option>
+                  </select>
+                </Field>
+              </div>
+            )}
+
             {tab === "models" && (
               <>
                 <div className="set-prov-toolbar">
