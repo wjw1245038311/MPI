@@ -120,6 +120,28 @@ function pruneTree(root) {
   walk(root);
 }
 
+/** pi ≥0.85 depends on @earendil-works/chord, which declares esbuild; npm then
+ * installs platform binaries for ~20 platforms (~270MB) even though pi only uses
+ * chord/context and never bundles at runtime. Keep just the current platform's
+ * binary so a future bundler call still works on this machine. */
+function pruneEsbuildPlatforms(root) {
+  const scope = join(root, "node_modules", "@esbuild");
+  if (!existsSync(scope)) return;
+  const keep = `${process.platform}-${process.arch}`; // e.g., win32-x64 / darwin-arm64
+  let removedBytes = 0;
+  for (const entry of readdirSync(scope, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === keep) continue;
+    const abs = join(scope, entry.name);
+    try {
+      removedBytes += directoryStats(abs).bytes;
+      rmSync(abs, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+  if (removedBytes > 0) log(`pruned @esbuild platform binaries except ${keep}: -${formatSize(removedBytes)}`);
+}
+
 function readPiVersion(dir) {
   try {
     const packageJson = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
@@ -179,6 +201,7 @@ function bundlePi(source) {
 
   const before = directoryStats(destination);
   pruneTree(destination);
+  pruneEsbuildPlatforms(destination);
   const after = directoryStats(destination);
   log(`pruned pi runtime: ${before.files} files/${formatSize(before.bytes)} -> ${after.files} files/${formatSize(after.bytes)}`);
 
