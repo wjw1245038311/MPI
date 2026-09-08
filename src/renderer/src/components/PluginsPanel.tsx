@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../store";
-import type { SkillHubDetail, SkillHubSkill, SkillInfo } from "../lib/types";
+import type { NpmPackage, PackageInfo, PluginPackage, SkillContent, SkillHubDetail, SkillHubSkill, SkillInfo } from "../lib/types";
 import { Markdown } from "../lib/markdown";
-import { AppStore, Check, Close, Plus, At, Refresh, Search } from "./icons";
+import { AppStore, At, Check, Close, Copy, Files, Gauge, Plus, Refresh, Search } from "./icons";
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -26,6 +26,21 @@ function skillKey(skill: SkillHubSkill): string {
 
 function skillIsInstalled(skill: SkillHubSkill, installed: SkillInfo[], overrides: Set<string>): boolean {
   return overrides.has(skillKey(skill)) || installed.some((item) => item.name.toLowerCase() === skill.skillId.toLowerCase());
+}
+
+/** External skill marketplaces linked from the Skill Market tab (open in browser). */
+const OTHER_MARKETS = [
+  { name: "虾评", domain: "xiaping.coze.com", url: "https://xiaping.coze.com", zhDesc: "精品 Skill 分享评测平台，按场景分类。", enDesc: "Curated skill reviews and rankings, organized by scenario." },
+  { name: "SkillHub", domain: "skillhub.cn", url: "https://skillhub.cn", zhDesc: "腾讯维护的 AI Skill 社区，精选 Top 50。", enDesc: "Tencent-run AI skill community with a curated top-50 list." },
+  { name: "SkillsMP", domain: "skillsmp.com", url: "https://skillsmp.com", zhDesc: "中文 Agent Skills 市场，支持搜索和分类浏览。", enDesc: "Chinese agent-skill marketplace with search and categories." },
+];
+
+/** Human label for a skill root directory (Pi's own dir first, then .agents). */
+function rootLabel(root: string, zh: boolean): { label: string; code: string } {
+  const norm = root.replace(/\\/g, "/");
+  if (norm.endsWith("/.pi/agent/skills")) return { label: zh ? "Pi 目录" : "Pi directory", code: "~/.pi/agent/skills" };
+  if (norm.endsWith("/.agents/skills")) return { label: zh ? ".agents 目录" : ".agents directory", code: "~/.agents/skills" };
+  return { label: norm, code: root };
 }
 
 function SkillsHubPanel({ installedSkills, language }: { installedSkills: SkillInfo[]; language: "en" | "zh" }) {
@@ -119,6 +134,21 @@ function SkillsHubPanel({ installedSkills, language }: { installedSkills: SkillI
         </a>
       </div>
 
+      <div className="skills-other-markets">
+        <div className="skills-hub-mini-label">{zh ? "其他市场" : "OTHER MARKETPLACES"}</div>
+        <div className="skill-market-grid">
+          {OTHER_MARKETS.map((market) => (
+            <a key={market.name} className="skill-market-card" href={market.url} target="_blank" rel="noreferrer noopener">
+              <div className="skill-market-head">
+                <span>{market.name}</span>
+                <code>{market.domain}</code>
+              </div>
+              <p>{zh ? market.zhDesc : market.enDesc}</p>
+            </a>
+          ))}
+        </div>
+      </div>
+
       <div className="skills-hub-toolbar">
         <div className="plugins-search skills-hub-search">
           <Search size={15} />
@@ -196,6 +226,7 @@ function SkillsHubPanel({ installedSkills, language }: { installedSkills: SkillI
               </div>
             );
           })}
+
         </section>
 
         <aside className="skills-hub-detail" aria-label={zh ? "技能详情" : "Skill details"}>
@@ -253,19 +284,625 @@ function SkillsHubPanel({ installedSkills, language }: { installedSkills: SkillI
   );
 }
 
-export function PluginsPanel() {
-  const open = useStore((s) => s.pluginsOpen);
-  const close = useStore((s) => s.closePlugins);
+type SkillFilter = "all" | "enabled" | "disabled";
+
+/** Master-detail view for the user's managed skills (left list, right detail). */
+function MySkillsView({ skills, loading, language }: { skills: SkillInfo[]; loading: boolean; language: "en" | "zh" }) {
+  const toggleSkill = useStore((s) => s.toggleSkill);
+  const pushToast = useStore((s) => s.pushToast);
+  const zh = language === "zh";
+
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<SkillFilter>("all");
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [content, setContent] = useState<SkillContent | null>(null);
+  const [contentLoading, setContentLoading] = useState(false);
+  const [contentError, setContentError] = useState("");
+  const contentRequest = useRef(0);
+
+  const q = query.trim().toLowerCase();
+  const filtered = useMemo(
+    () =>
+      skills.filter((sk) => {
+        if (filter === "enabled" && !sk.enabled) return false;
+        if (filter === "disabled" && sk.enabled) return false;
+        if (!q) return true;
+        return [sk.name, sk.description || "", sk.path].some((value) => value.toLowerCase().includes(q));
+      }),
+    [skills, filter, q],
+  );
+
+  const groups = useMemo(() => {
+    const map = new Map<string, SkillInfo[]>();
+    for (const sk of filtered) {
+      const list = map.get(sk.root);
+      if (list) list.push(sk);
+      else map.set(sk.root, [sk]);
+    }
+    return Array.from(map.entries()).sort((a, b) => {
+      const rank = (root: string) => (root.replace(/\\/g, "/").endsWith("/.pi/agent/skills") ? 0 : 1);
+      return rank(a[0]) - rank(b[0]);
+    });
+  }, [filtered]);
+
+  // Keep a valid default selection as the list loads or entries disappear.
+  useEffect(() => {
+    const stillExists = skills.some((sk) => sk.path === selectedPath);
+    if (!stillExists) setSelectedPath(skills.length > 0 ? skills[0].path : null);
+  }, [skills, selectedPath]);
+
+  const selected = useMemo(() => skills.find((sk) => sk.path === selectedPath) || null, [skills, selectedPath]);
+  const activePath = selected?.path ?? null;
+
+  useEffect(() => {
+    if (!activePath) {
+      setContent(null);
+      setContentError("");
+      return;
+    }
+    const request = ++contentRequest.current;
+    setContentLoading(true);
+    setContentError("");
+    window.pi.plugins
+      .getSkillContent(activePath)
+      .then((res: SkillContent) => {
+        if (request === contentRequest.current) setContent(res);
+      })
+      .catch((e: any) => {
+        if (request === contentRequest.current) setContentError(e?.message || String(e));
+      })
+      .finally(() => {
+        if (request === contentRequest.current) setContentLoading(false);
+      });
+  }, [activePath]);
+
+  const copyCommand = async () => {
+    if (!selected) return;
+    try {
+      await navigator.clipboard.writeText(`/skill:${selected.name}`);
+      pushToast("success", "命令已复制");
+    } catch {
+      pushToast("error", "复制失败");
+    }
+  };
+
+  const copyMarkdown = async () => {
+    if (!content) return;
+    try {
+      await navigator.clipboard.writeText(content.markdown);
+      pushToast("success", "Markdown 已复制");
+    } catch {
+      pushToast("error", "复制失败");
+    }
+  };
+
+  const counts = useMemo(
+    () => ({
+      all: skills.length,
+      enabled: skills.filter((sk) => sk.enabled).length,
+      disabled: skills.filter((sk) => !sk.enabled).length,
+    }),
+    [skills],
+  );
+
+  return (
+    <div className="skills-mine">
+      <div className="skills-mine-list">
+        <div className="plugins-search">
+          <Search size={15} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={zh ? "搜索我的技能…" : "Search my skills…"}
+            aria-label={zh ? "搜索我的技能" : "Search my skills"}
+          />
+          {query && (
+            <button type="button" className="plugins-search-clear" onClick={() => setQuery("")} aria-label={zh ? "清除搜索" : "Clear search"}>
+              ×
+            </button>
+          )}
+        </div>
+
+        <div className="skill-chips">
+          {(
+            [
+              ["all", zh ? "全部" : "All"],
+              ["enabled", zh ? "已启用" : "Enabled"],
+              ["disabled", zh ? "已禁用" : "Disabled"],
+            ] as [SkillFilter, string][]
+          ).map(([value, label]) => (
+            <button key={value} type="button" className={`skill-chip${filter === value ? " active" : ""}`} onClick={() => setFilter(value)}>
+              {label} {counts[value]}
+            </button>
+          ))}
+        </div>
+
+        <div className="skills-mine-scroll">
+          {loading && skills.length === 0 && <div className="set-empty-mini">{zh ? "加载中…" : "Loading…"}</div>}
+          {!loading && skills.length === 0 && (
+            <div className="set-empty-mini">
+              {zh
+                ? "未在 ~/.pi/agent/skills 或 ~/.agents/skills 目录发现独立技能。"
+                : "No standalone skills found in ~/.pi/agent/skills or ~/.agents/skills."}
+            </div>
+          )}
+          {skills.length > 0 && filtered.length === 0 && <div className="set-empty-mini">{zh ? "没有匹配的技能。" : "No matching skills."}</div>}
+          {groups.map(([root, list]) => {
+            const rl = rootLabel(root, zh);
+            return (
+              <div key={root}>
+                <div className="skills-group-head">
+                  <span>{rl.label}</span>
+                  <code title={root}>{rl.code}</code>
+                  <span className="count">{list.length}</span>
+                </div>
+                {list.map((sk) => (
+                  <div
+                    key={sk.path}
+                    role="button"
+                    tabIndex={0}
+                    className={`skill-row${selectedPath === sk.path ? " active" : ""}`}
+                    onClick={() => setSelectedPath(sk.path)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedPath(sk.path);
+                      }
+                    }}
+                  >
+                    <span className={`skill-dot ${sk.enabled ? "on" : "off"}`} />
+                    <div className="skill-row-main">
+                      <div className="skill-row-name">{sk.name}</div>
+                      {sk.description && <div className="skill-row-desc">{sk.description}</div>}
+                    </div>
+                    <span className="skill-row-toggle" onClick={(event) => event.stopPropagation()}>
+                      <Toggle checked={sk.enabled} onChange={(v) => toggleSkill(sk.path, v)} />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <aside className="skills-mine-detail" aria-label={zh ? "技能详情" : "Skill details"}>
+        {!selected && <div className="set-empty-mini">{zh ? "选择一个技能查看详情" : "Select a skill to view details"}</div>}
+        {selected && (
+          <>
+            <div className="skill-detail-head">
+              <div className="skill-detail-title-wrap">
+                <div className="skill-detail-title">{selected.name}</div>
+                <div className="skill-detail-badges">
+                  <span className="plugins-kind">{rootLabel(selected.root, zh).label}</span>
+                  <span className={`skill-badge ${selected.enabled ? "on" : "off"}`}>
+                    {selected.enabled ? (zh ? "● 已启用" : "● Enabled") : zh ? "已禁用" : "Disabled"}
+                  </span>
+                </div>
+              </div>
+              <div className="skill-detail-actions">
+                <button type="button" className="set-btn" onClick={copyCommand} title={`/skill:${selected.name}`}>
+                  <Copy size={13} /> {zh ? "复制命令" : "Copy command"}
+                </button>
+                <button
+                  type="button"
+                  className={`set-btn${selected.enabled ? "" : " primary"}`}
+                  onClick={() => toggleSkill(selected.path, !selected.enabled)}
+                >
+                  {selected.enabled ? (zh ? "停用" : "Disable") : zh ? "启用" : "Enable"}
+                </button>
+              </div>
+            </div>
+
+            <div className="skill-detail-meta">
+              <span title={`/skill:${selected.name}`}>
+                {zh ? "命令" : "Command"} <code>/skill:{selected.name}</code>
+              </span>
+              <span className="grow" title={selected.path}>
+                {zh ? "路径" : "Path"} <code>{selected.path}</code>
+              </span>
+            </div>
+
+            {selected.description && (
+              <div className="skill-detail-section">
+                <div className="skills-hub-mini-label">{zh ? "说明" : "DESCRIPTION"}</div>
+                <p className="skills-hub-description">{selected.description}</p>
+              </div>
+            )}
+
+            <div className="skill-detail-section skill-md-section">
+              <div className="skills-hub-mini-label skill-md-head-row">
+                SKILL.MD
+                {content && !contentLoading && (
+                  <button type="button" className="set-btn" onClick={copyMarkdown}>
+                    <Copy size={13} /> {zh ? "复制 Markdown" : "Copy Markdown"}
+                  </button>
+                )}
+              </div>
+              {contentLoading && (
+                <div className="skills-hub-detail-loading">
+                  <span className="spinner" /> {zh ? "加载 SKILL.MD…" : "Loading SKILL.md…"}
+                </div>
+              )}
+              {contentError && !contentLoading && <div className="skills-hub-error">{contentError}</div>}
+              {content && !contentLoading && (
+                <div className="skill-md-body">
+                  <Markdown text={content.markdown} />
+                </div>
+              )}
+            </div>
+
+            <div className="muted plugins-note">
+              {zh
+                ? "停用技能会将其入口文件重命名为 *.disabled（可逆）。"
+                : "Disabling a skill renames its entry file to *.disabled (reversible)."}
+            </div>
+          </>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+/** Convert a repository URL (git+https / git@host:user/repo) to an https link where possible. */
+function repositoryUrl(repo?: string): string | null {
+  if (!repo) return null;
+  const value = repo.trim();
+  if (value.startsWith("http://") || value.startsWith("https://")) return value;
+  const ssh = value.match(/^git@([^:]+):(.+)$/);
+  if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
+  return null;
+}
+
+/** Extension package market: search the public npm registry, install via `npm:<name>`. */
+function PackagesMarketView({ language }: { language: "en" | "zh" }) {
   const packages = useStore((s) => s.packages);
-  const skills = useStore((s) => s.skills);
+  const installPackage = useStore((s) => s.installPackage);
+  const zh = language === "zh";
+
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<NpmPackage[]>([]);
+  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [readme, setReadme] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [readmeLoading, setReadmeLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [installing, setInstalling] = useState<string | null>(null);
+  const readmeRequest = useRef(0);
+
+  // A dev instance started before this feature has an old preload without these APIs.
+  const marketApiReady = typeof window.pi.plugins.searchNpmPackages === "function" && typeof window.pi.plugins.getNpmReadme === "function";
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      if (!marketApiReady) {
+        setLoading(false);
+        setError(
+          zh
+            ? "当前实例的 preload 缺少扩展包市场接口——请完全退出 MPI 后重新启动（dev：重新运行 npm run dev）。"
+            : "This instance's preload is missing the package-market APIs — fully quit MPI and restart (dev: re-run npm run dev).",
+        );
+        return;
+      }
+      setLoading(true);
+      setError("");
+      try {
+        const items: NpmPackage[] = await window.pi.plugins.searchNpmPackages(query.trim());
+        if (!cancelled) setResults(items);
+      } catch (e: any) {
+        if (!cancelled) {
+          setResults([]);
+          setError(e?.message || (zh ? "无法加载 npm 搜索结果" : "Unable to load npm search results"));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, query.trim() ? 260 : 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, zh, marketApiReady]);
+
+  // Keep a valid selection as results change (auto-selects the first hit).
+  useEffect(() => {
+    const stillExists = results.some((item) => item.name === selectedName);
+    if (!stillExists) setSelectedName(results.length > 0 ? results[0].name : null);
+  }, [results, selectedName]);
+
+  const selected = useMemo(() => results.find((item) => item.name === selectedName) || null, [results, selectedName]);
+
+  useEffect(() => {
+    if (!selected || !marketApiReady) {
+      setReadme("");
+      return;
+    }
+    const request = ++readmeRequest.current;
+    setReadmeLoading(true);
+    window.pi.plugins
+      .getNpmReadme(selected.name)
+      .then((text: string) => {
+        if (request === readmeRequest.current) setReadme(text);
+      })
+      .catch(() => {
+        if (request === readmeRequest.current) setReadme("");
+      })
+      .finally(() => {
+        if (request === readmeRequest.current) setReadmeLoading(false);
+      });
+  }, [selected, marketApiReady]);
+
+  const isInstalled = (name: string) => packages.some((p) => p.source.toLowerCase() === `npm:${name}`.toLowerCase());
+
+  const install = async (pkg: NpmPackage) => {
+    if (installing || isInstalled(pkg.name)) return;
+    setInstalling(pkg.name);
+    try {
+      await installPackage(`npm:${pkg.name}`);
+    } finally {
+      setInstalling(null);
+    }
+  };
+
+  const repoLink = repositoryUrl(selected?.repository);
+
+  return (
+    <div className="skills-mine">
+      <div className="skills-mine-list">
+        <div className="plugins-search">
+          <Search size={15} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={zh ? "搜索 npm 上的扩展包…" : "Search extension packages on npm…"}
+            aria-label={zh ? "搜索扩展包" : "Search extension packages"}
+          />
+          {query && (
+            <button type="button" className="plugins-search-clear" onClick={() => setQuery("")} aria-label={zh ? "清除搜索" : "Clear search"}>
+              ×
+            </button>
+          )}
+        </div>
+
+        <div className="npm-market-hint">
+          {loading && results.length === 0 ? (
+            <>
+              <span className="spinner" /> {zh ? "正在搜索 npm…" : "Searching npm…"}
+            </>
+          ) : query.trim() ? (
+            zh ? `找到 ${results.length} 个包 · 按相关度排序` : `${results.length} packages found · ranked by relevance`
+          ) : (
+            zh ? `默认搜索 “pi extension” · 共 ${results.length} 个结果` : `Default query “pi extension” · ${results.length} results`
+          )}
+        </div>
+
+        <div className="skills-mine-scroll">
+          {error && !loading && <div className="skills-hub-error">{error}</div>}
+          {!loading && results.length === 0 && <div className="set-empty-mini">{zh ? "没有匹配的扩展包。" : "No matching packages."}</div>}
+          {results.map((pkg) => (
+            <div
+              key={pkg.name}
+              role="button"
+              tabIndex={0}
+              className={`npm-row${selectedName === pkg.name ? " active" : ""}`}
+              onClick={() => setSelectedName(pkg.name)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedName(pkg.name);
+                }
+              }}
+            >
+              <div className="skill-row-main">
+                <div className="npm-row-name">
+                  {pkg.name}
+                  {pkg.version && <span className="npm-row-version">v{pkg.version}</span>}
+                </div>
+                {pkg.description && <div className="skill-row-desc">{pkg.description}</div>}
+              </div>
+              <span className="npm-row-action" onClick={(event) => event.stopPropagation()}>
+                {isInstalled(pkg.name) ? (
+                  <span className="skills-hub-installed-label">
+                    <Check size={13} /> {zh ? "已安装" : "Installed"}
+                  </span>
+                ) : (
+                  <button type="button" className="set-btn" disabled={installing === pkg.name} onClick={() => install(pkg)} title={`npm:${pkg.name}`}>
+                    {installing === pkg.name ? <span className="spinner" /> : <Plus size={13} />} {zh ? "安装" : "Install"}
+                  </button>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <aside className="skills-mine-detail" aria-label={zh ? "扩展包详情" : "Package details"}>
+        {!selected && <div className="set-empty-mini">{zh ? "选择一个扩展包查看详情" : "Select a package to view details"}</div>}
+        {selected && (
+          <>
+            <div className="skill-detail-head">
+              <div className="skill-detail-title-wrap">
+                <div className="skill-detail-title">{selected.name}</div>
+                <div className="skill-detail-badges">
+                  {selected.version && <span className="plugins-kind">v{selected.version}</span>}
+                  {selected.license && <span className="plugins-kind">{selected.license}</span>}
+                  {selected.downloadsWeekly > 0 && (
+                    <span className="skill-badge on">
+                      {formatInstalls(selected.downloadsWeekly)} {zh ? "周下载" : "/week"}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="skill-detail-actions">
+                {isInstalled(selected.name) ? (
+                  <button type="button" className="set-btn" disabled title={zh ? "已在「我的扩展包」中管理" : "Managed under My Packages"}>
+                    <Check size={13} /> {zh ? "已安装" : "Installed"}
+                  </button>
+                ) : (
+                  <button type="button" className="set-btn primary" onClick={() => install(selected)} disabled={installing === selected.name} title={`npm:${selected.name}`}>
+                    {installing === selected.name ? <span className="spinner" /> : <Plus size={13} />} {zh ? "安装" : "Install"}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="skill-detail-meta">
+              <a href={selected.npmUrl} target="_blank" rel="noreferrer noopener">
+npm ↗
+              </a>
+              {repoLink && (
+                <a href={repoLink} target="_blank" rel="noreferrer noopener">
+                  仓库 ↗
+                </a>
+              )}
+              {selected.date && <span>{zh ? "发布" : "Published"} {new Date(selected.date).toLocaleDateString()}</span>}
+            </div>
+
+            {selected.description && (
+              <div className="skill-detail-section">
+                <div className="skills-hub-mini-label">{zh ? "说明" : "DESCRIPTION"}</div>
+                <p className="skills-hub-description">{selected.description}</p>
+              </div>
+            )}
+
+            {selected.keywords.length > 0 && (
+              <div className="skill-detail-section">
+                <div className="skills-hub-mini-label">{zh ? "关键词" : "KEYWORDS"}</div>
+                <div className="npm-keywords">
+                  {selected.keywords.map((keyword) => (
+                    <span key={keyword}>{keyword}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="skill-detail-section skill-md-section">
+              <div className="skills-hub-mini-label">README</div>
+              {readmeLoading && (
+                <div className="skills-hub-detail-loading">
+                  <span className="spinner" /> {zh ? "加载 README…" : "Loading README…"}
+                </div>
+              )}
+              {!readmeLoading && !readme && <div className="set-empty-mini">{zh ? "该包没有公开的 README。" : "This package has no public README."}</div>}
+              {readme && !readmeLoading && (
+                <div className="skill-md-body">
+                  <Markdown text={readme} />
+                </div>
+              )}
+            </div>
+
+            <div className="muted plugins-note">
+              {zh
+                ? "安装来源为 npm:<包名>，装好后在「我的扩展包」中更新、停用或移除。"
+                : "Installed as npm:<package name>; update, disable or remove it under My Packages."}
+            </div>
+          </>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+/** Phase-1 inventory stats: totals, per-root distribution, disabled list. */
+function SkillStatsView({ skills, language }: { skills: SkillInfo[]; language: "en" | "zh" }) {
+  const toggleSkill = useStore((s) => s.toggleSkill);
+  const zh = language === "zh";
+
+  const total = skills.length;
+  const enabledCount = skills.filter((sk) => sk.enabled).length;
+  const disabledList = useMemo(() => skills.filter((sk) => !sk.enabled), [skills]);
+
+  const groups = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const sk of skills) map.set(sk.root, (map.get(sk.root) || 0) + 1);
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+  }, [skills]);
+
+  if (total === 0) {
+    return (
+      <div className="plugins-body">
+        <div className="set-empty-mini">{zh ? "暂无技能数据。" : "No skill data yet."}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="plugins-body">
+      <div className="stats-cards">
+        <div className="stat-card">
+          <span>{zh ? "技能总数" : "Total skills"}</span>
+          <strong>{total}</strong>
+        </div>
+        <div className="stat-card ok">
+          <span>{zh ? "已启用" : "Enabled"}</span>
+          <strong>{enabledCount}</strong>
+        </div>
+        <div className="stat-card off">
+          <span>{zh ? "已禁用" : "Disabled"}</span>
+          <strong>{disabledList.length}</strong>
+        </div>
+      </div>
+
+      <section className="plugins-section">
+        <div className="plugins-section-head">{zh ? "按来源目录分布" : "By source directory"}</div>
+        {groups.map(([root, count]) => {
+          const rl = rootLabel(root, zh);
+          const pct = Math.round((count / total) * 100);
+          return (
+            <div key={root} className="stat-bar-row">
+              <span className="stat-bar-label" title={root}>
+                {rl.label}
+              </span>
+              <div className="stat-bar">
+                <i style={{ width: `${pct}%` }} />
+              </div>
+              <span className="stat-bar-count">
+                {count}（{pct}%）
+              </span>
+            </div>
+          );
+        })}
+      </section>
+
+      {disabledList.length > 0 && (
+        <section className="plugins-section">
+          <div className="plugins-section-head">{zh ? "已禁用的技能" : "Disabled skills"}</div>
+          {disabledList.map((sk) => (
+            <div key={sk.path} className="plugins-row">
+              <div className="plugins-row-main">
+                <span className="skill-dot off" />
+                <span className="plugins-row-name">{sk.name}</span>
+              </div>
+              <div className="plugins-row-sub" title={sk.path}>
+                {sk.path}
+              </div>
+              <div className="plugins-row-actions">
+                <Toggle checked={false} onChange={() => toggleSkill(sk.path, true)} />
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+    </div>
+  );
+}
+
+/** Fixed group order for the package list (npm first, then git, local). */
+const KIND_ORDER: Record<string, number> = { npm: 0, git: 1, local: 2 };
+
+function kindLabel(kind: string, zh: boolean): string {
+  return kind === "local" ? (zh ? "本地" : "Local") : KIND_LABEL[kind] || kind;
+}
+
+/** Extension package management — master-detail layout mirroring My Skills. */
+function PackagesView({ language, onOpenMarket }: { language: "en" | "zh"; onOpenMarket: () => void }) {
+  const packages = useStore((s) => s.packages);
   const loading = useStore((s) => s.pluginsLoading);
   const togglePackage = useStore((s) => s.togglePackage);
   const installPackage = useStore((s) => s.installPackage);
   const removePackage = useStore((s) => s.removePackage);
   const updatePackages = useStore((s) => s.updatePackages);
-  const loadPlugins = useStore((s) => s.loadPlugins);
-  const toggleSkill = useStore((s) => s.toggleSkill);
-  const language = useStore((s) => s.config?.language || "en");
   const zh = language === "zh";
 
   const [source, setSource] = useState("");
@@ -273,30 +910,79 @@ export function PluginsPanel() {
   const [updatingAll, setUpdatingAll] = useState(false);
   const [updatingOne, setUpdatingOne] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [hubOpen, setHubOpen] = useState(false);
+  const [filter, setFilter] = useState<SkillFilter>("all");
+  const [selectedSource, setSelectedSource] = useState<string | null>(null);
+  const [info, setInfo] = useState<PackageInfo | null>(null);
+  const [infoLoading, setInfoLoading] = useState(false);
+  const infoRequest = useRef(0);
+  // Packages have no marketplace — sources are found manually (npm/GitHub),
+  // so the install form stays collapsed behind a small button by default.
+  const [installOpen, setInstallOpen] = useState(false);
+  const installInputRef = useRef<HTMLInputElement>(null);
 
-  const dismiss = () => {
-    setHubOpen(false);
-    close();
-  };
+  useEffect(() => {
+    if (installOpen) installInputRef.current?.focus();
+  }, [installOpen]);
 
-  const normalizedQuery = query.trim().toLowerCase();
-  const filteredPackages = useMemo(
+  const q = query.trim().toLowerCase();
+  const filtered = useMemo(
     () =>
-      packages.filter((p) =>
-        !normalizedQuery || [p.name, p.source, p.kind].some((value) => value.toLowerCase().includes(normalizedQuery)),
-      ),
-    [packages, normalizedQuery],
-  );
-  const filteredSkills = useMemo(
-    () =>
-      skills.filter((sk) =>
-        !normalizedQuery || [sk.name, sk.path, sk.root].some((value) => value.toLowerCase().includes(normalizedQuery)),
-      ),
-    [skills, normalizedQuery],
+      packages.filter((p) => {
+        if (filter === "enabled" && !p.enabled) return false;
+        if (filter === "disabled" && p.enabled) return false;
+        if (!q) return true;
+        return [p.name, p.source, p.kind].some((value) => value.toLowerCase().includes(q));
+      }),
+    [packages, filter, q],
   );
 
-  if (!open) return null;
+  const groups = useMemo(() => {
+    const map = new Map<string, PluginPackage[]>();
+    for (const p of filtered) {
+      const list = map.get(p.kind);
+      if (list) list.push(p);
+      else map.set(p.kind, [p]);
+    }
+    return Array.from(map.entries()).sort((a, b) => (KIND_ORDER[a[0]] ?? 9) - (KIND_ORDER[b[0]] ?? 9));
+  }, [filtered]);
+
+  // Keep a valid default selection as the list loads or entries disappear.
+  useEffect(() => {
+    const stillExists = packages.some((p) => p.source === selectedSource);
+    if (!stillExists) setSelectedSource(packages.length > 0 ? packages[0].source : null);
+  }, [packages, selectedSource]);
+
+  const selected = useMemo(() => packages.find((p) => p.source === selectedSource) || null, [packages, selectedSource]);
+  const activeSource = selected?.source ?? null;
+
+  useEffect(() => {
+    if (!activeSource) {
+      setInfo(null);
+      return;
+    }
+    const request = ++infoRequest.current;
+    setInfoLoading(true);
+    window.pi.plugins
+      .getPackageInfo(activeSource)
+      .then((res: PackageInfo) => {
+        if (request === infoRequest.current) setInfo(res);
+      })
+      .catch(() => {
+        if (request === infoRequest.current) setInfo(null);
+      })
+      .finally(() => {
+        if (request === infoRequest.current) setInfoLoading(false);
+      });
+  }, [activeSource]);
+
+  const counts = useMemo(
+    () => ({
+      all: packages.length,
+      enabled: packages.filter((p) => p.enabled).length,
+      disabled: packages.filter((p) => !p.enabled).length,
+    }),
+    [packages],
+  );
 
   const install = async () => {
     const s = source.trim();
@@ -305,6 +991,7 @@ export function PluginsPanel() {
     await installPackage(s);
     setBusy(false);
     setSource("");
+    setInstallOpen(false);
   };
 
   const updating = updatingAll || updatingOne !== null;
@@ -321,161 +1008,301 @@ export function PluginsPanel() {
     setUpdatingOne(null);
   };
 
+  const removeSelected = () => {
+    if (!selected) return;
+    const question = zh ? `移除包 “${selected.name}”？将执行 pi remove 卸载。` : `Remove package “${selected.name}”? This runs pi remove.`;
+    if (window.confirm(question)) removePackage(selected.source);
+  };
+
   return (
-    <div className="settings-backdrop" onMouseDown={dismiss}>
+    <div className="packages-view">
+      <div className="packages-install-row">
+        <button
+          type="button"
+          className="set-btn"
+          onClick={() => setInstallOpen((v) => !v)}
+          title={zh ? "粘贴安装来源（npm / git / 本地路径）" : "Paste a package source (npm / git / local path)"}
+        >
+          {installOpen ? <Close size={13} /> : <Plus size={14} />} {zh ? "安装扩展包" : "Install package"}
+        </button>
+        <button
+          className="set-btn packages-update-all"
+          onClick={updateAll}
+          disabled={updating || packages.length === 0}
+          title={zh ? "检查并更新所有扩展（pi update --extensions）" : "Check and update all extensions (pi update --extensions)"}
+        >
+          {updatingAll ? <span className="spinner" /> : <Refresh size={13} />}
+          {zh ? "更新全部" : "Update all"}
+        </button>
+      </div>
+
+      {installOpen && (
+        <div className="packages-install-form">
+          <div className="packages-install-line">
+            <input
+              ref={installInputRef}
+              className="set-input"
+              placeholder={zh ? "安装来源，如 npm:@foo/bar、git:github.com/user/repo 或本地路径" : "Package source, such as npm:@foo/bar, git:github.com/user/repo, or a local path"}
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") install();
+                else if (e.key === "Escape") setInstallOpen(false);
+              }}
+            />
+            <button className="set-btn primary" onClick={install} disabled={busy || !source.trim()}>
+              {busy ? <span className="spinner" /> : <Plus size={14} />} {zh ? "安装" : "Install"}
+            </button>
+          </div>
+          <div className="packages-install-hint">
+            {zh ? "也可以到" : "Or browse from the "}
+            <button type="button" className="skills-hub-link" onClick={onOpenMarket}>
+              {zh ? "「扩展包市场」子页 →" : "Package Market sub-tab →"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="skills-mine packages-body">
+        <div className="skills-mine-list">
+          <div className="plugins-search">
+            <Search size={15} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={zh ? "搜索扩展包" : "Search packages"}
+              aria-label={zh ? "搜索扩展包" : "Search packages"}
+            />
+            {query && (
+              <button type="button" className="plugins-search-clear" onClick={() => setQuery("")} aria-label={zh ? "清除搜索" : "Clear search"}>
+                ×
+              </button>
+            )}
+          </div>
+
+          <div className="skill-chips">
+            {(
+              [
+                ["all", zh ? "全部" : "All"],
+                ["enabled", zh ? "已启用" : "Enabled"],
+                ["disabled", zh ? "已禁用" : "Disabled"],
+              ] as [SkillFilter, string][]
+            ).map(([value, label]) => (
+              <button key={value} type="button" className={`skill-chip${filter === value ? " active" : ""}`} onClick={() => setFilter(value)}>
+                {label} {counts[value]}
+              </button>
+            ))}
+          </div>
+
+          <div className="skills-mine-scroll">
+            {loading && packages.length === 0 && <div className="set-empty-mini">{zh ? "加载中…" : "Loading…"}</div>}
+            {!loading && packages.length === 0 && (
+              <div className="set-empty-mini">{zh ? "尚未安装任何扩展包。" : "No extension packages installed."}</div>
+            )}
+            {packages.length > 0 && filtered.length === 0 && <div className="set-empty-mini">{zh ? "没有匹配的扩展包。" : "No matching extension packages."}</div>}
+            {groups.map(([kind, list]) => (
+              <div key={kind}>
+                <div className="skills-group-head">
+                  <span>{kindLabel(kind, zh)}</span>
+                  <span className="count">{list.length}</span>
+                </div>
+                {list.map((p) => (
+                  <div
+                    key={p.source}
+                    role="button"
+                    tabIndex={0}
+                    className={`skill-row${selectedSource === p.source ? " active" : ""}`}
+                    onClick={() => setSelectedSource(p.source)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedSource(p.source);
+                      }
+                    }}
+                  >
+                    <span className={`skill-dot ${p.enabled ? "on" : "off"}`} />
+                    <div className="skill-row-main">
+                      <div className="skill-row-name">{p.name}</div>
+                      <div className="skill-row-desc" title={p.source}>
+                        {p.source}
+                      </div>
+                    </div>
+                    <span className="skill-row-toggle" onClick={(event) => event.stopPropagation()}>
+                      <Toggle checked={p.enabled} onChange={(v) => togglePackage(p.source, v)} />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <aside className="skills-mine-detail" aria-label={zh ? "扩展包详情" : "Package details"}>
+          {!selected && <div className="set-empty-mini">{zh ? "选择一个扩展包查看详情" : "Select a package to view details"}</div>}
+          {selected && (
+            <>
+              <div className="skill-detail-head">
+                <div className="skill-detail-title-wrap">
+                  <div className="skill-detail-title">{selected.name}</div>
+                  <div className="skill-detail-badges">
+                    <span className="plugins-kind">{kindLabel(selected.kind, zh)}</span>
+                    {info?.version && <span className="plugins-kind">v{info.version}</span>}
+                    <span className={`skill-badge ${selected.enabled ? "on" : "off"}`}>
+                      {selected.enabled ? (zh ? "● 已启用" : "● Enabled") : zh ? "已禁用" : "Disabled"}
+                    </span>
+                  </div>
+                </div>
+                <div className="skill-detail-actions">
+                  <button
+                    type="button"
+                    className="set-btn"
+                    onClick={() => updateOne(selected.source)}
+                    disabled={updating}
+                    title={zh ? "检查并更新此扩展" : "Check and update this extension"}
+                  >
+                    {updatingOne === selected.source ? <span className="spinner" /> : <Refresh size={13} />} {zh ? "更新" : "Update"}
+                  </button>
+                  <button
+                    type="button"
+                    className={`set-btn${selected.enabled ? "" : " primary"}`}
+                    onClick={() => togglePackage(selected.source, !selected.enabled)}
+                  >
+                    {selected.enabled ? (zh ? "停用" : "Disable") : zh ? "启用" : "Enable"}
+                  </button>
+                  <button type="button" className="set-iconbtn danger" title={zh ? "移除（执行 pi remove）" : "Remove (runs pi remove)"} onClick={removeSelected}>
+                    ×
+                  </button>
+                </div>
+              </div>
+
+              <div className="skill-detail-meta">
+                <span className="grow" title={selected.source}>
+                  {zh ? "来源" : "Source"} <code>{selected.source}</code>
+                </span>
+                {info?.dir && (
+                  <span className="grow" title={info.dir}>
+                    {zh ? "安装目录" : "Location"} <code>{info.dir}</code>
+                  </span>
+                )}
+              </div>
+
+              {infoLoading && (
+                <div className="skills-hub-detail-loading">
+                  <span className="spinner" /> {zh ? "读取包信息…" : "Reading package info…"}
+                </div>
+              )}
+
+              {info?.description && !infoLoading && (
+                <div className="skill-detail-section">
+                  <div className="skills-hub-mini-label">{zh ? "说明" : "DESCRIPTION"}</div>
+                  <p className="skills-hub-description">{info.description}</p>
+                </div>
+              )}
+
+              <div className="muted plugins-note">
+                {zh
+                  ? "开关写入 ~/.pi/agent/settings.json（autoload），与终端 pi 共享；移除会执行 pi remove 卸载。"
+                  : "Toggling writes autoload into ~/.pi/agent/settings.json, shared with terminal Pi. Removing runs `pi remove` to uninstall."}
+              </div>
+            </>
+          )}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+export function PluginsPanel() {
+  const open = useStore((s) => s.pluginsOpen);
+  const close = useStore((s) => s.closePlugins);
+  const packagesCount = useStore((s) => s.packages.length);
+  const skills = useStore((s) => s.skills);
+  const loading = useStore((s) => s.pluginsLoading);
+  const loadPlugins = useStore((s) => s.loadPlugins);
+  const language = useStore((s) => s.config?.language || "en");
+  const zh = language === "zh";
+
+  const [module, setModule] = useState<"skills" | "packages">("skills");
+  const [skillTab, setSkillTab] = useState<"mine" | "market" | "stats">("mine");
+  const [packageTab, setPackageTab] = useState<"mine" | "market">("mine");
+
+  if (!open) return null;
+
+  return (
+    <div className="settings-backdrop" onMouseDown={close}>
       <div className="plugins-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <header className="plugins-head">
           <div className="plugins-head-title">
             <span className="set-brand-mark">
-              {hubOpen ? <AppStore size={18} /> : <At size={18} />}
+              <At size={18} />
             </span>
             <div>
-              <div className="set-brand-title">{hubOpen ? (zh ? "技能中心" : "Skills Hub") : zh ? "扩展功能" : "Extensions"}</div>
-              <div className="set-brand-sub">
-                {hubOpen ? (zh ? "浏览并安装 skills.sh 公开技能" : "Browse and install public skills from skills.sh") : zh ? "管理 pi 的扩展包与技能" : "Manage Pi extension packages and skills"}
-              </div>
+              <div className="set-brand-title">{zh ? "扩展功能" : "Extensions"}</div>
+              <div className="set-brand-sub">{zh ? "管理 pi 的扩展包与技能" : "Manage Pi extension packages and skills"}</div>
             </div>
           </div>
           <div className="plugins-head-actions">
-            {hubOpen ? (
-              <button className="skills-hub-back" type="button" onClick={() => setHubOpen(false)}>
-                ← {zh ? "扩展功能" : "Extensions"}
-              </button>
-            ) : (
-              <button className="skills-hub-entry" type="button" onClick={() => setHubOpen(true)}>
-                <AppStore size={14} />
-                {zh ? "技能中心" : "Skills Hub"}
-              </button>
-            )}
-            <button className="set-iconbtn" title={zh ? "关闭" : "Close"} onClick={dismiss}>
+            <button className="set-iconbtn" title={zh ? "关闭" : "Close"} onClick={close}>
               <Close size={16} />
             </button>
           </div>
         </header>
 
-        {hubOpen ? <SkillsHubPanel installedSkills={skills} language={language} /> : <div className="plugins-body">
-          <div className="muted plugins-note">
-            {zh
-              ? "开关写入 ~/.pi/agent/settings.json，与终端 pi 共享；显示 ~/.pi/agent/skills 和 ~/.agents/skills，Pi 目录同名技能优先。"
-              : "Changes are written to ~/.pi/agent/settings.json and shared with terminal Pi. MPI displays ~/.pi/agent/skills and ~/.agents/skills; Pi skills win duplicate names."}
-          </div>
-
-          <div className="plugins-toolbar">
-            <div className="plugins-search">
-              <Search size={15} />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={zh ? "搜索扩展功能或技能" : "Search extensions or skills"}
-                aria-label={zh ? "搜索扩展功能或技能" : "Search extensions or skills"}
-              />
-              {query && (
-                <button type="button" className="plugins-search-clear" onClick={() => setQuery("")} aria-label={zh ? "清除搜索" : "Clear search"}>
-                  ×
-                </button>
-              )}
-            </div>
-            <button className="set-iconbtn" onClick={() => loadPlugins()} disabled={loading} title={zh ? "刷新扩展功能和技能" : "Refresh extensions and skills"}>
-              {loading ? <span className="spinner" /> : <Refresh size={15} />}
+        <div className="plugins-tabs-row">
+          <div className="plugins-module-tabs" role="tablist" aria-label={zh ? "扩展功能模块" : "Extension modules"}>
+            <button type="button" role="tab" aria-selected={module === "skills"} className={`plugin-tab${module === "skills" ? " active" : ""}`} onClick={() => setModule("skills")}>
+              {zh ? "技能" : "Skills"} <span className="tabs-count">{skills.length}</span>
+            </button>
+            <button type="button" role="tab" aria-selected={module === "packages"} className={`plugin-tab${module === "packages" ? " active" : ""}`} onClick={() => setModule("packages")}>
+              {zh ? "扩展包" : "Packages"} <span className="tabs-count">{packagesCount}</span>
             </button>
           </div>
 
-          <section className="plugins-section">
-            <div className="plugins-section-head plugins-section-head-row">
-              <span>
-                {zh ? "扩展包" : "Extensions"}（{filteredPackages.length}
-                {normalizedQuery ? ` / ${packages.length}` : ""}）
-              </span>
-              <button className="set-btn" onClick={updateAll} disabled={updating || packages.length === 0} title={zh ? "检查并更新所有扩展（pi update --extensions）" : "Check and update all extensions (pi update --extensions)"}>
-                {updatingAll ? <span className="spinner" /> : <Refresh size={13} />}
-                {zh ? "更新全部" : "Update all"}
+          {module === "skills" && (
+            <div className="skills-subtabs">
+              <button type="button" className={`skill-subtab${skillTab === "mine" ? " active" : ""}`} onClick={() => setSkillTab("mine")}>
+                <Files size={13} /> {zh ? "我的技能" : "My Skills"}
+              </button>
+              <button type="button" className={`skill-subtab${skillTab === "market" ? " active" : ""}`} onClick={() => setSkillTab("market")}>
+                <AppStore size={13} /> {zh ? "Skill 市场" : "Skill Market"}
+              </button>
+              <button type="button" className={`skill-subtab${skillTab === "stats" ? " active" : ""}`} onClick={() => setSkillTab("stats")}>
+                <Gauge size={13} /> {zh ? "统计" : "Stats"}
               </button>
             </div>
+          )}
 
-            <div className="plugins-install">
-              <input
-                className="set-input"
-                placeholder={zh ? "安装来源，如 npm:@foo/bar、git:github.com/user/repo 或本地路径" : "Package source, such as npm:@foo/bar, git:github.com/user/repo, or a local path"}
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && install()}
-              />
-              <button className="set-btn primary" onClick={install} disabled={busy || !source.trim()}>
-                {busy ? <span className="spinner" /> : <Plus size={14} />} {zh ? "安装" : "Install"}
+          {module === "packages" && (
+            <div className="skills-subtabs">
+              <button type="button" className={`skill-subtab${packageTab === "mine" ? " active" : ""}`} onClick={() => setPackageTab("mine")}>
+                <Files size={13} /> {zh ? "我的扩展包" : "My Packages"}
+              </button>
+              <button type="button" className={`skill-subtab${packageTab === "market" ? " active" : ""}`} onClick={() => setPackageTab("market")}>
+                <AppStore size={13} /> {zh ? "扩展包市场" : "Package Market"}
               </button>
             </div>
+          )}
 
-            {loading && packages.length === 0 && <div className="set-empty-mini">{zh ? "加载中…" : "Loading…"}</div>}
-            {!loading && packages.length === 0 && <div className="set-empty-mini">{zh ? "尚未安装任何扩展包。" : "No extension packages installed."}</div>}
-            {packages.length > 0 && filteredPackages.length === 0 && <div className="set-empty-mini">{zh ? "没有匹配的扩展包。" : "No matching extension packages."}</div>}
-            {filteredPackages.map((p) => (
-              <div className="plugins-row" key={p.source}>
-                <div className="plugins-row-main">
-                  <span className="plugins-row-name" title={p.source}>
-                    {p.name}
-                  </span>
-                  <span className="plugins-kind">{p.kind === "local" ? (zh ? "本地" : KIND_LABEL[p.kind]) : KIND_LABEL[p.kind] || p.kind}</span>
-                  {!p.enabled && <span className="plugins-off">{zh ? "已停用" : "Disabled"}</span>}
-                </div>
-                <div className="plugins-row-sub" title={p.source}>
-                  {p.source}
-                </div>
-                <div className="plugins-row-actions">
-                  <button
-                    className="set-iconbtn"
-                    title={zh ? "检查并更新此扩展" : "Check and update this extension"}
-                    disabled={updating}
-                    onClick={() => updateOne(p.source)}
-                  >
-                    {updatingOne === p.source ? <span className="spinner" /> : <Refresh size={13} />}
-                  </button>
-                  <Toggle checked={p.enabled} onChange={(v) => togglePackage(p.source, v)} />
-                  <button
-                    className="set-iconbtn danger"
-                    title={zh ? "移除" : "Remove"}
-                    onClick={() => {
-                      const question = zh ? `移除包 “${p.name}”？` : `Remove package “${p.name}”?`;
-                      if (window.confirm(question)) removePackage(p.source);
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-            ))}
-          </section>
+          <button className="set-iconbtn plugins-refresh" onClick={() => loadPlugins()} disabled={loading} title={zh ? "刷新扩展功能和技能" : "Refresh extensions and skills"}>
+            {loading ? <span className="spinner" /> : <Refresh size={15} />}
+          </button>
+        </div>
 
-          <section className="plugins-section">
-            <div className="plugins-section-head">
-              {zh ? "技能" : "Skills"} ({filteredSkills.length}
-              {normalizedQuery ? ` / ${skills.length}` : ""})
-            </div>
-            {loading && skills.length === 0 && <div className="set-empty-mini">{zh ? "加载中…" : "Loading…"}</div>}
-            {!loading && skills.length === 0 && <div className="set-empty-mini">{zh ? "未在 ~/.pi/agent/skills 或 ~/.agents/skills 目录发现独立技能。" : "No standalone skills found in ~/.pi/agent/skills or ~/.agents/skills."}</div>}
-            {skills.length > 0 && filteredSkills.length === 0 && <div className="set-empty-mini">{zh ? "没有匹配的技能。" : "No matching skills."}</div>}
-            {filteredSkills.map((sk) => (
-              <div className="plugins-row" key={sk.path}>
-                <div className="plugins-row-main">
-                  <span className="plugins-row-name" title={sk.path}>
-                    {sk.name}
-                  </span>
-                  {!sk.enabled && <span className="plugins-off">{zh ? "已停用" : "Disabled"}</span>}
-                </div>
-                <div className="plugins-row-sub" title={sk.path}>
-                  {sk.path}
-                </div>
-                <div className="plugins-row-actions">
-                  <Toggle checked={sk.enabled} onChange={(v) => toggleSkill(sk.path, v)} />
-                </div>
-              </div>
-            ))}
-            <div className="muted plugins-note">
-              {zh
-                ? "停用技能会将其入口文件重命名为 *.disabled（可逆）；新增文件后可点击右上角刷新。"
-                : "Disabling a skill renames its entry file to *.disabled (reversible). Refresh after adding new files."}
-            </div>
-          </section>
-        </div>}
+        <div className="plugins-content">
+          {module === "packages" ? (
+            packageTab === "mine" ? (
+              <PackagesView language={language} onOpenMarket={() => setPackageTab("market")} />
+            ) : (
+              <PackagesMarketView language={language} />
+            )
+          ) : skillTab === "mine" ? (
+            <MySkillsView skills={skills} loading={loading} language={language} />
+          ) : skillTab === "market" ? (
+            <SkillsHubPanel installedSkills={skills} language={language} />
+          ) : (
+            <SkillStatsView skills={skills} language={language} />
+          )}
+        </div>
       </div>
     </div>
   );

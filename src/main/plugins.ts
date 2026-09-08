@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { getConfig } from "./config";
 import { resolvePiRuntime } from "./pi-bridge";
 import { getAgentDir } from "./session-store";
@@ -74,8 +74,10 @@ function nameOf(source: string): string {
   let s = source.replace(/^(npm|git):/, "");
   s = s.replace(/^(https?|ssh|git):\/\//, "");
   s = s.split("@").slice(0, s.startsWith("@") ? 2 : 1).join("@") || s;
-  const seg = s.split(/[\\/]/).filter(Boolean).pop() || s;
-  return seg.replace(/\.git$/, "");
+  const segs = s.split(/[\\/]/).filter(Boolean);
+  // Preserve the npm scope (@scope/pkg) when present.
+  const name = (segs.length >= 2 && segs[segs.length - 2].startsWith("@") ? segs.slice(-2).join("/") : segs.pop()) || s;
+  return name.replace(/\.git$/, "");
 }
 
 export function listPackages(): PluginPackage[] {
@@ -432,6 +434,93 @@ export function listSkills(cwd?: string): SkillInfo[] {
  * not part of the global Plugins inventory. */
 export function listManagedSkills(): SkillInfo[] {
   return listSkillsFromRoots([join(getAgentDir(), "skills"), join(homedir(), ".agents", "skills")]);
+}
+
+export interface PackageInfo {
+  source: string;
+  name: string;
+  kind: "npm" | "git" | "local";
+  enabled: boolean;
+  /** Resolved install directory, when it could be located. */
+  dir?: string;
+  version?: string;
+  description?: string;
+}
+
+/** Read a package's installed manifest (version/description) for the detail
+ * pane. The source must already exist in settings.json so this IPC cannot be
+ * used to probe arbitrary paths. npm/git packages live in the agent's npm
+ * store; local packages are read from their own directory. */
+export function getPackageInfo(source: string): PackageInfo {
+  const base = listPackages().find((p) => p.source === source);
+  if (!base) throw new Error("Unknown package: " + source);
+
+  let dir: string | undefined;
+  if (base.kind === "local") {
+    const candidate = resolve(base.source.replace(/^(npm|git):/, ""));
+    if (existsSync(candidate)) dir = candidate;
+  } else {
+    const candidate = join(getAgentDir(), "npm", "node_modules", base.name);
+    if (existsSync(join(candidate, "package.json"))) dir = candidate;
+  }
+
+  let version: string | undefined;
+  let description: string | undefined;
+  if (dir) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as Record<string, unknown>;
+      if (typeof manifest.version === "string" && manifest.version.trim()) version = manifest.version.trim();
+      if (typeof manifest.description === "string" && manifest.description.trim()) description = manifest.description.trim();
+    } catch {
+      // Manifest missing or malformed — leave the fields empty.
+    }
+  }
+
+  return { ...base, ...(dir ? { dir } : {}), ...(version ? { version } : {}), ...(description ? { description } : {}) };
+}
+
+export interface SkillContent {
+  name: string;
+  path: string;
+  /** Raw markdown of the skill entry file (SKILL.md or root .md). */
+  markdown: string;
+}
+
+/** Read a managed skill's entry file for the detail pane. The requested path
+ * must live inside one of the two global managed roots so this IPC can never
+ * be abused as an arbitrary file reader by the renderer. */
+export function getSkillContent(path: string): SkillContent {
+  const resolved = resolve(path);
+  const roots = [join(getAgentDir(), "skills"), join(homedir(), ".agents", "skills")];
+  const managed = roots.some((root) => {
+    const rel = relative(resolve(root), resolved);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  });
+  if (!managed) throw new Error("Skill path not found: " + path);
+
+  let isDir = false;
+  try {
+    isDir = statSync(resolved).isDirectory();
+  } catch {
+    throw new Error("Skill path not found: " + path);
+  }
+
+  const entryPath = isDir
+    ? existsSync(join(resolved, "SKILL.md"))
+      ? join(resolved, "SKILL.md")
+      : join(resolved, "SKILL.md.disabled")
+    : resolved;
+
+  let markdown: string;
+  try {
+    markdown = readFileSync(entryPath, "utf8");
+  } catch (e) {
+    throw new Error("Failed to read skill file: " + entryPath);
+  }
+
+  const frontmatter = readSkillFrontmatter(entryPath);
+  const name = frontmatter?.name?.trim() || basename(isDir ? resolved : dirname(resolved));
+  return { name, path, markdown };
 }
 
 /** Build the same skill command entries returned by Pi's `get_commands`. */

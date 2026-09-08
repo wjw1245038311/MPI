@@ -1184,7 +1184,7 @@ interface PiStore {
   closePlugins: () => void;
   loadPlugins: () => Promise<void>;
   togglePackage: (source: string, enabled: boolean) => Promise<void>;
-  installPackage: (source: string) => Promise<void>;
+  installPackage: (source: string) => Promise<boolean>;
   removePackage: (source: string) => Promise<void>;
   updatePackages: (source?: string) => Promise<void>;
   toggleSkill: (path: string, enabled: boolean) => Promise<void>;
@@ -2578,8 +2578,10 @@ export const useStore = create<PiStore>()((set, get) => {
       const res: any = await window.pi.plugins.installPackage(source);
       if (res?.output) get().pushToast(res.ok ? "info" : "warning", String(res.output).slice(0, 300));
       await get().loadPlugins();
+      return !!res?.ok;
     } catch (e: any) {
       get().pushToast("error", "安装失败：" + (e?.message || e));
+      return false;
     }
   },
   removePackage: async (source) => {

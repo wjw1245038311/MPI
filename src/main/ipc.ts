@@ -41,6 +41,8 @@ import { repairSessionFile } from "./session-repair";
 import { emptyTrash, listTrash, moveToTrash, purgeFromTrash, restoreFromTrash } from "./trash-store";
 import {
   getAdditionalSkillPaths,
+  getPackageInfo,
+  getSkillContent,
   getSkillCommands,
   listPackages,
   listManagedSkills,
@@ -52,6 +54,7 @@ import {
   setSkillEnabled,
 } from "./plugins";
 import { getSkillDetails, getSkillsHubLeaderboard, installSkillFromHub, searchSkillsHub } from "./skills-hub";
+import { getNpmReadme, searchNpmPackages } from "./npm-registry";
 import { removeAutomationTask, runTaskNow, startScheduler } from "./automation";
 import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
@@ -2322,6 +2325,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ok: true, output: (res.stdout + res.stderr).trim() };
   });
   ipcMain.handle("plugins:getSkills", () => listManagedSkills());
+  ipcMain.handle("plugins:getSkillContent", (_e, path: string) => getSkillContent(path));
+  ipcMain.handle("plugins:getPackageInfo", (_e, source) => getPackageInfo(typeof source === "string" ? source : ""));
+  // Extension package market: search the public npm registry (no auth needed).
+  ipcMain.handle("plugins:npmSearch", (_e, query: string) => searchNpmPackages(typeof query === "string" ? query : ""));
+  ipcMain.handle("plugins:npmReadme", (_e, name: string) => getNpmReadme(typeof name === "string" ? name : ""));
   ipcMain.handle("plugins:setSkillEnabled", (_e, args: { path: string; enabled: boolean }) => {
     setSkillEnabled(args.path, args.enabled);
     // A skill is loaded during pi startup. Recreate the warm spare so newly

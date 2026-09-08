@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import type { ComposerDraft, PermissionLevel, SkillHubSkill, TrashEntry } from "../renderer/src/lib/types";
+import type { ComposerDraft, NpmPackage, PermissionLevel, SkillHubSkill, TrashEntry } from "../renderer/src/lib/types";
 
 /**
  * The renderer talks to the main process exclusively through this surface.
@@ -63,12 +63,16 @@ const api = {
   },
   plugins: {
     getPackages: () => ipcRenderer.invoke("plugins:getPackages"),
+    getPackageInfo: (source: string) => ipcRenderer.invoke("plugins:getPackageInfo", source),
     setPackageEnabled: (source: string, enabled: boolean) => ipcRenderer.invoke("plugins:setPackageEnabled", { source, enabled }),
     installPackage: (source: string) => ipcRenderer.invoke("plugins:installPackage", source),
     removePackage: (source: string) => ipcRenderer.invoke("plugins:removePackage", source),
     getSkills: (cwd?: string) => ipcRenderer.invoke("plugins:getSkills", cwd),
+    getSkillContent: (path: string) => ipcRenderer.invoke("plugins:getSkillContent", path),
     setSkillEnabled: (path: string, enabled: boolean) => ipcRenderer.invoke("plugins:setSkillEnabled", { path, enabled }),
     updatePackages: (source?: string) => ipcRenderer.invoke("plugins:updatePackages", source),
+    searchNpmPackages: (query: string): Promise<NpmPackage[]> => ipcRenderer.invoke("plugins:npmSearch", query),
+    getNpmReadme: (name: string): Promise<string> => ipcRenderer.invoke("plugins:npmReadme", name),
     getSkillsHubLeaderboard: () => ipcRenderer.invoke("skillsHub:leaderboard"),
     searchSkillsHub: (query: string) => ipcRenderer.invoke("skillsHub:search", query),
     getSkillDetails: (skill: SkillHubSkill) => ipcRenderer.invoke("skillsHub:detail", skill),

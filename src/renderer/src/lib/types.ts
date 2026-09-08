@@ -63,6 +63,18 @@ export interface PluginPackage {
   enabled: boolean;
 }
 
+/** Installed-manifest details for one package, for the detail pane. */
+export interface PackageInfo {
+  source: string;
+  name: string;
+  kind: "npm" | "git" | "local";
+  enabled: boolean;
+  /** Resolved install directory, when it could be located. */
+  dir?: string;
+  version?: string;
+  description?: string;
+}
+
 /** A standalone skill discovered in a skills directory. */
 export interface SkillInfo {
   name: string;
@@ -72,6 +84,13 @@ export interface SkillInfo {
   enabled: boolean;
   /** The description exposed by Pi for `/skill:<name>`. */
   description?: string;
+}
+
+/** Raw content of a managed skill's entry file, for the detail pane. */
+export interface SkillContent {
+  name: string;
+  path: string;
+  markdown: string;
 }
 
 /** A public skill returned by the skills.sh directory. */
@@ -93,6 +112,21 @@ export interface SkillHubDetail extends SkillHubSkill {
   hash: string | null;
   installCommand: string;
   markdown?: string;
+}
+
+/** A package returned by the npm registry search (extension package market). */
+export interface NpmPackage {
+  /** Full name including scope, e.g. `@plannotator/pi-extension`. */
+  name: string;
+  version: string;
+  description: string;
+  keywords: string[];
+  license?: string;
+  /** Last publish date (ISO). */
+  date: string;
+  downloadsWeekly: number;
+  npmUrl: string;
+  repository?: string;
 }
 
 export type ScheduleFrequency = "hourly" | "daily" | "weekly";
