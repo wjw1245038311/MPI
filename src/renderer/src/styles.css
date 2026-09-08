@@ -1842,7 +1842,8 @@ body.sidebar-resizing * {
   background: var(--accent-soft);
 }
 .composer {
-  max-width: 860px;
+  /* No max-width — the input follows the window width when stretched
+     (the message column above stays capped at 860px for readability). */
   margin: 0 auto;
   background: #fff;
   border: 1px solid var(--border-strong);

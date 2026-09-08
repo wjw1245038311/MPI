@@ -39,6 +39,11 @@ export function Chat() {
   // True while the viewport sits within NEAR_BOTTOM_PX of the transcript end.
   // Drives the floating "jump to latest" button.
   const [atBottom, setAtBottom] = useState(true);
+  // Sticky-bottom intent: stays true until the user scrolls up away from the
+  // bottom. Unlike a per-frame pixel check, this survives large content deltas
+  // during fast streaming (a >NEAR_BOTTOM_PX growth must not silently disable
+  // auto-follow — that forced users to scroll down manually after each turn).
+  const stickRef = useRef(true);
   const editInputRef = useRef<HTMLInputElement>(null);
   const language = useStore((s) => s.config?.language || "en");
 
@@ -57,7 +62,9 @@ export function Chat() {
     const el = scrollRef.current;
     if (!el || !activeThreadId) return;
     scrollPositionsRef.current.set(activeThreadId, el.scrollTop);
-    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX);
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+    stickRef.current = near;
+    setAtBottom(near);
   };
 
   // Length of the last streaming block's content. blocks.length only changes
@@ -82,7 +89,7 @@ export function Chat() {
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
     // A restored position is authoritative during a thread switch. Only
     // follow the bottom for new content within the already active thread.
-    if (!switchedThread && near) {
+    if (!switchedThread && (near || stickRef.current)) {
       el.scrollTop = el.scrollHeight;
       rememberScrollPosition();
     } else if (!switchedThread && activeThreadId && !scrollPositionsRef.current.has(activeThreadId)) {
@@ -91,6 +98,29 @@ export function Chat() {
       rememberScrollPosition();
     }
   }, [activeThreadId, count, streamTailLen, streaming?.blocks?.length, thread?.messages.length]);
+
+  // When the active thread's turn finishes (streaming → null), jump back to
+  // the latest message — users expect the transcript to end at the bottom.
+  const prevStreamRef = useRef<{ id: string | null; on: boolean }>({ id: activeThreadId, on: false });
+  useEffect(() => {
+    const now = !!thread?.streaming;
+    const prev = prevStreamRef.current;
+    prevStreamRef.current = { id: activeThreadId, on: now };
+    if (prev.id === activeThreadId && prev.on && !now) {
+      const el = scrollRef.current;
+      if (el) {
+        // The restore layout-effect re-applies the saved position on the
+        // count change that finalizes the turn; its rAF callback would snap
+        // back up over a same-commit scroll. Queue ours after it instead.
+        stickRef.current = true;
+        setAtBottom(true);
+        const frame = requestAnimationFrame(() => {
+          el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+        });
+        return () => cancelAnimationFrame(frame);
+      }
+    }
+  }, [thread?.streaming, activeThreadId]);
 
   // The chat DOM is reused when activeThreadId changes. Without an explicit
   // per-thread position, the browser clamps the reused scroll container to
