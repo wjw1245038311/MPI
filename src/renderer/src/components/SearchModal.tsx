@@ -241,7 +241,7 @@ export function SearchModal() {
                     <span
                       className="search-item-restore"
                       role="button"
-                      title={language === "zh" ? "恢复到侧栏" : "Restore to sidebar"}
+                      title={language === "zh" ? "恢复到导航栏" : "Restore to sidebar"}
                       onClick={(e) => {
                         e.stopPropagation();
                         void restoreHit(hit);

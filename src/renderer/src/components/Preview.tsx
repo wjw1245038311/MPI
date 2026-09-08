@@ -285,8 +285,8 @@ export function Preview() {
         ) : (
           <button
             className="iconbtn preview-collapse-btn"
-            title={language === "zh" ? "收缩到侧边栏" : "Restore side preview"}
-            aria-label={language === "zh" ? "收缩到侧边栏" : "Restore side preview"}
+            title={language === "zh" ? "收缩到导航栏" : "Restore side preview"}
+            aria-label={language === "zh" ? "收缩到导航栏" : "Restore side preview"}
             aria-pressed={true}
             onClick={toggleExpanded}
           >

@@ -83,7 +83,7 @@ export function TitleBar() {
       id: "view",
       label: "视图",
       items: [
-        { label: sidebarOpen ? "折叠侧栏" : "展开侧栏", onClick: act(toggleSidebar) },
+        { label: sidebarOpen ? "折叠导航栏" : "展开导航栏", onClick: act(toggleSidebar) },
         { label: "切换预览面板", onClick: act(togglePreview) },
       ],
     },
@@ -120,8 +120,8 @@ export function TitleBar() {
       <button
         className="tb-sidebar-toggle"
         onClick={toggleSidebar}
-        title={sidebarOpen ? "折叠侧栏" : "展开侧栏"}
-        aria-label={sidebarOpen ? "折叠侧栏" : "展开侧栏"}
+        title={sidebarOpen ? "折叠导航栏" : "展开导航栏"}
+        aria-label={sidebarOpen ? "折叠导航栏" : "展开导航栏"}
       >
         <Sidebar size={16} />
       </button>
@@ -162,8 +162,8 @@ export function TitleBar() {
         <button
           className={`tb-win-btn ${previewExpanded ? "tb-preview-restore" : ""}`}
           onClick={() => (previewExpanded ? togglePreviewExpanded() : togglePreview())}
-          title={previewExpanded ? (language === "zh" ? "收回侧边栏预览" : "Restore side preview") : language === "zh" ? "切换预览" : "Toggle preview"}
-          aria-label={previewExpanded ? (language === "zh" ? "收回侧边栏预览" : "Restore side preview") : language === "zh" ? "切换预览" : "Toggle preview"}
+          title={previewExpanded ? (language === "zh" ? "收回导航栏预览" : "Restore side preview") : language === "zh" ? "切换预览" : "Toggle preview"}
+          aria-label={previewExpanded ? (language === "zh" ? "收回导航栏预览" : "Restore side preview") : language === "zh" ? "切换预览" : "Toggle preview"}
         >
           {previewExpanded ? <Contract size={14} /> : <Maximize size={14} />}
         </button>

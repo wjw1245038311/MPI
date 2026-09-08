@@ -1584,7 +1584,7 @@ export const useStore = create<PiStore>()((set, get) => {
       });
       set({ config });
       await get().refreshProjects();
-      get().pushToast("success", "项目已恢复到侧栏。");
+      get().pushToast("success", "项目已恢复到导航栏。");
     } catch (e: any) {
       get().pushToast("error", "恢复项目失败：" + (e?.message || e));
     }
@@ -1672,7 +1672,7 @@ export const useStore = create<PiStore>()((set, get) => {
     try {
       await window.pi.trash.restore(id);
       await Promise.all([get().loadTrash(), get().refreshProjects()]);
-      get().pushToast("success", "会话已恢复到侧栏。");
+      get().pushToast("success", "会话已恢复到导航栏。");
     } catch (e: any) {
       get().pushToast("error", "从回收站恢复会话失败：" + (e?.message || e));
     }
@@ -1707,7 +1707,7 @@ export const useStore = create<PiStore>()((set, get) => {
       const config = await window.pi.app.setConfig({ archivedThreads: next });
       set({ config });
       await get().refreshProjects();
-      get().pushToast("success", "会话已恢复到侧栏。");
+      get().pushToast("success", "会话已恢复到导航栏。");
     } catch (e: any) {
       get().pushToast("error", "恢复会话失败：" + (e?.message || e));
     }

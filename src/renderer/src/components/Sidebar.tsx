@@ -294,7 +294,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
         className="sidebar-resizer"
         role="separator"
         aria-orientation="vertical"
-        aria-label={language === "zh" ? "调整侧边栏宽度" : "Resize sidebar"}
+        aria-label={language === "zh" ? "调整导航栏宽度" : "Resize sidebar"}
         aria-valuemin={SIDEBAR_MIN_WIDTH}
         aria-valuemax={SIDEBAR_MAX_WIDTH}
         aria-valuenow={Math.round(sidebarWidth)}
@@ -302,13 +302,13 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
         onPointerDown={beginResize}
         onKeyDown={resizeWithKeyboard}
         onDoubleClick={() => persistSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
-        title={language === "zh" ? "拖动调整侧边栏宽度；双击恢复默认" : "Drag to resize; double-click to reset"}
+        title={language === "zh" ? "拖动调整导航栏宽度；双击恢复默认" : "Drag to resize; double-click to reset"}
       />
       <div className="sb-head">
         <button className="sb-head-btn" title="搜索会话与文件" onClick={() => useStore.getState().openSearch()}>
           <Search size={16} />
         </button>
-        <button className="sb-head-btn" title="折叠侧栏" aria-label="折叠侧栏" onClick={toggleSidebar}>
+        <button className="sb-head-btn" title="折叠导航栏" aria-label="折叠导航栏" onClick={toggleSidebar}>
           <SidebarIcon size={16} />
         </button>
       </div>

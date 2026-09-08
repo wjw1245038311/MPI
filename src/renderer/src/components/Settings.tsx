@@ -1845,7 +1845,7 @@ export function Settings() {
                 <div className="set-card-title">{language === "zh" ? "已归档项目" : "Archived projects"}</div>
                 <div className="set-hint archived-project-hint">
                   {language === "zh"
-                    ? "归档只会从侧栏、搜索和新建会话的项目列表中隐藏文件夹，不会删除文件夹或其中的会话。"
+                    ? "归档只会从导航栏、搜索和新建会话的项目列表中隐藏文件夹，不会删除文件夹或其中的会话。"
                     : "Archiving only hides the folder from the sidebar, search, and new-session project list. It does not delete the folder or its sessions."}
                 </div>
                 {filteredArchivedProjects.length === 0 ? (
@@ -1937,7 +1937,7 @@ export function Settings() {
                   </div>
                   <div className="set-hint archived-project-hint">
                     {language === "zh"
-                      ? "回收站中的会话不再出现在侧栏和搜索里；恢复后会回到所属项目。只有在这里删除才算永久删除。"
+                      ? "回收站中的会话不再出现在导航栏和搜索里；恢复后会回到所属项目。只有在这里删除才算永久删除。"
                       : "Trashed sessions are hidden from the sidebar and search; restore puts one back into its project. Only deleting here removes a session for good."}
                   </div>
                   {trashGroups.length === 0 ? (

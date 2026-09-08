@@ -182,7 +182,7 @@ export function Chat() {
     return (
       <section className="main">
         <div className="chat-head">
-          <button className="iconbtn" title={language === "zh" ? "切换侧栏" : "Toggle sidebar"} onClick={toggleSidebar}>
+          <button className="iconbtn" title={language === "zh" ? "切换导航栏" : "Toggle sidebar"} onClick={toggleSidebar}>
             <Sidebar size={16} />
           </button>
           <div className="chat-head-titlewrap">
@@ -365,7 +365,7 @@ export function Chat() {
   return (
     <section className="main">
       <div className="chat-head">
-        <button className="iconbtn" title={language === "zh" ? "切换侧栏" : "Toggle sidebar"} onClick={toggleSidebar}>
+        <button className="iconbtn" title={language === "zh" ? "切换导航栏" : "Toggle sidebar"} onClick={toggleSidebar}>
           <Sidebar size={16} />
         </button>
         <div className="chat-head-titlewrap">
