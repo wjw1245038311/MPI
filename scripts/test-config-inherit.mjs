@@ -27,10 +27,10 @@ assert.equal(cfg.language, "zh", "inherits language from sibling");
 assert.equal(cfg.theme, "dark", "inherits theme from sibling");
 assert.equal(cfg.accentTheme, "blue", "inherits accentTheme from sibling");
 
-// 2b) New presets (default/mint/sky/lavender) are inherited too.
-writeFileSync(join(prodDir, "config.json"), JSON.stringify({ accentTheme: "mint" }));
+// 2b) New presets (white/lightgray/darkgray/red) are inherited too.
+writeFileSync(join(prodDir, "config.json"), JSON.stringify({ accentTheme: "white" }));
 cfg = loadConfig(devDir);
-assert.equal(cfg.accentTheme, "mint", "inherits new preset (mint) from sibling");
+assert.equal(cfg.accentTheme, "white", "inherits new preset (white) from sibling");
 // Restore the case-2 sibling state for the later cases.
 writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "zh", theme: "dark", accentTheme: "blue" }));
 
@@ -48,7 +48,7 @@ assert.equal(cfg.theme, "dark", "corrupt own file: inherit theme too");
 
 // 5) Sibling with invalid values is ignored (defaults kept).
 rmSync(join(devDir, "config.json"));
-writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "fr", theme: "neon", accentTheme: "red" }));
+writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "fr", theme: "neon", accentTheme: "yellow" }));
 cfg = loadConfig(devDir);
 assert.equal(cfg.language, "en", "invalid sibling language ignored");
 assert.equal(cfg.theme, "light", "invalid sibling theme ignored");

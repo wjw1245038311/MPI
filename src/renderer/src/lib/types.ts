@@ -282,7 +282,7 @@ export interface AppConfig {
   windowBounds?: { x?: number; y?: number; width: number; height: number; maximized?: boolean };
   theme: "dark" | "light" | "system";
   /** Accent color preset applied on top of the theme (see data-accent CSS blocks). */
-  accentTheme?: "default" | "green" | "blue" | "purple" | "pink" | "orange" | "mint" | "sky" | "lavender";
+  accentTheme?: "default" | "white" | "lightgray" | "darkgray" | "green" | "red" | "blue";
   /** Window zoom percentage, 50–150; 100 is default. */
   zoomPercent?: number;
   language: "en" | "zh";

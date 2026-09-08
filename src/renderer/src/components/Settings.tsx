@@ -107,16 +107,16 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 
 /** Accent color presets — CSS blocks keyed on <html data-accent> in styles.css.
  * "default" is the app's original muted palette (matches base :root values). */
+/** Accent color presets — user-defined palette; CSS blocks keyed on <html data-accent>.
+ * The default preset (empty circle) keeps the app's original per-theme look. */
 const ACCENT_PRESETS = [
-  { id: "default", zh: "默认", en: "Default", swatch: "#2e7d52" },
+  { id: "default", zh: "跟随主题", en: "Follow theme", swatch: "" },
+  { id: "white", zh: "白", en: "White", swatch: "#ffffff" },
+  { id: "lightgray", zh: "浅灰", en: "Light gray", swatch: "#d2d2d7" },
+  { id: "darkgray", zh: "深灰", en: "Dark gray", swatch: "#3a3a3c" },
   { id: "green", zh: "绿", en: "Green", swatch: "#34c759" },
+  { id: "red", zh: "红", en: "Red", swatch: "#ff3b30" },
   { id: "blue", zh: "蓝", en: "Blue", swatch: "#007aff" },
-  { id: "purple", zh: "紫", en: "Purple", swatch: "#af52de" },
-  { id: "pink", zh: "粉", en: "Pink", swatch: "#ff2d55" },
-  { id: "orange", zh: "橙", en: "Orange", swatch: "#ff9500" },
-  { id: "mint", zh: "浅绿", en: "Mint", swatch: "#46a57c" },
-  { id: "sky", zh: "浅蓝", en: "Sky", swatch: "#5d9bd4" },
-  { id: "lavender", zh: "浅紫", en: "Lavender", swatch: "#9b7fd4" },
 ] as const;
 
 function Field({ label, hint, children, wide }: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {
@@ -1291,8 +1291,8 @@ export function Settings() {
                         <button
                           key={a.id}
                           type="button"
-                          className={`accent-swatch ${selected ? "selected" : ""}`}
-                          style={{ background: a.swatch }}
+                          className={`accent-swatch ${!a.swatch ? "empty" : ""} ${selected ? "selected" : ""}`.trim()}
+                          style={a.swatch ? { background: a.swatch } : undefined}
                           title={language === "zh" ? a.zh : a.en}
                           onClick={() => changeAccent(a.id)}
                         >

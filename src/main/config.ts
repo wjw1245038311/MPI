@@ -20,14 +20,12 @@ export interface ArchivedThread {
  * it matches the base :root / dark values). */
 export const ACCENT_THEMES = [
   "default",
+  "white",
+  "lightgray",
+  "darkgray",
   "green",
+  "red",
   "blue",
-  "purple",
-  "pink",
-  "orange",
-  "mint",
-  "sky",
-  "lavender",
 ] as const;
 export type AccentTheme = (typeof ACCENT_THEMES)[number];
 

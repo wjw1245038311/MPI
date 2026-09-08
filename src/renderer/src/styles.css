@@ -18,6 +18,8 @@
   --accent-soft: #e4f1e8;
   --send: #2b2d28;
   --send-hover: #3a3d35;
+  --send-fg: #ffffff;
+  --send-ring: transparent;
   --code-bg: #f5f5f1;
   --user-bubble: #ffffff;
   --surface: #ffffff;
@@ -2924,7 +2926,8 @@ body.sidebar-resizing * {
   border-radius: 50%;
   border: none;
   background: var(--send);
-  color: #fff;
+  box-shadow: inset 0 0 0 1px var(--send-ring);
+  color: var(--send-fg);
   display: grid;
   place-items: center;
   font-size: 15px;
@@ -3643,7 +3646,8 @@ textarea.modal-input {
 }
 .btn.primary {
   background: var(--send);
-  color: #fff;
+  box-shadow: inset 0 0 0 1px var(--send-ring);
+  color: var(--send-fg);
   border-color: var(--send);
 }
 .btn.primary:hover {
@@ -4622,7 +4626,8 @@ textarea.modal-input {
 }
 .set-btn.primary {
   background: var(--send);
-  color: #fff;
+  box-shadow: inset 0 0 0 1px var(--send-ring);
+  color: var(--send-fg);
   border-color: var(--send);
 }
 .set-btn.primary:hover:not(:disabled) {
@@ -5690,6 +5695,8 @@ mark.hl {
   --accent-soft: #214333;
   --send: #75c995;
   --send-hover: #8cdda9;
+  --send-fg: #102015;
+  --send-ring: transparent;
   --code-bg: #151c20;
   --user-bubble: #263830;
   --surface: #1b2327;
@@ -6194,7 +6201,7 @@ mark.hl {
 :root[data-theme="dark"] .btn.primary {
   background: var(--send);
   border-color: var(--send);
-  color: #102015;
+  color: var(--send-fg);
 }
 :root[data-theme="dark"] .set-btn.primary:hover:not(:disabled),
 :root[data-theme="dark"] .btn.primary:hover {
@@ -6454,10 +6461,62 @@ mark.hl {
   white-space: nowrap;
 }
 
+/* Empty swatch for the "follow theme" default preset */
+.accent-swatch.empty {
+  box-shadow: inset 0 0 0 1.5px var(--border-strong);
+}
+.accent-swatch.empty.selected {
+  box-shadow: inset 0 0 0 1.5px var(--border-strong), 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+
 /* ---- Accent color presets (keyed on <html data-accent>; "default" is the base) - */
-/* Vivid presets: Apple HIG system accent colors. Pastel presets (mint/sky/
- * lavender) are softer, lighter-toned variants. The primary send/action
- * button follows the accent in both themes; selection surfaces use --accent-soft. */
+/* User-defined palette: white / light gray / dark gray / green / red / blue.
+ * Green and red/blue use Apple HIG system accent values; neutrals follow
+ * Apple's systemGray scale. The primary send/action button follows the preset
+ * in both themes (--send-fg keeps its text readable, --send-ring outlines
+ * light buttons on light backgrounds). */
+:root[data-accent="white"] {
+  --accent: #d2d2d7;
+  --accent-soft: #f5f5f7;
+  --send: #ffffff;
+  --send-hover: #ececf1;
+  --send-fg: #1d1e1b;
+  --send-ring: rgba(0, 0, 0, 0.14);
+}
+:root[data-theme="dark"][data-accent="white"] {
+  --accent: #ffffff;
+  --accent-soft: rgba(255, 255, 255, 0.16);
+  --send: #ffffff;
+  --send-hover: #e8e8ed;
+  --send-fg: #1d1e1b;
+}
+:root[data-accent="lightgray"] {
+  --accent: #8e8e93;
+  --accent-soft: #ececf1;
+  --send: #d2d2d7;
+  --send-hover: #c4c4ca;
+  --send-fg: #1d1e1b;
+  --send-ring: rgba(0, 0, 0, 0.1);
+}
+:root[data-theme="dark"][data-accent="lightgray"] {
+  --accent: #aeaeb2;
+  --accent-soft: rgba(255, 255, 255, 0.14);
+  --send: #d2d2d7;
+  --send-hover: #c8c8cd;
+  --send-fg: #1d1e1b;
+}
+:root[data-accent="darkgray"] {
+  --accent: #3a3a3c;
+  --accent-soft: #ececf1;
+  --send: #2b2d28;
+  --send-hover: #3a3d35;
+}
+:root[data-theme="dark"][data-accent="darkgray"] {
+  --accent: #98989d;
+  --accent-soft: rgba(255, 255, 255, 0.12);
+  --send: #48484a;
+  --send-hover: #5a5a5e;
+}
 :root[data-accent="green"] {
   --accent: #34c759;
   --accent-soft: #e5f5eb;
@@ -6469,6 +6528,19 @@ mark.hl {
   --accent-soft: #214333;
   --send: #30d158;
   --send-hover: #46da6b;
+  --send-fg: #123524;
+}
+:root[data-accent="red"] {
+  --accent: #ff3b30;
+  --accent-soft: #ffe9e7;
+  --send: #ff3b30;
+  --send-hover: #ea362c;
+}
+:root[data-theme="dark"][data-accent="red"] {
+  --accent: #ff453a;
+  --accent-soft: #3d211f;
+  --send: #ff453a;
+  --send-hover: #ff5f55;
 }
 :root[data-accent="blue"] {
   --accent: #007aff;
@@ -6481,77 +6553,4 @@ mark.hl {
   --accent-soft: #1b2f45;
   --send: #0a84ff;
   --send-hover: #2e95ff;
-}
-:root[data-accent="purple"] {
-  --accent: #af52de;
-  --accent-soft: #f6ecfd;
-  --send: #af52de;
-  --send-hover: #a044cf;
-}
-:root[data-theme="dark"][data-accent="purple"] {
-  --accent: #bf5af2;
-  --accent-soft: #2e2440;
-  --send: #bf5af2;
-  --send-hover: #ca7cf5;
-}
-:root[data-accent="pink"] {
-  --accent: #ff2d55;
-  --accent-soft: #ffe9ee;
-  --send: #ff2d55;
-  --send-hover: #e8274d;
-}
-:root[data-theme="dark"][data-accent="pink"] {
-  --accent: #ff375f;
-  --accent-soft: #3d2230;
-  --send: #ff375f;
-  --send-hover: #ff5a7d;
-}
-:root[data-accent="orange"] {
-  --accent: #ff9500;
-  --accent-soft: #fff2e3;
-  --send: #ff9500;
-  --send-hover: #f08c00;
-}
-:root[data-theme="dark"][data-accent="orange"] {
-  --accent: #ff9f0a;
-  --accent-soft: #3a2c1a;
-  --send: #ff9f0a;
-  --send-hover: #ffb133;
-}
-/* Pastel presets — softer, lighter tones. */
-:root[data-accent="mint"] {
-  --accent: #46a57c;
-  --accent-soft: #e2f3ea;
-  --send: #3f9a72;
-  --send-hover: #378a66;
-}
-:root[data-theme="dark"][data-accent="mint"] {
-  --accent: #6fd3a4;
-  --accent-soft: #1e3a2c;
-  --send: #4fae82;
-  --send-hover: #62c292;
-}
-:root[data-accent="sky"] {
-  --accent: #5d9bd4;
-  --accent-soft: #e7f0fb;
-  --send: #4f8cc7;
-  --send-hover: #457db5;
-}
-:root[data-theme="dark"][data-accent="sky"] {
-  --accent: #7cb8ea;
-  --accent-soft: #1f2f42;
-  --send: #5d9bd4;
-  --send-hover: #6faae0;
-}
-:root[data-accent="lavender"] {
-  --accent: #9b7fd4;
-  --accent-soft: #f1ecfa;
-  --send: #8a6cc9;
-  --send-hover: #7d5fc2;
-}
-:root[data-theme="dark"][data-accent="lavender"] {
-  --accent: #b39ae8;
-  --accent-soft: #2c2440;
-  --send: #9b7fd4;
-  --send-hover: #a98fe0;
 }
