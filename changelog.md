@@ -2,6 +2,12 @@
 
 MPI —— 基于 Pi coding agent（Pi Studio fork）的桌面客户端。本文件记录近期各版本的改动。
 
+**维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。
+
+## Unreleased
+
+（暂无未发布改动）
+
 ## v0.4.5（2026-09-08）
 
 ### 新功能
