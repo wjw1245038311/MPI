@@ -145,9 +145,11 @@ export function localizeAutomationThreadTitle(
   language: AppConfig["language"],
 ): string {
   const name = (sessionName || "").trim();
-  const match = name.match(/^(?:自动化|Automation)\s*[:：]\s*(.+)$/i);
+  // Matches the current prefix (定时任务/Automation) plus the legacy 自动化
+  // prefix so sessions created before the rename still localize.
+  const match = name.match(/^(?:定时任务|自动化|Automation)\s*[:：]\s*(.+)$/i);
   if (!match) return name;
-  return `${language === "zh" ? "自动化" : "Automation"}: ${match[1].trim()}`;
+  return `${language === "zh" ? "定时任务" : "Automation"}: ${match[1].trim()}`;
 }
 
 export function getDisplayThreadTitle(

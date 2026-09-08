@@ -39,8 +39,8 @@ export function usePiEvents() {
       if (p.type === "done") {
         st.refreshProjects();
         st.loadTasks();
-        if (p.ok) st.pushToast("info", `自动化任务完成：${p.name}`);
-        else st.pushToast("error", `自动化任务失败：${p.name}${p.error ? " · " + p.error : ""}`);
+        if (p.ok) st.pushToast("info", `定时任务完成：${p.name}`);
+        else st.pushToast("error", `定时任务失败：${p.name}${p.error ? " · " + p.error : ""}`);
       }
     });
     const u6 = window.pi.on.projectsChanged(() => {

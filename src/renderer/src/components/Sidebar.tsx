@@ -324,7 +324,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             <span className="ico">
               <Clock size={15} />
             </span>
-            自动化
+            定时任务
           </button>
           <button className="sb-nav-item" onClick={() => useStore.getState().openPlugins()}>
             <span className="ico">

@@ -95,7 +95,7 @@ export function AutomationPanel() {
               <Clock size={18} />
             </span>
             <div>
-              <div className="set-brand-title">自动化</div>
+              <div className="set-brand-title">定时任务</div>
               <div className="set-brand-sub">{language === "zh" ? "定时执行可使用技能的自定义提示词（仅在 MPI 运行时调度）" : "Schedule custom prompts that can use skills (runs while MPI is open)"}</div>
             </div>
           </div>
@@ -212,7 +212,7 @@ export function AutomationPanel() {
                     </div>
                     <div className="set-hint">
                       {language === "zh"
-                        ? "自动化无法等待授权。沙盒会阻止需要确认的操作；完全权限仅用于你明确信任的任务。"
+                        ? "定时任务无法等待授权。沙盒会阻止需要确认的操作；完全权限仅用于你明确信任的任务。"
                         : "Automations cannot wait for approval. Sandbox blocks operations that require confirmation; use Full access only for explicitly trusted tasks."}
                     </div>
                   </div>

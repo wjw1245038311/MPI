@@ -30,7 +30,7 @@ interface AssistantMessageSummary {
 }
 
 export function automationSessionName(taskName: string, language: "en" | "zh"): string {
-  return `${language === "zh" ? "自动化" : "Automation"}: ${taskName}`;
+  return `${language === "zh" ? "定时任务" : "Automation"}: ${taskName}`;
 }
 
 let timer: NodeJS.Timeout | null = null;
@@ -226,7 +226,7 @@ async function execute(task: AutomationTask): Promise<void> {
 
           finish(() => {
             if (cancelledUiMethod) {
-              reject(new Error(`自动化任务需要人工交互（${cancelledUiMethod}），无人值守运行已停止`));
+              reject(new Error(`定时任务需要人工交互（${cancelledUiMethod}），无人值守运行已停止`));
               return;
             }
             const failure = getAssistantFailure(lastAssistantMessage);
