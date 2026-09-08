@@ -31,8 +31,13 @@ export interface TrashEntry {
 
 const INDEX_NAME = "index.json";
 
-function dir(): string {
+/** Absolute path of the trash directory (<userData>/trash). */
+export function getTrashDir(): string {
   return join(getConfigDir(), "trash");
+}
+
+function dir(): string {
+  return getTrashDir();
 }
 
 function indexFile(): string {

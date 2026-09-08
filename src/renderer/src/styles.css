@@ -5152,6 +5152,60 @@ mark.hl {
   margin-left: auto;
   color: var(--text-dim);
 }
+/* Search modal: archived/trashed toggle + restore affordances */
+.search-arch-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.search-arch-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.search-esc-btn {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.search-esc-btn:hover {
+  background: var(--control-hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.search-item-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-dim);
+}
+.search-item-badge.trashed {
+  background: rgba(214, 69, 69, 0.1);
+  color: #c03d3d;
+}
+.search-item-restore {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 7px;
+  white-space: nowrap;
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: pointer;
+}
+.search-item-restore:hover {
+  filter: brightness(0.94);
+}
 
 /* ============================================================
    Title bar dropdown menus
@@ -5937,6 +5991,7 @@ mark.hl {
 :root[data-theme="dark"] .set-tab:hover,
 :root[data-theme="dark"] .set-iconbtn:hover,
 :root[data-theme="dark"] .search-clear:hover,
+:root[data-theme="dark"] .search-esc-btn:hover,
 :root[data-theme="dark"] .code-copy:hover,
 :root[data-theme="dark"] .thinking-toggle:hover,
 :root[data-theme="dark"] .tool-head:hover,
@@ -6021,6 +6076,9 @@ mark.hl {
 :root[data-theme="dark"] .set-empty,
 :root[data-theme="dark"] .set-about-list {
   background: var(--surface-muted);
+}
+:root[data-theme="dark"] .search-item-badge {
+  background: rgba(255, 255, 255, 0.08);
 }
 :root[data-theme="dark"] .archive-group-head:hover {
   background: rgba(255, 255, 255, 0.06);

@@ -38,6 +38,11 @@ export interface ThreadSearchHit {
   messageCount: number;
   snippet: string;
   matchCount: number;
+  /** Set only when searching with archived/trashed sessions included:
+   * "project-archived" = whole project folder is archived,
+   * "thread-archived" = single session archived, "trashed" = in the trash bin.
+   * Absent for live sessions. */
+  state?: "project-archived" | "thread-archived" | "trashed";
 }
 
 /** Thread permission level.

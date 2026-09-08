@@ -34,6 +34,9 @@ export function SearchModal() {
   const open = useStore((s) => s.searchOpen);
   const close = useStore((s) => s.closeSearch);
   const goToThread = useStore((s) => s.goToThread);
+  const restoreProject = useStore((s) => s.restoreProject);
+  const restoreThread = useStore((s) => s.restoreThread);
+  const restoreFromTrash = useStore((s) => s.restoreFromTrash);
   const language = useStore((s) => s.config?.language || "en");
 
   const [query, setQuery] = useState("");
@@ -41,6 +44,8 @@ export function SearchModal() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [active, setActive] = useState(0);
+  // When checked, archived sessions and trash entries are searched too.
+  const [includeArchive, setIncludeArchive] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -54,6 +59,7 @@ export function SearchModal() {
       setSearched(false);
       setLoading(false);
       setActive(0);
+      setIncludeArchive(false);
       reqId.current++;
       requestAnimationFrame(() => inputRef.current?.focus());
     }
@@ -72,7 +78,7 @@ export function SearchModal() {
     const myId = ++reqId.current;
     const t = setTimeout(async () => {
       try {
-        const res = await window.pi.app.searchThreads(q);
+        const res = await window.pi.app.searchThreads(q, includeArchive);
         if (reqId.current !== myId) return;
         setResults(res);
         setSearched(true);
@@ -86,7 +92,7 @@ export function SearchModal() {
       }
     }, 220);
     return () => clearTimeout(t);
-  }, [query]);
+  }, [query, includeArchive]);
 
   // keep the highlighted row in view while arrowing
   useEffect(() => {
@@ -109,6 +115,33 @@ export function SearchModal() {
   const go = async (hit: ThreadSearchHit) => {
     close();
     await goToThread(hit.cwd, hit.file);
+  };
+
+  // One-click restore for archived/trashed hits; drop the row once it is live again.
+  const restoreHit = async (hit: ThreadSearchHit) => {
+    if (!hit.state) return;
+    if (hit.state === "trashed") {
+      const id = hit.file.split(/[\\/]/).pop()?.replace(/\.jsonl$/i, "");
+      if (!id) return;
+      await restoreFromTrash(id);
+      const stillTrashed = useStore.getState().trashEntries.some((e) => e.id === id);
+      if (!stillTrashed) setResults((rs) => rs.filter((r) => r.file !== hit.file));
+    } else if (hit.state === "thread-archived") {
+      await restoreThread(hit.file);
+      const cfg = useStore.getState().config;
+      const stillArchived = (cfg?.archivedThreads || []).some((t) => t.file.toLowerCase() === hit.file.toLowerCase());
+      if (!stillArchived) setResults((rs) => rs.filter((r) => r.file !== hit.file));
+    } else {
+      await restoreProject(hit.cwd);
+      const cfg = useStore.getState().config;
+      const stillArchived = (cfg?.archivedProjects || []).some((c) => c.toLowerCase() === hit.cwd.toLowerCase());
+      if (!stillArchived) setResults((rs) => rs.filter((r) => !(r.state === "project-archived" && r.cwd.toLowerCase() === hit.cwd.toLowerCase())));
+    }
+  };
+
+  const stateLabel = (state: NonNullable<ThreadSearchHit["state"]>) => {
+    if (language === "zh") return state === "trashed" ? "回收站" : state === "project-archived" ? "项目已归档" : "已归档";
+    return state === "trashed" ? "Trashed" : state === "project-archived" ? "Project archived" : "Archived";
   };
 
   const onInputKey = (e: React.KeyboardEvent) => {
@@ -146,20 +179,38 @@ export function SearchModal() {
           {loading ? (
             <span className="spinner search-spin" />
           ) : query ? (
-            <button className="search-clear" title="清空" onClick={() => setQuery("")}>
+            <button className="search-clear" title={language === "zh" ? "清空" : "Clear"} onClick={() => setQuery("")}>
               <Close size={14} />
             </button>
-          ) : (
-            <span className="kbd">{language === "zh" ? "退出" : "Esc"}</span>
-          )}
+          ) : null}
+          <label
+            className="search-arch-toggle"
+            title={
+              language === "zh"
+                ? "勾选后同时搜索已归档会话和回收站中的会话，结果可直接恢复"
+                : "Also search archived sessions and trash entries; results can be restored in place"
+            }
+          >
+            <input type="checkbox" checked={includeArchive} onChange={(e) => setIncludeArchive(e.target.checked)} />
+            {language === "zh" ? "归档回收" : "Archived & trashed"}
+          </label>
+          <button className="kbd search-esc-btn" title={language === "zh" ? "关闭搜索（Esc）" : "Close (Esc)"} onClick={close}>
+            {language === "zh" ? "退出" : "Esc"}
+          </button>
         </div>
 
         <div className="search-results" ref={listRef}>
           {!q && (
             <div className="search-empty">
-              输入关键词，在全部项目的会话中搜索。
+              {language === "zh" ? "输入关键词，在全部项目的会话中搜索。" : "Type a keyword to search across all project sessions."}
               <br />
-              <span className="muted">匹配会话标题与用户 / 助手消息内容。</span>
+              <span className="muted">{language === "zh" ? "匹配会话标题与用户 / 助手消息内容。" : "Matches session titles and user/assistant message content."}</span>
+              <br />
+              <span className="muted">
+                {language === "zh"
+                  ? "勾选「归档回收」可一并搜索已归档和回收站中的会话，并支持直接恢复。"
+                  : 'Tick "Archived & trashed" to also search archived and trashed sessions, with one-click restore.'}
+              </span>
             </div>
           )}
 
@@ -182,7 +233,23 @@ export function SearchModal() {
               >
                 <div className="search-item-top">
                   <span className="search-item-title">{highlight(title, q)}</span>
-                  <span className="search-item-count">{hit.matchCount} 处匹配</span>
+                  {hit.state && (
+                    <span className={`search-item-badge ${hit.state === "trashed" ? "trashed" : ""}`}>{stateLabel(hit.state)}</span>
+                  )}
+                  <span className="search-item-count">{language === "zh" ? `${hit.matchCount} 处匹配` : `${hit.matchCount} match${hit.matchCount === 1 ? "" : "es"}`}</span>
+                  {hit.state && (
+                    <span
+                      className="search-item-restore"
+                      role="button"
+                      title={language === "zh" ? "恢复到侧栏" : "Restore to sidebar"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void restoreHit(hit);
+                      }}
+                    >
+                      {language === "zh" ? "恢复" : "Restore"}
+                    </span>
+                  )}
                 </div>
                 <div className="search-item-snippet">{highlight(hit.snippet, q)}</div>
                 <div className="search-item-meta">

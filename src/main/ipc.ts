@@ -36,7 +36,7 @@ import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtim
 import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
-import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, type ThreadSearchHit } from "./session-store";
+import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
 import { emptyTrash, listTrash, moveToTrash, purgeFromTrash, restoreFromTrash } from "./trash-store";
 import {
@@ -1684,12 +1684,25 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return result;
   });
 
-  ipcMain.handle("app:searchThreads", async (_e, query: string): Promise<ThreadSearchHit[]> => {
-    const archived = new Set((getConfig().archivedProjects || []).map((cwd) => cwd.toLowerCase()));
-    const archivedThreads = new Set((getConfig().archivedThreads || []).map((thread) => thread.file.toLowerCase()));
-    return (await searchThreads(query)).filter(
-      (hit) => !archived.has(hit.cwd.toLowerCase()) && !archivedThreads.has(hit.file.toLowerCase()),
-    );
+  ipcMain.handle("app:searchThreads", async (_e, query: string, includeArchived?: boolean): Promise<ThreadSearchHit[]> => {
+    const cfg = getConfig();
+    const archivedProjects = new Set((cfg.archivedProjects || []).map((cwd) => cwd.toLowerCase()));
+    const archivedThreads = new Set((cfg.archivedThreads || []).map((thread) => thread.file.toLowerCase()));
+    if (!includeArchived) {
+      return (await searchThreads(query)).filter(
+        (hit) => !archivedProjects.has(hit.cwd.toLowerCase()) && !archivedThreads.has(hit.file.toLowerCase()),
+      );
+    }
+    // Include archived sessions: tag them so the UI can offer one-click restore.
+    const hits = await searchThreads(query);
+    for (const hit of hits) {
+      if (archivedProjects.has(hit.cwd.toLowerCase())) hit.state = "project-archived";
+      else if (archivedThreads.has(hit.file.toLowerCase())) hit.state = "thread-archived";
+    }
+    const trashHits = await searchTrashThreads(query);
+    return [...hits, ...trashHits]
+      .sort((a, b) => b.matchCount - a.matchCount || b.updatedAt - a.updatedAt)
+      .slice(0, 50);
   });
 
   ipcMain.handle("app:getTotalUsage", () => getTotalUsage());

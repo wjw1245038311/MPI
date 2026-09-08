@@ -2,6 +2,7 @@ import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { getTrashDir } from "./trash-store";
 
 /**
  * Zero-dependency reader for pi's session store (~/.pi/agent/sessions).
@@ -262,6 +263,11 @@ export interface ThreadSearchHit {
   snippet: string;
   /** Total number of keyword matches in the thread (capped). */
   matchCount: number;
+  /** Set only when searching with archived/trashed sessions included:
+   * "project-archived" = whole project folder is archived,
+   * "thread-archived" = single session archived, "trashed" = in the trash bin.
+   * Absent for live sessions. */
+  state?: "project-archived" | "thread-archived" | "trashed";
 }
 
 function makeSnippet(text: string, idx: number, qlen: number): string {
@@ -273,7 +279,7 @@ function makeSnippet(text: string, idx: number, qlen: number): string {
   return s;
 }
 
-async function searchOneFile(file: string, q: string): Promise<ThreadSearchHit | null> {
+export async function searchOneFile(file: string, q: string): Promise<ThreadSearchHit | null> {
   let cwd = "";
   let name = "";
   let preview = "";
@@ -392,6 +398,41 @@ export async function searchThreads(query: string, limit = 50): Promise<ThreadSe
       const idx = cursor++;
       const hit = await searchOneFile(files[idx], q);
       if (hit) hits.push(hit);
+    }
+  }
+  const concurrency = 8;
+  await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, files.length)) }, worker));
+
+  hits.sort((a, b) => b.matchCount - a.matchCount || b.updatedAt - a.updatedAt);
+  return hits.slice(0, limit);
+}
+
+/** Full-text search across trashed sessions (<userData>/trash/*.jsonl).
+ * Every hit is tagged state="trashed"; cwd/title come from the JSONL itself,
+ * which still carries the original project header. */
+export async function searchTrashThreads(query: string, limit = 50): Promise<ThreadSearchHit[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const root = getTrashDir();
+  if (!existsSync(root)) return [];
+
+  let files: string[] = [];
+  try {
+    for (const f of readdirSync(root)) if (f.endsWith(".jsonl")) files.push(join(root, f));
+  } catch {
+    return [];
+  }
+
+  const hits: ThreadSearchHit[] = [];
+  let cursor = 0;
+  async function worker() {
+    while (cursor < files.length) {
+      const idx = cursor++;
+      const hit = await searchOneFile(files[idx], q);
+      if (hit) {
+        hit.state = "trashed";
+        hits.push(hit);
+      }
     }
   }
   const concurrency = 8;
