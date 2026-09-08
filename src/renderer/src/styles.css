@@ -3555,29 +3555,6 @@ textarea.modal-input {
   color: var(--text);
   font-size: 12px;
 }
-.set-custom-css {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  margin-bottom: 12px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--control);
-  color: var(--text);
-  font-size: 11px;
-  cursor: pointer;
-}
-.set-custom-css:hover {
-  background: var(--control-hover);
-}
-.set-custom-css code {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--text-dim);
-}
 .archived-project-hint {
   margin-bottom: 14px;
 }

@@ -80,8 +80,10 @@
 - **方案要点**：取消被取代的探测（superseded probe cancel）→ 服务可达时刷新 WebView 重建 HTTP/SSE → 不可达时走 IPC 重启本地 server。
 - **MPI 现状**：pi bridge 是本地子进程，休眠影响较小；但 **remote signaling（WebRTC/WSS）在 thinkbook/minibox 休眠唤醒后是否自愈未验证**。值得按此思路加 wake 事件监听 + 探测去重。
 
-#### A7 · 用户自定义样式表 custom.css ✅ 已完成（Unreleased）— [#29](https://github.com/abcwyc/pi-agent-desktop/pull/29)（已合并 PR）
-~~调字体/配色/间距要改代码重新打包~~ 已实现：`%APPDATA%\MPI\custom.css`（dev 为 `MPI Dev`，与 config.json 同目录、按 profile 隔离），设置侧栏「自定义样式表」按钮用默认编辑器打开、首次自动生成带注释模板（主题变量/字体字号/间距/隐藏元素示例）；renderer 注入 `<style>` 到 head 末尾（内置样式之后，同优先级用户规则胜出）；主进程目录 watch + 150ms 防抖推 `custom-css:changed` 事件实时热更新。测试：`npm run test:customcss`。
+#### A7 · 用户自定义样式表 custom.css — [#29](https://github.com/abcwyc/pi-agent-desktop/pull/29)（已合并 PR）
+- **方案**：`~/.pi/agent/desktop/custom.css`，设置页"Open custom.css"按钮首次使用生成带注释模板；样式表在 globals 之后 link，同优先级用户规则胜出；no-store 缓存策略。
+- **MPI 现状**：对魔改场景价值很高——调字体/配色/间距不用重新打包。**建议做**（Electron 版实现更简单：main 读文件 → preload 暴露内容或直接用 `<link>` file://）。
+- **注**：v0.4.12 开发中已完整实现过（commit `dc16fc6`，含模板/watch 热更新/测试），用户确认对当前样式满意、改动都是小修后 revert。需要时从历史恢复即可，勿重复开发。
 
 ### B 组：中价值，按需排期
 
@@ -117,6 +119,6 @@
 ## 建议的下一步（供你拍板）
 1. ~~**先做 A2**（GFM CJK autolink）~~ ✅ 已完成（见上）。
 2. **A3（RPC 工厂型小组件）**：差异化价值最高，建议排期；可先装 `@juicesharp/rpiv-todo` 在 MPI 里实测现状确认缺口。
-3. ~~**A1（unified diff）**~~ ✅ 已完成；~~**A7（custom.css）**~~ ✅ 已完成（见上）。
+3. ~~**A1（unified diff）**~~ ✅ 已完成；**A7（custom.css）**：体验类改进，半天到一天（已实现过又 revert，见 A7 注）。
 4. **A4/A5**：审计型工作，一次过 store.ts + composer 发送路径，产出风险清单。→ A5 ✅ 已完成（四个缺口已补全，见上）；剩 A4（threadId 一致性审计）。
 5. B 组按使用痛点再挑；C 组不动。

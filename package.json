@@ -20,7 +20,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
     "test:drafts": "node --experimental-strip-types scripts/test-draft-store.mjs",
     "test:config": "node --experimental-strip-types scripts/test-config-inherit.mjs",
-    "test:customcss": "node --experimental-strip-types scripts/test-custom-css.mjs",
     "test:markdown": "node --experimental-strip-types scripts/test-markdown-autolink.mjs",
     "test:diff": "node --experimental-strip-types scripts/test-diff.mjs",
     "test:compactions": "node --experimental-strip-types scripts/test-compaction-stats.mjs",
