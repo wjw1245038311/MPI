@@ -38,8 +38,8 @@
 ### P1-2 Composer 草稿不持久化 ✅ 已完成（Unreleased）
 ~~未发送的输入文本只存在 zustand 内存里，应用重启/崩溃即丢~~ 已实现：草稿按线程 key（`s:<sessionFile>` / `n:<cwd>`）存入 store 并由主进程落盘 `<userData>/drafts.json`；LRU 保留最近 40 份（更新先 delete 再 set，p-a-d #19 语义），单条 >2MB 时丢 base64 图片再落盘；发送/排队后续/清空即删；换文件夹时草稿跟随迁移（目标已有草稿则两者都留）。测试：`npm run test:drafts`。
 
-### P1-3 dev/prod 配置目录分离导致设置"看起来丢了"
-dev（`%APPDATA%\MPI Dev`）与 prod（`%APPDATA%\MPI`）各自独立 config.json。本次"重装后中文变英文"即此因。**可选**：新 dev profile 首次启动时一次性继承 prod 的 `language`/`theme`；或至少在 README 记录该行为。
+### P1-3 dev/prod 配置目录分离导致设置"看起来丢了" ✅ 已完成（Unreleased）
+~~dev（`%APPDATA%\MPI Dev`）与 prod（`%APPDATA%\MPI`）各自独立 config.json，新 profile 首次启动落默认值（英文/light），即"重装后中文变英文"的成因~~ 已实现：profile 自己没有 config.json（或损坏）时从兄弟 profile 继承 `language` + `theme`（只继承这两项，pins/threads/自动化任务等保持各自独立）。测试：`npm run test:config`。注：prod 覆盖安装不复现此问题（config.json 一直在），仅 dev↔prod 切换时触发。
 
 ### P1-4 无应用内更新机制
 目前升级靠手动从 Seafile/GitLab 下载安装包。可在设置页加"检查更新"（对比远端 manifest 版本号 + 下载链接），参考 p-a-d 的签名更新体系（#1/#3）但可先做轻量版（只提示+跳转，不做静默安装）。
@@ -72,18 +72,16 @@ dev（`%APPDATA%\MPI Dev`）与 prod（`%APPDATA%\MPI`）各自独立 config.jso
 - **问题**：`agent_end` 后异步 fetch 会话状态直接写入 UI，无"当前活动会话是否还是发起时那个"的检查 → 快速切换会话时旧状态覆盖新会话 UI。
 - **MPI 现状**：我们的事件流是 main push → `handleEvent` → store reducer，架构不同但同类风险存在（如 compaction_end / message_end 在切线程瞬间到达）。**行动**：审计 store.ts 各 case 是否校验 threadId 与 activeThreadId；不匹配则丢弃或路由到对应 ThreadState。
 
-#### A5 · 新会话首条消息失败的恢复路径 — [#15](https://github.com/abcwyc/pi-agent-desktop/issues/15)（已修）
-- **问题**：乐观气泡 + 立即清空输入框后，失败恢复逻辑只对"连接错误"生效；其他失败（如建会话 HTTP 500、set_model 失败）→ 气泡永久残留、无错误提示、输入文本丢失。
-- **MPI 现状**：检查我们 composer 发送路径的 catch 覆盖面——bridge spawn 失败 / RPC 首包失败时，用户消息气泡与输入框如何恢复。**小工作量审计 + 补全**。
+#### A5 · 新会话首条消息失败的恢复路径 ✅ 已完成（Unreleased）— [#15](https://github.com/abcwyc/pi-agent-desktop/issues/15)（已修）
+~~乐观气泡 + 立即清空输入框后，失败恢复逻辑只对"连接错误"生效；其他失败 → 气泡永久残留、无错误提示、输入文本丢失~~ 审计发现 MPI 四个缺口：① `/compact` 与正常发送在 ensureConnected 失败时输入已清但文本丢失（气泡回滚已有）；② prompt/steer/followUp RPC 抛错时乐观气泡永久残留成幽灵消息 + 输入丢失，且流式中误置 `isStreaming=false`；③ 成功后 refreshProjects() 异常被 catch 误报为"发送失败"。已补全：store.ts sendPrompt 增加 restoreDraft（按 draftKeyFor 恢复文本/图片/附件回草稿）、RPC 失败回滚气泡 + 恢复输入、steer/followUp 失败不动进行中任务状态、refreshProjects 独立 try。
 
 #### A6 · 休眠唤醒后的重连治理 — [#11](https://github.com/abcwyc/pi-agent-desktop/pull/11)（已合并 PR）
 - **问题**：睡眠恢复后多个健康探测事件重叠，过期失败探测把"离线横幅"卡住；Reconnect 按钮只重复同一 HTTP 请求，修不了失效的 SSE/WebView 连接。
 - **方案要点**：取消被取代的探测（superseded probe cancel）→ 服务可达时刷新 WebView 重建 HTTP/SSE → 不可达时走 IPC 重启本地 server。
 - **MPI 现状**：pi bridge 是本地子进程，休眠影响较小；但 **remote signaling（WebRTC/WSS）在 thinkbook/minibox 休眠唤醒后是否自愈未验证**。值得按此思路加 wake 事件监听 + 探测去重。
 
-#### A7 · 用户自定义样式表 custom.css — [#29](https://github.com/abcwyc/pi-agent-desktop/pull/29)（已合并 PR）
-- **方案**：`~/.pi/agent/desktop/custom.css`，设置页"Open custom.css"按钮首次使用生成带注释模板；样式表在 globals 之后 link，同优先级用户规则胜出；no-store 缓存策略。
-- **MPI 现状**：对魔改场景价值很高——调字体/配色/间距不用重新打包。**建议做**（Electron 版实现更简单：main 读文件 → preload 暴露内容或直接用 `<link>` file://）。
+#### A7 · 用户自定义样式表 custom.css ✅ 已完成（Unreleased）— [#29](https://github.com/abcwyc/pi-agent-desktop/pull/29)（已合并 PR）
+~~调字体/配色/间距要改代码重新打包~~ 已实现：`%APPDATA%\MPI\custom.css`（dev 为 `MPI Dev`，与 config.json 同目录、按 profile 隔离），设置侧栏「自定义样式表」按钮用默认编辑器打开、首次自动生成带注释模板（主题变量/字体字号/间距/隐藏元素示例）；renderer 注入 `<style>` 到 head 末尾（内置样式之后，同优先级用户规则胜出）；主进程目录 watch + 150ms 防抖推 `custom-css:changed` 事件实时热更新。测试：`npm run test:customcss`。
 
 ### B 组：中价值，按需排期
 
@@ -119,6 +117,6 @@ dev（`%APPDATA%\MPI Dev`）与 prod（`%APPDATA%\MPI`）各自独立 config.jso
 ## 建议的下一步（供你拍板）
 1. ~~**先做 A2**（GFM CJK autolink）~~ ✅ 已完成（见上）。
 2. **A3（RPC 工厂型小组件）**：差异化价值最高，建议排期；可先装 `@juicesharp/rpiv-todo` 在 MPI 里实测现状确认缺口。
-3. ~~**A1（unified diff）**~~ ✅ 已完成；**A7（custom.css）**：体验类改进，半天到一天。
-4. **A4/A5**：审计型工作，一次过 store.ts + composer 发送路径，产出风险清单。
+3. ~~**A1（unified diff）**~~ ✅ 已完成；~~**A7（custom.css）**~~ ✅ 已完成（见上）。
+4. **A4/A5**：审计型工作，一次过 store.ts + composer 发送路径，产出风险清单。→ A5 ✅ 已完成（四个缺口已补全，见上）；剩 A4（threadId 一致性审计）。
 5. B 组按使用痛点再挑；C 组不动。

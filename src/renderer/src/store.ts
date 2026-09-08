@@ -1858,6 +1858,23 @@ export const useStore = create<PiStore>()((set, get) => {
     // Built-in TUI slash commands cannot be executed through the RPC prompt
     // path (pi would hand them to the model as literal text). Route the ones
     // MPI supports to their dedicated calls instead.
+    // If a send fails after the composer has already cleared its input, put
+    // the content back into this thread's draft so nothing is lost (p-a-d #15).
+    const restoreDraft = (id: string) => {
+      const key = draftKeyFor(get().threads[id], id);
+      if (!key) return;
+      get().setDraft(key, {
+        text: trimmed,
+        images: (images || []).map((im) => ({
+          id: uid(),
+          dataUrl: `data:${im.mimeType};base64,${im.data}`,
+          base64: im.data,
+          mimeType: im.mimeType,
+        })),
+        files: attachments || [],
+      });
+    };
+
     if (!hasImg && !hasAtt) {
       const compactMatch = trimmed.match(/^\/compact(?:\s+([\s\S]*))?$/i);
       if (compactMatch) {
@@ -1868,7 +1885,10 @@ export const useStore = create<PiStore>()((set, get) => {
           return;
         }
         const tid = await get().ensureConnected(threadId);
-        if (!tid) return; // connection failed: nothing to compact against
+        if (!tid) {
+          restoreDraft(threadId); // ensureConnected already toasted the failure
+          return;
+        }
         await get().compactContext(tid, compactMatch[1]?.trim() || undefined);
         return;
       }
@@ -1915,16 +1935,18 @@ export const useStore = create<PiStore>()((set, get) => {
     // resolves with the thread's final id (a new task starts under a temp id).
     const tid = await get().ensureConnected(threadId);
     if (!tid) {
-      // Connection failed: roll back the bubble. The thread is still under its
-      // original id (remap only happens on success).
+      // Connection failed: roll back the bubble and restore the input. The
+      // thread is still under its original id (remap only happens on success).
       set((s) => {
         const t = s.threads[threadId];
         if (!t) return s;
         return { threads: { ...s.threads, [threadId]: { ...t, isStreaming: false, messages: t.messages.filter((m) => m.key !== optimistic.key) } } };
       });
+      restoreDraft(threadId);
       return;
     }
     const piImages = (images || []).map((im) => ({ type: "image", data: im.data, mimeType: im.mimeType }));
+    let delivered = false;
     try {
       if (wasStreaming) {
         // mode: "steer" interrupts current work; "followUp" waits until agent finishes
@@ -1936,8 +1958,37 @@ export const useStore = create<PiStore>()((set, get) => {
       } else {
         await window.pi.thread.prompt({ threadId: tid, text: trimmed, images: piImages, attachments });
       }
-      // Pi creates/persists a new session lazily on its first prompt.
-      await get().refreshProjects();
+      delivered = true;
+    } catch (e: any) {
+      // The message never reached pi: drop the optimistic bubble and put the
+      // content back into the composer so it can be resent. A failed steer /
+      // followUp leaves the in-flight turn untouched — only toast about it.
+      set((s) => {
+        const t = s.threads[tid];
+        if (!t) return s;
+        return {
+          threads: {
+            ...s.threads,
+            [tid]: {
+              ...t,
+              isStreaming: wasStreaming ? t.isStreaming : false,
+              error: wasStreaming ? t.error : e?.message || "prompt failed",
+              messages: t.messages.filter((m) => m.key !== optimistic.key),
+            },
+          },
+        };
+      });
+      restoreDraft(tid);
+      get().pushToast("error", e?.message || "prompt failed");
+    }
+    if (delivered) {
+      // Pi creates/persists a new session lazily on its first prompt. A sidebar
+      // refresh failure must not be reported as a send failure.
+      try {
+        await get().refreshProjects();
+      } catch {
+        /* best effort */
+      }
       if (!wasStreaming) {
         // Extension commands (/mem0-status, …) complete without starting an LLM
         // turn, so no agent_start/agent_settled will ever arrive to release the
@@ -1965,13 +2016,6 @@ export const useStore = create<PiStore>()((set, get) => {
           });
         }, 800);
       }
-    } catch (e: any) {
-      set((s) => {
-        const t = s.threads[tid];
-        if (!t) return s;
-        return { threads: { ...s.threads, [tid]: { ...t, isStreaming: false, error: e?.message || "prompt failed" } } };
-      });
-      get().pushToast("error", e?.message || "prompt failed");
     }
   },
 
