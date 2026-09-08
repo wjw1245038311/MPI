@@ -51,6 +51,9 @@
 - thinkbook16p / minibox 需同步 pi-mem0-local 更新代码并 `/reload`（09-05 workstation server 重启后遗留）
 - autoCapture 全对话抽取仍走慢 LLM 路径（服务端已加 16000 字符截断护栏；远端设备可考虑关闭或调大 MEM0_TIMEOUT_MS）
 
+### P1-7 会话跨项目拖拽移动（待办，用户拍板「后面考虑做」2026-09-08）
+现状：置顶区排序/区内拖拽已支持（v0.4.18 Unreleased），但会话只能在本项目内移动。设计要点（实现时参考）：① 交互 = 把会话拖到另一个项目的行上 → 确认框（提示「移入后该会话的新消息将在目标文件夹执行」）→ 主进程原子完成；正在 streaming 的会话禁止移动。② 数据层 = 改写 .jsonl 首行 header 的 `cwd` + 把文件挪到 `~/.pi/agent/sessions/<目标项目目录名>/`（MPI 按 header cwd 分组，pi 终端侧列表会跟着变，行为一致）。③ 引用同步 = `pinnedThreads[]`、`archivedThreads[].file`、`threadPermissions` key、drafts.json 的 `s:<sessionFile>` key；若该会话正开着需先关闭再按新路径重开。风险：动的是数据文件，建议实现时加备份/回滚（写临时文件+rename）。
+
 ---
 
 ## Part 2 · pi-agent-desktop 近期有价值改进建议（按相关性分组）
