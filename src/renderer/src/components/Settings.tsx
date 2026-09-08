@@ -1500,11 +1500,11 @@ export function Settings() {
                   </select>
                 </Field>
                 <Field
-                  label={language === "zh" ? "新建对话默认权限" : "New conversation permission"}
+                  label={language === "zh" ? "新建会话默认权限" : "New session permission"}
                   hint={
                     language === "zh"
-                      ? "仅影响之后新建的对话；已有会话保留各自设置，可随时在输入框左侧的权限菜单中切换。只读=修改直接阻止；严格=仅只读自动执行；沙盒=低风险明确操作自动执行、危险操作需确认；完全权限=不拦截。"
-                      : "Applies to conversations created from now on; existing threads keep their own level and can be switched anytime from the permission menu in the composer. Read-only blocks mutations; strict auto-runs only read-only; sandbox auto-runs low-risk explicit operations; full intercepts nothing."
+                      ? "仅影响之后新建的会话；已有会话保留各自设置，可随时在输入框左侧的权限菜单中切换。只读=修改直接阻止；严格=仅只读自动执行；沙盒=低风险明确操作自动执行、危险操作需确认；完全权限=不拦截。"
+                      : "Applies to sessions created from now on; existing sessions keep their own level and can be switched anytime from the permission menu in the composer. Read-only blocks mutations; strict auto-runs only read-only; sandbox auto-runs low-risk explicit operations; full intercepts nothing."
                   }
                 >
                   <select
@@ -1703,7 +1703,7 @@ export function Settings() {
               <div className="set-card">
                 <div className="set-card-title">已归档项目</div>
                 <div className="set-hint archived-project-hint">
-                  归档只会从侧栏、搜索和新建任务的项目列表中隐藏文件夹，不会删除文件夹或其中的线程。
+                  归档只会从侧栏、搜索和新建会话的项目列表中隐藏文件夹，不会删除文件夹或其中的会话。
                 </div>
                 {(config?.archivedProjects || []).length === 0 ? (
                   <div className="set-empty">暂无归档项目。</div>
@@ -1725,12 +1725,12 @@ export function Settings() {
                   </div>
                 )}
                 <div className="archived-thread-section">
-                  <div className="set-card-title">已归档线程</div>
+                  <div className="set-card-title">已归档会话</div>
                   <div className="set-hint archived-project-hint">
-                    归档只会隐藏线程，不会删除会话文件；恢复后线程会重新出现在所属项目下。
+                    归档只会隐藏会话，不会删除会话文件；恢复后会话会重新出现在所属项目下。
                   </div>
                   {(config?.archivedThreads || []).length === 0 ? (
-                    <div className="set-empty">暂无归档线程。</div>
+                    <div className="set-empty">暂无归档会话。</div>
                   ) : (
                     <div className="archived-thread-list">
                       {(config?.archivedThreads || []).map((thread) => {
@@ -1742,7 +1742,7 @@ export function Settings() {
                               <div className="archived-thread-name" title={thread.title}>{thread.title || thread.file}</div>
                               <div className="archived-thread-path" title={thread.file}>{projectName} · {thread.file}</div>
                             </div>
-                            <button className="set-btn" onClick={() => restoreThread(thread.file)}>恢复线程</button>
+                            <button className="set-btn" onClick={() => restoreThread(thread.file)}>恢复会话</button>
                           </div>
                         );
                       })}
@@ -1884,9 +1884,9 @@ export function Settings() {
                 <div className="set-card-title">更新 Pi 核心</div>
                 <div className="set-hint" style={{ marginBottom: 12 }}>
                   {diag?.bundled ? (
-                    <>Pi 核心由 MPI 统一管理（内置副本不可被 <code>pi update</code> 原地更新）。点击下方按钮后，MPI 会自行下载并安装新版本到应用数据目录，更新完成后新开的线程使用新版本。扩展请在「插件」面板更新。</>
+                    <>Pi 核心由 MPI 统一管理（内置副本不可被 <code>pi update</code> 原地更新）。点击下方按钮后，MPI 会自行下载并安装新版本到应用数据目录，更新完成后新开的会话使用新版本。扩展请在「插件」面板更新。</>
                   ) : (
-                    <>运行 <code>pi update</code> 更新 pi CLI 本体（不含扩展，扩展请在「插件」面板更新）。会先检查是否为最新版本，结果以提示呈现。更新完成后新开的线程使用新版本。</>
+                    <>运行 <code>pi update</code> 更新 pi CLI 本体（不含扩展，扩展请在「插件」面板更新）。会先检查是否为最新版本，结果以提示呈现。更新完成后新开的会话使用新版本。</>
                   )}
                 </div>
                 <div className="set-diag-grid" style={{ marginBottom: 12 }}>

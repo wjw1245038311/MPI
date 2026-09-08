@@ -132,8 +132,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         <div className="set-card-title">{zh ? "Android 手机远程控制" : "Android remote companion"}</div>
         <div className="set-hint">
           {zh
-             ? "使用 WSS 信令和 STUN 直连 WebRTC。信令服务不会接收提示词、代码、对话或文件；TURN/relay 候选会被拒绝。"
-            : "Uses WSS signaling and direct STUN WebRTC only. Signaling never receives prompts, code, conversations, or files; TURN/relay candidates are rejected."}
+             ? "使用 WSS 信令和 STUN 直连 WebRTC。信令服务不会接收提示词、代码、会话或文件；TURN/relay 候选会被拒绝。"
+            : "Uses WSS signaling and direct STUN WebRTC only. Signaling never receives prompts, code, sessions, or files; TURN/relay candidates are rejected."}
         </div>
         <div className="set-remote-status" aria-live="polite">
           <span className="set-diag-k">{zh ? "信令连接状态" : "Signal connection"}</span>

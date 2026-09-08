@@ -185,7 +185,7 @@ export function Chat() {
             <Sidebar size={16} />
           </button>
           <div className="chat-head-titlewrap">
-            <div className="chat-head-title">{language === "zh" ? "新线程" : "New Thread"}</div>
+            <div className="chat-head-title">{language === "zh" ? "新会话" : "New Session"}</div>
           </div>
           <div className="spacer" />
         </div>
@@ -209,8 +209,8 @@ export function Chat() {
   // Once this view has messages, derive the header from this thread itself;
   // only an actually empty draft uses the default label.
   const title = isEmptyDraft
-    ? language === "zh" ? "新线程" : "New Thread"
-    : getDisplayThreadTitle(sidebarTitle || thread.sessionName, firstUserText, language).slice(0, 40) || (language === "zh" ? "新线程" : "New Thread");
+    ? language === "zh" ? "新会话" : "New Session"
+    : getDisplayThreadTitle(sidebarTitle || thread.sessionName, firstUserText, language).slice(0, 40) || (language === "zh" ? "新会话" : "New Session");
 
   // Group consecutive assistant messages into one visual turn: a single agent
   // round emits many assistant messages (think -> tool -> ... -> final reply)
@@ -406,7 +406,7 @@ export function Chat() {
         </button>
         <div className="spacer" />
         <div className="ctx-wrap" ref={ctxRef}>
-          <button className={`iconbtn ${ctxOpen ? "on" : ""}`} title="当前线程上下文用量" onClick={toggleCtx}>
+          <button className={`iconbtn ${ctxOpen ? "on" : ""}`} title="当前会话上下文用量" onClick={toggleCtx}>
             <Gauge size={15} />
           </button>
           {ctxOpen && (
@@ -476,7 +476,7 @@ export function Chat() {
         <button className="iconbtn" title="切换工作文件夹" onClick={() => switchThreadFolder(activeThreadId)}>
           <Folder size={15} />
         </button>
-        <button className="iconbtn" title="新会话" onClick={() => newSessionInThread(activeThreadId)}>
+        <button className="iconbtn" title="新建会话" onClick={() => newSessionInThread(activeThreadId)}>
           <Refresh size={15} />
         </button>
         <button className="iconbtn" title="切换预览" onClick={togglePreview}>
@@ -525,7 +525,7 @@ export function Chat() {
         {!atBottom && count > 0 && (
           <button
             className="jump-latest"
-            title={language === "zh" ? "跳转到最新对话" : "Jump to latest"}
+            title={language === "zh" ? "跳转到最新消息" : "Jump to latest"}
             onClick={() => {
               const el = scrollRef.current;
               if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });

@@ -882,14 +882,14 @@ export function Composer({ threadId }: { threadId: string }) {
                     type="button"
                     className={`opt tool-opt ${compacting ? "busy" : ""}`}
                     disabled={!connected || isStreaming || compacting || !hasMessages}
-                    title={language === "zh" ? "总结较早的对话以释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}
+                    title={language === "zh" ? "总结较早的消息以释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}
                     onClick={() => void compactContext(threadId)}
                   >
                     <span className="o1">
                       <Compress size={13} />
                       {compacting ? (language === "zh" ? "压缩中…" : "Compacting…") : language === "zh" ? "压缩上下文" : "Compact context"}
                     </span>
-                    <span className="o2">{language === "zh" ? "总结较早的对话，释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}</span>
+                    <span className="o2">{language === "zh" ? "总结较早的消息，释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}</span>
                   </button>
                   <button
                     type="button"

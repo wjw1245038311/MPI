@@ -252,7 +252,7 @@ function mergeLiveThreadsIntoProjects(
     project.threads.unshift({
       file,
       id: file,
-      title: getDisplayThreadTitle(thread.sessionName, firstText, language).slice(0, 80) || (language === "zh" ? "新线程" : "New Thread"),
+      title: getDisplayThreadTitle(thread.sessionName, firstText, language).slice(0, 80) || (language === "zh" ? "新会话" : "New Session"),
       preview: firstText.slice(0, 120) || (firstUser.images?.length ? "图片消息" : ""),
       updatedAt: lastUser.timestamp || Date.now(),
       messageCount: thread.messages.filter((message) => message.role === "user" || message.role === "assistant").length,
@@ -1512,7 +1512,7 @@ export const useStore = create<PiStore>()((set, get) => {
       set({ config });
       await get().refreshProjects();
     } catch (e: any) {
-      get().pushToast("error", e?.message || (pinned ? "Pin thread failed" : "Unpin thread failed"));
+      get().pushToast("error", e?.message || (pinned ? "Pin session failed" : "Unpin session failed"));
     }
   },
   archiveProject: async (cwd) => {
@@ -1585,9 +1585,9 @@ export const useStore = create<PiStore>()((set, get) => {
         .map(([id]) => id);
       for (const id of ids) await get().closeThread(id);
       await get().refreshProjects();
-      get().pushToast("info", "线程已归档，可在设置的“归档线程”中恢复。");
+      get().pushToast("info", "会话已归档，可在设置的“已归档会话”中恢复。");
     } catch (e: any) {
-      get().pushToast("error", "归档线程失败：" + (e?.message || e));
+      get().pushToast("error", "归档失败：" + (e?.message || e));
     }
   },
   deleteThread: async (_cwd, file, _title) => {
@@ -1609,9 +1609,9 @@ export const useStore = create<PiStore>()((set, get) => {
         await get().closeThread(id);
       }
       await get().refreshProjects();
-      get().pushToast("success", "线程已永久删除，无法恢复。");
+      get().pushToast("success", "会话已永久删除，无法恢复。");
     } catch (e: any) {
-      get().pushToast("error", "永久删除线程失败：" + (e?.message || e));
+      get().pushToast("error", "永久删除会话失败：" + (e?.message || e));
     }
   },
   restoreThread: async (file) => {
@@ -1624,9 +1624,9 @@ export const useStore = create<PiStore>()((set, get) => {
       const config = await window.pi.app.setConfig({ archivedThreads: next });
       set({ config });
       await get().refreshProjects();
-      get().pushToast("success", "线程已恢复到侧栏。");
+      get().pushToast("success", "会话已恢复到侧栏。");
     } catch (e: any) {
-      get().pushToast("error", "恢复线程失败：" + (e?.message || e));
+      get().pushToast("error", "恢复会话失败：" + (e?.message || e));
     }
   },
 
@@ -1704,7 +1704,7 @@ export const useStore = create<PiStore>()((set, get) => {
         }
         return sessionFile;
       } catch (e: any) {
-        get().pushToast("error", "Open thread failed: " + (e?.message || e));
+        get().pushToast("error", "Open session failed: " + (e?.message || e));
         return null;
       }
     }
@@ -1889,7 +1889,7 @@ export const useStore = create<PiStore>()((set, get) => {
         const t = get().threads[threadId];
         if (t?.isStreaming || t?.compacting) {
           const zh = get().config?.language === "zh";
-          get().pushToast("info", zh ? "当前有任务进行中，结束后再压缩" : "A task is still running — compact after it finishes");
+          get().pushToast("info", zh ? "当前会话仍在执行中，结束后再压缩" : "The session is still running — compact after it finishes");
           return;
         }
         const tid = await get().ensureConnected(threadId);
@@ -2654,7 +2654,7 @@ export const useStore = create<PiStore>()((set, get) => {
     const original = get().threads[threadId];
     if (!original || original.cwd === cwd) return;
     if (original.messages.some((message) => message.role === "user" || message.role === "assistant")) {
-      get().pushToast("warning", "只能在发送第一条消息前更换任务文件夹。");
+      get().pushToast("warning", "只能在发送第一条消息前更换项目文件夹。");
       return;
     }
     try {

@@ -566,7 +566,7 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
       updated: true,
       from: status.current,
       to: targetVersion,
-      message: `Pi 核心已更新到 v${targetVersion}，新开的线程将使用新版本。`,
+      message: `Pi 核心已更新到 v${targetVersion}，新开的会话将使用新版本。`,
     };
   } catch (e: any) {
     rmSafe(staging);

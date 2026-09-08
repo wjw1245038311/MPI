@@ -187,7 +187,7 @@ export function AutomationPanel() {
                     value={draft.prompt}
                     onChange={(e) => patch({ prompt: e.target.value })}
                   />
-                  <div className="set-hint">触发时在该文件夹新建一个 pi 会话执行，完成后保存为可查看的线程。</div>
+                  <div className="set-hint">触发时在该文件夹新建一个 pi 会话执行，完成后保存为可查看的会话。</div>
                 </div>
               </div>
 

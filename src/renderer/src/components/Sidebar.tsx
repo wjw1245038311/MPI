@@ -218,7 +218,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             <span className="ico">
               <Edit size={15} />
             </span>
-            新建任务
+            新建会话
           </button>
           <button className="sb-nav-item" onClick={() => useStore.getState().openAutomation()}>
             <span className="ico">
@@ -236,7 +236,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
 
         <div className="sb-tabs">
           <button className={`sb-tab ${sidebarTab === "threads" ? "active" : ""}`} onClick={() => setSidebarTab("threads")}>
-            线程
+            会话
           </button>
           <button className={`sb-tab ${sidebarTab === "files" ? "active" : ""}`} onClick={() => setSidebarTab("files")}>
             文件
@@ -287,7 +287,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                     <span className="pcount">{p.threads.length}</span>
                     <button
                       className="pact"
-                      title={language === "zh" ? "新线程" : "New thread"}
+                      title={language === "zh" ? "新会话" : "New session"}
                       onClick={(e) => {
                         e.stopPropagation();
                         openThread(p.cwd);
@@ -310,7 +310,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                   </div>
                   {open && (
                     <div className="thread-list">
-                      {p.threads.length === 0 && <div className="ft-empty">暂无线程</div>}
+                      {p.threads.length === 0 && <div className="ft-empty">暂无会话</div>}
                       {p.threads.map((t) => {
                         const running = runningSet.has(t.file);
                         const title = localizeAutomationThreadTitle(t.title, language);
@@ -347,7 +347,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                             <div className="thread-title">
                               {running && <span className="thread-running" />}
                               {t.pinned && (
-                                <span className="thread-pin" title={language === "zh" ? "已置顶线程" : "Pinned thread"}>
+                                <span className="thread-pin" title={language === "zh" ? "已置顶会话" : "Pinned session"}>
                                   <Star size={11} />
                                 </span>
                               )}
@@ -355,8 +355,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                               <button
                                 type="button"
                                 className="thread-archive-btn"
-                                title="归档线程"
-                                aria-label={`归档线程：${title}`}
+                                title="归档"
+                                aria-label={`归档：${title}`}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   void archiveThread(p.cwd, t.file, title);
@@ -367,8 +367,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                               <button
                                 type="button"
                                 className="thread-delete-btn"
-                                title={language === "zh" ? "永久删除线程" : "Permanently delete thread"}
-                                aria-label={`${language === "zh" ? "永久删除线程" : "Permanently delete thread"}：${title}`}
+                                title={language === "zh" ? "永久删除会话" : "Permanently delete session"}
+                                aria-label={`${language === "zh" ? "永久删除会话" : "Permanently delete session"}：${title}`}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   openDeleteConfirmation(p.cwd, t.file, title);
@@ -504,18 +504,18 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
           >
             {threadMenu.pinned
               ? language === "zh"
-                ? "取消置顶线程"
-                : "Unpin thread"
+                ? "取消置顶会话"
+                : "Unpin session"
               : language === "zh"
-                ? "置顶线程"
-              : "Pin thread"}
+                ? "置顶会话"
+              : "Pin session"}
           </button>
           <button
             className="danger"
             role="menuitem"
             onClick={() => openDeleteConfirmation(threadMenu.cwd, threadMenu.file, threadMenu.name)}
           >
-            {language === "zh" ? "永久删除线程" : "Permanently delete thread"}
+            {language === "zh" ? "永久删除会话" : "Permanently delete session"}
           </button>
         </div>
       )}
@@ -529,12 +529,12 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             aria-labelledby="thread-delete-title"
           >
             <div className="modal-title" id="thread-delete-title">
-              {language === "zh" ? "永久删除线程？" : "Permanently delete thread?"}
+              {language === "zh" ? "永久删除会话？" : "Permanently delete session?"}
             </div>
             <div className="modal-msg">
               {language === "zh"
-                ? `“${deleteConfirm.name}”及其完整对话记录将被永久删除，删除后无法恢复。`
-                : `“${deleteConfirm.name}” and its complete conversation history will be permanently deleted and cannot be recovered.`}
+                ? `“${deleteConfirm.name}”及其完整会话记录将被永久删除，删除后无法恢复。`
+                : `“${deleteConfirm.name}” and its complete session history will be permanently deleted and cannot be recovered.`}
             </div>
             <div className="modal-actions">
               <button className="btn" onClick={() => setDeleteConfirm(null)}>
@@ -565,7 +565,7 @@ function FileTreeView({ cwd }: { cwd: string | null }) {
   useEffect(() => {
     if (cwd && !fileTree[treeKey(cwd, "")]?.loaded) loadFileTree(cwd, "");
   }, [cwd, loadFileTree, fileTree]);
-  if (!cwd) return <div className="ft-empty">先在“线程”页打开一个项目。</div>;
+  if (!cwd) return <div className="ft-empty">先在“会话”页打开一个项目。</div>;
   const root = fileTree[treeKey(cwd, "")];
   if (!root?.loaded) return <div className="ft-empty">加载中…</div>;
   return (
