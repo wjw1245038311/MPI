@@ -4,6 +4,12 @@ MPI —— 基于 Pi coding agent（Pi Studio fork）的桌面客户端。本文
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **新 profile 首次启动继承兄弟 profile 的语言/主题**：dev（`%APPDATA%\MPI Dev`）与 prod（`%APPDATA%\MPI`）配置目录相互独立，全新 profile 没有 config.json 时直接落默认值（英文 + light），这就是「重装后中文变英文」的成因。现在自己的目录没有 config.json（或文件损坏）时，会从另一个已知的 MPI profile 继承 `language` 与 `theme`；只继承这两项外观设置，置顶项目/会话、自动化任务等仍各自独立。测试：`npm run test:config`。
+
+   验证方式：把 `%APPDATA%\MPI Dev\config.json`（或 `%APPDATA%\MPI\config.json`）改名备份后启动对应构建，界面语言与主题应与另一个 profile 一致而非默认英文；改回原名后以自己的配置为准。只装 prod 版的用户无感知（行为不变）。
+
 ## v0.4.11（2026-09-08）
 
 1. **changelog 验证行格式调整**：各条目原来的「验证」改为独立换行的「验证方式」，描述与操作步骤分行显示，便于安装后逐条对照实测。

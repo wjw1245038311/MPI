@@ -155,8 +155,39 @@ export function loadConfig(userDataDir: string): AppConfig {
       // corrupt file -> fall back to defaults but keep a copy
     }
   }
-  cached = { ...DEFAULTS };
+  // New (or unreadable) profile: inherit user-facing appearance settings from
+  // the sibling MPI profile, if any. dev ("MPI Dev") and prod ("MPI") have
+  // separate userData dirs; without this, first launch of a fresh profile
+  // silently resets language/theme to defaults — the "重装后中文变英文" case.
+  cached = { ...DEFAULTS, ...inheritFromSiblingProfile(userDataDir) };
   return cached;
+}
+
+/**
+ * Look for a config.json in the other known MPI userData dir (%APPDATA%\MPI vs
+ * %APPDATA%\MPI Dev) and inherit only language/theme from it. Everything else
+ * (pins, threads, automation tasks, …) stays per-profile on purpose.
+ */
+function inheritFromSiblingProfile(currentDir: string): Partial<AppConfig> {
+  const appDataRoot = dirname(currentDir);
+  for (const name of ["MPI", "MPI Dev"]) {
+    const dir = join(appDataRoot, name);
+    if (dir === currentDir) continue;
+    let parsed: Partial<AppConfig>;
+    try {
+      if (!existsSync(configPath(dir))) continue;
+      parsed = JSON.parse(readFileSync(configPath(dir), "utf8")) as Partial<AppConfig>;
+    } catch {
+      continue; // missing/unreadable/corrupt sibling -> skip
+    }
+    const out: Partial<AppConfig> = {};
+    if (parsed.language === "zh" || parsed.language === "en") out.language = parsed.language;
+    if (parsed.theme === "dark" || parsed.theme === "light" || parsed.theme === "system") {
+      out.theme = parsed.theme;
+    }
+    return out; // first readable sibling wins
+  }
+  return {};
 }
 
 export function getConfig(): AppConfig {
