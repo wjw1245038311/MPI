@@ -57,6 +57,7 @@ import {
   setSkillEnabled,
 } from "./plugins";
 import { getSkillDetails, getSkillsHubLeaderboard, installSkillFromHub, searchSkillsHub } from "./skills-hub";
+import { getMcpMarketDetail, searchMcpMarket } from "./mcp-market";
 import { getNpmReadme, searchNpmPackages } from "./npm-registry";
 import { removeAutomationTask, runTaskNow, startScheduler } from "./automation";
 import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
@@ -2333,6 +2334,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // Extension package market: search the public npm registry (no auth needed).
   ipcMain.handle("plugins:npmSearch", (_e, query: string) => searchNpmPackages(typeof query === "string" ? query : ""));
   ipcMain.handle("plugins:npmReadme", (_e, name: string) => getNpmReadme(typeof name === "string" ? name : ""));
+  // mcpmarket.cn directory search + detail.
+  ipcMain.handle("plugins:mcpMarketSearch", (_e, args: { query?: string; page?: number }) =>
+    searchMcpMarket(typeof args?.query === "string" ? args.query : "", Number.isFinite(Number(args?.page)) ? Number(args.page) : 1)
+  );
+  ipcMain.handle("plugins:mcpMarketDetail", (_e, id: string) => getMcpMarketDetail(typeof id === "string" ? id : ""));
+
   // MCP servers live in <agentDir>/mcp.json (pi-mcp-adapter / pi-mcp-market).
   ipcMain.handle("plugins:getMcpServers", () => listMcpServers());
   ipcMain.handle("plugins:setMcpServerDisabled", (_e, args: { name: string; disabled: boolean }) => {

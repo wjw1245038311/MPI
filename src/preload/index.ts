@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import type { ComposerDraft, NpmPackage, PermissionLevel, SkillHubSkill, TrashEntry } from "../renderer/src/lib/types";
+import type {
+  ComposerDraft,
+  McpMarketDetail,
+  McpMarketPage,
+  NpmPackage,
+  PermissionLevel,
+  SkillHubSkill,
+  TrashEntry,
+} from "../renderer/src/lib/types";
 
 /**
  * The renderer talks to the main process exclusively through this surface.
@@ -73,6 +81,9 @@ const api = {
     updatePackages: (source?: string) => ipcRenderer.invoke("plugins:updatePackages", source),
     searchNpmPackages: (query: string): Promise<NpmPackage[]> => ipcRenderer.invoke("plugins:npmSearch", query),
     getNpmReadme: (name: string): Promise<string> => ipcRenderer.invoke("plugins:npmReadme", name),
+    searchMcpMarket: (query: string, page?: number): Promise<McpMarketPage> =>
+      ipcRenderer.invoke("plugins:mcpMarketSearch", { query, page }),
+    getMcpMarketDetail: (id: string): Promise<McpMarketDetail> => ipcRenderer.invoke("plugins:mcpMarketDetail", id),
     getMcpServers: () => ipcRenderer.invoke("plugins:getMcpServers"),
     setMcpServerDisabled: (name: string, disabled: boolean) => ipcRenderer.invoke("plugins:setMcpServerDisabled", { name, disabled }),
     removeMcpServer: (name: string) => ipcRenderer.invoke("plugins:removeMcpServer", name),

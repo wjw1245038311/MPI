@@ -105,6 +105,47 @@ export interface McpServerInfo {
   disabled: boolean;
 }
 
+/** One entry from the mcpmarket.cn directory (list view). */
+export interface McpMarketItem {
+  id: string;
+  name: string;
+  by?: string;
+  description?: string;
+  stars?: number;
+  /** Source link (usually GitHub). */
+  url?: string;
+  /** Absolute URL or site-relative path. */
+  logo?: string;
+  featured?: boolean;
+}
+
+/** Localized overview sections returned by the mcpmarket.cn detail API. */
+export interface McpMarketOverview {
+  what_is?: string;
+  key_features?: string;
+  how_to_use?: string;
+  use_cases?: string;
+  where_to_use?: string;
+}
+
+/** Full detail for one mcpmarket.cn entry. */
+export interface McpMarketDetail extends McpMarketItem {
+  categories?: string[];
+  mcpType?: string[];
+  descriptionEn?: string;
+  descriptionZh?: string;
+  overviewEn?: McpMarketOverview;
+  overviewZh?: McpMarketOverview;
+}
+
+/** One page of mcpmarket.cn search results. */
+export interface McpMarketPage {
+  items: McpMarketItem[];
+  total: number;
+  pages: number;
+  page: number;
+}
+
 /** A public skill returned by the skills.sh directory. */
 export interface SkillHubSkill {
   /** Stable directory id, e.g. `vercel-labs/skills/find-skills`. */

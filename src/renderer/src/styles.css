@@ -6347,60 +6347,115 @@ mark.hl {
   justify-content: center;
   margin-top: 10px;
 }
-.mcp-server-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  padding: 10px 13px;
-  margin-bottom: 8px;
-}
-.mcp-server-main {
-  flex: 1;
-  min-width: 0;
-}
-.mcp-server-name-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+/* my mcp — dependency strip above the master-detail row */
+.mcp-mine {
   flex-wrap: wrap;
 }
-.mcp-server-name {
-  font-weight: 600;
-  font-size: 13.5px;
+.mcp-deps,
+.mcp-deps-warn {
+  width: 100%;
 }
-.mcp-server-sub {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-faint);
-  font-family: var(--mono);
-  font-size: 11px;
-  margin-top: 3px;
+.mcp-deps {
+  display: flex;
+  gap: 8px;
 }
-.mcp-server-actions {
+.mcp-dep-card {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 7px 12px;
+}
+.mcp-dep-card.warn {
+  border-color: color-mix(in srgb, var(--ctx-warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--ctx-warn) 6%, #fff);
+}
+.mcp-dep-name {
+  font-weight: 600;
+  font-size: 12.5px;
   flex: 0 0 auto;
 }
-.mcp-guide {
-  background: var(--accent-soft);
-  border-radius: 11px;
-  padding: 12px 14px;
+.mcp-dep-note {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
 }
-.mcp-guide-title {
-  font-size: 12.5px;
-  font-weight: 700;
-  margin-bottom: 5px;
+/* transport badge inside a skill-row (right side, before the toggle) */
+.skill-row-kind {
+  flex: 0 0 auto;
 }
-.mcp-guide-copy {
-  margin: 0 0 9px;
+.mcp-cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-soft, #f5f6f8);
+  border-radius: 9px;
+  padding: 7px 10px;
+}
+.mcp-cmd-row code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
   font-size: 12px;
-  line-height: 1.6;
+}
+
+/* mcp market (mcpmarket.cn) */
+.mcp-market-logo-wrap {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--bg-soft, #f5f6f8);
+}
+.mcp-market-logo-wrap.big {
+  width: 46px;
+  height: 46px;
+  border-radius: 11px;
+}
+.mcp-market-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.mcp-market-logo-fallback {
+  font-weight: 700;
+  font-size: 16px;
   color: var(--text-dim);
+}
+.mcp-market-desc {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.mcp-load-more {
+  width: 100%;
+  margin-top: 4px;
+  justify-content: center;
+}
+.skills-hub-detail-head-main {
+  min-width: 0;
+}
+.mcp-market-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
 }
 
 /* ---- automation specifics ---- */

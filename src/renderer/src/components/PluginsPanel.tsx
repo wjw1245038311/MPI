@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../store";
-import type { NpmPackage, PackageInfo, PluginPackage, SkillContent, SkillHubDetail, SkillHubSkill, SkillInfo } from "../lib/types";
+import type {
+  McpMarketDetail,
+  McpMarketItem,
+  McpMarketPage,
+  NpmPackage,
+  PackageInfo,
+  PluginPackage,
+  SkillContent,
+  SkillHubDetail,
+  SkillHubSkill,
+  SkillInfo,
+} from "../lib/types";
 import { Markdown } from "../lib/markdown";
 import { AppStore, At, Check, Close, Copy, Files, Gauge, Plug, Plus, Refresh, Search } from "./icons";
 
@@ -804,12 +815,57 @@ npm ↗
   );
 }
 
-/**
- * MCP module — gated on pi-mcp-market being installed (it provides the
- * /mcp-market panel for discovering and installing servers). Once available,
- * shows dependency status plus the servers configured in mcp.json.
- */
-function McpView({ language }: { language: "en" | "zh" }) {
+/** Gate card shown while pi-mcp-market is not installed — MCP module unavailable. */
+function McpGateCard({ language }: { language: "en" | "zh" }) {
+  const installPackage = useStore((s) => s.installPackage);
+  const zh = language === "zh";
+  const [installing, setInstalling] = useState(false);
+
+  // A dev instance started before this feature has an old preload without these APIs.
+  const mcpApiReady = typeof window.pi.plugins.getMcpServers === "function" && typeof window.pi.plugins.removeMcpServer === "function";
+
+  const installMarket = async () => {
+    if (installing) return;
+    setInstalling(true);
+    try {
+      await installPackage("npm:pi-mcp-market");
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  return (
+    <div className="plugins-body mcp-view">
+      {!mcpApiReady && (
+        <div className="skills-hub-error">
+          {zh
+            ? "当前实例的 preload 缺少 MCP 接口——请完全退出 MPI 后重新启动（dev：重新运行 npm run dev）。"
+            : "This instance's preload is missing the MCP APIs — fully quit MPI and restart (dev: re-run npm run dev)."}
+        </div>
+      )}
+      <div className="mcp-gate">
+        <div className="mcp-gate-icon">
+          <Plug size={26} />
+        </div>
+        <div className="mcp-gate-title">{zh ? "MCP 模块不可用" : "MCP module unavailable"}</div>
+        <p className="mcp-gate-copy">
+          {zh
+            ? "使用 MCP 需要先安装 pi-mcp-market 扩展：它提供 /mcp-market 市场面板，可搜索、预览并安装/卸载 MCP 服务器。实际连接与运行这些服务器还需要 pi-mcp-adapter。"
+            : "MCP requires the pi-mcp-market extension: it provides the /mcp-market panel to search, preview and install/uninstall MCP servers. Actually connecting to those servers also needs pi-mcp-adapter."}
+        </p>
+        <div className="mcp-gate-actions">
+          <button type="button" className="set-btn primary" onClick={installMarket} disabled={installing}>
+            {installing ? <span className="spinner" /> : <Plus size={14} />}
+            {zh ? "安装 pi-mcp-market" : "Install pi-mcp-market"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** My MCP — master-detail over the servers configured in mcp.json (skill-style layout). */
+function McpMineView({ language }: { language: "en" | "zh" }) {
   const packages = useStore((s) => s.packages);
   const mcpServers = useStore((s) => s.mcpServers);
   const loading = useStore((s) => s.pluginsLoading);
@@ -820,7 +876,9 @@ function McpView({ language }: { language: "en" | "zh" }) {
   const pushToast = useStore((s) => s.pushToast);
   const zh = language === "zh";
 
-  const [installingMarket, setInstallingMarket] = useState(false);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<"all" | "stdio" | "remote">("all");
+  const [selectedName, setSelectedName] = useState<string | null>(null);
   const [installingAdapter, setInstallingAdapter] = useState(false);
 
   // A dev instance started before this feature has an old preload without these APIs.
@@ -829,18 +887,8 @@ function McpView({ language }: { language: "en" | "zh" }) {
   const marketPkg = packages.find((p) => p.name.toLowerCase() === "pi-mcp-market");
   const adapterPkg = packages.find((p) => p.name.toLowerCase() === "pi-mcp-adapter");
 
-  const installMarket = async () => {
-    if (installingMarket || installingAdapter) return;
-    setInstallingMarket(true);
-    try {
-      await installPackage("npm:pi-mcp-market");
-    } finally {
-      setInstallingMarket(false);
-    }
-  };
-
   const installAdapter = async () => {
-    if (installingMarket || installingAdapter) return;
+    if (installingAdapter) return;
     setInstallingAdapter(true);
     try {
       await installPackage("npm:pi-mcp-adapter");
@@ -849,10 +897,39 @@ function McpView({ language }: { language: "en" | "zh" }) {
     }
   };
 
-  const copyCommand = async () => {
+  const q = query.trim().toLowerCase();
+  const filtered = useMemo(
+    () =>
+      mcpServers.filter((server) => {
+        if (filter !== "all" && server.transport !== filter) return false;
+        if (!q) return true;
+        return [server.name, server.command || "", server.url || ""].some((value) => value.toLowerCase().includes(q));
+      }),
+    [mcpServers, filter, q],
+  );
+
+  // Keep a valid default selection as the list loads or entries disappear.
+  useEffect(() => {
+    const stillExists = mcpServers.some((server) => server.name === selectedName);
+    if (!stillExists) setSelectedName(mcpServers.length > 0 ? mcpServers[0].name : null);
+  }, [mcpServers, selectedName]);
+
+  const selected = useMemo(() => mcpServers.find((server) => server.name === selectedName) || null, [mcpServers, selectedName]);
+
+  const counts = useMemo(
+    () => ({
+      all: mcpServers.length,
+      stdio: mcpServers.filter((s) => s.transport === "stdio").length,
+      remote: mcpServers.filter((s) => s.transport === "remote").length,
+    }),
+    [mcpServers],
+  );
+
+  const copyValue = async (value?: string) => {
+    if (!value) return;
     try {
-      await navigator.clipboard.writeText("/mcp-market");
-      pushToast("success", zh ? "命令已复制" : "Command copied");
+      await navigator.clipboard.writeText(value);
+      pushToast("success", zh ? "已复制" : "Copied");
     } catch {
       pushToast("error", zh ? "复制失败" : "Copy failed");
     }
@@ -865,146 +942,451 @@ function McpView({ language }: { language: "en" | "zh" }) {
     if (window.confirm(question)) removeMcpServer(name);
   };
 
-  const stalePreload = !mcpApiReady && (
-    <div className="skills-hub-error">
-      {zh
-        ? "当前实例的 preload 缺少 MCP 接口——请完全退出 MPI 后重新启动（dev：重新运行 npm run dev）。"
-        : "This instance's preload is missing the MCP APIs — fully quit MPI and restart (dev: re-run npm run dev)."}
-    </div>
-  );
-
-  // ---- Gate: pi-mcp-market not installed → module unavailable. ----
-  if (!marketPkg) {
-    return (
-      <div className="plugins-body mcp-view">
-        {stalePreload}
-        <div className="mcp-gate">
-          <div className="mcp-gate-icon">
-            <Plug size={26} />
-          </div>
-          <div className="mcp-gate-title">{zh ? "MCP 模块不可用" : "MCP module unavailable"}</div>
-          <p className="mcp-gate-copy">
-            {zh
-              ? "使用 MCP 需要先安装 pi-mcp-market 扩展：它提供 /mcp-market 市场面板，可搜索、预览并安装/卸载 MCP 服务器。实际连接与运行这些服务器还需要 pi-mcp-adapter。"
-              : "MCP requires the pi-mcp-market extension: it provides the /mcp-market panel to search, preview and install/uninstall MCP servers. Actually connecting to those servers also needs pi-mcp-adapter."}
-          </p>
-          <div className="mcp-gate-actions">
-            <button type="button" className="set-btn primary" onClick={installMarket} disabled={installingMarket || installingAdapter}>
-              {installingMarket ? <span className="spinner" /> : <Plus size={14} />}
-              {zh ? "安装 pi-mcp-market" : "Install pi-mcp-market"}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ---- Available: dependency status + configured servers. ----
   return (
-    <div className="plugins-body mcp-view">
-      {stalePreload}
+    <div className="skills-mine mcp-mine">
+      {!mcpApiReady && (
+        <div className="skills-hub-error mcp-deps-warn">
+          {zh
+            ? "当前实例的 preload 缺少 MCP 接口——请完全退出 MPI 后重新启动（dev：重新运行 npm run dev）。"
+            : "This instance's preload is missing the MCP APIs — fully quit MPI and restart (dev: re-run npm run dev)."}
+        </div>
+      )}
 
-      <section className="plugins-section">
-        <div className="plugins-section-head">{zh ? "依赖扩展" : "Required extensions"}</div>
-        <div className="mcp-server-row">
-          <div className="mcp-server-main">
-            <div className="mcp-server-name-row">
-              <span className="mcp-server-name">pi-mcp-market</span>
-              <span className={`skill-badge ${marketPkg.enabled ? "on" : "off"}`}>
-                {marketPkg.enabled ? (zh ? "● 已启用" : "● Enabled") : zh ? "已禁用" : "Disabled"}
-              </span>
-            </div>
-            <div className="mcp-server-sub">{zh ? "提供 /mcp-market 市场面板（搜索、预览、安装/卸载）" : "Provides the /mcp-market panel (search, preview, install/uninstall)"}</div>
-          </div>
-          <div className="mcp-server-actions">
+      {/* Dependency strip: pi-mcp-market provides /mcp-market, pi-mcp-adapter runs servers. */}
+      <div className="mcp-deps">
+        {marketPkg && (
+          <div className="mcp-dep-card">
+            <span className={`skill-dot ${marketPkg.enabled ? "on" : "off"}`} />
+            <span className="mcp-dep-name">pi-mcp-market</span>
+            <span className="muted mcp-dep-note">{zh ? "/mcp-market 市场面板" : "/mcp-market panel"}</span>
             <Toggle checked={marketPkg.enabled} onChange={(v) => togglePackage(marketPkg.source, v)} />
           </div>
-        </div>
+        )}
         {adapterPkg ? (
-          <div className="mcp-server-row">
-            <div className="mcp-server-main">
-              <div className="mcp-server-name-row">
-                <span className="mcp-server-name">pi-mcp-adapter</span>
-                <span className={`skill-badge ${adapterPkg.enabled ? "on" : "off"}`}>
-                  {adapterPkg.enabled ? (zh ? "● 已启用" : "● Enabled") : zh ? "已禁用" : "Disabled"}
-                </span>
-              </div>
-              <div className="mcp-server-sub">{zh ? "负责实际连接与运行 MCP 服务器" : "Actually connects to and runs the MCP servers"}</div>
-            </div>
-            <div className="mcp-server-actions">
-              <Toggle checked={adapterPkg.enabled} onChange={(v) => togglePackage(adapterPkg.source, v)} />
-            </div>
+          <div className="mcp-dep-card">
+            <span className={`skill-dot ${adapterPkg.enabled ? "on" : "off"}`} />
+            <span className="mcp-dep-name">pi-mcp-adapter</span>
+            <span className="muted mcp-dep-note">{zh ? "连接与运行 MCP 服务器" : "connects to & runs the servers"}</span>
+            <Toggle checked={adapterPkg.enabled} onChange={(v) => togglePackage(adapterPkg.source, v)} />
           </div>
         ) : (
-          <div className="mcp-server-row">
-            <div className="mcp-server-main">
-              <div className="mcp-server-name-row">
-                <span className="mcp-server-name">pi-mcp-adapter</span>
-                <span className="skill-badge off">{zh ? "未安装" : "Not installed"}</span>
-              </div>
-              <div className="mcp-server-sub">{zh ? "负责实际连接与运行 MCP 服务器——不装它，已配置的服务器无法使用" : "Actually connects to and runs the servers — without it, configured servers won't work"}</div>
-            </div>
-            <div className="mcp-server-actions">
-              <button type="button" className="set-btn primary" onClick={installAdapter} disabled={installingMarket || installingAdapter}>
-                {installingAdapter ? <span className="spinner" /> : <Plus size={13} />} {zh ? "安装" : "Install"}
-              </button>
-            </div>
+          <div className="mcp-dep-card warn">
+            <span className="skill-dot off" />
+            <span className="mcp-dep-name">pi-mcp-adapter</span>
+            <span className="muted mcp-dep-note">{zh ? "未安装——已配置的服务器无法使用" : "not installed — configured servers won't work"}</span>
+            <button type="button" className="set-btn primary" onClick={installAdapter} disabled={installingAdapter}>
+              {installingAdapter ? <span className="spinner" /> : <Plus size={13} />} {zh ? "安装" : "Install"}
+            </button>
           </div>
         )}
-      </section>
+      </div>
 
-      <section className="plugins-section">
-        <div className="plugins-section-head">{zh ? `已配置的服务器（${mcpServers.length}）` : `Configured servers (${mcpServers.length})`}</div>
-        {loading && mcpServers.length === 0 && <div className="set-empty-mini">{zh ? "加载中…" : "Loading…"}</div>}
-        {!loading && mcpServers.length === 0 && (
-          <div className="set-empty-mini">
-            {zh
-              ? "尚未配置任何 MCP 服务器——在会话中运行 /mcp-market 搜索并安装。"
-              : "No MCP servers configured yet — run /mcp-market in a session to search and install."}
-          </div>
-        )}
-        {mcpServers.map((server) => (
-          <div key={server.name} className="mcp-server-row">
-            <div className="mcp-server-main">
-              <div className="mcp-server-name-row">
-                <span className="mcp-server-name">{server.name}</span>
-                <span className="plugins-kind">{server.transport === "stdio" ? "stdio" : "remote"}</span>
-                {server.disabled && <span className="skill-badge off">{zh ? "已禁用" : "Disabled"}</span>}
+      <div className="skills-mine-list">
+        <div className="plugins-search">
+          <Search size={15} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={zh ? "搜索我的 MCP 服务器…" : "Search my MCP servers…"}
+            aria-label={zh ? "搜索我的 MCP 服务器" : "Search my MCP servers"}
+          />
+          {query && (
+            <button type="button" className="plugins-search-clear" onClick={() => setQuery("")} aria-label={zh ? "清除搜索" : "Clear search"}>
+              ×
+            </button>
+          )}
+        </div>
+
+        <div className="skill-chips">
+          {(
+            [
+              ["all", zh ? "全部" : "All"],
+              ["stdio", "stdio"],
+              ["remote", "remote"],
+            ] as ["all" | "stdio" | "remote", string][]
+          ).map(([value, label]) => (
+            <button key={value} type="button" className={`skill-chip${filter === value ? " active" : ""}`} onClick={() => setFilter(value)}>
+              {label} {counts[value]}
+            </button>
+          ))}
+        </div>
+
+        <div className="skills-mine-scroll">
+          {loading && mcpServers.length === 0 && <div className="set-empty-mini">{zh ? "加载中…" : "Loading…"}</div>}
+          {!loading && mcpServers.length === 0 && (
+            <div className="set-empty-mini">
+              {zh
+                ? "尚未配置任何 MCP 服务器——切到「MCP 市场」浏览，或在会话中运行 /mcp-market。"
+                : "No MCP servers configured yet — browse the MCP Market tab, or run /mcp-market in a session."}
+            </div>
+          )}
+          {mcpServers.length > 0 && filtered.length === 0 && <div className="set-empty-mini">{zh ? "没有匹配的服务器。" : "No matching servers."}</div>}
+          {filtered.map((server) => (
+            <div
+              key={server.name}
+              role="button"
+              tabIndex={0}
+              className={`skill-row${selectedName === server.name ? " active" : ""}`}
+              onClick={() => setSelectedName(server.name)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedName(server.name);
+                }
+              }}
+            >
+              <span className={`skill-dot ${server.disabled ? "off" : "on"}`} />
+              <div className="skill-row-main">
+                <div className="skill-row-name">{server.name}</div>
+                {(server.command || server.url) && <div className="skill-row-desc">{server.command || server.url}</div>}
               </div>
-              {(server.command || server.url) && (
-                <div className="mcp-server-sub" title={server.command || server.url}>
-                  {server.command || server.url}
+              <span className="plugins-kind skill-row-kind">{server.transport === "stdio" ? "stdio" : "remote"}</span>
+              <span className="skill-row-toggle" onClick={(event) => event.stopPropagation()}>
+                <Toggle checked={!server.disabled} onChange={(v) => toggleMcpServer(server.name, !v)} />
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <aside className="skills-mine-detail" aria-label={zh ? "MCP 服务器详情" : "MCP server details"}>
+        {!selected && <div className="set-empty-mini">{zh ? "选择一个服务器查看详情" : "Select a server to view details"}</div>}
+        {selected && (
+          <>
+            <div className="skill-detail-head">
+              <div className="skill-detail-title-wrap">
+                <div className="skill-detail-title">{selected.name}</div>
+                <div className="skill-detail-badges">
+                  <span className="plugins-kind">{selected.transport === "stdio" ? "stdio" : "remote"}</span>
+                  <span className={`skill-badge ${selected.disabled ? "off" : "on"}`}>
+                    {selected.disabled ? (zh ? "已禁用" : "Disabled") : zh ? "● 已启用" : "● Enabled"}
+                  </span>
+                </div>
+              </div>
+              <div className="skill-detail-actions">
+                <button
+                  type="button"
+                  className={`set-btn${selected.disabled ? "" : " primary"}`}
+                  onClick={() => toggleMcpServer(selected.name, !selected.disabled)}
+                >
+                  {selected.disabled ? (zh ? "启用" : "Enable") : zh ? "停用" : "Disable"}
+                </button>
+                <button type="button" className="set-iconbtn danger" title={zh ? "删除该服务器" : "Remove this server"} onClick={() => removeServer(selected.name)}>
+                  ×
+                </button>
+              </div>
+            </div>
+
+            {(selected.command || selected.url) && (
+              <div className="skill-detail-section">
+                <div className="skills-hub-mini-label">{selected.transport === "stdio" ? (zh ? "启动命令" : "COMMAND") : zh ? "地址" : "URL"}</div>
+                <div className="mcp-cmd-row">
+                  <code title={selected.command || selected.url}>{selected.command || selected.url}</code>
+                  <button type="button" className="set-btn" onClick={() => copyValue(selected.command || selected.url)}>
+                    <Copy size={13} /> {zh ? "复制" : "Copy"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="skill-detail-section">
+              <div className="skills-hub-mini-label">{zh ? "使用" : "USAGE"}</div>
+              <p className="skills-hub-description">
+                {zh
+                  ? "在会话中运行 /mcp-market 可搜索并安装新服务器；/reload 重新加载配置，/mcp 查看连接状态。"
+                  : "Run /mcp-market in a session to search and install new servers; /reload re-reads the config, /mcp shows connection status."}
+              </p>
+            </div>
+
+            <div className="muted plugins-note">
+              {zh
+                ? "配置读写 ~/.pi/agent/mcp.json（与 pi-mcp-adapter、pi-mcp-market 共享）；停用只写 disabled 标志，可随时恢复。"
+                : "Config is read from and written to ~/.pi/agent/mcp.json (shared with pi-mcp-adapter and pi-mcp-market); disabling only sets a flag and is reversible."}
+            </div>
+          </>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+/** Absolute URL for an mcpmarket.cn logo (list API returns site-relative paths). */
+function mcpLogoUrl(logo?: string): string | undefined {
+  if (!logo) return undefined;
+  if (/^https?:\/\//.test(logo)) return logo;
+  return `https://mcpmarket.cn${logo.startsWith("/") ? "" : "/"}${logo}`;
+}
+
+/** MCP Market — browse the public mcpmarket.cn directory (skill-market-style layout). */
+function McpMarketView({ language }: { language: "en" | "zh" }) {
+  const zh = language === "zh";
+
+  const [query, setQuery] = useState("");
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [items, setItems] = useState<McpMarketItem[]>([]);
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState<McpMarketItem | null>(null);
+  const [detail, setDetail] = useState<McpMarketDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const detailRequest = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const result: McpMarketPage = await window.pi.plugins.searchMcpMarket(query.trim(), 1);
+        if (!cancelled) {
+          setItems(result.items);
+          setPage(result.page);
+          setPages(result.pages);
+          setTotal(result.total);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setItems([]);
+          setError(e?.message || (zh ? "无法加载 mcpmarket.cn 目录" : "Unable to load the mcpmarket.cn directory"));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, query.trim() ? 260 : 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, refreshToken, zh]);
+
+  const loadMore = async () => {
+    if (loading || loadingMore || page >= pages) return;
+    setLoadingMore(true);
+    try {
+      const result: McpMarketPage = await window.pi.plugins.searchMcpMarket(query.trim(), page + 1);
+      setItems((current) => [...current, ...result.items]);
+      setPage(result.page);
+      setPages(result.pages);
+    } catch (e: any) {
+      setError(e?.message || (zh ? "加载失败" : "Load failed"));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const selectItem = async (item: McpMarketItem) => {
+    const request = ++detailRequest.current;
+    setSelected(item);
+    setDetail(null);
+    setDetailLoading(true);
+    try {
+      const payload: McpMarketDetail = await window.pi.plugins.getMcpMarketDetail(item.id);
+      if (request === detailRequest.current) setDetail(payload);
+    } catch {
+      // Detail fetch failed — the list-level info below still renders.
+    } finally {
+      if (request === detailRequest.current) setDetailLoading(false);
+    }
+  };
+
+  const descText = selected ? (detail ? (zh ? detail.descriptionZh || detail.descriptionEn : detail.descriptionEn || detail.descriptionZh) : selected.description) : undefined;
+  const overview = detail ? (zh ? detail.overviewZh || detail.overviewEn : detail.overviewEn || detail.overviewZh) : undefined;
+
+  return (
+    <div className="skills-hub-body">
+      <div className="skills-hub-intro">
+        <div>
+          <div className="skills-hub-kicker">{zh ? "公开目录" : "PUBLIC DIRECTORY"}</div>
+          <div className="skills-hub-copy">
+            {zh ? `浏览 mcpmarket.cn 的 MCP 服务器目录（共 ${total || "…"} 个），支持搜索。` : `Browse the MCP server directory on mcpmarket.cn (${total || "…"} entries), with search.`}
+          </div>
+        </div>
+        <a className="skills-hub-link" href="https://mcpmarket.cn/" target="_blank" rel="noreferrer noopener">
+          mcpmarket.cn ↗
+        </a>
+      </div>
+
+      <div className="skills-hub-toolbar">
+        <div className="plugins-search skills-hub-search">
+          <Search size={15} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={zh ? "搜索 MCP 服务器" : "Search MCP servers"}
+            aria-label={zh ? "搜索 MCP 服务器" : "Search MCP servers"}
+          />
+          {query && (
+            <button type="button" className="plugins-search-clear" onClick={() => setQuery("")} aria-label={zh ? "清除搜索" : "Clear search"}>
+              ×
+            </button>
+          )}
+        </div>
+        <button
+          className="set-iconbtn"
+          onClick={() => setRefreshToken((value) => value + 1)}
+          disabled={loading}
+          title={zh ? "刷新 mcpmarket.cn 目录" : "Refresh the mcpmarket.cn directory"}
+        >
+          {loading ? <span className="spinner" /> : <Refresh size={15} />}
+        </button>
+      </div>
+
+      {error && <div className="skills-hub-error">{error}</div>}
+      <div className="skills-hub-layout">
+        <section className="skills-hub-results" aria-label={zh ? "MCP 服务器搜索结果" : "MCP server search results"}>
+          <div className="skills-hub-section-head">
+            <span>{query.trim() ? (zh ? "搜索结果" : "SEARCH RESULTS") : zh ? "全部目录" : "ALL ENTRIES"}</span>
+            <span className="skills-hub-count">{loading ? "…" : items.length}</span>
+          </div>
+          {!loading && !error && items.length === 0 && (
+            <div className="set-empty-mini">{zh ? "没有匹配的 MCP 服务器。" : "No MCP servers matched your search."}</div>
+          )}
+          {items.map((item) => {
+            const active = selected?.id === item.id;
+            const logo = mcpLogoUrl(item.logo);
+            return (
+              <div
+                className={`skills-hub-card${active ? " active" : ""}`}
+                key={item.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => selectItem(item)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    selectItem(item);
+                  }
+                }}
+              >
+                <div className="mcp-market-logo-wrap">
+                  {logo ? (
+                    <img className="mcp-market-logo" src={logo} alt="" loading="lazy" onError={(event) => ((event.target as HTMLImageElement).style.display = "none")} />
+                  ) : (
+                    <span className="mcp-market-logo-fallback">{item.name.slice(0, 1).toUpperCase()}</span>
+                  )}
+                </div>
+                <div className="skills-hub-card-main">
+                  <div className="skills-hub-card-title">
+                    <span className="skills-hub-card-name">{item.name}</span>
+                    {item.featured && <span className="skills-hub-installed-label">{zh ? "精选" : "Featured"}</span>}
+                  </div>
+                  {item.by && (
+                    <div className="skills-hub-card-source">
+                      @{item.by}
+                      {typeof item.stars === "number" && item.stars > 0 && ` · ${formatInstalls(item.stars)} ★`}
+                    </div>
+                  )}
+                  {item.description && <div className="mcp-market-desc">{item.description}</div>}
+                </div>
+              </div>
+            );
+          })}
+          {!loading && !error && page < pages && (
+            <button type="button" className="set-btn mcp-load-more" onClick={loadMore} disabled={loadingMore}>
+              {loadingMore ? <span className="spinner" /> : null} {zh ? `加载更多（第 ${page}/${pages} 页）` : `Load more (page ${page}/${pages})`}
+            </button>
+          )}
+        </section>
+
+        <aside className="skills-hub-detail" aria-label={zh ? "MCP 服务器详情" : "MCP server details"}>
+          {!selected && <div className="skills-hub-detail-empty">{zh ? "选择一个 MCP 服务器查看详情" : "Select an MCP server to view details"}</div>}
+          {selected && (
+            <>
+              <div className="skills-hub-detail-head">
+                <div className="mcp-market-logo-wrap big">
+                  {(() => {
+                    const logo = mcpLogoUrl(detail?.logo || selected.logo);
+                    return logo ? (
+                      <img className="mcp-market-logo" src={logo} alt="" onError={(event) => ((event.target as HTMLImageElement).style.display = "none")} />
+                    ) : (
+                      <span className="mcp-market-logo-fallback">{selected.name.slice(0, 1).toUpperCase()}</span>
+                    );
+                  })()}
+                </div>
+                <div className="skills-hub-detail-head-main">
+                  <div className="skills-hub-detail-title">{selected.name}</div>
+                  {selected.by && <div className="skills-hub-card-source">@{selected.by}</div>}
+                </div>
+              </div>
+
+              {(detail?.mcpType || detail?.categories) && (
+                <div className="skill-detail-badges mcp-market-badges">
+                  {detail?.mcpType?.map((type) => (
+                    <span key={type} className="plugins-kind">
+                      {type}
+                    </span>
+                  ))}
+                  {detail?.categories?.slice(0, 4).map((category) => (
+                    <span key={category} className="skill-badge on">
+                      {category}
+                    </span>
+                  ))}
                 </div>
               )}
-            </div>
-            <div className="mcp-server-actions">
-              <Toggle checked={!server.disabled} onChange={(v) => toggleMcpServer(server.name, !v)} />
-              <button type="button" className="set-iconbtn danger" title={zh ? "删除该服务器" : "Remove this server"} onClick={() => removeServer(server.name)}>
-                ×
-              </button>
-            </div>
-          </div>
-        ))}
-      </section>
 
-      <section className="plugins-section">
-        <div className="mcp-guide">
-          <div className="mcp-guide-title">{zh ? "浏览与安装新服务器" : "Browse & install new servers"}</div>
-          <p className="mcp-guide-copy">
-            {zh
-              ? "在任意会话输入 /mcp-market 打开市场面板（官方 Registry、Smithery、DeepNLP 等源）。安装后运行 /reload 生效，用 /mcp 查看连接状态。"
-              : "Type /mcp-market in any session to open the market panel (official registry, Smithery, DeepNLP and more). Run /reload after installing; check connection status with /mcp."}
-          </p>
-          <button type="button" className="set-btn" onClick={copyCommand}>
-            <Copy size={13} /> {zh ? "复制命令 /mcp-market" : "Copy command /mcp-market"}
-          </button>
-        </div>
-      </section>
+              <div className="skills-hub-detail-meta">
+                {typeof selected.stars === "number" && selected.stars > 0 && (
+                  <span title={zh ? "GitHub Stars" : "GitHub stars"}>{formatInstalls(selected.stars)} ★</span>
+                )}
+                {selected.url && (
+                  <a href={selected.url} target="_blank" rel="noreferrer noopener">
+                    GitHub ↗
+                  </a>
+                )}
+                <a href="https://mcpmarket.cn/" target="_blank" rel="noreferrer noopener">
+                  {zh ? "在 mcpmarket.cn 查看" : "View on mcpmarket.cn"} ↗
+                </a>
+              </div>
 
-      <div className="muted plugins-note">
-        {zh
-          ? "服务器配置读写 ~/.pi/agent/mcp.json（与 pi-mcp-adapter、pi-mcp-market 共享）；停用只写 disabled 标志，可随时恢复。"
-          : "Servers are read from and written to ~/.pi/agent/mcp.json (shared with pi-mcp-adapter and pi-mcp-market); disabling only sets a flag and is reversible."}
+              {detailLoading && (
+                <div className="skills-hub-detail-loading">
+                  <span className="spinner" /> {zh ? "加载详情…" : "Loading details…"}
+                </div>
+              )}
+
+              {!detailLoading && descText && <p className="skills-hub-description">{descText}</p>}
+
+              {!detailLoading && overview && (
+                <div className="skills-hub-detail-scroll">
+                  {overview.what_is && (
+                    <div className="skill-detail-section">
+                      <div className="skills-hub-mini-label">{zh ? "简介" : "WHAT IS IT"}</div>
+                      <p className="skills-hub-description">{overview.what_is}</p>
+                    </div>
+                  )}
+                  {overview.key_features && (
+                    <div className="skill-detail-section">
+                      <div className="skills-hub-mini-label">{zh ? "核心特性" : "KEY FEATURES"}</div>
+                      <p className="skills-hub-description">{overview.key_features}</p>
+                    </div>
+                  )}
+                  {overview.how_to_use && (
+                    <div className="skill-detail-section">
+                      <div className="skills-hub-mini-label">{zh ? "如何使用" : "HOW TO USE"}</div>
+                      <p className="skills-hub-description">{overview.how_to_use}</p>
+                    </div>
+                  )}
+                  {overview.use_cases && (
+                    <div className="skill-detail-section">
+                      <div className="skills-hub-mini-label">{zh ? "使用场景" : "USE CASES"}</div>
+                      <p className="skills-hub-description">{overview.use_cases}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!detailLoading && !descText && !overview && (
+                <div className="muted plugins-note">
+                  {zh ? "该条目暂无更多介绍——可打开 GitHub 链接查看。" : "No further details for this entry — open the GitHub link to learn more."}
+                </div>
+              )}
+            </>
+          )}
+        </aside>
       </div>
     </div>
   );
@@ -1422,6 +1804,8 @@ export function PluginsPanel() {
   const open = useStore((s) => s.pluginsOpen);
   const close = useStore((s) => s.closePlugins);
   const packagesCount = useStore((s) => s.packages.length);
+  // The MCP module is gated on pi-mcp-market being installed.
+  const mcpAvailable = useStore((s) => s.packages.some((p) => p.name.toLowerCase() === "pi-mcp-market"));
   const skills = useStore((s) => s.skills);
   const loading = useStore((s) => s.pluginsLoading);
   const loadPlugins = useStore((s) => s.loadPlugins);
@@ -1433,6 +1817,7 @@ export function PluginsPanel() {
   const [module, setModule] = useState<"skills" | "packages" | "mcp">("skills");
   const [skillTab, setSkillTab] = useState<"mine" | "market" | "stats">("mine");
   const [packageTab, setPackageTab] = useState<"mine" | "market">("mine");
+  const [mcpTab, setMcpTab] = useState<"mine" | "market">("mine");
 
   if (!open) return null;
 
@@ -1494,6 +1879,17 @@ export function PluginsPanel() {
             </div>
           )}
 
+          {module === "mcp" && mcpAvailable && (
+            <div className="skills-subtabs">
+              <button type="button" className={`skill-subtab${mcpTab === "mine" ? " active" : ""}`} onClick={() => setMcpTab("mine")}>
+                <Files size={13} /> {zh ? "我的 MCP" : "My MCP"}
+              </button>
+              <button type="button" className={`skill-subtab${mcpTab === "market" ? " active" : ""}`} onClick={() => setMcpTab("market")}>
+                <AppStore size={13} /> {zh ? "MCP 市场" : "MCP Market"}
+              </button>
+            </div>
+          )}
+
           <button className="set-iconbtn plugins-refresh" onClick={() => loadPlugins()} disabled={loading} title={zh ? "刷新扩展功能和技能" : "Refresh extensions and skills"}>
             {loading ? <span className="spinner" /> : <Refresh size={15} />}
           </button>
@@ -1501,7 +1897,15 @@ export function PluginsPanel() {
 
         <div className="plugins-content">
           {module === "mcp" ? (
-            <McpView language={language} />
+            mcpAvailable ? (
+              mcpTab === "mine" ? (
+                <McpMineView language={language} />
+              ) : (
+                <McpMarketView language={language} />
+              )
+            ) : (
+              <McpGateCard language={language} />
+            )
           ) : module === "packages" ? (
             packageTab === "mine" ? (
               <PackagesView language={language} onOpenMarket={() => setPackageTab("market")} />
