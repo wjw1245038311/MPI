@@ -1114,6 +1114,22 @@ const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language }: 
   const running = run?.running;
   const diffViewMode = useStore((s) => s.config?.diffViewMode || "unified");
   const argsView = renderToolArgs(name, run, blockArgs, language, diffViewMode);
+
+  // Edit calls with recognizable before/after content open by default so the
+  // unified diff is visible without hunting for it. Arguments may arrive late
+  // while streaming, so auto-open once they are complete — but never override
+  // a manual toggle. Very large edits stay collapsed to avoid flooding history.
+  const editPairs = matchesTool(name, ["edit", "patch", "replace", "update"]) ? extractEditPairs(parseToolArgs(run, blockArgs)) : [];
+  let autoExpand = false;
+  if (editPairs.length) {
+    let lines = 0;
+    for (const p of editPairs) lines += p.old.split("\n").length + p.next.split("\n").length;
+    autoExpand = lines <= 240;
+  }
+  const userToggled = useRef(false);
+  useEffect(() => {
+    if (autoExpand && !userToggled.current) setOpen(true);
+  }, [autoExpand]);
   const result = run?.resultText ?? run?.partialText ?? "";
   const status = toolStatus(run);
   const summary = toolSummary(name, run, blockArgs, language);
@@ -1133,11 +1149,17 @@ const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language }: 
         type="button"
         aria-expanded={open}
         aria-controls={detailsId}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          userToggled.current = true;
+          setOpen((v) => !v);
+        }}
       >
         <span style={{ transform: open ? "rotate(90deg)" : "none", display: "inline-block", transition: "transform .12s" }}>›</span>
         <span className="tool-name">{name}</span>
         {summary && <span className="tool-summary" title={summary}>{summary}</span>}
+        {!open && editPairs.length > 1 && (
+          <span className="tool-edits-badge">{language === "zh" ? `${editPairs.length} 处替换` : `${editPairs.length} edits`}</span>
+        )}
         <span className={`tool-status state-${status}`}>
           {running ? <span className="spinner" /> : language === "zh" ? toolStatusLabel(status) : status}
         </span>

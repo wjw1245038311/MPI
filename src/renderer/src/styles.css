@@ -1301,6 +1301,14 @@ body.sidebar-resizing * {
   font-size: 12.5px;
   text-align: left;
 }
+.tool-edits-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  white-space: nowrap;
+}
 .tool-head:hover {
   background: rgba(0, 0, 0, 0.04);
 }
