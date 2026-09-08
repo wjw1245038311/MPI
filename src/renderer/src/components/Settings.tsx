@@ -7,8 +7,8 @@ import { translateUiText } from "../lib/i18n";
 import { Archive, Check, Close, Edit, Plus, Refresh, Folder } from "./icons";
 import { ChangelogModal } from "./ChangelogModal";
 import appIconUrl from "../../../../resources/icon.png";
-import doraemonAvatarUrl from "../../../../resources/doraemon.png";
-import nobitaAvatarUrl from "../../../../resources/nobita.png";
+import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
+import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
 
 /* ------------------------------------------------------------------ *
  * Constants

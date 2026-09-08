@@ -11,8 +11,8 @@ import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from ".
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Gauge, Branch, ChevronRight, ChevronsDown } from "./icons";
-import doraemonAvatarUrl from "../../../../resources/doraemon.png";
-import nobitaAvatarUrl from "../../../../resources/nobita.png";
+import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
+import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
 
 // Minimum user messages before the left dot rail appears. Kept low (2) so it
 // shows up in essentially every real conversation — a single message has
