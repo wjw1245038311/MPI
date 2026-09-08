@@ -105,13 +105,13 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
-/** Accent color presets (Feishu-style swatches); CSS blocks keyed on <html data-accent>. */
+/** Accent color presets — Apple HIG system accent colors; CSS blocks keyed on <html data-accent>. */
 const ACCENT_PRESETS = [
-  { id: "green", zh: "绿", en: "Green", swatch: "#2e7d52" },
-  { id: "blue", zh: "蓝", en: "Blue", swatch: "#2563eb" },
-  { id: "purple", zh: "紫", en: "Purple", swatch: "#7c3aed" },
-  { id: "orange", zh: "橙", en: "Orange", swatch: "#ea580c" },
-  { id: "rose", zh: "玫红", en: "Rose", swatch: "#dc2626" },
+  { id: "green", zh: "绿", en: "Green", swatch: "#34c759" },
+  { id: "blue", zh: "蓝", en: "Blue", swatch: "#007aff" },
+  { id: "purple", zh: "紫", en: "Purple", swatch: "#af52de" },
+  { id: "pink", zh: "粉", en: "Pink", swatch: "#ff2d55" },
+  { id: "orange", zh: "橙", en: "Orange", swatch: "#ff9500" },
 ] as const;
 
 function Field({ label, hint, children, wide }: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {

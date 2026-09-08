@@ -12,10 +12,12 @@
   --text: #1d1e1b;
   --text-dim: #6c7066;
   --text-faint: #9aa096;
-  --accent: #2e7d52;
-  --accent-soft: #e4f1e8;
-  --send: #2b2d28;
-  --send-hover: #3a3d35;
+  /* Default accent: Apple HIG green (light). Other presets override via
+   * <html data-accent> blocks at the end of this file. */
+  --accent: #34c759;
+  --accent-soft: #e5f5eb;
+  --send: #34c759;
+  --send-hover: #2db851;
   --code-bg: #f5f5f1;
   --user-bubble: #ffffff;
   --surface: #ffffff;
@@ -412,7 +414,7 @@ body.sidebar-resizing * {
   outline-offset: -2px;
 }
 .thread.active {
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--accent-soft);
   box-shadow: var(--shadow-sm);
 }
 .thread-title {
@@ -508,7 +510,7 @@ body.sidebar-resizing * {
   font-size: 12px;
 }
 .sb-tab.active {
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--accent-soft);
   color: var(--text);
   border-color: var(--border);
 }
@@ -1885,7 +1887,7 @@ body.sidebar-resizing * {
 }
 .slash-menu-item:hover,
 .slash-menu-item.active {
-  background: #f1f1ed;
+  background: var(--accent-soft);
 }
 .slash-command-name {
   font-family: var(--mono);
@@ -2050,7 +2052,9 @@ body.sidebar-resizing * {
   font-size: 13px;
 }
 .project-menu-option:hover,
-.project-menu-option.active,
+.project-menu-option.active {
+  background: var(--accent-soft);
+}
 .project-menu-new:hover {
   background: var(--control);
 }
@@ -2572,7 +2576,7 @@ body.sidebar-resizing * {
 }
 .model-provider-toggle:hover,
 .model-provider-toggle.active {
-  background: #f3f3ee;
+  background: var(--accent-soft);
 }
 .model-provider-chevron {
   flex: 0 0 auto;
@@ -3850,7 +3854,7 @@ textarea.modal-input {
   color: var(--text);
 }
 .set-tab.active {
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--accent-soft);
   color: var(--text);
   font-weight: 600;
   box-shadow: var(--shadow-sm);
@@ -4884,7 +4888,7 @@ textarea.modal-input {
 .search-item:hover,
 .search-item.active {
   background: var(--accent-soft);
-  border-color: rgba(46, 125, 82, 0.28);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .search-item-top {
   display: flex;
@@ -5681,10 +5685,11 @@ mark.hl {
   --text: #e8eef0;
   --text-dim: #b6c2c8;
   --text-faint: #8b98a0;
-  --accent: #7bd6a1;
+  /* Apple HIG green (dark) */
+  --accent: #30d158;
   --accent-soft: #214333;
-  --send: #75c995;
-  --send-hover: #8cdda9;
+  --send: #30d158;
+  --send-hover: #46da6b;
   --code-bg: #151c20;
   --user-bubble: #263830;
   --surface: #1b2327;
@@ -5751,7 +5756,7 @@ mark.hl {
 :root[data-theme="dark"] .thread.active,
 :root[data-theme="dark"] .sb-tab.active,
 :root[data-theme="dark"] .set-tab.active {
-  background: rgba(255, 255, 255, 0.09);
+  background: var(--accent-soft);
 }
 :root[data-theme="dark"] .chat-head-input,
 :root[data-theme="dark"] .modal-input,
@@ -6448,53 +6453,53 @@ mark.hl {
 }
 
 /* ---- Accent color presets (keyed on <html data-accent>; green is default) - */
-/* The primary send/action button follows the accent in both themes. */
-:root[data-accent="green"] { --send: #2e7d52; --send-hover: #38915f; }
+/* Palette: Apple HIG system accent colors. The primary send/action button
+ * follows the accent in both themes; selection surfaces use --accent-soft. */
 :root[data-accent="blue"] {
-  --accent: #2563eb;
-  --accent-soft: #dbeafe;
-  --send: #2563eb;
-  --send-hover: #3b76f0;
+  --accent: #007aff;
+  --accent-soft: #e7f1ff;
+  --send: #007aff;
+  --send-hover: #006ae0;
 }
 :root[data-theme="dark"][data-accent="blue"] {
-  --accent: #7cb0f5;
-  --accent-soft: #1d3a5c;
-  --send: #4f9cf0;
-  --send-hover: #6fb0f5;
+  --accent: #0a84ff;
+  --accent-soft: #1b2f45;
+  --send: #0a84ff;
+  --send-hover: #2e95ff;
 }
 :root[data-accent="purple"] {
-  --accent: #7c3aed;
-  --accent-soft: #ede9fe;
-  --send: #7c3aed;
-  --send-hover: #8f55f2;
+  --accent: #af52de;
+  --accent-soft: #f6ecfd;
+  --send: #af52de;
+  --send-hover: #a044cf;
 }
 :root[data-theme="dark"][data-accent="purple"] {
-  --accent: #b794f6;
-  --accent-soft: #33254e;
-  --send: #9d7bf0;
-  --send-hover: #b195f5;
+  --accent: #bf5af2;
+  --accent-soft: #2e2440;
+  --send: #bf5af2;
+  --send-hover: #ca7cf5;
+}
+:root[data-accent="pink"] {
+  --accent: #ff2d55;
+  --accent-soft: #ffe9ee;
+  --send: #ff2d55;
+  --send-hover: #e8274d;
+}
+:root[data-theme="dark"][data-accent="pink"] {
+  --accent: #ff375f;
+  --accent-soft: #3d2230;
+  --send: #ff375f;
+  --send-hover: #ff5a7d;
 }
 :root[data-accent="orange"] {
-  --accent: #ea580c;
-  --accent-soft: #ffedd5;
-  --send: #ea580c;
-  --send-hover: #f06a24;
+  --accent: #ff9500;
+  --accent-soft: #fff2e3;
+  --send: #ff9500;
+  --send-hover: #f08c00;
 }
 :root[data-theme="dark"][data-accent="orange"] {
-  --accent: #fb923c;
-  --accent-soft: #4a2c15;
-  --send: #f59e42;
-  --send-hover: #f7ad6b;
-}
-:root[data-accent="rose"] {
-  --accent: #dc2626;
-  --accent-soft: #fee2e2;
-  --send: #dc2626;
-  --send-hover: #e64545;
-}
-:root[data-theme="dark"][data-accent="rose"] {
-  --accent: #f87171;
-  --accent-soft: #4a1d1d;
-  --send: #ef6363;
-  --send-hover: #f28585;
+  --accent: #ff9f0a;
+  --accent-soft: #3a2c1a;
+  --send: #ff9f0a;
+  --send-hover: #ffb133;
 }

@@ -37,7 +37,7 @@ export interface AppConfig {
   /** "dark" | "light" | "system". */
   theme: "dark" | "light" | "system";
   /** Accent color preset applied on top of the theme (see data-accent CSS blocks). */
-  accentTheme: "green" | "blue" | "purple" | "orange" | "rose";
+  accentTheme: "green" | "blue" | "purple" | "pink" | "orange";
   /** Window zoom percentage, 50–150; 100 is default. Applied via webContents zoom level. */
   zoomPercent: number;
   /** UI language. English is the default for new installations. */
@@ -150,8 +150,8 @@ export function loadConfig(userDataDir: string): AppConfig {
         accentTheme:
           parsed.accentTheme === "blue" ||
           parsed.accentTheme === "purple" ||
-          parsed.accentTheme === "orange" ||
-          parsed.accentTheme === "rose"
+          parsed.accentTheme === "pink" ||
+          parsed.accentTheme === "orange"
             ? parsed.accentTheme
             : DEFAULTS.accentTheme,
         zoomPercent:
@@ -206,8 +206,8 @@ function inheritFromSiblingProfile(currentDir: string): Partial<AppConfig> {
       parsed.accentTheme === "green" ||
       parsed.accentTheme === "blue" ||
       parsed.accentTheme === "purple" ||
-      parsed.accentTheme === "orange" ||
-      parsed.accentTheme === "rose"
+      parsed.accentTheme === "pink" ||
+      parsed.accentTheme === "orange"
     ) {
       out.accentTheme = parsed.accentTheme;
     }

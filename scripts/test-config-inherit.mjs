@@ -41,7 +41,7 @@ assert.equal(cfg.theme, "dark", "corrupt own file: inherit theme too");
 
 // 5) Sibling with invalid values is ignored (defaults kept).
 rmSync(join(devDir, "config.json"));
-writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "fr", theme: "neon", accentTheme: "pink" }));
+writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "fr", theme: "neon", accentTheme: "red" }));
 cfg = loadConfig(devDir);
 assert.equal(cfg.language, "en", "invalid sibling language ignored");
 assert.equal(cfg.theme, "light", "invalid sibling theme ignored");
