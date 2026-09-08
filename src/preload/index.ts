@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import type { ComposerDraft, SkillHubSkill } from "../renderer/src/lib/types";
+import type { ComposerDraft, PermissionLevel, SkillHubSkill } from "../renderer/src/lib/types";
 
 /**
  * The renderer talks to the main process exclusively through this surface.
@@ -97,7 +97,7 @@ const api = {
     onPairingRequest: (cb: (p: { connectionId: string; deviceId: string; deviceName: string }) => void) => on("remote:pairing-request", cb),
   },
   thread: {
-    open: (args: { cwd: string; sessionFile?: string; name?: string; permission?: "sandbox" | "full" }) => ipcRenderer.invoke("thread:open", args),
+    open: (args: { cwd: string; sessionFile?: string; name?: string; permission?: PermissionLevel }) => ipcRenderer.invoke("thread:open", args),
     loadHistory: (args: { cwd: string; sessionFile: string }) => ipcRenderer.invoke("thread:loadHistory", args),
     close: (threadId: string) => ipcRenderer.invoke("thread:close", threadId),
     delete: (file: string) => ipcRenderer.invoke("thread:delete", file),
@@ -125,7 +125,7 @@ const api = {
     getCommands: (threadId: string) => ipcRenderer.invoke("thread:getCommands", threadId),
     extuiResponse: (args: { threadId: string; id: string; payload: Record<string, unknown> }) =>
       ipcRenderer.invoke("thread:extuiResponse", args),
-    setPermission: (args: { threadId: string; permission: "sandbox" | "full" }) => ipcRenderer.invoke("thread:setPermission", args),
+    setPermission: (args: { threadId: string; permission: PermissionLevel }) => ipcRenderer.invoke("thread:setPermission", args),
   },
   settings: {
     getModels: () => ipcRenderer.invoke("settings:getModels"),

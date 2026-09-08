@@ -38,8 +38,12 @@ export interface ThreadSearchHit {
   matchCount: number;
 }
 
-/** Thread permission level. Sandbox auto-allows low-risk explicit operations and gates destructive, sensitive, external-code, subagent, and unclassified actions; full is unrestricted. */
-export type PermissionLevel = "sandbox" | "full";
+/** Thread permission level.
+ * - readonly: read-only operations run; every mutating operation is blocked outright.
+ * - strict: only read-only operations auto-run; everything else requires confirmation.
+ * - sandbox: low-risk explicit operations also auto-run (the historical default).
+ * - full: unrestricted. */
+export type PermissionLevel = "readonly" | "strict" | "sandbox" | "full";
 
 /** An installed pi package (from settings.json `packages`). */
 export interface PluginPackage {
@@ -290,6 +294,12 @@ export interface AppConfig {
   soundOnComplete?: boolean;
   /** Edit-tool result rendering: unified single-column diff or before/after blocks. */
   diffViewMode?: "unified" | "blocks";
+  /** Permission level applied to brand-new conversations; existing threads keep their own level. */
+  defaultPermission?: PermissionLevel;
+  /** Custom user avatar as a data URL; absent = built-in emoji. */
+  userAvatar?: string;
+  /** Custom agent avatar as a data URL; absent = app icon. */
+  agentAvatar?: string;
   remoteSignalingUrl: string;
   remoteSignalingEnabled: boolean;
   remoteStunUrls: string[];

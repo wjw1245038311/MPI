@@ -671,6 +671,8 @@ function MessageGroupInner({
   const openPreview = useStore((s) => s.openPreview);
   const cwd = useStore((s) => s.threads[threadId]?.cwd || "");
   const language = useStore((s) => s.config?.language || "en");
+  const userAvatar = useStore((s) => s.config?.userAvatar);
+  const agentAvatar = useStore((s) => s.config?.agentAvatar);
   const [branching, setBranching] = useState<"fork" | "clone" | null>(null);
   const artifacts = useMemo(
     () => (group.role === "assistant" ? collectFileArtifacts(group.items, toolRuns, cwd) : []),
@@ -818,9 +820,13 @@ function MessageGroupInner({
           </div>
         </div>
         <div className="msg-avatar" aria-label="用户">
-          <span className="msg-user-character" aria-hidden="true">
-            🧑
-          </span>
+          {userAvatar ? (
+            <img className="msg-avatar-img" src={userAvatar} alt="" />
+          ) : (
+            <span className="msg-user-character" aria-hidden="true">
+              🧑
+            </span>
+          )}
         </div>
       </div>
     );
@@ -854,7 +860,7 @@ function MessageGroupInner({
   return (
     <div className="msg assistant">
       <div className="msg-avatar" aria-label={language === "zh" ? "MPI 智能体" : "MPI Agent"}>
-        <img className="msg-app-icon" src={appIconUrl} alt="" />
+        <img className="msg-app-icon" src={agentAvatar || appIconUrl} alt="" />
       </div>
       <div className="msg-body">
         {renderAssistantBlocks(group.items, toolRuns, language)}

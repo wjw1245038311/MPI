@@ -28,7 +28,9 @@ export function ExtUiPromptCard({ threadId }: { threadId: string }) {
   const titleParts = String(request.title || fallbackTitle).split(/\r?\n/);
   const title = titleParts.shift() || fallbackTitle;
   const detail = [...titleParts, request.message || ""].filter(Boolean).join("\n");
-  const isSandbox = /sandbox|沙盒/i.test(title);
+  // Permission-gate prompts (all modes) lead with a stable prefix; older builds
+  // used the sandbox wording. Keep in sync with isSandboxApprovalRequest.
+  const isSandbox = /^(?:权限确认|Permission\s+required|沙盒\s*请求授权|Sandbox\s+authorization|请求授权)\s*[:：]|sandbox|沙盒/i.test(title);
 
   return (
     <div className={`extui-card ${request.method} ${isSandbox ? "sandbox-card" : ""}`} role="alertdialog" aria-labelledby={`extui-title-${request.id}`}>

@@ -718,6 +718,14 @@ function emptyThread(cwd: string): ThreadState {
   };
 }
 
+/** Permission level for brand-new conversations, from General Settings. */
+function defaultPermission(): PermissionLevel {
+  const configured = useStore.getState().config?.defaultPermission;
+  return configured === "readonly" || configured === "strict" || configured === "sandbox" || configured === "full"
+    ? configured
+    : "sandbox";
+}
+
 function threadFromResponse(res: any, fallback: ThreadState, pendingEditorText?: string): ThreadState {
   const { views, toolRuns } = historyToView(res.messages || [], res.branchMessages || []);
   return {
@@ -733,7 +741,7 @@ function threadFromResponse(res: any, fallback: ThreadState, pendingEditorText?:
     isStreaming: !!res.isStreaming,
     messages: views,
     toolRuns,
-    permission: res.permission || fallback.permission || "sandbox",
+    permission: res.permission || fallback.permission || defaultPermission(),
     pendingEditorText,
   };
 }
@@ -1677,7 +1685,7 @@ export const useStore = create<PiStore>()((set, get) => {
           isStreaming: !!hist.isStreaming,
           messages: views,
           toolRuns,
-          permission: hist.permission || permission || "sandbox",
+          permission: hist.permission || permission || defaultPermission(),
         };
         set((s) => ({
           threads: { ...s.threads, [sessionFile]: thread },
@@ -1706,7 +1714,7 @@ export const useStore = create<PiStore>()((set, get) => {
     // background (adopting the warm spare). No blocking "starting pi" spinner.
     // The temp id is remapped to the real session file once connected.
     const tempId = `opening-${uid()}`;
-    const placeholder: ThreadState = { ...emptyThread(cwd), loading: false, connected: false, permission: permission || "sandbox" };
+    const placeholder: ThreadState = { ...emptyThread(cwd), loading: false, connected: false, permission: permission || defaultPermission() };
     placeholder.isNewSession = true;
     set((s) => ({
       threads: { ...s.threads, [tempId]: placeholder },
@@ -2195,7 +2203,7 @@ export const useStore = create<PiStore>()((set, get) => {
         commands: res.commands || [],
         messages: views,
         toolRuns,
-        permission: res.permission || get().threads[id]?.permission || "sandbox",
+        permission: res.permission || get().threads[id]?.permission || defaultPermission(),
       };
       set((s) => {
         const threads: Record<string, ThreadState> = { ...s.threads, [newId]: thread };
@@ -2608,9 +2616,22 @@ export const useStore = create<PiStore>()((set, get) => {
       // file, so the pi process and session keep running uninterrupted.
       await window.pi.thread.setPermission({ threadId, permission: level });
       const zh = get().config?.language === "zh";
-      get().pushToast("info", level === "sandbox"
-        ? zh ? "已切换到沙盒（低风险明确操作自动执行，危险、敏感、外部脚本及无法确认的操作需确认）。" : "Switched to sandbox. Low-risk explicit operations run automatically; destructive, sensitive, external-code, and uncertain actions require confirmation."
-        : zh ? "已切换到完全权限。" : "Switched to full access.");
+      const permToast: Record<PermissionLevel, [string, string]> = {
+        sandbox: [
+          "已切换到沙盒（低风险明确操作自动执行，危险、敏感、外部脚本及无法确认的操作需确认）。",
+          "Switched to sandbox. Low-risk explicit operations run automatically; destructive, sensitive, external-code, and uncertain actions require confirmation.",
+        ],
+        strict: [
+          "已切换到严格模式（仅只读操作自动执行，所有写入/删除及修改类命令均需确认）。",
+          "Switched to strict mode. Only read-only operations run automatically; every write, deletion, or mutating command requires confirmation.",
+        ],
+        readonly: [
+          "已切换到只读模式（只读操作可执行，任何修改操作将被直接阻止）。",
+          "Switched to read-only mode. Read-only operations run; any mutating operation is blocked outright.",
+        ],
+        full: ["已切换到完全权限。", "Switched to full access."],
+      };
+      get().pushToast("info", zh ? permToast[level][0] : permToast[level][1]);
     } catch (e: any) {
       get().pushToast("error", "切换权限失败：" + (e?.message || e));
     }

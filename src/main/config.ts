@@ -29,6 +29,18 @@ export const ACCENT_THEMES = [
 ] as const;
 export type AccentTheme = (typeof ACCENT_THEMES)[number];
 
+/**
+ * Thread permission levels, from most to least restrictive:
+ * - readonly: read-only operations run; every mutating operation is blocked outright.
+ * - strict:   only read-only operations run automatically; everything else (including
+ *             write/edit tools and low-risk project-local mutations) requires confirmation.
+ * - sandbox:  read-only + verifiable low-risk project-local operations run automatically;
+ *             medium/high risk require confirmation. The historical default.
+ * - full:     no gating at all (pi's unrestricted mode).
+ */
+export const PERMISSION_LEVELS = ["readonly", "strict", "sandbox", "full"] as const;
+export type PermissionLevel = (typeof PERMISSION_LEVELS)[number];
+
 export interface AppConfig {
   /**
    * Path to pi's cli.js, or empty string to auto-detect via `npm root -g`.
@@ -61,8 +73,14 @@ export interface AppConfig {
   /** How edit-tool results render in the transcript: unified single-column
    * diff (default) or before/after blocks. */
   diffViewMode: "unified" | "blocks";
-  /** Per-thread permission level, keyed by session file path. Defaults to "sandbox" when absent. */
-  threadPermissions: Record<string, "sandbox" | "full">;
+  /** Permission level applied to brand-new conversations; existing threads keep their own level. */
+  defaultPermission: PermissionLevel;
+  /** Per-thread permission level, keyed by session file path. Defaults to defaultPermission when absent. */
+  threadPermissions: Record<string, PermissionLevel>;
+  /** Custom user avatar as a data URL (downscaled in the renderer); absent = built-in emoji. */
+  userAvatar?: string;
+  /** Custom agent avatar as a data URL; absent = app icon. */
+  agentAvatar?: string;
   /** cwd of the most recently opened thread; seeds the warm spare's project. */
   lastThreadCwd?: string;
   /** User-defined scheduled automation tasks. */
@@ -124,6 +142,7 @@ const DEFAULTS: AppConfig = {
   language: "en",
   soundOnComplete: true,
   diffViewMode: "unified",
+  defaultPermission: "sandbox",
   threadPermissions: {},
   automationTasks: [],
   remoteSignalingUrl: DEFAULT_REMOTE_SIGNALING_URL,
@@ -161,6 +180,10 @@ export function loadConfig(userDataDir: string): AppConfig {
           ? parsed.remoteSignalingEnabled
           : DEFAULTS.remoteSignalingEnabled,
         diffViewMode: parsed.diffViewMode === "blocks" ? "blocks" : DEFAULTS.diffViewMode,
+        defaultPermission:
+          typeof parsed.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(parsed.defaultPermission)
+            ? (parsed.defaultPermission as PermissionLevel)
+            : DEFAULTS.defaultPermission,
         accentTheme:
           typeof parsed.accentTheme === "string" &&
           (ACCENT_THEMES as readonly string[]).includes(parsed.accentTheme)

@@ -3,7 +3,7 @@ import { draftKeyFor, useStore } from "../store";
 import { modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { useOutsideClose } from "../lib/useOutsideClose";
-import type { ComposerDraft, HtmlElementReference, ModelInfo, PendingFile, PendingImage } from "../lib/types";
+import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage } from "../lib/types";
 import { Plus, Paperclip, ImageIcon, Send, Stop, Smile, At, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress } from "./icons";
 
 let _pid = 0;
@@ -700,39 +700,68 @@ export function Composer({ threadId }: { threadId: string }) {
               <Plus size={17} />
             </button>
             <div className="pill perm-pill composer-optional-action" ref={permRef}>
-              <button
-                className={`pill-btn perm-btn ${permission === "full" ? "perm-full" : ""}`}
-                title={language === "zh"
-                  ? "权限级别：沙盒自动放行可判断为低风险的明确操作，删除项目、敏感路径、外部脚本及无法确认的操作需用户确认；完全权限为 pi 默认无限制模式"
-                  : "Permission level: sandbox auto-allows verifiable low-risk explicit operations and asks before project deletion, sensitive paths, external scripts, or uncertain actions; full access uses Pi's unrestricted mode"}
-                onClick={() => setPermOpen((v) => !v)}
-              >
-                <Shield size={13} /> {permission === "full" ? (language === "zh" ? "完全权限" : "Full access") : language === "zh" ? "沙盒" : "Sandbox"} ▾
-              </button>
-              {permOpen && (
-                <div className="pill-pop perm-pop">
-                  <button
-                    className={`opt ${permission !== "full" ? "active" : ""}`}
-                    onClick={() => {
-                      setPermOpen(false);
-                      setPermission(threadId, "sandbox");
-                    }}
-                >
-                    <span className="o1">{language === "zh" ? "沙盒" : "Sandbox"}</span>
-                    <span className="o2">{language === "zh" ? "低风险明确操作自动执行，危险操作执行前需确认（默认）" : "Auto-run low-risk explicit operations; confirm dangerous actions (default)"}</span>
-                  </button>
-                  <button
-                    className={`opt ${permission === "full" ? "active" : ""}`}
-                    onClick={() => {
-                      setPermOpen(false);
-                      setPermission(threadId, "full");
-                    }}
-                  >
-                    <span className="o1">完全权限</span>
-                    <span className="o2">pi 默认，不拦截任何操作</span>
-                  </button>
-                </div>
-              )}
+              {(() => {
+                const perm = permission || "sandbox";
+                const zh = language === "zh";
+                const options: { level: PermissionLevel; name: string; desc: string }[] = [
+                  {
+                    level: "readonly",
+                    name: zh ? "只读" : "Read-only",
+                    desc: zh
+                      ? "只读操作可执行，任何修改直接阻止（纯问答/分析）"
+                      : "Read-only operations run; any mutation is blocked (pure Q&A / analysis)",
+                  },
+                  {
+                    level: "strict",
+                    name: zh ? "严格" : "Strict",
+                    desc: zh
+                      ? "仅只读自动执行，所有写入/删除及修改类命令均需确认"
+                      : "Only read-only auto-runs; every write, deletion, or mutating command confirms",
+                  },
+                  {
+                    level: "sandbox",
+                    name: zh ? "沙盒" : "Sandbox",
+                    desc: zh
+                      ? "低风险明确操作自动执行，危险操作执行前需确认（默认）"
+                      : "Auto-run low-risk explicit operations; confirm dangerous actions (default)",
+                  },
+                  {
+                    level: "full",
+                    name: zh ? "完全权限" : "Full access",
+                    desc: zh ? "pi 默认，不拦截任何操作" : "Pi default, nothing is intercepted",
+                  },
+                ];
+                return (
+                  <>
+                    <button
+                      className={`pill-btn perm-btn ${perm === "full" ? "perm-full" : ""}`}
+                      title={zh
+                        ? "权限级别：只读=修改直接阻止；严格=仅只读自动执行；沙盒=低风险明确操作自动执行、危险操作需确认；完全权限=不拦截"
+                        : "Permission level: read-only blocks mutations; strict auto-runs only read-only; sandbox auto-runs low-risk explicit operations and confirms dangerous ones; full access intercepts nothing"}
+                      onClick={() => setPermOpen((v) => !v)}
+                    >
+                      <Shield size={13} /> {options.find((o) => o.level === perm)?.name || (zh ? "沙盒" : "Sandbox")} ▾
+                    </button>
+                    {permOpen && (
+                      <div className="pill-pop perm-pop">
+                        {options.map((option) => (
+                          <button
+                            key={option.level}
+                            className={`opt ${perm === option.level ? "active" : ""}`}
+                            onClick={() => {
+                              setPermOpen(false);
+                              setPermission(threadId, option.level);
+                            }}
+                          >
+                            <span className="o1">{option.name}</span>
+                            <span className="o2">{option.desc}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
             <div className="pill composer-optional-action" ref={cmdRef}>
               <button className="pill-btn" title={language === "zh" ? "斜杠命令 / 技能" : "Slash commands / skills"} onClick={toggleCommands}>

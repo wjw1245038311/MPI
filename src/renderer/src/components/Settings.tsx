@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useStore } from "../store";
-import type { ApiType, Diagnostics, ModelDef, ModelsFile, ProviderDef, ThinkingDefaults } from "../lib/types";
+import type { ApiType, Diagnostics, ModelDef, ModelsFile, PermissionLevel, ProviderDef, ThinkingDefaults } from "../lib/types";
 import { cleanOutput, hasLibuvAssertion, lastLine, stripAnsi } from "../lib/update";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { translateUiText } from "../lib/i18n";
@@ -697,6 +697,42 @@ function overallUpdatePct(stage: string, pct?: number): number | null {
   return Math.min(100, Math.round(span[0] + ((span[1] - span[0]) * pct) / 100));
 }
 
+/** Downscale an uploaded avatar to a small data URL so config.json stays tiny. */
+async function downscaleImageFile(file: File, maxSize = 192): Promise<string> {
+  const rawUrl = await new Promise<string>((resolveUrl, rejectUrl) => {
+    const reader = new FileReader();
+    reader.onload = () => resolveUrl(String(reader.result));
+    reader.onerror = () => rejectUrl(new Error("read failed"));
+    reader.readAsDataURL(file);
+  });
+  const image = await new Promise<HTMLImageElement>((resolveImg, rejectImg) => {
+    const el = new Image();
+    el.onload = () => resolveImg(el);
+    el.onerror = () => rejectImg(new Error("decode failed"));
+    el.src = rawUrl;
+  });
+  const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("canvas unavailable");
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, 0, 0, width, height);
+  let dataUrl = canvas.toDataURL("image/png");
+  // Photos can bloat as PNG; fall back to JPEG when the downscaled result is large.
+  if (dataUrl.length > 400_000) {
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+  }
+  return dataUrl;
+}
+
 export function Settings() {
   const open = useStore((s) => s.settingsOpen);
   const close = useStore((s) => s.closeSettings);
@@ -1137,6 +1173,38 @@ export function Settings() {
     }
   };
 
+  const changeDefaultPermission = async (defaultPermission: PermissionLevel) => {
+    const next = await window.pi.app.setConfig({ defaultPermission });
+    useStore.setState({ config: next });
+  };
+
+  // ---- custom avatars (user + agent), stored as downscaled data URLs -------
+  const userAvatarInputRef = useRef<HTMLInputElement>(null);
+  const agentAvatarInputRef = useRef<HTMLInputElement>(null);
+
+  const onAvatarPicked = async (event: ChangeEvent<HTMLInputElement>, kind: "user" | "agent") => {
+    const file = event.target.files?.[0];
+    event.target.value = ""; // allow re-selecting the same file
+    if (!file) return;
+    try {
+      const dataUrl = await downscaleImageFile(file);
+      const next = await window.pi.app.setConfig(kind === "user" ? { userAvatar: dataUrl } : { agentAvatar: dataUrl });
+      useStore.setState({ config: next });
+    } catch (e: any) {
+      pushToast(
+        "error",
+        language === "zh"
+          ? `头像设置失败（${e?.message || e}），请换一张图片重试`
+          : `Avatar update failed (${e?.message || e}); try another image`,
+      );
+    }
+  };
+
+  const resetAvatar = async (kind: "user" | "agent") => {
+    const next = await window.pi.app.setConfig(kind === "user" ? { userAvatar: undefined } : { agentAvatar: undefined });
+    useStore.setState({ config: next });
+  };
+
   const openFile = async (abs: string) => {
     const r = await window.pi.settings.openPath(abs);
     if (r && r.ok === false) pushToast("error", "打开失败：" + (r.error || ""));
@@ -1348,6 +1416,70 @@ export function Settings() {
                       </option>
                     ))}
                   </select>
+                </Field>
+                <Field
+                  label={language === "zh" ? "新建对话默认权限" : "New conversation permission"}
+                  hint={
+                    language === "zh"
+                      ? "仅影响之后新建的对话；已有会话保留各自设置，可随时在输入框左侧的权限菜单中切换。只读=修改直接阻止；严格=仅只读自动执行；沙盒=低风险明确操作自动执行、危险操作需确认；完全权限=不拦截。"
+                      : "Applies to conversations created from now on; existing threads keep their own level and can be switched anytime from the permission menu in the composer. Read-only blocks mutations; strict auto-runs only read-only; sandbox auto-runs low-risk explicit operations; full intercepts nothing."
+                  }
+                >
+                  <select
+                    className="set-select"
+                    value={config?.defaultPermission || "sandbox"}
+                    onChange={(e) => changeDefaultPermission(e.target.value as PermissionLevel)}
+                  >
+                    <option value="readonly">{language === "zh" ? "只读（修改直接阻止）" : "Read-only (mutations blocked)"}</option>
+                    <option value="strict">{language === "zh" ? "严格（仅只读自动执行）" : "Strict (read-only auto-runs)"}</option>
+                    <option value="sandbox">{language === "zh" ? "沙盒（低风险操作自动执行，默认）" : "Sandbox (low-risk auto-runs, default)"}</option>
+                    <option value="full">{language === "zh" ? "完全权限" : "Full access"}</option>
+                  </select>
+                </Field>
+                <Field
+                  label={language === "zh" ? "头像" : "Avatars"}
+                  hint={
+                    language === "zh"
+                      ? "聊天消息左侧的头像。上传的图片会自动压缩后保存；恢复默认使用内置图标。"
+                      : "Avatars shown beside chat messages. Uploaded images are downscaled before saving; reset restores the built-in icons."
+                  }
+                >
+                  <div className="avatar-row">
+                    <input ref={userAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "user")} />
+                    <input ref={agentAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "agent")} />
+                    <div className="avatar-slot">
+                      <span className="avatar-preview">
+                        {config?.userAvatar ? <img src={config.userAvatar} alt="" /> : <span aria-hidden="true">🧑</span>}
+                      </span>
+                      <div className="avatar-slot-actions">
+                        <button type="button" className="set-btn" onClick={() => userAvatarInputRef.current?.click()}>
+                          {language === "zh" ? "更换" : "Change"}
+                        </button>
+                        {config?.userAvatar && (
+                          <button type="button" className="set-btn ghost" onClick={() => void resetAvatar("user")}>
+                            {language === "zh" ? "恢复默认" : "Reset"}
+                          </button>
+                        )}
+                      </div>
+                      <span className="avatar-slot-label">{language === "zh" ? "用户" : "User"}</span>
+                    </div>
+                    <div className="avatar-slot">
+                      <span className="avatar-preview">
+                        {config?.agentAvatar ? <img src={config.agentAvatar} alt="" /> : <img src={appIconUrl} alt="" />}
+                      </span>
+                      <div className="avatar-slot-actions">
+                        <button type="button" className="set-btn" onClick={() => agentAvatarInputRef.current?.click()}>
+                          {language === "zh" ? "更换" : "Change"}
+                        </button>
+                        {config?.agentAvatar && (
+                          <button type="button" className="set-btn ghost" onClick={() => void resetAvatar("agent")}>
+                            {language === "zh" ? "恢复默认" : "Reset"}
+                          </button>
+                        )}
+                      </div>
+                      <span className="avatar-slot-label">{language === "zh" ? "MPI 智能体" : "MPI Agent"}</span>
+                    </div>
+                  </div>
                 </Field>
               </div>
             )}

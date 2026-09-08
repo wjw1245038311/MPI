@@ -6,6 +6,10 @@ type ShellDecision = {
   risk: RiskLevel;
   reason: string;
   reasonZh?: string;
+  /** True when an auto-allowed decision still mutates state (single project-local
+   * deletion, safe package task, in-project file write). Strict mode gates these.
+   * Read-only allows never set it. */
+  writes?: boolean;
   exactKey?: string;
   prefixKey?: string;
 };
@@ -416,6 +420,10 @@ function projectScriptDecision(segment: string, cwd: string): ShellDecision | nu
   if (!words?.length) return null;
   const name = commandName(words[0]);
 
+  // Scripts and package tasks can write files even when classified low-risk,
+  // so they carry the writes flag for strict mode.
+  const scriptAllow = (): ShellDecision => ({ risk: "allow", reason: "", writes: true, exactKey: cacheKey(segment) });
+
   if (name === "npm" || name === "pnpm" || name === "yarn") {
     const taskIndex = words[1]?.toLowerCase() === "run" ? 2 : 1;
     const task = words[taskIndex] || "";
@@ -427,8 +435,8 @@ function projectScriptDecision(segment: string, cwd: string): ShellDecision | nu
         reasonZh: "该包任务名称疑似清理、部署、安装或其他状态变更操作。",
       };
     }
-    if (words[1]?.toLowerCase() === "run" && SAFE_PROJECT_NPM_TASK.test(task)) return { risk: "allow", reason: "" };
-    if (/^(?:build|check|compile|dev|format|generate|lint|preview|test|typecheck|validate)$/i.test(task)) return { risk: "allow", reason: "" };
+    if (words[1]?.toLowerCase() === "run" && SAFE_PROJECT_NPM_TASK.test(task)) return scriptAllow();
+    if (/^(?:build|check|compile|dev|format|generate|lint|preview|test|typecheck|validate)$/i.test(task)) return scriptAllow();
     return null;
   }
 
@@ -464,7 +472,7 @@ function projectScriptDecision(segment: string, cwd: string): ShellDecision | nu
       reasonZh: "脚本名称疑似破坏性或会修改外部状态的操作。",
     };
   }
-  return { risk: "allow", reason: "" };
+  return scriptAllow();
 }
 
 function projectMutationDecision(segment: string, cwd: string): ShellDecision | null {
@@ -485,7 +493,7 @@ function projectMutationDecision(segment: string, cwd: string): ShellDecision | 
       reasonZh: "该命令将写入无法可靠确认的路径。",
     };
   }
-  return { risk: "allow", reason: "" };
+  return { risk: "allow", reason: "", writes: true, exactKey: cacheKey(segment) };
 }
 
 function resolvesToProjectRoot(path: string, cwd: string): boolean {
@@ -530,7 +538,7 @@ function deletionDecision(segment: string, cwd: string): ShellDecision | null {
       reasonZh: "删除目标位于敏感位置、项目外，或无法可靠确认。",
     };
   }
-  return { risk: "allow", reason: "A single, project-local deletion was classified as low risk." };
+  return { risk: "allow", reason: "A single, project-local deletion was classified as low risk.", writes: true, exactKey: cacheKey(segment) };
 }
 
 function lowRiskSegmentDecision(segment: string, cwd: string): ShellDecision | null {
@@ -541,7 +549,10 @@ function lowRiskSegmentDecision(segment: string, cwd: string): ShellDecision | n
   const decisions = [script, mutation].filter((decision): decision is ShellDecision => Boolean(decision));
   if (decisions.some((decision) => decision.risk === "always")) return decisions.find((decision) => decision.risk === "always")!;
   if (decisions.some((decision) => decision.risk === "approval")) return decisions.find((decision) => decision.risk === "approval")!;
-  if (decisions.length) return { risk: "allow", reason: "" };
+  if (decisions.length) {
+    const writes = decisions.some((decision) => decision.writes);
+    return { risk: "allow", reason: "", ...(writes ? { writes: true, exactKey: cacheKey(segment) } : {}) };
+  }
   if (isReadOnlySegment(segment)) return { risk: "allow", reason: "" };
   if (SAFE_NON_MUTATING_SEGMENT.test(maskQuotedLiterals(segment))) return { risk: "allow", reason: "" };
   return null;
@@ -636,7 +647,8 @@ export function classifyShellCommand(command: string, cwd = process.cwd()): Shel
     if (always) return { ...always, exactKey };
     const approval = lowRisk.find((decision) => decision?.risk === "approval");
     if (approval) return { ...approval, exactKey, prefixKey: suggestedPrefix(command, parsed) };
-    return { risk: "allow", reason: "" };
+    const writes = lowRisk.some((decision) => decision.writes);
+    return { risk: "allow", reason: "", ...(writes ? { writes: true, exactKey } : {}) };
   }
   if (parsed.hasRedirection || FILE_MUTATION.test(riskText)) {
     return {
@@ -690,20 +702,26 @@ function redactInput(value: unknown): string {
   }
 }
 
+type GateMode = "full" | "sandbox" | "strict" | "readonly";
+
 export default function permissionGate(pi: any) {
   const modeFile = process.env.MPI_GATE_MODE_FILE || "";
   const approvedExact = new Set<string>();
   const approvedPrefixes = new Set<string>();
   const approvedTools = new Set<string>();
-  let previousFullMode = false;
+  let previousMode: GateMode = "sandbox";
 
-  const isFullMode = (): boolean => {
-    if (!modeFile) return false;
+  /** Read the thread's current gate mode from its per-thread mode file.
+   * Unknown/missing values fall back to sandbox (fail closed). */
+  const readMode = (): GateMode => {
+    if (!modeFile) return "sandbox";
     try {
-      return readFileSync(modeFile, "utf8").trim() === "full";
+      const value = readFileSync(modeFile, "utf8").trim();
+      if (value === "full" || value === "strict" || value === "readonly") return value;
     } catch {
-      return false;
+      /* unreadable -> sandbox */
     }
+    return "sandbox";
   };
 
   const language = (): "en" | "zh" => {
@@ -716,15 +734,18 @@ export default function permissionGate(pi: any) {
     }
   };
 
-  const gatingDisabled = () => {
-    const full = isFullMode();
-    if (full !== previousFullMode) {
+  // Approvals are per-thread memory. When the thread flips into or out of full
+  // access, drop them: grants made under gating should not survive an explicit
+  // switch to unrestricted (and back).
+  const currentMode = (): GateMode => {
+    const mode = readMode();
+    if ((mode === "full") !== (previousMode === "full")) {
       approvedExact.clear();
       approvedPrefixes.clear();
       approvedTools.clear();
-      previousFullMode = full;
     }
-    return full;
+    previousMode = mode;
+    return mode;
   };
 
   const blocked = (reason: string) => ({ block: true, reason });
@@ -760,9 +781,11 @@ export default function permissionGate(pi: any) {
       ...(options.cacheable && allowTool ? [allowTool] : []),
       deny,
     ];
+    // Stable prefix matched by the main process (system notifications) and the
+    // renderer's approval card; keep in sync with isSandboxApprovalRequest.
     const heading = zh
-      ? `沙盒请求授权：${title}\n${reason}\n\n${detail}`
-      : `Sandbox authorization: ${title}\n${reason}\n\n${detail}`;
+      ? `权限确认：${title}\n${reason}\n\n${detail}`
+      : `Permission required: ${title}\n${reason}\n\n${detail}`;
     const choice = await ctx.ui.select(heading, choices);
     if (!choice || choice === deny) {
       return blocked(zh ? "用户未授权，沙盒已阻止执行" : "The user denied this operation; Sandbox blocked it");
@@ -784,38 +807,62 @@ export default function permissionGate(pi: any) {
   };
 
   pi.on("tool_call", async (event: any, ctx: any) => {
-    if (gatingDisabled()) return undefined;
+    const mode = currentMode();
+    if (mode === "full") return undefined;
+    const zh = language() === "zh";
 
     if (event.toolName === "bash") {
       const command = String(event.input?.command || "");
       const decision = classifyShellCommand(command, String(ctx.cwd || process.cwd()));
-      if (decision.risk === "allow" || (decision.risk === "approval" && hasShellApproval(decision))) return undefined;
-      return requestApproval(ctx, "Shell", language() === "zh" ? decision.reasonZh || decision.reason : decision.reason, command, {
+      // Read-only operations always pass. Low-risk project-local mutations
+      // (single-file deletion, safe package tasks, in-project writes) also pass
+      // under sandbox; strict mode gates them too unless the user already
+      // approved this exact operation for the thread; readonly blocks them.
+      if (decision.risk === "allow") {
+        if (!decision.writes) return undefined; // read-only always passes
+        if (mode === "sandbox" || (mode === "strict" && hasShellApproval(decision))) return undefined;
+      } else if (decision.risk === "approval" && hasShellApproval(decision)) {
+        return undefined;
+      }
+      if (mode === "readonly") {
+        const reason =
+          zh ? decision.reasonZh || decision.reason : decision.reason;
+        return blocked(
+          zh
+            ? `只读模式已阻止：${reason || "该操作可能修改本地状态"}。如用户需要执行修改操作，请提示其将权限切换到沙盒或更高。`
+            : `Read-only mode blocked this operation: ${reason || "it may mutate local state"}. If the user needs changes, ask them to switch permission to Sandbox or higher.`,
+        );
+      }
+      return requestApproval(ctx, "Shell", zh ? decision.reasonZh || decision.reason : decision.reason, command, {
         exactKey: decision.exactKey,
         prefixKey: decision.prefixKey,
-        cacheable: decision.risk === "approval",
+        cacheable: decision.risk !== "always",
       });
     }
 
     if (event.toolName === "write" || event.toolName === "edit") {
       const path = String(event.input?.path || "");
       const cwd = String(ctx.cwd || process.cwd());
+      // Sensitive/unverifiable writes are gated in every non-full mode; readonly
+      // blocks them outright instead of prompting.
+      const gateWrite = (reason: string, detail: string) =>
+        mode === "readonly"
+          ? blocked(
+              zh
+                ? `只读模式已阻止文件修改：${reason}。如用户需要修改文件，请提示其将权限切换到沙盒或更高。`
+                : `Read-only mode blocked this file change: ${reason}. If the user needs changes, ask them to switch permission to Sandbox or higher.`,
+            )
+          : requestApproval(ctx, event.toolName, reason, detail, { cacheable: false });
       if (!path) {
-        return requestApproval(
-          ctx,
-          event.toolName,
-          language() === "zh" ? "缺少明确文件路径，无法判断写入范围。" : "No explicit file path was provided, so the write scope cannot be verified.",
+        return gateWrite(
+          zh ? "缺少明确文件路径，无法判断写入范围。" : "No explicit file path was provided, so the write scope cannot be verified.",
           redactInput(event.input),
-          { cacheable: false },
         );
       }
       if (hasPathWildcard(path)) {
-        return requestApproval(
-          ctx,
-          event.toolName,
-          language() === "zh" ? "文件路径包含通配符，无法确认实际修改范围。" : "The file path contains a wildcard, so the actual write scope cannot be verified.",
+        return gateWrite(
+          zh ? "文件路径包含通配符，无法确认实际修改范围。" : "The file path contains a wildcard, so the actual write scope cannot be verified.",
           path,
-          { cacheable: false },
         );
       }
       let resolvedPath = path;
@@ -825,24 +872,38 @@ export default function permissionGate(pi: any) {
         /* fall back to the lexical path check */
       }
       if (isSensitivePath(path) || isSensitivePath(resolvedPath)) {
+        return gateWrite(
+          zh ? "将修改敏感文件或目录，必须由用户兜底确认。" : "This will modify a sensitive file or directory and requires fallback user confirmation.",
+          path,
+        );
+      }
+      // Strict mode gates every non-sensitive write/edit too; the tool-level
+      // grant ("allow this tool for this thread") keeps long refactors usable.
+      if (mode === "strict") {
+        if (approvedTools.has(event.toolName)) return undefined;
         return requestApproval(
           ctx,
           event.toolName,
-          language() === "zh" ? "将修改敏感文件或目录，必须由用户兜底确认。" : "This will modify a sensitive file or directory and requires fallback user confirmation.",
-          path,
-          { cacheable: false },
+          zh ? "严格模式：所有文件写入/编辑需确认。" : "Strict mode: every file write or edit requires confirmation.",
+          redactInput(event.input),
+          { toolKey: event.toolName, cacheable: true },
         );
       }
-      return undefined;
+      return undefined; // sandbox: non-sensitive writes run without prompting
     }
 
     const toolName = String(event.toolName || "");
     if (SAFE_TOOLS.has(toolName)) return undefined;
     if (SUBAGENT_TOOLS.has(toolName)) {
+      if (mode === "readonly") {
+        return blocked(
+          zh ? "只读模式已阻止子智能体：其内部操作无法逐项拦截。" : "Read-only mode blocks child agents: their internal operations cannot be intercepted per tool.",
+        );
+      }
       return requestApproval(
         ctx,
         toolName,
-        language() === "zh"
+        zh
           ? "子智能体进程目前无法获得逐工具沙盒拦截；允许即代表本次子智能体具有完整本机权限。"
           : "Child agents cannot currently receive per-tool Sandbox interception. Allowing this grants the child full local permissions for this run.",
         redactInput(event.input),
@@ -851,14 +912,17 @@ export default function permissionGate(pi: any) {
     }
     if (approvedTools.has(toolName)) return undefined;
     const mutating = MUTATING_TOOL_NAME.test(toolName);
+    if (mode === "readonly") {
+      return blocked(zh ? `只读模式已阻止扩展工具 ${toolName}。` : `Read-only mode blocked extension tool ${toolName}.`);
+    }
     return requestApproval(
       ctx,
       toolName || "Extension tool",
       mutating
-        ? language() === "zh"
+        ? zh
           ? "扩展工具名称表明它可能修改本地或外部状态。"
           : "The extension tool name indicates that it may mutate local or external state."
-        : language() === "zh"
+        : zh
           ? "该扩展工具没有声明可验证的只读风险级别。"
           : "This extension tool has no verifiable read-only risk declaration.",
       redactInput(event.input),

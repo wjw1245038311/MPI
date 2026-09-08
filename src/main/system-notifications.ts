@@ -22,19 +22,23 @@ export function truncateNotificationText(value: unknown, maxLength: number): str
   return `${text.slice(0, Math.max(1, maxLength - 1))}…`;
 }
 
-/** The permission gate identifies its actionable prompts through this stable title prefix. */
+/** The permission gate identifies its actionable prompts through this stable title prefix.
+ * Newer builds use the generic “权限确认 / Permission required” prefix for all gated
+ * modes; older sandbox prefixes are kept so in-flight requests still match. */
+const GATE_TITLE_PREFIX = /^(?:Permission\s+required|权限确认|Sandbox\s+authorization|Sandbox\s+请求授权|沙盒\s*请求授权|请求授权)\s*[:：]/i;
+
 export function isSandboxApprovalRequest(request: unknown): boolean {
   if (!request || typeof request !== "object") return false;
   const value = request as { method?: unknown; title?: unknown };
   if (value.method !== "select" || typeof value.title !== "string") return false;
-  return /^(?:Sandbox\s+authorization|Sandbox\s+请求授权|沙盒\s*请求授权|请求授权)\s*[:：]/i.test(value.title.trim());
+  return GATE_TITLE_PREFIX.test(value.title.trim());
 }
 
 /** Extract only the operation label; the full command remains inside MPI. */
 export function sandboxOperationFromTitle(title: unknown, language: NotificationLanguage = "en"): string {
   if (typeof title !== "string") return language === "zh" ? "命令行" : "Shell";
   const firstLine = title.split(/\r?\n/, 1)[0] || "";
-  const operation = firstLine.replace(/^(?:Sandbox\s+(?:authorization|请求授权)|沙盒\s*请求授权|请求授权)\s*[:：]\s*/i, "").trim();
+  const operation = firstLine.replace(GATE_TITLE_PREFIX, "").trim();
   return truncateNotificationText(operation || (language === "zh" ? "命令行" : "Shell"), 80);
 }
 
@@ -101,8 +105,8 @@ export function createSystemNotificationCenter(getWindow: WindowGetter): SystemN
         subtitle: label,
         body:
           language === "zh"
-            ? `沙盒正在等待确认（${label}）。点击此提醒返回 MPI。`
-            : `Sandbox is waiting for approval (${label}). Click to return to MPI.`,
+            ? `操作正在等待确认（${label}）。点击此提醒返回 MPI。`
+            : `A gated operation is waiting for approval (${label}). Click to return to MPI.`,
         persistent: true,
       });
     },

@@ -9,11 +9,13 @@ import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import {
   BUILT_IN_REMOTE_STUN_URLS,
   DEFAULT_REMOTE_SIGNALING_URL,
+  PERMISSION_LEVELS,
   getConfig,
   getConfigDir,
   reloadConfig,
   updateConfig,
   type AutomationTask,
+  type PermissionLevel,
 } from "./config";
 import { deleteDraft, getAllDrafts, setDraft as persistDraft } from "./draft-store";
 import type { ComposerDraft } from "../renderer/src/lib/types";
@@ -64,6 +66,7 @@ import {
   type RemoteFileArtifact,
   type RemoteMessage,
   type RemoteModelOption,
+  type RemotePermission,
   type RemoteProject,
   type RemoteSkill,
   type RemoteThreadEventPayload,
@@ -71,7 +74,7 @@ import {
   type RemoteThreadState,
 } from "./remote/protocol";
 
-type PermissionLevel = "sandbox" | "full";
+
 
 /**
  * Wires the renderer's window.pi.* calls to main-process services and to the
@@ -541,12 +544,14 @@ function activeBranchMessages(entriesRes: any): { entryId: string; role: "user" 
 
 /** Resolve the effective permission level for a thread open request. */
 function resolvePermission(sessionFile: string | undefined, requested: PermissionLevel | undefined): PermissionLevel {
-  if (requested === "sandbox" || requested === "full") return requested;
+  const valid = (value: unknown): value is PermissionLevel => typeof value === "string" && (PERMISSION_LEVELS as readonly string[]).includes(value);
+  if (valid(requested)) return requested;
   if (sessionFile) {
     const stored = getConfig().threadPermissions[sessionFile];
-    if (stored === "sandbox" || stored === "full") return stored;
+    if (valid(stored)) return stored;
   }
-  return "sandbox"; // default
+  // Brand-new conversations follow the user's configured default.
+  return valid(getConfig().defaultPermission) ? getConfig().defaultPermission : "sandbox";
 }
 
 /** Stop every local bridge. Bridges with an in-flight turn/compaction are
@@ -1123,10 +1128,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return hasMessages ? "idle" : "draft";
   }
 
+  // The remote wire protocol only carries the two original levels; map newer
+  // local modes down to the safe side so mixed-version pairs stay compatible.
+  const toRemotePermission = (level: PermissionLevel): RemotePermission => (level === "full" ? "full" : "sandbox");
+
   async function remoteSnapshot(threadId: string, options: { live?: boolean } = {}): Promise<RemoteThreadSnapshot> {
     const ref = await remoteThread(threadId);
     const configuredModels = configuredRemoteModelOptions();
-    const permission = ref.sessionFile ? resolvePermission(ref.sessionFile, ref.permission) : (ref.permission || "sandbox");
+    const permission = toRemotePermission(ref.sessionFile ? resolvePermission(ref.sessionFile, ref.permission) : (ref.permission || "sandbox"));
     let live = options.live && ref.localId ? bridges.get(ref.localId) : undefined;
     if (options.live && !live) {
       try {
@@ -1165,7 +1174,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         updatedAt: Date.now(),
         messageCount: messages.filter((message) => message.role === "user" || message.role === "assistant").length,
         state: remoteState(!!gathered.isStreaming, messages.length > 0),
-        permission: live.permission,
+        permission: toRemotePermission(live.permission),
         cwdName: basename(ref.cwd) || ref.cwd,
         model: gathered.model || null,
         availableModels: remoteModelOptions([...modelArray(gathered.models), ...configuredModels]),
@@ -1954,6 +1963,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   });
 
   ipcMain.handle("thread:setPermission", async (_e, args: { threadId: string; permission: PermissionLevel }) => {
+    if (typeof args?.permission !== "string" || !(PERMISSION_LEVELS as readonly string[]).includes(args.permission)) {
+      return { ok: false, error: "Invalid permission level" };
+    }
     const perms = getConfig().threadPermissions;
     updateConfig({ threadPermissions: { ...perms, [args.threadId]: args.permission } });
     // Flip the running thread's gate mode live; the pi process keeps running.
