@@ -280,6 +280,9 @@ const exact: Record<string, string> = {
   "未知错误": "Unknown error",
   "删除失败": "Deletion failed",
   "会话已永久删除，无法恢复。": "Session permanently deleted and cannot be recovered.",
+  "会话已移入回收站，可在设置「归档与回收站」中恢复或永久删除。": "Session moved to trash. Restore or permanently delete it from Settings → Archive & trash.",
+  "已从回收站永久删除，无法恢复。": "Permanently deleted from trash and cannot be recovered.",
+  "当前 dev 实例启动早于回收站功能，请完整重启 MPI 后再试。": "This dev instance predates the trash feature; fully restart MPI to use it.",
   "任务已开始执行…": "Task started…",
   "已切换到 sandbox（低风险明确操作自动执行，危险、敏感、外部脚本及无法确认的操作需确认）。": "Switched to sandbox. Low-risk explicit operations run automatically; destructive, sensitive, external-code, and uncertain actions require confirmation.",
   "已切换到完全权限。": "Switched to full access.",
@@ -338,7 +341,12 @@ const prefixes: Array<[string, string]> = [
   ["自动化任务失败：", "Automation task failed: "],
   ["MPI 更新失败：", "MPI update failed: "],
   ["启动安装程序失败：", "Failed to start the installer: "],
-  ["永久删除会话失败：", "Failed to permanently delete session: "],
+  ["删除会话失败：", "Failed to delete session: "],
+  ["读取回收站失败：", "Failed to read trash: "],
+  ["从回收站恢复会话失败：", "Failed to restore session from trash: "],
+  ["从回收站删除失败：", "Failed to delete from trash: "],
+  ["清空回收站失败：", "Failed to empty trash: "],
+  ["保存回收站设置失败：", "Failed to save trash setting: "],
   ["Pi 运行时包安装失败：", "Pi runtime package installation failed: "],
 ];
 
@@ -467,6 +475,7 @@ function translateToEnglish(value: string): string {
     .replace(/共\s*(\d+)\s*个任务/g, "$1 tasks")
     .replace(/(\d+)\s*个任务/g, "$1 tasks")
     .replace(/(\d+)\s*处匹配/g, "$1 matches")
+    .replace(/^回收站已清空，(\d+) 个会话被永久删除。$/, "Trash emptied; $1 sessions were permanently deleted.")
     .replace(/(\d+)\s*个会话/g, "$1 sessions")
     .replace(/(\d+)\s*条\s*·/g, "$1 messages ·")
     .replace(/(\d+)\s*条/g, "$1 messages")
@@ -505,6 +514,7 @@ function translateToChinese(value: string): string {
     .replace(/^(\d+) matches$/, "$1 处匹配")
     .replace(/^(\d+) threads$/, "$1 个会话")
     .replace(/^(\d+) messages$/, "$1 条消息")
+    .replace(/^Trash emptied; (\d+) sessions were permanently deleted\.$/, "回收站已清空，$1 个会话被永久删除。")
     .replace(/^(\d+) sessions$/, "$1 个会话")
     .replace(/^(\d+) attachments$/, "$1 个附件")
     .replace(/^(\d+) models$/, "$1 个模型")

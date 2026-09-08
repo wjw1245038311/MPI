@@ -19,6 +19,7 @@ import type {
   ThreadState,
   Toast,
   ToolRun,
+  TrashEntry,
   ViewAttachment,
   ViewMessage,
 } from "./lib/types";
@@ -1107,6 +1108,13 @@ interface PiStore {
   archiveThread: (cwd: string, file: string, title?: string) => Promise<void>;
   deleteThread: (cwd: string, file: string, title?: string) => Promise<void>;
   restoreThread: (file: string) => Promise<void>;
+
+  // Session trash (recycle bin): deleted sessions land here until purged.
+  trashEntries: TrashEntry[];
+  loadTrash: () => Promise<void>;
+  restoreFromTrash: (id: string) => Promise<void>;
+  purgeFromTrash: (id: string) => Promise<void>;
+  emptyTrash: () => Promise<void>;
   toggleProject: (cwd: string) => void;
   setActiveProject: (cwd: string) => void;
 
@@ -1391,6 +1399,7 @@ export const useStore = create<PiStore>()((set, get) => {
   toasts: [],
   extuiQueue: [],
   settingsOpen: false,
+  trashEntries: [],
 
   bootstrap: async () => {
     // These calls are deliberately independent. Project discovery can be slow
@@ -1612,10 +1621,10 @@ export const useStore = create<PiStore>()((set, get) => {
       get().pushToast("error", "归档失败：" + (e?.message || e));
     }
   },
-  deleteThread: async (_cwd, file, _title) => {
+  deleteThread: async (cwd, file, title) => {
     try {
       if (!file || file.startsWith("opening-") || file.startsWith("boot:")) return;
-      const result = await window.pi.thread.delete(file);
+      const result = await window.pi.thread.delete({ file, title, cwd });
       if (result?.config) set({ config: result.config });
 
       // The main process stops the bridge before removing the JSONL. Remove
@@ -1625,15 +1634,66 @@ export const useStore = create<PiStore>()((set, get) => {
         .filter(([id, thread]) => normalizeThreadFile(thread.sessionFile || id) === target)
         .map(([id]) => id);
       for (const id of ids) {
-        // The session file is gone; drop its persisted draft too.
+        // The session file is gone from the store; drop its persisted draft too.
         const key = draftKeyFor(get().threads[id], id);
         if (key?.startsWith("s:")) get().clearDraft(key);
         await get().closeThread(id);
       }
       await get().refreshProjects();
-      get().pushToast("success", "会话已永久删除，无法恢复。");
+      // The main process decides based on the same config; trust its answer.
+      get().pushToast(
+        "success",
+        result?.trashed
+          ? "会话已移入回收站，可在设置「归档与回收站」中恢复或永久删除。"
+          : "会话已永久删除，无法恢复。",
+      );
     } catch (e: any) {
-      get().pushToast("error", "永久删除会话失败：" + (e?.message || e));
+      get().pushToast("error", "删除会话失败：" + (e?.message || e));
+    }
+  },
+
+  loadTrash: async () => {
+    try {
+      // Dev instances booted before this feature ship an old preload without
+      // pi.trash; fail loudly instead of a cryptic TypeError toast.
+      if (typeof window.pi.trash?.list !== "function") {
+        get().pushToast("warning", "当前 dev 实例启动早于回收站功能，请完整重启 MPI 后再试。");
+        return;
+      }
+      const entries = await window.pi.trash.list();
+      set({ trashEntries: Array.isArray(entries) ? entries : [] });
+    } catch (e: any) {
+      get().pushToast("error", "读取回收站失败：" + (e?.message || e));
+    }
+  },
+
+  restoreFromTrash: async (id) => {
+    try {
+      await window.pi.trash.restore(id);
+      await Promise.all([get().loadTrash(), get().refreshProjects()]);
+      get().pushToast("success", "会话已恢复到侧栏。");
+    } catch (e: any) {
+      get().pushToast("error", "从回收站恢复会话失败：" + (e?.message || e));
+    }
+  },
+
+  purgeFromTrash: async (id) => {
+    try {
+      await window.pi.trash.purge(id);
+      await get().loadTrash();
+      get().pushToast("success", "已从回收站永久删除，无法恢复。");
+    } catch (e: any) {
+      get().pushToast("error", "从回收站删除失败：" + (e?.message || e));
+    }
+  },
+
+  emptyTrash: async () => {
+    try {
+      const result = await window.pi.trash.empty();
+      await get().loadTrash();
+      get().pushToast("success", `回收站已清空，${result?.count ?? 0} 个会话被永久删除。`);
+    } catch (e: any) {
+      get().pushToast("error", "清空回收站失败：" + (e?.message || e));
     }
   },
   restoreThread: async (file) => {

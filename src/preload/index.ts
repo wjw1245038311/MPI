@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import type { ComposerDraft, PermissionLevel, SkillHubSkill } from "../renderer/src/lib/types";
+import type { ComposerDraft, PermissionLevel, SkillHubSkill, TrashEntry } from "../renderer/src/lib/types";
 
 /**
  * The renderer talks to the main process exclusively through this surface.
@@ -104,7 +104,7 @@ const api = {
     open: (args: { cwd: string; sessionFile?: string; name?: string; permission?: PermissionLevel }) => ipcRenderer.invoke("thread:open", args),
     loadHistory: (args: { cwd: string; sessionFile: string }) => ipcRenderer.invoke("thread:loadHistory", args),
     close: (threadId: string) => ipcRenderer.invoke("thread:close", threadId),
-    delete: (file: string) => ipcRenderer.invoke("thread:delete", file),
+    delete: (args: { file: string; title?: string; cwd?: string }) => ipcRenderer.invoke("thread:delete", args),
     prompt: (args: { threadId: string; text: string; images?: unknown[]; attachments?: { abs: string; name: string }[] }) =>
       ipcRenderer.invoke("thread:prompt", args),
     steer: (args: { threadId: string; text: string; images?: unknown[]; attachments?: { abs: string; name: string }[] }) =>
@@ -130,6 +130,12 @@ const api = {
     extuiResponse: (args: { threadId: string; id: string; payload: Record<string, unknown> }) =>
       ipcRenderer.invoke("thread:extuiResponse", args),
     setPermission: (args: { threadId: string; permission: PermissionLevel }) => ipcRenderer.invoke("thread:setPermission", args),
+  },
+  trash: {
+    list: (): Promise<TrashEntry[]> => ipcRenderer.invoke("trash:list"),
+    restore: (id: string) => ipcRenderer.invoke("trash:restore", id),
+    purge: (id: string) => ipcRenderer.invoke("trash:purge", id),
+    empty: () => ipcRenderer.invoke("trash:empty"),
   },
   settings: {
     getModels: () => ipcRenderer.invoke("settings:getModels"),

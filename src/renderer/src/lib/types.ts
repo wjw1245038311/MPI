@@ -198,6 +198,16 @@ export interface ComposerDraft {
   htmlReferences?: HtmlElementReference[];
 }
 
+/** A session moved to the app trash (restorable until purged). */
+export interface TrashEntry {
+  id: string;
+  originalFile: string;
+  title: string;
+  cwd: string;
+  deletedAt: number;
+  sizeBytes: number;
+}
+
 export interface ThreadState {
   cwd: string;
   sessionFile: string | null;
@@ -283,6 +293,9 @@ export interface AppConfig {
   pinnedThreads: string[];
   archivedProjects: string[];
   archivedThreads: ArchivedThread[];
+  /** Deleted sessions go to the app trash (restorable) instead of being unlinked
+   * immediately. Absent = enabled (safe default, see main/config.ts). */
+  trashEnabled?: boolean;
   windowBounds?: { x?: number; y?: number; width: number; height: number; maximized?: boolean };
   theme: "dark" | "light" | "system";
   /** Accent color preset applied on top of the theme (see data-accent CSS blocks). */

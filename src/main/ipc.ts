@@ -38,6 +38,7 @@ import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateM
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
 import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
+import { emptyTrash, listTrash, moveToTrash, purgeFromTrash, restoreFromTrash } from "./trash-store";
 import {
   getAdditionalSkillPaths,
   getSkillCommands,
@@ -2039,8 +2040,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return readSessionCompactions(requested);
   });
 
-  ipcMain.handle("thread:delete", async (_e, file: string) => {
-    const target = assertDeletableSessionFile(typeof file === "string" ? file : "");
+  ipcMain.handle(
+    "thread:delete",
+    async (_e, args: { file?: string; title?: string; cwd?: string } | string) => {
+      const meta = typeof args === "string" ? {} : (args || {});
+      const target = assertDeletableSessionFile(typeof meta.file === "string" ? meta.file : "");
 
     // Stop every local bridge that points at this session before unlinking it;
     // otherwise a live Pi process can recreate or continue writing the file.
@@ -2051,9 +2055,17 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
     if (warmHandle && sameSessionFile(warmHandle.getId(), target)) dropWarmBridge();
 
-    await unlinkSessionWithRetry(target);
-
     const current = getConfig();
+    // Trash enabled (default): the JSONL is moved to <userData>/trash and stays
+    // restorable. Disabled: historical behavior, unlink immediately.
+    let trashed = false;
+    if (current.trashEnabled !== false) {
+      await moveToTrash({ originalFile: target, title: meta.title, cwd: meta.cwd });
+      trashed = true;
+    } else {
+      await unlinkSessionWithRetry(target);
+    }
+
     const threadPermissions = Object.fromEntries(
       Object.entries(current.threadPermissions || {}).filter(([path]) => !sameSessionFile(path, target)),
     );
@@ -2071,8 +2083,24 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
     invalidateRemoteProjects();
     send("pi:projects-changed", { sessionFile: target });
-    return { ok: true, config };
+    return { ok: true, config, trashed };
   });
+
+  ipcMain.handle("trash:list", () => listTrash());
+
+  ipcMain.handle("trash:restore", (_e, id: string) => {
+    const entry = restoreFromTrash(typeof id === "string" ? id : "");
+    invalidateRemoteProjects();
+    send("pi:projects-changed", { sessionFile: entry.originalFile });
+    return { ok: true };
+  });
+
+  ipcMain.handle("trash:purge", (_e, id: string) => {
+    purgeFromTrash(typeof id === "string" ? id : "");
+    return { ok: true };
+  });
+
+  ipcMain.handle("trash:empty", () => ({ ok: true, count: emptyTrash() }));
 
   ipcMain.handle("thread:close", (_e, threadId: string) => {
     const h = bridges.get(threadId);

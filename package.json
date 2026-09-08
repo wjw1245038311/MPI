@@ -26,6 +26,7 @@
     "test:toolargs": "node --experimental-strip-types scripts/test-tool-args.mjs",
     "test:permission": "node scripts/test-permission-gate.mjs",
     "test:pinnedorder": "node --experimental-strip-types scripts/test-pinned-order.mjs",
+    "test:trash": "node --experimental-strip-types scripts/test-trash.mjs",
     "test:html-reference": "node --experimental-strip-types scripts/test-html-reference.mjs",
     "bundle": "node scripts/bundle-runtime.mjs",
     "finalize-runtime": "node scripts/finalize-runtime.mjs",

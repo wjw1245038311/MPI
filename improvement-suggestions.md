@@ -54,6 +54,10 @@
 ### P1-7 会话跨项目拖拽移动（待办，用户拍板「后面考虑做」2026-09-08）
 现状：置顶区排序/区内拖拽已支持（v0.4.18 Unreleased），但会话只能在本项目内移动。设计要点（实现时参考）：① 交互 = 把会话拖到另一个项目的行上 → 确认框（提示「移入后该会话的新消息将在目标文件夹执行」）→ 主进程原子完成；正在 streaming 的会话禁止移动。② 数据层 = 改写 .jsonl 首行 header 的 `cwd` + 把文件挪到 `~/.pi/agent/sessions/<目标项目目录名>/`（MPI 按 header cwd 分组，pi 终端侧列表会跟着变，行为一致）。③ 引用同步 = `pinnedThreads[]`、`archivedThreads[].file`、`threadPermissions` key、drafts.json 的 `s:<sessionFile>` key；若该会话正开着需先关闭再按新路径重开。风险：动的是数据文件，建议实现时加备份/回滚（写临时文件+rename）。
 
+### P1-8 会话回收站 + 会话行常驻星形置顶切换（用户拍板 2026-09-08，v0.4.19）
+背景：侧栏会话只有「归档/删除」两个按钮，且删除=直接 unlink JSONL，容易误删。用户要求引入回收站机制——**只有在回收站里删除才算永久删除**。拍板决策：① 置顶按钮做成**常驻星形切换**（行上始终可见，点亮=已置顶）；② 回收站 v1 **手动清空**（不做 N 天自动清理，留作后续）；③ 回收站**默认开启**（设置可关，关闭后删除恢复为立即永久删）；④ UI 文案「永久删除会话」统一改为「删除」（弹窗正文按开关分支：开=移入回收站说明，关=不可恢复警告）。
+实现要点：`src/main/trash-store.ts`——文件 move 到 `<userData>/trash/<uuid>.jsonl`（rename 失败 EXDEV 时 copy+unlink 兜底），index.json 记录 `{id, originalFile, title, cwd, deletedAt, sizeBytes}`；IPC `thread:delete` 参数扩为 `{file,title?,cwd?}`，按 `config.trashEnabled` 分流（开=移入回收站返回 `trashed:true`，关=原 unlink 路径），新增 `trash:list/restore/purge/empty`（list 顺带清理文件已不存在的索引条目；restore 目标已存在时报错、父目录缺失则重建）；设置「归档与回收站」页新增回收站卡片（恢复/永久删除/清空+总占用，危险操作带确认弹窗）+ 通用设置开关行。i18n exact/prefixes 同步。测试 `npm run test:trash`。
+
 ---
 
 ## Part 2 · pi-agent-desktop 近期有价值改进建议（按相关性分组）

@@ -69,6 +69,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const activeThreadId = useStore((s) => s.activeThreadId);
   const sidebarTab = useStore((s) => s.sidebarTab);
   const language = useStore((s) => s.config?.language || "en");
+  // Absent/corrupt config means the trash is on (safe default, see main/config.ts).
+  const trashEnabled = useStore((s) => s.config?.trashEnabled !== false);
 
   // ids of threads currently streaming, joined into a stable string so this
   // component only re-renders when the running set changes (not on every token).
@@ -462,6 +464,34 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                               <span className="tt-text">{title}</span>
                               <button
                                 type="button"
+                                className={`thread-pin-btn ${t.pinned ? "on" : ""}`}
+                                title={
+                                  t.pinned
+                                    ? language === "zh"
+                                      ? "取消置顶会话"
+                                      : "Unpin session"
+                                    : language === "zh"
+                                      ? "置顶会话"
+                                      : "Pin session"
+                                }
+                                aria-label={`${
+                                  t.pinned
+                                    ? language === "zh"
+                                      ? "取消置顶会话"
+                                      : "Unpin session"
+                                    : language === "zh"
+                                      ? "置顶会话"
+                                      : "Pin session"
+                                }：${title}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void setThreadPinned(t.file, !t.pinned);
+                                }}
+                              >
+                                <Star size={13} fill={t.pinned ? "currentColor" : "none"} />
+                              </button>
+                              <button
+                                type="button"
                                 className="thread-archive-btn"
                                 title="归档"
                                 aria-label={`归档：${title}`}
@@ -475,8 +505,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                               <button
                                 type="button"
                                 className="thread-delete-btn"
-                                title={language === "zh" ? "永久删除会话" : "Permanently delete session"}
-                                aria-label={`${language === "zh" ? "永久删除会话" : "Permanently delete session"}：${title}`}
+                                title={language === "zh" ? "删除" : "Delete"}
+                                aria-label={`${language === "zh" ? "删除" : "Delete"}：${title}`}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   openDeleteConfirmation(p.cwd, t.file, title);
@@ -671,7 +701,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             role="menuitem"
             onClick={() => openDeleteConfirmation(threadMenu.cwd, threadMenu.file, threadMenu.name)}
           >
-            {language === "zh" ? "永久删除会话" : "Permanently delete session"}
+            {language === "zh" ? "删除" : "Delete"}
           </button>
         </div>
       )}
@@ -685,12 +715,16 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             aria-labelledby="thread-delete-title"
           >
             <div className="modal-title" id="thread-delete-title">
-              {language === "zh" ? "永久删除会话？" : "Permanently delete session?"}
+              {language === "zh" ? "删除？" : "Delete?"}
             </div>
             <div className="modal-msg">
-              {language === "zh"
-                ? `“${deleteConfirm.name}”及其完整会话记录将被永久删除，删除后无法恢复。`
-                : `“${deleteConfirm.name}” and its complete session history will be permanently deleted and cannot be recovered.`}
+              {trashEnabled
+                ? language === "zh"
+                  ? `“${deleteConfirm.name}”将被移入回收站，可在设置「归档与回收站」中恢复或永久删除。`
+                  : `“${deleteConfirm.name}” will be moved to the trash. You can restore or permanently delete it from Settings → Archive & trash.`
+                : language === "zh"
+                  ? `“${deleteConfirm.name}”及其完整会话记录将被永久删除，删除后无法恢复。`
+                  : `“${deleteConfirm.name}” and its complete session history will be permanently deleted and cannot be recovered.`}
             </div>
             <div className="modal-actions">
               <button className="btn" onClick={() => setDeleteConfirm(null)}>

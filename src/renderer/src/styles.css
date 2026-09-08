@@ -501,6 +501,34 @@ body.sidebar-resizing * {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+/* Always-visible pin toggle (unlike archive/delete, which stay hidden until hover).
+   Filled accent star when pinned; faint outline star otherwise. */
+.thread-pin-btn {
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.thread-pin-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text);
+}
+.thread-pin-btn.on {
+  color: var(--accent);
+}
+.thread-pin-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .thread-running {
   width: 11px;
   height: 11px;
@@ -3601,6 +3629,21 @@ textarea.modal-input {
   padding-top: 18px;
   border-top: 1px solid var(--border);
 }
+.trash-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.trash-count {
+  font-weight: 400;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+/* Trash rows carry two action buttons (restore + delete forever). */
+.archived-thread-row.trash-row {
+  grid-template-columns: 20px minmax(0, 1fr) auto auto;
+}
 .archived-thread-list {
   display: grid;
   gap: 8px;
@@ -4667,6 +4710,13 @@ textarea.modal-input {
 .set-btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+.set-btn.danger {
+  color: #b23a2c;
+  border-color: rgba(178, 58, 44, 0.4);
+}
+.set-btn.danger:hover {
+  background: #fbe9e7;
 }
 .set-iconbtn {
   width: 30px;

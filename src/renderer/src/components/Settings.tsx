@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { useStore } from "../store";
 import type { ApiType, Diagnostics, ModelDef, ModelsFile, PermissionLevel, ProviderDef, ThinkingDefaults } from "../lib/types";
 import { cleanOutput, hasLibuvAssertion, lastLine, stripAnsi } from "../lib/update";
+import { formatBytes } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { translateUiText } from "../lib/i18n";
-import { Archive, Check, Close, Edit, Plus, Refresh, Folder } from "./icons";
+import { Archive, Check, Close, Edit, Plus, Refresh, Folder, Trash } from "./icons";
 import { ChangelogModal } from "./ChangelogModal";
 import appIconUrl from "../../../../resources/icon.png";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
@@ -742,6 +743,11 @@ export function Settings() {
   const config = useStore((s) => s.config);
   const restoreProject = useStore((s) => s.restoreProject);
   const restoreThread = useStore((s) => s.restoreThread);
+  const loadTrash = useStore((s) => s.loadTrash);
+  const trashEntries = useStore((s) => s.trashEntries);
+  const restoreFromTrash = useStore((s) => s.restoreFromTrash);
+  const purgeFromTrash = useStore((s) => s.purgeFromTrash);
+  const emptyTrash = useStore((s) => s.emptyTrash);
   const refreshOpenThreadModels = useStore((s) => s.refreshOpenThreadModels);
   const language = config?.language || "en";
 
@@ -753,6 +759,14 @@ export function Settings() {
     if (!open) return;
     window.pi.app.getAutoLaunch().then(setAutoLaunchState).catch(() => setAutoLaunchState(null));
   }, [open]);
+  // Trash confirmation dialogs (per-item purge / empty-all).
+  const [trashPurgeConfirm, setTrashPurgeConfirm] = useState<{ id: string; title: string } | null>(null);
+  const [trashEmptyConfirm, setTrashEmptyConfirm] = useState(false);
+  // Refresh the trash list whenever the archive tab is visible (deletes happen
+  // in the sidebar, so there is no other signal to reload on).
+  useEffect(() => {
+    if (open && tab === "archive") loadTrash();
+  }, [open, tab, loadTrash]);
   const [draft, setDraft] = useState<ModelsFile>({ providers: {} });
   const [initialProviders, setInitialProviders] = useState("{}");
   const [thinking, setThinking] = useState<ThinkingDefaults>({});
@@ -1158,6 +1172,15 @@ export function Settings() {
     useStore.setState({ config: next });
   };
 
+  const changeTrashEnabled = async (trashEnabled: boolean) => {
+    try {
+      const next = await window.pi.app.setConfig({ trashEnabled });
+      useStore.setState({ config: next });
+    } catch (e: any) {
+      pushToast("error", "保存回收站设置失败：" + (e?.message || e));
+    }
+  };
+
   const changeDiffViewMode = async (diffViewMode: "unified" | "blocks") => {
     const next = await window.pi.app.setConfig({ diffViewMode });
     useStore.setState({ config: next });
@@ -1252,7 +1275,7 @@ export function Settings() {
               ["general", language === "zh" ? "通用设置" : "General"],
               ["models", "模型与提供商"],
               ["thinking", "思考默认值"],
-              ["archive", "已归档项目"],
+              ["archive", language === "zh" ? "归档与回收站" : "Archive & trash"],
               ["diag", "诊断与配置"],
               ["update", language === "zh" ? "应用更新" : "App updates"],
               ["about", language === "zh" ? "关于" : "About"],
@@ -1376,6 +1399,19 @@ export function Settings() {
                   <label className="theme-sys-check">
                     <input type="checkbox" checked={autoLaunch === true} onChange={(e) => void changeAutoLaunch(e.target.checked)} />
                     <span>{language === "zh" ? "登录系统时自动启动" : "Start automatically at sign-in"}</span>
+                  </label>
+                </Field>
+                <Field
+                  label={language === "zh" ? "回收站" : "Trash"}
+                  hint={
+                    language === "zh"
+                      ? "开启后，删除的会话先移入回收站（设置 → 归档与回收站），可恢复；只有在那里删除才算永久删除。关闭后删除会立即永久生效。"
+                      : "When on, deleted sessions go to the trash (Settings → Archive & trash) and stay restorable; only deleting there removes them for good. When off, delete removes a session immediately."
+                  }
+                >
+                  <label className="theme-sys-check">
+                    <input type="checkbox" checked={config?.trashEnabled !== false} onChange={(e) => void changeTrashEnabled(e.target.checked)} />
+                    <span>{language === "zh" ? "删除的会话先移入回收站（可恢复）" : "Deleted sessions go to the trash first (restorable)"}</span>
                   </label>
                 </Field>
                 <Field
@@ -1749,6 +1785,57 @@ export function Settings() {
                     </div>
                   )}
                 </div>
+                <div className="archived-thread-section">
+                  <div className="set-card-title trash-head-row">
+                    <span>
+                      {language === "zh" ? "回收站" : "Trash"}
+                      {trashEntries.length > 0 && (
+                        <span className="trash-count">
+                          {` · ${trashEntries.length} ${language === "zh" ? "项" : trashEntries.length === 1 ? "item" : "items"} · ${formatBytes(trashEntries.reduce((sum, entry) => sum + (entry.sizeBytes || 0), 0))}`}
+                        </span>
+                      )}
+                    </span>
+                    {trashEntries.length > 0 && (
+                      <button className="set-btn danger" onClick={() => setTrashEmptyConfirm(true)}>
+                        {language === "zh" ? "清空回收站" : "Empty trash"}
+                      </button>
+                    )}
+                  </div>
+                  <div className="set-hint archived-project-hint">
+                    {language === "zh"
+                      ? "回收站中的会话不再出现在侧栏和搜索里；恢复后会回到所属项目。只有在这里删除才算永久删除。"
+                      : "Trashed sessions are hidden from the sidebar and search; restore puts one back into its project. Only deleting here removes a session for good."}
+                  </div>
+                  {trashEntries.length === 0 ? (
+                    <div className="set-empty">{language === "zh" ? "回收站是空的。" : "Trash is empty."}</div>
+                  ) : (
+                    <div className="archived-thread-list">
+                      {trashEntries.map((entry) => {
+                        const projectName = entry.cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || entry.cwd;
+                        return (
+                          <div className="archived-thread-row trash-row" key={entry.id}>
+                            <Trash size={17} />
+                            <div className="archived-thread-main">
+                              <div className="archived-thread-name" title={entry.title}>{entry.title || entry.originalFile}</div>
+                              <div className="archived-thread-path" title={entry.originalFile}>
+                                {projectName} · {new Date(entry.deletedAt).toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} · {formatBytes(entry.sizeBytes)}
+                              </div>
+                            </div>
+                            <button className="set-btn" onClick={() => void restoreFromTrash(entry.id)}>
+                              {language === "zh" ? "恢复会话" : "Restore"}
+                            </button>
+                            <button
+                              className="set-btn danger"
+                              onClick={() => setTrashPurgeConfirm({ id: entry.id, title: entry.title || entry.originalFile })}
+                            >
+                              {language === "zh" ? "永久删除" : "Delete forever"}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1952,6 +2039,68 @@ export function Settings() {
             )}
           </div>
         </section>
+
+        {trashPurgeConfirm && (
+          <div className="modal-backdrop" onMouseDown={() => setTrashPurgeConfirm(null)}>
+            <div
+              className="modal thread-delete-confirm"
+              onMouseDown={(event) => event.stopPropagation()}
+              role="alertdialog"
+              aria-modal="true"
+            >
+              <div className="modal-title">{language === "zh" ? "永久删除？" : "Delete forever?"}</div>
+              <div className="modal-msg">
+                {language === "zh"
+                  ? `“${trashPurgeConfirm.title}”将从回收站中永久删除，无法恢复。`
+                  : `“${trashPurgeConfirm.title}” will be permanently deleted from the trash and cannot be recovered.`}
+              </div>
+              <div className="modal-actions">
+                <button className="btn" onClick={() => setTrashPurgeConfirm(null)}>{language === "zh" ? "取消" : "Cancel"}</button>
+                <button
+                  className="btn danger"
+                  onClick={() => {
+                    const item = trashPurgeConfirm;
+                    setTrashPurgeConfirm(null);
+                    void purgeFromTrash(item.id);
+                  }}
+                >
+                  <Trash size={13} />
+                  {language === "zh" ? "永久删除" : "Delete forever"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {trashEmptyConfirm && (
+          <div className="modal-backdrop" onMouseDown={() => setTrashEmptyConfirm(false)}>
+            <div
+              className="modal thread-delete-confirm"
+              onMouseDown={(event) => event.stopPropagation()}
+              role="alertdialog"
+              aria-modal="true"
+            >
+              <div className="modal-title">{language === "zh" ? "清空回收站？" : "Empty trash?"}</div>
+              <div className="modal-msg">
+                {language === "zh"
+                  ? `回收站中的 ${trashEntries.length} 个会话将被永久删除，无法恢复。`
+                  : `${trashEntries.length} session${trashEntries.length === 1 ? "" : "s"} in the trash will be permanently deleted and cannot be recovered.`}
+              </div>
+              <div className="modal-actions">
+                <button className="btn" onClick={() => setTrashEmptyConfirm(false)}>{language === "zh" ? "取消" : "Cancel"}</button>
+                <button
+                  className="btn danger"
+                  onClick={() => {
+                    setTrashEmptyConfirm(false);
+                    void emptyTrash();
+                  }}
+                >
+                  <Trash size={13} />
+                  {language === "zh" ? "清空" : "Empty trash"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Inside .set-modal so backdrop clicks stop there and do not close settings too. */}
         <ChangelogModal

@@ -58,6 +58,10 @@ export interface AppConfig {
   archivedProjects: string[];
   /** Individual sessions hidden from normal navigation until restored in Settings. */
   archivedThreads: ArchivedThread[];
+  /** Deleted sessions go to the app trash (restorable) instead of being
+   * unlinked immediately; toggle in Settings → General. Absent/corrupt = enabled,
+   * because accidental deletion is exactly what this protects against. */
+  trashEnabled: boolean;
   /** Last window geometry, restored on launch. */
   windowBounds?: { x?: number; y?: number; width: number; height: number; maximized?: boolean };
   /** "dark" | "light" | "system". */
@@ -136,6 +140,7 @@ const DEFAULTS: AppConfig = {
   pinnedThreads: [],
   archivedProjects: [],
   archivedThreads: [],
+  trashEnabled: true,
   theme: "light",
   accentTheme: "default",
   zoomPercent: 100,
@@ -180,6 +185,7 @@ export function loadConfig(userDataDir: string): AppConfig {
           ? parsed.remoteSignalingEnabled
           : DEFAULTS.remoteSignalingEnabled,
         diffViewMode: parsed.diffViewMode === "blocks" ? "blocks" : DEFAULTS.diffViewMode,
+        trashEnabled: typeof parsed.trashEnabled === "boolean" ? parsed.trashEnabled : DEFAULTS.trashEnabled,
         defaultPermission:
           typeof parsed.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(parsed.defaultPermission)
             ? (parsed.defaultPermission as PermissionLevel)
