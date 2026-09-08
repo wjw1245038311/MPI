@@ -744,6 +744,13 @@ export function Settings() {
   const language = config?.language || "en";
 
   const [tab, setTab] = useState<Tab>("general");
+  // Auto-launch at system login — OS-level state (Electron login items), not
+  // config.json; read live each time settings opens. null = still loading.
+  const [autoLaunch, setAutoLaunchState] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    window.pi.app.getAutoLaunch().then(setAutoLaunchState).catch(() => setAutoLaunchState(null));
+  }, [open]);
   const [draft, setDraft] = useState<ModelsFile>({ providers: {} });
   const [initialProviders, setInitialProviders] = useState("{}");
   const [thinking, setThinking] = useState<ThinkingDefaults>({});
@@ -1177,6 +1184,20 @@ export function Settings() {
     }
   };
 
+  const changeAutoLaunch = async (enabled: boolean) => {
+    try {
+      const next = await window.pi.app.setAutoLaunch(enabled);
+      setAutoLaunchState(next);
+    } catch (e: any) {
+      pushToast(
+        "error",
+        language === "zh"
+          ? `开机自启动设置失败：${e?.message || e}`
+          : `Failed to change auto-launch: ${e?.message || e}`,
+      );
+    }
+  };
+
   const changeDefaultPermission = async (defaultPermission: PermissionLevel) => {
     const next = await window.pi.app.setConfig({ defaultPermission });
     useStore.setState({ config: next });
@@ -1297,6 +1318,64 @@ export function Settings() {
           <div className="set-body">
             {tab === "general" && (
               <div className="set-card">
+                <Field
+                  label={language === "zh" ? "头像" : "Avatars"}
+                  hint={
+                    language === "zh"
+                      ? "聊天消息左侧的头像。上传的图片会自动压缩后保存；恢复默认使用内置图标。"
+                      : "Avatars shown beside chat messages. Uploaded images are downscaled before saving; reset restores the built-in icons."
+                  }
+                >
+                  <div className="avatar-row">
+                    <input ref={userAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "user")} />
+                    <input ref={agentAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "agent")} />
+                    <div className="avatar-slot">
+                      <span className="avatar-preview">
+                        {config?.userAvatar ? <img src={config.userAvatar} alt="" /> : <span aria-hidden="true">🧑</span>}
+                      </span>
+                      <div className="avatar-slot-actions">
+                        <button type="button" className="set-btn" onClick={() => userAvatarInputRef.current?.click()}>
+                          {language === "zh" ? "更换" : "Change"}
+                        </button>
+                        {config?.userAvatar && (
+                          <button type="button" className="set-btn ghost" onClick={() => void resetAvatar("user")}>
+                            {language === "zh" ? "恢复默认" : "Reset"}
+                          </button>
+                        )}
+                      </div>
+                      <span className="avatar-slot-label">{language === "zh" ? "用户" : "User"}</span>
+                    </div>
+                    <div className="avatar-slot">
+                      <span className="avatar-preview">
+                        {config?.agentAvatar ? <img src={config.agentAvatar} alt="" /> : <img src={appIconUrl} alt="" />}
+                      </span>
+                      <div className="avatar-slot-actions">
+                        <button type="button" className="set-btn" onClick={() => agentAvatarInputRef.current?.click()}>
+                          {language === "zh" ? "更换" : "Change"}
+                        </button>
+                        {config?.agentAvatar && (
+                          <button type="button" className="set-btn ghost" onClick={() => void resetAvatar("agent")}>
+                            {language === "zh" ? "恢复默认" : "Reset"}
+                          </button>
+                        )}
+                      </div>
+                      <span className="avatar-slot-label">{language === "zh" ? "MPI 智能体" : "MPI Agent"}</span>
+                    </div>
+                  </div>
+                </Field>
+                <Field
+                  label={language === "zh" ? "开机自启动" : "Launch at startup"}
+                  hint={
+                    language === "zh"
+                      ? "登录系统时自动启动 MPI（Windows 下通过开始菜单的启动项实现）。"
+                      : "Starts MPI automatically when you sign in (uses the OS startup folder on Windows)."
+                  }
+                >
+                  <label className="theme-sys-check">
+                    <input type="checkbox" checked={autoLaunch === true} onChange={(e) => void changeAutoLaunch(e.target.checked)} />
+                    <span>{language === "zh" ? "登录系统时自动启动" : "Start automatically at sign-in"}</span>
+                  </label>
+                </Field>
                 <Field
                   label={language === "zh" ? "主题模式" : "Theme"}
                   hint={
@@ -1436,51 +1515,6 @@ export function Settings() {
                     <option value="sandbox">{language === "zh" ? "沙盒（低风险操作自动执行，默认）" : "Sandbox (low-risk auto-runs, default)"}</option>
                     <option value="full">{language === "zh" ? "完全权限" : "Full access"}</option>
                   </select>
-                </Field>
-                <Field
-                  label={language === "zh" ? "头像" : "Avatars"}
-                  hint={
-                    language === "zh"
-                      ? "聊天消息左侧的头像。上传的图片会自动压缩后保存；恢复默认使用内置图标。"
-                      : "Avatars shown beside chat messages. Uploaded images are downscaled before saving; reset restores the built-in icons."
-                  }
-                >
-                  <div className="avatar-row">
-                    <input ref={userAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "user")} />
-                    <input ref={agentAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "agent")} />
-                    <div className="avatar-slot">
-                      <span className="avatar-preview">
-                        {config?.userAvatar ? <img src={config.userAvatar} alt="" /> : <span aria-hidden="true">🧑</span>}
-                      </span>
-                      <div className="avatar-slot-actions">
-                        <button type="button" className="set-btn" onClick={() => userAvatarInputRef.current?.click()}>
-                          {language === "zh" ? "更换" : "Change"}
-                        </button>
-                        {config?.userAvatar && (
-                          <button type="button" className="set-btn ghost" onClick={() => void resetAvatar("user")}>
-                            {language === "zh" ? "恢复默认" : "Reset"}
-                          </button>
-                        )}
-                      </div>
-                      <span className="avatar-slot-label">{language === "zh" ? "用户" : "User"}</span>
-                    </div>
-                    <div className="avatar-slot">
-                      <span className="avatar-preview">
-                        {config?.agentAvatar ? <img src={config.agentAvatar} alt="" /> : <img src={appIconUrl} alt="" />}
-                      </span>
-                      <div className="avatar-slot-actions">
-                        <button type="button" className="set-btn" onClick={() => agentAvatarInputRef.current?.click()}>
-                          {language === "zh" ? "更换" : "Change"}
-                        </button>
-                        {config?.agentAvatar && (
-                          <button type="button" className="set-btn ghost" onClick={() => void resetAvatar("agent")}>
-                            {language === "zh" ? "恢复默认" : "Reset"}
-                          </button>
-                        )}
-                      </div>
-                      <span className="avatar-slot-label">{language === "zh" ? "MPI 智能体" : "MPI Agent"}</span>
-                    </div>
-                  </div>
                 </Field>
               </div>
             )}

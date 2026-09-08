@@ -1560,6 +1560,22 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
 
   // ---- app / config -------------------------------------------------------
   ipcMain.handle("app:getVersion", () => app.getVersion());
+  // Auto-launch at system login. On Windows Electron implements this via a
+  // shortcut in the Start Menu startup folder; returns the effective state.
+  // In dev the shortcut target is the bare Electron binary, so both set and
+  // get must carry the app directory (out/main → repo root) as args —
+  // otherwise openAtLogin does not match the item that was created.
+  const autoLaunchArgs = () => (app.isPackaged ? undefined : [resolve(__dirname, "../..")]);
+  ipcMain.handle("app:getAutoLaunch", () => {
+    const args = autoLaunchArgs();
+    return (args ? app.getLoginItemSettings({ args }) : app.getLoginItemSettings()).openAtLogin;
+  });
+  ipcMain.handle("app:setAutoLaunch", (_e, enabled: unknown) => {
+    const on = !!enabled;
+    const args = autoLaunchArgs();
+    app.setLoginItemSettings({ openAtLogin: on, ...(args ? { args } : {}) });
+    return (args ? app.getLoginItemSettings({ args }) : app.getLoginItemSettings()).openAtLogin;
+  });
   ipcMain.handle("app:getConfig", () => getConfig());
   ipcMain.handle("app:setConfig", (_e, patch) => {
     const prev = getConfig().piCliPath;
