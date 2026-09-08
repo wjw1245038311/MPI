@@ -1127,6 +1127,10 @@ export function Settings() {
     }
   };
 
+  // Avatar file-input refs — must stay above the early return (Rules of Hooks).
+  const userAvatarInputRef = useRef<HTMLInputElement>(null);
+  const agentAvatarInputRef = useRef<HTMLInputElement>(null);
+
   if (!open) return null;
 
   const providerKeys = Object.keys(draft.providers);
@@ -1179,9 +1183,6 @@ export function Settings() {
   };
 
   // ---- custom avatars (user + agent), stored as downscaled data URLs -------
-  const userAvatarInputRef = useRef<HTMLInputElement>(null);
-  const agentAvatarInputRef = useRef<HTMLInputElement>(null);
-
   const onAvatarPicked = async (event: ChangeEvent<HTMLInputElement>, kind: "user" | "agent") => {
     const file = event.target.files?.[0];
     event.target.value = ""; // allow re-selecting the same file
