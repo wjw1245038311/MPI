@@ -1,158 +1,115 @@
 #!/usr/bin/env python3
-"""Generate the MPI app icon.
+"""Generate MPI app icon assets from the master artwork.
 
-Renders a green gradient squircle with a bold white pi glyph, matching the
-in-app brand mark (`.set-brand-mark`: linear-gradient(135deg, #2e7d52, #6fbf8c)
-with a white "pi"). Outputs a 1024px master PNG plus multi-size ICO (Windows)
-and ICNS (macOS) into ../resources.
+Source: resources/0.jpg — WJW bamboo-copter (竹蜻蜓) design on a light-blue
+squircle with an "MPI" badge, provided by the maintainer. The source is a
+PagePop template and carries its watermark in the bottom-right margin; this
+script removes it and outputs:
+
+  * resources/icon.png   1024px master, transparent outside the squircle
+  * resources/icon.ico   multi-size Windows icon (16..256)
+  * resources/icon.icns  macOS icon set
 
 Usage: python scripts/generate-icon.py
 """
 import os
-import sys
-
+from PIL import Image, ImageDraw
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR = os.path.normpath(os.path.join(HERE, "..", "resources"))
-S = 1024  # master canvas size
+RES = os.path.normpath(os.path.join(HERE, "..", "resources"))
+SRC = os.path.join(RES, "0.jpg")
 
-# Brand colors (CSS: linear-gradient(135deg, var(--accent), #6fbf8c)).
-C_DARK = np.array([46, 125, 82], dtype=np.float64)    # #2e7d52 top-left
-C_LIGHT = np.array([111, 191, 140], dtype=np.float64)  # #6fbf8c bottom-right
-
-FONT_CANDIDATES = [
-    "C:/Windows/Fonts/seguibl.ttf",   # Segoe UI Black
-    "C:/Windows/Fonts/seguisb.ttf",   # Segoe UI Semibold
-    "C:/Windows/Fonts/segoeuib.ttf",  # Segoe UI Bold
-    "C:/Windows/Fonts/arialbd.ttf",   # Arial Bold
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-]
+# Bottom-right margin box that contains the PagePop watermark. Pixels inside
+# it are whitened unless they look like the blue tile (B channel clearly
+# above R), so the artwork itself is never touched.
+WM_BOX = (840, 935)
 
 
-def pick_font(target_px: int) -> ImageFont.FreeTypeFont:
-    for path in FONT_CANDIDATES:
-        if not os.path.exists(path):
-            continue
-        try:
-            font = ImageFont.truetype(path, target_px)
-        except OSError:
-            continue
-        # Ensure the font actually has a pi glyph.
-        if font.getbbox("\u03c0"):
-            return font
-    raise SystemExit("No font with a pi glyph was found.")
+def load_clean() -> tuple[Image.Image, np.ndarray]:
+    im = Image.open(SRC).convert("RGB")
+    a = np.array(im)
+    h, w, _ = a.shape
+    x0, y0 = WM_BOX
+    box = a[y0:h, x0:w].copy()
+    not_blue = ~((box[:, :, 2].astype(int) > box[:, :, 0].astype(int) + 8))
+    box[not_blue] = [255, 255, 255]
+    a[y0:h, x0:w] = box
+    return Image.fromarray(a), a
 
 
-def rounded_mask(size: int, inset: int, radius: int) -> Image.Image:
-    mask = Image.new("L", (size, size), 0)
+def tile_bbox(a: np.ndarray):
+    """Bounding box of the squircle (non-white pixels)."""
+    nw = ~((a[:, :, 0] > 248) & (a[:, :, 1] > 248) & (a[:, :, 2] > 248))
+    rows = np.where(nw.any(axis=1))[0]
+    cols = np.where(nw.any(axis=0))[0]
+    return int(cols.min()), int(rows.min()), int(cols.max()), int(rows.max())
+
+
+def corner_radius(a: np.ndarray, L: int, T: int, R: int, B: int) -> int:
+    """Measure the rounded-corner radius at each corner (first row/col where
+    the edge reaches the straight line) and return the median."""
+    nw = ~((a[:, :, 0] > 248) & (a[:, :, 1] > 248) & (a[:, :, 2] > 248))
+
+    def first_straight(fn, start, stop, step):
+        for y in range(start, stop, step):
+            xs = np.where(nw[y, :])[0]
+            if len(xs) and fn(int(xs[0]), int(xs[-1])):
+                return abs(y - (T if step > 0 else B))
+        raise RuntimeError("corner arc not found")
+
+    radii = [
+        first_straight(lambda f, l: f <= L + 2, T, T + 500, 1),      # top-left
+        first_straight(lambda f, l: l >= R - 2, T, T + 500, 1),      # top-right
+        first_straight(lambda f, l: f <= L + 2, B, B - 500, -1),     # bottom-left
+        first_straight(lambda f, l: l >= R - 2, B, B - 500, -1),     # bottom-right
+    ]
+    r = int(sorted(radii)[len(radii) // 2])
+    if not 150 <= r <= 300:
+        raise RuntimeError(f"implausible corner radius {r} (measured {radii})")
+    return r
+
+
+def build_mask(size: int, L: int, T: int, R: int, B: int, r: int) -> Image.Image:
+    """2x-supersampled rounded-rect alpha mask so the squircle edge stays smooth."""
+    s2 = size * 2
+    mask = Image.new("L", (s2, s2), 0)
     d = ImageDraw.Draw(mask)
-    d.rounded_rectangle([inset, inset, size - inset - 1, size - inset - 1], radius=radius, fill=255)
-    return mask
-
-
-def gradient_tile(size: int) -> Image.Image:
-    """135deg diagonal gradient: dark green (top-left) -> light green (bottom-right)."""
-    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
-    t = (xs + ys) / (2.0 * (size - 1))  # 0 at top-left, 1 at bottom-right
-    rgb = C_DARK * (1.0 - t)[..., None] + C_LIGHT * t[..., None]
-    return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), "RGB")
-
-
-def add_sheen(tile: Image.Image, mask: Image.Image) -> Image.Image:
-    """Subtle top light for a modern, slightly dimensional flat look."""
-    size = tile.width
-    ys = np.arange(size, dtype=np.float64)
-    # 0.14 alpha at the very top, fading to 0 by 46% height.
-    alpha = np.clip(0.14 * (1.0 - ys / (size * 0.46)), 0.0, 1.0)
-    band = np.zeros((size, size), dtype=np.float64)
-    band[:] = alpha[:, None]
-    white = Image.new("RGB", (size, size), (255, 255, 255))
-    overlay_alpha = Image.fromarray((band * 255).astype(np.uint8), "L")
-    tile = tile.copy()
-    tile.paste(white, (0, 0), overlay_alpha)
-    # Re-apply the rounded mask so the sheen never leaks past the corners.
-    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    out.paste(tile, (0, 0), mask)
-    return out
-
-
-def draw_pi(base: Image.Image, mask: Image.Image) -> Image.Image:
-    size = base.width
-    inset = round(size * 0.035)
-    tile = size - 2 * inset
-    target_h = tile * 0.50  # pi cap height relative to the tile
-
-    font = pick_font(round(target_h * 1.4))
-    # Scale the font so the rendered pi matches the target height.
-    bbox = font.getbbox("\u03c0")
-    cur_h = bbox[3] - bbox[1]
-    font = pick_font(round(font.size * (target_h / cur_h)))
-
-    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    bbox = font.getbbox("\u03c0")
-    w = bbox[2] - bbox[0]
-    h = bbox[3] - bbox[1]
-    x = (size - w) / 2 - bbox[0]
-    y = (size - h) / 2 - bbox[1]
-    # Optical lift: the pi reads better sitting a touch above true center.
-    y -= size * 0.008
-
-    # Soft drop shadow for legibility against the lighter lower-right.
-    shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(shadow)
-    sd.text((x, y + size * 0.006), "\u03c0", font=font, fill=(15, 40, 26, 90))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(radius=size * 0.006))
-
-    d.text((x, y), "\u03c0", font=font, fill=(255, 255, 255, 255))
-
-    out = base.copy()
-    out = Image.alpha_composite(out, shadow)
-    out = Image.alpha_composite(out, layer)
-    # Clip everything back to the rounded tile.
-    clipped = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    clipped.paste(out, (0, 0), mask)
-    return clipped
-
-
-def build_master() -> Image.Image:
-    inset = round(S * 0.035)
-    radius = round((S - 2 * inset) * 0.225)
-    mask = rounded_mask(S, inset, radius)
-    tile = gradient_tile(S).convert("RGBA")
-    tile = add_sheen(tile, mask)
-    return draw_pi(tile, mask)
+    d.rounded_rectangle([L * 2 - 2, T * 2 - 2, R * 2 + 2, B * 2 + 2], radius=r * 2, fill=255)
+    return mask.resize((size, size), Image.LANCZOS)
 
 
 def save_ico(master: Image.Image, path: str) -> None:
-    sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-    master.save(path, format="ICO", sizes=sizes)
+    master.save(path, format="ICO", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 
 
 def save_icns(master: Image.Image, path: str) -> None:
     try:
-        sizes = [(16, 16), (32, 32), (128, 128), (256, 256), (512, 512), (1024, 1024)]
-        master.save(path, format="ICNS", sizes=sizes)
+        master.save(path, format="ICNS", sizes=[(16, 16), (32, 32), (128, 128), (256, 256), (512, 512), (1024, 1024)])
     except Exception as e:  # macOS icon is a nice-to-have; don't fail the build.
-        print(f"warning: ICNS generation skipped ({e})", file=sys.stderr)
+        print(f"warning: ICNS generation skipped ({e})")
 
 
 def main() -> None:
-    os.makedirs(OUT_DIR, exist_ok=True)
-    master = build_master()
+    im, a = load_clean()
+    L, T, R, B = tile_bbox(a)
+    r = corner_radius(a, L, T, R, B)
+    size = im.width
 
-    png_path = os.path.join(OUT_DIR, "icon.png")
+    master = im.convert("RGBA")
+    master.putalpha(build_mask(size, L, T, R, B, r))
+
+    png_path = os.path.join(RES, "icon.png")
+    ico_path = os.path.join(RES, "icon.ico")
+    icns_path = os.path.join(RES, "icon.icns")
     master.save(png_path, format="PNG")
+    save_ico(master, ico_path)
+    save_icns(master, icns_path)
 
-    save_ico(master, os.path.join(OUT_DIR, "icon.ico"))
-    save_icns(master, os.path.join(OUT_DIR, "icon.icns"))
-
+    print(f"tile bbox=({L},{T})-({R},{B}) radius={r}")
     print(f"wrote: {png_path}")
-    print(f"wrote: {os.path.join(OUT_DIR, 'icon.ico')}")
-    print(f"wrote: {os.path.join(OUT_DIR, 'icon.icns')}")
+    print(f"wrote: {ico_path}")
+    print(f"wrote: {icns_path}")
 
 
 if __name__ == "__main__":
