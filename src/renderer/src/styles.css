@@ -6156,3 +6156,34 @@ mark.hl {
   border-color: #5c2b23;
   color: #f0aaa1;
 }
+
+/* ---- Jump-to-latest floating button -------------------------------------- */
+.jump-latest {
+  position: absolute;
+  right: 14px;
+  bottom: 16px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.jump-latest:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24);
+}
+.jump-latest:active {
+  transform: translateY(0);
+}
+:root[data-theme="dark"] .jump-latest {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: var(--surface-muted);
+}

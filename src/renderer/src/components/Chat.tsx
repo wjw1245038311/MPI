@@ -8,10 +8,13 @@ import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
-import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Gauge, Branch, ChevronRight } from "./icons";
+import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Gauge, Branch, ChevronRight, ChevronsDown } from "./icons";
 import appIconUrl from "../../../../resources/icon.png";
 
 const USER_MESSAGE_NAV_MIN_ITEMS = 6;
+// Distance from the transcript bottom (px) within which we treat the viewport
+// as "at the latest" — used for both auto-follow and the jump-to-latest button.
+const NEAR_BOTTOM_PX = 140;
 
 export function Chat() {
   const activeThreadId = useStore((s) => s.activeThreadId);
@@ -31,6 +34,9 @@ export function Chat() {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  // True while the viewport sits within NEAR_BOTTOM_PX of the transcript end.
+  // Drives the floating "jump to latest" button.
+  const [atBottom, setAtBottom] = useState(true);
   const editInputRef = useRef<HTMLInputElement>(null);
   const language = useStore((s) => s.config?.language || "en");
 
@@ -48,6 +54,7 @@ export function Chat() {
     const el = scrollRef.current;
     if (!el || !activeThreadId) return;
     scrollPositionsRef.current.set(activeThreadId, el.scrollTop);
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX);
   };
 
   // Length of the last streaming block's content. blocks.length only changes
@@ -69,7 +76,7 @@ export function Chat() {
       lastAutoScrollThreadIdRef.current !== null &&
       lastAutoScrollThreadIdRef.current !== activeThreadId;
     lastAutoScrollThreadIdRef.current = activeThreadId;
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
     // A restored position is authoritative during a thread switch. Only
     // follow the bottom for new content within the already active thread.
     if (!switchedThread && near) {
@@ -108,6 +115,7 @@ export function Chat() {
     const restore = () => {
       const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
       el.scrollTop = Math.min(saved, maxScrollTop);
+      setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX);
     };
 
     restore();
@@ -417,6 +425,18 @@ export function Chat() {
         </div>
         {userGroups.length >= USER_MESSAGE_NAV_MIN_ITEMS && (
           <UserMessageNav groups={userGroups} language={language} onJump={jumpToUserMessage} />
+        )}
+        {!atBottom && count > 0 && (
+          <button
+            className="jump-latest"
+            title={language === "zh" ? "跳转到最新对话" : "Jump to latest"}
+            onClick={() => {
+              const el = scrollRef.current;
+              if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+            }}
+          >
+            <ChevronsDown size={18} />
+          </button>
         )}
       </div>
 
