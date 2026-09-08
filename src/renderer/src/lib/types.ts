@@ -93,6 +93,18 @@ export interface SkillContent {
   markdown: string;
 }
 
+/** An MCP server entry from <agentDir>/mcp.json (managed by pi-mcp-adapter). */
+export interface McpServerInfo {
+  name: string;
+  /** "stdio" when launched via command, "remote" when using a url. */
+  transport: "stdio" | "remote";
+  /** Full stdio command line for display (command + args). */
+  command?: string;
+  url?: string;
+  /** Per-server disable flag (`disabled: true` in mcp.json). */
+  disabled: boolean;
+}
+
 /** A public skill returned by the skills.sh directory. */
 export interface SkillHubSkill {
   /** Stable directory id, e.g. `vercel-labs/skills/find-skills`. */

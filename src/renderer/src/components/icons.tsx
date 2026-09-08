@@ -276,3 +276,10 @@ export const Smartphone = (p: P) => (
     <path d="M10 5h4M11 18h2" />
   </svg>
 );
+export const Plug = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M9 7V3.5M15 7V3.5" />
+    <path d="M6.5 7h11v3a5.5 5.5 0 0 1-5.5 5.5A5.5 5.5 0 0 1 6.5 10V7Z" />
+    <path d="M12 15.5V20.5" />
+  </svg>
+);

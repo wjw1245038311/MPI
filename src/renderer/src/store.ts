@@ -8,6 +8,7 @@ import type {
   ContentBlock,
   ExtUiRequest,
   FileNode,
+  McpServerInfo,
   ModelInfo,
   PendingFollowUp,
   PermissionLevel,
@@ -1179,6 +1180,7 @@ interface PiStore {
   pluginsOpen: boolean;
   packages: PluginPackage[];
   skills: SkillInfo[];
+  mcpServers: McpServerInfo[];
   pluginsLoading: boolean;
   openPlugins: () => void;
   closePlugins: () => void;
@@ -1187,6 +1189,8 @@ interface PiStore {
   installPackage: (source: string) => Promise<boolean>;
   removePackage: (source: string) => Promise<void>;
   updatePackages: (source?: string) => Promise<void>;
+  toggleMcpServer: (name: string, disabled: boolean) => Promise<void>;
+  removeMcpServer: (name: string) => Promise<void>;
   toggleSkill: (path: string, enabled: boolean) => Promise<void>;
   installSkill: (skill: SkillHubSkill) => Promise<boolean>;
 
@@ -2547,6 +2551,7 @@ export const useStore = create<PiStore>()((set, get) => {
   pluginsOpen: false,
   packages: [],
   skills: [],
+  mcpServers: [],
   pluginsLoading: false,
   openPlugins: () => {
     set({ pluginsOpen: true });
@@ -2557,8 +2562,15 @@ export const useStore = create<PiStore>()((set, get) => {
     set({ pluginsLoading: true });
     try {
       const activeProjectCwd = get().activeProjectCwd || undefined;
-      const [packages, skills] = await Promise.all([window.pi.plugins.getPackages(), window.pi.plugins.getSkills(activeProjectCwd)]);
-      set({ packages, skills, pluginsLoading: false });
+      // A dev instance started before the MCP module has an old preload without
+      // these APIs — degrade to an empty list instead of breaking panel load.
+      const mcpReady = typeof window.pi.plugins.getMcpServers === "function";
+      const [packages, skills, mcp] = await Promise.all([
+        window.pi.plugins.getPackages(),
+        window.pi.plugins.getSkills(activeProjectCwd),
+        mcpReady ? window.pi.plugins.getMcpServers() : Promise.resolve([] as McpServerInfo[]),
+      ]);
+      set({ packages, skills, mcpServers: mcp, pluginsLoading: false });
     } catch (e: any) {
       set({ pluginsLoading: false });
       get().pushToast("error", "加载扩展功能失败：" + (e?.message || e));
@@ -2590,6 +2602,24 @@ export const useStore = create<PiStore>()((set, get) => {
       await get().loadPlugins();
     } catch (e: any) {
       get().pushToast("error", "移除失败：" + (e?.message || e));
+    }
+  },
+  toggleMcpServer: async (name, disabled) => {
+    set((s) => ({ mcpServers: s.mcpServers.map((m) => (m.name === name ? { ...m, disabled } : m)) }));
+    try {
+      await window.pi.plugins.setMcpServerDisabled(name, disabled);
+    } catch (e: any) {
+      get().pushToast("error", e?.message || "切换失败");
+      get().loadPlugins();
+    }
+  },
+  removeMcpServer: async (name) => {
+    try {
+      await window.pi.plugins.removeMcpServer(name);
+      set((s) => ({ mcpServers: s.mcpServers.filter((m) => m.name !== name) }));
+    } catch (e: any) {
+      get().pushToast("error", "删除失败：" + (e?.message || e));
+      get().loadPlugins();
     }
   },
   updatePackages: async (source) => {

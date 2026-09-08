@@ -6304,6 +6304,105 @@ mark.hl {
   }
 }
 
+/* mcp module (gated on pi-mcp-market) */
+.mcp-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.mcp-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 56px 24px;
+  text-align: center;
+}
+.mcp-gate-icon {
+  width: 58px;
+  height: 58px;
+  border-radius: 17px;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.mcp-gate-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+.mcp-gate-copy {
+  max-width: 500px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+.mcp-gate-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 10px;
+}
+.mcp-server-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 10px 13px;
+  margin-bottom: 8px;
+}
+.mcp-server-main {
+  flex: 1;
+  min-width: 0;
+}
+.mcp-server-name-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.mcp-server-name {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+.mcp-server-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  margin-top: 3px;
+}
+.mcp-server-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.mcp-guide {
+  background: var(--accent-soft);
+  border-radius: 11px;
+  padding: 12px 14px;
+}
+.mcp-guide-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+.mcp-guide-copy {
+  margin: 0 0 9px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
 /* ---- automation specifics ---- */
 .auto-freq {
   font-size: 11px;

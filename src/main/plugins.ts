@@ -548,3 +548,112 @@ export function setSkillEnabled(path: string, enabled: boolean): void {
     else if (!enabled && path.endsWith(".md")) renameSync(path, path + ".disabled");
   }
 }
+
+/* ----------------------------- mcp servers ----------------------------- */
+
+/**
+ * MCP server configuration lives in `<agentDir>/mcp.json` (the Pi-owned file
+ * that pi-mcp-adapter reads and pi-mcp-market writes). Shape:
+ * `{ "mcpServers": { name: { command, args?, env? } | { url, headers?, auth? ... }, ... }, ...other adapter keys }
+ *
+ * We only ever touch `mcpServers.<name>` — every other top-level key (imports,
+ * overrides) is preserved verbatim. A malformed file is reported, never
+ * overwritten.
+ */
+
+export interface McpServerInfo {
+  name: string;
+  /** "stdio" when launched via command, "remote" when using a url. */
+  transport: "stdio" | "remote";
+  /** Full stdio command line for display (command + args). */
+  command?: string;
+  url?: string;
+  /** Per-server disable flag (`disabled: true` in mcp.json). */
+  disabled: boolean;
+}
+
+interface McpFileShape {
+  mcpServers?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+function mcpConfigPath(): string {
+  return join(getAgentDir(), "mcp.json");
+}
+
+function readMcpFile(): McpFileShape {
+  const path = mcpConfigPath();
+  if (!existsSync(path)) return {};
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (e) {
+    throw new Error("Cannot read mcp.json: " + (e as Error).message);
+  }
+  if (!raw.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("mcp.json is not valid JSON — fix it manually before managing servers here.");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("mcp.json must be a JSON object.");
+  }
+  return parsed as McpFileShape;
+}
+
+function writeMcpFile(obj: McpFileShape): void {
+  const dir = getAgentDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(mcpConfigPath(), JSON.stringify(obj, null, 2) + "\n", "utf8");
+}
+
+function requireServer(file: McpFileShape, name: string): Record<string, unknown> {
+  const servers = file.mcpServers;
+  if (typeof servers !== "object" || servers === null) throw new Error("mcp.json has no mcpServers section.");
+  const entry = servers[name];
+  if (typeof entry !== "object" || entry === null) throw new Error(`MCP server not found: ${name}`);
+  return entry as Record<string, unknown>;
+}
+
+export function listMcpServers(): McpServerInfo[] {
+  const file = readMcpFile();
+  const servers = (typeof file.mcpServers === "object" && file.mcpServers !== null ? file.mcpServers : {}) as Record<
+    string,
+    unknown
+  >;
+  return Object.entries(servers)
+    .filter(([, entry]) => typeof entry === "object" && entry !== null)
+    .map(([name, rawEntry]): McpServerInfo => {
+      const entry = rawEntry as Record<string, unknown>;
+      const command = typeof entry.command === "string" ? entry.command : undefined;
+      const args = Array.isArray(entry.args) ? (entry.args as unknown[]).filter((a): a is string => typeof a === "string") : [];
+      const url = typeof entry.url === "string" && entry.url.trim() ? entry.url : undefined;
+      return {
+        name,
+        transport: command ? "stdio" : url ? "remote" : "stdio",
+        ...(command ? { command: [...(command.split(/\s+/).filter(Boolean)), ...args].join(" ") } : {}),
+        ...(url ? { url } : {}),
+        disabled: entry.disabled === true,
+      };
+    });
+}
+
+export function setMcpServerDisabled(name: string, disabled: boolean): void {
+  const file = readMcpFile();
+  const entry = requireServer(file, name);
+  if (disabled) file.mcpServers![name] = { ...entry, disabled: true };
+  else {
+    const { disabled: _drop, ...rest } = entry;
+    file.mcpServers![name] = rest;
+  }
+  writeMcpFile(file);
+}
+
+export function removeMcpServer(name: string): void {
+  const file = readMcpFile();
+  requireServer(file, name); // throws when missing
+  delete file.mcpServers![name];
+  writeMcpFile(file);
+}
