@@ -190,13 +190,6 @@ button {
 .tb-win-btn:hover {
   background: rgba(0, 0, 0, 0.07);
 }
-.tb-win-btn.tb-preview-restore {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-.tb-win-btn.tb-preview-restore:hover {
-  background: rgba(46, 125, 82, .18);
-}
 .tb-win-btn.close:hover {
   background: #e81123;
   color: #fff;
@@ -4940,27 +4933,6 @@ textarea.modal-input {
   transform: scale(0.9);
 }
 
-/* titlebar sidebar toggle (always visible, even on the empty state) */
-.tb-sidebar-toggle {
-  -webkit-app-region: no-drag;
-  width: 32px;
-  height: 30px;
-  border: none;
-  background: transparent;
-  border-radius: 7px;
-  color: var(--text-dim);
-  display: grid;
-  place-items: center;
-  margin-right: 4px;
-  transition: background 0.15s, color 0.15s, transform 0.12s;
-}
-.tb-sidebar-toggle:hover {
-  background: rgba(0, 0, 0, 0.07);
-  color: var(--text);
-}
-.tb-sidebar-toggle:active {
-  transform: scale(0.9);
-}
 
 /* ============================================================
    Search palette (Ctrl/Cmd+K)
@@ -6655,7 +6627,6 @@ mark.hl {
 :root[data-theme="dark"] .tb-menu-btn.open,
 :root[data-theme="dark"] .tb-win-btn:hover,
 :root[data-theme="dark"] .tb-settings-btn:hover,
-:root[data-theme="dark"] .tb-sidebar-toggle:hover,
 :root[data-theme="dark"] .iconbtn:hover,
 :root[data-theme="dark"] .chat-head .iconbtn:hover,
 :root[data-theme="dark"] .sb-nav-item:hover,

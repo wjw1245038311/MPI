@@ -271,7 +271,6 @@ const exact: Record<string, string> = {
   "请等待当前回复结束后再 Clone。": "Wait for the current reply to finish before cloning.",
   "已 Clone 截至所选 Agent 回复的分支。": "Cloned the branch through the selected Agent reply.",
   "模型配置已保存，新模型现在可在对话框中选择。": "Model configuration saved. The new model is now available in the chat.",
-  "收回导航栏预览": "Restore side preview",
   "切换失败": "Change failed",
   "该扩展已是最新版本。": "This extension is already up to date.",
   "所有扩展已是最新版本。": "All extensions are already up to date.",

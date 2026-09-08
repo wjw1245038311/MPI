@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import { modelShort } from "../lib/format";
-import { Minus, Square, Close, Maximize, Contract, Sidebar, Settings as SettingsIcon } from "./icons";
+import { Minus, Square, Close, Settings as SettingsIcon } from "./icons";
 import appIconUrl from "../../../../resources/icon.png";
 
 type MenuId = "file" | "edit" | "view" | "help";
@@ -17,10 +17,7 @@ export function TitleBar() {
   const threads = useStore((s) => s.threads);
   const runtime = useStore((s) => s.runtime);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
-  const togglePreview = useStore((s) => s.togglePreview);
-  const togglePreviewExpanded = useStore((s) => s.togglePreviewExpanded);
   const openSettings = useStore((s) => s.openSettings);
-  const previewExpanded = useStore((s) => s.previewExpanded);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const language = useStore((s) => s.config?.language || "en");
 
@@ -84,7 +81,7 @@ export function TitleBar() {
       label: "视图",
       items: [
         { label: sidebarOpen ? "折叠导航栏" : "展开导航栏", onClick: act(toggleSidebar) },
-        { label: "切换预览面板", onClick: act(togglePreview) },
+        { label: "切换预览面板", onClick: act(() => st().togglePreview()) },
       ],
     },
     {
@@ -117,14 +114,6 @@ export function TitleBar() {
 
   return (
     <div className="titlebar">
-      <button
-        className="tb-sidebar-toggle"
-        onClick={toggleSidebar}
-        title={sidebarOpen ? "折叠导航栏" : "展开导航栏"}
-        aria-label={sidebarOpen ? "折叠导航栏" : "展开导航栏"}
-      >
-        <Sidebar size={16} />
-      </button>
       <div className="tb-brand">
         <img className="tb-brand-icon" src={appIconUrl} alt="" aria-hidden="true" />
         MPI
@@ -159,14 +148,6 @@ export function TitleBar() {
         <SettingsIcon size={15} />
       </button>
       <div className="tb-win">
-        <button
-          className={`tb-win-btn ${previewExpanded ? "tb-preview-restore" : ""}`}
-          onClick={() => (previewExpanded ? togglePreviewExpanded() : togglePreview())}
-          title={previewExpanded ? (language === "zh" ? "收回导航栏预览" : "Restore side preview") : language === "zh" ? "切换预览" : "Toggle preview"}
-          aria-label={previewExpanded ? (language === "zh" ? "收回导航栏预览" : "Restore side preview") : language === "zh" ? "切换预览" : "Toggle preview"}
-        >
-          {previewExpanded ? <Contract size={14} /> : <Maximize size={14} />}
-        </button>
         <button className="tb-win-btn" onClick={() => window.pi.window.minimize()} title={language === "zh" ? "最小化" : "Minimize"} aria-label={language === "zh" ? "最小化" : "Minimize"}>
           <Minus size={14} />
         </button>
