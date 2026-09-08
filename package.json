@@ -1,6 +1,6 @@
 {
   "name": "mpi",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "piRuntimeVersion": "0.85.1",
   "private": true,
   "license": "MIT",
@@ -22,6 +22,7 @@
     "test:markdown": "node --experimental-strip-types scripts/test-markdown-autolink.mjs",
     "test:diff": "node --experimental-strip-types scripts/test-diff.mjs",
     "test:compactions": "node --experimental-strip-types scripts/test-compaction-stats.mjs",
+    "test:toolargs": "node --experimental-strip-types scripts/test-tool-args.mjs",
     "test:permission": "node scripts/test-permission-gate.mjs",
     "test:html-reference": "node --experimental-strip-types scripts/test-html-reference.mjs",
     "bundle": "node scripts/bundle-runtime.mjs",

@@ -1473,6 +1473,13 @@ body.sidebar-resizing * {
 }
 .udiff-row.removed .udiff-marker { color: #d64545; font-weight: 700; }
 .udiff-row.added .udiff-marker { color: #1a9e4b; font-weight: 700; }
+.udiff-hunk-label {
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+}
 .tool-result {
   color: var(--text-dim);
   background: transparent;

@@ -5,6 +5,7 @@ import { formatClock, formatTokens } from "../lib/format";
 import { collectFileArtifacts } from "../lib/artifacts";
 import { parseHtmlReferenceText } from "../lib/html-reference";
 import { diffLines } from "../lib/diff";
+import { extractEditPairs, normalizeTranscriptText } from "../lib/tool-args";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
@@ -1169,35 +1170,6 @@ const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language }: 
  * an escaped JSON fragment while the call is still streaming. Keep the
  * session data untouched and normalize only the visible representation.
  */
-function normalizeTranscriptText(value: unknown): string {
-  if (value == null) return "";
-  let text = typeof value === "string" ? value : String(value);
-  text = text.replace(/\r\n?/g, "\n");
-
-  const trimmed = text.trim();
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (typeof parsed === "string") text = parsed.replace(/\r\n?/g, "\n");
-    } catch {
-      /* Keep the original text when it is not a complete JSON string. */
-    }
-  }
-
-  // A partial toolcall or older transcript may still contain transport-level
-  // escape sequences. Decode them only when there are no real line breaks, so
-  // source code containing a literal "\\n" remains intact.
-  if (!text.includes("\n") && /\\(?:r\\n|n|r|t|\")/.test(text)) {
-    text = text
-      .replace(/\\r\\n/g, "\n")
-      .replace(/\\n/g, "\n")
-      .replace(/\\r/g, "\r")
-      .replace(/\\t/g, "\t")
-      .replace(/\\"/g, '"');
-  }
-  return text;
-}
-
 function parseToolArgs(run?: ToolRun, fallbackArgs?: unknown): Record<string, unknown> | null {
   const candidate = run?.args && hasToolArgumentObject(run.args) && Object.keys(run.args).length > 0 ? run.args : fallbackArgs ?? run?.args;
   if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
@@ -1352,34 +1324,57 @@ function renderToolArgs(name: string, run: ToolRun | undefined, fallbackArgs: un
   }
   if (isEdit || isWrite) {
     const path = normalizeTranscriptText(toolArg(args, ["path", "filePath", "file_path", "filename", "file"]));
-    const oldText = normalizeTranscriptText(toolArg(args, ["oldText", "old_text", "old", "before", "original"]));
-    const newText = normalizeTranscriptText(toolArg(args, ["newText", "new_text", "new", "after", "replacement", "content", "text"]));
-    const patch = normalizeTranscriptText(toolArg(args, ["patch", "diff"]));
-    const content = isEdit ? newText || patch : normalizeTranscriptText(toolArg(args, ["content", "text", "data", "newText", "new_text"]));
     const codeLang = languageForPath(path);
-    // Unified single-column diff for edits (the default); before/after blocks
-    // remain available via the Diff view setting.
-    if (isEdit && oldText && content && diffViewMode === "unified") {
+
+    // pi's edit tool passes an `edits` array of {oldText,newText} objects
+    // (one entry per replacement); other agents may use flat top-level fields.
+    const pairs = isEdit ? extractEditPairs(args) : [];
+
+    // Edits with recognizable before/after content render as diffs — unified
+    // single-column by default, before/after blocks via the Diff view setting.
+    if (isEdit && pairs.length > 0) {
       return (
         <div className="tool-operation">
           <div className="tool-operation-title">{language === "zh" ? "编辑" : "Edit"}{path ? ` · ${path}` : ""}</div>
-          <UnifiedDiffView oldText={oldText} newText={content} codeLang={codeLang} uiLang={language} />
+          {pairs.map((pair, index) => (
+            <div className="tool-code-section" key={index}>
+              {pairs.length > 1 && (
+                <div className="udiff-hunk-label">
+                  {language === "zh" ? `编辑 ${index + 1}/${pairs.length}` : `Edit ${index + 1} of ${pairs.length}`}
+                </div>
+              )}
+              {diffViewMode === "unified" && pair.old && pair.next ? (
+                <UnifiedDiffView oldText={pair.old} newText={pair.next} codeLang={codeLang} uiLang={language} />
+              ) : (
+                <>
+                  {pair.old && (
+                    <div className="tool-code-section">
+                      <div className="tool-code-label removed">{language === "zh" ? "原内容" : "Before"}</div>
+                      <ToolCode text={pair.old} language={codeLang} />
+                    </div>
+                  )}
+                  {pair.next && (
+                    <div className="tool-code-section">
+                      <div className="tool-code-label">{language === "zh" ? "新内容" : "After"}</div>
+                      <ToolCode text={pair.next} language={codeLang} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
         </div>
       );
     }
+
+    // write (or an edit with unrecognized argument shape): plain content view.
+    const patch = normalizeTranscriptText(toolArg(args, ["patch", "diff"]));
+    const content = isEdit ? patch : normalizeTranscriptText(toolArg(args, ["content", "text", "data", "newText", "new_text"]));
     const sections: ReactNode[] = [];
-    if (isEdit && oldText) {
-      sections.push(
-        <div className="tool-code-section" key="old">
-          <div className="tool-code-label removed">{language === "zh" ? "原内容" : "Before"}</div>
-          <ToolCode text={oldText} language={codeLang} />
-        </div>,
-      );
-    }
     if (content) {
       sections.push(
         <div className="tool-code-section" key="new">
-          <div className="tool-code-label">{isEdit ? (language === "zh" ? "新内容" : "After") : language === "zh" ? "写入内容" : "Written content"}</div>
+          <div className="tool-code-label">{isEdit ? (language === "zh" ? "补丁内容" : "Patch") : language === "zh" ? "写入内容" : "Written content"}</div>
           <ToolCode text={content} language={codeLang} />
         </div>,
       );
