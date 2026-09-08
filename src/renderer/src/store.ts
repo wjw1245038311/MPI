@@ -1083,6 +1083,11 @@ interface PiStore {
   openThreadIds: string[];
   activeThreadId: string | null;
   threads: Record<string, ThreadState>;
+  /** threadId -> true while that thread shows the interactive pi TUI terminal. */
+  tuiThreads: Record<string, boolean>;
+  /** threadId -> true when a TUI session wrote to the session file and the RPC
+   * bridge must be reopened from disk before the next GUI interaction. */
+  tuiDirty: Record<string, boolean>;
   /** Unsent composer content per draft key (see draftKeyFor), persisted by
    * the main process with LRU eviction so restarts do not lose input. */
   drafts: Record<string, ComposerDraft>;
@@ -1129,6 +1134,12 @@ interface PiStore {
   /** Create a new thread in the active project, prompting for a folder if none is open. */
   newTask: () => Promise<void>;
   closeThread: (id: string) => Promise<void>;
+  /** Toggle the active thread between GUI rendering and the interactive pi TUI terminal. */
+  toggleTui: (threadId: string) => Promise<void>;
+  /** Leave TUI mode for a thread (kills its PTY via TuiView unmount; defers the RPC reopen). */
+  exitTui: (threadId: string) => Promise<void>;
+  /** Reopen a tuiDirty thread's RPC bridge so it reloads history from disk. Call only when the thread is active. */
+  reopenTuiThread: (threadId: string) => Promise<void>;
   setActiveThread: (id: string) => void;
   sendPrompt: (threadId: string, text: string, images?: { data: string; mimeType: string }[], attachments?: { abs: string; name: string }[], mode?: "steer" | "followUp") => Promise<void>;
   setPendingFollowUp: (threadId: string, pending: PendingFollowUp | null) => void;
@@ -1396,6 +1407,11 @@ export const useStore = create<PiStore>()((set, get) => {
   openThreadIds: [],
   activeThreadId: null,
   threads: {},
+  // threadId -> true while that thread shows the interactive pi terminal.
+  tuiThreads: {},
+  // threadId -> true when a TUI session wrote to the session file and the RPC
+  // bridge must be reopened from disk before the next GUI interaction.
+  tuiDirty: {},
   drafts: {},
   fileTree: {},
   previewPath: null,
@@ -1918,6 +1934,57 @@ export const useStore = create<PiStore>()((set, get) => {
       const activeProjectCwd = activeThreadId ? threads[activeThreadId]?.cwd || null : null;
       return { openThreadIds, threads, activeThreadId, activeProjectCwd };
     });
+  },
+
+  toggleTui: async (threadId) => {
+    const t = get().threads[threadId];
+    // Drafts without a session file on disk can't be resumed by an interactive pi.
+    if (!t?.sessionFile) return;
+    if (get().tuiThreads[threadId]) {
+      await get().exitTui(threadId);
+      return;
+    }
+    // Entering: stop any in-flight RPC turn first, so the TUI process can take
+    // over the session file without two writers.
+    if (t.isStreaming) {
+      try {
+        await get().abortThread(threadId);
+      } catch {
+        /* abort is best-effort; the TUI still starts */
+      }
+    }
+    set((s) => ({ tuiThreads: { ...s.tuiThreads, [threadId]: true } }));
+  },
+
+  exitTui: async (threadId) => {
+    const was = !!get().tuiThreads[threadId];
+    set((s) => {
+      const next = { ...s.tuiThreads };
+      delete next[threadId];
+      return { tuiThreads: next, tuiDirty: was ? { ...s.tuiDirty, [threadId]: true } : s.tuiDirty };
+    });
+    if (!was) return;
+    // The PTY itself is killed by TuiView's unmount. If this thread is still on
+    // screen, reopen its RPC bridge now so it reloads whatever the TUI wrote.
+    if (threadId === get().activeThreadId) await get().reopenTuiThread(threadId);
+  },
+
+  reopenTuiThread: async (threadId) => {
+    const t = get().threads[threadId];
+    set((s) => {
+      const next = { ...s.tuiDirty };
+      delete next[threadId];
+      return { tuiDirty: next };
+    });
+    if (!t?.sessionFile || threadId !== get().activeThreadId) return;
+    // Same pattern as repairSession: the running pi process still holds the
+    // pre-TUI context — close and reopen so it reloads from the session file.
+    try {
+      await get().closeThread(threadId);
+      await get().goToThread(t.cwd, t.sessionFile);
+    } catch {
+      /* best-effort; the thread stays browsable either way */
+    }
   },
 
   setActiveThread: (id) =>

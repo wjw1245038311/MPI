@@ -1,16 +1,16 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getDisplayThreadTitle, normalizeThreadFile, parseSkillBlock, useStore } from "../store";
 import { Markdown } from "../lib/markdown";
-import { formatClock, formatTokens } from "../lib/format";
+import { formatClock } from "../lib/format";
 import { collectFileArtifacts } from "../lib/artifacts";
 import { parseHtmlReferenceText } from "../lib/html-reference";
 import { diffLines } from "../lib/diff";
 import { extractEditPairs, normalizeTranscriptText } from "../lib/tool-args";
-import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
-import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Gauge, Branch, ChevronRight, ChevronsDown, Star } from "./icons";
+import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, ChevronRight, ChevronsDown, Star, Terminal } from "./icons";
+import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
 
@@ -51,14 +51,20 @@ export function Chat() {
   const stickRef = useRef(true);
   const editInputRef = useRef<HTMLInputElement>(null);
   const language = useStore((s) => s.config?.language || "en");
-
-  // context-usage popover
-  const [ctxOpen, setCtxOpen] = useState(false);
-  const [ctxStats, setCtxStats] = useState<any>(null);
-  const [ctxComps, setCtxComps] = useState<{ count: number; lastAt: string | null } | null>(null);
-  const [ctxLoading, setCtxLoading] = useState(false);
-  const ctxRef = useRef<HTMLDivElement>(null);
-  useOutsideClose(ctxRef, ctxOpen, () => setCtxOpen(false));
+  // Pi TUI mode: the whole dialog becomes an interactive pi terminal.
+  const tuiMode = useStore((s) => !!s.tuiThreads[activeThreadId ?? ""]);
+  const tuiPrevThreadRef = useRef(activeThreadId);
+  useEffect(() => {
+    const prev = tuiPrevThreadRef.current;
+    tuiPrevThreadRef.current = activeThreadId;
+    if (!activeThreadId) return;
+    const st = useStore.getState();
+    // TUI mode is tied to what's on screen: switching away from a thread in
+    // TUI mode auto-exits it (PTY dies; its RPC bridge reloads from disk via
+    // tuiDirty when the user comes back).
+    if (prev && prev !== activeThreadId && st.tuiThreads[prev]) void st.exitTui(prev);
+    if (st.tuiDirty[activeThreadId]) void st.reopenTuiThread(activeThreadId);
+  }, [activeThreadId]);
 
   const streaming = thread?.streaming;
   const count = (thread?.messages.length || 0) + (streaming ? 1 : 0);
@@ -278,90 +284,6 @@ export function Chat() {
     setEditing(false);
   };
 
-  // Compaction count is read straight from the session JSONL (no live bridge
-  // needed), so it stays accurate across restarts and for disconnected threads.
-  const loadCompactions = async () => {
-    const file = useStore.getState().threads[activeThreadId ?? ""]?.sessionFile;
-    if (!file) {
-      setCtxComps(null);
-      return;
-    }
-    try {
-      setCtxComps(await window.pi.thread.getCompactionStats(file));
-    } catch {
-      setCtxComps(null);
-    }
-  };
-
-  const loadCtx = async () => {
-    if (!activeThreadId) return;
-    setCtxLoading(true);
-    void loadCompactions();
-    try {
-      const id = await useStore.getState().ensureConnected(activeThreadId);
-      setCtxStats(id ? await window.pi.thread.getStats(id) : null);
-    } catch {
-      setCtxStats(null);
-    }
-    setCtxLoading(false);
-  };
-  const toggleCtx = () => {
-    const next = !ctxOpen;
-    setCtxOpen(next);
-    if (next) loadCtx();
-  };
-
-  // Refresh usage stats once a compaction run finishes (pi reports tokens=null until the next reply).
-  const compacting = !!thread?.compacting;
-  const prevCompactingRef = useRef(false);
-  useEffect(() => {
-    if (ctxOpen && prevCompactingRef.current && !compacting) loadCtx();
-    prevCompactingRef.current = compacting;
-  }, [compacting, ctxOpen]);
-
-  const ctxUsage = ctxStats?.contextUsage;
-  // After compaction pi reports tokens=null until the next LLM response; fall back to the post-compaction estimate.
-  const ctxIsEstimate = !!ctxUsage && typeof ctxUsage.tokens !== "number";
-  const ctxUsed = !ctxUsage ? 0 : (typeof ctxUsage.tokens === "number" ? ctxUsage.tokens : thread?.contextEstimate ?? 0);
-  const ctxHasValue = !ctxUsage || (!ctxIsEstimate || typeof thread?.contextEstimate === "number");
-  const ctxTotal = ctxUsage?.contextWindow ?? 0;
-  const ctxRemaining = Math.max(0, ctxTotal - ctxUsed);
-  const ctxPctRaw = ctxUsage ? (typeof ctxUsage.percent === "number" ? ctxUsage.percent : ctxTotal ? (ctxUsed / ctxTotal) * 100 : 0) : 0;
-  // pi reports percent as a raw float — display at most two decimals.
-  const ctxPct = Math.round(ctxPctRaw * 100) / 100;
-  // Threshold bands for "should I compact?": ≤60% green, 60–74% yellow,
-  // 75–89% orange, ≥90% red.
-  const ctxBand = ctxPct >= 90 ? "hi" : ctxPct >= 75 ? "mid" : ctxPct >= 60 ? "warn" : "low";
-
-  // Compaction advice: usage-band guidance plus a note once repeated
-  // compactions start eroding early-session detail.
-  const ctxAdvice = (() => {
-    if (!ctxUsage) return null;
-    let base: string;
-    switch (ctxBand) {
-      case "hi":
-        base = language === "zh" ? "占用过高，建议立即手动压缩（自动压缩也可能随时触发）" : "Very high — compact now (auto-compaction may trigger at any time)";
-        break;
-      case "mid":
-        base = language === "zh" ? "占用偏高，建议手动压缩为后续回复留出空间" : "Running high — consider compacting to leave headroom for upcoming replies";
-        break;
-      case "warn":
-        base = language === "zh" ? "接近警戒线，长任务可提前手动压缩" : "Approaching the warning zone — on long tasks, compact early";
-        break;
-      default:
-        base = language === "zh" ? "占用较低，暂无需压缩" : "Usage is low — no compaction needed yet";
-    }
-    const n = ctxComps?.count ?? 0;
-    if (n >= 3) {
-      base +=
-        language === "zh"
-          ? `；本会话已压缩 ${n} 次，早期细节可能丢失，重要结论建议写入文件或记忆`
-          : `; compacted ${n}× this session — early details may be lost, write key conclusions to files or memory`;
-    }
-    return base;
-  })();
-  const ctxCompLast = ctxComps?.lastAt ? new Date(ctxComps.lastAt).toLocaleString() : null;
-
   return (
     <section className="main">
       <div className="chat-head">
@@ -406,6 +328,8 @@ export function Chat() {
             <span className="spinner" /> 连接中
           </span>
         )}
+        {/* All action buttons live on the right; the title keeps the middle. */}
+        <div className="spacer" />
         {activeThreadId && (
           <button
             className={`iconbtn ${isPinned ? "on" : ""}`}
@@ -418,88 +342,45 @@ export function Chat() {
         <button className="iconbtn" title="重命名" onClick={startRename}>
           <Edit size={14} />
         </button>
-        <div className="spacer" />
-        <div className="ctx-wrap" ref={ctxRef}>
-          <button className={`iconbtn ${ctxOpen ? "on" : ""}`} title="当前会话上下文用量" onClick={toggleCtx}>
-            <Gauge size={15} />
-          </button>
-          {ctxOpen && (
-            <div className="ctx-pop">
-              <div className="ctx-pop-head">
-                <span>上下文</span>
-                <button className="ctx-refresh" title="刷新" onClick={loadCtx}>
-                  <Refresh size={12} />
-                </button>
-              </div>
-              {ctxLoading ? (
-                <div className="ctx-loading">
-                  <span className="spinner" />
-                </div>
-              ) : ctxUsage ? (
-                <>
-                  <div className={`ctx-bignum ${ctxBand}`}>
-                    {ctxHasValue ? `${ctxIsEstimate ? "~" : ""}${formatTokens(ctxUsed)}` : "—"}
-                    <span className="ctx-of"> / {formatTokens(ctxTotal)}</span>
-                    {ctxUsage && ctxHasValue && (
-                      <span className={`ctx-pct ${ctxBand}`} title={language === "zh" ? "上下文占用比例" : "Context usage ratio"}>
-                        {ctxPct}%
-                      </span>
-                    )}
-                  </div>
-                  <div className={`ctx-bar ${ctxBand} ${ctxIsEstimate ? "est" : ""}`}>
-                    <div className="ctx-bar-fill" style={{ width: `${Math.min(100, ctxHasValue ? ctxPct : 0)}%` }} />
-                  </div>
-                  {ctxIsEstimate && (
-                    <div className="ctx-hint">压缩后估算值，下次回复后更新</div>
-                  )}
-                  <div className="ctx-rows">
-                    <div className="ctx-row">
-                      <span>已使用{ctxIsEstimate ? "（估）" : ""}</span>
-                      <b>{ctxHasValue ? `${ctxIsEstimate ? "~" : ""}${formatTokens(ctxUsed)}` : "—"}</b>
-                    </div>
-                    <div className="ctx-row">
-                      <span>总上下文</span>
-                      <b>{formatTokens(ctxTotal)}</b>
-                    </div>
-                    <div className="ctx-row">
-                      <span>剩余</span>
-                      <b>{formatTokens(ctxRemaining)}</b>
-                    </div>
-                    <div
-                      className="ctx-row"
-                      title={
-                        ctxCompLast
-                          ? language === "zh"
-                            ? `最近一次压缩：${ctxCompLast}`
-                            : `Last compaction: ${ctxCompLast}`
-                          : undefined
-                      }
-                    >
-                      <span>{language === "zh" ? "已压缩" : "Compactions"}</span>
-                      <b>{(ctxComps?.count ?? 0)}{language === "zh" ? " 次" : "×"}</b>
-                    </div>
-                  </div>
-                  {ctxAdvice && <div className={`ctx-advice ${ctxBand}`}>{ctxAdvice}</div>}
-                </>
-              ) : (
-                <div className="ctx-empty">暂无上下文数据</div>
-              )}
-            </div>
-          )}
-        </div>
         <button className="iconbtn" title="切换工作文件夹" onClick={() => switchThreadFolder(activeThreadId)}>
           <Folder size={15} />
         </button>
         <button className="iconbtn" title="新建会话" onClick={() => newSessionInThread(activeThreadId)}>
           <Refresh size={15} />
         </button>
+        {activeThreadId && (
+          <button
+            className={`iconbtn ${tuiMode ? "on" : ""}`}
+            disabled={!thread.sessionFile}
+            title={
+              !thread.sessionFile
+                ? language === "zh"
+                  ? "会话尚未建立，暂不可用"
+                  : "Session not established yet"
+                : tuiMode
+                  ? language === "zh"
+                    ? "切换到 Pi GUI（自定义界面）"
+                    : "Switch to Pi GUI (custom interface)"
+                  : language === "zh"
+                    ? "切换到 Pi TUI 终端（交互式 pi）"
+                    : "Switch to Pi TUI terminal (interactive pi)"
+            }
+            onClick={() => useStore.getState().toggleTui(activeThreadId)}
+          >
+            <Terminal size={16} />
+          </button>
+        )}
         <button className="iconbtn" title="切换预览" onClick={togglePreview}>
           <PanelRight size={16} />
         </button>
       </div>
 
-      <div className="chat-stage">
-        <div className="chat-scroll" ref={scrollRef} onScroll={rememberScrollPosition}>
+      {tuiMode ? (
+        <TuiView threadId={activeThreadId} cwd={thread.cwd} sessionFile={thread.sessionFile} />
+      ) : (
+        <>
+          <div className="chat-stage">
+            <div className="chat-scroll" ref={scrollRef} onScroll={rememberScrollPosition}>
           <div className="messages">
             {headGroups.map((g) => (
               <MessageGroup key={g.key} threadId={activeThreadId} group={g} toolRuns={thread.toolRuns} locked={thread.isStreaming} onPreviewImage={setPreviewImage} />
@@ -571,7 +452,9 @@ export function Chat() {
           </button>
         </div>
       )}
-      <Composer threadId={activeThreadId} />
+          <Composer threadId={activeThreadId} />
+        </>
+      )}
       {previewImage && (
         <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" onMouseDown={() => setPreviewImage(null)}>
           <button className="image-lightbox-close" title="关闭" onClick={() => setPreviewImage(null)}>×</button>

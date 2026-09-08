@@ -283,3 +283,10 @@ export const Plug = (p: P) => (
     <path d="M12 15.5V20.5" />
   </svg>
 );
+export const Terminal = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4" width="18" height="16" rx="2.5" />
+    <path d="m7 9 3 3-3 3" />
+    <path d="M12.5 15H17" />
+  </svg>
+);

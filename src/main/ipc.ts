@@ -35,6 +35,7 @@ import {
 import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtimeKind } from "./pi-bridge";
 import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
+import { registerTuiIpc } from "./tui";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
 import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
@@ -597,6 +598,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   sendToRenderer = send;
   systemNotifications = createSystemNotificationCenter(getWin);
   warmEnabled = true;
+  // Pi TUI terminal sessions (interactive pi in a PTY, xterm.js in renderer).
+  registerTuiIpc(ipcMain, send);
   // ---- remote companion backend -----------------------------------------
   // The remote surface is deliberately built beside the existing renderer IPC
   // rather than exposing renderer channels to the network. It receives only

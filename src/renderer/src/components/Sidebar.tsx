@@ -4,7 +4,7 @@ import { localizeAutomationThreadTitle, useStore } from "../store";
 import { fileIcon, formatTokens } from "../lib/format";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
-import { Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, At, Search, Settings, Help, Refresh, Gauge, Smartphone, Sidebar as SidebarIcon } from "./icons";
+import { Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, Plug, Search, Sidebar as SidebarIcon } from "./icons";
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
 
@@ -82,10 +82,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   );
   const runningSet = useMemo(() => new Set(runningKey ? runningKey.split("\u0000") : []), [runningKey]);
 
-  // total-usage popover (sidebar footer)
-  const [usageOpen, setUsageOpen] = useState(false);
+  // token-usage readout in the sidebar footer (today + all-time), always visible
   const [usageData, setUsageData] = useState<any>(null);
-  const [usageLoading, setUsageLoading] = useState(false);
   const [projectMenu, setProjectMenu] = useState<{ cwd: string; name: string; pinned: boolean; pinnedRank: number; pinnedCount: number; x: number; y: number } | null>(null);
   const [threadMenu, setThreadMenu] = useState<{ cwd: string; file: string; name: string; pinned: boolean; pinnedRank: number; pinnedCount: number; x: number; y: number } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ cwd: string; file: string; name: string } | null>(null);
@@ -93,11 +91,9 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const [dragItem, setDragItem] = useState<{ kind: "project" | "thread"; id: string } | null>(null);
   const [dropTarget, setDropTarget] = useState<{ kind: "project" | "thread"; id: string; pos: "before" | "after" } | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(initialSidebarWidth);
-  const usageRef = useRef<HTMLDivElement>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
   const threadMenuRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<{ startX: number; startWidth: number; width: number } | null>(null);
-  useOutsideClose(usageRef, usageOpen, () => setUsageOpen(false));
   useOutsideClose(projectMenuRef, !!projectMenu, () => setProjectMenu(null));
   useOutsideClose(threadMenuRef, !!threadMenu, () => setThreadMenu(null));
 
@@ -171,19 +167,27 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   };
 
   const loadUsage = async () => {
-    setUsageLoading(true);
     try {
       setUsageData(await window.pi.app.getTotalUsage());
     } catch {
-      setUsageData(null);
+      // Keep whatever was shown before; the readout is best-effort.
     }
-    setUsageLoading(false);
   };
-  const toggleUsage = () => {
-    const next = !usageOpen;
-    setUsageOpen(next);
-    if (next) loadUsage();
-  };
+
+  // The sidebar unmounts when collapsed, so this also runs on every reopen.
+  // Refresh again once streaming finishes (new usage lands then) and poll
+  // lightly to pick up activity from terminal pi sessions.
+  useEffect(() => {
+    void loadUsage();
+    const id = setInterval(loadUsage, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const prevRunningKey = useRef(runningKey);
+  useEffect(() => {
+    if (prevRunningKey.current && !runningKey) void loadUsage();
+    prevRunningKey.current = runningKey;
+  }, [runningKey]);
 
   const toggleProject = useStore((s) => s.toggleProject);
   const openThread = useStore((s) => s.openThread);
@@ -328,7 +332,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
           </button>
           <button className="sb-nav-item" onClick={() => useStore.getState().openPlugins()}>
             <span className="ico">
-              <At size={15} />
+              <Plug size={15} />
             </span>
             扩展功能
           </button>
@@ -533,54 +537,29 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
         )}
       </div>
 
+      {/* 设置/帮助已随顶部标题栏去重移除；手机远程控制入口暂缓（待办 P1-10，见
+          improvement-suggestions.md）——onOpenRemote/remoteOpen props 保留，恢复时加回按钮即可。 */}
       <div className="sb-foot">
-        <button className="iconbtn" title={language === "zh" ? "设置" : "Settings"} onClick={() => useStore.getState().openSettings()}>
-          <Settings size={15} />
-        </button>
-        <span className="sb-foot-spacer" aria-hidden="true" />
-        <button
-          className={`iconbtn ${remoteOpen ? "on" : ""}`}
-          title={language === "zh" ? "手机远程控制" : "Phone remote control"}
-          aria-label={language === "zh" ? "打开手机远程控制配置" : "Open phone remote control settings"}
-          onClick={onOpenRemote}
+        <div
+          className="usage-inline"
+          title={
+            usageData
+              ? language === "zh"
+                ? `今日 ${formatTokens(usageData.todayTokens)} · 总计 ${formatTokens(usageData.tokens)}${usageData.cost > 0 ? ` · $${usageData.cost.toFixed(4)}` : ""}（${usageData.sessions} 个会话）`
+                : `Today ${formatTokens(usageData.todayTokens)} · Total ${formatTokens(usageData.tokens)}${usageData.cost > 0 ? ` · $${usageData.cost.toFixed(4)}` : ""} (${usageData.sessions} sessions)`
+              : undefined
+          }
         >
-          <Smartphone size={15} />
-        </button>
-        <div className="usage-wrap" ref={usageRef}>
-          <button className={`iconbtn ${usageOpen ? "on" : ""}`} title={language === "zh" ? "Pi 合计令牌用量" : "Total Pi token usage"} onClick={toggleUsage}>
-            <Gauge size={15} />
-          </button>
-          {usageOpen && (
-            <div className="usage-pop">
-              <div className="usage-pop-head">
-                <span>Pi 合计用量</span>
-                <button className="ctx-refresh" title="刷新" onClick={loadUsage}>
-                  <Refresh size={12} />
-                </button>
-              </div>
-              {usageLoading ? (
-                <div className="ctx-loading">
-                  <span className="spinner" />
-                </div>
-              ) : usageData ? (
-                <>
-                  <div className="usage-bignum">{formatTokens(usageData.tokens)}</div>
-                  <div className="usage-sub">{language === "zh" ? `令牌 · ${usageData.sessions} 个会话` : `Tokens · ${usageData.sessions} ${usageData.sessions === 1 ? "session" : "sessions"}`}</div>
-                  {usageData.cost > 0 && <div className="usage-cost">合计 ${usageData.cost.toFixed(4)}</div>}
-                </>
-              ) : (
-                <div className="ctx-empty">暂无用量数据</div>
-              )}
-            </div>
-          )}
+          <span className="ui-row">
+            <span className="ui-label">{language === "zh" ? "今日用量" : "Today"}</span>
+            <b>{formatTokens(usageData?.todayTokens)}</b>
+          </span>
+          <span className="ui-sep" aria-hidden="true">·</span>
+          <span className="ui-row">
+            <span className="ui-label">{language === "zh" ? "总用量" : "Total"}</span>
+            <b>{formatTokens(usageData?.tokens)}</b>
+          </span>
         </div>
-        <button
-          className="iconbtn"
-          title={language === "zh" ? "帮助" : "Help"}
-          onClick={() => useStore.getState().pushToast("info", language === "zh" ? "MPI · 继承终端 pi" : "MPI · inherits terminal pi")}
-        >
-          <Help size={15} />
-        </button>
       </div>
       {projectMenu && (
         <div

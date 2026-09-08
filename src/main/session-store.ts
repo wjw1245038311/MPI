@@ -449,11 +449,20 @@ export interface TotalUsage {
   cost: number;
   /** Number of session files scanned. */
   sessions: number;
+  /** Like `tokens`, but only messages whose entry timestamp is today (local). */
+  todayTokens: number;
+  /** Like `cost`, but only messages whose entry timestamp is today (local). */
+  todayCost: number;
 }
 
-async function sumUsageInFile(file: string): Promise<{ tokens: number; cost: number }> {
+async function sumUsageInFile(
+  file: string,
+  dayStartMs: number,
+): Promise<{ tokens: number; cost: number; todayTokens: number; todayCost: number }> {
   let tokens = 0;
   let cost = 0;
+  let todayTokens = 0;
+  let todayCost = 0;
   try {
     await forEachLine(file, (line) => {
       let e: any;
@@ -463,22 +472,30 @@ async function sumUsageInFile(file: string): Promise<{ tokens: number; cost: num
         return;
       }
       const u = e?.message?.usage;
-      if (u && typeof u === "object") {
-        if (typeof u.totalTokens === "number") tokens += u.totalTokens;
-        const c = u.cost?.total;
-        if (typeof c === "number") cost += c;
+      if (!u || typeof u !== "object") return;
+      const t = typeof u.totalTokens === "number" ? u.totalTokens : 0;
+      const c = typeof u.cost?.total === "number" ? u.cost.total : 0;
+      tokens += t;
+      cost += c;
+      if (t || c) {
+        // Entries without a parseable timestamp count toward the totals only.
+        const ts = Date.parse(e.timestamp || "");
+        if (!Number.isNaN(ts) && ts >= dayStartMs) {
+          todayTokens += t;
+          todayCost += c;
+        }
       }
     });
   } catch {
     /* ignore unreadable file */
   }
-  return { tokens, cost };
+  return { tokens, cost, todayTokens, todayCost };
 }
 
-/** Aggregate token/cost usage across every session file. */
+/** Aggregate token/cost usage across every session file (all-time plus local-today). */
 export async function getTotalUsage(): Promise<TotalUsage> {
   const root = getSessionsDir();
-  if (!existsSync(root)) return { tokens: 0, cost: 0, sessions: 0 };
+  if (!existsSync(root)) return { tokens: 0, cost: 0, sessions: 0, todayTokens: 0, todayCost: 0 };
   const files: string[] = [];
   try {
     const dirs = readdirSync(root, { withFileTypes: true })
@@ -492,21 +509,27 @@ export async function getTotalUsage(): Promise<TotalUsage> {
       }
     }
   } catch {
-    return { tokens: 0, cost: 0, sessions: 0 };
+    return { tokens: 0, cost: 0, sessions: 0, todayTokens: 0, todayCost: 0 };
   }
+  const now = new Date();
+  const dayStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   let tokens = 0;
   let cost = 0;
+  let todayTokens = 0;
+  let todayCost = 0;
   let cursor = 0;
   async function worker() {
     while (cursor < files.length) {
       const idx = cursor++;
-      const r = await sumUsageInFile(files[idx]);
+      const r = await sumUsageInFile(files[idx], dayStartMs);
       tokens += r.tokens;
       cost += r.cost;
+      todayTokens += r.todayTokens;
+      todayCost += r.todayCost;
     }
   }
   await Promise.all(Array.from({ length: Math.min(8, Math.max(1, files.length)) }, worker));
-  return { tokens, cost, sessions: files.length };
+  return { tokens, cost, sessions: files.length, todayTokens, todayCost };
 }
 
 /** Read every session file under the sessions dir, grouped by real cwd. */

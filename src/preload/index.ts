@@ -155,6 +155,18 @@ const api = {
     purge: (id: string) => ipcRenderer.invoke("trash:purge", id),
     empty: () => ipcRenderer.invoke("trash:empty"),
   },
+  tui: {
+    start: (args: { threadId: string; cwd: string; sessionFile?: string | null }) =>
+      ipcRenderer.invoke("tui:start", args) as Promise<{ ok: boolean; error?: string; gen?: number }>,
+    write: (threadId: string, data: string) => ipcRenderer.invoke("tui:write", { threadId, data }),
+    resize: (threadId: string, cols: number, rows: number) =>
+      ipcRenderer.invoke("tui:resize", { threadId, cols, rows }),
+    // `gen` makes the stop conditional: it only kills the PTY owned by that
+    // generation, so a stale effect's cleanup can't kill a newer terminal.
+    stop: (threadId: string, gen?: number) => ipcRenderer.invoke("tui:stop", { threadId, gen }),
+    onData: (cb: (p: { threadId: string; data: string }) => void) => on("tui:data", cb),
+    onExit: (cb: (p: { threadId: string; code: number | null }) => void) => on("tui:exit", cb),
+  },
   settings: {
     getModels: () => ipcRenderer.invoke("settings:getModels"),
     testModel: (args: { providerId: string; provider: Record<string, unknown>; modelId: string }) =>

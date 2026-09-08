@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { draftKeyFor, useStore } from "../store";
-import { modelShort } from "../lib/format";
+import { formatTokens, modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage } from "../lib/types";
-import { Plus, Paperclip, ImageIcon, Send, Stop, Smile, At, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress } from "./icons";
+import { Plus, Paperclip, ImageIcon, Send, Stop, Smile, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh } from "./icons";
 
 let _pid = 0;
 const pid = () => `p${_pid++}`;
 /** Stable empties so a draft-less thread does not allocate per render. */
 const EMPTY_DRAFT: ComposerDraft = { text: "", images: [], files: [], htmlReferences: [] };
 const EMPTY_REFS: HtmlElementReference[] = [];
+/** Ring geometry for the context-usage button (SVG viewBox 20×20). */
+const RING_R = 7.5;
+const RING_C = 2 * Math.PI * RING_R;
 const MAX_PASTED_FILE_BYTES = 50_000_000;
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
@@ -106,6 +109,8 @@ export function Composer({ threadId }: { threadId: string }) {
   const thinking = useStore((s) => s.threads[threadId]?.thinking);
   const cwd = useStore((s) => s.threads[threadId]?.cwd || "");
   const sessionFile = useStore((s) => s.threads[threadId]?.sessionFile || null);
+  // Post-compaction token estimate (pi reports tokens=null until the next reply).
+  const contextEstimate = useStore((s) => s.threads[threadId]?.contextEstimate);
   const isDraftTask = useStore(
     (s) => !s.threads[threadId]?.messages.some((message) => message.role === "user" || message.role === "assistant"),
   );
@@ -151,6 +156,8 @@ export function Composer({ threadId }: { threadId: string }) {
   const [modelOpen, setModelOpen] = useState(false);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const [cmdOpen, setCmdOpen] = useState(false);
+  // Thinking-level options expanded inside the model popover.
+  const [thinkOpen, setThinkOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [permOpen, setPermOpen] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
@@ -168,6 +175,124 @@ export function Composer({ threadId }: { threadId: string }) {
   useOutsideClose(cmdRef, cmdOpen, () => setCmdOpen(false));
   useOutsideClose(modelRef, modelOpen, () => setModelOpen(false));
   useOutsideClose(projectRef, projectOpen, () => setProjectOpen(false));
+
+  // Collapse the thinking-level options whenever the model popover closes.
+  useEffect(() => {
+    if (!modelOpen) setThinkOpen(false);
+  }, [modelOpen]);
+
+  // Context-usage ring + popover (bottom bar, before the model pill).
+  const [ctxOpen, setCtxOpen] = useState(false);
+  const [ctxStats, setCtxStats] = useState<any>(null);
+  const [ctxComps, setCtxComps] = useState<{ count: number; lastAt: string | null } | null>(null);
+  const [ctxLoading, setCtxLoading] = useState(false);
+  const ctxRef = useRef<HTMLDivElement>(null);
+  useOutsideClose(ctxRef, ctxOpen, () => setCtxOpen(false));
+
+  // Compaction count is read straight from the session JSONL (no live bridge
+  // needed), so it stays accurate across restarts and for disconnected threads.
+  const loadCompactions = async () => {
+    if (!sessionFile) {
+      setCtxComps(null);
+      return;
+    }
+    try {
+      const stats = await window.pi.thread.getCompactionStats(sessionFile);
+      // Guard: the composer instance survives thread switches, so a stale
+      // in-flight read must not overwrite the new thread's data.
+      if (useStore.getState().activeThreadId === threadId) setCtxComps(stats);
+    } catch {
+      if (useStore.getState().activeThreadId === threadId) setCtxComps(null);
+    }
+  };
+
+  const loadCtx = async () => {
+    setCtxLoading(true);
+    void loadCompactions();
+    try {
+      const id = await useStore.getState().ensureConnected(threadId);
+      if (useStore.getState().activeThreadId !== threadId) return; // switched away mid-flight
+      setCtxStats(id ? await window.pi.thread.getStats(id) : null);
+    } catch {
+      if (useStore.getState().activeThreadId === threadId) setCtxStats(null);
+    }
+    if (useStore.getState().activeThreadId === threadId) setCtxLoading(false);
+  };
+
+  // The ring is always visible, so keep it fresh: load on thread switch,
+  // refresh when streaming/compaction ends (new usage lands then), and poll
+  // while a run is in flight so the arc grows live.
+  useEffect(() => {
+    setCtxStats(null);
+    setCtxComps(null);
+    void loadCtx();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
+
+  const prevStreamingRef = useRef(isStreaming);
+  useEffect(() => {
+    if (prevStreamingRef.current && !isStreaming) void loadCtx();
+    prevStreamingRef.current = isStreaming;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming]);
+
+  const prevCompactingRef = useRef(compacting);
+  useEffect(() => {
+    if (prevCompactingRef.current && !compacting) void loadCtx();
+    prevCompactingRef.current = compacting;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compacting]);
+
+  useEffect(() => {
+    if (!isStreaming) return;
+    const id = setInterval(loadCtx, 15_000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming]);
+
+  const ctxUsage = ctxStats?.contextUsage;
+  // After compaction pi reports tokens=null until the next LLM response; fall back to the post-compaction estimate.
+  const ctxIsEstimate = !!ctxUsage && typeof ctxUsage.tokens !== "number";
+  const ctxUsed = !ctxUsage ? 0 : (typeof ctxUsage.tokens === "number" ? ctxUsage.tokens : contextEstimate ?? 0);
+  const ctxHasValue = !ctxUsage || (!ctxIsEstimate || typeof contextEstimate === "number");
+  const ctxTotal = ctxUsage?.contextWindow ?? 0;
+  const ctxPctRaw = ctxUsage ? (typeof ctxUsage.percent === "number" ? ctxUsage.percent : ctxTotal ? (ctxUsed / ctxTotal) * 100 : 0) : 0;
+  // pi reports percent as a raw float — display at most two decimals.
+  const ctxPct = Math.round(ctxPctRaw * 100) / 100;
+  // Threshold bands for "should I compact?": ≤60% green, 60–74% yellow,
+  // 75–89% orange, ≥90% red.
+  const ctxBand = ctxPct >= 90 ? "hi" : ctxPct >= 75 ? "mid" : ctxPct >= 60 ? "warn" : "low";
+  // Ring arc percent (empty track until the first stats arrive).
+  const ringPct = ctxHasValue && ctxTotal > 0 ? Math.min(100, ctxPct) : 0;
+
+  // Compaction advice: usage-band guidance plus a note once repeated
+  // compactions start eroding early-session detail.
+  const ctxAdvice = (() => {
+    if (!ctxUsage) return null;
+    let base: string;
+    switch (ctxBand) {
+      case "hi":
+        base = language === "zh" ? "占用过高，建议立即手动压缩（自动压缩也可能随时触发）" : "Very high — compact now (auto-compaction may trigger at any time)";
+        break;
+      case "mid":
+        base = language === "zh" ? "占用偏高，建议手动压缩为后续回复留出空间" : "Running high — consider compacting to leave headroom for upcoming replies";
+        break;
+      case "warn":
+        base = language === "zh" ? "接近警戒线，长任务可提前手动压缩" : "Approaching the warning zone — on long tasks, compact early";
+        break;
+      default:
+        base = language === "zh" ? "占用较低，暂无需压缩" : "Usage is low — no compaction needed yet";
+    }
+    const n = ctxComps?.count ?? 0;
+    if (n >= 3) {
+      base +=
+        language === "zh"
+          ? `；本会话已压缩 ${n} 次，早期细节可能丢失，重要结论建议写入文件或记忆`
+          : `; compacted ${n}× this session — early details may be lost, write key conclusions to files or memory`;
+    }
+    return base;
+  })();
+  const ctxCompLast = ctxComps?.lastAt ? new Date(ctxComps.lastAt).toLocaleString() : null;
 
   // extension-injected editor text
   const lastInjected = useRef<string | undefined>(undefined);
@@ -765,7 +890,7 @@ export function Composer({ threadId }: { threadId: string }) {
             </div>
             <div className="pill composer-optional-action" ref={cmdRef}>
               <button className="pill-btn" title={language === "zh" ? "斜杠命令 / 技能" : "Slash commands / skills"} onClick={toggleCommands}>
-                <At size={14} /> 命令
+                <span className="cmd-slash">/</span> 命令
               </button>
               {cmdOpen && (
                 <div className="pill-pop command-pop">
@@ -804,6 +929,99 @@ export function Composer({ threadId }: { threadId: string }) {
           </div>
 
           <div className="cb-right">
+            <div className="pill ctx-ring-wrap" ref={ctxRef}>
+              <button
+                type="button"
+                className={`ctx-ring-btn ${ctxOpen ? "on" : ""}`}
+                title="当前会话上下文用量"
+                aria-label="当前会话上下文用量"
+                onClick={() => {
+                  const next = !ctxOpen;
+                  setCtxOpen(next);
+                  if (next) void loadCtx();
+                }}
+              >
+                <svg className={`ctx-ring ${ctxBand}`} width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
+                  <circle className="track" cx="10" cy="10" r={RING_R} />
+                  {ringPct > 0 && (
+                    <circle
+                      className="fill"
+                      cx="10"
+                      cy="10"
+                      r={RING_R}
+                      strokeDasharray={`${(ringPct / 100) * RING_C} ${RING_C}`}
+                      transform="rotate(-90 10 10)"
+                    />
+                  )}
+                </svg>
+              </button>
+              {ctxOpen && (
+                <div className="ctx-pop">
+                  <div className="ctx-pop-head">
+                    <span>上下文窗口</span>
+                    <div className="ctx-pop-actions">
+                      <button className="ctx-refresh" title="刷新" onClick={() => void loadCtx()}>
+                        <Refresh size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className={`ctx-compact ${compacting ? "busy" : ""}`}
+                        disabled={!connected || isStreaming || compacting || !hasMessages}
+                        title={language === "zh" ? "总结较早的消息以释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}
+                        onClick={() => void compactContext(threadId)}
+                      >
+                        <Compress size={12} />
+                      </button>
+                    </div>
+                  </div>
+                  {model && <div className="ctx-model">{modelShort(model)}</div>}
+                  {ctxLoading ? (
+                    <div className="ctx-loading">
+                      <span className="spinner" />
+                    </div>
+                  ) : ctxUsage ? (
+                    <>
+                      <div className={`ctx-bignum ${ctxBand}`}>
+                        {ctxHasValue ? `${ctxIsEstimate ? "~" : ""}${formatTokens(ctxUsed)}` : "—"}
+                        <span className="ctx-of"> / {formatTokens(ctxTotal)}</span>
+                        {ctxUsage && ctxHasValue && (
+                          <span className={`ctx-pct ${ctxBand}`} title={language === "zh" ? "上下文占用比例" : "Context usage ratio"}>
+                            {ctxPct}%
+                          </span>
+                        )}
+                      </div>
+                      <div className={`ctx-bar ${ctxBand} ${ctxIsEstimate ? "est" : ""}`}>
+                        <div className="ctx-bar-fill" style={{ width: `${Math.min(100, ctxHasValue ? ctxPct : 0)}%` }} />
+                      </div>
+                      {ctxIsEstimate && (
+                        <div className="ctx-hint">压缩后估算值，下次回复后更新</div>
+                      )}
+                      <div className="ctx-hint">
+                        {language === "zh" ? "按当前已渲染消息计算，非累计账单 tokens" : "Calculated from rendered messages, not cumulative billed tokens"}
+                      </div>
+                      <div className="ctx-rows">
+                        <div
+                          className="ctx-row"
+                          title={
+                            ctxCompLast
+                              ? language === "zh"
+                                ? `最近一次压缩：${ctxCompLast}`
+                                : `Last compaction: ${ctxCompLast}`
+                              : undefined
+                          }
+                        >
+                          <span>{language === "zh" ? "已压缩" : "Compactions"}</span>
+                          <b>{(ctxComps?.count ?? 0)}{language === "zh" ? " 次" : "×"}</b>
+                        </div>
+                      </div>
+                      {ctxAdvice && <div className={`ctx-advice ${ctxBand}`}>{ctxAdvice}</div>}
+                    </>
+                  ) : (
+                    <div className="ctx-empty">暂无上下文数据</div>
+                  )}
+                </div>
+              )}
+            </div>
             <div className="pill composer-model-pill" ref={modelRef}>
               <button className="pill-btn" onClick={() => setModelOpen((v) => !v)} title="模型与思考等级">
                 {modelShort(model)}
@@ -855,42 +1073,44 @@ export function Composer({ threadId }: { threadId: string }) {
                   {levelList.length > 0 && (
                     <>
                       <div className="pop-divider" />
-                      <div className="pop-head">思考等级</div>
-                      <div className="think-chips">
-                        {(["off", ...levelList] as string[]).map((l) => {
-                          const mapped = mappedThinkingLevel(l);
-                          return (
-                            <button
-                              key={l}
-                              className={`think-chip ${thinking === l ? "active" : ""}`}
-                              onClick={() => {
-                                setThinking(threadId, l);
-                                setModelOpen(false);
-                              }}
-                            >
-                              <span>{reasoningLevelLabel(l, language)}</span>
-                              {mapped && <span className="think-chip-map">→ {mapped}</span>}
-                            </button>
-                          );
-                        })}
+                      <div className="think-row">
+                        <span className="think-row-label">思考等级</span>
+                        <button
+                          type="button"
+                          className={`think-pill ${thinkOpen ? "open" : ""}`}
+                          onClick={() => setThinkOpen(!thinkOpen)}
+                        >
+                          {reasoningLevelLabel(thinking, language)}
+                          <ChevronRight size={12} className={`chev ${thinkOpen ? "up" : ""}`} />
+                        </button>
                       </div>
+                      {thinkOpen && (
+                        <div className="think-options">
+                          {(["off", ...levelList] as string[]).map((l) => {
+                            const mapped = mappedThinkingLevel(l);
+                            return (
+                              <button
+                                key={l}
+                                type="button"
+                                className={`think-option ${thinking === l ? "active" : ""}`}
+                                onClick={() => {
+                                  setThinkOpen(false);
+                                  setThinking(threadId, l);
+                                  setModelOpen(false);
+                                }}
+                              >
+                                <span>{reasoningLevelLabel(l, language)}</span>
+                                {mapped && <span className="think-option-map">→ {mapped}</span>}
+                                {thinking === l && <Check size={12} />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </>
                   )}
                   <div className="pop-divider" />
                   <div className="pop-head">{language === "zh" ? "会话工具" : "Session tools"}</div>
-                  <button
-                    type="button"
-                    className={`opt tool-opt ${compacting ? "busy" : ""}`}
-                    disabled={!connected || isStreaming || compacting || !hasMessages}
-                    title={language === "zh" ? "总结较早的消息以释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}
-                    onClick={() => void compactContext(threadId)}
-                  >
-                    <span className="o1">
-                      <Compress size={13} />
-                      {compacting ? (language === "zh" ? "压缩中…" : "Compacting…") : language === "zh" ? "压缩上下文" : "Compact context"}
-                    </span>
-                    <span className="o2">{language === "zh" ? "总结较早的消息，释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}</span>
-                  </button>
                   <button
                     type="button"
                     className={`opt tool-opt ${soundOnComplete ? "active" : ""}`}

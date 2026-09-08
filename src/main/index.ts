@@ -8,6 +8,7 @@ import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
 import { stopAutomations, stopScheduler } from "./automation";
+import { stopAllTuis } from "./tui";
 
 const IS_DEV_BUILD = !app.isPackaged;
 const APP_USER_MODEL_ID = IS_DEV_BUILD ? "com.mpi.app.dev" : "com.mpi.app";
@@ -292,6 +293,7 @@ app.on("before-quit", (e) => {
     .catch(() => undefined)
     .finally(() => {
       clearTimeout(hardStop);
+      stopAllTuis(); // interactive pi terminals — immediate kill is fine
       app.quit();
     });
 });
@@ -301,5 +303,6 @@ app.on("window-all-closed", () => {
   // bridges are already stopped (both calls then no-op).
   stopScheduler();
   void Promise.all([stopAllBridges(), stopAutomations()]).catch(() => undefined);
+  stopAllTuis();
   if (process.platform !== "darwin") app.quit();
 });

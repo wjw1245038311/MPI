@@ -28,6 +28,7 @@
     "test:pinnedorder": "node --experimental-strip-types scripts/test-pinned-order.mjs",
     "test:trash": "node --experimental-strip-types scripts/test-trash.mjs",
     "test:searchtrash": "node --experimental-strip-types scripts/test-search-trash.mjs",
+    "test:usage": "node --experimental-strip-types scripts/test-usage.mjs",
     "test:html-reference": "node --experimental-strip-types scripts/test-html-reference.mjs",
     "bundle": "node scripts/bundle-runtime.mjs",
     "finalize-runtime": "node scripts/finalize-runtime.mjs",
@@ -35,14 +36,18 @@
     "dist": "npm run bundle && npm run build && electron-builder && node scripts/write-sha256.mjs && npm run finalize-runtime",
     "test:remote": "node scripts/test-remote-protocol.mjs",
     "test:remote-signaling": "node scripts/test-remote-signaling.mjs",
-    "signaling": "node signaling/server.mjs"
+    "signaling": "node signaling/server.mjs",
+    "test:tuirace": "node scripts/build-tui-race-bundle.mjs && node scripts/test-tui-race.cjs"
   },
   "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
     "clsx": "^2.1.1",
     "electron-updater": "^6.8.9",
     "highlight.js": "^11.10.0",
     "jszip": "^3.10.1",
     "mammoth": "^1.8.0",
+    "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -76,6 +81,10 @@
   "build": {
     "appId": "com.mpi.app",
     "productName": "MPI",
+    "npmRebuild": false,
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
+    ],
     "publish": [
       {
         "provider": "github",
