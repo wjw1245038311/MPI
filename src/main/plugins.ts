@@ -107,13 +107,6 @@ export function setPackageEnabled(source: string, enabled: boolean): void {
   writeSettings({ ...settings, packages: next });
 }
 
-export function addPackage(source: string): void {
-  const settings = readSettings();
-  const packages = (settings.packages as PackageEntry[] | undefined) || [];
-  if (packages.some((e) => entrySource(e) === source)) return;
-  writeSettings({ ...settings, packages: [...packages, source] });
-}
-
 export function removePackageEntry(source: string): void {
   const settings = readSettings();
   const packages = (settings.packages as PackageEntry[] | undefined) || [];
@@ -121,7 +114,7 @@ export function removePackageEntry(source: string): void {
 }
 
 /** Run a pi CLI command (install/remove/update/list) and capture its output. */
-export function runPiCli(args: string[], onLine?: (line: string) => void): Promise<{ code: number | null; stdout: string; stderr: string }> {
+export function runPiCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise(async (resolve, reject) => {
     let rt: { node: string; cli: string };
     try {
@@ -134,14 +127,10 @@ export function runPiCli(args: string[], onLine?: (line: string) => void): Promi
     let stdout = "";
     let stderr = "";
     proc.stdout.on("data", (d: Buffer) => {
-      const s = d.toString("utf8");
-      stdout += s;
-      s.split(/\r?\n/).forEach((l) => l.trim() && onLine?.(l));
+      stdout += d.toString("utf8");
     });
     proc.stderr.on("data", (d: Buffer) => {
-      const s = d.toString("utf8");
-      stderr += s;
-      s.split(/\r?\n/).forEach((l) => l.trim() && onLine?.(l));
+      stderr += d.toString("utf8");
     });
     proc.on("error", reject);
     proc.on("exit", (code) => resolve({ code, stdout, stderr }));

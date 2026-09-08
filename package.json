@@ -42,7 +42,6 @@
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
-    "clsx": "^2.1.1",
     "electron-updater": "^6.8.9",
     "highlight.js": "^11.10.0",
     "jszip": "^3.10.1",
@@ -54,7 +53,6 @@
     "react-markdown": "^9.0.1",
     "rehype-highlight": "^7.0.1",
     "remark-gfm": "^4.0.0",
-    "skills": "^1.5.22",
     "ws": "^8.21.2",
     "xlsx": "^0.18.5",
     "zustand": "^4.5.5"

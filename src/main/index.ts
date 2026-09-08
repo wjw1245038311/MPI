@@ -166,9 +166,6 @@ function createWindow(): void {
     mainWindow.show();
   });
 
-  const sendMax = (v: boolean) => mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send("window:maximized-changed", v);
-  mainWindow.on("maximize", () => sendMax(true));
-  mainWindow.on("unmaximize", () => sendMax(false));
   mainWindow.on("close", (event) => {
     if (isQuitting) return;
     event.preventDefault();

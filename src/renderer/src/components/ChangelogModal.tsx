@@ -5,7 +5,7 @@ import { Markdown } from "../lib/markdown";
 // installer shipped, with no network access required. @repo-root is aliased to
 // the repo root in electron.vite.config.ts (the file sits outside the renderer
 // root, so a plain relative import does not resolve).
-import changelogRaw from "@repo-root/CHANGELOG.md?raw";
+import changelogRaw from "@repo-root/changelog.md?raw";
 
 /** Verification guidance shown below the release notes. Kept in sync with the
  * packaging workflow: every installer is published next to a same-named

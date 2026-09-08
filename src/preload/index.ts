@@ -35,7 +35,6 @@ const api = {
     openProject: (absPath: string) => ipcRenderer.invoke("app:openProject", absPath),
     openFolderInExplorer: (absPath: string) => ipcRenderer.invoke("app:openFolderInExplorer", absPath),
     prewarm: (cwd: string) => ipcRenderer.invoke("app:prewarm", cwd),
-    unpinProject: (absPath: string) => ipcRenderer.invoke("app:unpinProject", absPath),
     setProjectPinned: (args: { cwd: string; pinned: boolean }) => ipcRenderer.invoke("app:setProjectPinned", args),
     setThreadPinned: (args: { file: string; pinned: boolean }) => ipcRenderer.invoke("app:setThreadPinned", args),
     reorderPinned: (args: { kind: "project" | "thread"; id: string; target: number }) =>
@@ -133,7 +132,6 @@ const api = {
     compact: (args: { threadId: string; instructions?: string }) => ipcRenderer.invoke("thread:compact", args),
     repairSession: (args: { threadId?: string; sessionFile: string }) => ipcRenderer.invoke("thread:repair-session", args),
     setModel: (args: { threadId: string; provider: string; modelId: string }) => ipcRenderer.invoke("thread:setModel", args),
-    getModels: (threadId: string) => ipcRenderer.invoke("thread:getModels", threadId),
     refreshModels: (threadId: string) => ipcRenderer.invoke("thread:refreshModels", threadId),
     setThinking: (args: { threadId: string; level: string }) => ipcRenderer.invoke("thread:setThinking", args),
     getThinkingLevels: (threadId: string) => ipcRenderer.invoke("thread:getThinkingLevels", threadId),
@@ -144,7 +142,6 @@ const api = {
     setName: (args: { threadId: string; name: string }) => ipcRenderer.invoke("thread:setName", args),
     getStats: (threadId: string) => ipcRenderer.invoke("thread:getStats", threadId),
     getCompactionStats: (sessionFile: string) => ipcRenderer.invoke("thread:compaction-stats", { sessionFile }),
-    getCommands: (threadId: string) => ipcRenderer.invoke("thread:getCommands", threadId),
     extuiResponse: (args: { threadId: string; id: string; payload: Record<string, unknown> }) =>
       ipcRenderer.invoke("thread:extuiResponse", args),
     setPermission: (args: { threadId: string; permission: PermissionLevel }) => ipcRenderer.invoke("thread:setPermission", args),
@@ -185,8 +182,6 @@ const api = {
     minimize: () => ipcRenderer.invoke("window:minimize"),
     maximize: () => ipcRenderer.invoke("window:maximize"),
     close: () => ipcRenderer.invoke("window:close"),
-    isMaximized: () => ipcRenderer.invoke("window:isMaximized"),
-    onMaximizedChanged: (cb: (max: boolean) => void) => on("window:maximized-changed", cb),
   },
   on: {
     event: (cb: (p: { threadId: string; event: any }) => void) => on("pi:event", cb),

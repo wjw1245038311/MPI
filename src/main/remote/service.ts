@@ -8,7 +8,6 @@ import {
   type RemotePermission,
   type RemoteThreadEventPayload,
   type RemoteThreadSnapshot,
-  type RemoteUiRequest,
 } from "./protocol";
 
 export interface RemoteBackend {

@@ -24,14 +24,6 @@ export function TitleBar() {
   const [menu, setMenu] = useState<MenuId | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const u = window.pi.window.onMaximizedChanged(setMax);
-    window.pi.window.isMaximized().then(setMax).catch(() => {});
-    return u;
-  }, []);
-
-  const [max, setMax] = useState(false);
-
   // close dropdown on outside click
   useEffect(() => {
     if (!menu) return;

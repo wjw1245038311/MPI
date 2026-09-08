@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { extname, join, resolve, sep } from "node:path";
 
 /**
  * Lazy file-tree listing for the sidebar "Files" tab. Only direct children are
@@ -85,16 +85,4 @@ export function listDir(cwd: string, rel?: string): FileNode[] {
     return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
   return nodes;
-}
-
-export function fileExists(abs: string): boolean {
-  try {
-    return existsSync(abs);
-  } catch {
-    return false;
-  }
-}
-
-export function baseName(abs: string): string {
-  return basename(abs);
 }

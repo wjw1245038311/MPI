@@ -1416,7 +1416,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   const filePreviewService = new FilePreviewService(
     async (projectId, relativePath) => {
       const project = await remoteProject(projectId);
-      const target = relativePath ? assertRemotePath(project.cwd, relativePath) : project.cwd;
+      // Validate before listing so a path escape is rejected even though listDir re-checks.
+      if (relativePath) assertRemotePath(project.cwd, relativePath);
       const rel = relativePath || undefined;
       return listDir(project.cwd, rel)
         .filter((node) => !/(^|[\\/])(?:\.env|credentials|secrets?|id_rsa|id_ed25519)(?:\.|$)/i.test(node.rel))
@@ -1736,13 +1737,6 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     const error = await shell.openPath(absPath);
     if (error) throw new Error(error);
     return { ok: true };
-  });
-
-  ipcMain.handle("app:unpinProject", (_e, absPath: string) => {
-    const cfg = getConfig();
-    const target = typeof absPath === "string" ? absPath.toLowerCase() : "";
-    updateConfig({ pinnedProjects: (cfg.pinnedProjects || []).filter((p) => p.toLowerCase() !== target) });
-    return true;
   });
 
   ipcMain.handle("app:setProjectPinned", (_e, args: { cwd?: string; pinned?: boolean }) => {
@@ -2190,12 +2184,6 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { model, thinkingLevel: state?.thinkingLevel ?? null };
   });
 
-  ipcMain.handle("thread:getModels", async (_e, threadId: string) => {
-    const h = bridges.get(threadId);
-    if (!h) return { models: [] };
-    return h.bridge.getAvailableModels();
-  });
-
   ipcMain.handle("thread:refreshModels", async (_e, threadId: string) => {
     const h = bridges.get(threadId);
     if (!h) return { models: [] };
@@ -2275,13 +2263,6 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     const h = bridges.get(threadId);
     if (!h) return null;
     return h.bridge.getSessionStats();
-  });
-
-  ipcMain.handle("thread:getCommands", async (_e, threadId: string) => {
-    const h = bridges.get(threadId);
-    if (!h) return { commands: [] };
-    const response: any = await h.bridge.getCommands();
-    return { ...response, commands: synchronizedCommands(response?.commands, h.bridge.cwd) };
   });
 
   ipcMain.handle("thread:extuiResponse", (_e, args: { threadId: string; id: string; payload: Record<string, unknown> }) => {
@@ -2494,7 +2475,6 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     w.hide();
     return true;
   });
-  ipcMain.handle("window:isMaximized", () => !!getWin()?.isMaximized());
 
   // ---- background scheduler ----------------------------------------------
   startScheduler((p) => send("pi:automation", p));

@@ -4,7 +4,7 @@ import { formatTokens, modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage } from "../lib/types";
-import { Plus, Paperclip, ImageIcon, Send, Stop, Smile, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh } from "./icons";
+import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh } from "./icons";
 
 let _pid = 0;
 const pid = () => `p${_pid++}`;

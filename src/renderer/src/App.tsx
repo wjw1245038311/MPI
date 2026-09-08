@@ -20,7 +20,6 @@ import appIconUrl from "../../../resources/icon.png";
 export default function App() {
   const bootstrap = useStore((s) => s.bootstrap);
   const activeThreadId = useStore((s) => s.activeThreadId);
-  const sidebarOpen = useStore((s) => s.sidebarOpen);
   const previewOpen = useStore((s) => s.previewOpen);
   const previewExpanded = useStore((s) => s.previewExpanded);
   const projects = useStore((s) => s.projects);
