@@ -2123,9 +2123,9 @@ export function Settings() {
                 <div className="set-card-title">更新 Pi 核心</div>
                 <div className="set-hint" style={{ marginBottom: 12 }}>
                   {diag?.bundled ? (
-                    <>Pi 核心由 MPI 统一管理（内置副本不可被 <code>pi update</code> 原地更新）。点击下方按钮后，MPI 会自行下载并安装新版本到应用数据目录，更新完成后新开的会话使用新版本。扩展请在「插件」面板更新。</>
+                    <>Pi 核心由 MPI 统一管理（内置副本不可被 <code>pi update</code> 原地更新）。点击下方按钮后，MPI 会自行下载并安装新版本到应用数据目录，更新完成后新开的会话使用新版本。扩展请在「扩展功能」面板更新。</>
                   ) : (
-                    <>运行 <code>pi update</code> 更新 pi CLI 本体（不含扩展，扩展请在「插件」面板更新）。会先检查是否为最新版本，结果以提示呈现。更新完成后新开的会话使用新版本。</>
+                    <>运行 <code>pi update</code> 更新 pi CLI 本体（不含扩展，扩展请在「扩展功能」面板更新）。会先检查是否为最新版本，结果以提示呈现。更新完成后新开的会话使用新版本。</>
                   )}
                 </div>
                 <div className="set-diag-grid" style={{ marginBottom: 12 }}>

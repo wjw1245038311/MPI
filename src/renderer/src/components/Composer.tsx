@@ -549,7 +549,7 @@ export function Composer({ threadId }: { threadId: string }) {
         )}
         {slashMenuOpen && (
           <div className="slash-menu" role="listbox" aria-label={language === "zh" ? "斜杠命令" : "Slash commands"}>
-            <div className="slash-menu-head">{language === "zh" ? "命令、插件和技能" : "Commands, plugins & skills"}</div>
+            <div className="slash-menu-head">{language === "zh" ? "命令、扩展功能和技能" : "Commands, extensions & skills"}</div>
             <div className="slash-menu-list">
               {slashItems.map((command: any, index: number) => {
                 const isSkill = command.source === "skill";
@@ -558,12 +558,12 @@ export function Composer({ threadId }: { threadId: string }) {
                   ? isSkill
                     ? "技能"
                     : command.source === "extension"
-                      ? "插件"
+                      ? "扩展功能"
                       : "提示词"
                   : isSkill
                     ? "Skill"
                     : command.source === "extension"
-                      ? "Plugin"
+                      ? "Extension"
                       : "Prompt";
                 return (
                   <button
@@ -775,8 +775,8 @@ export function Composer({ threadId }: { threadId: string }) {
                       autoFocus
                       value={commandQuery}
                       onChange={(event) => setCommandQuery(event.target.value)}
-                      placeholder={language === "zh" ? "搜索命令、插件或技能" : "Search commands, plugins, or skills"}
-                      aria-label={language === "zh" ? "搜索命令、插件或技能" : "Search commands, plugins, or skills"}
+                      placeholder={language === "zh" ? "搜索命令、扩展功能或技能" : "Search commands, extensions, or skills"}
+                      aria-label={language === "zh" ? "搜索命令、扩展功能或技能" : "Search commands, extensions, or skills"}
                     />
                   </label>
                   <div className="command-list">

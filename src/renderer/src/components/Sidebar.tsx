@@ -330,7 +330,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             <span className="ico">
               <At size={15} />
             </span>
-            插件
+            扩展功能
           </button>
         </div>
 

@@ -2561,7 +2561,7 @@ export const useStore = create<PiStore>()((set, get) => {
       set({ packages, skills, pluginsLoading: false });
     } catch (e: any) {
       set({ pluginsLoading: false });
-      get().pushToast("error", "加载插件失败：" + (e?.message || e));
+      get().pushToast("error", "加载扩展功能失败：" + (e?.message || e));
     }
   },
   togglePackage: async (source, enabled) => {

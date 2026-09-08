@@ -330,7 +330,7 @@ export function PluginsPanel() {
               {hubOpen ? <AppStore size={18} /> : <At size={18} />}
             </span>
             <div>
-              <div className="set-brand-title">{hubOpen ? (zh ? "技能中心" : "Skills Hub") : zh ? "插件" : "Plugins"}</div>
+              <div className="set-brand-title">{hubOpen ? (zh ? "技能中心" : "Skills Hub") : zh ? "扩展功能" : "Extensions"}</div>
               <div className="set-brand-sub">
                 {hubOpen ? (zh ? "浏览并安装 skills.sh 公开技能" : "Browse and install public skills from skills.sh") : zh ? "管理 pi 的扩展包与技能" : "Manage Pi extension packages and skills"}
               </div>
@@ -339,7 +339,7 @@ export function PluginsPanel() {
           <div className="plugins-head-actions">
             {hubOpen ? (
               <button className="skills-hub-back" type="button" onClick={() => setHubOpen(false)}>
-                ← {zh ? "插件" : "Plugins"}
+                ← {zh ? "扩展功能" : "Extensions"}
               </button>
             ) : (
               <button className="skills-hub-entry" type="button" onClick={() => setHubOpen(true)}>
@@ -366,8 +366,8 @@ export function PluginsPanel() {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder={zh ? "搜索插件或技能" : "Search plugins or skills"}
-                aria-label={zh ? "搜索插件或技能" : "Search plugins or skills"}
+                placeholder={zh ? "搜索扩展功能或技能" : "Search extensions or skills"}
+                aria-label={zh ? "搜索扩展功能或技能" : "Search extensions or skills"}
               />
               {query && (
                 <button type="button" className="plugins-search-clear" onClick={() => setQuery("")} aria-label={zh ? "清除搜索" : "Clear search"}>
@@ -375,7 +375,7 @@ export function PluginsPanel() {
                 </button>
               )}
             </div>
-            <button className="set-iconbtn" onClick={() => loadPlugins()} disabled={loading} title={zh ? "刷新插件和技能" : "Refresh plugins and skills"}>
+            <button className="set-iconbtn" onClick={() => loadPlugins()} disabled={loading} title={zh ? "刷新扩展功能和技能" : "Refresh extensions and skills"}>
               {loading ? <span className="spinner" /> : <Refresh size={15} />}
             </button>
           </div>
