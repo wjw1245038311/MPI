@@ -6347,13 +6347,22 @@ mark.hl {
   justify-content: center;
   margin-top: 10px;
 }
-/* my mcp — dependency strip above the master-detail row */
-.mcp-mine {
-  flex-wrap: wrap;
+/* my mcp — column wrapper so the dependency strip stays compact and the
+   master-detail row below fills the remaining height. (A single wrap-enabled
+   flex container would stretch both rows to share the space, inflating the
+   dep cards to half the panel height.) */
+.mcp-mine-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px 16px;
 }
-.mcp-deps,
-.mcp-deps-warn {
-  width: 100%;
+.mcp-mine-inner {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
 }
 .mcp-deps {
   display: flex;

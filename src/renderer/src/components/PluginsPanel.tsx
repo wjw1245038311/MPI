@@ -943,7 +943,7 @@ function McpMineView({ language }: { language: "en" | "zh" }) {
   };
 
   return (
-    <div className="skills-mine mcp-mine">
+    <div className="mcp-mine-wrap">
       {!mcpApiReady && (
         <div className="skills-hub-error mcp-deps-warn">
           {zh
@@ -981,6 +981,7 @@ function McpMineView({ language }: { language: "en" | "zh" }) {
         )}
       </div>
 
+      <div className="skills-mine mcp-mine-inner">
       <div className="skills-mine-list">
         <div className="plugins-search">
           <Search size={15} />
@@ -1106,6 +1107,7 @@ function McpMineView({ language }: { language: "en" | "zh" }) {
           </>
         )}
       </aside>
+      </div>
     </div>
   );
 }
