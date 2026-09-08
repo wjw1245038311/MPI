@@ -15,6 +15,8 @@ import {
   updateConfig,
   type AutomationTask,
 } from "./config";
+import { deleteDraft, getAllDrafts, setDraft as persistDraft } from "./draft-store";
+import type { ComposerDraft } from "../renderer/src/lib/types";
 import { listDir } from "./fs-service";
 import { createHtmlPreviewUrl } from "./html-preview-protocol";
 import {
@@ -1563,6 +1565,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
     return next;
   });
+  // ---- composer drafts (persisted unsent input, LRU-capped) --------------
+  ipcMain.handle("drafts:getAll", () => getAllDrafts());
+  ipcMain.handle("drafts:set", (_e, key: string, draft: ComposerDraft) => {
+    if (!key || !draft) return;
+    persistDraft(key, draft);
+  });
+  ipcMain.handle("drafts:delete", (_e, key: string) => deleteDraft(key));
+
   ipcMain.handle("app:resolveRuntime", async () => {
     try {
       const rt = await resolvePiRuntime(getConfig().piCliPath);

@@ -185,6 +185,15 @@ export interface PendingFollowUp {
   htmlReferences?: HtmlElementReference[];
 }
 
+/** Unsent composer content, persisted per thread so a restart/crash does not
+ * lose in-progress input. Persisted by the main process with LRU eviction. */
+export interface ComposerDraft {
+  text: string;
+  images: PendingImage[];
+  files: PendingFile[];
+  htmlReferences?: HtmlElementReference[];
+}
+
 export interface ThreadState {
   cwd: string;
   sessionFile: string | null;

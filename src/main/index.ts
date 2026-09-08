@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, Menu, shell, Tray } from "electron";
 import { loadConfig, getConfig, updateConfig } from "./config";
+import { flushDrafts } from "./draft-store";
 import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
@@ -258,6 +259,7 @@ app.on("before-quit", (e) => {
   }
   stopScheduler();
   stopRemoteHost();
+  flushDrafts(); // synchronous: the coalesced draft write must not be lost
   quitInFlight = true;
   // Safety net in case a bridge ever fails to settle (stopGraceful is bounded
   // at ~4s internally; this caps the whole sequence well beyond that).

@@ -4,6 +4,7 @@ import type {
   AppRuntime,
   ArchivedThread,
   AutomationTask,
+  ComposerDraft,
   ContentBlock,
   ExtUiRequest,
   FileNode,
@@ -1070,6 +1071,9 @@ interface PiStore {
   openThreadIds: string[];
   activeThreadId: string | null;
   threads: Record<string, ThreadState>;
+  /** Unsent composer content per draft key (see draftKeyFor), persisted by
+   * the main process with LRU eviction so restarts do not lose input. */
+  drafts: Record<string, ComposerDraft>;
 
   // files / preview
   fileTree: Record<string, FileTreeEntry>;
@@ -1182,12 +1186,40 @@ interface PiStore {
   switchThreadFolder: (threadId: string) => Promise<void>;
   /** Move a not-yet-sent task to another working folder without losing the composer draft. */
   changeDraftThreadFolder: (threadId: string, cwd: string) => Promise<void>;
+  setDraft: (key: string, draft: ComposerDraft) => void;
+  clearDraft: (key: string) => void;
 
   // edit menu
   editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => Promise<void>;
 }
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
+
+/** Stable persistence key for a thread's unsent composer content. Resumed
+ * sessions are keyed by their session file; not-yet-sent tasks by working
+ * folder, so drafts survive restarts and follow "new task" per project. */
+export function draftKeyFor(
+  thread: { sessionFile?: string | null; cwd?: string } | undefined | null,
+  fallbackId?: string,
+): string | null {
+  if (!thread) return null;
+  if (thread.sessionFile) return `s:${thread.sessionFile}`;
+  if (thread.cwd) return `n:${thread.cwd}`;
+  return fallbackId ? `t:${fallbackId}` : null;
+}
+
+export function isDraftEmpty(draft: ComposerDraft | undefined | null): boolean {
+  if (!draft) return true;
+  return (
+    !draft.text.trim() &&
+    draft.images.length === 0 &&
+    draft.files.length === 0 &&
+    !(draft.htmlReferences || []).length
+  );
+}
+
+/** Debounced per-key persistence timers for composer drafts. */
+const draftPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** In-flight background connects keyed by thread id, so a click and a
  *  same-tick prompt share one process boot instead of spawning two. */
@@ -1314,7 +1346,20 @@ function scheduleEventFlush(): void {
   });
 }
 
-export const useStore = create<PiStore>()((set, get) => ({
+export const useStore = create<PiStore>()((set, get) => {
+  /** Move an unsent draft to `newKey` when the destination holds nothing;
+   * keep both otherwise so no in-progress text is ever lost. Used by the
+   * folder-switch flows (composer project pill + chat header button). */
+  const carryDraftTo = (oldKey: string | null, newKey: string): void => {
+    if (!oldKey || oldKey === newKey) return;
+    const moving = get().drafts[oldKey];
+    if (!isDraftEmpty(moving) && isDraftEmpty(get().drafts[newKey])) {
+      get().setDraft(newKey, moving);
+      get().clearDraft(oldKey);
+    }
+  };
+
+  return ({
   config: null,
   runtime: null,
   projects: [],
@@ -1328,6 +1373,7 @@ export const useStore = create<PiStore>()((set, get) => ({
   openThreadIds: [],
   activeThreadId: null,
   threads: {},
+  drafts: {},
   fileTree: {},
   previewPath: null,
   previewRoot: null,
@@ -1356,10 +1402,17 @@ export const useStore = create<PiStore>()((set, get) => ({
         get().pushToast("warning", error);
       });
 
-    const [configResult, projectsResult] = await Promise.allSettled([
+    const [configResult, projectsResult, draftsResult] = await Promise.allSettled([
       window.pi.app.getConfig(),
       window.pi.app.getProjects(),
+      window.pi.drafts.getAll(),
     ]);
+
+    if (draftsResult.status === "fulfilled") {
+      // Merge (state wins) so a draft typed before this load resolved is never
+      // clobbered by the disk snapshot.
+      set((s) => ({ drafts: { ...(draftsResult.value || {}), ...s.drafts } }));
+    }
 
     if (configResult.status === "fulfilled") {
       set({ config: configResult.value });
@@ -1541,7 +1594,12 @@ export const useStore = create<PiStore>()((set, get) => ({
       const ids = Object.entries(get().threads)
         .filter(([id, thread]) => normalizeThreadFile(thread.sessionFile || id) === target)
         .map(([id]) => id);
-      for (const id of ids) await get().closeThread(id);
+      for (const id of ids) {
+        // The session file is gone; drop its persisted draft too.
+        const key = draftKeyFor(get().threads[id], id);
+        if (key?.startsWith("s:")) get().clearDraft(key);
+        await get().closeThread(id);
+      }
       await get().refreshProjects();
       get().pushToast("success", "线程已永久删除，无法恢复。");
     } catch (e: any) {
@@ -2517,6 +2575,9 @@ export const useStore = create<PiStore>()((set, get) => ({
     try {
       const path = await window.pi.app.showOpenDialog("folder");
       if (!path || Array.isArray(path)) return;
+      // Same draft-carry rule as changeDraftThreadFolder: an unsent task's
+      // in-progress text follows the user into the new folder.
+      carryDraftTo(draftKeyFor(get().threads[threadId]), `n:${path}`);
       await window.pi.app.openProject(path);
       await get().refreshProjects();
       await get().openThread(path, undefined, get().threads[threadId]?.permission);
@@ -2532,9 +2593,13 @@ export const useStore = create<PiStore>()((set, get) => ({
       return;
     }
     try {
+      // Carry the unsent draft to the replacement thread's key BEFORE opening
+      // it, so the composer (a single instance) shows the same text the moment
+      // activeThreadId switches — no blank frame, nothing lost.
+      carryDraftTo(draftKeyFor(original), `n:${cwd}`);
       // Resolve the old optimistic id first so its process can be closed
       // reliably. Open the replacement before closing it: activeThreadId never
-      // becomes null, so React preserves the Composer's unsent local draft.
+      // becomes null while the switch is in flight.
       const oldId = (await get().ensureConnected(threadId)) || threadId;
       await window.pi.app.openProject(cwd);
       await get().refreshProjects();
@@ -2546,6 +2611,45 @@ export const useStore = create<PiStore>()((set, get) => ({
     }
   },
 
+  setDraft: (key, draft) => {
+    if (!key) return;
+    if (isDraftEmpty(draft)) {
+      // Deleting the last character is a clear, not an empty entry — keeps
+      // the LRU store from filling up with blank drafts.
+      get().clearDraft(key);
+      return;
+    }
+    set((s) => ({ drafts: { ...s.drafts, [key]: draft } }));
+    const timer = draftPersistTimers.get(key);
+    if (timer) clearTimeout(timer);
+    draftPersistTimers.set(
+      key,
+      setTimeout(() => {
+        draftPersistTimers.delete(key);
+        // Persist whatever is current when the flush fires; skip if the draft
+        // was cleared in the meantime.
+        const current = useStore.getState().drafts[key];
+        if (!current) return;
+        window.pi.drafts.set(key, current).catch(() => {});
+      }, 500),
+    );
+  },
+
+  clearDraft: (key) => {
+    const timer = draftPersistTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      draftPersistTimers.delete(key);
+    }
+    set((s) => {
+      if (!(key in s.drafts)) return s;
+      const drafts = { ...s.drafts };
+      delete drafts[key];
+      return { drafts };
+    });
+    window.pi.drafts.delete(key).catch(() => {});
+  },
+
   // ---- edit menu ----
   editAction: async (action) => {
     try {
@@ -2554,4 +2658,5 @@ export const useStore = create<PiStore>()((set, get) => ({
       /* ignore */
     }
   },
-}));
+  });
+});

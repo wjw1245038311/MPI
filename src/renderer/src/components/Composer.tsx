@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useStore } from "../store";
+import { draftKeyFor, useStore } from "../store";
 import { modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { useOutsideClose } from "../lib/useOutsideClose";
-import type { HtmlElementReference, ModelInfo, PendingFile, PendingImage } from "../lib/types";
+import type { ComposerDraft, HtmlElementReference, ModelInfo, PendingFile, PendingImage } from "../lib/types";
 import { Plus, Paperclip, ImageIcon, Send, Stop, Smile, At, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress } from "./icons";
 
 let _pid = 0;
 const pid = () => `p${_pid++}`;
+/** Stable empties so a draft-less thread does not allocate per render. */
+const EMPTY_DRAFT: ComposerDraft = { text: "", images: [], files: [], htmlReferences: [] };
+const EMPTY_REFS: HtmlElementReference[] = [];
 const MAX_PASTED_FILE_BYTES = 50_000_000;
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
@@ -102,6 +105,7 @@ export function Composer({ threadId }: { threadId: string }) {
   const model = useStore((s) => s.threads[threadId]?.model);
   const thinking = useStore((s) => s.threads[threadId]?.thinking);
   const cwd = useStore((s) => s.threads[threadId]?.cwd || "");
+  const sessionFile = useStore((s) => s.threads[threadId]?.sessionFile || null);
   const isDraftTask = useStore(
     (s) => !s.threads[threadId]?.messages.some((message) => message.role === "user" || message.role === "assistant"),
   );
@@ -124,10 +128,25 @@ export function Composer({ threadId }: { threadId: string }) {
   const compactContext = useStore((s) => s.compactContext);
   const setSoundOnComplete = useStore((s) => s.setSoundOnComplete);
 
-  const [text, setText] = useState("");
-  const [images, setImages] = useState<PendingImage[]>([]);
-  const [files, setFiles] = useState<PendingFile[]>([]);
-  const [htmlReferences, setHtmlReferences] = useState<HtmlElementReference[]>([]);
+  // Unsent content lives in the store keyed per thread (see draftKeyFor) so it
+  // survives app restarts and swaps correctly when switching threads; main
+  // persists it with LRU eviction. expandedHtmlReferences stays local — pure UI.
+  const draftKey = useMemo(() => draftKeyFor({ sessionFile, cwd }, threadId), [sessionFile, cwd, threadId]);
+  const draft = useStore((s) => (draftKey ? s.drafts[draftKey] : undefined));
+  const setDraft = useStore((s) => s.setDraft);
+  const clearDraft = useStore((s) => s.clearDraft);
+  const text = draft?.text ?? EMPTY_DRAFT.text;
+  const images = draft?.images ?? EMPTY_DRAFT.images;
+  const files = draft?.files ?? EMPTY_DRAFT.files;
+  const htmlReferences = draft?.htmlReferences ?? EMPTY_REFS;
+
+  /** Merge a partial update into this thread's current draft (fresh read, so
+   * rapid updates never clobber each other). */
+  const patchDraft = (patch: Partial<ComposerDraft>) => {
+    if (!draftKey) return;
+    const current = useStore.getState().drafts[draftKey];
+    setDraft(draftKey, { ...EMPTY_DRAFT, ...current, ...patch });
+  };
   const [expandedHtmlReferences, setExpandedHtmlReferences] = useState<Record<string, boolean>>({});
   const [modelOpen, setModelOpen] = useState(false);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
@@ -155,7 +174,7 @@ export function Composer({ threadId }: { threadId: string }) {
   useEffect(() => {
     if (injected && injected !== lastInjected.current) {
       lastInjected.current = injected;
-      setText(injected);
+      patchDraft({ text: injected });
       requestAnimationFrame(() => taRef.current?.focus());
     }
   }, [injected]);
@@ -191,13 +210,13 @@ export function Composer({ threadId }: { threadId: string }) {
       // A new selection replaces the previous target. The composer should
       // always describe the element the user most recently picked, rather
       // than accumulating stale HTML references in the draft.
-      setHtmlReferences([selected]);
+      patchDraft({ htmlReferences: [selected] });
       setExpandedHtmlReferences({});
       requestAnimationFrame(() => taRef.current?.focus());
     };
     window.addEventListener("mpi-html-element-reference", onElementReference);
     return () => window.removeEventListener("mpi-html-element-reference", onElementReference);
-  }, [threadId]);
+  }, [threadId, draftKey]);
 
   const autoGrow = () => {
     const ta = taRef.current;
@@ -221,10 +240,12 @@ export function Composer({ threadId }: { threadId: string }) {
         pushToast("warning", language === "zh" ? `${name} 添加失败：${reason}` : `${name} could not be added: ${reason}`);
       }
     }
-    setImages((p) => [...p, ...imgs]);
-    setFiles((p) => {
-      const existing = new Set(p.map((file) => file.abs));
-      return [...p, ...fs.filter((file) => !existing.has(file.abs))];
+    patchDraft({
+      images: [...images, ...imgs],
+      files: (() => {
+        const existing = new Set(files.map((file) => file.abs));
+        return [...files, ...fs.filter((file) => !existing.has(file.abs))];
+      })(),
     });
   };
 
@@ -239,7 +260,7 @@ export function Composer({ threadId }: { threadId: string }) {
     const paths = await window.pi.app.showOpenDialog("files");
     if (!paths || !Array.isArray(paths)) return;
     const names = paths.map((p) => p.split(/[\\/]/).pop() || p);
-    setFiles((p) => [...p, ...paths.map((abs, i) => ({ abs, name: names[i] }))]);
+    patchDraft({ files: [...files, ...paths.map((abs, i) => ({ abs, name: names[i] }))] });
   };
 
   const onPaste = async (e: React.ClipboardEvent) => {
@@ -261,10 +282,7 @@ export function Composer({ threadId }: { threadId: string }) {
     if (!t && !images.length && !files.length) return;
     const imgs = images.map((im) => ({ data: im.base64, mimeType: im.mimeType }));
     const atts = files.map((f) => ({ abs: f.abs, name: f.name }));
-    setText("");
-    setImages([]);
-    setFiles([]);
-    setHtmlReferences([]);
+    clearDraft(draftKey || "");
     setExpandedHtmlReferences({});
     await sendPrompt(threadId, t, imgs.length ? imgs : undefined, atts.length ? atts : undefined, mode);
   };
@@ -280,10 +298,7 @@ export function Composer({ threadId }: { threadId: string }) {
       const imgs = images.map((im) => ({ data: im.base64, mimeType: im.mimeType }));
       const atts = files.map((f) => ({ abs: f.abs, name: f.name }));
       const prompt = promptTextWithHtmlReferences(text, htmlReferences);
-      setText("");
-      setImages([]);
-      setFiles([]);
-      setHtmlReferences([]);
+      clearDraft(draftKey || "");
       setExpandedHtmlReferences({});
       sendPrompt(threadId, prompt, imgs.length ? imgs : undefined, atts.length ? atts : undefined, "followUp");
       return;
@@ -294,19 +309,20 @@ export function Composer({ threadId }: { threadId: string }) {
       files,
       htmlReferences: htmlReferences.length ? htmlReferences : undefined,
     });
-    setText("");
-    setImages([]);
-    setFiles([]);
-    setHtmlReferences([]);
+    clearDraft(draftKey || "");
     setExpandedHtmlReferences({});
   };
 
   const reEditPending = () => {
     if (!pending) return;
-    setText(pending.text);
-    setImages(pending.images);
-    setFiles(pending.files);
-    setHtmlReferences(pending.htmlReferences || []);
+    if (draftKey) {
+      setDraft(draftKey, {
+        text: pending.text,
+        images: pending.images,
+        files: pending.files,
+        htmlReferences: pending.htmlReferences || [],
+      });
+    }
     setExpandedHtmlReferences({});
     setPendingFollowUp(threadId, null);
     requestAnimationFrame(() => {
@@ -431,7 +447,7 @@ export function Composer({ threadId }: { threadId: string }) {
 
   const chooseSlashCommand = (command: any) => {
     // Replace only the current slash token and keep any prompt text before it.
-    setText((current) => current.replace(/\/[^\s]*$/, `/${command.name} `));
+    patchDraft({ text: text.replace(/\/[^\s]*$/, `/${command.name} `) });
     setSlashDismissed(true);
     requestAnimationFrame(() => taRef.current?.focus());
   };
@@ -460,7 +476,7 @@ export function Composer({ threadId }: { threadId: string }) {
   };
 
   const removeHtmlReference = (id: string) => {
-    setHtmlReferences((current) => current.filter((reference) => reference.id !== id));
+    patchDraft({ htmlReferences: htmlReferences.filter((reference) => reference.id !== id) });
     setExpandedHtmlReferences((current) => {
       const next = { ...current };
       delete next[id];
@@ -569,7 +585,7 @@ export function Composer({ threadId }: { threadId: string }) {
               <div key={im.id} className="attach-chip">
                 <img src={im.dataUrl} alt="" />
                 <span className="nm">{language === "zh" ? "图像" : "image"}</span>
-                <button className="rm" onClick={() => setImages((p) => p.filter((x) => x.id !== im.id))}>
+                <button className="rm" onClick={() => patchDraft({ images: images.filter((x) => x.id !== im.id) })}>
                   ×
                 </button>
               </div>
@@ -580,7 +596,7 @@ export function Composer({ threadId }: { threadId: string }) {
                 <span className="nm" title={f.abs}>
                   {f.name}
                 </span>
-                <button className="rm" onClick={() => setFiles((p) => p.filter((x) => x.abs !== f.abs))}>
+                <button className="rm" onClick={() => patchDraft({ files: files.filter((x) => x.abs !== f.abs) })}>
                   ×
                 </button>
               </div>
@@ -663,7 +679,7 @@ export function Composer({ threadId }: { threadId: string }) {
                 : "Type a message · Paste images or files · + Add files"}
             value={text}
             onChange={(e) => {
-              setText(e.target.value);
+              patchDraft({ text: e.target.value });
               setSlashDismissed(false);
             }}
             onKeyDown={onKeyDown}
@@ -735,7 +751,7 @@ export function Composer({ threadId }: { threadId: string }) {
                         key={`${c.source || "command"}:${c.name}`}
                         className="opt"
                         onClick={() => {
-                          setText((t) => (t ? t + " " : "") + `/${c.name} `);
+                          patchDraft({ text: (text ? text + " " : "") + `/${c.name} ` });
                           setCommandQuery("");
                           setCmdOpen(false);
                           taRef.current?.focus();

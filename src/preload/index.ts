@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import type { SkillHubSkill } from "../renderer/src/lib/types";
+import type { ComposerDraft, SkillHubSkill } from "../renderer/src/lib/types";
 
 /**
  * The renderer talks to the main process exclusively through this surface.
@@ -51,6 +51,11 @@ const api = {
     checkCoreUpdate: () => ipcRenderer.invoke("app:checkCoreUpdate"),
     relaunch: () => ipcRenderer.invoke("app:relaunch"),
     editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => ipcRenderer.invoke("app:editAction", action),
+  },
+  drafts: {
+    getAll: (): Promise<Record<string, ComposerDraft>> => ipcRenderer.invoke("drafts:getAll"),
+    set: (key: string, draft: ComposerDraft) => ipcRenderer.invoke("drafts:set", key, draft),
+    delete: (key: string) => ipcRenderer.invoke("drafts:delete", key),
   },
   plugins: {
     getPackages: () => ipcRenderer.invoke("plugins:getPackages"),

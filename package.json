@@ -18,6 +18,7 @@
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
+    "test:drafts": "node --experimental-strip-types scripts/test-draft-store.mjs",
     "test:permission": "node scripts/test-permission-gate.mjs",
     "test:html-reference": "node --experimental-strip-types scripts/test-html-reference.mjs",
     "bundle": "node scripts/bundle-runtime.mjs",
