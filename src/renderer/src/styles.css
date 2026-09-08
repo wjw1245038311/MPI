@@ -6448,28 +6448,50 @@ mark.hl {
 }
 
 /* ---- Accent color presets (keyed on <html data-accent>; green is default) - */
-:root[data-accent="blue"] { --accent: #2563eb; --accent-soft: #dbeafe; }
+/* The primary send/action button follows the accent in both themes. */
+:root[data-accent="green"] { --send: #2e7d52; --send-hover: #38915f; }
+:root[data-accent="blue"] {
+  --accent: #2563eb;
+  --accent-soft: #dbeafe;
+  --send: #2563eb;
+  --send-hover: #3b76f0;
+}
 :root[data-theme="dark"][data-accent="blue"] {
   --accent: #7cb0f5;
   --accent-soft: #1d3a5c;
   --send: #4f9cf0;
   --send-hover: #6fb0f5;
 }
-:root[data-accent="purple"] { --accent: #7c3aed; --accent-soft: #ede9fe; }
+:root[data-accent="purple"] {
+  --accent: #7c3aed;
+  --accent-soft: #ede9fe;
+  --send: #7c3aed;
+  --send-hover: #8f55f2;
+}
 :root[data-theme="dark"][data-accent="purple"] {
   --accent: #b794f6;
   --accent-soft: #33254e;
   --send: #9d7bf0;
   --send-hover: #b195f5;
 }
-:root[data-accent="orange"] { --accent: #ea580c; --accent-soft: #ffedd5; }
+:root[data-accent="orange"] {
+  --accent: #ea580c;
+  --accent-soft: #ffedd5;
+  --send: #ea580c;
+  --send-hover: #f06a24;
+}
 :root[data-theme="dark"][data-accent="orange"] {
   --accent: #fb923c;
   --accent-soft: #4a2c15;
   --send: #f59e42;
   --send-hover: #f7ad6b;
 }
-:root[data-accent="rose"] { --accent: #dc2626; --accent-soft: #fee2e2; }
+:root[data-accent="rose"] {
+  --accent: #dc2626;
+  --accent-soft: #fee2e2;
+  --send: #dc2626;
+  --send-hover: #e64545;
+}
 :root[data-theme="dark"][data-accent="rose"] {
   --accent: #f87171;
   --accent-soft: #4a1d1d;

@@ -75,7 +75,7 @@ export default function App() {
           window.pi.window
             .setZoom(next)
             .then((cfg: any) => useStore.setState({ config: cfg }))
-            .catch(() => {});
+            .catch((err) => console.error("[zoom] setZoom failed:", err));
         }
       }
     };

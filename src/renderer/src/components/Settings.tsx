@@ -1115,8 +1115,21 @@ export function Settings() {
   };
 
   const changeZoom = async (zoomPercent: number) => {
-    const next = await window.pi.window.setZoom(zoomPercent);
-    useStore.setState({ config: next });
+    try {
+      const next = await window.pi.window.setZoom(zoomPercent);
+      useStore.setState({ config: next });
+    } catch (e: any) {
+      // e.g. stale preload from a pre-restart dev session — surface it instead of failing silently.
+      console.error("[zoom] setZoom failed:", e);
+      useStore
+        .getState()
+        .pushToast(
+          "warning",
+          language === "zh"
+            ? `缩放设置失败（${e?.message || e}），请重启应用后重试`
+            : `Zoom change failed (${e?.message || e}); restart the app and try again`
+        );
+    }
   };
 
   const openFile = async (abs: string) => {
