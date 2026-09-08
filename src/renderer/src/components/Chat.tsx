@@ -260,7 +260,9 @@ export function Chat() {
   const ctxHasValue = !ctxUsage || (!ctxIsEstimate || typeof thread?.contextEstimate === "number");
   const ctxTotal = ctxUsage?.contextWindow ?? 0;
   const ctxRemaining = Math.max(0, ctxTotal - ctxUsed);
-  const ctxPct = ctxUsage ? (typeof ctxUsage.percent === "number" ? ctxUsage.percent : ctxTotal ? Math.round((ctxUsed / ctxTotal) * 100) : 0) : 0;
+  const ctxPctRaw = ctxUsage ? (typeof ctxUsage.percent === "number" ? ctxUsage.percent : ctxTotal ? (ctxUsed / ctxTotal) * 100 : 0) : 0;
+  // pi reports percent as a raw float — display at most two decimals.
+  const ctxPct = Math.round(ctxPctRaw * 100) / 100;
   // Threshold bands for "should I compact?": ≤60% green, 60–74% yellow,
   // 75–89% orange, ≥90% red.
   const ctxBand = ctxPct >= 90 ? "hi" : ctxPct >= 75 ? "mid" : ctxPct >= 60 ? "warn" : "low";
