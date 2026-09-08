@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, Menu, shell, Tray } from "electron";
 import { loadConfig, getConfig, updateConfig } from "./config";
+import { customCssPath, readCustomCss, watchCustomCss } from "./custom-css";
 import { flushDrafts } from "./draft-store";
 import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
@@ -211,6 +212,7 @@ function createWindow(): void {
 }
 
 // Single instance -----------------------------------------------------------
+let stopCustomCssWatch: (() => void) | null = null;
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -221,6 +223,13 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     loadConfig(app.getPath("userData"));
+    // Live-reload the user stylesheet (custom.css) into every window on change.
+    stopCustomCssWatch = watchCustomCss(() => {
+      const payload = { path: customCssPath(), content: readCustomCss() };
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send("custom-css:changed", payload);
+      }
+    });
     registerHtmlPreviewProtocol();
     // Remove runtime trees superseded by an in-app core update (they may have
     // been locked by pi child processes during the previous run; nothing holds
@@ -257,6 +266,8 @@ app.on("before-quit", (e) => {
   } catch {
     /* ignore */
   }
+  stopCustomCssWatch?.();
+  stopCustomCssWatch = null;
   stopScheduler();
   stopRemoteHost();
   flushDrafts(); // synchronous: the coalesced draft write must not be lost

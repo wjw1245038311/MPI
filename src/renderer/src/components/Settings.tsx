@@ -1100,6 +1100,11 @@ export function Settings() {
     useStore.setState({ config: next });
   };
 
+  const openCustomCss = async () => {
+    const r = await window.pi.settings.openCustomCss();
+    if (r && r.ok === false) pushToast("error", "打开 custom.css 失败：" + (r.error || ""));
+  };
+
   const openFile = async (abs: string) => {
     const r = await window.pi.settings.openPath(abs);
     if (r && r.ok === false) pushToast("error", "打开失败：" + (r.error || ""));
@@ -1158,6 +1163,19 @@ export function Settings() {
                 <option value="blocks">{language === "zh" ? "前后分块" : "Before / after blocks"}</option>
               </select>
             </label>
+            <button
+              type="button"
+              className="set-custom-css"
+              onClick={openCustomCss}
+              title={
+                language === "zh"
+                  ? "用默认编辑器打开 custom.css（首次自动生成模板；保存即生效，删除文件还原）"
+                  : "Open custom.css in the default editor (template auto-created on first use; saves apply live, delete to reset)"
+              }
+            >
+              <span>{language === "zh" ? "自定义样式表" : "Custom stylesheet"}</span>
+              <code>custom.css</code>
+            </button>
             编辑会写入 <code>~/.pi/agent</code>，与终端 pi 共享。
           </div>
         </aside>

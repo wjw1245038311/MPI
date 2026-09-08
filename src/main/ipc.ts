@@ -15,6 +15,7 @@ import {
   updateConfig,
   type AutomationTask,
 } from "./config";
+import { customCssPath, ensureCustomCssTemplate, readCustomCss } from "./custom-css";
 import { deleteDraft, getAllDrafts, setDraft as persistDraft } from "./draft-store";
 import type { ComposerDraft } from "../renderer/src/lib/types";
 import { listDir } from "./fs-service";
@@ -1831,6 +1832,18 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     settings: getSettingsPath(),
     auth: getAuthPath(),
   }));
+
+  // ---- user stylesheet (custom.css) ---------------------------------------
+  ipcMain.handle("custom-css:get", () => ({ path: customCssPath(), content: readCustomCss() }));
+  ipcMain.handle("custom-css:open", async () => {
+    const { path, created } = ensureCustomCssTemplate(getConfig().language);
+    try {
+      const err = await shell.openPath(path);
+      return err ? { ok: false, error: err, path, created } : { ok: true, path, created };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e), path, created };
+    }
+  });
 
   // ---- threads (pi bridges) ----------------------------------------------
   /**

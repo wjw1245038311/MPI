@@ -9,6 +9,9 @@ MPI —— 基于 Pi coding agent（Pi Studio fork）的桌面客户端。本文
 1. **新 profile 首次启动继承兄弟 profile 的语言/主题**：dev（`%APPDATA%\MPI Dev`）与 prod（`%APPDATA%\MPI`）配置目录相互独立，全新 profile 没有 config.json 时直接落默认值（英文 + light），这就是「重装后中文变英文」的成因。现在自己的目录没有 config.json（或文件损坏）时，会从另一个已知的 MPI profile 继承 `language` 与 `theme`；只继承这两项外观设置，置顶项目/会话、自动化任务等仍各自独立。测试：`npm run test:config`。
 
    验证方式：把 `%APPDATA%\MPI Dev\config.json`（或 `%APPDATA%\MPI\config.json`）改名备份后启动对应构建，界面语言与主题应与另一个 profile 一致而非默认英文；改回原名后以自己的配置为准。只装 prod 版的用户无感知（行为不变）。
+2. **用户自定义样式表 custom.css**：设置侧栏新增「自定义样式表」按钮，用系统默认编辑器打开 `%APPDATA%\MPI\custom.css`（dev 构建为 `MPI Dev`），首次使用自动生成带注释模板（主题变量/字体字号/间距/隐藏元素示例）。文件在所有内置样式之后加载——同优先级下用户规则覆盖默认值，改配色、字体、间距不用重新打包；保存即生效（目录 watch 实时热更新，无需重启），删除文件或清空内容即还原。测试：`npm run test:customcss`。
+
+   验证方式：设置 → 左侧栏点「自定义样式表」，默认编辑器打开 custom.css（首次为模板）；取消注释 `--accent` 一行改成别的颜色保存，应用强调色立即变化、无需重启；删掉文件外观还原。
 
 ## v0.4.11（2026-09-08）
 

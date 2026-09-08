@@ -136,6 +136,9 @@ const api = {
     saveThinking: (patch: Record<string, unknown>) => ipcRenderer.invoke("settings:saveThinking", patch),
     getDiagnostics: () => ipcRenderer.invoke("settings:getDiagnostics"),
     getPaths: () => ipcRenderer.invoke("settings:getPaths"),
+    getCustomCss: (): Promise<{ path: string; content: string }> => ipcRenderer.invoke("custom-css:get"),
+    openCustomCss: (): Promise<{ ok: boolean; error?: string; path: string; created: boolean }> =>
+      ipcRenderer.invoke("custom-css:open"),
     openPath: (abs: string) => ipcRenderer.invoke("settings:openPath", abs),
     showItem: (abs: string) => ipcRenderer.invoke("settings:showItem", abs),
     openAgentDir: () => ipcRenderer.invoke("settings:openAgentDir"),
@@ -156,6 +159,7 @@ const api = {
     automation: (cb: (p: { type: "start" | "done"; taskId: string; name: string; ok?: boolean; error?: string }) => void) =>
       on("pi:automation", cb),
     projectsChanged: (cb: (p: { cwd?: string; sessionFile?: string }) => void) => on("pi:projects-changed", cb),
+    customCss: (cb: (p: { path: string; content: string }) => void) => on("custom-css:changed", cb),
     appUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:appUpdate", cb),
     coreUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:coreUpdate", cb),
   },
