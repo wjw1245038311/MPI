@@ -13,7 +13,10 @@ import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Gauge, Branch, ChevronRight, ChevronsDown } from "./icons";
 import appIconUrl from "../../../../resources/icon.png";
 
-const USER_MESSAGE_NAV_MIN_ITEMS = 6;
+// Minimum user messages before the left dot rail appears. Kept low (2) so it
+// shows up in essentially every real conversation — a single message has
+// nowhere to jump to, but from two on the rail is useful.
+const USER_MESSAGE_NAV_MIN_ITEMS = 2;
 // Distance from the transcript bottom (px) within which we treat the viewport
 // as "at the latest" — used for both auto-follow and the jump-to-latest button.
 const NEAR_BOTTOM_PX = 140;
