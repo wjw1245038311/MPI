@@ -58,6 +58,10 @@
 背景：侧栏会话只有「归档/删除」两个按钮，且删除=直接 unlink JSONL，容易误删。用户要求引入回收站机制——**只有在回收站里删除才算永久删除**。拍板决策：① 置顶按钮做成**常驻星形切换**（行上始终可见，点亮=已置顶）；② 回收站 v1 **手动清空**（不做 N 天自动清理，留作后续）；③ 回收站**默认开启**（设置可关，关闭后删除恢复为立即永久删）；④ UI 文案「永久删除会话」统一改为「删除」（弹窗正文按开关分支：开=移入回收站说明，关=不可恢复警告）。
 实现要点：`src/main/trash-store.ts`——文件 move 到 `<userData>/trash/<uuid>.jsonl`（rename 失败 EXDEV 时 copy+unlink 兜底），index.json 记录 `{id, originalFile, title, cwd, deletedAt, sizeBytes}`；IPC `thread:delete` 参数扩为 `{file,title?,cwd?}`，按 `config.trashEnabled` 分流（开=移入回收站返回 `trashed:true`，关=原 unlink 路径），新增 `trash:list/restore/purge/empty`（list 顺带清理文件已不存在的索引条目；restore 目标已存在时报错、父目录缺失则重建）；设置「归档与回收站」页新增回收站卡片（恢复/永久删除/清空+总占用，危险操作带确认弹窗）+ 通用设置开关行。i18n exact/prefixes 同步。测试 `npm run test:trash`。
 
+### P1-9 MCP 市场卡片一键安装（待办，用户拍板「先放到待办」2026-09-08）
+背景：MCP 市场 tab（mcpmarket.cn 目录，commit 80648d2）目前只做浏览——卡片/详情只有 GitHub 链接和 mcpmarket.cn 外链，没有一键安装。原因：该站**无公开安装配置 API**（它自己的 Add 按钮需登录其托管代理），条目数据里也没有 command/url/env。
+实现思路（做的时候再拍板细节）：① 从条目的 GitHub 仓库拉取安装信息——优先找仓库里的 `.mcp.json` / `mcp-server.json`，其次解析 README 的 npx/docker 命令块；能可靠推断出 stdio command+args 或 remote url 才显示「一键安装」按钮，否则降级为手动指引（复制 JSON 片段到 mcp.json）。② 写入走现有 mcp.json 管理函数同源逻辑（新增一个 upsert 入口），重名时提示覆盖/改名。③ 需要环境变量（env）的条目要弹表单让用户填，不能静默写空值。
+
 ---
 
 ## Part 2 · pi-agent-desktop 近期有价值改进建议（按相关性分组）
