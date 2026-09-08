@@ -26,7 +26,7 @@ export default function App() {
   const projects = useStore((s) => s.projects);
   const runtime = useStore((s) => s.runtime);
   const theme = useStore((s) => s.config?.theme || "light");
-  const accentTheme = useStore((s) => s.config?.accentTheme || "green");
+  const accentTheme = useStore((s) => s.config?.accentTheme || "default");
   const language = useStore((s) => s.config?.language || "en");
   const [remoteOpen, setRemoteOpen] = useState(false);
   usePiEvents();

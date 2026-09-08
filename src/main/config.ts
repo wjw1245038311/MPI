@@ -15,6 +15,22 @@ export interface ArchivedThread {
   title: string;
 }
 
+/** Accent color presets; CSS blocks keyed on <html data-accent> in styles.css.
+ * "default" is the app's original muted palette (no override block needed —
+ * it matches the base :root / dark values). */
+export const ACCENT_THEMES = [
+  "default",
+  "green",
+  "blue",
+  "purple",
+  "pink",
+  "orange",
+  "mint",
+  "sky",
+  "lavender",
+] as const;
+export type AccentTheme = (typeof ACCENT_THEMES)[number];
+
 export interface AppConfig {
   /**
    * Path to pi's cli.js, or empty string to auto-detect via `npm root -g`.
@@ -37,7 +53,7 @@ export interface AppConfig {
   /** "dark" | "light" | "system". */
   theme: "dark" | "light" | "system";
   /** Accent color preset applied on top of the theme (see data-accent CSS blocks). */
-  accentTheme: "green" | "blue" | "purple" | "pink" | "orange";
+  accentTheme: AccentTheme;
   /** Window zoom percentage, 50–150; 100 is default. Applied via webContents zoom level. */
   zoomPercent: number;
   /** UI language. English is the default for new installations. */
@@ -105,7 +121,7 @@ const DEFAULTS: AppConfig = {
   archivedProjects: [],
   archivedThreads: [],
   theme: "light",
-  accentTheme: "green",
+  accentTheme: "default",
   zoomPercent: 100,
   language: "en",
   soundOnComplete: true,
@@ -148,10 +164,8 @@ export function loadConfig(userDataDir: string): AppConfig {
           : DEFAULTS.remoteSignalingEnabled,
         diffViewMode: parsed.diffViewMode === "blocks" ? "blocks" : DEFAULTS.diffViewMode,
         accentTheme:
-          parsed.accentTheme === "blue" ||
-          parsed.accentTheme === "purple" ||
-          parsed.accentTheme === "pink" ||
-          parsed.accentTheme === "orange"
+          typeof parsed.accentTheme === "string" &&
+          (ACCENT_THEMES as readonly string[]).includes(parsed.accentTheme)
             ? parsed.accentTheme
             : DEFAULTS.accentTheme,
         zoomPercent:
@@ -203,11 +217,8 @@ function inheritFromSiblingProfile(currentDir: string): Partial<AppConfig> {
       out.theme = parsed.theme;
     }
     if (
-      parsed.accentTheme === "green" ||
-      parsed.accentTheme === "blue" ||
-      parsed.accentTheme === "purple" ||
-      parsed.accentTheme === "pink" ||
-      parsed.accentTheme === "orange"
+      typeof parsed.accentTheme === "string" &&
+      (ACCENT_THEMES as readonly string[]).includes(parsed.accentTheme)
     ) {
       out.accentTheme = parsed.accentTheme;
     }

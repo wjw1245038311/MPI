@@ -27,6 +27,13 @@ assert.equal(cfg.language, "zh", "inherits language from sibling");
 assert.equal(cfg.theme, "dark", "inherits theme from sibling");
 assert.equal(cfg.accentTheme, "blue", "inherits accentTheme from sibling");
 
+// 2b) New presets (default/mint/sky/lavender) are inherited too.
+writeFileSync(join(prodDir, "config.json"), JSON.stringify({ accentTheme: "mint" }));
+cfg = loadConfig(devDir);
+assert.equal(cfg.accentTheme, "mint", "inherits new preset (mint) from sibling");
+// Restore the case-2 sibling state for the later cases.
+writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "zh", theme: "dark", accentTheme: "blue" }));
+
 // 3) An existing own config is never overridden by the sibling.
 writeFileSync(join(devDir, "config.json"), JSON.stringify({ language: "en", theme: "system" }));
 cfg = loadConfig(devDir);
@@ -45,7 +52,7 @@ writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "fr", the
 cfg = loadConfig(devDir);
 assert.equal(cfg.language, "en", "invalid sibling language ignored");
 assert.equal(cfg.theme, "light", "invalid sibling theme ignored");
-assert.equal(cfg.accentTheme, "green", "invalid sibling accentTheme ignored");
+assert.equal(cfg.accentTheme, "default", "invalid sibling accentTheme falls back to default");
 
 // 6) Corrupt sibling -> skipped silently.
 writeFileSync(join(prodDir, "config.json"), "{broken");

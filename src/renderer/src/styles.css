@@ -12,12 +12,12 @@
   --text: #1d1e1b;
   --text-dim: #6c7066;
   --text-faint: #9aa096;
-  /* Default accent: Apple HIG green (light). Other presets override via
-   * <html data-accent> blocks at the end of this file. */
-  --accent: #34c759;
-  --accent-soft: #e5f5eb;
-  --send: #34c759;
-  --send-hover: #2db851;
+  /* Default accent (preset "default"): the app's original muted palette.
+   * Other presets override via <html data-accent> blocks at the end of this file. */
+  --accent: #2e7d52;
+  --accent-soft: #e4f1e8;
+  --send: #2b2d28;
+  --send-hover: #3a3d35;
   --code-bg: #f5f5f1;
   --user-bubble: #ffffff;
   --surface: #ffffff;
@@ -5686,10 +5686,10 @@ mark.hl {
   --text-dim: #b6c2c8;
   --text-faint: #8b98a0;
   /* Apple HIG green (dark) */
-  --accent: #30d158;
+  --accent: #7bd6a1;
   --accent-soft: #214333;
-  --send: #30d158;
-  --send-hover: #46da6b;
+  --send: #75c995;
+  --send-hover: #8cdda9;
   --code-bg: #151c20;
   --user-bubble: #263830;
   --surface: #1b2327;
@@ -6423,7 +6423,9 @@ mark.hl {
 /* ---- General settings: accent color swatches ----------------------------- */
 .accent-swatches {
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
+  row-gap: 30px; /* extra room for the selected preset's name label */
   align-items: flex-start;
   padding-top: 2px;
   padding-bottom: 20px; /* room for the selected preset's name label */
@@ -6452,9 +6454,22 @@ mark.hl {
   white-space: nowrap;
 }
 
-/* ---- Accent color presets (keyed on <html data-accent>; green is default) - */
-/* Palette: Apple HIG system accent colors. The primary send/action button
- * follows the accent in both themes; selection surfaces use --accent-soft. */
+/* ---- Accent color presets (keyed on <html data-accent>; "default" is the base) - */
+/* Vivid presets: Apple HIG system accent colors. Pastel presets (mint/sky/
+ * lavender) are softer, lighter-toned variants. The primary send/action
+ * button follows the accent in both themes; selection surfaces use --accent-soft. */
+:root[data-accent="green"] {
+  --accent: #34c759;
+  --accent-soft: #e5f5eb;
+  --send: #34c759;
+  --send-hover: #2db851;
+}
+:root[data-theme="dark"][data-accent="green"] {
+  --accent: #30d158;
+  --accent-soft: #214333;
+  --send: #30d158;
+  --send-hover: #46da6b;
+}
 :root[data-accent="blue"] {
   --accent: #007aff;
   --accent-soft: #e7f1ff;
@@ -6502,4 +6517,41 @@ mark.hl {
   --accent-soft: #3a2c1a;
   --send: #ff9f0a;
   --send-hover: #ffb133;
+}
+/* Pastel presets — softer, lighter tones. */
+:root[data-accent="mint"] {
+  --accent: #46a57c;
+  --accent-soft: #e2f3ea;
+  --send: #3f9a72;
+  --send-hover: #378a66;
+}
+:root[data-theme="dark"][data-accent="mint"] {
+  --accent: #6fd3a4;
+  --accent-soft: #1e3a2c;
+  --send: #4fae82;
+  --send-hover: #62c292;
+}
+:root[data-accent="sky"] {
+  --accent: #5d9bd4;
+  --accent-soft: #e7f0fb;
+  --send: #4f8cc7;
+  --send-hover: #457db5;
+}
+:root[data-theme="dark"][data-accent="sky"] {
+  --accent: #7cb8ea;
+  --accent-soft: #1f2f42;
+  --send: #5d9bd4;
+  --send-hover: #6faae0;
+}
+:root[data-accent="lavender"] {
+  --accent: #9b7fd4;
+  --accent-soft: #f1ecfa;
+  --send: #8a6cc9;
+  --send-hover: #7d5fc2;
+}
+:root[data-theme="dark"][data-accent="lavender"] {
+  --accent: #b39ae8;
+  --accent-soft: #2c2440;
+  --send: #9b7fd4;
+  --send-hover: #a98fe0;
 }
