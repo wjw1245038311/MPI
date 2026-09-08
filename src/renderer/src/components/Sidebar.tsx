@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { localizeAutomationThreadTitle, useStore } from "../store";
 import { fileIcon, formatTokens } from "../lib/format";
 import { useOutsideClose } from "../lib/useOutsideClose";
@@ -7,6 +7,45 @@ import type { FileNode } from "../lib/types";
 import { Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, At, Search, Settings, Help, Refresh, Gauge, Smartphone, Sidebar as SidebarIcon } from "./icons";
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
+
+/** The pinned zone is the leading contiguous run of pinned entries in a displayed list. */
+function leadingPinned<T extends { pinned?: boolean }>(list: T[]): number {
+  let n = 0;
+  while (n < list.length && list[n].pinned) n++;
+  return n;
+}
+
+/**
+ * Resolve a drop onto `hoverId` into an action on the pinned zone.
+ * - Pinned item dropped inside the zone → reorder to that rank.
+ * - Pinned item dropped at/after the end of the zone → unpin.
+ * - Unpinned item dropped inside the zone (or at the very top when nothing is
+ *   pinned yet) → pin it there.
+ * - Anything else → null: the recent zone stays auto-sorted by activity.
+ */
+type DropAction = { type: "move" | "pin"; target: number } | { type: "unpin" } | null;
+function resolveDrop<T extends { id: string; pinned?: boolean }>(
+  list: T[],
+  dragId: string,
+  hoverId: string,
+  pos: "before" | "after",
+): DropAction {
+  if (dragId === hoverId) return null;
+  const di = list.findIndex((x) => x.id === dragId);
+  const hi = list.findIndex((x) => x.id === hoverId);
+  if (di < 0 || hi < 0) return null;
+  const P = leadingPinned(list);
+  const i = hi + (pos === "after" ? 1 : 0); // insertion index in the displayed list
+  if (list[di].pinned) {
+    if (i >= P) return { type: "unpin" };
+    const j = i > di ? i - 1 : i;
+    return j === di ? null : { type: "move", target: j };
+  }
+  if (P > 0 && i < P) return { type: "pin", target: i };
+  if (P === 0 && i === 0) return { type: "pin", target: 0 };
+  return null;
+}
+
 const SIDEBAR_WIDTH_KEY = "mpi.sidebar-width";
 const SIDEBAR_DEFAULT_WIDTH = 286;
 const SIDEBAR_MIN_WIDTH = 220;
@@ -45,9 +84,12 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const [usageOpen, setUsageOpen] = useState(false);
   const [usageData, setUsageData] = useState<any>(null);
   const [usageLoading, setUsageLoading] = useState(false);
-  const [projectMenu, setProjectMenu] = useState<{ cwd: string; name: string; pinned: boolean; x: number; y: number } | null>(null);
-  const [threadMenu, setThreadMenu] = useState<{ cwd: string; file: string; name: string; pinned: boolean; x: number; y: number } | null>(null);
+  const [projectMenu, setProjectMenu] = useState<{ cwd: string; name: string; pinned: boolean; pinnedRank: number; pinnedCount: number; x: number; y: number } | null>(null);
+  const [threadMenu, setThreadMenu] = useState<{ cwd: string; file: string; name: string; pinned: boolean; pinnedRank: number; pinnedCount: number; x: number; y: number } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ cwd: string; file: string; name: string } | null>(null);
+  // Pinned-zone drag & drop state (projects and threads share the same rules).
+  const [dragItem, setDragItem] = useState<{ kind: "project" | "thread"; id: string } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ kind: "project" | "thread"; id: string; pos: "before" | "after" } | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(initialSidebarWidth);
   const usageRef = useRef<HTMLDivElement>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
@@ -148,6 +190,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const setProjectPinned = useStore((s) => s.setProjectPinned);
   const unpinProject = useStore((s) => s.unpinProject);
   const setThreadPinned = useStore((s) => s.setThreadPinned);
+  const movePinned = useStore((s) => s.movePinned);
   const archiveProject = useStore((s) => s.archiveProject);
   const archiveThread = useStore((s) => s.archiveThread);
   const deleteThread = useStore((s) => s.deleteThread);
@@ -187,6 +230,61 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
       );
     }
   };
+
+  // HTML5 drag & drop for reordering the pinned zone. `list` is the displayed
+  // order (pinned first); see resolveDrop() for the cross-zone semantics.
+  const dndHandlers = (
+    kind: "project" | "thread",
+    list: Array<{ id: string; pinned?: boolean }>,
+    id: string,
+  ) => ({
+    draggable: true,
+    onDragStart: (event: ReactDragEvent) => {
+      event.dataTransfer.effectAllowed = "move";
+      // Some browsers refuse to start a drag without payload data.
+      event.dataTransfer.setData("text/plain", id);
+      setDragItem({ kind, id });
+    },
+    onDragEnd: () => {
+      setDragItem(null);
+      setDropTarget(null);
+    },
+    onDragOver: (event: ReactDragEvent) => {
+      if (!dragItem || dragItem.kind !== kind) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const pos: "before" | "after" = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+      const action = resolveDrop(list, dragItem.id, id, pos);
+      if (action) {
+        event.preventDefault(); // required to allow the drop
+        event.dataTransfer.dropEffect = "move";
+        setDropTarget({ kind, id, pos });
+      } else if (dropTarget?.kind === kind && dropTarget.id === id) {
+        setDropTarget(null);
+      }
+    },
+    onDragLeave: () => {
+      if (dropTarget?.kind === kind && dropTarget.id === id) setDropTarget(null);
+    },
+    onDrop: (event: ReactDragEvent) => {
+      event.preventDefault();
+      const rect = event.currentTarget.getBoundingClientRect();
+      const pos: "before" | "after" = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+      const action = dragItem && dragItem.kind === kind ? resolveDrop(list, dragItem.id, id, pos) : null;
+      const dragged = dragItem;
+      setDragItem(null);
+      setDropTarget(null);
+      if (!action || !dragged) return;
+      if (action.type === "unpin") {
+        if (kind === "project") void unpinProject(dragged.id);
+        else void setThreadPinned(dragged.id, false);
+      } else {
+        void movePinned(kind, dragged.id, action.target);
+      }
+    },
+  });
+
+  const dropClass = (kind: "project" | "thread", id: string) =>
+    dropTarget?.kind === kind && dropTarget.id === id ? `drop-${dropTarget.pos}` : "";
 
   return (
     <aside className="sidebar" style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
@@ -257,20 +355,25 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               return (
                 <div className="project" key={p.cwd}>
                   <div
-                    className={`project-head ${open ? "open" : ""}`}
+                    className={`project-head ${open ? "open" : ""} ${dropClass("project", p.cwd)} ${dragItem?.id === p.cwd ? "dragging" : ""}`}
                     onClick={() => toggleProject(p.cwd)}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
                       setThreadMenu(null);
+                      const P = leadingPinned(projects);
+                      const idx = projects.findIndex((x) => x.cwd === p.cwd);
                       setProjectMenu({
                         cwd: p.cwd,
                         name: p.name,
                         pinned: !!p.pinned,
+                        pinnedRank: idx < P ? idx : -1,
+                        pinnedCount: P,
                         x: Math.min(event.clientX, window.innerWidth - 190),
                         y: Math.min(event.clientY, window.innerHeight - 70),
                       });
                     }}
+                    {...dndHandlers("project", projects.map((x) => ({ id: x.cwd, pinned: x.pinned })), p.cwd)}
                   >
                     <span className="caret">
                       <ChevronRight size={10} />
@@ -318,7 +421,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                         return (
                           <div
                             key={t.file}
-                            className={`thread ${activeThreadId === t.file ? "active" : ""}`}
+                            className={`thread ${activeThreadId === t.file ? "active" : ""} ${dropClass("thread", t.file)} ${dragItem?.id === t.file ? "dragging" : ""}`}
                             role="button"
                             tabIndex={0}
                             onClick={openThread}
@@ -326,15 +429,20 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                               event.preventDefault();
                               event.stopPropagation();
                               setProjectMenu(null);
+                              const P = leadingPinned(p.threads);
+                              const idx = p.threads.findIndex((x) => x.file === t.file);
                               setThreadMenu({
                                 cwd: p.cwd,
                                 file: t.file,
                                 name: title,
                                 pinned: !!t.pinned,
+                                pinnedRank: idx < P ? idx : -1,
+                                pinnedCount: P,
                                 x: Math.min(event.clientX, window.innerWidth - 190),
                                 y: Math.min(event.clientY, window.innerHeight - 70),
                               });
                             }}
+                            {...dndHandlers("thread", p.threads.map((x) => ({ id: x.file, pinned: x.pinned })), t.file)}
                             onKeyDown={(event) => {
                               if (event.target !== event.currentTarget) return;
                               if (event.key === "Enter" || event.key === " ") {
@@ -452,6 +560,30 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
           role="menu"
         >
           <div className="project-context-name" title={projectMenu.cwd}>{projectMenu.name}</div>
+          {projectMenu.pinnedRank > 0 && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                const item = projectMenu;
+                setProjectMenu(null);
+                void movePinned("project", item.cwd, item.pinnedRank - 1);
+              }}
+            >
+              上移
+            </button>
+          )}
+          {projectMenu.pinnedRank >= 0 && projectMenu.pinnedRank < projectMenu.pinnedCount - 1 && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                const item = projectMenu;
+                setProjectMenu(null);
+                void movePinned("project", item.cwd, item.pinnedRank + 1);
+              }}
+            >
+              下移
+            </button>
+          )}
           <button
             role="menuitem"
             onClick={() => void openProjectInExplorer(projectMenu.cwd)}
@@ -494,6 +626,30 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
           role="menu"
         >
           <div className="project-context-name" title={threadMenu.file}>{threadMenu.name}</div>
+          {threadMenu.pinnedRank > 0 && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                const item = threadMenu;
+                setThreadMenu(null);
+                void movePinned("thread", item.file, item.pinnedRank - 1);
+              }}
+            >
+              上移
+            </button>
+          )}
+          {threadMenu.pinnedRank >= 0 && threadMenu.pinnedRank < threadMenu.pinnedCount - 1 && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                const item = threadMenu;
+                setThreadMenu(null);
+                void movePinned("thread", item.file, item.pinnedRank + 1);
+              }}
+            >
+              下移
+            </button>
+          )}
           <button
             role="menuitem"
             onClick={() => {

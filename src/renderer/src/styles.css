@@ -317,6 +317,7 @@ body.sidebar-resizing * {
   margin-bottom: 4px;
 }
 .project-head {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -418,6 +419,34 @@ body.sidebar-resizing * {
 .thread.active {
   background: var(--accent-soft);
   box-shadow: var(--shadow-sm);
+}
+
+/* Pinned-zone drag & drop: insertion indicator + faded source row */
+.project-head.drop-before::before,
+.thread.drop-before::before,
+.project-head.drop-after::after,
+.thread.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  z-index: 1;
+  pointer-events: none;
+}
+.project-head.drop-before::before,
+.thread.drop-before::before {
+  top: -3px;
+}
+.project-head.drop-after::after,
+.thread.drop-after::after {
+  bottom: -3px;
+}
+.project-head.dragging,
+.thread.dragging {
+  opacity: 0.45;
 }
 .thread-title {
   display: flex;

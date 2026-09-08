@@ -10,7 +10,7 @@ import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
-import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Gauge, Branch, ChevronRight, ChevronsDown } from "./icons";
+import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Gauge, Branch, ChevronRight, ChevronsDown, Star } from "./icons";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
 
@@ -29,6 +29,7 @@ export function Chat() {
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const togglePreview = useStore((s) => s.togglePreview);
   const newSessionInThread = useStore((s) => s.newSessionInThread);
+  const setThreadPinned = useStore((s) => s.setThreadPinned);
   const renameThread = useStore((s) => s.renameThread);
   const switchThreadFolder = useStore((s) => s.switchThreadFolder);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -200,11 +201,15 @@ export function Chat() {
   const firstUserText = thread.messages.find((m) => m.role === "user")?.text || "";
   const isEmptyDraft = thread.messages.length === 0 && !thread.streaming;
   const titleFile = thread.sessionFile || activeThreadId;
-  const sidebarTitle = activeThreadId
+  // Sidebar summary of the active session: source for its display title and
+  // pin state (the header star toggles this).
+  const activeSummary = activeThreadId
     ? projects
         .flatMap((project) => project.threads)
-        .find((summary) => normalizeThreadFile(summary.file || summary.id) === normalizeThreadFile(titleFile))?.title || ""
-    : "";
+        .find((summary) => normalizeThreadFile(summary.file || summary.id) === normalizeThreadFile(titleFile))
+    : undefined;
+  const sidebarTitle = activeSummary?.title || "";
+  const isPinned = !!activeSummary?.pinned;
   // A stale fresh-session flag must never hide the title of a real transcript.
   // Once this view has messages, derive the header from this thread itself;
   // only an actually empty draft uses the default label.
@@ -400,6 +405,15 @@ export function Chat() {
           <span className="chat-connecting" title="pi 进程连接中；历史已可浏览，发送消息会自动等待连接完成">
             <span className="spinner" /> 连接中
           </span>
+        )}
+        {activeThreadId && (
+          <button
+            className={`iconbtn ${isPinned ? "on" : ""}`}
+            title={isPinned ? "取消置顶会话" : "置顶会话"}
+            onClick={() => activeSummary && void setThreadPinned(activeSummary.file, !isPinned)}
+          >
+            <Star size={14} />
+          </button>
         )}
         <button className="iconbtn" title="重命名" onClick={startRename}>
           <Edit size={14} />

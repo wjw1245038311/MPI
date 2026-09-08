@@ -1101,6 +1101,7 @@ interface PiStore {
   setProjectPinned: (cwd: string, pinned: boolean) => Promise<void>;
   unpinProject: (cwd: string) => Promise<void>;
   setThreadPinned: (file: string, pinned: boolean) => Promise<void>;
+  movePinned: (kind: "project" | "thread", id: string, target: number) => Promise<void>;
   archiveProject: (cwd: string) => Promise<void>;
   restoreProject: (cwd: string) => Promise<void>;
   archiveThread: (cwd: string, file: string, title?: string) => Promise<void>;
@@ -1513,6 +1514,15 @@ export const useStore = create<PiStore>()((set, get) => {
       await get().refreshProjects();
     } catch (e: any) {
       get().pushToast("error", e?.message || (pinned ? "Pin session failed" : "Unpin session failed"));
+    }
+  },
+  movePinned: async (kind, id, target) => {
+    try {
+      const config = await window.pi.app.reorderPinned({ kind, id, target });
+      set({ config });
+      await get().refreshProjects();
+    } catch (e: any) {
+      get().pushToast("error", e?.message || "Reorder failed");
     }
   },
   archiveProject: async (cwd) => {

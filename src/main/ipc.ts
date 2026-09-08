@@ -33,6 +33,7 @@ import {
   writeThinking,
 } from "./models-service";
 import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtimeKind } from "./pi-bridge";
+import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
 import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, type ThreadSearchHit } from "./session-store";
@@ -1726,7 +1727,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     const cfg = getConfig();
     const target = cwd.toLowerCase();
     const next = (cfg.pinnedProjects || []).filter((path) => path.toLowerCase() !== target);
-    if (args?.pinned) next.unshift(cwd);
+    // New pins append to the END of the pinned zone so existing manual order is kept.
+    if (args?.pinned) next.push(cwd);
     return updateConfig({ pinnedProjects: next });
   });
 
@@ -1736,8 +1738,23 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     const cfg = getConfig();
     const target = file.toLowerCase();
     const next = (cfg.pinnedThreads || []).filter((path) => path.toLowerCase() !== target);
-    if (args?.pinned) next.unshift(file);
+    // New pins append to the END of the pinned zone so existing manual order is kept.
+    if (args?.pinned) next.push(file);
     return updateConfig({ pinnedThreads: next });
+  });
+
+  // Move an entry within its pinned list, or pin it at a rank when absent.
+  // The array order IS the display order of the sidebar's pinned zone.
+  ipcMain.handle("app:reorderPinned", (_e, args: { kind?: string; id?: string; target?: number }) => {
+    const kind = args?.kind === "thread" ? "thread" : args?.kind === "project" ? "project" : null;
+    if (!kind) throw new Error("Invalid pinned list");
+    const id = typeof args?.id === "string" ? args.id.trim() : "";
+    if (!id) throw new Error("Missing id");
+    const cfg = getConfig();
+    if (kind === "project") {
+      return updateConfig({ pinnedProjects: reorderPinned(cfg.pinnedProjects || [], id, Number(args?.target)) });
+    }
+    return updateConfig({ pinnedThreads: reorderPinned(cfg.pinnedThreads || [], id, Number(args?.target)) });
   });
 
   // Pre-warm the standby pi process for the project the user is looking at, so

@@ -30,6 +30,8 @@ const api = {
     unpinProject: (absPath: string) => ipcRenderer.invoke("app:unpinProject", absPath),
     setProjectPinned: (args: { cwd: string; pinned: boolean }) => ipcRenderer.invoke("app:setProjectPinned", args),
     setThreadPinned: (args: { file: string; pinned: boolean }) => ipcRenderer.invoke("app:setThreadPinned", args),
+    reorderPinned: (args: { kind: "project" | "thread"; id: string; target: number }) =>
+      ipcRenderer.invoke("app:reorderPinned", args),
     showOpenDialog: (kind: "folder" | "file" | "files") => ipcRenderer.invoke("app:showOpenDialog", kind),
     getFileTree: (cwd: string, rel?: string) => ipcRenderer.invoke("app:getFileTree", cwd, rel),
     fileExists: (absPath: string) => ipcRenderer.invoke("app:fileExists", absPath),
