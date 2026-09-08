@@ -62,10 +62,8 @@ dev（`%APPDATA%\MPI Dev`）与 prod（`%APPDATA%\MPI`）各自独立 config.jso
 - **方案**：新增单栏交错布局（`-`/`+` 前缀），与 git diff / GitHub unified 视图一致；用户可切换两种模式。对方仓库已有文件级 `DiffView` 渲染器可参考复用。
 - **MPI 现状**：我们的 edit toolCall 结果渲染是双栏，窄窗口同样难受。**直接可做**。
 
-#### A2 · GFM autolink 吞 CJK 文本 — [#50](https://github.com/abcwyc/pi-agent-desktop/issues/50) / PR #51（已合并）
-- **问题**：`读https://...，然后来解决一下` —— URL 后紧跟中文时，remark-gfm autolink literal 把后续所有非 ASCII 字符吞进 `<a>`，点击跳到百分号编码的无效 URL。
-- **方案**：autolink-trim 插件（PR #51），配套 PR #54 补类型（去掉 `any`）。
-- **MPI 现状**：我们用 remark-gfm + zh 用户为主，**大概率同样受影响**。先验证 `lib/markdown.tsx` 是否复现，再移植该插件。工作量小、收益直接。
+#### A2 · GFM autolink 吞 CJK 文本 ✅ 已完成（Unreleased）— [#50](https://github.com/abcwyc/pi-agent-desktop/issues/50) / PR #51
+~~URL 后紧跟中文时 remark-gfm autolink literal 把后续非 ASCII 字符吞进 `<a>`~~ **已验证复现**（`读https://example.com，然后来解决一下` → url 含 CJK）。已移植 `lib/remark-autolink-trim.ts`（PR #51+#54 类型版）：仅处理 autolink literal（link 唯一子节点 text === url），首个非 ASCII 字符起拆回普通文本；显式 `[文本](url)` 与百分号编码 URL 不受影响。接入 `markdown.tsx` REMARK_PLUGINS（gfm 之后）。测试 `npm run test:markdown`（含无插件时 bug 存在的 sanity 断言，防上游修复后插件失效无感知）。
 
 #### A3 · RPC 模式支持工厂型扩展小组件 — [#57](https://github.com/abcwyc/pi-agent-desktop/pull/57)（open PR）
 - **问题**：pi 的 `ExtensionUIContext.setWidget()` 可传字符串数组或组件工厂；RPC 桥接只处理字符串数组，**直接忽略工厂**。导致如 `@juicesharp/rpiv-todo` 这类扩展的工具/命令能注册、但实时待办面板不显示。
@@ -121,7 +119,7 @@ dev（`%APPDATA%\MPI Dev`）与 prod（`%APPDATA%\MPI`）各自独立 config.jso
 ---
 
 ## 建议的下一步（供你拍板）
-1. **先做 A2**（GFM CJK autolink）：先验证是否复现，若中招移植插件，半天内可完成。
+1. ~~**先做 A2**（GFM CJK autolink）~~ ✅ 已完成（见上）。
 2. **A3（RPC 工厂型小组件）**：差异化价值最高，建议排期；可先装 `@juicesharp/rpiv-todo` 在 MPI 里实测现状确认缺口。
 3. **A1（unified diff）+ A7（custom.css）**：体验类改进，各半天到一天。
 4. **A4/A5**：审计型工作，一次过 store.ts + composer 发送路径，产出风险清单。

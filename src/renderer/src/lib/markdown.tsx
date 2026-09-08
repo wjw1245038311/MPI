@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { CODE_LANGUAGE_ALIASES, CODE_LANGUAGE_NAMES, CODE_LANGUAGES } from "./code-languages";
+import { remarkTrimAutolinkTrailingUnicode } from "./remark-autolink-trim";
 import { useStore } from "../store";
 
 function extractText(node: ReactNode): string {
@@ -47,7 +48,8 @@ function CodeBlock({ className, children }: { className?: string; children: Reac
 // pipeline when the plugin array identity changes, and re-parses the text on
 // every render — so everything here must be stable, and the component itself
 // is memoized on `text`. Unchanged messages then cost nothing to re-render.
-const REMARK_PLUGINS = [remarkGfm];
+// The trim plugin must run after gfm (it fixes autolink literals gfm produced).
+const REMARK_PLUGINS = [remarkGfm, remarkTrimAutolinkTrailingUnicode];
 const REHYPE_PLUGINS = [
   [
     rehypeHighlight,
