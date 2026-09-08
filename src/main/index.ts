@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { basename, extname, join } from "node:path";
 import { app, BrowserWindow, Menu, shell, Tray } from "electron";
 import { loadConfig, getConfig, updateConfig } from "./config";
 import { flushDrafts } from "./draft-store";
@@ -52,14 +53,34 @@ function showMainWindow(): void {
   mainWindow.focus();
 }
 
-/** Resolve the app icon for the live window (dev + packaged). */
+/** Resolve the app icon for the live window (dev + packaged).
+ *
+ * Windows Explorer caches icons per file path: replacing an .ico at a stable
+ * path (repo resources/ in dev, install dir on upgrades) keeps showing the old
+ * image in the taskbar. Copying to a content-addressed name under userData
+ * guarantees a fresh path whenever the icon bytes change. */
 function resolveWindowIcon(): string | undefined {
   const names = process.platform === "win32" ? ["icon.ico", "icon.png"] : ["icon.png"];
   const candidates = names.flatMap((name) => [
     join(app.getAppPath(), "resources", name),
     join((process as any).resourcesPath || "", name),
   ]);
-  return candidates.find((p) => p && existsSync(p));
+  const source = candidates.find((p) => p && existsSync(p));
+  if (!source) return undefined;
+  try {
+    const hash = createHash("sha256").update(readFileSync(source)).digest("hex").slice(0, 10);
+    const dir = join(app.getPath("userData"), "icons");
+    mkdirSync(dir, { recursive: true });
+    const dest = join(dir, `icon-${hash}${extname(source)}`);
+    if (!existsSync(dest)) copyFileSync(source, dest);
+    // Drop stale copies left behind by previous icon versions.
+    for (const f of readdirSync(dir)) {
+      if (f !== basename(dest) && /^icon-[0-9a-f]{10}\.(ico|png)$/.test(f)) rmSync(join(dir, f), { force: true });
+    }
+    return dest;
+  } catch {
+    return source; // fall back to the original path if copying fails
+  }
 }
 
 function updateTrayMenu(): void {
