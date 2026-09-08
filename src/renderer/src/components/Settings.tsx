@@ -105,6 +105,15 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
+/** Accent color presets (Feishu-style swatches); CSS blocks keyed on <html data-accent>. */
+const ACCENT_PRESETS = [
+  { id: "green", zh: "绿", en: "Green", swatch: "#2e7d52" },
+  { id: "blue", zh: "蓝", en: "Blue", swatch: "#2563eb" },
+  { id: "purple", zh: "紫", en: "Purple", swatch: "#7c3aed" },
+  { id: "orange", zh: "橙", en: "Orange", swatch: "#ea580c" },
+  { id: "rose", zh: "玫红", en: "Rose", swatch: "#dc2626" },
+] as const;
+
 function Field({ label, hint, children, wide }: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {
   return (
     <div className={`set-row ${wide ? "wide" : ""}`}>
@@ -1100,6 +1109,16 @@ export function Settings() {
     useStore.setState({ config: next });
   };
 
+  const changeAccent = async (accentTheme: (typeof ACCENT_PRESETS)[number]["id"]) => {
+    const next = await window.pi.app.setConfig({ accentTheme });
+    useStore.setState({ config: next });
+  };
+
+  const changeZoom = async (zoomPercent: number) => {
+    const next = await window.pi.window.setZoom(zoomPercent);
+    useStore.setState({ config: next });
+  };
+
   const openFile = async (abs: string) => {
     const r = await window.pi.settings.openPath(abs);
     if (r && r.ok === false) pushToast("error", "打开失败：" + (r.error || ""));
@@ -1191,16 +1210,79 @@ export function Settings() {
           <div className="set-body">
             {tab === "general" && (
               <div className="set-card">
-                <Field label={language === "zh" ? "主题模式" : "Theme"}>
-                  <select
-                    className="set-select"
-                    value={config?.theme || "light"}
-                    onChange={(e) => changeTheme(e.target.value as "dark" | "light" | "system")}
-                  >
-                    <option value="system">{language === "zh" ? "跟随系统" : "System"}</option>
-                    <option value="light">{language === "zh" ? "浅色" : "Light"}</option>
-                    <option value="dark">{language === "zh" ? "夜间" : "Dark"}</option>
-                  </select>
+                <Field
+                  label={language === "zh" ? "主题模式" : "Theme"}
+                  hint={
+                    language === "zh"
+                      ? "勾选「跟随系统」后，应用随操作系统外观设置切换。"
+                      : "When “Follow system” is on, the app follows the OS appearance setting."
+                  }
+                >
+                  <div className="theme-picker">
+                    <label className="theme-sys-check">
+                      <input
+                        type="checkbox"
+                        checked={config?.theme === "system"}
+                        onChange={(e) => changeTheme(e.target.checked ? "system" : "light")}
+                      />
+                      <span>{language === "zh" ? "跟随系统" : "Follow system"}</span>
+                    </label>
+                    <div className="theme-cards">
+                      {(["light", "dark"] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={`theme-card ${config?.theme === mode ? "selected" : ""}`}
+                          onClick={() => changeTheme(mode)}
+                        >
+                          <span className={`theme-mock ${mode}`} aria-hidden="true">
+                            <i className="tm-rail" />
+                            <span className="tm-body">
+                              <i className="tm-line w60" />
+                              <i className="tm-line w85 tm-accent" />
+                              <i className="tm-line w45" />
+                            </span>
+                          </span>
+                          <span className="theme-card-label">
+                            <i className={`radio-dot ${config?.theme === mode ? "on" : ""}`} />
+                            {mode === "light"
+                              ? language === "zh"
+                                ? "浅色"
+                                : "Light"
+                              : language === "zh"
+                                ? "深色"
+                                : "Dark"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </Field>
+                <Field
+                  label={language === "zh" ? "主题色" : "Accent color"}
+                  hint={
+                    language === "zh"
+                      ? "改变应用强调色（高亮、选中态、发送按钮等）。"
+                      : "Changes the app accent (highlights, selection, send button)."
+                  }
+                >
+                  <div className="accent-swatches">
+                    {ACCENT_PRESETS.map((a) => {
+                      const selected = (config?.accentTheme || "green") === a.id;
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          className={`accent-swatch ${selected ? "selected" : ""}`}
+                          style={{ background: a.swatch }}
+                          title={language === "zh" ? a.zh : a.en}
+                          onClick={() => changeAccent(a.id)}
+                        >
+                          {selected && <span className="accent-name">{language === "zh" ? a.zh : a.en}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </Field>
                 <Field label={language === "zh" ? "语言" : "Language"}>
                   <select
@@ -1227,6 +1309,26 @@ export function Settings() {
                   >
                     <option value="unified">{language === "zh" ? "统一（单栏）" : "Unified (single column)"}</option>
                     <option value="blocks">{language === "zh" ? "前后分块" : "Before / after blocks"}</option>
+                  </select>
+                </Field>
+                <Field
+                  label={language === "zh" ? "窗口缩放" : "Window zoom"}
+                  hint={
+                    language === "zh"
+                      ? "也可用快捷键 Ctrl+= / Ctrl+- 调整，Ctrl+0 恢复默认。"
+                      : "Also adjustable via Ctrl+= / Ctrl+-; Ctrl+0 resets to default."
+                  }
+                >
+                  <select
+                    className="set-select"
+                    value={config?.zoomPercent ?? 100}
+                    onChange={(e) => changeZoom(Number(e.target.value))}
+                  >
+                    {[50, 75, 100, 125, 150].map((p) => (
+                      <option key={p} value={p}>
+                        {p === 100 ? `${p}%（${language === "zh" ? "默认" : "default"}）` : `${p}%`}
+                      </option>
+                    ))}
                   </select>
                 </Field>
               </div>

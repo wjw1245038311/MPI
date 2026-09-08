@@ -36,6 +36,10 @@ export interface AppConfig {
   windowBounds?: { x?: number; y?: number; width: number; height: number; maximized?: boolean };
   /** "dark" | "light" | "system". */
   theme: "dark" | "light" | "system";
+  /** Accent color preset applied on top of the theme (see data-accent CSS blocks). */
+  accentTheme: "green" | "blue" | "purple" | "orange" | "rose";
+  /** Window zoom percentage, 50–150; 100 is default. Applied via webContents zoom level. */
+  zoomPercent: number;
   /** UI language. English is the default for new installations. */
   language: "en" | "zh";
   /** Play a short chime in the renderer when an agent turn completes. */
@@ -101,6 +105,8 @@ const DEFAULTS: AppConfig = {
   archivedProjects: [],
   archivedThreads: [],
   theme: "light",
+  accentTheme: "green",
+  zoomPercent: 100,
   language: "en",
   soundOnComplete: true,
   diffViewMode: "unified",
@@ -141,6 +147,17 @@ export function loadConfig(userDataDir: string): AppConfig {
           ? parsed.remoteSignalingEnabled
           : DEFAULTS.remoteSignalingEnabled,
         diffViewMode: parsed.diffViewMode === "blocks" ? "blocks" : DEFAULTS.diffViewMode,
+        accentTheme:
+          parsed.accentTheme === "blue" ||
+          parsed.accentTheme === "purple" ||
+          parsed.accentTheme === "orange" ||
+          parsed.accentTheme === "rose"
+            ? parsed.accentTheme
+            : DEFAULTS.accentTheme,
+        zoomPercent:
+          typeof parsed.zoomPercent === "number" && Number.isFinite(parsed.zoomPercent)
+            ? Math.min(150, Math.max(50, Math.round(parsed.zoomPercent)))
+            : DEFAULTS.zoomPercent,
         // Older config files may contain a custom list. Always replace it with
         // the built-in list so this transport setting cannot be changed via
         // persisted data or a generic config update.
@@ -184,6 +201,15 @@ function inheritFromSiblingProfile(currentDir: string): Partial<AppConfig> {
     if (parsed.language === "zh" || parsed.language === "en") out.language = parsed.language;
     if (parsed.theme === "dark" || parsed.theme === "light" || parsed.theme === "system") {
       out.theme = parsed.theme;
+    }
+    if (
+      parsed.accentTheme === "green" ||
+      parsed.accentTheme === "blue" ||
+      parsed.accentTheme === "purple" ||
+      parsed.accentTheme === "orange" ||
+      parsed.accentTheme === "rose"
+    ) {
+      out.accentTheme = parsed.accentTheme;
     }
     return out; // first readable sibling wins
   }

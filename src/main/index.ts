@@ -131,6 +131,9 @@ function createWindow(): void {
     });
   }
 
+  // Restore the saved window zoom (50–150%); setZoomLevel uses log2(factor).
+  mainWindow.webContents.setZoomLevel(Math.log2(cfg.zoomPercent / 100));
+
   mainWindow.on("ready-to-show", () => {
     if (!mainWindow) return;
     // On Windows, explicitly reapply the ICO after Chromium has created the

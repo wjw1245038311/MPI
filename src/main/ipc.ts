@@ -2353,6 +2353,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   });
 
   // ---- window chrome (frameless) -----------------------------------------
+  ipcMain.handle("window:setZoom", (_e, percent: unknown) => {
+    const p =
+      typeof percent === "number" && Number.isFinite(percent)
+        ? Math.min(150, Math.max(50, Math.round(percent)))
+        : 100;
+    getWin()?.webContents.setZoomLevel(Math.log2(p / 100));
+    return updateConfig({ zoomPercent: p });
+  });
   ipcMain.handle("window:minimize", () => getWin()?.minimize());
   ipcMain.handle("window:maximize", () => {
     const w = getWin();

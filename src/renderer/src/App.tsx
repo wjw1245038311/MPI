@@ -26,6 +26,7 @@ export default function App() {
   const projects = useStore((s) => s.projects);
   const runtime = useStore((s) => s.runtime);
   const theme = useStore((s) => s.config?.theme || "light");
+  const accentTheme = useStore((s) => s.config?.accentTheme || "green");
   const language = useStore((s) => s.config?.language || "en");
   const [remoteOpen, setRemoteOpen] = useState(false);
   usePiEvents();
@@ -48,12 +49,34 @@ export default function App() {
     return () => media.removeEventListener?.("change", applyTheme);
   }, [theme]);
 
-  // Ctrl/Cmd+K opens the thread search palette
+  // Accent color preset: CSS blocks keyed on <html data-accent> override the
+  // --accent / --accent-soft (and dark-theme send) variables.
+  useEffect(() => {
+    document.documentElement.dataset.accent = accentTheme;
+  }, [accentTheme]);
+
+  // Ctrl/Cmd+K opens the thread search palette; Ctrl+= / Ctrl+- / Ctrl+0
+  // adjust the window zoom (Feishu-style, persisted via main).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === "k") {
         e.preventDefault();
         useStore.getState().openSearch();
+        return;
+      }
+      if (key === "=" || key === "+" || key === "-" || key === "_" || key === "0") {
+        const cur = useStore.getState().config?.zoomPercent ?? 100;
+        const next =
+          key === "0" ? 100 : key === "=" || key === "+" ? Math.min(150, cur + 25) : Math.max(50, cur - 25);
+        if (next !== cur) {
+          e.preventDefault();
+          window.pi.window
+            .setZoom(next)
+            .then((cfg: any) => useStore.setState({ config: cfg }))
+            .catch(() => {});
+        }
       }
     };
     window.addEventListener("keydown", onKey);

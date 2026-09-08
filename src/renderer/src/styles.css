@@ -6311,3 +6311,168 @@ mark.hl {
   border-color: rgba(255, 255, 255, 0.1);
   background: var(--surface-muted);
 }
+
+/* ---- General settings: theme mode picker (Feishu-style) ------------------ */
+.theme-picker {
+  display: grid;
+  gap: 10px;
+}
+.theme-sys-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.theme-sys-check input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.theme-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  max-width: 460px;
+}
+.theme-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.theme-card:hover {
+  border-color: var(--border-strong);
+}
+.theme-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+/* Mini UI mockup drawn in pure CSS (fixed colors so the preview is accurate
+ * regardless of the currently applied theme). */
+.theme-mock {
+  display: flex;
+  gap: 8px;
+  height: 74px;
+  padding: 10px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.theme-mock .tm-rail {
+  width: 26%;
+  border-radius: 4px;
+}
+.theme-mock .tm-body {
+  flex: 1;
+  display: grid;
+  gap: 7px;
+  align-content: start;
+  padding-top: 2px;
+}
+.tm-line {
+  height: 9px;
+  border-radius: 4px;
+}
+.tm-line.w60 { width: 60%; }
+.tm-line.w85 { width: 85%; }
+.tm-line.w45 { width: 45%; }
+.theme-mock.light { background: #f2f4f7; }
+.theme-mock.light .tm-rail { background: #e2e6eb; }
+.theme-mock.light .tm-line { background: #d8dde3; }
+.theme-mock.light .tm-accent { background: #c9dcf5; }
+.theme-mock.dark { background: #17181c; }
+.theme-mock.dark .tm-rail { background: #24262b; }
+.theme-mock.dark .tm-line { background: #3a3d43; }
+.theme-mock.dark .tm-accent { background: #3d5f92; }
+.theme-card-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--text);
+  padding-left: 2px;
+}
+.radio-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: transparent;
+  flex: none;
+}
+.radio-dot.on {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 38%, transparent 42%);
+}
+
+/* ---- General settings: accent color swatches ----------------------------- */
+.accent-swatches {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding-top: 2px;
+  padding-bottom: 20px; /* room for the selected preset's name label */
+}
+.accent-swatch {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+.accent-swatch:hover {
+  transform: scale(1.06);
+}
+.accent-swatch.selected {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+.accent-name {
+  position: absolute;
+  top: calc(100% + 5px);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* ---- Accent color presets (keyed on <html data-accent>; green is default) - */
+:root[data-accent="blue"] { --accent: #2563eb; --accent-soft: #dbeafe; }
+:root[data-theme="dark"][data-accent="blue"] {
+  --accent: #7cb0f5;
+  --accent-soft: #1d3a5c;
+  --send: #4f9cf0;
+  --send-hover: #6fb0f5;
+}
+:root[data-accent="purple"] { --accent: #7c3aed; --accent-soft: #ede9fe; }
+:root[data-theme="dark"][data-accent="purple"] {
+  --accent: #b794f6;
+  --accent-soft: #33254e;
+  --send: #9d7bf0;
+  --send-hover: #b195f5;
+}
+:root[data-accent="orange"] { --accent: #ea580c; --accent-soft: #ffedd5; }
+:root[data-theme="dark"][data-accent="orange"] {
+  --accent: #fb923c;
+  --accent-soft: #4a2c15;
+  --send: #f59e42;
+  --send-hover: #f7ad6b;
+}
+:root[data-accent="rose"] { --accent: #dc2626; --accent-soft: #fee2e2; }
+:root[data-theme="dark"][data-accent="rose"] {
+  --accent: #f87171;
+  --accent-soft: #4a1d1d;
+  --send: #ef6363;
+  --send-hover: #f28585;
+}

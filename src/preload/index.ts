@@ -141,6 +141,7 @@ const api = {
     openAgentDir: () => ipcRenderer.invoke("settings:openAgentDir"),
   },
   window: {
+    setZoom: (percent: number) => ipcRenderer.invoke("window:setZoom", percent),
     minimize: () => ipcRenderer.invoke("window:minimize"),
     maximize: () => ipcRenderer.invoke("window:maximize"),
     close: () => ipcRenderer.invoke("window:close"),

@@ -20,11 +20,12 @@ let cfg = loadConfig(devDir);
 assert.equal(cfg.language, "en", "no sibling config: default language en");
 assert.equal(cfg.theme, "light", "no sibling config: default theme light");
 
-// 2) Prod has zh/dark; fresh dev profile inherits both on first load.
-writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "zh", theme: "dark" }));
+// 2) Prod has zh/dark/blue; fresh dev profile inherits all appearance settings.
+writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "zh", theme: "dark", accentTheme: "blue" }));
 cfg = loadConfig(devDir);
 assert.equal(cfg.language, "zh", "inherits language from sibling");
 assert.equal(cfg.theme, "dark", "inherits theme from sibling");
+assert.equal(cfg.accentTheme, "blue", "inherits accentTheme from sibling");
 
 // 3) An existing own config is never overridden by the sibling.
 writeFileSync(join(devDir, "config.json"), JSON.stringify({ language: "en", theme: "system" }));
@@ -40,10 +41,11 @@ assert.equal(cfg.theme, "dark", "corrupt own file: inherit theme too");
 
 // 5) Sibling with invalid values is ignored (defaults kept).
 rmSync(join(devDir, "config.json"));
-writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "fr", theme: "neon" }));
+writeFileSync(join(prodDir, "config.json"), JSON.stringify({ language: "fr", theme: "neon", accentTheme: "pink" }));
 cfg = loadConfig(devDir);
 assert.equal(cfg.language, "en", "invalid sibling language ignored");
 assert.equal(cfg.theme, "light", "invalid sibling theme ignored");
+assert.equal(cfg.accentTheme, "green", "invalid sibling accentTheme ignored");
 
 // 6) Corrupt sibling -> skipped silently.
 writeFileSync(join(prodDir, "config.json"), "{broken");
@@ -56,5 +58,16 @@ writeFileSync(join(devDir, "config.json"), JSON.stringify({ language: "zh", them
 cfg = loadConfig(prodDir);
 assert.equal(cfg.language, "zh", "prod inherits from dev profile");
 assert.equal(cfg.theme, "dark", "prod inherits theme from dev profile");
+
+// 8) zoomPercent is clamped to 50–150; invalid values fall back to 100.
+writeFileSync(join(devDir, "config.json"), JSON.stringify({ zoomPercent: 999 }));
+cfg = loadConfig(devDir);
+assert.equal(cfg.zoomPercent, 150, "zoomPercent clamped to max 150");
+writeFileSync(join(devDir, "config.json"), JSON.stringify({ zoomPercent: 30 }));
+cfg = loadConfig(devDir);
+assert.equal(cfg.zoomPercent, 50, "zoomPercent clamped to min 50");
+writeFileSync(join(devDir, "config.json"), JSON.stringify({ zoomPercent: "abc" }));
+cfg = loadConfig(devDir);
+assert.equal(cfg.zoomPercent, 100, "invalid zoomPercent falls back to default");
 
 console.log("config-inherit: all assertions passed");

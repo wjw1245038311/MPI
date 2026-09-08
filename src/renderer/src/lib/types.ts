@@ -281,6 +281,10 @@ export interface AppConfig {
   archivedThreads: ArchivedThread[];
   windowBounds?: { x?: number; y?: number; width: number; height: number; maximized?: boolean };
   theme: "dark" | "light" | "system";
+  /** Accent color preset applied on top of the theme (see data-accent CSS blocks). */
+  accentTheme?: "green" | "blue" | "purple" | "orange" | "rose";
+  /** Window zoom percentage, 50–150; 100 is default. */
+  zoomPercent?: number;
   language: "en" | "zh";
   /** Play a short chime when an agent turn completes. */
   soundOnComplete?: boolean;
