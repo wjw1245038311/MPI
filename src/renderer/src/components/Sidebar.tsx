@@ -720,7 +720,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             <div className="modal-msg">
               {trashEnabled
                 ? language === "zh"
-                  ? `“${deleteConfirm.name}”将被移入回收站，可在设置「归档与回收站」中恢复或永久删除。`
+                  ? `“${deleteConfirm.name}”将被移入回收站，可在设置「归档回收」中恢复或永久删除。`
                   : `“${deleteConfirm.name}” will be moved to the trash. You can restore or permanently delete it from Settings → Archive & trash.`
                 : language === "zh"
                   ? `“${deleteConfirm.name}”及其完整会话记录将被永久删除，删除后无法恢复。`

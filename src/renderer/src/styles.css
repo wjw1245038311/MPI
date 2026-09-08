@@ -3703,6 +3703,114 @@ textarea.modal-input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Archive tab: search box + project groups */
+.archive-search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.archive-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-muted);
+  color: var(--text-faint);
+}
+.archive-search-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.archive-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.archive-search-input::placeholder {
+  color: var(--text-faint);
+}
+.archive-search-clear {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.archive-search-clear:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+.archive-search-count {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+/* Project groups for archived sessions / trash entries. */
+.archive-group-list {
+  display: grid;
+  gap: 14px;
+}
+.archive-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+.archive-group-head:hover {
+  background: rgba(0, 0, 0, 0.045);
+  color: var(--text);
+}
+.archive-chevron {
+  flex-shrink: 0;
+  transition: transform 0.12s ease;
+}
+.archive-chevron.open {
+  transform: rotate(90deg);
+}
+.archive-group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.archive-group-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--control);
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.archive-group .archived-thread-list {
+  margin-top: 6px;
+}
 .btn {
   border: 1px solid var(--border-strong);
   background: #fff;
@@ -5913,6 +6021,9 @@ mark.hl {
 :root[data-theme="dark"] .set-empty,
 :root[data-theme="dark"] .set-about-list {
   background: var(--surface-muted);
+}
+:root[data-theme="dark"] .archive-group-head:hover {
+  background: rgba(255, 255, 255, 0.06);
 }
 :root[data-theme="dark"] .msg-user-actions button:hover:not(:disabled) {
   color: var(--text);

@@ -24,6 +24,8 @@ export interface ArchivedThread {
   file: string;
   cwd: string;
   title: string;
+  /** Epoch ms when the thread was archived; absent on older entries. */
+  archivedAt?: number;
 }
 
 /** A full-text search hit across session transcripts. */

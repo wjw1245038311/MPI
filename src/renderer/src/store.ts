@@ -1603,6 +1603,7 @@ export const useStore = create<PiStore>()((set, get) => {
               file,
               cwd,
               title: title?.trim() || file.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || file,
+              archivedAt: Date.now(),
             },
           ],
         });
@@ -1644,7 +1645,7 @@ export const useStore = create<PiStore>()((set, get) => {
       get().pushToast(
         "success",
         result?.trashed
-          ? "会话已移入回收站，可在设置「归档与回收站」中恢复或永久删除。"
+          ? "会话已移入回收站，可在设置「归档回收」中恢复或永久删除。"
           : "会话已永久删除，无法恢复。",
       );
     } catch (e: any) {

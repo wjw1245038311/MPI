@@ -13,6 +13,8 @@ export interface ArchivedThread {
   cwd: string;
   /** Title captured when the thread was archived, for the restore list. */
   title: string;
+  /** Epoch ms when the thread was archived; absent on older entries. */
+  archivedAt?: number;
 }
 
 /** Accent color presets; CSS blocks keyed on <html data-accent> in styles.css.

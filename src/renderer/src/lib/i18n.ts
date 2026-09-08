@@ -280,7 +280,7 @@ const exact: Record<string, string> = {
   "未知错误": "Unknown error",
   "删除失败": "Deletion failed",
   "会话已永久删除，无法恢复。": "Session permanently deleted and cannot be recovered.",
-  "会话已移入回收站，可在设置「归档与回收站」中恢复或永久删除。": "Session moved to trash. Restore or permanently delete it from Settings → Archive & trash.",
+  "会话已移入回收站，可在设置「归档回收」中恢复或永久删除。": "Session moved to trash. Restore or permanently delete it from Settings → Archive & trash.",
   "已从回收站永久删除，无法恢复。": "Permanently deleted from trash and cannot be recovered.",
   "当前 dev 实例启动早于回收站功能，请完整重启 MPI 后再试。": "This dev instance predates the trash feature; fully restart MPI to use it.",
   "任务已开始执行…": "Task started…",

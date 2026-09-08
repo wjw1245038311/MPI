@@ -5,7 +5,7 @@ import { cleanOutput, hasLibuvAssertion, lastLine, stripAnsi } from "../lib/upda
 import { formatBytes } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { translateUiText } from "../lib/i18n";
-import { Archive, Check, Close, Edit, Plus, Refresh, Folder, Trash } from "./icons";
+import { Archive, Check, ChevronRight, Close, Edit, Plus, Refresh, Folder, Search, Trash } from "./icons";
 import { ChangelogModal } from "./ChangelogModal";
 import appIconUrl from "../../../../resources/icon.png";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
@@ -736,6 +736,57 @@ async function downscaleImageFile(file: File, maxSize = 192): Promise<string> {
   return dataUrl;
 }
 
+/* ------------------------------------------------------------------ *
+ * Archive tab helpers
+ * ------------------------------------------------------------------ */
+
+/** Last path segment of a folder/file path (compact display name). */
+function pathBase(p: string): string {
+  return p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+}
+
+/** Human-friendly timestamp: today → HH:mm, this year → “Sep 8 14:30”, older → full date. */
+function formatWhen(ts?: number, language?: string): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const locale = language === "zh" ? "zh-CN" : "en-US";
+  const time = d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return time;
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${d.toLocaleDateString(locale, { month: "short", day: "numeric" })} ${time}`;
+  }
+  return d.toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
+}
+
+interface ArchiveGroup<T> {
+  cwd: string;
+  name: string;
+  items: T[];
+  latest: number;
+}
+
+/** Group rows by owning project (cwd); newest group and item first. */
+function groupByCwd<T>(items: T[], getCwd: (item: T) => string, getTs: (item: T) => number | undefined): ArchiveGroup<T>[] {
+  const map = new Map<string, ArchiveGroup<T>>();
+  for (const item of items) {
+    const cwd = getCwd(item);
+    let group = map.get(cwd.toLowerCase());
+    if (!group) {
+      group = { cwd, name: pathBase(cwd), items: [], latest: 0 };
+      map.set(cwd.toLowerCase(), group);
+    }
+    group.items.push(item);
+    const ts = getTs(item) || 0;
+    if (ts > group.latest) group.latest = ts;
+  }
+  for (const group of map.values()) {
+    group.items.sort((a, b) => (getTs(b) || 0) - (getTs(a) || 0));
+  }
+  return [...map.values()].sort((a, b) => b.latest - a.latest);
+}
+
 export function Settings() {
   const open = useStore((s) => s.settingsOpen);
   const close = useStore((s) => s.closeSettings);
@@ -767,6 +818,31 @@ export function Settings() {
   useEffect(() => {
     if (open && tab === "archive") loadTrash();
   }, [open, tab, loadTrash]);
+  // Archive tab: search query + collapsed project groups (lowercased cwd keys).
+  const [archiveQuery, setArchiveQuery] = useState("");
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    if (!open) setArchiveQuery("");
+  }, [open]);
+  const toggleGroup = useCallback((cwd: string) => {
+    const key = cwd.toLowerCase();
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const archiveQueryTrimmed = archiveQuery.trim().toLowerCase();
+  const matchesArchive = (...fields: Array<string | undefined>) =>
+    !archiveQueryTrimmed || fields.some((f) => f && f.toLowerCase().includes(archiveQueryTrimmed));
+  const filteredArchivedProjects = (config?.archivedProjects || []).filter((cwd) => matchesArchive(cwd));
+  const filteredArchivedThreads = (config?.archivedThreads || []).filter((t) => matchesArchive(t.title, t.cwd, t.file));
+  const filteredTrashEntries = trashEntries.filter((e) => matchesArchive(e.title, e.cwd, e.originalFile));
+  const threadGroups = groupByCwd(filteredArchivedThreads, (t) => t.cwd || "", (t) => t.archivedAt);
+  const trashGroups = groupByCwd(filteredTrashEntries, (e) => e.cwd || "", (e) => e.deletedAt);
+  const archiveResultCount = filteredArchivedProjects.length + filteredArchivedThreads.length + filteredTrashEntries.length;
   const [draft, setDraft] = useState<ModelsFile>({ providers: {} });
   const [initialProviders, setInitialProviders] = useState("{}");
   const [thinking, setThinking] = useState<ThinkingDefaults>({});
@@ -1275,7 +1351,7 @@ export function Settings() {
               ["general", language === "zh" ? "通用设置" : "General"],
               ["models", "模型与提供商"],
               ["thinking", "思考默认值"],
-              ["archive", language === "zh" ? "归档与回收站" : "Archive & trash"],
+              ["archive", language === "zh" ? "归档回收" : "Archive & trash"],
               ["diag", "诊断与配置"],
               ["update", language === "zh" ? "应用更新" : "App updates"],
               ["about", language === "zh" ? "关于" : "About"],
@@ -1405,7 +1481,7 @@ export function Settings() {
                   label={language === "zh" ? "回收站" : "Trash"}
                   hint={
                     language === "zh"
-                      ? "开启后，删除的会话先移入回收站（设置 → 归档与回收站），可恢复；只有在那里删除才算永久删除。关闭后删除会立即永久生效。"
+                      ? "开启后，删除的会话先移入回收站（设置 → 归档回收），可恢复；只有在那里删除才算永久删除。关闭后删除会立即永久生效。"
                       : "When on, deleted sessions go to the trash (Settings → Archive & trash) and stay restorable; only deleting there removes them for good. When off, delete removes a session immediately."
                   }
                 >
@@ -1737,48 +1813,106 @@ export function Settings() {
 
             {tab === "archive" && (
               <div className="set-card">
-                <div className="set-card-title">已归档项目</div>
-                <div className="set-hint archived-project-hint">
-                  归档只会从侧栏、搜索和新建会话的项目列表中隐藏文件夹，不会删除文件夹或其中的会话。
+                {/* Search across archived projects, sessions and trash entries. */}
+                <div className="archive-search-row">
+                  <div className="archive-search-box">
+                    <Search size={14} />
+                    <input
+                      className="archive-search-input"
+                      value={archiveQuery}
+                      onChange={(e) => setArchiveQuery(e.target.value)}
+                      placeholder={language === "zh" ? "搜索归档项目、会话或回收站条目…" : "Search archived projects, sessions or trash…"}
+                    />
+                    {archiveQuery && (
+                      <button
+                        className="archive-search-clear"
+                        onClick={() => setArchiveQuery("")}
+                        aria-label={language === "zh" ? "清空搜索" : "Clear search"}
+                      >
+                        <Close size={12} />
+                      </button>
+                    )}
+                  </div>
+                  {archiveQueryTrimmed && (
+                    <span className="archive-search-count">
+                      {language === "zh"
+                        ? `${archiveResultCount} 条结果`
+                        : `${archiveResultCount} result${archiveResultCount === 1 ? "" : "s"}`}
+                    </span>
+                  )}
                 </div>
-                {(config?.archivedProjects || []).length === 0 ? (
-                  <div className="set-empty">暂无归档项目。</div>
+
+                <div className="set-card-title">{language === "zh" ? "已归档项目" : "Archived projects"}</div>
+                <div className="set-hint archived-project-hint">
+                  {language === "zh"
+                    ? "归档只会从侧栏、搜索和新建会话的项目列表中隐藏文件夹，不会删除文件夹或其中的会话。"
+                    : "Archiving only hides the folder from the sidebar, search, and new-session project list. It does not delete the folder or its sessions."}
+                </div>
+                {filteredArchivedProjects.length === 0 ? (
+                  <div className="set-empty">
+                    {archiveQueryTrimmed
+                      ? language === "zh" ? "没有匹配的归档项目。" : "No matching archived projects."
+                      : language === "zh" ? "暂无归档项目。" : "No archived projects."}
+                  </div>
                 ) : (
                   <div className="archived-project-list">
-                    {(config?.archivedProjects || []).map((cwd) => {
-                      const name = cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || cwd;
-                      return (
-                        <div className="archived-project-row" key={cwd}>
-                          <Folder size={17} />
-                          <div className="archived-project-main">
-                            <div className="archived-project-name">{name}</div>
-                            <div className="archived-project-path" title={cwd}>{cwd}</div>
-                          </div>
-                          <button className="set-btn" onClick={() => restoreProject(cwd)}>恢复项目</button>
+                    {filteredArchivedProjects.map((cwd) => (
+                      <div className="archived-project-row" key={cwd}>
+                        <Folder size={17} />
+                        <div className="archived-project-main">
+                          <div className="archived-project-name">{pathBase(cwd)}</div>
+                          <div className="archived-project-path" title={cwd}>{cwd}</div>
                         </div>
-                      );
-                    })}
+                        <button className="set-btn" onClick={() => restoreProject(cwd)}>
+                          {language === "zh" ? "恢复项目" : "Restore project"}
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
                 <div className="archived-thread-section">
-                  <div className="set-card-title">已归档会话</div>
+                  <div className="set-card-title">{language === "zh" ? "已归档会话" : "Archived sessions"}</div>
                   <div className="set-hint archived-project-hint">
-                    归档只会隐藏会话，不会删除会话文件；恢复后会话会重新出现在所属项目下。
+                    {language === "zh"
+                      ? "归档只会隐藏会话，不会删除会话文件；恢复后会话会重新出现在所属项目下。"
+                      : "Archiving only hides the session; it does not delete the session file. Restored sessions reappear under their project."}
                   </div>
-                  {(config?.archivedThreads || []).length === 0 ? (
-                    <div className="set-empty">暂无归档会话。</div>
+                  {threadGroups.length === 0 ? (
+                    <div className="set-empty">
+                      {archiveQueryTrimmed
+                        ? language === "zh" ? "没有匹配的归档会话。" : "No matching archived sessions."
+                        : language === "zh" ? "暂无归档会话。" : "No archived sessions."}
+                    </div>
                   ) : (
-                    <div className="archived-thread-list">
-                      {(config?.archivedThreads || []).map((thread) => {
-                        const projectName = thread.cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || thread.cwd;
+                    <div className="archive-group-list">
+                      {threadGroups.map((group) => {
+                        const expanded = archiveQueryTrimmed !== "" || !collapsedGroups.has(group.cwd.toLowerCase());
                         return (
-                          <div className="archived-thread-row" key={thread.file}>
-                            <Archive size={17} />
-                            <div className="archived-thread-main">
-                              <div className="archived-thread-name" title={thread.title}>{thread.title || thread.file}</div>
-                              <div className="archived-thread-path" title={thread.file}>{projectName} · {thread.file}</div>
-                            </div>
-                            <button className="set-btn" onClick={() => restoreThread(thread.file)}>恢复会话</button>
+                          <div className="archive-group" key={group.cwd}>
+                            <button type="button" className="archive-group-head" onClick={() => toggleGroup(group.cwd)} title={group.cwd}>
+                              <ChevronRight size={13} className={expanded ? "archive-chevron open" : "archive-chevron"} />
+                              <Folder size={15} />
+                              <span className="archive-group-name">{group.name}</span>
+                              <span className="archive-group-count">{group.items.length}</span>
+                            </button>
+                            {expanded && (
+                              <div className="archived-thread-list">
+                                {group.items.map((thread) => (
+                                  <div className="archived-thread-row" key={thread.file} title={`${thread.cwd}\n${thread.file}`}>
+                                    <Archive size={17} />
+                                    <div className="archived-thread-main">
+                                      <div className="archived-thread-name" title={thread.title}>{thread.title || pathBase(thread.file)}</div>
+                                      {thread.archivedAt ? (
+                                        <div className="archived-thread-path">{formatWhen(thread.archivedAt, language)}</div>
+                                      ) : null}
+                                    </div>
+                                    <button className="set-btn" onClick={() => restoreThread(thread.file)}>
+                                      {language === "zh" ? "恢复会话" : "Restore"}
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -1806,30 +1940,48 @@ export function Settings() {
                       ? "回收站中的会话不再出现在侧栏和搜索里；恢复后会回到所属项目。只有在这里删除才算永久删除。"
                       : "Trashed sessions are hidden from the sidebar and search; restore puts one back into its project. Only deleting here removes a session for good."}
                   </div>
-                  {trashEntries.length === 0 ? (
-                    <div className="set-empty">{language === "zh" ? "回收站是空的。" : "Trash is empty."}</div>
+                  {trashGroups.length === 0 ? (
+                    <div className="set-empty">
+                      {archiveQueryTrimmed
+                        ? language === "zh" ? "没有匹配的回收站条目。" : "No matching trash entries."
+                        : language === "zh" ? "回收站是空的。" : "Trash is empty."}
+                    </div>
                   ) : (
-                    <div className="archived-thread-list">
-                      {trashEntries.map((entry) => {
-                        const projectName = entry.cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || entry.cwd;
+                    <div className="archive-group-list">
+                      {trashGroups.map((group) => {
+                        const expanded = archiveQueryTrimmed !== "" || !collapsedGroups.has(group.cwd.toLowerCase());
                         return (
-                          <div className="archived-thread-row trash-row" key={entry.id}>
-                            <Trash size={17} />
-                            <div className="archived-thread-main">
-                              <div className="archived-thread-name" title={entry.title}>{entry.title || entry.originalFile}</div>
-                              <div className="archived-thread-path" title={entry.originalFile}>
-                                {projectName} · {new Date(entry.deletedAt).toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} · {formatBytes(entry.sizeBytes)}
+                          <div className="archive-group" key={group.cwd}>
+                            <button type="button" className="archive-group-head" onClick={() => toggleGroup(group.cwd)} title={group.cwd}>
+                              <ChevronRight size={13} className={expanded ? "archive-chevron open" : "archive-chevron"} />
+                              <Folder size={15} />
+                              <span className="archive-group-name">{group.name}</span>
+                              <span className="archive-group-count">{group.items.length}</span>
+                            </button>
+                            {expanded && (
+                              <div className="archived-thread-list">
+                                {group.items.map((entry) => (
+                                  <div className="archived-thread-row trash-row" key={entry.id} title={`${entry.cwd}\n${entry.originalFile}`}>
+                                    <Trash size={17} />
+                                    <div className="archived-thread-main">
+                                      <div className="archived-thread-name" title={entry.title}>{entry.title || pathBase(entry.originalFile)}</div>
+                                      <div className="archived-thread-path">
+                                        {formatWhen(entry.deletedAt, language)} · {formatBytes(entry.sizeBytes)}
+                                      </div>
+                                    </div>
+                                    <button className="set-btn" onClick={() => void restoreFromTrash(entry.id)}>
+                                      {language === "zh" ? "恢复会话" : "Restore"}
+                                    </button>
+                                    <button
+                                      className="set-btn danger"
+                                      onClick={() => setTrashPurgeConfirm({ id: entry.id, title: entry.title || entry.originalFile })}
+                                    >
+                                      {language === "zh" ? "永久删除" : "Delete forever"}
+                                    </button>
+                                  </div>
+                                ))}
                               </div>
-                            </div>
-                            <button className="set-btn" onClick={() => void restoreFromTrash(entry.id)}>
-                              {language === "zh" ? "恢复会话" : "Restore"}
-                            </button>
-                            <button
-                              className="set-btn danger"
-                              onClick={() => setTrashPurgeConfirm({ id: entry.id, title: entry.title || entry.originalFile })}
-                            >
-                              {language === "zh" ? "永久删除" : "Delete forever"}
-                            </button>
+                            )}
                           </div>
                         );
                       })}
