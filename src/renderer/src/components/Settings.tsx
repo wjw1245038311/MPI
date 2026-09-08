@@ -5,6 +5,7 @@ import { cleanOutput, hasLibuvAssertion, lastLine, stripAnsi } from "../lib/upda
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { translateUiText } from "../lib/i18n";
 import { Archive, Check, Close, Edit, Plus, Refresh, Folder } from "./icons";
+import { ChangelogModal } from "./ChangelogModal";
 import appIconUrl from "../../../../resources/icon.png";
 
 /* ------------------------------------------------------------------ *
@@ -702,6 +703,7 @@ export function Settings() {
   const [flash, setFlash] = useState<null | "models" | "thinking">(null);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [changelogOpen, setChangelogOpen] = useState(false);
   const [paths, setPaths] = useState<{ agentDir: string; models: string; settings: string; auth: string } | null>(null);
   const [adding, setAdding] = useState(false);
   const [newProvider, setNewProvider] = useState<NewProviderDraft>(emptyNewProvider);
@@ -924,12 +926,13 @@ export function Settings() {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") attemptClose();
+      // The changelog modal owns Escape while it is open (its own listener closes it).
+      if (e.key === "Escape" && !changelogOpen) attemptClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, draft, thinking, initialProviders, initialThinking]);
+  }, [open, draft, thinking, initialProviders, initialThinking, changelogOpen]);
 
   const modelDirty = useMemo(() => JSON.stringify(draft.providers) !== initialProviders, [draft.providers, initialProviders]);
   const thinkDirty = useMemo(() => JSON.stringify(thinking) !== initialThinking, [thinking, initialThinking]);
@@ -1524,6 +1527,9 @@ export function Settings() {
                           ? "检查最新版本"
                           : "Check for updates"}
                     </button>
+                    <button className="set-btn ghost" onClick={() => setChangelogOpen(true)}>
+                      {language === "zh" ? "查看更新日志" : "View changelog"}
+                    </button>
                     {appUpdateStatus?.hasUpdate && !appUpdateReady && (
                       <button
                         className="set-btn primary"
@@ -1631,6 +1637,13 @@ export function Settings() {
             )}
           </div>
         </section>
+
+        {/* Inside .set-modal so backdrop clicks stop there and do not close settings too. */}
+        <ChangelogModal
+          open={changelogOpen}
+          currentVersion={appUpdateStatus?.current || appVersion}
+          onClose={() => setChangelogOpen(false)}
+        />
       </div>
     </div>
   );

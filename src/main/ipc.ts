@@ -33,7 +33,7 @@ import {
 import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtimeKind } from "./pi-bridge";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
-import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readThreadHistory, scanProjects, searchThreads, type ThreadSearchHit } from "./session-store";
+import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
 import {
   getAdditionalSkillPaths,
@@ -1979,6 +1979,19 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       return { ok: false, changed: 0, details: [] as string[], error: e?.message || "invalid session path" };
     }
     return repairSessionFile(file);
+  });
+
+  // Compaction bookkeeping for the context popover: how many times this session
+  // has been compacted (persisted in the JSONL, so it survives restarts).
+  ipcMain.handle("thread:compaction-stats", async (_e, args: { sessionFile?: string }) => {
+    const requested = typeof args?.sessionFile === "string" ? args.sessionFile : "";
+    if (!requested) return null;
+    try {
+      assertDeletableSessionFile(requested);
+    } catch {
+      return null;
+    }
+    return readSessionCompactions(requested);
   });
 
   ipcMain.handle("thread:delete", async (_e, file: string) => {

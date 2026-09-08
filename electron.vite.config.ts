@@ -26,6 +26,13 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, "src/renderer"),
     plugins: [react()],
+    resolve: {
+      alias: {
+        // The changelog lives at the repo root (outside the renderer root);
+        // expose it under a stable specifier for the in-app viewer.
+        "@repo-root": resolve(__dirname),
+      },
+    },
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, "src/renderer/index.html") },

@@ -121,6 +121,7 @@ const api = {
     clone: (args: { threadId: string; entryId: string }) => ipcRenderer.invoke("thread:clone", args),
     setName: (args: { threadId: string; name: string }) => ipcRenderer.invoke("thread:setName", args),
     getStats: (threadId: string) => ipcRenderer.invoke("thread:getStats", threadId),
+    getCompactionStats: (sessionFile: string) => ipcRenderer.invoke("thread:compaction-stats", { sessionFile }),
     getCommands: (threadId: string) => ipcRenderer.invoke("thread:getCommands", threadId),
     extuiResponse: (args: { threadId: string; id: string; payload: Record<string, unknown> }) =>
       ipcRenderer.invoke("thread:extuiResponse", args),

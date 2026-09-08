@@ -44,6 +44,7 @@ export function Chat() {
   // context-usage popover
   const [ctxOpen, setCtxOpen] = useState(false);
   const [ctxStats, setCtxStats] = useState<any>(null);
+  const [ctxComps, setCtxComps] = useState<{ count: number; lastAt: string | null } | null>(null);
   const [ctxLoading, setCtxLoading] = useState(false);
   const ctxRef = useRef<HTMLDivElement>(null);
   useOutsideClose(ctxRef, ctxOpen, () => setCtxOpen(false));
@@ -237,9 +238,25 @@ export function Chat() {
     setEditing(false);
   };
 
+  // Compaction count is read straight from the session JSONL (no live bridge
+  // needed), so it stays accurate across restarts and for disconnected threads.
+  const loadCompactions = async () => {
+    const file = useStore.getState().threads[activeThreadId ?? ""]?.sessionFile;
+    if (!file) {
+      setCtxComps(null);
+      return;
+    }
+    try {
+      setCtxComps(await window.pi.thread.getCompactionStats(file));
+    } catch {
+      setCtxComps(null);
+    }
+  };
+
   const loadCtx = async () => {
     if (!activeThreadId) return;
     setCtxLoading(true);
+    void loadCompactions();
     try {
       const id = await useStore.getState().ensureConnected(activeThreadId);
       setCtxStats(id ? await window.pi.thread.getStats(id) : null);
@@ -275,6 +292,35 @@ export function Chat() {
   // Threshold bands for "should I compact?": ≤60% green, 60–74% yellow,
   // 75–89% orange, ≥90% red.
   const ctxBand = ctxPct >= 90 ? "hi" : ctxPct >= 75 ? "mid" : ctxPct >= 60 ? "warn" : "low";
+
+  // Compaction advice: usage-band guidance plus a note once repeated
+  // compactions start eroding early-session detail.
+  const ctxAdvice = (() => {
+    if (!ctxUsage) return null;
+    let base: string;
+    switch (ctxBand) {
+      case "hi":
+        base = language === "zh" ? "占用过高，建议立即手动压缩（自动压缩也可能随时触发）" : "Very high — compact now (auto-compaction may trigger at any time)";
+        break;
+      case "mid":
+        base = language === "zh" ? "占用偏高，建议手动压缩为后续回复留出空间" : "Running high — consider compacting to leave headroom for upcoming replies";
+        break;
+      case "warn":
+        base = language === "zh" ? "接近警戒线，长任务可提前手动压缩" : "Approaching the warning zone — on long tasks, compact early";
+        break;
+      default:
+        base = language === "zh" ? "占用较低，暂无需压缩" : "Usage is low — no compaction needed yet";
+    }
+    const n = ctxComps?.count ?? 0;
+    if (n >= 3) {
+      base +=
+        language === "zh"
+          ? `；本会话已压缩 ${n} 次，早期细节可能丢失，重要结论建议写入文件或记忆`
+          : `; compacted ${n}× this session — early details may be lost, write key conclusions to files or memory`;
+    }
+    return base;
+  })();
+  const ctxCompLast = ctxComps?.lastAt ? new Date(ctxComps.lastAt).toLocaleString() : null;
 
   return (
     <section className="main">
@@ -370,7 +416,21 @@ export function Chat() {
                       <span>剩余</span>
                       <b>{formatTokens(ctxRemaining)}</b>
                     </div>
+                    <div
+                      className="ctx-row"
+                      title={
+                        ctxCompLast
+                          ? language === "zh"
+                            ? `最近一次压缩：${ctxCompLast}`
+                            : `Last compaction: ${ctxCompLast}`
+                          : undefined
+                      }
+                    >
+                      <span>{language === "zh" ? "已压缩" : "Compactions"}</span>
+                      <b>{(ctxComps?.count ?? 0)}{language === "zh" ? " 次" : "×"}</b>
+                    </div>
                   </div>
+                  {ctxAdvice && <div className={`ctx-advice ${ctxBand}`}>{ctxAdvice}</div>}
                 </>
               ) : (
                 <div className="ctx-empty">暂无上下文数据</div>

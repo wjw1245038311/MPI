@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 /**
@@ -50,7 +50,7 @@ export function getSessionsDir(): string {
 }
 
 /** Stream a file line-by-line using only `\n` as delimiter (JSONL-safe). */
-function forEachLine(file: string, onLine: (line: string) => void): Promise<void> {
+export function forEachLine(file: string, onLine: (line: string) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const decoder = new StringDecoder("utf8");
     let buf = "";
@@ -522,4 +522,49 @@ export async function scanProjects(): Promise<ProjectSummary[]> {
     return lb - la;
   });
   return projects;
+}
+
+export interface CompactionStats {
+  /** Number of compaction entries recorded in this session file. */
+  count: number;
+  /** ISO timestamp of the most recent compaction entry, or null when none. */
+  lastAt: string | null;
+}
+
+/**
+ * Counts the `compaction` entries a session JSONL has accumulated (every
+ * successful auto- or manual compaction appends one). Streams line-by-line and
+ * only parses lines that look like compactions, so large sessions stay fast.
+ * Returns null when the path is outside pi's sessions dir or unreadable.
+ */
+export async function readSessionCompactions(filePath: string): Promise<CompactionStats | null> {
+  const root = getSessionsDir();
+  let resolved: string;
+  try {
+    resolved = resolve(filePath);
+  } catch {
+    return null;
+  }
+  if (!resolved.startsWith(root + sep)) return null;
+
+  let count = 0;
+  let lastAt: string | null = null;
+  try {
+    await forEachLine(resolved, (line) => {
+      // Fast pre-filter before JSON.parse — compaction lines are rare.
+      if (!line.includes('"type":"compaction"')) return;
+      try {
+        const entry = JSON.parse(line);
+        if (entry?.type !== "compaction") return;
+        count += 1;
+        // Entries append chronologically; the last one wins.
+        if (typeof entry.timestamp === "string" && entry.timestamp) lastAt = entry.timestamp;
+      } catch {
+        // Ignore malformed lines.
+      }
+    });
+  } catch {
+    return null; // Missing or unreadable file (e.g. session not created yet).
+  }
+  return { count, lastAt };
 }

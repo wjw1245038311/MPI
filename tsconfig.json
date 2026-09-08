@@ -5,6 +5,11 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      // Mirrors the @repo-root alias in electron.vite.config.ts (changelog import).
+      "@repo-root/*": ["./*"]
+    },
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,

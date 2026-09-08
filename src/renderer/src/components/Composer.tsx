@@ -332,6 +332,11 @@ export function Composer({ threadId }: { threadId: string }) {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // While an IME composition is in progress the input method owns every key
+    // (Enter confirms a candidate, arrows navigate it). Never treat those as
+    // submit / slash-menu navigation — otherwise Chinese/Japanese typing would
+    // send the draft or accept a command mid-word.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (slashMenuOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -343,7 +348,9 @@ export function Composer({ threadId }: { threadId: string }) {
         setSlashIndex((index) => (index - 1 + slashItems.length) % slashItems.length);
         return;
       }
-      if ((e.key === "Enter" || e.key === "Tab") && slashItems.length > 0) {
+      // Shift+Enter must still insert a newline even with the menu open; the
+      // inserted line break ends the trailing "/token" so the menu closes on its own.
+      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && slashItems.length > 0) {
         e.preventDefault();
         chooseSlashCommand(slashItems[slashIndex] || slashItems[0]);
         return;
@@ -672,11 +679,11 @@ export function Composer({ threadId }: { threadId: string }) {
             rows={1}
             placeholder={isStreaming
               ? language === "zh"
-                 ? "输入插话…回车键存为待处理后续（完成后发送），Alt+回车立即插入（中断当前）"
-                : "Type a message… Enter queues a follow-up; Alt+Enter steers immediately"
+                 ? "输入插话…回车存为待处理后续（完成后发送），Alt+回车立即插入，Shift+回车换行"
+                : "Type a message… Enter queues a follow-up; Alt+Enter steers immediately; Shift+Enter for newline"
               : language === "zh"
-                ? "随心输入  ·  粘贴图片或文件  ·  + 添加文件"
-                : "Type a message · Paste images or files · + Add files"}
+                ? "随心输入  ·  Shift+回车换行  ·  粘贴图片或文件"
+                : "Type a message · Shift+Enter for newline · Paste images or files"}
             value={text}
             onChange={(e) => {
               patchDraft({ text: e.target.value });

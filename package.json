@@ -1,6 +1,6 @@
 {
   "name": "mpi",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "piRuntimeVersion": "0.85.1",
   "private": true,
   "license": "MIT",
@@ -21,12 +21,13 @@
     "test:drafts": "node --experimental-strip-types scripts/test-draft-store.mjs",
     "test:markdown": "node --experimental-strip-types scripts/test-markdown-autolink.mjs",
     "test:diff": "node --experimental-strip-types scripts/test-diff.mjs",
+    "test:compactions": "node --experimental-strip-types scripts/test-compaction-stats.mjs",
     "test:permission": "node scripts/test-permission-gate.mjs",
     "test:html-reference": "node --experimental-strip-types scripts/test-html-reference.mjs",
     "bundle": "node scripts/bundle-runtime.mjs",
     "finalize-runtime": "node scripts/finalize-runtime.mjs",
     "pack": "npm run bundle && npm run build && electron-builder --dir && npm run finalize-runtime",
-    "dist": "npm run bundle && npm run build && electron-builder && npm run finalize-runtime",
+    "dist": "npm run bundle && npm run build && electron-builder && node scripts/write-sha256.mjs && npm run finalize-runtime",
     "test:remote": "node scripts/test-remote-protocol.mjs",
     "test:remote-signaling": "node scripts/test-remote-signaling.mjs",
     "signaling": "node signaling/server.mjs"
