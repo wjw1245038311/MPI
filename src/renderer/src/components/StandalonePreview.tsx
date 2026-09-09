@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import type { DragEvent as ReactDragEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import type { PreviewPayload } from "../lib/types";
 import { basename, fileIcon, formatBytes } from "../lib/format";
 import { MPI_FILE_MIME, MPI_PREVIEW_WINDOW_MIME } from "../lib/file-drag";
@@ -48,14 +48,38 @@ export function StandalonePreview({ path }: { path: string }) {
 
   const zh = language === "zh";
 
-  // Dragging this tab back into the main window docks it: the main panel
-  // re-activates (or creates) the matching preview tab and closes this window.
+  // Caption drag (VS-style floating document window): main moves the window
+  // with the cursor while we hold it; releasing over the main window docks the
+  // file back into its preview panel and closes this window.
+  const moveActiveRef = useRef(false);
+  const onCaptionMouseDown = (e: ReactMouseEvent) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+    moveActiveRef.current = true;
+    void window.pi.app.previewWindowMoveStart(path).catch(() => {});
+  };
+
+  useEffect(() => {
+    const endMove = () => {
+      if (!moveActiveRef.current) return;
+      moveActiveRef.current = false;
+      void window.pi.app.previewWindowMoveEnd(path).catch(() => {});
+    };
+    // mouseup covers in-window releases; blur covers releasing over another
+    // window (desktop, the main MPI window, ...) where we never get a mouseup.
+    window.addEventListener("mouseup", endMove);
+    window.addEventListener("blur", endMove);
+    return () => {
+      window.removeEventListener("mouseup", endMove);
+      window.removeEventListener("blur", endMove);
+    };
+  }, [path]);
+
+  // Dragging the small tab back into the main window also docks it (HTML5 DnD
+  // path; cross-window payloads are unreliable, so main tracks the pointer).
   const onTabDragStart = (e: ReactDragEvent) => {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData(MPI_FILE_MIME, path); // also works as a plain file drop
     e.dataTransfer.setData(MPI_PREVIEW_WINDOW_MIME, path); // dock-back marker
-    // Cross-window drag payloads are unreliable; main tracks the pointer while
-    // this drag is in flight and docks us back if it ends over the main window.
     void window.pi.app.previewWindowDragStart(path).catch(() => {});
   };
 
@@ -71,12 +95,36 @@ export function StandalonePreview({ path }: { path: string }) {
 
   return (
     <div className="standalone-preview">
+      {stalePreload && (
+        <div className="standalone-stale-banner">
+          {zh
+            ? "停靠功能不可用：请完全退出并重启 MPI（当前实例的 preload 是旧版）"
+            : "Docking unavailable: fully quit and restart MPI (this instance has an outdated preload)"}
+        </div>
+      )}
+      {/* Custom caption (the window is frameless): drag anywhere on this row to
+          move the window; release over the main window to dock back. */}
+      <div className="standalone-caption" onMouseDown={onCaptionMouseDown}>
+        <span className="preview-tab-ico">{fileIcon(ext, false)}</span>
+        <span className="standalone-caption-title" title={path}>
+          {basename(path)}
+        </span>
+        {payload && payload.kind !== "missing" && (
+          <span className="muted standalone-caption-size">{formatBytes(payload.size)}</span>
+        )}
+        <button className="iconbtn" title={zh ? "刷新预览" : "Refresh preview"} disabled={loading} onClick={() => void load()}>
+          <Refresh size={14} />
+        </button>
+        <button className="iconbtn" title={zh ? "关闭" : "Close"} onClick={() => window.close()}>
+          <Close size={15} />
+        </button>
+      </div>
       <div className="preview-tabs standalone-tabs" role="tablist">
         <div
           className="preview-tab active"
           role="tab"
           aria-selected={true}
-          title={`${zh ? "拖回主窗口的预览面板可停靠回来\n" : "Drag back onto the main window's preview panel to dock it back\n"}${path}`}
+          title={`${zh ? "拖回主窗口可停靠回来\n" : "Drag back onto the main window to dock it back\n"}${path}`}
           draggable
           onDragStart={onTabDragStart}
           onDragEnd={onTabDragEnd}
@@ -92,33 +140,6 @@ export function StandalonePreview({ path }: { path: string }) {
             <Close size={10} />
           </button>
         </div>
-      </div>
-      {stalePreload && (
-        <div className="standalone-stale-banner">
-          {zh
-            ? "停靠功能不可用：请完全退出并重启 MPI（当前实例的 preload 是旧版）"
-            : "Docking unavailable: fully quit and restart MPI (this instance has an outdated preload)"}
-        </div>
-      )}
-      {/* The whole head row is a drag handle too — easier to grab than the tab. */}
-      <div
-        className="preview-head standalone-head"
-        draggable
-        onDragStart={onTabDragStart}
-        onDragEnd={onTabDragEnd}
-      >
-        <span className="preview-title" title={path}>
-          {basename(path)}
-        </span>
-        {payload && payload.kind !== "missing" && (
-          <span className="muted preview-size">{formatBytes(payload.size)}</span>
-        )}
-        <button className="iconbtn" title={zh ? "刷新预览" : "Refresh preview"} disabled={loading} onClick={() => void load()}>
-          <Refresh size={14} />
-        </button>
-        <button className="iconbtn" title={zh ? "关闭" : "Close"} onClick={() => window.close()}>
-          <Close size={15} />
-        </button>
       </div>
       <div className={`preview-body ${payload?.kind === "html" ? "html-preview-active" : ""}`}>
         {loading ? (

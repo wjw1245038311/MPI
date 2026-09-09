@@ -43,6 +43,8 @@ import {
   openPreviewWindow,
   previewWindowDragEnd,
   previewWindowDragStart,
+  previewWindowMoveEnd,
+  previewWindowMoveStart,
 } from "./preview-window";
 import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
@@ -1772,6 +1774,17 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
 
   ipcMain.handle("app:previewWindowDragEnd", (_e, absPath: string) => {
     previewWindowDragEnd(String(absPath || ""));
+    return { ok: true };
+  });
+
+  // Caption drag on the frameless floating window (VS-style move + dock).
+  ipcMain.handle("app:previewWindowMoveStart", (_e, absPath: string) => {
+    previewWindowMoveStart(String(absPath || ""));
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:previewWindowMoveEnd", (_e, absPath: string) => {
+    previewWindowMoveEnd(String(absPath || ""));
     return { ok: true };
   });
 
