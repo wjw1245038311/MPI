@@ -1764,6 +1764,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ok: true };
   });
 
+  // Absolute path of the bundled user manual (Help → 使用手册), or null.
+  ipcMain.handle("app:getUserManualPath", () => {
+    const candidates = [
+      join(process.resourcesPath, "user-manual.md"), // packaged: extraResources
+      join(app.getAppPath(), "resources", "user-manual.md"), // dev: repo resources/
+    ];
+    for (const p of candidates) if (existsSync(p)) return p;
+    return null;
+  });
+
 
   // Caption drag on the frameless floating window (VS-style move + dock).
   ipcMain.handle("app:previewWindowMoveStart", (_e, absPath: string) => {

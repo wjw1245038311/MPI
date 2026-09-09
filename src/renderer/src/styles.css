@@ -3797,6 +3797,20 @@ body.preview-resizing * {
   font-size: 15px;
   margin-bottom: 6px;
 }
+/* Help → About MPI panel (same cards as the settings tab). */
+.about-modal {
+  width: min(680px, 94vw);
+  max-height: 82vh;
+  overflow-y: auto;
+}
+.about-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-weight: 700;
+  font-size: 15px;
+}
 .modal-msg {
   color: var(--text-dim);
   font-size: 13px;

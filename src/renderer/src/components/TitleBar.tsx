@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import { modelShort } from "../lib/format";
 import { Minus, Square, Close, Settings as SettingsIcon } from "./icons";
+import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
 import appIconUrl from "../../../../resources/icon.png";
 
 type MenuId = "file" | "edit" | "view" | "help";
@@ -41,10 +42,23 @@ export function TitleBar() {
     };
   }, [menu]);
 
+  const [aboutOpen, setAboutOpen] = useState(false);
+
   const st = () => useStore.getState();
   const act = (fn: () => void) => () => {
     setMenu(null);
     fn();
+  };
+
+  // Open the bundled user manual in a preview tab (main resolves its path).
+  const openManual = async () => {
+    try {
+      const p: string | null = await window.pi.app.getUserManualPath();
+      if (p) void useStore.getState().openPreview(p);
+      else st().pushToast("error", "未找到使用手册文件");
+    } catch (e: any) {
+      st().pushToast("error", "打开使用手册失败：" + (e?.message || e));
+    }
   };
 
   const MENUS: { id: MenuId; label: string; items: MenuItem[] }[] = [
@@ -79,7 +93,11 @@ export function TitleBar() {
     {
       id: "help",
       label: "帮助",
-      items: [{ label: "关于 MPI", onClick: act(() => st().pushToast("info", "MPI · 终端 pi 的 Windows 桌面端")) }],
+      items: [
+        { label: "使用手册", onClick: act(() => void openManual()) },
+        { label: "", sep: true },
+        { label: "关于 MPI", onClick: act(() => setAboutOpen(true)) },
+      ],
     },
   ];
 
@@ -105,6 +123,7 @@ export function TitleBar() {
   const statusTitle = active?.error || runtime?.error || status;
 
   return (
+    <>
     <div className="titlebar">
       <div className="tb-brand">
         <img className="tb-brand-icon" src={appIconUrl} alt="" aria-hidden="true" />
@@ -151,5 +170,21 @@ export function TitleBar() {
         </button>
       </div>
     </div>
+
+    {aboutOpen && (
+      <div className="modal-backdrop" onMouseDown={() => setAboutOpen(false)}>
+        <div className="modal about-modal" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="about-modal-head">
+            <span>关于 MPI</span>
+            <button className="iconbtn" onClick={() => setAboutOpen(false)} title={language === "zh" ? "关闭" : "Close"} aria-label={language === "zh" ? "关闭" : "Close"}>
+              <Close size={14} />
+            </button>
+          </div>
+          <AppUpdatePanel />
+          <PiCoreUpdatePanel />
+        </div>
+      </div>
+    )}
+    </>
   );
 }

@@ -115,6 +115,10 @@
       {
         "from": "resources/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "resources/user-manual.md",
+        "to": "user-manual.md"
       }
     ],
     "win": {
