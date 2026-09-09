@@ -4958,30 +4958,6 @@ textarea.modal-input {
   background: #c64d42;
   box-shadow: 0 0 0 3px rgba(198, 77, 66, 0.14);
 }
-.set-about-list {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.62);
-}
-.set-about-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 11px 12px;
-  font-size: 12.5px;
-}
-.set-about-row + .set-about-row {
-  border-top: 1px solid var(--border);
-}
-.set-about-row > span {
-  color: var(--text-dim);
-}
-.set-about-row > code {
-  color: var(--text);
-  font-family: var(--mono);
-}
 .set-diag-err {
   background: #fdf3f1;
   border: 1px solid #ecc;
@@ -7023,8 +6999,7 @@ mark.hl {
 :root[data-theme="dark"] .auto-freq,
 :root[data-theme="dark"] .archived-project-row,
 :root[data-theme="dark"] .archived-thread-row,
-:root[data-theme="dark"] .set-empty,
-:root[data-theme="dark"] .set-about-list {
+:root[data-theme="dark"] .set-empty {
   background: var(--surface-muted);
 }
 :root[data-theme="dark"] .search-item-badge {

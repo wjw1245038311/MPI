@@ -661,7 +661,7 @@ function ProviderCard({
  * Main panel
  * ------------------------------------------------------------------ */
 
-type Tab = "general" | "models" | "thinking" | "archive" | "diag" | "update" | "about";
+type Tab = "general" | "models" | "thinking" | "archive" | "diag" | "update";
 
 interface NewProviderDraft {
   id: string;
@@ -1353,8 +1353,7 @@ export function Settings() {
               ["thinking", "思考默认值"],
               ["archive", language === "zh" ? "归档回收" : "Archive & trash"],
               ["diag", "诊断与配置"],
-              ["update", language === "zh" ? "应用更新" : "App updates"],
-              ["about", language === "zh" ? "关于" : "About"],
+              ["update", language === "zh" ? "关于 MPI" : "About MPI"],
             ] as [Tab, string][]).map(([id, label]) => (
               <button key={id} className={`set-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
                 <span className="set-tab-bar" />
@@ -1384,12 +1383,8 @@ export function Settings() {
                       ? "已归档项目"
                       : tab === "update"
                       ? language === "zh"
-                        ? "应用更新"
-                        : "App updates"
-                      : tab === "about"
-                        ? language === "zh"
-                          ? "关于"
-                          : "About"
+                        ? "关于 MPI"
+                        : "About MPI"
                         : "诊断与配置文件"}
             </h2>
             <div className="set-head-actions">
@@ -2178,17 +2173,6 @@ export function Settings() {
               </>
             )}
 
-            {tab === "about" && (
-              <div className="set-card set-about-card">
-                <div className="set-card-title">{language === "zh" ? "关于 MPI" : "About MPI"}</div>
-                <div className="set-about-list">
-                  <div className="set-about-row">
-                    <span>{language === "zh" ? "软件版本" : "Software version"}</span>
-                    <code>{appVersion ? `v${appVersion}` : "—"}</code>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </section>
 
