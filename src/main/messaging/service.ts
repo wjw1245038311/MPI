@@ -271,23 +271,31 @@ export class FeishuMessagingService {
       }
 
       // Subscribe before prompting so no delta is missed.
+      // NOTE: remotePublish sets event.kind to pi's own event type
+      // ("message_update", "agent_settled", …) — not a constant wrapper kind.
       unsubscribe = this.options.backend.subscribeThread(threadId, (event) => {
         if (ref.cancelled) return;
-        if (event.kind === "agent.event") {
-          const ev: any = event.data?.event || {};
-          if (ev.type === "message_update") {
-            const ame = ev.assistantMessageEvent;
-            if (ame?.type === "text_delta" && typeof ame.delta === "string") {
-              buffer += ame.delta;
-              const now = Date.now();
-              if (replyMessageId && now - lastPushAt >= STREAM_UPDATE_INTERVAL_MS) {
-                lastPushAt = now;
-                void this.updateReply(replyMessageId, truncateForChat(buffer, MAX_REPLY_CHARS)).catch(() => undefined);
-              }
+        const ev: any = event.data?.event || {};
+        if (event.kind === "message_update") {
+          const ame = ev.assistantMessageEvent;
+          if (ame?.type === "text_delta" && typeof ame.delta === "string") {
+            buffer += ame.delta;
+            const now = Date.now();
+            if (replyMessageId && now - lastPushAt >= STREAM_UPDATE_INTERVAL_MS) {
+              lastPushAt = now;
+              void this.updateReply(replyMessageId, truncateForChat(buffer, MAX_REPLY_CHARS)).catch(() => undefined);
             }
-          } else if (ev.type === "agent_settled") {
-            settledResolve();
           }
+        } else if (event.kind === "message_end") {
+          // agent_settled fires even when the turn errored (pi's finally block) —
+          // annotate the buffer with the failure reason when there is one.
+          const m = ev.message;
+          if (m?.role === "assistant" && m.stopReason === "error") {
+            const detail = typeof m.errorMessage === "string" ? ` ${m.errorMessage}` : "";
+            buffer += `\n${lang.errorPrefix}${detail.trim()}`;
+          }
+        } else if (event.kind === "agent_settled") {
+          settledResolve();
         } else if (event.kind === "thread.error" || event.kind === "thread.exit") {
           const detail = typeof event.data?.message === "string" ? ` ${event.data.message}` : "";
           buffer += `\n${lang.errorPrefix}${detail.trim()}`;
