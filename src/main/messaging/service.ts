@@ -261,6 +261,7 @@ export class FeishuMessagingService {
     });
     ref.settleNow = settledResolve;
     let watchdog: ReturnType<typeof setTimeout> | null = null;
+    let failureText: string | null = null;
 
     try {
       // Ack first so the user always gets feedback in Feishu — even if thread
@@ -324,16 +325,24 @@ export class FeishuMessagingService {
       }
 
       await settled;
+    } catch (err) {
+      // prompt() rejected or something unexpected — report it in the final write
+      // instead of leaving the ack stuck on "working on it".
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[messaging] runJob failed:", message);
+      failureText = `${lang.errorPrefix}${message.slice(0, 300)}`;
     } finally {
-      ref.cancelled = true;
+      // NOTE: do NOT set ref.cancelled here — it must stay false on normal
+      // completion so the final write below actually runs. Only stop() sets it
+      // (external cancel). Setting it in finally made the final delivery dead code.
       if (watchdog) clearTimeout(watchdog);
       unsubscribe?.();
       this.job = null;
     }
 
-    // Final content: full reply text, truncated for chat delivery. Goes through
-    // the same serialized chain (with retries) so it is guaranteed to land last.
-    const finalText = buffer.trim() || lang.noOutput;
+    // Final content: complete result, or the failure reason when the turn errored.
+    // Goes through the same serialized chain (with retries) so it lands last.
+    const finalText = failureText ?? (buffer.trim() || lang.noOutput);
     if (!ref.cancelled && this.client) {
       const payload = truncateForChat(finalText, MAX_REPLY_CHARS, lang.truncatedNote);
       if (replyMessageId) {
