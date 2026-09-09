@@ -178,7 +178,10 @@ MPI manages providers and models through Pi's shared `models.json` (in `~/.pi/ag
 
 ### 4.1 Adding a provider
 
-**Settings → Models & Providers → Add provider**:
+The **Settings → Models & Providers** page has two sections: **Preset providers** on top and **My providers** below.
+
+- **Quick add from presets**: the top section lists common platforms as cards (LM Studio, DeepSeek, MiniMax, Kimi / Moonshot, Bailian pay-as-you-go API / Coding Plan), plus two entry points — "Custom config" and "Local deploy". Clicking a platform card opens the add form prefilled with its URL, API type and first model; just enter your API key (adjust as needed) and add it. A preset that is already configured gets an accent outline, and if it is also the current default provider it shows a "Current" badge — clicking it then expands that provider's editor in the section below instead. The search box filters platforms by name; "Refresh presets" re-reads models.json to update each platform's status.
+- **Custom config / Local deploy**: opens an empty (or Ollama-prefilled) add form for any API:
 
 | Field | Notes |
 | --- | --- |
@@ -186,9 +189,11 @@ MPI manages providers and models through Pi's shared `models.json` (in `~/.pi/ag
 | API type | Choose per the vendor's docs: `openai-completions` / `openai-responses` / `anthropic-messages` / `google-generative-ai`. OpenAI-compatible services usually use an OpenAI-compatible type, but follow the vendor's documentation. |
 | API URL | Base URL, e.g. `https://api.example.com/v1` (mind the `/v1` path). |
 | API key | Paste the key directly or reference an environment variable like `$MY_API_KEY`. **Never put real keys into screenshots, commit history or shared docs.** |
-| Model ID | The model ID the vendor actually uses. |
+| Model ID | The model ID the vendor actually uses; may be left empty and added later in the provider editor. |
 
 Fill it in, click "Add provider", then "Save models". The model immediately appears in the composer's model selector.
+
+- **My providers**: each configured provider shows as a compact card (name + model count + host) in the bottom section; clicking one expands its full editor below — base URL, API type, API key, request headers, advanced compat JSON and per-model settings. Renaming or deleting a provider happens there too.
 
 ### 4.2 Model card settings
 

@@ -678,6 +678,122 @@ const emptyNewProvider = (): NewProviderDraft => ({
   modelId: "",
 });
 
+/* ------------------------------------------------------------------ *
+ * Preset provider templates ("预设供应商" grid)
+ * ------------------------------------------------------------------ */
+
+interface ProviderPreset {
+  /** Provider id created when the user adds this preset. */
+  key: string;
+  name: string; // zh label (source language)
+  enName: string;
+  subtitle: string; // zh
+  enSubtitle: string;
+  monogram: string;
+  color: string;
+  baseUrl: string;
+  api: ApiType;
+  /** Optional first model id; empty = provider added without models. */
+  modelId?: string;
+}
+
+const PROVIDER_PRESETS: ProviderPreset[] = [
+  {
+    key: "lm-studio",
+    name: "LM Studio",
+    enName: "LM Studio",
+    subtitle: "本机 OpenAI 兼容服务 · 端口 1234",
+    enSubtitle: "Local OpenAI-compatible service on port 1234",
+    monogram: "L",
+    color: "#52525b",
+    baseUrl: "http://localhost:1234/v1",
+    api: "openai-completions",
+  },
+  {
+    key: "deepseek",
+    name: "DeepSeek",
+    enName: "DeepSeek",
+    subtitle: "官方 API · deepseek-chat / deepseek-reasoner",
+    enSubtitle: "Official API · deepseek-chat / deepseek-reasoner",
+    monogram: "D",
+    color: "#4f63d2",
+    baseUrl: "https://api.deepseek.com/v1",
+    api: "openai-completions",
+    modelId: "deepseek-chat",
+  },
+  {
+    key: "minimax",
+    name: "MiniMax",
+    enName: "MiniMax",
+    subtitle: "Token Plan 订阅 · OpenAI 兼容端点",
+    enSubtitle: "Token Plan subscription · OpenAI-compatible endpoint",
+    monogram: "M",
+    color: "#d97706",
+    baseUrl: "https://api.minimaxi.com/v1",
+    api: "openai-completions",
+    modelId: "MiniMax-M2",
+  },
+  {
+    key: "moonshot",
+    name: "Kimi / Moonshot",
+    enName: "Kimi / Moonshot",
+    subtitle: "官方 API · kimi 系列模型",
+    enSubtitle: "Official API · Kimi models",
+    monogram: "K",
+    color: "#1e3a8a",
+    baseUrl: "https://api.moonshot.cn/v1",
+    api: "openai-completions",
+    modelId: "kimi-k3",
+  },
+  {
+    key: "bailian-api",
+    name: "阿里云百炼 · API 按量付费",
+    enName: "Bailian · Pay-as-you-go API",
+    subtitle: "DashScope OpenAI 兼容端点",
+    enSubtitle: "DashScope OpenAI-compatible endpoint",
+    monogram: "百",
+    color: "#ff6a00",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    api: "openai-completions",
+    modelId: "qwen3-max",
+  },
+  {
+    key: "bailian-coding",
+    name: "阿里云百炼 · Coding Plan",
+    enName: "Bailian · Coding Plan",
+    subtitle: "Qwen 编程订阅套餐（sk-sp- 密钥）",
+    enSubtitle: "Qwen coding subscription (sk-sp- key)",
+    monogram: "码",
+    color: "#ea580c",
+    baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+    api: "openai-completions",
+    modelId: "qwen3-coder-plus",
+  },
+];
+
+/** Dashed entry card for self-hosted endpoints (Ollama / LM Studio / llama.cpp). */
+const LOCAL_DEPLOY_PRESET: ProviderPreset = {
+  key: "local",
+  name: "本地部署",
+  enName: "Local deploy",
+  subtitle: "Ollama · LM Studio · llama.cpp 等自托管服务",
+  enSubtitle: "Self-hosted services such as Ollama, LM Studio, llama.cpp",
+  monogram: "+",
+  color: "#52525b",
+  baseUrl: "http://localhost:11434/v1",
+  api: "openai-completions",
+};
+
+/** Host of a base URL ("" when unset/invalid) — used to match presets against configured providers. */
+function hostOf(url?: string): string {
+  try {
+    const host = new URL(url || "").host;
+    return host ? host.toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
 
 /** Downscale an uploaded avatar to a small data URL so config.json stays tiny. */
 async function downscaleImageFile(file: File, maxSize = 192): Promise<string> {
@@ -835,6 +951,10 @@ export function Settings() {
   const [paths, setPaths] = useState<{ agentDir: string; models: string; settings: string; auth: string } | null>(null);
   const [adding, setAdding] = useState(false);
   const [newProvider, setNewProvider] = useState<NewProviderDraft>(emptyNewProvider);
+  // Models tab two-section layout: preset search query + which configured
+  // provider is expanded into the full editor below the tile grid.
+  const [presetQuery, setPresetQuery] = useState("");
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
 
   const register = useCallback((p: string, ok: boolean) => setInvalidJson((s) => ({ ...s, [p]: ok })), []);
 
@@ -844,6 +964,8 @@ export function Settings() {
     setInvalidJson({});
     setAdding(false);
     setNewProvider(emptyNewProvider());
+    setPresetQuery("");
+    setExpandedProvider(null);
     (async () => {
       try {
         const [models, think, d, p] = await Promise.all([
@@ -913,6 +1035,7 @@ export function Settings() {
         ]),
       ),
     );
+    setExpandedProvider((cur) => (cur === from ? to : cur));
     return true;
   };
   const updateModel = (k: string, i: number, p: Partial<ModelDef>) =>
@@ -932,6 +1055,7 @@ export function Settings() {
   const deleteProvider = (k: string) => {
     const question = language === "zh" ? `删除提供商 “${k}” 及其全部模型？` : `Delete provider “${k}” and all of its models?`;
     if (!window.confirm(question)) return;
+    setExpandedProvider((cur) => (cur === k ? null : cur));
     setDraft((d) => {
       const p = { ...d.providers };
       delete p[k];
@@ -944,17 +1068,43 @@ export function Settings() {
     const modelId = newProvider.modelId.trim();
     if (!id) return pushToast("warning", language === "zh" ? "请输入供应商名称" : "Enter a provider name.");
     if (!baseUrl) return pushToast("warning", language === "zh" ? "请输入 API 地址" : "Enter the API URL.");
-    if (!modelId) return pushToast("warning", language === "zh" ? "请输入模型 ID" : "Enter a model ID.");
     if (draft.providers[id]) return pushToast("error", language === "zh" ? "该供应商名称已存在" : "That provider name already exists.");
     const provider: ProviderDef = {
       baseUrl,
       api: newProvider.api,
       apiKey: newProvider.apiKey.trim() || undefined,
-      models: [{ id: modelId, name: modelId }],
+      // Model ID is optional (local deploys often add models later).
+      models: modelId ? [{ id: modelId, name: modelId }] : [],
     };
     setDraft((d) => ({ ...d, providers: { ...d.providers, [id]: provider } }));
     setAdding(false);
     setNewProvider(emptyNewProvider());
+    // Reveal the new provider's editor so connection details can be refined right away.
+    setExpandedProvider(id);
+  };
+
+  /* ---- models tab: preset grid + expanded provider helpers ---- */
+  /** Provider key this preset maps to, or null when not configured yet.
+   * Matches by provider id first, then by endpoint host (hand-written/renamed entries). */
+  const configuredKeyFor = (preset: ProviderPreset): string | null => {
+    if (draft.providers[preset.key]) return preset.key;
+    const host = hostOf(preset.baseUrl);
+    if (!host) return null;
+    return Object.keys(draft.providers).find((k) => hostOf(draft.providers[k]?.baseUrl) === host) || null;
+  };
+  const openAddForm = (preset: ProviderPreset | null) => {
+    setNewProvider(
+      preset
+        ? { id: preset.key, baseUrl: preset.baseUrl, apiKey: "", api: preset.api, modelId: preset.modelId || "" }
+        : emptyNewProvider(),
+    );
+    setAdding(true);
+  };
+  /** Preset already configured? Expand its editor; otherwise open the prefilled add form. */
+  const onPresetClick = (preset: ProviderPreset) => {
+    const configuredKey = configuredKeyFor(preset);
+    if (configuredKey) setExpandedProvider(configuredKey);
+    else openAddForm(preset);
   };
   const reloadModels = async () => {
     if (
@@ -1018,6 +1168,27 @@ export function Settings() {
   // Avatar file-input refs — must stay above the early return (Rules of Hooks).
   const userAvatarInputRef = useRef<HTMLInputElement>(null);
   const agentAvatarInputRef = useRef<HTMLInputElement>(null);
+  // Scroll the expanded provider editor into view when it opens.
+  const detailRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!expandedProvider) return;
+    const timer = window.setTimeout(
+      () => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      30,
+    );
+    return () => window.clearTimeout(timer);
+  }, [expandedProvider]);
+  // The add form renders at the top of section 1; scroll to it when opened
+  // from a button further down (e.g. “添加供应商” in section 2).
+  const addFormRef = useRef<HTMLFormElement | null>(null);
+  useEffect(() => {
+    if (!adding) return;
+    const timer = window.setTimeout(
+      () => addFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      30,
+    );
+    return () => window.clearTimeout(timer);
+  }, [adding]);
 
   if (!open) return null;
 
@@ -1026,6 +1197,14 @@ export function Settings() {
   const defaultModels = defaultModelDefs.map((m) => m.id);
   const selectedDefaultModel = defaultModelDefs.find((m) => m.id === thinking.defaultModel);
   const availableThinkingLevels = supportedThinkingLevels(selectedDefaultModel);
+
+  // Preset grid search filter (matches zh/en names, subtitles and provider key).
+  const presetQueryTrimmed = presetQuery.trim().toLowerCase();
+  const visiblePresets = PROVIDER_PRESETS.filter(
+    (p) =>
+      !presetQueryTrimmed ||
+      [p.name, p.enName, p.subtitle, p.enSubtitle, p.key].some((s) => s.toLowerCase().includes(presetQueryTrimmed)),
+  );
 
   const changeLanguage = async (language: "en" | "zh") => {
     const next = await window.pi.app.setConfig({ language });
@@ -1419,22 +1598,84 @@ export function Settings() {
 
             {tab === "models" && (
               <>
-                <div className="set-prov-toolbar">
-                  <span className="muted">
-                    {language === "zh"
-                      ? "自定义提供商与模型，参考 models.md。常用字段图形化；compat 在“高级”里用 JSON 编辑，thinkingLevelMap 按档位配置。"
-                      : "Configure custom providers and models using models.md. Common fields have controls; edit compat as JSON under Advanced and configure thinkingLevelMap by level."}
-                  </span>
-                  {!adding && (
-                    <button className="set-btn" onClick={() => setAdding(true)}>
-                      <Plus size={14} /> {language === "zh" ? "添加供应商" : "Add provider"}
+                {/* ---- 第一段：预设供应商 ---- */}
+                <div className="set-sec-head">
+                  <div className="set-sec-title">{language === "zh" ? "预设供应商" : "Preset providers"}</div>
+                  <div className="set-sec-actions">
+                    <div className="archive-search-box preset-search">
+                      <Search size={13} />
+                      <input
+                        className="archive-search-input"
+                        placeholder={language === "zh" ? "搜索模型平台…" : "Search model platforms…"}
+                        value={presetQuery}
+                        onChange={(e) => setPresetQuery(e.target.value)}
+                      />
+                      {presetQuery && (
+                        <button
+                          className="archive-search-clear"
+                          onClick={() => setPresetQuery("")}
+                          aria-label={language === "zh" ? "清空搜索" : "Clear search"}
+                        >
+                          <Close size={12} />
+                        </button>
+                      )}
+                    </div>
+                    <button
+                      className="set-btn ghost"
+                      onClick={() => void reloadModels()}
+                      title={language === "zh" ? "重新读取 models.json，更新各平台的配置状态" : "Reload models.json and refresh each platform's status"}
+                    >
+                      <Refresh size={14} /> {language === "zh" ? "刷新预设" : "Refresh presets"}
                     </button>
-                  )}
+                  </div>
                 </div>
+
+                <div className="preset-grid">
+                  <button type="button" className="preset-card dashed" onClick={() => openAddForm(null)}>
+                    <Plus size={15} />
+                    <span>{language === "zh" ? "自定义配置" : "Custom config"}</span>
+                  </button>
+                  <button type="button" className="preset-card dashed" onClick={() => openAddForm(LOCAL_DEPLOY_PRESET)}>
+                    <Plus size={15} />
+                    <span>{language === "zh" ? "本地部署" : "Local deploy"}</span>
+                  </button>
+                  {visiblePresets.map((preset) => {
+                    const configuredKey = configuredKeyFor(preset);
+                    const isCurrent = !!configuredKey && thinking.defaultProvider === configuredKey;
+                    return (
+                      <button
+                        key={preset.key}
+                        type="button"
+                        className={`preset-card ${configuredKey ? "configured" : ""}`.trim()}
+                        onClick={() => onPresetClick(preset)}
+                      >
+                        <span className="preset-icon" style={{ background: preset.color }} aria-hidden="true">
+                          {preset.monogram}
+                        </span>
+                        <span className="preset-main">
+                          <span className="preset-name">
+                            {language === "zh" ? preset.name : preset.enName}
+                            {isCurrent && (
+                              <em className="preset-badge">{language === "zh" ? "当前" : "Current"}</em>
+                            )}
+                          </span>
+                          <span className="preset-sub">
+                            {hostOf(preset.baseUrl) || (language === "zh" ? "本地服务" : "local service")}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {presetQueryTrimmed && visiblePresets.length === 0 && (
+                  <div className="set-empty-mini">{language === "zh" ? "没有匹配的平台。" : "No matching platforms."}</div>
+                )}
 
                 {adding && (
                   <form
+                    ref={addFormRef}
                     className="set-addprov-card"
+                    style={{ scrollMarginTop: 8 }}
                     onSubmit={(event) => {
                       event.preventDefault();
                       confirmAddProvider();
@@ -1510,7 +1751,7 @@ export function Settings() {
                         <span>{language === "zh" ? "模型 ID" : "Model ID"}</span>
                         <input
                           className="set-input"
-                          placeholder="model-id"
+                          placeholder={language === "zh" ? "model-id（可留空，稍后可补）" : "model id (optional)"}
                           value={newProvider.modelId}
                           onChange={(event) => setNewProvider((value) => ({ ...value, modelId: event.target.value }))}
                         />
@@ -1535,23 +1776,84 @@ export function Settings() {
                   </form>
                 )}
 
-                {providerKeys.length === 0 && !adding && <div className="set-empty">尚无提供商。点“添加提供商”接入自定义 API（OpenAI / Anthropic / Gemini 兼容端点、Ollama、代理等）。</div>}
+                {/* ---- 第二段：我的供应商（紧凑卡片，点击展开完整编辑区） ---- */}
+                <div className="set-sec-head models-sec2">
+                  <div className="set-sec-title">
+                    {language === "zh" ? "我的供应商" : "My providers"}
+                    {providerKeys.length > 0 && <span className="set-prov-count">{providerKeys.length}</span>}
+                  </div>
+                  <div className="set-sec-actions">
+                    {!adding && (
+                      <button className="set-btn ghost" onClick={() => openAddForm(null)}>
+                        <Plus size={14} /> {language === "zh" ? "添加供应商" : "Add provider"}
+                      </button>
+                    )}
+                    {expandedProvider && draft.providers[expandedProvider] && (
+                      <button className="set-btn ghost" onClick={() => setExpandedProvider(null)}>
+                        {language === "zh" ? "收起" : "Collapse"}
+                      </button>
+                    )}
+                  </div>
+                </div>
 
-                {providerKeys.map((k) => (
-                  <ProviderCard
-                    key={k}
-                    k={k}
-                    def={draft.providers[k]}
-                    language={language}
-                    rename={(name) => renameProvider(k, name)}
-                    patch={(p) => updateProvider(k, p)}
-                    del={() => deleteProvider(k)}
-                    register={register}
-                    addModel={() => addModel(k)}
-                    updateModel={(i, p) => updateModel(k, i, p)}
-                    deleteModel={(i) => deleteModel(k, i)}
-                  />
-                ))}
+                {providerKeys.length === 0 ? (
+                  !adding && (
+                    <div className="set-empty">
+                      {language === "zh"
+                        ? "尚无提供商。从上方选择平台，或点「自定义配置」接入任意 API（OpenAI / Anthropic / Gemini 兼容端点、Ollama、代理等）。"
+                        : "No providers yet. Pick a platform above, or use Custom config to connect any API (OpenAI / Anthropic / Gemini compatible endpoints, Ollama, proxies, etc.)."}
+                    </div>
+                  )
+                ) : (
+                  <>
+                    <div className="preset-grid">
+                      {providerKeys.map((k) => {
+                        const def = draft.providers[k];
+                        const modelCount = (def.models || []).length;
+                        const isCurrent = thinking.defaultProvider === k;
+                        return (
+                          <button
+                            key={k}
+                            type="button"
+                            className={`prov-tile ${expandedProvider === k ? "active" : ""}`.trim()}
+                            onClick={() => setExpandedProvider((cur) => (cur === k ? null : k))}
+                          >
+                            <span className="prov-tile-top">
+                              <span className="set-prov-id" title={k}>
+                                {k}
+                              </span>
+                              {isCurrent && (
+                                <em className="preset-badge">{language === "zh" ? "当前" : "Current"}</em>
+                              )}
+                            </span>
+                            <span className="prov-tile-sub">
+                              {language === "zh"
+                                ? `${modelCount} 模型 · ${hostOf(def.baseUrl) || "未设地址"}`
+                                : `${modelCount} model${modelCount === 1 ? "" : "s"} · ${hostOf(def.baseUrl) || "no URL set"}`}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {expandedProvider && draft.providers[expandedProvider] && (
+                      <div className="set-prov-detail" ref={detailRef}>
+                        <ProviderCard
+                          k={expandedProvider}
+                          def={draft.providers[expandedProvider]}
+                          language={language}
+                          rename={(name) => renameProvider(expandedProvider, name)}
+                          patch={(p) => updateProvider(expandedProvider, p)}
+                          del={() => deleteProvider(expandedProvider)}
+                          register={register}
+                          addModel={() => addModel(expandedProvider)}
+                          updateModel={(i, p) => updateModel(expandedProvider, i, p)}
+                          deleteModel={(i) => deleteModel(expandedProvider, i)}
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
               </>
             )}
 
