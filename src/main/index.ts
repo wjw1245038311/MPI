@@ -4,6 +4,7 @@ import { basename, extname, join } from "node:path";
 import { app, BrowserWindow, Menu, shell, Tray } from "electron";
 import { loadConfig, getConfig, updateConfig } from "./config";
 import { flushDrafts } from "./draft-store";
+import { flushTodos, ingestInbox } from "./todo-store";
 import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
@@ -283,6 +284,12 @@ app.on("before-quit", (e) => {
   stopScheduler();
   stopRemoteHost();
   flushDrafts(); // synchronous: the coalesced draft write must not be lost
+  try {
+    ingestInbox(); // pick up any pending agent-side todo additions before exit
+  } catch {
+    /* ignore */
+  }
+  flushTodos(); // synchronous: the coalesced todo write must not be lost
   quitInFlight = true;
   // Safety net in case a bridge ever fails to settle (stopGraceful is bounded
   // at ~4s internally; this caps the whole sequence well beyond that).

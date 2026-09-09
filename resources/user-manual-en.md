@@ -18,22 +18,23 @@ This manual covers all major features of MPI. If you only need to get the first 
 8. [Context Management](#8-context-management)
 9. [File Preview and HTML Element References](#9-file-preview-and-html-element-references)
 10. [Automations (Scheduled Tasks)](#10-automations-scheduled-tasks)
-11. [Extensions: Skills / Packages / MCP](#11-extensions-skills-packages-mcp)
-12. [Pi TUI Terminal Mode](#12-pi-tui-terminal-mode)
-13. [Global Search (Ctrl+K)](#13-global-search-ctrlk)
-14. [Archive and Trash](#14-archive-and-trash)
-15. [Settings Reference](#15-settings-reference)
-16. [Android Phone Remote Control](#16-android-phone-remote-control)
-17. [Messaging Channels (Feishu)](#17-messaging-channels-feishu)
-18. [Keyboard Shortcuts](#18-keyboard-shortcuts)
-19. [Data and Configuration Locations](#19-data-and-configuration-locations)
-20. [FAQ](#20-faq)
+11. [Todo Tasks](#11-todo-tasks)
+12. [Extensions: Skills / Packages / MCP](#12-extensions-skills-packages-mcp)
+13. [Pi TUI Terminal Mode](#13-pi-tui-terminal-mode)
+14. [Global Search (Ctrl+K)](#14-global-search-ctrlk)
+15. [Archive and Trash](#15-archive-and-trash)
+16. [Settings Reference](#16-settings-reference)
+17. [Android Phone Remote Control](#17-android-phone-remote-control)
+18. [Messaging Channels (Feishu)](#18-messaging-channels-feishu)
+19. [Keyboard Shortcuts](#19-keyboard-shortcuts)
+20. [Data and Configuration Locations](#20-data-and-configuration-locations)
+21. [FAQ](#21-faq)
 
 ---
 
 ## 1. Getting to Know MPI
 
-MPI is a standalone desktop client for the [Pi coding agent](https://github.com/earendil-works/pi) (a personal fork of Pi Studio, with no affiliation to or official endorsement by the Pi maintainers). It brings projects, sessions, model configuration, extensions, permission control, scheduled tasks and file preview into one desktop workspace.
+MPI is a standalone desktop client for the [Pi coding agent](https://github.com/earendil-works/pi) (a personal fork of Pi Studio, with no affiliation to or official endorsement by the Pi maintainers). It brings projects, sessions, model configuration, extensions, permission control, scheduled tasks, todo tasks and file preview into one desktop workspace.
 
 A few key concepts:
 
@@ -121,7 +122,7 @@ The main window has four areas:
 Top to bottom:
 
 1. **Top button row**: 🔍 global search (same as Ctrl+K), collapse sidebar.
-2. **Quick entries**: three labeled buttons — "New session", "Automations" (clock icon), "Extensions" (plug icon) — opening a new session, the [automations panel](#10-automations-scheduled-tasks) and the [extensions panel](#11-extensions-skills-packages-mcp) respectively.
+2. **Quick entries**: four labeled buttons — "New session", "Automations" (clock icon), "Todo tasks" (checked-box icon), "Extensions" (plug icon) — opening a new session, the [automations panel](#10-automations-scheduled-tasks), the [todo panel](#11-todo-tasks) and the [extensions panel](#12-extensions-skills-packages-mcp) respectively.
 3. **Tabs**: `Sessions` / `Files`.
    - "Sessions" tab: project list + each project's session list.
    - "Files" tab: file tree of the current session's project; click any file to open it in the preview pane; **file rows can be dragged straight into the composer as attachments** (folders are not draggable).
@@ -143,7 +144,7 @@ The sidebar width can be adjusted by dragging its right edge; double-click reset
 **Top bar**:
 
 - Left: session title (**double-click to rename**), working folder path (hover for the full path, click to open in File Explorer), connection status hint.
-- Right buttons (left to right): ⭐ pin/unpin current session, ✎ rename, 📁 switch working folder, ＋ new session (start a fresh conversation in the current context), ⌨ **Terminal** (switch to Pi TUI, see [Section 12](#12-pi-tui-terminal-mode)), 👁 toggle preview.
+- Right buttons (left to right): ⭐ pin/unpin current session, ✎ rename, 📁 switch working folder, ＋ new session (start a fresh conversation in the current context), ⌨ **Terminal** (switch to Pi TUI, see [Section 13](#13-pi-tui-terminal-mode)), 👁 toggle preview.
 
 **Message list**:
 
@@ -277,7 +278,7 @@ Clicking fork/clone while a reply is streaming asks you to wait for it to finish
 
 - **Archive session**: hover the session row and click the archive icon (or right-click). Archived sessions disappear from the sidebar and default search; find them under "Settings → Archive & Trash" or Ctrl+K (with "Archive & trash" checked) and restore with one click.
 - **Archive project**: right-click a project → "Archive project". All of its sessions are archived together; restoring works the same way.
-- **Delete session**: hover and click the trash icon, or right-click "Delete". By default this moves it to the **trash** (recoverable); only deleting again from the trash is permanent. Turning off the trash switch in "Settings → General" makes deletes immediately permanent. See [Section 14](#14-archive-and-trash).
+- **Delete session**: hover and click the trash icon, or right-click "Delete". By default this moves it to the **trash** (recoverable); only deleting again from the trash is permanent. Turning off the trash switch in "Settings → General" makes deletes immediately permanent. See [Section 15](#15-archive-and-trash).
 
 ### 5.6 Other session behaviors
 
@@ -446,7 +447,29 @@ Click `+` and fill in:
 
 ---
 
-## 11. Extensions: Skills / Packages / MCP
+## 11. Todo Tasks
+
+The checked-box icon in the navigation bar opens the "Todo tasks" panel. Todos are **tracked per project**, with due dates, notes and smart date parsing; the agent can also add todos from a conversation (marked with an AI badge).
+
+### 11.1 Adding todos
+
+- Type into the input at the top of the panel and press Enter to create. With "All projects" selected on the left, pick the target project in the dropdown first; when a specific project is selected, new todos automatically belong to it.
+- **Smart date parsing**: you can write dates straight into the text — `send report tomorrow` → title "send report", due tomorrow (Chinese forms like `明天发周报`, `周五`, `9月30日`, `12-5` also work); if no date is recognized the todo has none.
+- Click a row to expand its inline editor: change title / note / due date (or clear it) and save, or delete directly (no confirmation dialog).
+
+### 11.2 Smart sections
+
+The panel groups todos by time dimension, each chip showing a count: **All** / **Today** (includes overdue; overdue in red) / **Tomorrow** / **This week** (Mon–Sun) / **Later** (dates after this week) / **No date** / **Done**. In the "Done" section, "Clear done" at the bottom bulk-deletes completed items in the current scope.
+
+### 11.3 Project scope and agent collaboration
+
+- Selecting a project in the left column filters to that project's todos; "All projects" shows everything with a project-name tag on each row.
+- When the agent calls `mpi_todo_add` / `mpi_todo_list` during a conversation, items are written into this panel through an inbox mechanism (the main process watches and dedupes them). Such rows carry an **AI** badge; clicking it jumps straight to the source session.
+- Data lives in `%APPDATA%\MPI\todos.json` (see [Section 20](#20-data-and-configuration-locations)); dev and production builds are independent.
+
+---
+
+## 12. Extensions: Skills / Packages / MCP
 
 The plug icon in the sidebar opens the "Extensions" panel (managing pi's extension packages and skills), with three top-level module tabs: **Skills N / Packages M / MCP K** (each with a count).
 
@@ -478,7 +501,7 @@ MCP (Model Context Protocol) servers provide pi with external tools and data sou
 
 ---
 
-## 12. Pi TUI Terminal Mode
+## 13. Pi TUI Terminal Mode
 
 The "**Terminal**" button in the chat top bar switches the whole session area into an interactive pi terminal (xterm.js):
 
@@ -491,7 +514,7 @@ For users who prefer keyboard flow and want direct access to all of pi's TUI com
 
 ---
 
-## 13. Global Search (Ctrl+K)
+## 14. Global Search (Ctrl+K)
 
 The 🔍 button at the top of the sidebar or **Ctrl+K** opens global session search:
 
@@ -501,7 +524,7 @@ The 🔍 button at the top of the sidebar or **Ctrl+K** opens global session sea
 
 ---
 
-## 14. Archive and Trash
+## 15. Archive and Trash
 
 The **Settings → Archive & Trash** page manages three kinds of entries, all grouped by project (group headers show project name + count, collapsible); the search box at the top filters all three (substring match on title/project name/path):
 
@@ -518,7 +541,7 @@ Rules:
 
 ---
 
-## 15. Settings Reference
+## 16. Settings Reference
 
 **Settings** entries: ⚙ in the title bar, menu "Edit → Open settings…". Left tabs below.
 
@@ -540,7 +563,7 @@ See [Section 4](#4-configuring-models). The **User profile** tab (see 4.6) works
 
 ### 15.3 Archive & Trash
 
-See [Section 14](#14-archive-and-trash).
+See [Section 15](#15-archive-and-trash).
 
 ### 15.4 Backup & Restore
 
@@ -568,7 +591,7 @@ Shows Pi runtime status and the actual paths of each config file (`models.json` 
 
 ---
 
-## 16. Android Phone Remote Control
+## 17. Android Phone Remote Control
 
 > **Current status**: the UI entry for this feature is temporarily hidden in recent versions (to be restored after polish); below describes its designed capabilities, for reference.
 
@@ -580,7 +603,7 @@ MPI supports remotely viewing sessions from an Android companion app and perform
 
 ---
 
-## 17. Messaging Channels (Feishu)
+## 18. Messaging Channels (Feishu)
 
 Message your MPI from Feishu: DM the bot or @-mention it in a group, and the message runs in a dedicated session under the bound project; the agent's reply streams back into that same message. The channel is online **only while MPI is running**.
 
@@ -627,7 +650,7 @@ Click **Save configuration** to apply immediately. Status light at the top: gray
 
 ---
 
-## 18. Keyboard Shortcuts
+## 19. Keyboard Shortcuts
 
 | Shortcut | Action |
 | --- | --- |
@@ -641,7 +664,7 @@ Click **Save configuration** to apply immediately. Status light at the top: gray
 
 ---
 
-## 19. Data and Configuration Locations
+## 20. Data and Configuration Locations
 
 | Content | Location (Windows) | Notes |
 | --- | --- | --- |
@@ -649,6 +672,7 @@ Click **Save configuration** to apply immediately. Status light at the top: gray
 | Session files | `~/.pi/agent/sessions/` (organized by project) | JSONL format; broken-session repair backups in `sessions/mpi-repair-backups/`. |
 | App config | `%APPDATA%\MPI\config.json` | General settings: theme, language, avatars, default permission, etc. |
 | Drafts | `%APPDATA%\MPI\drafts.json` | Unsent input; LRU-kept, last 40. |
+| Todo tasks | `%APPDATA%\MPI\todos.json` | Per-project todos; agent writes arrive via the `todos-inbox/` inbox and are deduped on ingest. |
 | Trash | `%APPDATA%\MPI\trash\` | Deleted session files. |
 | Bundled runtime | `%APPDATA%\MPI\runtime\versions\…` | Extracted on first launch; the built-in npm used for package installs lives here too. |
 
@@ -658,7 +682,7 @@ Dev (development build) and production installs have independent config director
 
 ---
 
-## 20. FAQ
+## 21. FAQ
 
 **Model selector shows "No available models"**
 Go back to "Settings → Models & Providers" and confirm you saved; check API key, Base URL (mind `/v1`), API type and model ID one by one, using "Test availability" to pinpoint the problem. If it still fails, reopen the session once.

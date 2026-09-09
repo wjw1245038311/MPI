@@ -19,6 +19,7 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
     "test:drafts": "node --experimental-strip-types scripts/test-draft-store.mjs",
+    "test:todos": "node --experimental-strip-types scripts/test-todo-store.mjs",
     "test:config": "node --experimental-strip-types scripts/test-config-inherit.mjs",
     "test:markdown": "node --experimental-strip-types scripts/test-markdown-autolink.mjs",
     "test:diff": "node --experimental-strip-types scripts/test-diff.mjs",

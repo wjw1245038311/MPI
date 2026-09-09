@@ -1,6 +1,8 @@
+import { join } from "node:path";
 import { getConfig, getConfigDir, reloadConfig, updateConfig, type AutomationTask, type TaskSchedule } from "./config";
 import { PiBridge } from "./pi-bridge";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile } from "./permission-gate";
+import { ensureTodoExtension, ensureTodoInbox } from "./todo-extension";
 
 /**
  * Scheduled automation. Tasks are user-defined prompts (which may invoke
@@ -213,7 +215,10 @@ async function execute(task: AutomationTask): Promise<void> {
         piCliPath: getConfig().piCliPath,
         // Same user-profile injection as interactive sessions.
         appendSystemPrompt: getConfig().userProfile?.trim() || undefined,
-        extensions: [ensureGateExtension(getConfigDir())],
+        // Same todo bridge as interactive threads (no session file here, so
+        // agent-added todos carry no provenance).
+        extensions: [ensureGateExtension(getConfigDir()), ensureTodoExtension(getConfigDir())],
+        todoPaths: { file: join(getConfigDir(), "todos.json"), inboxDir: ensureTodoInbox(getConfigDir()) },
         gateModeFile,
         name: automationSessionName(task.name, getConfig().language),
         onEvent: (e: any) => {

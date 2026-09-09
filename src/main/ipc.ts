@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, watch, type FSWatcher, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -27,6 +27,16 @@ import {
   parseConfigBackup,
 } from "./backup";
 import { deleteDraft, getAllDrafts, setDraft as persistDraft } from "./draft-store";
+import {
+  addTodo,
+  clearCompletedTodos,
+  deleteTodo,
+  ingestInbox,
+  listTodos,
+  toggleTodo,
+  updateTodo,
+  type TodoPatch,
+} from "./todo-store";
 import type { ComposerDraft } from "../renderer/src/lib/types";
 import { listDir } from "./fs-service";
 import { createHtmlPreviewUrl } from "./html-preview-protocol";
@@ -45,6 +55,7 @@ import { classifyMissingTool } from "./npm-command";
 import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtimeKind } from "./pi-bridge";
 import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
+import { ensureTodoExtension, ensureTodoInbox } from "./todo-extension";
 import { registerTuiIpc } from "./tui";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
 import {
@@ -331,7 +342,9 @@ function createHandle(
     name,
     // The gate extension is always loaded; its sandbox/full behaviour is decided
     // at runtime by the per-thread mode file, so permission can change live.
-    extensions: [ensureGateExtension(getConfigDir())],
+    // The todo bridge gives the agent mpi_todo_add / mpi_todo_list (待办任务 panel).
+    extensions: [ensureGateExtension(getConfigDir()), ensureTodoExtension(getConfigDir())],
+    todoPaths: { file: join(getConfigDir(), "todos.json"), inboxDir: ensureTodoInbox(getConfigDir()) },
     // Keep pi's runtime in sync with the Plugins inventory, including the
     // singular `.pi/agent/skill` compatibility path and other local roots.
     skills: getAdditionalSkillPaths(cwd),
@@ -1769,6 +1782,61 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     persistDraft(key, draft);
   });
   ipcMain.handle("drafts:delete", (_e, key: string) => deleteDraft(key));
+
+  // ---- todos (待办任务) ----------------------------------------------------
+  const notifyTodosChanged = () => {
+    try {
+      getWin()?.webContents.send("pi:todo-changed");
+    } catch {
+      /* window gone */
+    }
+  };
+  ipcMain.handle("todo:list", () => listTodos());
+  ipcMain.handle("todo:add", (_e, args?: { cwd?: string; title?: string; note?: string; dueDate?: string | null }) => {
+    const item = addTodo(args || {});
+    if (item) notifyTodosChanged();
+    return item;
+  });
+  ipcMain.handle("todo:update", (_e, id: unknown, patch?: TodoPatch) => {
+    const item = updateTodo(id, patch || {});
+    if (item) notifyTodosChanged();
+    return item;
+  });
+  ipcMain.handle("todo:toggle", (_e, id: unknown) => {
+    const item = toggleTodo(id);
+    if (item) notifyTodosChanged();
+    return item;
+  });
+  ipcMain.handle("todo:delete", (_e, id: unknown) => {
+    const ok = deleteTodo(id);
+    if (ok) notifyTodosChanged();
+    return ok;
+  });
+  ipcMain.handle("todo:clearCompleted", (_e, cwd?: string | null) => {
+    const removed = clearCompletedTodos(cwd ?? null);
+    if (removed > 0) notifyTodosChanged();
+    return removed;
+  });
+
+  // Agent-side additions arrive as one JSON file per todo in the inbox dir
+  // (mpi-todo-ext never writes todos.json). Watch + poll; ingest is idempotent.
+  const todoInbox = ensureTodoInbox(getConfigDir());
+  let todoInboxWatcher: FSWatcher | null = null;
+  try {
+    todoInboxWatcher = watch(todoInbox, () => {
+      if (ingestInbox().length > 0) notifyTodosChanged();
+    });
+  } catch {
+    /* the poll below still covers it */
+  }
+  const todoInboxPoll = setInterval(() => {
+    try {
+      if (ingestInbox().length > 0) notifyTodosChanged();
+    } catch {
+      /* ignore transient fs errors */
+    }
+  }, 2000);
+  todoInboxPoll.unref?.();
 
   ipcMain.handle("app:resolveRuntime", async () => {
     try {

@@ -6,6 +6,7 @@ import type {
   NpmPackage,
   PermissionLevel,
   SkillHubSkill,
+  TodoItem,
   TrashEntry,
 } from "../renderer/src/lib/types";
 
@@ -76,6 +77,16 @@ const api = {
     getAll: (): Promise<Record<string, ComposerDraft>> => ipcRenderer.invoke("drafts:getAll"),
     set: (key: string, draft: ComposerDraft) => ipcRenderer.invoke("drafts:set", key, draft),
     delete: (key: string) => ipcRenderer.invoke("drafts:delete", key),
+  },
+  todo: {
+    list: (): Promise<TodoItem[]> => ipcRenderer.invoke("todo:list"),
+    add: (args: { cwd?: string; title?: string; note?: string; dueDate?: string | null }): Promise<TodoItem | null> =>
+      ipcRenderer.invoke("todo:add", args),
+    update: (id: string, patch: { title?: string; note?: string; dueDate?: string | null }): Promise<TodoItem | null> =>
+      ipcRenderer.invoke("todo:update", id, patch),
+    toggle: (id: string): Promise<TodoItem | null> => ipcRenderer.invoke("todo:toggle", id),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke("todo:delete", id),
+    clearCompleted: (cwd?: string | null): Promise<number> => ipcRenderer.invoke("todo:clearCompleted", cwd ?? null),
   },
   plugins: {
     getPackages: () => ipcRenderer.invoke("plugins:getPackages"),
@@ -239,6 +250,7 @@ const api = {
       projectCwd: string;
       permission: PermissionLevel;
     }) => void) => on("pi:messaging", cb),
+    todoChanged: (cb: () => void) => on("pi:todo-changed", cb),
     projectsChanged: (cb: (p: { cwd?: string; sessionFile?: string }) => void) => on("pi:projects-changed", cb),
     appUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:appUpdate", cb),
     coreUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:coreUpdate", cb),

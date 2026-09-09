@@ -308,6 +308,9 @@ export interface PiBridgeOptions {
   /** Per-thread gate mode file exposed to the gate extension as
    * MPI_GATE_MODE_FILE so sandbox/full can be toggled without a restart. */
   gateModeFile?: string;
+  /** Paths for the 待办任务 bridge extension (mpi-todo-ext): todos.json and the
+   * inbox dir where agent-side additions land before main ingests them. */
+  todoPaths?: { file: string; inboxDir: string };
   onEvent: (event: unknown) => void;
   onExtUi: (request: ExtUiRequest) => void;
   onExit: (info: { code: number | null; signal: NodeJS.Signals | null; stderr: string; expected?: boolean }) => void;
@@ -358,6 +361,11 @@ export class PiBridge {
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     if (this.opts.gateModeFile) env.MPI_GATE_MODE_FILE = this.opts.gateModeFile;
+    if (this.opts.todoPaths) {
+      env.MPI_TODO_FILE = this.opts.todoPaths.file;
+      env.MPI_TODO_INBOX_DIR = this.opts.todoPaths.inboxDir;
+      if (this.opts.sessionFile) env.MPI_TODO_SESSION_FILE = this.opts.sessionFile;
+    }
 
     this.proc = spawn(rt.node, [rt.cli, ...args], {
       cwd: this.opts.cwd,

@@ -51,6 +51,11 @@ export function usePiEvents() {
     const u6 = window.pi.on.projectsChanged(() => {
       void useStore.getState().refreshProjects();
     });
+    // A dev instance started before the todos module has an old preload without
+    // this API — skip silently instead of breaking event wiring.
+    const u9 = typeof window.pi.on.todoChanged === "function"
+      ? window.pi.on.todoChanged(() => void useStore.getState().loadTodos())
+      : () => undefined;
     return () => {
       u1();
       u2();
@@ -60,6 +65,7 @@ export function usePiEvents() {
       u5();
       u6();
       u8();
+      u9();
     };
   }, [handleEvent, handleExtUi, handleExit, handleError]);
 }

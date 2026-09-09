@@ -5,7 +5,7 @@ import { fileIcon, formatTokens } from "../lib/format";
 import { MPI_FILE_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
-import { Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, Plug, MessageSquare, Search, Sidebar as SidebarIcon } from "./icons";
+import { Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Sidebar as SidebarIcon } from "./icons";
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
 
@@ -331,6 +331,12 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               <Clock size={15} />
             </span>
             定时任务
+          </button>
+          <button className="sb-nav-item" onClick={() => useStore.getState().openTodoPanel()}>
+            <span className="ico">
+              <CheckSquare size={15} />
+            </span>
+            待办任务
           </button>
           <button className="sb-nav-item" onClick={() => useStore.getState().openPlugins()}>
             <span className="ico">

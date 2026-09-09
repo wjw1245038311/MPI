@@ -98,6 +98,12 @@ export const Clock = (p: P) => (
     <path d="M12 7v5l3 2" />
   </svg>
 );
+export const CheckSquare = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3" y="3" width="18" height="18" rx="2.5" />
+    <path d="m8.5 12 2.5 2.5 5-5.5" />
+  </svg>
+);
 export const At = (p: P) => (
   <svg {...base(p)}>
     <circle cx="12" cy="12" r="4" />

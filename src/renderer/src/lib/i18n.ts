@@ -74,6 +74,28 @@ const exact: Record<string, string> = {
   "思考": "Reasoning",
   "图像": "Images",
   "高级": "Advanced",
+  // todo panel (待办任务)
+  "待办任务": "Todos",
+  "全部项目": "All projects",
+  "目标项目": "Target project",
+  "添加待办，回车创建（支持：明天 / 周五 / 9月30日）": "Add a todo and press Enter (supports: tomorrow / Friday / Sep 30)",
+  "全部": "All",
+  "今天": "Today",
+  "明天": "Tomorrow",
+  "本周": "This week",
+  "稍后": "Later",
+  "无日期": "No date",
+  "已完成": "Done",
+  "暂无待办": "No todos yet",
+  "备注（可选）": "Note (optional)",
+  "截止日期": "Due date",
+  "清除日期": "Clear date",
+  "保存": "Save",
+  "标记为未完成": "Mark as not done",
+  "标记为已完成": "Mark as done",
+  "由智能体添加": "Added by agent",
+  "清空已完成": "Clear completed",
+  "请先打开一个项目再添加待办": "Open a project first to add todos",
   "删除": "Delete",
   "删除模型": "Delete model",
   "删除提供商": "Delete provider",
@@ -314,6 +336,14 @@ const exact: Record<string, string> = {
 };
 
 const prefixes: Array<[string, string]> = [
+  // todo panel (longer prefix first so it wins over the bare form)
+  ["由智能体添加 · ", "Added by agent · "],
+  ["加载待办任务失败：", "Failed to load todos: "],
+  ["添加待办失败：", "Failed to add todo: "],
+  ["保存待办失败：", "Failed to save todo: "],
+  ["更新待办失败：", "Failed to update todo: "],
+  ["删除待办失败：", "Failed to delete todo: "],
+  ["清空已完成失败：", "Failed to clear completed todos: "],
   ["未检测到 pi：", "Pi was not detected: "],
   ["归档项目失败：", "Failed to archive project: "],
   ["恢复项目失败：", "Failed to restore project: "],
@@ -538,7 +568,7 @@ export function translateUiText(value: string, language: Language): string {
 
 const originals = new WeakMap<Node, string>();
 const attrOriginals = new WeakMap<Element, Map<string, string>>();
-const PROTECTED_TEXT_SELECTOR = ".md,.toast,.msg-user-text,.thinking-body,.tool-output,.tool-name,.tool-summary,.modal-title,.modal-msg,.extui-card-message,.extui-card-title,.extui-card-options,.pname,.tt-text,.chat-head-title,.chat-head-folder-path,.project-menu-option,.thread-preview,.project-context-name,.archived-project-name,.archived-thread-name,.archived-thread-path,.msg-artifact-name,.msg-artifact-path,.ft-name,.plugins-row-name,.plugins-row-sub,.auto-prompt,.skills-hub-card-name,.skills-hub-card-source,.skills-hub-description,.skills-hub-install-command,.skills-hub-file,.skills-hub-markdown,.preview-title,.set-prov-id,.search-item-title,.search-item-snippet,.search-item-proj";
+const PROTECTED_TEXT_SELECTOR = ".md,.toast,.msg-user-text,.thinking-body,.tool-output,.tool-name,.tool-summary,.modal-title,.modal-msg,.extui-card-message,.extui-card-title,.extui-card-options,.pname,.tt-text,.chat-head-title,.chat-head-folder-path,.project-menu-option,.thread-preview,.project-context-name,.archived-project-name,.archived-thread-name,.archived-thread-path,.msg-artifact-name,.msg-artifact-path,.ft-name,.plugins-row-name,.plugins-row-sub,.auto-prompt,.skills-hub-card-name,.skills-hub-card-source,.skills-hub-description,.skills-hub-install-command,.skills-hub-file,.skills-hub-markdown,.preview-title,.set-prov-id,.search-item-title,.search-item-snippet,.search-item-proj,.todo-title,.todo-note,.todo-proj-name,.todo-opt";
 
 function isProtectedText(element: Element | null): boolean {
   return !!element?.closest(PROTECTED_TEXT_SELECTOR);

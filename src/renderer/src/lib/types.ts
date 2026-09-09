@@ -302,6 +302,23 @@ export interface TrashEntry {
   sizeBytes: number;
 }
 
+/** A personal todo item in the Feishu-style 待办任务 panel.
+ * Scoped per project (cwd); dueDate is a local "YYYY-MM-DD" (null = undated).
+ * source="agent" marks items added by the pi extension during a conversation
+ * (sessionFile points at the originating session for the AI badge). */
+export interface TodoItem {
+  id: string;
+  title: string;
+  note?: string;
+  cwd: string;
+  dueDate: string | null;
+  done: boolean;
+  createdAt: number;
+  completedAt: number | null;
+  source?: "user" | "agent";
+  sessionFile?: string;
+}
+
 export interface ThreadState {
   cwd: string;
   sessionFile: string | null;

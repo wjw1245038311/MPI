@@ -21,6 +21,7 @@ import type {
   SkillHubSkill,
   ThreadState,
   Toast,
+  TodoItem,
   ToolRun,
   TrashEntry,
   ViewAttachment,
@@ -1222,6 +1223,18 @@ interface PiStore {
   deleteTask: (id: string) => Promise<void>;
   runTaskNow: (id: string) => Promise<void>;
 
+  // todo panel (待办任务)
+  todoPanelOpen: boolean;
+  todos: TodoItem[];
+  openTodoPanel: () => void;
+  closeTodoPanel: () => void;
+  loadTodos: () => Promise<void>;
+  addTodo: (args: { cwd?: string; title?: string; note?: string; dueDate?: string | null }) => Promise<TodoItem | null>;
+  updateTodo: (id: string, patch: { title?: string; note?: string; dueDate?: string | null }) => Promise<boolean>;
+  toggleTodo: (id: string) => Promise<void>;
+  deleteTodo: (id: string) => Promise<void>;
+  clearCompletedTodos: (cwd?: string | null) => Promise<number>;
+
   // messaging overlay (Feishu channel)
   messagingOpen: boolean;
   messagingState: MessagingState | null;
@@ -1515,6 +1528,16 @@ export const useStore = create<PiStore>()((set, get) => {
       // Merge (state wins) so a draft typed before this load resolved is never
       // clobbered by the disk snapshot.
       set((s) => ({ drafts: { ...(draftsResult.value || {}), ...s.drafts } }));
+    }
+
+    // Todos (待办任务). A dev instance started before the module has an old
+    // preload without this API — skip silently, the panel guards too.
+    if (typeof window.pi.todo?.list === "function") {
+      try {
+        set({ todos: await window.pi.todo.list() });
+      } catch {
+        /* non-fatal; opening the panel retries */
+      }
     }
 
     if (configResult.status === "fulfilled") {
@@ -2926,6 +2949,82 @@ export const useStore = create<PiStore>()((set, get) => {
       await get().refreshProjects();
     } catch (e: any) {
       get().pushToast("error", "执行失败：" + (e?.message || e));
+    }
+  },
+
+  // ---- todos (待办任务) ----
+  todoPanelOpen: false,
+  todos: [],
+  openTodoPanel: () => {
+    set({ todoPanelOpen: true });
+    void get().loadTodos();
+  },
+  closeTodoPanel: () => set({ todoPanelOpen: false }),
+  loadTodos: async () => {
+    if (typeof window.pi.todo?.list !== "function") return; // old preload in a stale dev instance
+    try {
+      const todos = await window.pi.todo.list();
+      set({ todos });
+    } catch (e: any) {
+      get().pushToast("error", "加载待办任务失败：" + (e?.message || e));
+    }
+  },
+  addTodo: async (args) => {
+    if (typeof window.pi.todo?.add !== "function") return null;
+    try {
+      const item = await window.pi.todo.add(args);
+      if (!item) {
+        get().pushToast("warning", "请输入待办标题");
+        return null;
+      }
+      set((s) => ({ todos: [...s.todos, item] }));
+      return item;
+    } catch (e: any) {
+      get().pushToast("error", "添加待办失败：" + (e?.message || e));
+      return null;
+    }
+  },
+  updateTodo: async (id, patch) => {
+    if (typeof window.pi.todo?.update !== "function") return false;
+    try {
+      const item = await window.pi.todo.update(id, patch);
+      if (!item) return false;
+      set((s) => ({ todos: s.todos.map((t) => (t.id === id ? item : t)) }));
+      return true;
+    } catch (e: any) {
+      get().pushToast("error", "保存待办失败：" + (e?.message || e));
+      return false;
+    }
+  },
+  toggleTodo: async (id) => {
+    if (typeof window.pi.todo?.toggle !== "function") return;
+    try {
+      const item = await window.pi.todo.toggle(id);
+      if (!item) return;
+      set((s) => ({ todos: s.todos.map((t) => (t.id === id ? item : t)) }));
+    } catch (e: any) {
+      get().pushToast("error", "更新待办失败：" + (e?.message || e));
+    }
+  },
+  deleteTodo: async (id) => {
+    if (typeof window.pi.todo?.delete !== "function") return;
+    try {
+      await window.pi.todo.delete(id);
+      set((s) => ({ todos: s.todos.filter((t) => t.id !== id) }));
+    } catch (e: any) {
+      get().pushToast("error", "删除待办失败：" + (e?.message || e));
+    }
+  },
+  clearCompletedTodos: async (cwd) => {
+    if (typeof window.pi.todo?.clearCompleted !== "function") return 0;
+    try {
+      const removed = await window.pi.todo.clearCompleted(cwd ?? null);
+      // Drop exactly the completed items in scope; keep everything else.
+      set((s) => ({ todos: s.todos.filter((t) => !(t.done && (cwd ? t.cwd === cwd : true))) }));
+      return removed;
+    } catch (e: any) {
+      get().pushToast("error", "清空已完成失败：" + (e?.message || e));
+      return 0;
     }
   },
 

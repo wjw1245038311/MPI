@@ -12,6 +12,7 @@ import { Settings } from "./components/Settings";
 import { SearchModal } from "./components/SearchModal";
 import { PluginsPanel } from "./components/PluginsPanel";
 import { AutomationPanel } from "./components/AutomationPanel";
+import { TodoPanel } from "./components/TodoPanel";
 import { MessagingPanel } from "./components/MessagingPanel";
 import { Folder, Plus } from "./components/icons";
 import { LanguageBridge } from "./components/LanguageBridge";
@@ -140,6 +141,7 @@ export default function App() {
       <SearchModal />
       <PluginsPanel />
       <AutomationPanel />
+      <TodoPanel />
       <MessagingPanel />
       <Settings />
       {remoteOpen && (
