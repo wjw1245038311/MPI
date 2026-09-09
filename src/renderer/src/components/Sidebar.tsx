@@ -199,6 +199,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const movePinned = useStore((s) => s.movePinned);
   const archiveProject = useStore((s) => s.archiveProject);
   const archiveThread = useStore((s) => s.archiveThread);
+  const cloneThread = useStore((s) => s.cloneThread);
   const deleteThread = useStore((s) => s.deleteThread);
   const setSidebarTab = useStore((s) => s.setSidebarTab);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
@@ -674,6 +675,21 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               : language === "zh"
                 ? "置顶会话"
               : "Pin session"}
+          </button>
+          <button
+            role="menuitem"
+            title={language === "zh" ? "把当前会话完整复制成一个新会话" : "Duplicate the whole session into a new one"}
+            onClick={() => {
+              const item = threadMenu;
+              setThreadMenu(null);
+              // openThread guarantees the thread exists in the store and kicks off
+              // (or reuses) its connection; cloneThread's ensureConnected awaits it.
+              void openThread(item.cwd, item.file).then((id) => {
+                if (id) void cloneThread(id);
+              });
+            }}
+          >
+            {language === "zh" ? "克隆会话" : "Clone session"}
           </button>
           <button
             className="danger"

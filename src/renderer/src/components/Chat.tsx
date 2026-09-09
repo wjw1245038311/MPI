@@ -597,14 +597,13 @@ function MessageGroupInner({
   streaming?: boolean;
   onPreviewImage: (src: string) => void;
 }) {
-  const forkThreadFromAgentReply = useStore((s) => s.forkThreadFromAgentReply);
-  const cloneThread = useStore((s) => s.cloneThread);
+  const forkThread = useStore((s) => s.forkThread);
   const openPreview = useStore((s) => s.openPreview);
   const cwd = useStore((s) => s.threads[threadId]?.cwd || "");
   const language = useStore((s) => s.config?.language || "en");
   const userAvatar = useStore((s) => s.config?.userAvatar);
   const agentAvatar = useStore((s) => s.config?.agentAvatar);
-  const [branching, setBranching] = useState<"fork" | "clone" | null>(null);
+  const [forking, setForking] = useState(false);
   const artifacts = useMemo(
     () => (group.role === "assistant" ? collectFileArtifacts(group.items, toolRuns, cwd) : []),
     [cwd, group.items, group.role, toolRuns],
@@ -651,6 +650,17 @@ function MessageGroupInner({
   }, [artifactCheckKey]);
 
   const visibleArtifacts = artifacts.filter((artifact) => artifactExists[artifact.path.toLowerCase()] !== false);
+
+  // Native pi fork: branch before the selected user message; its text is prefilled in the editor.
+  const runUserFork = async (entryId?: string) => {
+    if (locked || forking || !entryId) return;
+    setForking(true);
+    try {
+      await forkThread(threadId, entryId);
+    } finally {
+      setForking(false);
+    }
+  };
 
   // Extension command output (/mem0-status, …): a quiet centered note.
   if (group.role === "custom") {
@@ -748,6 +758,17 @@ function MessageGroupInner({
             >
               <Copy size={11} /> 复制
             </button>
+            <button
+              disabled={locked || forking || !m.branchEntryId}
+              title={m.branchEntryId
+                ? language === "zh"
+                  ? "从这条提问创建新分支（原提示词会填入输入框，可修改后发送）"
+                  : "Fork a new session from this prompt (its text is prefilled in the editor)"
+                : language === "zh" ? "连接并保存会话后可创建分支" : "Fork is available after the session connects and saves"}
+              onClick={() => void runUserFork(m.branchEntryId)}
+            >
+              <Branch size={11} /> {forking ? (language === "zh" ? "创建中…" : "Forking…") : language === "zh" ? "分支" : "Fork"}
+            </button>
           </div>
         </div>
         <div className="msg-avatar" aria-label="用户">
@@ -775,16 +796,6 @@ function MessageGroupInner({
       // Fall through to the normal preview path if the probe is unavailable.
     }
     openPreview(artifact.path, cwd);
-  };
-  const runBranchAction = async (kind: "fork" | "clone") => {
-    if (locked || branching || !last.branchEntryId) return;
-    setBranching(kind);
-    try {
-      if (kind === "fork") await forkThreadFromAgentReply(threadId, last.branchEntryId);
-      else await cloneThread(threadId, last.branchEntryId);
-    } finally {
-      setBranching(null);
-    }
   };
   return (
     <div className="msg assistant">
@@ -851,26 +862,6 @@ function MessageGroupInner({
               </button>
               <button title={language === "zh" ? "没帮助" : "Bad"}>
                 <ThumbDown size={12} />
-              </button>
-            </span>
-            <span className="msg-branch-actions" aria-label={language === "zh" ? "从此智能体回复创建分支" : "Branch from this Agent reply"}>
-              <button
-                disabled={locked || !!branching || !last.branchEntryId}
-                title={last.branchEntryId
-                  ? language === "zh" ? "从这条智能体回复开始创建新分支" : "Create a new branch from this Agent reply"
-                  : language === "zh" ? "连接并保存会话后可创建分支" : "Fork is available after the session connects and saves"}
-                onClick={() => runBranchAction("fork")}
-              >
-                <Branch size={11} /> {branching === "fork" ? language === "zh" ? "创建中…" : "Forking…" : language === "zh" ? "分支" : "Fork"}
-              </button>
-              <button
-                disabled={locked || !!branching || !last.branchEntryId}
-                title={last.branchEntryId
-                  ? language === "zh" ? "复制截至这条智能体回复的分支" : "Clone the branch through this Agent reply"
-                  : language === "zh" ? "连接并保存会话后可克隆" : "Clone is available after the session connects and saves"}
-                onClick={() => runBranchAction("clone")}
-              >
-                <Copy size={11} /> {branching === "clone" ? language === "zh" ? "克隆中…" : "Cloning…" : language === "zh" ? "克隆" : "Clone"}
               </button>
             </span>
           </div>

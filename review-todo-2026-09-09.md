@@ -32,9 +32,11 @@
   - `/fork` = 从之前某条消息分叉出新会话；RPC `{"type":"fork","entryId":...}`，响应带 `text`（被分叉消息原文），TUI 里会放回输入框供编辑重发
   - `/clone` = 把当前活跃分支整体复制成新会话文件（当前位置、不选点）；RPC `{"type":"clone"}` 无参数
 - **佐证原始意图**：store fork action 有 `res.selectedText → pendingEditorText → Composer 预填输入框` 管道，但 main 从不填 selectedText（死代码）——正是为原生 fork 的 text 响应设计的。
-- 建议方案（对齐官方语义，两按钮各有意义）：
-  1. **分支**：保留每条回复下的按钮、行为不变；可选升级为原生 RPC `fork` + 接通 selectedText 管道（fork 后输入框自动带原提示词可改）
-  2. **克隆**：改为整段会话复制，实现一行 `bridge.send("clone")`；按钮从每条回复下移到线程菜单/顶栏（它是全会话操作，不该挂在单条消息上）
+- ✅ **已实施（用户拍板「完整对齐」）**：
+  1. **分支**：按钮移到每条**用户消息**的悬停操作条；走原生 RPC `fork`（position "before"），响应 text → selectedText → Composer 预填输入框（接通了原死管道）
+  2. **克隆**：改为整段会话复制（`bridge.send("clone")`，pi 运行时内部 = fork(leafId, {position:"at"})）；入口移到侧栏会话行右键菜单「克隆会话」
+  3. 移除 `/mpi-branch-at` 扩展命令、`bridge.branchAt`、synchronizedCommands 里的过滤特判；store `forkThreadFromAgentReply`→`forkThread`，`cloneThread(id)` 去掉 entryId
+  - ⚠️ 技术细节：原生 RPC fork 默认 position="before" **只接受用户消息 entryId**（传 agent 回复 id 会抛 Invalid entry ID），所以分支按钮必须挂在用户消息上；旧「从某条回复分叉」的能力由「点下一条提问的分支」或「克隆」覆盖
 
 ### B. 应用自更新整条链路是死代码（~300 行 + 1 个依赖 + UI 区块）
 - `app-updater.ts` 里 `APP_UPDATE_DISABLED = true` 硬编码（个人 fork，避免上游 flowflic/Pi-Studio 发布覆盖本地魔改），于是 electron-updater 集成、`electron-updater` 依赖、IPC ×3（check/download/installAppUpdate）、preload 入口、Settings「MPI 应用更新」整块 UI 全部空转。

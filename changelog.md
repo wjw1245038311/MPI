@@ -4,6 +4,19 @@ MPI —— 基于 Pi coding agent（Pi Studio fork）的桌面客户端。本文
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **「分支 / 克隆」对齐 pi 官方语义**：此前两个按钮行为完全相同（都走自定义扩展命令 `/mpi-branch-at`，从所点回复处分叉）。现按 pi 文档（pi.dev/docs/latest/usage）区分：
+   - **分支（Fork）**：移到每条**用户消息**的悬停操作条上（原智能体回复下的两个按钮移除）。走 pi RPC 原生 `fork` 命令——从该提问之前分叉出新会话，并把被分叉提问的原文自动填入输入框（可修改后发送），与 TUI `/fork` 行为一致。
+   - **克隆（Clone）**：改为**整段会话复制**（pi RPC 原生 `clone`，当前活跃分支完整复制到新会话文件）。入口从消息下方移到侧栏会话行右键菜单「克隆会话」。
+   - 内部清理：移除 `/mpi-branch-at` 扩展命令与 `bridge.branchAt`；fork/clone IPC handler 改用原生命令并透传 cancelled。
+
+   验证方式：① 悬停任意一条**用户消息**——气泡下方出现 [复制][分支] 两个按钮（智能体回复下不再有分支/克隆按钮）；点「分支」→ toast「已从所选消息创建分支，原提示词已放入输入框。」，新会话切为当前、原会话标记断开，且输入框自动带上那条提问的原文（可编辑后发送）。② 侧栏右键任一会话 → 菜单出现「克隆会话」（置顶与删除之间）；点击 → toast「已克隆会话（完整复制当前分支）」，新会话包含全部历史并切为当前。③ 流式回复进行中点分支/克隆会提示等待结束。
+
+2. **全仓 review 清理**：移除死代码与未使用依赖（净删 ~194 行）——未使用依赖 clsx/skills；死 IPC ×3（app:unpinProject / thread:getModels / thread:getCommands）；window:maximized-changed 三层死链；fs-service/plugins/runtime-package/remote-service 多处死函数与未用导入；App.tsx sidebarOpen 无效订阅（顺带消除每次折叠导航栏的全树重渲染）。修复 ChangelogModal 的 `CHANGELOG.md`→`changelog.md` 导入大小写（Windows 掩盖的跨平台构建隐患）。
+
+   验证方式：应用功能无变化；「关于/更新日志」弹窗正常显示 changelog 内容即可确认第 2 条的导入修复生效。
+
 ## v0.5.1（2026-09-09）
 
 1. **「扩展功能」面板改造**：顶层拆为 技能 / 扩展包 两个模块；技能模块下三个子 tab——我的技能 / Skill 市场 / 统计。

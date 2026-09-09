@@ -440,7 +440,7 @@ function synchronizedCommands(raw: unknown, cwd: string): any[] {
   const commands = Array.isArray(raw) ? raw : [];
 
   for (const command of commands) {
-    if (!command || typeof command !== "object" || (command as any).name === "mpi-branch-at") continue;
+    if (!command || typeof command !== "object") continue;
     if ((command as any).source === "skill") {
       const name = String((command as any).name || "");
       const canonical = byName.get(name);
@@ -2233,21 +2233,27 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ...(await gatherThread(h.bridge, newId, h.permission)), selectedText };
   };
 
+  // Native RPC fork (position "before"): the entry must be a USER message; the
+  // response carries its text so the renderer can prefill it in the editor.
   ipcMain.handle("thread:fork", async (_e, args: { threadId: string; entryId: string }) => {
     const h = bridges.get(args.threadId);
     if (!h) throw new Error("Thread not open");
     const previousFile = (await h.bridge.getState() as any)?.sessionFile;
-    await h.bridge.branchAt(args.entryId);
+    const res: any = await h.bridge.fork(args.entryId);
+    if (res?.cancelled) return { cancelled: true };
     const currentFile = (await h.bridge.getState() as any)?.sessionFile;
     if (!currentFile || currentFile === previousFile) throw new Error("Fork did not create a new session");
-    return { cancelled: false, ...(await finishBranch(h, args.threadId)) };
+    const text = typeof res?.text === "string" && res.text ? res.text : undefined;
+    return { cancelled: false, ...(await finishBranch(h, args.threadId, text)) };
   });
 
-  ipcMain.handle("thread:clone", async (_e, args: { threadId: string; entryId: string }) => {
+  // Native RPC clone: duplicates the current active branch at its leaf — no entry needed.
+  ipcMain.handle("thread:clone", async (_e, args: { threadId: string }) => {
     const h = bridges.get(args.threadId);
     if (!h) throw new Error("Thread not open");
     const previousFile = (await h.bridge.getState() as any)?.sessionFile;
-    await h.bridge.branchAt(args.entryId);
+    const res: any = await h.bridge.clone();
+    if (res?.cancelled) return { cancelled: true };
     const currentFile = (await h.bridge.getState() as any)?.sessionFile;
     if (!currentFile || currentFile === previousFile) throw new Error("Clone did not create a new session");
     return { cancelled: false, ...(await finishBranch(h, args.threadId)) };

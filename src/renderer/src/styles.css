@@ -1740,37 +1740,6 @@ body.sidebar-resizing * {
   background: rgba(0, 0, 0, 0.06);
   color: var(--text);
 }
-.msg-branch-actions {
-  display: flex;
-  gap: 3px;
-  margin-left: auto;
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-.msg.assistant:hover .msg-branch-actions,
-.msg.assistant:focus-within .msg-branch-actions {
-  opacity: 1;
-}
-.msg-branch-actions button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 0;
-  border-radius: 5px;
-  padding: 2px 6px;
-  background: transparent;
-  color: var(--text-faint);
-  font: inherit;
-  font-size: 11px;
-}
-.msg-branch-actions button:hover:not(:disabled) {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-.msg-branch-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
 .streaming-dot {
   display: inline-block;
   width: 7px;

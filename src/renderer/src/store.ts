@@ -1153,8 +1153,8 @@ interface PiStore {
   setModel: (id: string, provider: string, modelId: string) => Promise<void>;
   setThinking: (id: string, level: string) => Promise<void>;
   newSessionInThread: (id: string) => Promise<void>;
-  forkThreadFromAgentReply: (id: string, entryId: string) => Promise<void>;
-  cloneThread: (id: string, entryId: string) => Promise<void>;
+  forkThread: (id: string, entryId: string) => Promise<void>;
+  cloneThread: (id: string) => Promise<void>;
   renameThread: (id: string, name: string) => Promise<void>;
 
   setSidebarTab: (t: "threads" | "files") => void;
@@ -2374,7 +2374,9 @@ export const useStore = create<PiStore>()((set, get) => {
     }
   },
 
-  forkThreadFromAgentReply: async (id, entryId) => {
+  // Native pi fork semantics: branch BEFORE the selected user message; its text
+  // comes back as selectedText and is prefilled in the editor for re-sending.
+  forkThread: async (id, entryId) => {
     const liveId = await get().ensureConnected(id);
     if (!liveId) return;
     const source = get().threads[liveId];
@@ -2398,14 +2400,15 @@ export const useStore = create<PiStore>()((set, get) => {
           newId === liveId || s.openThreadIds.includes(newId) ? s.openThreadIds : [...s.openThreadIds, newId];
         return { threads, openThreadIds, activeThreadId: newId, activeProjectCwd: next.cwd };
       });
-      get().pushToast("info", zh ? "已从所选智能体回复创建分支。" : "Created a fork from the selected Agent reply.");
+      get().pushToast("info", zh ? "已从所选消息创建分支，原提示词已放入输入框。" : "Forked from the selected message; its prompt is in the editor.");
       get().refreshProjects();
     } catch (e: any) {
       get().pushToast("error", e?.message || "fork failed");
     }
   },
 
-  cloneThread: async (id, entryId) => {
+  // Native pi clone semantics: duplicate the whole current active branch into a new session.
+  cloneThread: async (id) => {
     const liveId = await get().ensureConnected(id);
     if (!liveId) return;
     const source = get().threads[liveId];
@@ -2415,7 +2418,7 @@ export const useStore = create<PiStore>()((set, get) => {
       return;
     }
     try {
-      const res: any = await window.pi.thread.clone({ threadId: liveId, entryId });
+      const res: any = await window.pi.thread.clone({ threadId: liveId });
       if (res?.cancelled) return;
       const newId = res.threadId || liveId;
       const next = threadFromResponse(res, source);
@@ -2429,7 +2432,7 @@ export const useStore = create<PiStore>()((set, get) => {
           newId === liveId || s.openThreadIds.includes(newId) ? s.openThreadIds : [...s.openThreadIds, newId];
         return { threads, openThreadIds, activeThreadId: newId, activeProjectCwd: next.cwd };
       });
-      get().pushToast("info", zh ? "已克隆截至所选智能体回复的分支。" : "Cloned the branch through the selected Agent reply.");
+      get().pushToast("info", zh ? "已克隆会话（完整复制当前分支）。" : "Session cloned (full copy of the current branch).");
       get().refreshProjects();
     } catch (e: any) {
       get().pushToast("error", e?.message || "clone failed");

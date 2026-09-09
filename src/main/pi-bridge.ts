@@ -498,8 +498,14 @@ export class PiBridge {
   getEntries(since?: string): Promise<unknown> {
     return this.send("get_entries", since ? { since } : {});
   }
-  branchAt(entryId: string): Promise<unknown> {
-    return this.prompt(`/mpi-branch-at ${entryId}`);
+  /** Native RPC fork: branch BEFORE a previous user message; resolves {text, cancelled}.
+   * `text` is the forked-from prompt (prefill it in the editor, like TUI /fork). */
+  fork(entryId: string): Promise<unknown> {
+    return this.send("fork", { entryId });
+  }
+  /** Native RPC clone: duplicate the current active branch into a new session file. Resolves {cancelled}. */
+  clone(): Promise<unknown> {
+    return this.send("clone");
   }
   setModel(provider: string, modelId: string): Promise<unknown> {
     return this.send("set_model", { provider, modelId });

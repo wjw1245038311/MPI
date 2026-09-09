@@ -930,16 +930,6 @@ export default function permissionGate(pi: any) {
     );
   });
 
-  pi.registerCommand("mpi-branch-at", {
-    description: "Internal MPI branch operation",
-    handler: async (args: string, ctx: any) => {
-      const entryId = args.trim();
-      if (!entryId || !/^[a-zA-Z0-9_-]+$/.test(entryId)) throw new Error("Invalid session entry id");
-      const result = await ctx.fork(entryId, { position: "at" });
-      if (result?.cancelled) throw new Error("Branch operation cancelled");
-    },
-  });
-
   pi.registerCommand("mpi-refresh-models", {
     description: "Internal MPI model registry refresh",
     handler: async (_args: string, ctx: any) => {
