@@ -86,6 +86,16 @@ export default function App() {
   // chime can play later without a fresh gesture requirement.
   useEffect(() => unlockAudio(), []);
 
+  // Dock request from main: a floating preview window's tab was released over
+  // this window → (re)open its file here. Lives in App (not Preview) because
+  // the panel may be closed — and docking must still work then.
+  useEffect(() => {
+    return window.pi.app.onPreviewDockRequest((p: string) => {
+      const cwd = useStore.getState().activeProjectCwd || undefined;
+      void useStore.getState().openPreview(p, cwd);
+    });
+  }, []);
+
   const newTask = async () => {
     let cwd: string | null = useStore.getState().activeProjectCwd;
     if (!cwd) {

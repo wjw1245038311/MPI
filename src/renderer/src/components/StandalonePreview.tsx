@@ -11,6 +11,12 @@ export function StandalonePreview({ path }: { path: string }) {
   const [language, setLanguage] = useState<"zh" | "en">("zh");
   const [payload, setPayload] = useState<PreviewPayload | null>(null);
   const [loading, setLoading] = useState(true);
+  // A dev instance started before the dock IPCs were added has no
+  // previewWindowDragStart in its preload — say so instead of failing silently.
+  const [stalePreload, setStalePreload] = useState(false);
+  useEffect(() => {
+    if (typeof window.pi.app.previewWindowDragStart !== "function") setStalePreload(true);
+  }, []);
 
   useEffect(() => {
     // App-level theme/language normally come from the store; this window has no
@@ -87,7 +93,20 @@ export function StandalonePreview({ path }: { path: string }) {
           </button>
         </div>
       </div>
-      <div className="preview-head standalone-head">
+      {stalePreload && (
+        <div className="standalone-stale-banner">
+          {zh
+            ? "停靠功能不可用：请完全退出并重启 MPI（当前实例的 preload 是旧版）"
+            : "Docking unavailable: fully quit and restart MPI (this instance has an outdated preload)"}
+        </div>
+      )}
+      {/* The whole head row is a drag handle too — easier to grab than the tab. */}
+      <div
+        className="preview-head standalone-head"
+        draggable
+        onDragStart={onTabDragStart}
+        onDragEnd={onTabDragEnd}
+      >
         <span className="preview-title" title={path}>
           {basename(path)}
         </span>

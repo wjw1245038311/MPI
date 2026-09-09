@@ -2582,7 +2582,10 @@ export const useStore = create<PiStore>()((set, get) => {
       await get().loadPreviewTab(newId);
       return;
     }
-    if (existing.id !== get().activePreviewId) set({ activePreviewId: existing.id });
+    // Always make the panel visible — e.g. docking back while it is hidden.
+    if (!get().previewOpen || existing.id !== get().activePreviewId) {
+      set({ previewOpen: true, activePreviewId: existing.id });
+    }
     // Re-reading keeps a clicked/refreshed tab current even when it was already open.
     await get().loadPreviewTab(existing.id);
   },

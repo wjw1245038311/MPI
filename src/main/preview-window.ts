@@ -86,6 +86,7 @@ function findMainWindow(): BrowserWindow | undefined {
 }
 
 export function previewWindowDragStart(absPath: string): void {
+  console.log("[preview-dock] drag start:", absPath);
   pendingDock = { path: absPath, lastOverMain: false };
   if (dockPollTimer) clearInterval(dockPollTimer);
   dockPollTimer = setInterval(() => {
@@ -109,10 +110,18 @@ export function previewWindowDragEnd(absPath: string): void {
   }
   const pending = pendingDock;
   pendingDock = null;
-  if (!pending || pending.path !== absPath || !pending.lastOverMain) return;
   const main = findMainWindow();
+  console.log(
+    "[preview-dock] drag end:", absPath,
+    "| pending:", !!pending,
+    "pathMatch:", pending?.path === absPath,
+    "lastOverMain:", pending?.lastOverMain ?? false,
+    "mainFound:", !!(main && !main.isDestroyed()),
+  );
+  if (!pending || pending.path !== absPath || !pending.lastOverMain) return;
   if (main && !main.isDestroyed()) {
     // Ask the main renderer to (re)open this file's preview tab, then close us.
+    console.log("[preview-dock] docking back:", pending.path);
     main.webContents.send("preview:dock-request", pending.path);
   }
   closePreviewWindow(absPath);

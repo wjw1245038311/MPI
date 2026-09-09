@@ -1896,6 +1896,13 @@ body.sidebar-resizing * {
   min-height: 0;
   background: var(--preview-bg);
 }
+.standalone-stale-banner {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #fff;
+  background: #b23a2c;
+}
 
 /* ---------- Pi TUI terminal (replaces transcript + composer) ---------- */
 .tui-view {
