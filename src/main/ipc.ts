@@ -13,10 +13,19 @@ import {
   getConfig,
   getConfigDir,
   reloadConfig,
+  sanitizeImportedConfig,
   updateConfig,
   type AutomationTask,
   type PermissionLevel,
 } from "./config";
+import {
+  buildConfigBackup,
+  exportSessionsZip,
+  importSessionZip,
+  inspectSessionBackup,
+  listBackupProjects,
+  parseConfigBackup,
+} from "./backup";
 import { deleteDraft, getAllDrafts, setDraft as persistDraft } from "./draft-store";
 import type { ComposerDraft } from "../renderer/src/lib/types";
 import { listDir } from "./fs-service";
@@ -1617,6 +1626,116 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       ensureWarmBridge();
     }
     return next;
+  });
+
+  // ---- backup & restore (Settings → 备份与恢复) ---------------------------
+  const backupStamp = () => new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
+
+  ipcMain.handle("backup:listSessions", () => listBackupProjects());
+
+  ipcMain.handle("backup:exportConfig", async () => {
+    const w = getWin();
+    const language = getConfig().language;
+    const res = await dialog.showSaveDialog(w!, {
+      title: language === "zh" ? "导出应用设置" : "Export app settings",
+      defaultPath: join(app.getPath("documents"), `mpi-config-backup-${backupStamp()}.json`),
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    try {
+      writeFileSync(res.filePath, buildConfigBackup(getConfig(), app.getVersion()));
+      return { ok: true, path: res.filePath };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+
+  ipcMain.handle("backup:pickConfigImport", async () => {
+    const w = getWin();
+    const language = getConfig().language;
+    const res = await dialog.showOpenDialog(w!, {
+      title: language === "zh" ? "导入应用设置" : "Import app settings",
+      properties: ["openFile"],
+      filters: [
+        { name: language === "zh" ? "MPI 配置备份 / JSON" : "MPI config backup / JSON", extensions: ["json"] },
+      ],
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    const path = res.filePaths[0];
+    try {
+      // Read + sanitize only; the renderer confirms, then applies via
+      // app:setConfig so warm-bridge / remote-host side effects run once.
+      const patch = sanitizeImportedConfig(parseConfigBackup(readFileSync(path, "utf8")));
+      const fields = Object.keys(patch);
+      if (fields.length === 0) {
+        return { ok: false, error: language === "zh" ? "备份文件里没有可识别的设置项。" : "No recognizable settings found in the backup file." };
+      }
+      return { ok: true, path, fields, patch };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+
+  ipcMain.handle("backup:exportSessions", async (_e, dirNames: unknown) => {
+    const w = getWin();
+    const language = getConfig().language;
+    const names = Array.isArray(dirNames)
+      ? (dirNames.filter((n): n is string => typeof n === "string") as string[])
+      : [];
+    if (names.length === 0) {
+      return { ok: false, error: language === "zh" ? "未选择任何项目。" : "No projects selected." };
+    }
+    const res = await dialog.showSaveDialog(w!, {
+      title: language === "zh" ? "导出会话" : "Export sessions",
+      defaultPath: join(app.getPath("documents"), `mpi-sessions-backup-${backupStamp()}.zip`),
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    try {
+      const count = await exportSessionsZip(res.filePath, names, app.getVersion());
+      if (count === 0) {
+        return { ok: false, error: language === "zh" ? "所选项目下没有会话文件。" : "No session files found in the selected projects." };
+      }
+      return { ok: true, path: res.filePath, count };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+
+  ipcMain.handle("backup:pickSessionImport", async () => {
+    const w = getWin();
+    const language = getConfig().language;
+    const res = await dialog.showOpenDialog(w!, {
+      title: language === "zh" ? "导入会话" : "Import sessions",
+      properties: ["openFile"],
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    const path = res.filePaths[0];
+    try {
+      const summary = await inspectSessionBackup(path);
+      if (summary.total === 0) {
+        return { ok: false, error: language === "zh" ? "压缩包里没有找到会话文件（.jsonl）。" : "No session files (.jsonl) found in the archive." };
+      }
+      return { ok: true, path, ...summary };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+
+  ipcMain.handle("backup:importSessions", async (_e, args: { path?: string; policy?: "skip" | "overwrite" }) => {
+    const language = getConfig().language;
+    if (!args || typeof args.path !== "string") {
+      return { ok: false, error: language === "zh" ? "缺少备份文件路径。" : "Missing backup file path." };
+    }
+    try {
+      const result = await importSessionZip(args.path, args.policy === "overwrite" ? "overwrite" : "skip");
+      invalidateRemoteProjects();
+      send("pi:projects-changed", {});
+      return { ok: true, ...result };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
   });
   // ---- composer drafts (persisted unsent input, LRU-capped) --------------
   ipcMain.handle("drafts:getAll", () => getAllDrafts());

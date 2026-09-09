@@ -28,6 +28,7 @@
     "test:pinnedorder": "node --experimental-strip-types scripts/test-pinned-order.mjs",
     "test:npmcommand": "node --experimental-strip-types scripts/test-npm-command.mjs",
     "test:trash": "node --experimental-strip-types scripts/test-trash.mjs",
+    "test:backup": "node --experimental-strip-types scripts/test-backup.mjs",
     "test:searchtrash": "node --experimental-strip-types scripts/test-search-trash.mjs",
     "test:usage": "node --experimental-strip-types scripts/test-usage.mjs",
     "test:html-reference": "node --experimental-strip-types scripts/test-html-reference.mjs",

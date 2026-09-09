@@ -541,16 +541,26 @@ See [Section 4](#4-configuring-models). The **User profile** tab (see 4.6) works
 
 See [Section 14](#14-archive-and-trash).
 
-### 15.4 Diagnostics & Config
+### 15.4 Backup & Restore
+
+Two independent backup targets, each with its own export/import pair:
+
+**App settings**: exports MPI's app configuration (`config.json`: theme, language, pins, avatars, user profile, automations, remote signaling…) as a single JSON file (default name `mpi-config-backup-<date>.json`). Import first shows how many recognizable settings the file contains and asks for confirmation; on confirm it overwrites only those fields (everything else is kept). Model providers / thinking defaults live in `~/.pi/agent` (shared with terminal pi) and are not part of this backup; machine-specific items (pi path, window position) are never restored.
+
+**Sessions**: tick the projects to export (select all / clear, each row shows session count and size), packaging their raw session JSONL files into a zip (`mpi-sessions-backup-<date>.zip`, project directory structure preserved). Import first reports "N new / M already present": by default only new sessions are imported and existing files are skipped; choose "Overwrite all" to restore from the backup instead. Imported sessions reappear under their original projects (the sidebar refreshes automatically).
+
+Typical uses: migrating to a new PC, or taking a snapshot before big changes.
+
+### 15.5 Diagnostics & Config
 
 Shows Pi runtime status and the actual paths of each config file (`models.json` / `settings.json` / `auth.json`), clickable to open in File Explorer. Model/thinking settings are written to `~/.pi/agent` (shared with terminal pi); general settings live in the app's config directory — check here first when troubleshooting "I changed it but nothing happened".
 
-### 15.5 About MPI
+### 15.6 About MPI
 
 - **MPI app update**: current/latest version, source (GitHub Releases), "View changelog" (bundled changelog, no network needed; footer includes SHA256 install verification steps), and "Install and restart" when a new version is found.
 - **Update Pi core**: manages the bundled pi runtime version. Update extensions in the "Extensions" panel instead.
 
-### 15.6 Help menu (title bar)
+### 15.7 Help menu (title bar)
 
 - **User manual**: opens this manual in a preview tab (the English version is shown automatically under the English interface).
 - **About MPI**: pops up a panel with the same app-update and Pi-core cards as above.

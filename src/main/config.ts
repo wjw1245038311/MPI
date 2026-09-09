@@ -277,6 +277,111 @@ export function getConfigDir(): string {
   return cachedDir;
 }
 
+/**
+ * Validate an externally supplied config object (Settings → 备份与恢复 import).
+ * Returns ONLY the fields that are present AND well-formed, so importing a
+ * stale or foreign backup never clobbers newer settings with defaults.
+ * Machine-specific fields (piCliPath, windowBounds) and transport-locked
+ * fields (remoteStunUrls) are intentionally excluded — they keep their current values.
+ */
+export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
+  const p = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
+  const out: Partial<AppConfig> = {};
+  const isStrArray = (v: unknown) => Array.isArray(v);
+  const strList = (v: unknown): string[] | undefined =>
+    isStrArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined;
+
+  const pinnedProjects = strList(p.pinnedProjects);
+  if (pinnedProjects) out.pinnedProjects = pinnedProjects;
+  const pinnedThreads = strList(p.pinnedThreads);
+  if (pinnedThreads) out.pinnedThreads = pinnedThreads;
+  const archivedProjects = strList(p.archivedProjects);
+  if (archivedProjects) out.archivedProjects = archivedProjects;
+
+  if (Array.isArray(p.archivedThreads)) {
+    const threads: ArchivedThread[] = [];
+    for (const t of p.archivedThreads as any[]) {
+      if (!t || typeof t !== "object") continue;
+      if (typeof t.file !== "string" || !t.file) continue;
+      threads.push({
+        file: t.file,
+        cwd: typeof t.cwd === "string" ? t.cwd : "",
+        title: typeof t.title === "string" ? t.title : "",
+        ...(typeof t.archivedAt === "number" && Number.isFinite(t.archivedAt) ? { archivedAt: t.archivedAt } : {}),
+      });
+    }
+    out.archivedThreads = threads;
+  }
+
+  if (typeof p.trashEnabled === "boolean") out.trashEnabled = p.trashEnabled;
+  if (p.theme === "dark" || p.theme === "light" || p.theme === "system") out.theme = p.theme;
+  if (typeof p.accentTheme === "string" && (ACCENT_THEMES as readonly string[]).includes(p.accentTheme)) {
+    out.accentTheme = p.accentTheme as AccentTheme;
+  }
+  if (typeof p.zoomPercent === "number" && Number.isFinite(p.zoomPercent)) {
+    out.zoomPercent = Math.min(150, Math.max(50, Math.round(p.zoomPercent)));
+  }
+  if (p.language === "en" || p.language === "zh") out.language = p.language;
+  if (typeof p.soundOnComplete === "boolean") out.soundOnComplete = p.soundOnComplete;
+  if (p.diffViewMode === "unified" || p.diffViewMode === "blocks") out.diffViewMode = p.diffViewMode;
+  if (typeof p.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(p.defaultPermission)) {
+    out.defaultPermission = p.defaultPermission as PermissionLevel;
+  }
+
+  if (p.threadPermissions && typeof p.threadPermissions === "object" && !Array.isArray(p.threadPermissions)) {
+    const perms: Record<string, PermissionLevel> = {};
+    for (const [key, value] of Object.entries(p.threadPermissions as Record<string, unknown>)) {
+      if (typeof value === "string" && (PERMISSION_LEVELS as readonly string[]).includes(value)) {
+        perms[key] = value as PermissionLevel;
+      }
+    }
+    out.threadPermissions = perms;
+  }
+
+  // Avatars are data URLs produced by the renderer; require the prefix so a
+  // corrupted/foreign file cannot inject arbitrary strings into <img src>.
+  if (typeof p.userAvatar === "string" && p.userAvatar.startsWith("data:image/")) out.userAvatar = p.userAvatar;
+  if (typeof p.agentAvatar === "string" && p.agentAvatar.startsWith("data:image/")) out.agentAvatar = p.agentAvatar;
+  if (typeof p.userProfile === "string") out.userProfile = p.userProfile;
+  if (typeof p.lastThreadCwd === "string" && p.lastThreadCwd) out.lastThreadCwd = p.lastThreadCwd;
+
+  if (Array.isArray(p.automationTasks)) {
+    const tasks: AutomationTask[] = [];
+    for (const t of p.automationTasks as any[]) {
+      if (!t || typeof t !== "object") continue;
+      if (typeof t.id !== "string" || !t.id) continue;
+      if (typeof t.name !== "string" || typeof t.cwd !== "string" || typeof t.prompt !== "string") continue;
+      const schedule = t.schedule;
+      if (!schedule || typeof schedule !== "object") continue;
+      if (schedule.frequency !== "hourly" && schedule.frequency !== "daily" && schedule.frequency !== "weekly") continue;
+      tasks.push({
+        id: t.id,
+        name: t.name,
+        cwd: t.cwd,
+        prompt: t.prompt,
+        schedule: {
+          frequency: schedule.frequency,
+          ...(typeof schedule.minute === "number" ? { minute: schedule.minute } : {}),
+          ...(typeof schedule.time === "string" ? { time: schedule.time } : {}),
+          ...(Array.isArray(schedule.days) && schedule.days.every((d: unknown) => typeof d === "number")
+            ? { days: schedule.days as number[] }
+            : {}),
+        },
+        enabled: typeof t.enabled === "boolean" ? t.enabled : true,
+        permission: t.permission === "full" ? "full" : "sandbox",
+      });
+    }
+    out.automationTasks = tasks;
+  }
+
+  if (typeof p.remoteSignalingUrl === "string" && p.remoteSignalingUrl.trim()) {
+    out.remoteSignalingUrl = p.remoteSignalingUrl.trim();
+  }
+  if (typeof p.remoteSignalingEnabled === "boolean") out.remoteSignalingEnabled = p.remoteSignalingEnabled;
+
+  return out;
+}
+
 export function updateConfig(patch: Partial<AppConfig>): AppConfig {
   if (!cached) throw new Error("config not loaded");
   cached = {

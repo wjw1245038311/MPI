@@ -660,7 +660,7 @@ function ProviderCard({
  * Main panel
  * ------------------------------------------------------------------ */
 
-type Tab = "general" | "profile" | "models" | "thinking" | "archive" | "diag" | "update";
+type Tab = "general" | "profile" | "models" | "thinking" | "archive" | "backup" | "diag" | "update";
 
 interface NewProviderDraft {
   id: string;
@@ -855,6 +855,12 @@ function pathBase(p: string): string {
   return p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 }
 
+/** Second-to-last path segment — the sessions subdirectory a session file lives in. */
+function pathDirName(p: string): string {
+  const parts = p.replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] : "";
+}
+
 /** Human-friendly timestamp: today → HH:mm, this year → “Sep 8 14:30”, older → full date. */
 function formatWhen(ts?: number, language?: string): string {
   if (!ts) return "";
@@ -910,6 +916,7 @@ export function Settings() {
   const purgeFromTrash = useStore((s) => s.purgeFromTrash);
   const emptyTrash = useStore((s) => s.emptyTrash);
   const refreshOpenThreadModels = useStore((s) => s.refreshOpenThreadModels);
+  const projects = useStore((s) => s.projects);
   const language = config?.language || "en";
 
   const [tab, setTab] = useState<Tab>("general");
@@ -975,6 +982,184 @@ export function Settings() {
   // provider is expanded into the full editor below the tile grid.
   const [presetQuery, setPresetQuery] = useState("");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
+
+  // ---- Backup & restore tab ---------------------------------------------
+  // Project groups come from main (dirName = sessions subdirectory); the
+  // friendly project name is decorated from the sidebar's live projects.
+  const [bkGroups, setBkGroups] = useState<{ dirName: string; count: number; totalBytes: number }[] | null>(null);
+  const [bkSelected, setBkSelected] = useState<ReadonlySet<string>>(new Set());
+  const [bkBusy, setBkBusy] = useState<null | "exportConfig" | "importConfig" | "exportSessions" | "importSessions">(null);
+  // Two-stage import previews: config patch (from pickConfigImport) and the
+  // session zip summary (from pickSessionImport). null = no pending confirm.
+  const [configImportPreview, setConfigImportPreview] = useState<{ fields: string[]; patch: Record<string, unknown> } | null>(null);
+  const [sessionImportPreview, setSessionImportPreview] = useState<{ path: string; total: number; newCount: number; existingCount: number } | null>(null);
+  // Dev instances started before this feature shipped lack window.pi.backup —
+  // guard every call site and tell the user to fully restart (see reorderPinned).
+  const backupApi = typeof window.pi?.backup === "object" && window.pi.backup ? window.pi.backup : null;
+  useEffect(() => {
+    if (!open || tab !== "backup") return;
+    setBkGroups(null);
+    if (!backupApi) {
+      setBkGroups([]);
+      return;
+    }
+    backupApi
+      .listSessions()
+      .then((groups) => {
+        setBkGroups(groups);
+        setBkSelected(new Set(groups.map((g) => g.dirName)));
+      })
+      .catch(() => setBkGroups([]));
+  }, [open, tab, backupApi]);
+  const bkDirNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of projects) {
+      for (const t of p.threads) {
+        const dirName = pathDirName(t.file);
+        if (dirName && !map.has(dirName)) map.set(dirName, p.name);
+      }
+    }
+    return map;
+  }, [projects]);
+  const bkSelectedBytes = useMemo(
+    () => (bkGroups || []).filter((g) => bkSelected.has(g.dirName)).reduce((sum, g) => sum + g.totalBytes, 0),
+    [bkGroups, bkSelected],
+  );
+  const toggleBkDir = useCallback((dirName: string) => {
+    setBkSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(dirName)) next.delete(dirName);
+      else next.add(dirName);
+      return next;
+    });
+  }, []);
+
+  const backupUnavailableToast = () =>
+    pushToast(
+      "warning",
+      language === "zh"
+        ? "备份功能不可用：请完整重启 MPI（当前 dev 实例早于该功能启动）。"
+        : "Backup unavailable: fully restart MPI (this dev instance predates the feature).",
+    );
+
+  const doExportConfig = async () => {
+    if (!backupApi) return backupUnavailableToast();
+    setBkBusy("exportConfig");
+    try {
+      const r = await backupApi.exportConfig();
+      if (r === null) return; // user canceled the save dialog
+      if (!r.ok) throw new Error(r.error || "unknown error");
+      pushToast("info", language === "zh" ? `配置已导出：${r.path}` : `Config exported: ${r.path}`);
+    } catch (e: any) {
+      pushToast("error", (language === "zh" ? "导出失败：" : "Export failed: ") + (e?.message || e));
+    } finally {
+      setBkBusy(null);
+    }
+  };
+
+  const doPickConfigImport = async () => {
+    if (!backupApi) return backupUnavailableToast();
+    setBkBusy("importConfig");
+    try {
+      const r = await backupApi.pickConfigImport();
+      if (r === null) return;
+      if (!r.ok) throw new Error(r.error);
+      setConfigImportPreview({ fields: r.fields, patch: r.patch });
+    } catch (e: any) {
+      pushToast("error", (language === "zh" ? "读取备份失败：" : "Failed to read backup: ") + (e?.message || e));
+    } finally {
+      setBkBusy(null);
+    }
+  };
+
+  const doApplyConfigImport = async () => {
+    const preview = configImportPreview;
+    if (!preview) return;
+    setConfigImportPreview(null);
+    setBkBusy("importConfig");
+    try {
+      // Reuse app:setConfig so warm-bridge / remote-host side effects run once.
+      const next = await window.pi.app.setConfig(preview.patch as Record<string, unknown>);
+      useStore.setState({ config: next });
+      pushToast(
+        "info",
+        language === "zh"
+          ? `已导入 ${preview.fields.length} 项设置。`
+          : `Imported ${preview.fields.length} setting${preview.fields.length === 1 ? "" : "s"}.`,
+      );
+    } catch (e: any) {
+      pushToast("error", (language === "zh" ? "导入失败：" : "Import failed: ") + (e?.message || e));
+    } finally {
+      setBkBusy(null);
+    }
+  };
+
+  const doExportSessions = async () => {
+    if (!backupApi) return backupUnavailableToast();
+    const names = [...bkSelected];
+    if (names.length === 0) return;
+    setBkBusy("exportSessions");
+    try {
+      const r = await backupApi.exportSessions(names);
+      if (r === null) return;
+      if (!r.ok) throw new Error(r.error || "unknown error");
+      pushToast(
+        "info",
+        language === "zh"
+          ? `已导出 ${r.count} 个会话：${r.path}`
+          : `Exported ${r.count} session${r.count === 1 ? "" : "s"}: ${r.path}`,
+      );
+    } catch (e: any) {
+      pushToast("error", (language === "zh" ? "导出失败：" : "Export failed: ") + (e?.message || e));
+    } finally {
+      setBkBusy(null);
+    }
+  };
+
+  const doPickSessionImport = async () => {
+    if (!backupApi) return backupUnavailableToast();
+    setBkBusy("importSessions");
+    try {
+      const r = await backupApi.pickSessionImport();
+      if (r === null) return;
+      if (!r.ok) throw new Error(r.error);
+      setSessionImportPreview({ path: r.path, total: r.total, newCount: r.newCount, existingCount: r.existingCount });
+    } catch (e: any) {
+      pushToast("error", (language === "zh" ? "读取备份失败：" : "Failed to read backup: ") + (e?.message || e));
+    } finally {
+      setBkBusy(null);
+    }
+  };
+
+  const doImportSessions = async (policy: "skip" | "overwrite") => {
+    if (!backupApi) return backupUnavailableToast();
+    const preview = sessionImportPreview;
+    if (!preview) return;
+    setSessionImportPreview(null);
+    setBkBusy("importSessions");
+    try {
+      const r = await backupApi.importSessions({ path: preview.path, policy });
+      if (!r.ok) throw new Error(r.error || "unknown error");
+      pushToast(
+        "info",
+        language === "zh"
+          ? (r.imported
+              ? `已导入 ${r.imported} 个会话${r.skipped ? `，跳过 ${r.skipped} 个已存在` : ""}${r.overwritten ? `，覆盖 ${r.overwritten} 个` : ""}。`
+              : r.overwritten
+                ? `已按备份恢复（覆盖）${r.overwritten} 个会话。`
+                : `没有可导入的会话（${r.skipped ?? 0} 个已存在）。`)
+          : (r.imported
+              ? `Imported ${r.imported} session${r.imported === 1 ? "" : "s"}${r.skipped ? `, skipped ${r.skipped} existing` : ""}${r.overwritten ? `, overwrote ${r.overwritten}` : ""}.`
+              : r.overwritten
+                ? `Restored (overwrote) ${r.overwritten} session${r.overwritten === 1 ? "" : "s"} from the backup.`
+                : `Nothing to import (${r.skipped ?? 0} already present).`),
+      );
+    } catch (e: any) {
+      pushToast("error", (language === "zh" ? "导入失败：" : "Import failed: ") + (e?.message || e));
+    } finally {
+      setBkBusy(null);
+    }
+  };
 
   const register = useCallback((p: string, ok: boolean) => setInvalidJson((s) => ({ ...s, [p]: ok })), []);
 
@@ -1369,6 +1554,7 @@ export function Settings() {
               ["models", "模型与提供商"],
               ["thinking", "思考默认值"],
               ["archive", language === "zh" ? "归档回收" : "Archive & trash"],
+              ["backup", language === "zh" ? "备份与恢复" : "Backup & restore"],
               ["diag", "诊断与配置"],
               ["update", language === "zh" ? "关于 MPI" : "About MPI"],
             ] as [Tab, string][]).map(([id, label]) => (
@@ -1403,7 +1589,9 @@ export function Settings() {
                   ? "思考默认值"
                     : tab === "archive"
                       ? "已归档项目"
-                      : tab === "update"
+                      : tab === "backup"
+                        ? language === "zh" ? "备份与恢复" : "Backup & restore"
+                        : tab === "update"
                       ? language === "zh"
                         ? "关于 MPI"
                         : "About MPI"
@@ -2167,6 +2355,100 @@ export function Settings() {
               </div>
             )}
 
+            {tab === "backup" && (
+              <div className="set-card">
+                {/* App settings (config.json) */}
+                <div className="set-card-title">{language === "zh" ? "应用设置" : "App settings"}</div>
+                <div className="set-hint archived-project-hint">
+                  {language === "zh"
+                    ? "备份 MPI 的应用配置（主题、语言、置顶、头像、用户画像、定时任务等），导出为单个 JSON 文件。模型与提供商存于 ~/.pi/agent（与终端 pi 共享），不在备份范围内；机器相关项（pi 路径、窗口位置）导入时不会恢复。"
+                    : "Backs up MPI's app settings (theme, language, pins, avatars, user profile, automations…) as a single JSON file. Model providers live in ~/.pi/agent (shared with terminal pi) and are not included; machine-specific items (pi path, window position) are never restored on import."}
+                </div>
+                <div className="set-diag-btns">
+                  <button className="set-btn" disabled={!!bkBusy || !backupApi} onClick={() => void doExportConfig()}>
+                    {bkBusy === "exportConfig" && <span className="spinner" />}
+                    {language === "zh" ? "导出配置" : "Export config"}
+                  </button>
+                  <button className="set-btn" disabled={!!bkBusy || !backupApi} onClick={() => void doPickConfigImport()}>
+                    {bkBusy === "importConfig" && <span className="spinner" />}
+                    {language === "zh" ? "导入配置" : "Import config"}
+                  </button>
+                </div>
+
+                {/* Sessions */}
+                <div className="archived-thread-section">
+                  <div className="set-card-title trash-head-row">
+                    <span>
+                      {language === "zh" ? "会话" : "Sessions"}
+                      {bkGroups && bkGroups.length > 0 && (
+                        <span className="trash-count">
+                          {` · ${bkSelected.size}/${bkGroups.length} ${language === "zh" ? "个项目" : "projects"} · ${formatBytes(bkSelectedBytes)}`}
+                        </span>
+                      )}
+                    </span>
+                    {bkGroups && bkGroups.length > 0 && (
+                      <div className="backup-select-actions">
+                        <button
+                          className="set-btn ghost"
+                          onClick={() => setBkSelected(new Set(bkGroups.map((g) => g.dirName)))}
+                        >
+                          {language === "zh" ? "全选" : "Select all"}
+                        </button>
+                        <button className="set-btn ghost" onClick={() => setBkSelected(new Set())}>
+                          {language === "zh" ? "清空" : "Clear"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="set-hint archived-project-hint">
+                    {language === "zh"
+                      ? "勾选要导出的项目（会话以原始 JSONL 打包为 zip，保留项目结构）；导入时恢复到原来的项目位置。已存在的文件默认跳过，也可选择覆盖。"
+                      : "Tick the projects to export (sessions are zipped as raw JSONL, keeping project structure); import restores them to their original projects. Existing files are skipped by default — overwriting is optional."}
+                  </div>
+                  {bkGroups === null ? (
+                    <div className="set-empty">
+                      <span className="spinner" />
+                    </div>
+                  ) : bkGroups.length === 0 ? (
+                    <div className="set-empty">{language === "zh" ? "暂无会话。" : "No sessions yet."}</div>
+                  ) : (
+                    <>
+                      <div className="backup-project-list">
+                        {bkGroups.map((g) => (
+                          <label className="backup-project-row" key={g.dirName} title={g.dirName}>
+                            <input
+                              type="checkbox"
+                              checked={bkSelected.has(g.dirName)}
+                              onChange={() => toggleBkDir(g.dirName)}
+                            />
+                            <span className="backup-project-name">{bkDirNames.get(g.dirName) || g.dirName}</span>
+                            <span className="backup-project-meta">
+                              {g.count} {language === "zh" ? "个会话" : `session${g.count === 1 ? "" : "s"}`} ·{" "}
+                              {formatBytes(g.totalBytes)}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="set-diag-btns backup-actions">
+                        <button
+                          className="set-btn primary"
+                          disabled={!!bkBusy || bkSelected.size === 0}
+                          onClick={() => void doExportSessions()}
+                        >
+                          {bkBusy === "exportSessions" && <span className="spinner" />}
+                          {language === "zh" ? `导出所选会话（${bkSelected.size}）` : `Export selected (${bkSelected.size})`}
+                        </button>
+                        <button className="set-btn" disabled={!!bkBusy} onClick={() => void doPickSessionImport()}>
+                          {bkBusy === "importSessions" && <span className="spinner" />}
+                          {language === "zh" ? "导入会话" : "Import sessions"}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
             {tab === "diag" && (
               <>
                 <div className="set-card">
@@ -2285,6 +2567,87 @@ export function Settings() {
                   <Trash size={13} />
                   {language === "zh" ? "清空" : "Empty trash"}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Backup: confirm replacing app settings from a config backup. */}
+        {configImportPreview && (
+          <div className="modal-backdrop" onMouseDown={() => setConfigImportPreview(null)}>
+            <div
+              className="modal thread-delete-confirm"
+              onMouseDown={(event) => event.stopPropagation()}
+              role="alertdialog"
+              aria-modal="true"
+            >
+              <div className="modal-title">{language === "zh" ? "导入应用设置？" : "Import app settings?"}</div>
+              <div className="modal-msg">
+                {language === "zh"
+                  ? `备份文件包含 ${configImportPreview.fields.length} 项可识别的设置，将覆盖当前对应项（其余设置保持不变）。机器相关项（pi 路径、窗口位置）不会被恢复。`
+                  : `The backup contains ${configImportPreview.fields.length} recognizable setting${
+                      configImportPreview.fields.length === 1 ? "" : "s"
+                    }. They will overwrite the current values (everything else stays). Machine-specific items (pi path, window position) are not restored.`}
+              </div>
+              <div className="modal-actions">
+                <button className="btn" onClick={() => setConfigImportPreview(null)}>
+                  {language === "zh" ? "取消" : "Cancel"}
+                </button>
+                <button
+                  className="btn primary"
+                  disabled={bkBusy !== null}
+                  onClick={() => void doApplyConfigImport()}
+                >
+                  {bkBusy === "importConfig" && <span className="spinner" />}
+                  {language === "zh" ? "导入" : "Import"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Backup: session zip summary — skip existing vs overwrite all. */}
+        {sessionImportPreview && (
+          <div className="modal-backdrop" onMouseDown={() => setSessionImportPreview(null)}>
+            <div
+              className="modal thread-delete-confirm"
+              onMouseDown={(event) => event.stopPropagation()}
+              role="alertdialog"
+              aria-modal="true"
+            >
+              <div className="modal-title">{language === "zh" ? "导入会话？" : "Import sessions?"}</div>
+              <div className="modal-msg">
+                {language === "zh"
+                  ? `备份包含 ${sessionImportPreview.total} 个会话：${sessionImportPreview.newCount} 个新会话，${sessionImportPreview.existingCount} 个已存在。`
+                  : `The archive contains ${sessionImportPreview.total} session${
+                      sessionImportPreview.total === 1 ? "" : "s"
+                    }: ${sessionImportPreview.newCount} new, ${sessionImportPreview.existingCount} already present.`}
+              </div>
+              <div className="modal-actions">
+                <button className="btn" onClick={() => setSessionImportPreview(null)}>
+                  {language === "zh" ? "取消" : "Cancel"}
+                </button>
+                {sessionImportPreview.existingCount > 0 && (
+                  <button
+                    className="btn danger"
+                    disabled={bkBusy !== null}
+                    onClick={() => void doImportSessions("overwrite")}
+                  >
+                    {bkBusy === "importSessions" && <span className="spinner" />}
+                    {language === "zh"
+                      ? `覆盖全部（${sessionImportPreview.existingCount}）`
+                      : `Overwrite all (${sessionImportPreview.existingCount})`}
+                  </button>
+                )}
+                {sessionImportPreview.newCount > 0 && (
+                  <button
+                    className="btn primary"
+                    disabled={bkBusy !== null}
+                    onClick={() => void doImportSessions("skip")}
+                  >
+                    {language === "zh" ? `导入新会话（${sessionImportPreview.newCount}）` : `Import new (${sessionImportPreview.newCount})`}
+                  </button>
+                )}
               </div>
             </div>
           </div>

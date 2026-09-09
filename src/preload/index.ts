@@ -161,6 +161,33 @@ const api = {
     purge: (id: string) => ipcRenderer.invoke("trash:purge", id),
     empty: () => ipcRenderer.invoke("trash:empty"),
   },
+  backup: {
+    listSessions: (): Promise<{ dirName: string; count: number; totalBytes: number }[]> =>
+      ipcRenderer.invoke("backup:listSessions"),
+    /** Save dialog + write. Returns null when the user cancels. */
+    exportConfig: (): Promise<null | { ok: boolean; path?: string; error?: string }> =>
+      ipcRenderer.invoke("backup:exportConfig"),
+    /** Open dialog + read/sanitize only (no side effects). null = canceled. */
+    pickConfigImport: (): Promise<
+      | null
+      | { ok: false; error: string }
+      | { ok: true; path: string; fields: string[]; patch: Record<string, unknown> }
+    > => ipcRenderer.invoke("backup:pickConfigImport"),
+    /** Save dialog + zip the selected session dirs. null = canceled. */
+    exportSessions: (dirNames: string[]): Promise<null | { ok: boolean; path?: string; count?: number; error?: string }> =>
+      ipcRenderer.invoke("backup:exportSessions", dirNames),
+    /** Open dialog + inspect zip without writing. null = canceled. */
+    pickSessionImport: (): Promise<
+      | null
+      | { ok: false; error: string }
+      | { ok: true; path: string; total: number; newCount: number; existingCount: number }
+    > => ipcRenderer.invoke("backup:pickSessionImport"),
+    importSessions: (args: {
+      path: string;
+      policy: "skip" | "overwrite";
+    }): Promise<{ ok: boolean; imported?: number; skipped?: number; overwritten?: number; error?: string }> =>
+      ipcRenderer.invoke("backup:importSessions", args),
+  },
   tui: {
     start: (args: { threadId: string; cwd: string; sessionFile?: string | null }) =>
       ipcRenderer.invoke("tui:start", args) as Promise<{ ok: boolean; error?: string; gen?: number }>,
