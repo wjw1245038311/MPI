@@ -24,10 +24,17 @@
 
 ## 二、无法直接拍板的问题（待你审查）
 
-### A. 「分支(Fork)」和「克隆(Clone)」行为完全相同 —— 建议合并
+### A. 「分支(Fork)」和「克隆(Clone)」行为完全相同 —— 建议对齐 pi 官方语义
 - Chat 每条 Agent 回复下方有两个按钮：`分支` / `克隆`，分别走 `thread:fork` / `thread:clone`。
-- 但 main 侧两个 handler **100% 同构**（都是 `branchAt(entryId)` + `finishBranch`），store 里两个 action 也只有 toast 文案不同；UI 上两者都会把新会话设为当前活动线程、原线程标记断开。
-- 选项：① 合并成一个按钮（推荐，除非你计划让二者语义分化）；② 保留两个但先定义差异（例如 fork=保留原会话可继续 / clone=纯复制），再补实现。
+- main 侧两个 handler **100% 同构**（都调 `bridge.branchAt(entryId)`），store action 也只有 toast 文案不同。
+- **根因**：`branchAt` 发的是自定义扩展命令 `/mpi-branch-at <entryId>`（permission-gate-ext.ts:933，内部 `ctx.fork(entryId, {position:"at"})`），pi RPC 原生的 `fork`/`clone` 命令完全没用上。
+- **pi 官方语义**（https://pi.dev/docs/latest/usage + /rpc）：
+  - `/fork` = 从之前某条消息分叉出新会话；RPC `{"type":"fork","entryId":...}`，响应带 `text`（被分叉消息原文），TUI 里会放回输入框供编辑重发
+  - `/clone` = 把当前活跃分支整体复制成新会话文件（当前位置、不选点）；RPC `{"type":"clone"}` 无参数
+- **佐证原始意图**：store fork action 有 `res.selectedText → pendingEditorText → Composer 预填输入框` 管道，但 main 从不填 selectedText（死代码）——正是为原生 fork 的 text 响应设计的。
+- 建议方案（对齐官方语义，两按钮各有意义）：
+  1. **分支**：保留每条回复下的按钮、行为不变；可选升级为原生 RPC `fork` + 接通 selectedText 管道（fork 后输入框自动带原提示词可改）
+  2. **克隆**：改为整段会话复制，实现一行 `bridge.send("clone")`；按钮从每条回复下移到线程菜单/顶栏（它是全会话操作，不该挂在单条消息上）
 
 ### B. 应用自更新整条链路是死代码（~300 行 + 1 个依赖 + UI 区块）
 - `app-updater.ts` 里 `APP_UPDATE_DISABLED = true` 硬编码（个人 fork，避免上游 flowflic/Pi-Studio 发布覆盖本地魔改），于是 electron-updater 集成、`electron-updater` 依赖、IPC ×3（check/download/installAppUpdate）、preload 入口、Settings「MPI 应用更新」整块 UI 全部空转。
