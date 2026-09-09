@@ -1764,13 +1764,18 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ok: true };
   });
 
-  // Absolute path of the bundled user manual (Help → 使用手册), or null.
+  // Absolute path of the bundled user manual (Help → 使用手册 / User manual),
+  // picked by UI language, or null when no copy exists.
   ipcMain.handle("app:getUserManualPath", () => {
-    const candidates = [
-      join(process.resourcesPath, "user-manual.md"), // packaged: extraResources
-      join(app.getAppPath(), "resources", "user-manual.md"), // dev: repo resources/
-    ];
-    for (const p of candidates) if (existsSync(p)) return p;
+    const en = getConfig().language === "en";
+    const names = en ? ["user-manual-en.md", "user-manual.md"] : ["user-manual.md"];
+    for (const name of names) {
+      const candidates = [
+        join(process.resourcesPath, name), // packaged: extraResources
+        join(app.getAppPath(), "resources", name), // dev: repo resources/
+      ];
+      for (const p of candidates) if (existsSync(p)) return p;
+    }
     return null;
   });
 

@@ -119,6 +119,10 @@
       {
         "from": "resources/user-manual.md",
         "to": "user-manual.md"
+      },
+      {
+        "from": "resources/user-manual-en.md",
+        "to": "user-manual-en.md"
       }
     ],
     "win": {

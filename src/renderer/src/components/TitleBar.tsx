@@ -55,9 +55,10 @@ export function TitleBar() {
     try {
       const p: string | null = await window.pi.app.getUserManualPath();
       if (p) void useStore.getState().openPreview(p);
-      else st().pushToast("error", "未找到使用手册文件");
+      else st().pushToast("error", language === "zh" ? "未找到使用手册文件" : "User manual file not found");
     } catch (e: any) {
-      st().pushToast("error", "打开使用手册失败：" + (e?.message || e));
+      const msg = e?.message || String(e);
+      st().pushToast("error", language === "zh" ? "打开使用手册失败：" + msg : `Could not open the user manual: ${msg}`);
     }
   };
 
@@ -94,7 +95,7 @@ export function TitleBar() {
       id: "help",
       label: "帮助",
       items: [
-        { label: "使用手册", onClick: act(() => void openManual()) },
+        { label: language === "zh" ? "使用手册" : "User manual", onClick: act(() => void openManual()) },
         { label: "", sep: true },
         { label: "关于 MPI", onClick: act(() => setAboutOpen(true)) },
       ],
