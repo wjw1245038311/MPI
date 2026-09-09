@@ -5,7 +5,7 @@ import { useStore } from "../store";
 import { Markdown } from "../lib/markdown";
 import { CODE_LANGUAGE_ALIASES, CODE_LANGUAGES } from "../lib/code-languages";
 import { basename, fileIcon, formatBytes } from "../lib/format";
-import { MPI_FILE_MIME, MPI_PREVIEW_WINDOW_MIME } from "../lib/file-drag";
+import { MPI_FILE_MIME } from "../lib/file-drag";
 import type { PreviewTab } from "../lib/types";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import { translateUiText } from "../lib/i18n";
@@ -270,16 +270,6 @@ export function Preview() {
     fileDropDepthRef.current = 0;
     setFileDropOver(false);
     const cwd = useStore.getState().activeProjectCwd || undefined;
-    // A tab dragged back from a popped-out window → dock it here and close that
-    // window — but only when released over the tab strip, otherwise leave it floating.
-    const fromWindow = e.dataTransfer.getData(MPI_PREVIEW_WINDOW_MIME);
-    if (fromWindow) {
-      if (!dockZoneContains(e.clientX, e.clientY)) return;
-      void openPreview(fromWindow, cwd);
-      void window.pi.app.closePreviewWindow(fromWindow).catch(() => {});
-      e.stopPropagation(); // keep the document-level dock fallback from running twice
-      return;
-    }
     // In-app drag from the sidebar file tree carries a path, not a File object.
     const internalPath = e.dataTransfer.getData(MPI_FILE_MIME);
     if (internalPath) {
@@ -375,10 +365,8 @@ export function Preview() {
     };
   }, [dragTabId]);
 
-  // Dock-back paths (both require the release point to be on the tab strip):
-  // 1) main-process pointer tracking sends a "dock-candidate" with screen coords
-  //    (primary — cross-window drag payloads are unreliable);
-  // 2) HTML5 drop payload from the floating window's tab (bonus path).
+  // Dock-back: main-process pointer tracking sends a "dock-candidate" with the
+  // release point (screen coords); we dock only when it lands on our tab strip.
   useEffect(() => {
     const tryDock = (path: string, clientX: number, clientY: number) => {
       if (!dockZoneContains(clientX, clientY)) {
@@ -389,26 +377,10 @@ export function Preview() {
       void openPreview(path, cwd);
       void window.pi.app.closePreviewWindow(path).catch(() => {});
     };
-    const unsub = window.pi.app.onPreviewDockCandidate(({ path, x, y }) => {
+    return window.pi.app.onPreviewDockCandidate(({ path, x, y }) => {
       const c = screenToClient(x, y);
       tryDock(path, c.x, c.y);
     });
-    const onDragOver = (e: DragEvent) => {
-      if ((e.dataTransfer?.types || []).includes(MPI_PREVIEW_WINDOW_MIME)) e.preventDefault();
-    };
-    const onDrop = (e: DragEvent) => {
-      const fromWindow = e.dataTransfer?.getData(MPI_PREVIEW_WINDOW_MIME);
-      if (!fromWindow) return;
-      e.preventDefault();
-      tryDock(fromWindow, e.clientX, e.clientY);
-    };
-    document.addEventListener("dragover", onDragOver);
-    document.addEventListener("drop", onDrop);
-    return () => {
-      unsub();
-      document.removeEventListener("dragover", onDragOver);
-      document.removeEventListener("drop", onDrop);
-    };
   }, [openPreview]);
 
   useEffect(() => {

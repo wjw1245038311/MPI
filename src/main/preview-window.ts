@@ -87,13 +87,6 @@ export function closePreviewWindow(absPath: string): void {
   win.close();
 }
 
-// Dock-back detection (Visual Studio style). HTML5 drag payloads do not
-// reliably cross BrowserWindow boundaries, so instead of relying on drop data
-// we track the pointer while a floating window's tab is being dragged: if it
-// is released over the main window, that file docks back into its preview panel.
-let pendingDock: { path: string; lastOverMain: boolean } | null = null;
-let dockPollTimer: NodeJS.Timeout | null = null;
-
 function findMainWindow(): BrowserWindow | undefined {
   const previewWins = new Set(windows.values());
   return BrowserWindow.getAllWindows().find((w) => !previewWins.has(w));
@@ -105,16 +98,6 @@ function isCursorOverMainWindow(): boolean {
   const p = screen.getCursorScreenPoint();
   const b = main.getBounds();
   return p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
-}
-
-export function previewWindowDragStart(absPath: string): void {
-  console.log("[preview-dock] drag start:", absPath);
-  pendingDock = { path: absPath, lastOverMain: false };
-  if (dockPollTimer) clearInterval(dockPollTimer);
-  dockPollTimer = setInterval(() => {
-    if (!pendingDock) return;
-    pendingDock.lastOverMain = isCursorOverMainWindow();
-  }, 50);
 }
 
 // Caption drag (VS-style): the renderer's custom title bar reports start/end;
@@ -172,27 +155,3 @@ export function previewWindowMoveEnd(absPath: string): void {
   }
 }
 
-export function previewWindowDragEnd(absPath: string): void {
-  if (dockPollTimer) {
-    clearInterval(dockPollTimer);
-    dockPollTimer = null;
-  }
-  const pending = pendingDock;
-  pendingDock = null;
-  const main = findMainWindow();
-  console.log(
-    "[preview-dock] drag end:", absPath,
-    "| pending:", !!pending,
-    "pathMatch:", pending?.path === absPath,
-    "lastOverMain:", pending?.lastOverMain ?? false,
-    "mainFound:", !!(main && !main.isDestroyed()),
-  );
-  if (!pending || pending.path !== absPath || !pending.lastOverMain) return;
-  const c = screen.getCursorScreenPoint();
-  console.log("[preview-dock] drag released over main → candidate:", pending.path, `@${Math.round(c.x)},${Math.round(c.y)}`);
-  if (main && !main.isDestroyed()) {
-    // The renderer decides: it only docks when the release point is on its
-    // preview tab strip (and closes this window itself in that case).
-    main.webContents.send("preview:dock-candidate", { path: pending.path, x: Math.round(c.x), y: Math.round(c.y) });
-  }
-}

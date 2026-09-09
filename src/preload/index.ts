@@ -37,8 +37,6 @@ const api = {
     revealFileInExplorer: (absPath: string) => ipcRenderer.invoke("app:revealFileInExplorer", absPath),
     openPreviewWindow: (absPath: string) => ipcRenderer.invoke("app:openPreviewWindow", absPath),
     closePreviewWindow: (absPath: string) => ipcRenderer.invoke("app:closePreviewWindow", absPath),
-    previewWindowDragStart: (absPath: string) => ipcRenderer.invoke("app:previewWindowDragStart", absPath),
-    previewWindowDragEnd: (absPath: string) => ipcRenderer.invoke("app:previewWindowDragEnd", absPath),
     previewWindowMoveStart: (absPath: string) => ipcRenderer.invoke("app:previewWindowMoveStart", absPath),
     previewWindowMoveEnd: (absPath: string) => ipcRenderer.invoke("app:previewWindowMoveEnd", absPath),
     onPreviewDockCandidate: (cb: (p: { path: string; x: number; y: number }) => void) =>

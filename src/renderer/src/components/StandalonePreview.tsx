@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import type { PreviewPayload } from "../lib/types";
 import { basename, fileIcon, formatBytes } from "../lib/format";
-import { MPI_FILE_MIME, MPI_PREVIEW_WINDOW_MIME } from "../lib/file-drag";
 import { Close, Refresh } from "./icons";
 import { PreviewBody } from "./Preview";
 
@@ -11,11 +10,11 @@ export function StandalonePreview({ path }: { path: string }) {
   const [language, setLanguage] = useState<"zh" | "en">("zh");
   const [payload, setPayload] = useState<PreviewPayload | null>(null);
   const [loading, setLoading] = useState(true);
-  // A dev instance started before the dock IPCs were added has no
-  // previewWindowDragStart in its preload — say so instead of failing silently.
+  // A dev instance started before the caption-move IPCs were added has no
+  // previewWindowMoveStart in its preload — say so instead of failing silently.
   const [stalePreload, setStalePreload] = useState(false);
   useEffect(() => {
-    if (typeof window.pi.app.previewWindowDragStart !== "function") setStalePreload(true);
+    if (typeof window.pi.app.previewWindowMoveStart !== "function") setStalePreload(true);
   }, []);
 
   useEffect(() => {
@@ -74,19 +73,6 @@ export function StandalonePreview({ path }: { path: string }) {
     };
   }, [path]);
 
-  // Dragging the small tab back into the main window also docks it (HTML5 DnD
-  // path; cross-window payloads are unreliable, so main tracks the pointer).
-  const onTabDragStart = (e: ReactDragEvent) => {
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData(MPI_FILE_MIME, path); // also works as a plain file drop
-    e.dataTransfer.setData(MPI_PREVIEW_WINDOW_MIME, path); // dock-back marker
-    void window.pi.app.previewWindowDragStart(path).catch(() => {});
-  };
-
-  const onTabDragEnd = () => {
-    void window.pi.app.previewWindowDragEnd(path).catch(() => {});
-  };
-
   const ext = (() => {
     const base = basename(path);
     const dot = base.lastIndexOf(".");
@@ -118,28 +104,6 @@ export function StandalonePreview({ path }: { path: string }) {
         <button className="iconbtn" title={zh ? "关闭" : "Close"} onClick={() => window.close()}>
           <Close size={15} />
         </button>
-      </div>
-      <div className="preview-tabs standalone-tabs" role="tablist">
-        <div
-          className="preview-tab active"
-          role="tab"
-          aria-selected={true}
-          title={`${zh ? "拖回主窗口可停靠回来\n" : "Drag back onto the main window to dock it back\n"}${path}`}
-          draggable
-          onDragStart={onTabDragStart}
-          onDragEnd={onTabDragEnd}
-        >
-          <span className="preview-tab-ico">{fileIcon(ext, false)}</span>
-          {loading && !payload ? <span className="spinner preview-tab-spinner" /> : null}
-          <span className="preview-tab-name">{basename(path)}</span>
-          <button
-            className="preview-tab-close"
-            aria-label={zh ? "关闭窗口" : "Close window"}
-            onClick={() => window.close()}
-          >
-            <Close size={10} />
-          </button>
-        </div>
       </div>
       <div className={`preview-body ${payload?.kind === "html" ? "html-preview-active" : ""}`}>
         {loading ? (

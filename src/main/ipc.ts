@@ -41,8 +41,7 @@ import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-serv
 import {
   closePreviewWindow,
   openPreviewWindow,
-  previewWindowDragEnd,
-  previewWindowDragStart,
+
   previewWindowMoveEnd,
   previewWindowMoveStart,
 } from "./preview-window";
@@ -1765,17 +1764,6 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ok: true };
   });
 
-  // Dock-back detection: while a floating preview window's tab is dragged,
-  // main tracks the pointer; on release over the main window it docks back.
-  ipcMain.handle("app:previewWindowDragStart", (_e, absPath: string) => {
-    previewWindowDragStart(String(absPath || ""));
-    return { ok: true };
-  });
-
-  ipcMain.handle("app:previewWindowDragEnd", (_e, absPath: string) => {
-    previewWindowDragEnd(String(absPath || ""));
-    return { ok: true };
-  });
 
   // Caption drag on the frameless floating window (VS-style move + dock).
   ipcMain.handle("app:previewWindowMoveStart", (_e, absPath: string) => {
