@@ -270,9 +270,10 @@ export function Preview() {
     }
   };
 
-  // HTML5 drag & drop for tabs (VS Code style): dropping on another tab
-  // reorders; releasing anywhere else inside the app snaps back; only
-  // releasing outside the app window pops the tab out into a separate window.
+  // HTML5 drag & drop for tabs (Visual Studio document-window style):
+  // dropping on another tab reorders; releasing anywhere else inside the app
+  // snaps back; releasing outside the app window detaches the tab into a
+  // floating window — it moves there and can be dragged back to dock.
   const tabDndHandlers = (id: string) => ({
     draggable: true,
     onDragStart: (event: ReactDragEvent) => {
@@ -287,10 +288,15 @@ export function Preview() {
       setDragTabId(null);
       setDropPos(null);
       // The drag ended without an in-app drop → it was released outside the
-      // window (desktop/taskbar) → pop out into a separate window.
+      // window (desktop/taskbar) → detach into a separate window. Visual
+      // Studio semantics: the tab MOVES — it is removed from this panel and
+      // the floating window takes over (drag its tab back to dock it here).
       if (dragged && !tabDragConsumedRef.current) {
         const tab = tabs.find((t) => t.id === dragged);
-        if (tab) void window.pi.app.openPreviewWindow(tab.path).catch(() => {});
+        if (tab) {
+          closePreviewTab(dragged);
+          void window.pi.app.openPreviewWindow(tab.path).catch(() => {});
+        }
       }
       tabDragConsumedRef.current = false;
     },
