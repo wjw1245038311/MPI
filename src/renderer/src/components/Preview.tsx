@@ -5,7 +5,7 @@ import { useStore } from "../store";
 import { Markdown } from "../lib/markdown";
 import { CODE_LANGUAGE_ALIASES, CODE_LANGUAGES } from "../lib/code-languages";
 import { basename, fileIcon, formatBytes } from "../lib/format";
-import { MPI_FILE_MIME } from "../lib/file-drag";
+import { MPI_FILE_MIME, MPI_PREVIEW_WINDOW_MIME } from "../lib/file-drag";
 import type { PreviewTab } from "../lib/types";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import { translateUiText } from "../lib/i18n";
@@ -245,6 +245,14 @@ export function Preview() {
     fileDropDepthRef.current = 0;
     setFileDropOver(false);
     const cwd = useStore.getState().activeProjectCwd || undefined;
+    // A tab dragged back from a popped-out window → dock it here and close that window.
+    const fromWindow = e.dataTransfer.getData(MPI_PREVIEW_WINDOW_MIME);
+    if (fromWindow) {
+      void openPreview(fromWindow, cwd);
+      void window.pi.app.closePreviewWindow(fromWindow).catch(() => {});
+      e.stopPropagation(); // keep the document-level dock fallback from running twice
+      return;
+    }
     // In-app drag from the sidebar file tree carries a path, not a File object.
     const internalPath = e.dataTransfer.getData(MPI_FILE_MIME);
     if (internalPath) {
@@ -333,6 +341,29 @@ export function Preview() {
       document.removeEventListener("drop", onDrop);
     };
   }, [dragTabId]);
+
+  // Dock-back fallback: a popped-out window's tab can be dropped anywhere in
+  // this window (even while the preview panel is hidden) to dock back — the
+  // matching tab is activated/created here and that window closes.
+  useEffect(() => {
+    const onDragOver = (e: DragEvent) => {
+      if ((e.dataTransfer?.types || []).includes(MPI_PREVIEW_WINDOW_MIME)) e.preventDefault();
+    };
+    const onDrop = (e: DragEvent) => {
+      const fromWindow = e.dataTransfer?.getData(MPI_PREVIEW_WINDOW_MIME);
+      if (!fromWindow) return;
+      e.preventDefault();
+      const cwd = useStore.getState().activeProjectCwd || undefined;
+      void openPreview(fromWindow, cwd);
+      void window.pi.app.closePreviewWindow(fromWindow).catch(() => {});
+    };
+    document.addEventListener("dragover", onDragOver);
+    document.addEventListener("drop", onDrop);
+    return () => {
+      document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("drop", onDrop);
+    };
+  }, [openPreview]);
 
   useEffect(() => {
     if (!expanded) return;

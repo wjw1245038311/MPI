@@ -65,3 +65,10 @@ export function openPreviewWindow(absPath: string): void {
   win.on("closed", () => windows.delete(key));
   windows.set(key, win);
 }
+
+/** Close the popped-out window for a path (no-op when it is not open). Used
+ *  when its tab is dragged back into the main preview panel. */
+export function closePreviewWindow(absPath: string): void {
+  const win = windows.get(absPath.toLowerCase());
+  if (win && !win.isDestroyed()) win.close();
+}

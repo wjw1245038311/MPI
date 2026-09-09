@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
+import type { DragEvent as ReactDragEvent } from "react";
 import type { PreviewPayload } from "../lib/types";
-import { basename, formatBytes } from "../lib/format";
+import { basename, fileIcon, formatBytes } from "../lib/format";
+import { MPI_FILE_MIME, MPI_PREVIEW_WINDOW_MIME } from "../lib/file-drag";
 import { Close, Refresh } from "./icons";
 import { PreviewBody } from "./Preview";
 
@@ -39,8 +41,44 @@ export function StandalonePreview({ path }: { path: string }) {
   }, [load]);
 
   const zh = language === "zh";
+
+  // Dragging this tab back into the main window docks it: the main panel
+  // re-activates (or creates) the matching preview tab and closes this window.
+  const onTabDragStart = (e: ReactDragEvent) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData(MPI_FILE_MIME, path); // also works as a plain file drop
+    e.dataTransfer.setData(MPI_PREVIEW_WINDOW_MIME, path); // dock-back marker
+  };
+
+  const ext = (() => {
+    const base = basename(path);
+    const dot = base.lastIndexOf(".");
+    return dot > 0 ? base.slice(dot).toLowerCase() : "";
+  })();
+
   return (
     <div className="standalone-preview">
+      <div className="preview-tabs standalone-tabs" role="tablist">
+        <div
+          className="preview-tab active"
+          role="tab"
+          aria-selected={true}
+          title={`${zh ? "拖回主窗口的预览面板可停靠回来\n" : "Drag back onto the main window's preview panel to dock it back\n"}${path}`}
+          draggable
+          onDragStart={onTabDragStart}
+        >
+          <span className="preview-tab-ico">{fileIcon(ext, false)}</span>
+          {loading && !payload ? <span className="spinner preview-tab-spinner" /> : null}
+          <span className="preview-tab-name">{basename(path)}</span>
+          <button
+            className="preview-tab-close"
+            aria-label={zh ? "关闭窗口" : "Close window"}
+            onClick={() => window.close()}
+          >
+            <Close size={10} />
+          </button>
+        </div>
+      </div>
       <div className="preview-head standalone-head">
         <span className="preview-title" title={path}>
           {basename(path)}
