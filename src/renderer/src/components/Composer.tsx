@@ -4,6 +4,7 @@ import { formatTokens, modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage } from "../lib/types";
+import { MPI_FILE_MIME } from "../lib/file-drag";
 import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh } from "./icons";
 
 let _pid = 0;
@@ -162,6 +163,10 @@ export function Composer({ threadId }: { threadId: string }) {
   const [permOpen, setPermOpen] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
+  // Highlight while a file is dragged over the composer (sidebar file tree or OS
+  // files). A depth counter avoids flicker when moving across child elements.
+  const [fileDragOver, setFileDragOver] = useState(false);
+  const dragDepthRef = useRef(0);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -374,8 +379,23 @@ export function Composer({ threadId }: { threadId: string }) {
     });
   };
 
+  /** True when the drag payload is a file (in-app sidebar drag or OS files). */
+  const isFileDrag = (e: React.DragEvent) => {
+    const types = Array.from(e.dataTransfer.types || []);
+    return types.includes(MPI_FILE_MIME) || types.includes("Files");
+  };
+
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    dragDepthRef.current = 0;
+    setFileDragOver(false);
+    // In-app drag from the sidebar file tree carries a path, not a File object.
+    const internalPath = e.dataTransfer.getData(MPI_FILE_MIME);
+    if (internalPath) {
+      const name = internalPath.split(/[\\/]/).pop() || internalPath;
+      patchDraft({ files: [...files, ...(!files.some((f) => f.abs === internalPath) ? [{ abs: internalPath, name }] : [])] });
+      return;
+    }
     const dropped = Array.from(e.dataTransfer.files || []);
     if (!dropped.length) return;
     await addAttachments(dropped);
@@ -617,7 +637,20 @@ export function Composer({ threadId }: { threadId: string }) {
   };
 
   return (
-    <div className="composer-wrap" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+    <div
+      className={`composer-wrap ${fileDragOver ? "drop-target" : ""}`}
+      onDrop={onDrop}
+      onDragEnter={(e) => {
+        if (!isFileDrag(e)) return;
+        dragDepthRef.current += 1;
+        setFileDragOver(true);
+      }}
+      onDragLeave={() => {
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (!dragDepthRef.current) setFileDragOver(false);
+      }}
+      onDragOver={(e) => e.preventDefault()}
+    >
       <div className="composer">
         {isDraftTask && !isStreaming && (
           <div className="composer-project-row" ref={projectRef}>

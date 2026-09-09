@@ -1764,6 +1764,11 @@ body.sidebar-resizing * {
   padding: 8px 28px 18px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0), var(--bg) 28%);
 }
+/* A file is being dragged over the composer (sidebar file tree or OS files). */
+.composer-wrap.drop-target .composer {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-md);
+}
 /* ---------- Pi TUI terminal (replaces transcript + composer) ---------- */
 .tui-view {
   flex: 1;

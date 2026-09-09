@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { localizeAutomationThreadTitle, useStore } from "../store";
 import { fileIcon, formatTokens } from "../lib/format";
+import { MPI_FILE_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
 import { Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, Plug, Search, Sidebar as SidebarIcon } from "./icons";
@@ -782,6 +783,13 @@ function FileRow({ cwd, node, depth }: { cwd: string; node: FileNode; depth: num
           void window.pi.app.showFileContextMenu(node.abs);
         }}
         title={node.abs}
+        draggable={!node.isDir}
+        onDragStart={(event) => {
+          if (node.isDir) return;
+          event.dataTransfer.effectAllowed = "copy";
+          // In-app drags expose no File objects; the composer reads the path from this type.
+          event.dataTransfer.setData(MPI_FILE_MIME, node.abs);
+        }}
       >
         {node.isDir ? (
           <span className="ft-ico" style={{ transform: expanded ? "rotate(90deg)" : "none", display: "inline-block", transition: "transform .12s" }}>
