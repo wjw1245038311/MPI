@@ -112,6 +112,9 @@ export function Preview() {
   const [dropPos, setDropPos] = useState<"before" | "after" | null>(null);
   const [fileDropOver, setFileDropOver] = useState(false);
   const fileDropDepthRef = useRef(0);
+  // Set when a tab drag is consumed by an in-panel drop (reorder / snap-back),
+  // so the trailing dragend does not also pop the tab out into a window.
+  const tabDragConsumedRef = useRef(false);
   // Right-click menu on a tab (open in separate window / close).
   const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
@@ -259,24 +262,39 @@ export function Preview() {
     }
   };
 
-  // HTML5 drag & drop for reordering tabs (same pattern as the sidebar pinned zone).
+  // HTML5 drag & drop for tabs (VS Code style): dropping on another tab
+  // reorders; releasing anywhere else inside the app snaps back; only
+  // releasing outside the app window pops the tab out into a separate window.
   const tabDndHandlers = (id: string) => ({
     draggable: true,
     onDragStart: (event: ReactDragEvent) => {
       event.dataTransfer.effectAllowed = "move";
       // Some browsers refuse to start a drag without payload data.
       event.dataTransfer.setData("text/plain", id);
+      tabDragConsumedRef.current = false;
       setDragTabId(id);
     },
     onDragEnd: () => {
+      const dragged = dragTabId;
       setDragTabId(null);
       setDropPos(null);
+      // The drag ended without an in-app drop → it was released outside the
+      // window (desktop/taskbar) → pop out into a separate window.
+      if (dragged && !tabDragConsumedRef.current) {
+        const tab = tabs.find((t) => t.id === dragged);
+        if (tab) void window.pi.app.openPreviewWindow(tab.path).catch(() => {});
+      }
+      tabDragConsumedRef.current = false;
     },
     onDragOver: (event: ReactDragEvent) => {
-      if (!dragTabId || dragTabId === id) return;
-      event.preventDefault(); // required to allow the drop
+      if (!dragTabId) return;
+      event.preventDefault(); // required to allow the drop (self = snap-back)
       event.stopPropagation(); // keep the panel-level file-drop handler out of it
       event.dataTransfer.dropEffect = "move";
+      if (dragTabId === id) {
+        setDropPos(null);
+        return;
+      }
       const rect = event.currentTarget.getBoundingClientRect();
       setDropPos(event.clientY < rect.top + rect.height / 2 ? "before" : "after");
     },
@@ -289,11 +307,32 @@ export function Preview() {
       const dragged = dragTabId;
       setDragTabId(null);
       setDropPos(null);
-      if (!dragged || dragged === id) return;
+      tabDragConsumedRef.current = true; // in-panel drop: no pop-out on dragend
+      if (!dragged || dragged === id) return; // released on self → snap back
       const rect = event.currentTarget.getBoundingClientRect();
       reorderPreviews(dragged, id, event.clientY < rect.top + rect.height / 2 ? "before" : "after");
     },
   });
+
+  // While a tab is being dragged, make every point inside this window accept
+  // the drop: releasing anywhere in-app then produces a real drop event (→
+  // snap back), while releasing outside the app ends the drag with no drop at
+  // all (→ onDragEnd pops out). This also stops the tab's text/plain payload
+  // from being pasted into inputs if released over them.
+  useEffect(() => {
+    if (!dragTabId) return;
+    const onDragOver = (e: DragEvent) => e.preventDefault();
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      tabDragConsumedRef.current = true; // in-app release → snap back, no pop-out
+    };
+    document.addEventListener("dragover", onDragOver);
+    document.addEventListener("drop", onDrop);
+    return () => {
+      document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("drop", onDrop);
+    };
+  }, [dragTabId]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -336,7 +375,21 @@ export function Preview() {
       onDrop={onPanelDrop}
     >
       {tabs.length > 0 && (
-        <div className="preview-tabs" role="tablist">
+        <div
+          className="preview-tabs"
+          role="tablist"
+          // Releasing over the strip background (gaps between tabs) snaps back
+          // instead of popping out, so near-misses while reordering are safe.
+          onDragOver={(e) => {
+            if (dragTabId) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            if (!dragTabId) return;
+            e.preventDefault();
+            e.stopPropagation();
+            tabDragConsumedRef.current = true;
+          }}
+        >
           {tabs.map((tab) => {
             const tabName = basename(tab.path);
             return (
