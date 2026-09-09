@@ -395,7 +395,6 @@ export function Preview() {
   }, [expanded, toggleExpanded]);
 
   if (!open) return null;
-  const name = path?.split(/[\\/]/).pop() || "Preview";
   const htmlCanEdit = payload?.kind === "html" && Boolean(path && payload.text && !payload.truncated);
 
   const tabExt = (tab: PreviewTab) => {
@@ -493,7 +492,8 @@ export function Preview() {
       )}
       {active && (
       <div className="preview-head">
-        <span className="preview-title" title={path || ""}>{name}</span>
+        {/* No file-name text here: the tab strip above already shows it. */}
+        <span className="preview-head-spacer" aria-hidden />
         {payload && <span className="muted preview-size">{formatBytes(payload.size)}</span>}
         {payload && <span className="preview-kind">{previewKindLabel(payload)}</span>}
         {payload?.kind === "html" && (

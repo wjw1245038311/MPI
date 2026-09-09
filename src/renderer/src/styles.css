@@ -3350,13 +3350,10 @@ body.preview-resizing * {
   border-bottom: 1px solid var(--border);
   background: var(--rail-2);
 }
-.preview-title {
+/* Keeps the head row's right-side buttons pushed over (the file name is
+   shown by the tab strip above, not here). */
+.preview-head-spacer {
   flex: 1;
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .preview-size {
   flex: 0 0 auto;
