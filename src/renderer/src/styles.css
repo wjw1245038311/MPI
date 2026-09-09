@@ -3166,6 +3166,12 @@ body.sidebar-resizing * {
   font-weight: 600;
   color: var(--text);
 }
+/* Count + compact button stay grouped on the right of the row. */
+.ctx-comp-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .ctx-advice {
   margin-top: 8px;
   padding: 7px 9px;

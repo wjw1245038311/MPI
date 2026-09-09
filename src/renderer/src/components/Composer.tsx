@@ -996,15 +996,6 @@ export function Composer({ threadId }: { threadId: string }) {
                       <button className="ctx-refresh" title="刷新" onClick={() => void loadCtx()}>
                         <Refresh size={12} />
                       </button>
-                      <button
-                        type="button"
-                        className={`ctx-compact ${compacting ? "busy" : ""}`}
-                        disabled={!connected || isStreaming || compacting || !hasMessages}
-                        title={language === "zh" ? "总结较早的消息以释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}
-                        onClick={() => void compactContext(threadId)}
-                      >
-                        <Compress size={12} />
-                      </button>
                     </div>
                   </div>
                   {model && <div className="ctx-model">{modelShort(model)}</div>}
@@ -1044,7 +1035,19 @@ export function Composer({ threadId }: { threadId: string }) {
                           }
                         >
                           <span>{language === "zh" ? "已压缩" : "Compactions"}</span>
-                          <b>{(ctxComps?.count ?? 0)}{language === "zh" ? " 次" : "×"}</b>
+                          <span className="ctx-comp-count">
+                            <b>{(ctxComps?.count ?? 0)}{language === "zh" ? " 次" : "×"}</b>
+                            {/* Compact button sits right after the count it acts on. */}
+                            <button
+                              type="button"
+                              className={`ctx-compact ${compacting ? "busy" : ""}`}
+                              disabled={!connected || isStreaming || compacting || !hasMessages}
+                              title={language === "zh" ? "总结较早的消息以释放上下文空间（等同 /compact）" : "Summarize earlier messages to free up context space (same as /compact)"}
+                              onClick={() => void compactContext(threadId)}
+                            >
+                              <Compress size={12} />
+                            </button>
+                          </span>
                         </div>
                       </div>
                       {ctxAdvice && <div className={`ctx-advice ${ctxBand}`}>{ctxAdvice}</div>}
