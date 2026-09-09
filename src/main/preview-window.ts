@@ -25,10 +25,12 @@ export function openPreviewWindow(absPath: string): void {
   const key = absPath.toLowerCase();
   const existing = windows.get(key);
   if (existing && !existing.isDestroyed()) {
+    console.log("[preview-dock] focus existing window:", absPath);
     existing.show();
     existing.focus();
     return;
   }
+  console.log("[preview-dock] open new window:", absPath);
 
   const icon = resolveIcon();
   const win = new BrowserWindow({
@@ -70,7 +72,9 @@ export function openPreviewWindow(absPath: string): void {
  *  when its tab is dragged back into the main preview panel. */
 export function closePreviewWindow(absPath: string): void {
   const win = windows.get(absPath.toLowerCase());
-  if (win && !win.isDestroyed()) win.close();
+  if (!win || win.isDestroyed()) return;
+  console.log("[preview-dock] close window:", absPath);
+  win.close();
 }
 
 // Dock-back detection (Visual Studio style). HTML5 drag payloads do not
