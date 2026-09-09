@@ -211,6 +211,8 @@ async function execute(task: AutomationTask): Promise<void> {
       bridge = new PiBridge({
         cwd: task.cwd,
         piCliPath: getConfig().piCliPath,
+        // Same user-profile injection as interactive sessions.
+        appendSystemPrompt: getConfig().userProfile?.trim() || undefined,
         extensions: [ensureGateExtension(getConfigDir())],
         gateModeFile,
         name: automationSessionName(task.name, getConfig().language),

@@ -324,6 +324,9 @@ function createHandle(
     // Keep pi's runtime in sync with the Plugins inventory, including the
     // singular `.pi/agent/skill` compatibility path and other local roots.
     skills: getAdditionalSkillPaths(cwd),
+    // User profile text (Settings → User Profile) is appended to this run's
+    // system prompt; read at spawn time so edits apply from new sessions on.
+    appendSystemPrompt: getConfig().userProfile?.trim() || undefined,
     gateModeFile,
     onEvent: (e) => {
       const event: any = e;
@@ -1599,14 +1602,18 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   });
   ipcMain.handle("app:getConfig", () => getConfig());
   ipcMain.handle("app:setConfig", (_e, patch) => {
-    const prev = getConfig().piCliPath;
+    const prevCli = getConfig().piCliPath;
+    const prevProfile = (getConfig().userProfile || "").trim();
     const next = updateConfig(patch || {});
     if (patch && ("remoteSignalingUrl" in patch || "remoteStunUrls" in patch)) {
       remoteHost.configure(next.remoteSignalingUrl || DEFAULT_REMOTE_SIGNALING_URL, [...BUILT_IN_REMOTE_STUN_URLS]);
     }
-    if ((next.piCliPath || "") !== (prev || "")) {
+    if ((next.piCliPath || "") !== (prevCli || "")) {
       resetPiRuntime();
       dropWarmBridge(); // standby was booted from the old runtime
+      ensureWarmBridge();
+    } else if (((next.userProfile || "").trim() || "") !== prevProfile) {
+      dropWarmBridge(); // standby was booted with the old profile text
       ensureWarmBridge();
     }
     return next;

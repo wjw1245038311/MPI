@@ -4823,6 +4823,32 @@ textarea.modal-input {
   background: #fdf3f1;
   box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.12);
 }
+
+/* User profile editor (Settings → User Profile) */
+.set-profile-textarea {
+  width: 100%;
+  min-height: 200px;
+  font-size: 13px;
+  line-height: 1.65;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 10px 12px;
+  resize: vertical;
+  background: var(--code-bg);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.set-profile-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.set-profile-count {
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
 .set-json-err {
   color: #c0392b;
   font-size: 11px;

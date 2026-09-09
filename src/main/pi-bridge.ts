@@ -302,6 +302,9 @@ export interface PiBridgeOptions {
   extensions?: string[];
   /** Skill directories/files to load explicitly for deterministic discovery. */
   skills?: string[];
+  /** Free-form user profile text (Settings → User Profile) appended to pi's
+   * system prompt for this run via --append-system-prompt. Empty = no flag. */
+  appendSystemPrompt?: string;
   /** Per-thread gate mode file exposed to the gate extension as
    * MPI_GATE_MODE_FILE so sandbox/full can be toggled without a restart. */
   gateModeFile?: string;
@@ -350,6 +353,8 @@ export class PiBridge {
     if (this.opts.sessionFile) args.push("--session", this.opts.sessionFile);
     for (const ext of this.opts.extensions || []) args.push("--extension", ext);
     for (const skill of this.opts.skills || []) args.push("--skill", skill);
+    const appendPrompt = (this.opts.appendSystemPrompt || "").trim();
+    if (appendPrompt) args.push("--append-system-prompt", appendPrompt);
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     if (this.opts.gateModeFile) env.MPI_GATE_MODE_FILE = this.opts.gateModeFile;

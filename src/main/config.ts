@@ -87,6 +87,10 @@ export interface AppConfig {
   userAvatar?: string;
   /** Custom agent avatar as a data URL; absent = built-in Doraemon avatar. */
   agentAvatar?: string;
+  /** Free-form "user profile" text (Settings → User Profile) appended to every
+   * session's system prompt via pi's --append-system-prompt.
+   * Absent/empty = no injection. MPI-only: terminal pi is not affected. */
+  userProfile?: string;
   /** cwd of the most recently opened thread; seeds the warm spare's project. */
   lastThreadCwd?: string;
   /** User-defined scheduled automation tasks. */
@@ -188,6 +192,7 @@ export function loadConfig(userDataDir: string): AppConfig {
           : DEFAULTS.remoteSignalingEnabled,
         diffViewMode: parsed.diffViewMode === "blocks" ? "blocks" : DEFAULTS.diffViewMode,
         trashEnabled: typeof parsed.trashEnabled === "boolean" ? parsed.trashEnabled : DEFAULTS.trashEnabled,
+        userProfile: typeof parsed.userProfile === "string" ? parsed.userProfile : undefined,
         defaultPermission:
           typeof parsed.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(parsed.defaultPermission)
             ? (parsed.defaultPermission as PermissionLevel)

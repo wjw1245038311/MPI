@@ -227,6 +227,14 @@ Note: the actually available levels also depend on the model's live capability l
 1. Open **Settings → Diagnostics & Config** to see the actual paths of `models.json`, `settings.json` and `auth.json`, and make sure you're editing the right file.
 2. Common causes: misspelled model ID; Base URL missing/extra `/v1`; API type mismatched with the protocol; key without permission; "Thinking" not enabled on the model, so no levels appear.
 
+### 4.6 User Profile
+
+**Settings → User profile**: write a short self-introduction and preferences — who you are, your tech stack, how you want replies phrased (e.g. "concise, lead with the conclusion"). This text is appended to every session's system prompt so the agent knows your context from the very first message.
+
+- Up to 4000 characters; saving it empty disables the injection.
+- Applies to **new sessions**; already-open ones pick it up on reconnect (closing and reopening a session counts). Scheduled tasks use the same profile.
+- Stored in MPI's app config directory (`config.json`); terminal pi is not affected.
+
 ---
 
 ## 5. Projects and Sessions
@@ -525,9 +533,9 @@ Rules:
 | **Diff display** | Two modes for edit-tool diffs — "Unified view / Split before-after", unified by default. |
 | **Window zoom** | 50%–150%, shortcuts Ctrl+= / Ctrl+- (25% steps), Ctrl+0 to reset; persists across restarts. |
 
-### 15.2 Models & Providers / Thinking Defaults
+### 15.2 Models & Providers / Thinking Defaults / User Profile
 
-See [Section 4](#4-configuring-models). Changes require clicking "Save"; a small dot on the tab indicates unsaved changes.
+See [Section 4](#4-configuring-models). The **User profile** tab (see 4.6) works the same way: edit, then click "Save"; a small dot on the tab indicates unsaved changes.
 
 ### 15.3 Archive & Trash
 

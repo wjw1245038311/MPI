@@ -660,7 +660,7 @@ function ProviderCard({
  * Main panel
  * ------------------------------------------------------------------ */
 
-type Tab = "general" | "models" | "thinking" | "archive" | "diag" | "update";
+type Tab = "general" | "profile" | "models" | "thinking" | "archive" | "diag" | "update";
 
 interface NewProviderDraft {
   id: string;
@@ -958,8 +958,13 @@ export function Settings() {
   const [thinking, setThinking] = useState<ThinkingDefaults>({});
   const [initialThinking, setInitialThinking] = useState("{}");
   const [invalidJson, setInvalidJson] = useState<Record<string, boolean>>({});
-  const [saving, setSaving] = useState<null | "models" | "thinking">(null);
-  const [flash, setFlash] = useState<null | "models" | "thinking">(null);
+  // User profile (Settings → User Profile): free text appended to every
+  // session's system prompt. Lives in AppConfig; draft/initial mirror the
+  // models/thinking save pattern.
+  const [profileDraft, setProfileDraft] = useState("");
+  const [initialProfile, setInitialProfile] = useState("");
+  const [saving, setSaving] = useState<null | "models" | "thinking" | "profile">(null);
+  const [flash, setFlash] = useState<null | "models" | "thinking" | "profile">(null);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
   // Mirrors the changelog modal state inside AppUpdatePanel (Escape guard).
   const [changelogOpen, setChangelogOpen] = useState(false);
@@ -981,6 +986,11 @@ export function Settings() {
     setNewProvider(emptyNewProvider());
     setPresetQuery("");
     setExpandedProvider(null);
+    // Seed the profile editor from the persisted config (read once per open;
+    // deliberately not a dep so later config updates don't clobber edits).
+    const savedProfile = config?.userProfile || "";
+    setProfileDraft(savedProfile);
+    setInitialProfile(savedProfile);
     (async () => {
       try {
         const [models, think, d, p] = await Promise.all([
@@ -1014,9 +1024,10 @@ export function Settings() {
 
   const modelDirty = useMemo(() => JSON.stringify(draft.providers) !== initialProviders, [draft.providers, initialProviders]);
   const thinkDirty = useMemo(() => JSON.stringify(thinking) !== initialThinking, [thinking, initialThinking]);
+  const profileDirty = profileDraft !== initialProfile;
   function attemptClose() {
     if (
-      (modelDirty || thinkDirty) &&
+      (modelDirty || thinkDirty || profileDirty) &&
       !window.confirm(language === "zh" ? "有未保存的更改，确定放弃并关闭？" : "Discard unsaved changes and close?")
     ) return;
     close();
@@ -1180,6 +1191,28 @@ export function Settings() {
     }
   };
 
+  const saveProfile = async () => {
+    setSaving("profile");
+    try {
+      const text = profileDraft.trim();
+      await window.pi.app.setConfig({ userProfile: text || undefined });
+      setProfileDraft(text);
+      setInitialProfile(text);
+      setFlash("profile");
+      setTimeout(() => setFlash(null), 1500);
+      pushToast(
+        "info",
+        language === "zh"
+          ? "用户画像已保存，对新会话生效。"
+          : "User profile saved. Applies to new sessions.",
+      );
+    } catch (e: any) {
+      pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
+    } finally {
+      setSaving(null);
+    }
+  };
+
   // Avatar file-input refs — must stay above the early return (Rules of Hooks).
   const userAvatarInputRef = useRef<HTMLInputElement>(null);
   const agentAvatarInputRef = useRef<HTMLInputElement>(null);
@@ -1332,6 +1365,7 @@ export function Settings() {
           <nav className="set-tabs">
             {([
               ["general", language === "zh" ? "通用设置" : "General"],
+              ["profile", language === "zh" ? "用户画像" : "User profile"],
               ["models", "模型与提供商"],
               ["thinking", "思考默认值"],
               ["archive", language === "zh" ? "归档回收" : "Archive & trash"],
@@ -1341,6 +1375,7 @@ export function Settings() {
               <button key={id} className={`set-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
                 <span className="set-tab-bar" />
                 {label}
+                {id === "profile" && profileDirty && <span className="set-dot" />}
                 {id === "models" && modelDirty && <span className="set-dot" />}
                 {id === "thinking" && thinkDirty && <span className="set-dot" />}
               </button>
@@ -1358,7 +1393,11 @@ export function Settings() {
                 ? language === "zh"
                   ? "通用设置"
                   : "General"
-                : tab === "models"
+                : tab === "profile"
+                  ? language === "zh"
+                    ? "用户画像"
+                    : "User profile"
+                  : tab === "models"
                   ? "模型与提供商"
                 : tab === "thinking"
                   ? "思考默认值"
@@ -1381,6 +1420,12 @@ export function Settings() {
                     {modelDirty && flash !== "models" && <span className="set-dot" />}
                   </button>
                 </>
+              )}
+              {tab === "profile" && (
+                <button className={`set-btn primary ${flash === "profile" ? "saved" : ""}`} onClick={saveProfile} disabled={!!saving}>
+                  {saving === "profile" ? <span className="spinner" /> : flash === "profile" ? (language === "zh" ? "已保存 ✓" : "Saved ✓") : language === "zh" ? "保存用户画像" : "Save profile"}
+                  {profileDirty && flash !== "profile" && <span className="set-dot" />}
+                </button>
               )}
               {tab === "thinking" && (
                 <button className={`set-btn primary ${flash === "thinking" ? "saved" : ""}`} onClick={saveThinking} disabled={!!saving}>
@@ -1607,6 +1652,36 @@ export function Settings() {
                     <option value="sandbox">{language === "zh" ? "沙盒（低风险操作自动执行，默认）" : "Sandbox (low-risk auto-runs, default)"}</option>
                     <option value="full">{language === "zh" ? "完全权限" : "Full access"}</option>
                   </select>
+                </Field>
+              </div>
+            )}
+
+            {tab === "profile" && (
+              <div className="set-card">
+                <Field
+                  wide
+                  label={language === "zh" ? "用户画像" : "User profile"}
+                  hint={
+                    language === "zh"
+                      ? "这段文字会附加到每个会话的系统提示词里，让 AI 从第一条消息起就了解你是谁、偏好什么。对新会话生效（已打开的会话重连后生效）；留空则不注入。仅对 MPI 生效，不影响终端 pi。"
+                      : "This text is appended to every session's system prompt so the agent knows who you are and what you prefer from the very first message. Applies to new sessions (open ones pick it up on reconnect); leave empty to disable. MPI-only — terminal pi is not affected."
+                  }
+                >
+                  <textarea
+                    className="set-profile-textarea"
+                    value={profileDraft}
+                    maxLength={4000}
+                    spellCheck={false}
+                    placeholder={
+                      language === "zh"
+                        ? "例如：\n我是后端工程师，主要用 TypeScript / Node.js。\n回复请简洁、先说结论；代码注释用中文。"
+                        : "e.g.\nI'm a backend engineer, mainly TypeScript / Node.js.\nKeep replies concise and lead with the conclusion; write code comments in Chinese."
+                    }
+                    onChange={(e) => setProfileDraft(e.target.value)}
+                  />
+                  <div className="set-profile-count">
+                    {profileDraft.length} / 4000
+                  </div>
                 </Field>
               </div>
             )}

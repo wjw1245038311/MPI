@@ -416,6 +416,9 @@ export interface AppConfig {
   userAvatar?: string;
   /** Custom agent avatar as a data URL; absent = built-in Doraemon avatar. */
   agentAvatar?: string;
+  /** Free-form user profile text appended to every session's system prompt
+   * (Settings → User Profile); absent/empty = no injection. */
+  userProfile?: string;
   remoteSignalingUrl: string;
   remoteSignalingEnabled: boolean;
   remoteStunUrls: string[];
