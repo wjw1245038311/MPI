@@ -767,14 +767,15 @@ function FileRow({ cwd, node, depth }: { cwd: string; node: FileNode; depth: num
   const toggleFolder = useStore((s) => s.toggleFolder);
   const openPreview = useStore((s) => s.openPreview);
   const fileTree = useStore((s) => s.fileTree);
-  const previewPath = useStore((s) => s.previewPath);
+  // Highlight any file that has an open preview tab (not only the active one).
+  const inPreview = useStore((s) => s.previewTabs.some((t) => t.path === node.abs));
   const entry = node.isDir ? fileTree[treeKey(cwd, node.rel)] : undefined;
   const expanded = !!entry?.expanded;
 
   return (
     <>
       <div
-        className={`ft-row ${!node.isDir && previewPath === node.abs ? "active" : ""}`}
+        className={`ft-row ${!node.isDir && inPreview ? "active" : ""}`}
         style={{ paddingLeft: 8 + depth * 12 }}
         onClick={() => (node.isDir ? toggleFolder(cwd, node.rel) : openPreview(node.abs, cwd))}
         onContextMenu={(event) => {

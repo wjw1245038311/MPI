@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import hljs from "highlight.js/lib/core";
 import { useStore } from "../store";
 import { Markdown } from "../lib/markdown";
 import { CODE_LANGUAGE_ALIASES, CODE_LANGUAGES } from "../lib/code-languages";
-import { formatBytes } from "../lib/format";
+import { basename, fileIcon, formatBytes } from "../lib/format";
+import { MPI_FILE_MIME } from "../lib/file-drag";
+import type { PreviewTab } from "../lib/types";
+import { useOutsideClose } from "../lib/useOutsideClose";
 import { translateUiText } from "../lib/i18n";
 import { Close, Contract, Copy, Edit, Expand, Folder, Minus, Plus, Refresh, SelectArrow } from "./icons";
 
@@ -89,12 +92,13 @@ function initialPreviewWidth(): number {
 
 export function Preview() {
   const open = useStore((s) => s.previewOpen);
-  const path = useStore((s) => s.previewPath);
-  const root = useStore((s) => s.previewRoot);
-  const payload = useStore((s) => s.previewPayload);
-  const loading = useStore((s) => s.previewLoading);
+  const tabs = useStore((s) => s.previewTabs);
+  const activeId = useStore((s) => s.activePreviewId);
   const expanded = useStore((s) => s.previewExpanded);
   const openPreview = useStore((s) => s.openPreview);
+  const closePreviewTab = useStore((s) => s.closePreviewTab);
+  const setActivePreview = useStore((s) => s.setActivePreview);
+  const reorderPreviews = useStore((s) => s.reorderPreviews);
   const toggleExpanded = useStore((s) => s.togglePreviewExpanded);
   const close = useStore((s) => s.closePreview);
   const activeThreadId = useStore((s) => s.activeThreadId);
@@ -103,13 +107,28 @@ export function Preview() {
   const [htmlAnnotationMode, setHtmlAnnotationMode] = useState(false);
   const [htmlEditMode, setHtmlEditMode] = useState(false);
   const [selectedHtmlTag, setSelectedHtmlTag] = useState<string | null>(null);
+  // Tab drag state (reordering) + external file-drop highlight.
+  const [dragTabId, setDragTabId] = useState<string | null>(null);
+  const [dropPos, setDropPos] = useState<"before" | "after" | null>(null);
+  const [fileDropOver, setFileDropOver] = useState(false);
+  const fileDropDepthRef = useRef(0);
+  // Right-click menu on a tab (open in separate window / close).
+  const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const tabMenuRef = useRef<HTMLDivElement>(null);
+  useOutsideClose(tabMenuRef, !!tabMenu, () => setTabMenu(null));
   const resizeRef = useRef<{ startX: number; startWidth: number; width: number; element: HTMLDivElement } | null>(null);
+
+  const active = tabs.find((t) => t.id === activeId) || null;
+  const path = active?.path ?? null;
+  const root = active?.root ?? null;
+  const payload = active?.payload ?? null;
+  const loading = !!active?.loading;
 
   useEffect(() => {
     setHtmlAnnotationMode(false);
     setHtmlEditMode(false);
     setSelectedHtmlTag(null);
-  }, [path]);
+  }, [activeId]);
 
   const handleHtmlElementSelected = useCallback((element: HtmlElementSnapshot) => {
     setHtmlEditMode(false);
@@ -211,6 +230,71 @@ export function Preview() {
     }
   };
 
+  /** True when the drag payload is a file (sidebar file tree or OS files). */
+  const isFileDrag = (e: React.DragEvent) => {
+    const types = Array.from(e.dataTransfer.types || []);
+    return types.includes(MPI_FILE_MIME) || types.includes("Files");
+  };
+
+  // Dropping a file anywhere on the panel opens it in a new tab.
+  const onPanelDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    fileDropDepthRef.current = 0;
+    setFileDropOver(false);
+    const cwd = useStore.getState().activeProjectCwd || undefined;
+    // In-app drag from the sidebar file tree carries a path, not a File object.
+    const internalPath = e.dataTransfer.getData(MPI_FILE_MIME);
+    if (internalPath) {
+      void openPreview(internalPath, cwd);
+      return;
+    }
+    for (const f of Array.from(e.dataTransfer.files || [])) {
+      let abs = "";
+      try {
+        abs = window.pi.app.getPathForFile(f) || (f as File & { path?: string }).path || "";
+      } catch {
+        // Clipboard-created files are not backed by a path.
+      }
+      if (abs) void openPreview(abs, cwd);
+    }
+  };
+
+  // HTML5 drag & drop for reordering tabs (same pattern as the sidebar pinned zone).
+  const tabDndHandlers = (id: string) => ({
+    draggable: true,
+    onDragStart: (event: ReactDragEvent) => {
+      event.dataTransfer.effectAllowed = "move";
+      // Some browsers refuse to start a drag without payload data.
+      event.dataTransfer.setData("text/plain", id);
+      setDragTabId(id);
+    },
+    onDragEnd: () => {
+      setDragTabId(null);
+      setDropPos(null);
+    },
+    onDragOver: (event: ReactDragEvent) => {
+      if (!dragTabId || dragTabId === id) return;
+      event.preventDefault(); // required to allow the drop
+      event.stopPropagation(); // keep the panel-level file-drop handler out of it
+      event.dataTransfer.dropEffect = "move";
+      const rect = event.currentTarget.getBoundingClientRect();
+      setDropPos(event.clientY < rect.top + rect.height / 2 ? "before" : "after");
+    },
+    onDragLeave: () => {
+      if (dropPos) setDropPos(null);
+    },
+    onDrop: (event: ReactDragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const dragged = dragTabId;
+      setDragTabId(null);
+      setDropPos(null);
+      if (!dragged || dragged === id) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      reorderPreviews(dragged, id, event.clientY < rect.top + rect.height / 2 ? "before" : "after");
+    },
+  });
+
   useEffect(() => {
     if (!expanded) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -226,11 +310,67 @@ export function Preview() {
   const name = path?.split(/[\\/]/).pop() || "Preview";
   const htmlCanEdit = payload?.kind === "html" && Boolean(path && payload.text && !payload.truncated);
 
+  const tabExt = (tab: PreviewTab) => {
+    if (tab.payload?.ext) return tab.payload.ext;
+    const base = basename(tab.path);
+    const dot = base.lastIndexOf(".");
+    return dot > 0 ? base.slice(dot).toLowerCase() : "";
+  };
+
   return (
     <aside
-      className={`preview ${expanded ? "expanded" : ""}`}
+      className={`preview ${expanded ? "expanded" : ""} ${fileDropOver ? "drop-files" : ""}`}
       style={expanded ? undefined : { width: previewWidth, flexBasis: previewWidth }}
+      onDragEnter={(e) => {
+        if (!isFileDrag(e)) return;
+        fileDropDepthRef.current += 1;
+        setFileDropOver(true);
+      }}
+      onDragLeave={() => {
+        fileDropDepthRef.current = Math.max(0, fileDropDepthRef.current - 1);
+        if (!fileDropDepthRef.current) setFileDropOver(false);
+      }}
+      onDragOver={(e) => {
+        if (isFileDrag(e)) e.preventDefault();
+      }}
+      onDrop={onPanelDrop}
     >
+      {tabs.length > 0 && (
+        <div className="preview-tabs" role="tablist">
+          {tabs.map((tab) => {
+            const tabName = basename(tab.path);
+            return (
+              <div
+                key={tab.id}
+                role="tab"
+                aria-selected={tab.id === activeId}
+                className={`preview-tab ${tab.id === activeId ? "active" : ""} ${dragTabId === tab.id ? "dragging" : ""} ${dropPos && dragTabId && dragTabId !== tab.id ? `drop-${dropPos}` : ""}`}
+                title={tab.path}
+                onClick={() => setActivePreview(tab.id)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setTabMenu({ id: tab.id, x: event.clientX, y: event.clientY });
+                }}
+                {...tabDndHandlers(tab.id)}
+              >
+                <span className="preview-tab-ico">{fileIcon(tabExt(tab), false)}</span>
+                {tab.loading && !tab.payload ? <span className="spinner preview-tab-spinner" /> : null}
+                <span className="preview-tab-name">{tabName}</span>
+                <button
+                  className="preview-tab-close"
+                  aria-label={language === "zh" ? `关闭 ${tabName}` : `Close ${tabName}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closePreviewTab(tab.id);
+                  }}
+                >
+                  <Close size={10} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {!expanded && (
         <div
           className="preview-resizer"
@@ -247,6 +387,7 @@ export function Preview() {
           title={language === "zh" ? "拖动调整预览栏宽度；双击恢复默认" : "Drag to resize; double-click to reset"}
         />
       )}
+      {active && (
       <div className="preview-head">
         <span className="preview-title" title={path || ""}>{name}</span>
         {payload && <span className="muted preview-size">{formatBytes(payload.size)}</span>}
@@ -329,6 +470,7 @@ export function Preview() {
           <Close size={15} />
         </button>
       </div>
+      )}
       <div className={`preview-body ${payload?.kind === "html" ? "html-preview-active" : ""}`}>
         {loading ? <div className="pv-loading"><span className="spinner" /></div> : (
           <PreviewBody
@@ -344,6 +486,29 @@ export function Preview() {
           />
         )}
       </div>
+      {tabMenu && (
+        <div className="preview-tab-menu" ref={tabMenuRef} style={{ left: tabMenu.x, top: tabMenu.y }} role="menu">
+          <button
+            role="menuitem"
+            onClick={() => {
+              const target = tabs.find((t) => t.id === tabMenu.id);
+              setTabMenu(null);
+              if (target) void window.pi.app.openPreviewWindow(target.path).catch(() => {});
+            }}
+          >
+            {language === "zh" ? "在独立窗口打开" : "Open in separate window"}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              closePreviewTab(tabMenu.id);
+              setTabMenu(null);
+            }}
+          >
+            {language === "zh" ? "关闭标签页" : "Close tab"}
+          </button>
+        </div>
+      )}
     </aside>
   );
 }
@@ -358,7 +523,7 @@ function previewKindLabel(payload: any): string {
   return (payload.lang || payload.ext?.slice(1) || "FILE").toUpperCase();
 }
 
-function PreviewBody({
+export function PreviewBody({
   payload,
   path,
   projectRoot,

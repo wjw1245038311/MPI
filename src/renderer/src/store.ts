@@ -14,6 +14,7 @@ import type {
   PermissionLevel,
   PluginPackage,
   PreviewPayload,
+  PreviewTab,
   ProjectSummary,
   SkillInfo,
   SkillHubSkill,
@@ -1092,12 +1093,11 @@ interface PiStore {
    * the main process with LRU eviction so restarts do not lose input. */
   drafts: Record<string, ComposerDraft>;
 
-  // files / preview
+  // files / preview (browser-style tabs)
   fileTree: Record<string, FileTreeEntry>;
-  previewPath: string | null;
-  previewRoot: string | null;
-  previewPayload: PreviewPayload | null;
-  previewLoading: boolean;
+  /** Open preview tabs; array order is the display order. */
+  previewTabs: PreviewTab[];
+  activePreviewId: string | null;
 
   // overlay
   toasts: Toast[];
@@ -1163,7 +1163,13 @@ interface PiStore {
   togglePreviewExpanded: () => void;
   loadFileTree: (cwd: string, rel?: string) => Promise<void>;
   toggleFolder: (cwd: string, rel: string) => void;
+  /** Open a file in the preview panel: activates an existing tab or creates one. */
   openPreview: (abs: string, projectRoot?: string) => Promise<void>;
+  loadPreviewTab: (id: string) => Promise<void>;
+  closePreviewTab: (id: string) => void;
+  setActivePreview: (id: string) => void;
+  reorderPreviews: (dragId: string, overId: string, pos: "before" | "after") => void;
+  /** Hide the panel again; open tabs are kept for next time. */
   closePreview: () => void;
 
   pushToast: (kind: Toast["kind"], text: string) => void;
@@ -1396,13 +1402,12 @@ function scheduleEventFlush(): void {
       // HTML itself or any linked CSS/JS become visible without reopening it.
       const cwd = latest.threads[threadId]?.cwd;
       if (cwd && latest.fileTree[treeKey(cwd, "")]?.loaded) latest.loadFileTree(cwd, "");
-      if (
-        cwd &&
-        latest.previewOpen &&
-        latest.previewPath &&
-        latest.previewRoot?.toLowerCase() === cwd.toLowerCase()
-      ) {
-        latest.openPreview(latest.previewPath, cwd);
+      // Reload every open preview tab of this project (without stealing the
+      // active tab) so edits to HTML/CSS/JS show up without reopening.
+      if (cwd && latest.previewOpen) {
+        for (const tab of latest.previewTabs) {
+          if (tab.root?.toLowerCase() === cwd.toLowerCase()) void latest.loadPreviewTab(tab.id);
+        }
       }
     }
   });
@@ -1465,10 +1470,8 @@ export const useStore = create<PiStore>()((set, get) => {
   tuiDirty: {},
   drafts: {},
   fileTree: {},
-  previewPath: null,
-  previewRoot: null,
-  previewPayload: null,
-  previewLoading: false,
+  previewTabs: [],
+  activePreviewId: null,
   toasts: [],
   extuiQueue: [],
   settingsOpen: false,
@@ -2548,24 +2551,75 @@ export const useStore = create<PiStore>()((set, get) => {
     get().loadFileTree(cwd, rel);
   },
 
-  openPreview: async (abs, projectRoot) => {
-    const root = projectRoot || get().previewRoot || undefined;
-    set({ previewOpen: true, previewPath: abs, previewRoot: root || null, previewLoading: true, previewPayload: null });
+  loadPreviewTab: async (id) => {
+    const tab = get().previewTabs.find((t) => t.id === id);
+    if (!tab) return;
+    set((s) => ({ previewTabs: s.previewTabs.map((t) => (t.id === id ? { ...t, loading: true, payload: null } : t)) }));
     try {
-      const payload = await window.pi.app.readPreview(abs, root);
-      set({ previewPayload: payload, previewLoading: false });
+      const payload = await window.pi.app.readPreview(tab.path, tab.root || undefined);
+      set((s) => ({ previewTabs: s.previewTabs.map((t) => (t.id === id ? { ...t, loading: false, payload } : t)) }));
     } catch (e: any) {
-      set({ previewLoading: false, previewPayload: { name: abs.split(/[\\/]/).pop() || abs, ext: "", size: 0, kind: "missing", message: e?.message || "read failed" } });
+      const message = e?.message || "read failed";
+      set((s) => ({
+        previewTabs: s.previewTabs.map((t) =>
+          t.id === id
+            ? { ...t, loading: false, payload: { name: t.path.split(/[\\/]/).pop() || t.path, ext: "", size: 0, kind: "missing" as const, message } }
+            : t,
+        ),
+      }));
     }
   },
+
+  openPreview: async (abs, projectRoot) => {
+    const existing = get().previewTabs.find((t) => t.path.toLowerCase() === abs.toLowerCase());
+    if (!existing) {
+      const newId = uid();
+      set((s) => ({
+        previewOpen: true,
+        previewTabs: [...s.previewTabs, { id: newId, path: abs, root: projectRoot || null, payload: null, loading: true }],
+        activePreviewId: newId,
+      }));
+      await get().loadPreviewTab(newId);
+      return;
+    }
+    if (existing.id !== get().activePreviewId) set({ activePreviewId: existing.id });
+    // Re-reading keeps a clicked/refreshed tab current even when it was already open.
+    await get().loadPreviewTab(existing.id);
+  },
+
+  closePreviewTab: (id) =>
+    set((s) => {
+      const tabs = s.previewTabs.filter((t) => t.id !== id);
+      let active = s.activePreviewId;
+      if (active === id) {
+        // Fall back to the tab that took its place (next), else the previous one.
+        const idx = s.previewTabs.findIndex((t) => t.id === id);
+        active = tabs[Math.min(idx, tabs.length - 1)]?.id ?? null;
+      }
+      return { previewTabs: tabs, activePreviewId: active };
+    }),
+
+  setActivePreview: (id) => {
+    if (get().previewTabs.some((t) => t.id === id)) set({ activePreviewId: id });
+  },
+
+  reorderPreviews: (dragId, overId, pos) =>
+    set((s) => {
+      const from = s.previewTabs.findIndex((t) => t.id === dragId);
+      const to = s.previewTabs.findIndex((t) => t.id === overId);
+      if (from < 0 || to < 0 || from === to) return s;
+      const tabs = [...s.previewTabs];
+      const [moved] = tabs.splice(from, 1);
+      let insertAt = tabs.findIndex((t) => t.id === overId);
+      if (pos === "after") insertAt += 1;
+      tabs.splice(insertAt, 0, moved);
+      return { previewTabs: tabs };
+    }),
 
   closePreview: () =>
     set({
       previewOpen: false,
       previewExpanded: false,
-      previewPath: null,
-      previewRoot: null,
-      previewPayload: null,
     }),
 
   pushToast: (kind, text) => {

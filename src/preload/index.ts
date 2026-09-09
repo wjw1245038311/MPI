@@ -35,6 +35,7 @@ const api = {
     openProject: (absPath: string) => ipcRenderer.invoke("app:openProject", absPath),
     openFolderInExplorer: (absPath: string) => ipcRenderer.invoke("app:openFolderInExplorer", absPath),
     revealFileInExplorer: (absPath: string) => ipcRenderer.invoke("app:revealFileInExplorer", absPath),
+    openPreviewWindow: (absPath: string) => ipcRenderer.invoke("app:openPreviewWindow", absPath),
     prewarm: (cwd: string) => ipcRenderer.invoke("app:prewarm", cwd),
     setProjectPinned: (args: { cwd: string; pinned: boolean }) => ipcRenderer.invoke("app:setProjectPinned", args),
     setThreadPinned: (args: { file: string; pinned: boolean }) => ipcRenderer.invoke("app:setThreadPinned", args),

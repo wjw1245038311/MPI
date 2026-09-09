@@ -105,6 +105,8 @@ const exact: Record<string, string> = {
   "切换工作文件夹": "Change working folder",
   "切换预览": "Toggle preview",
   "刷新预览": "Refresh preview",
+  "在独立窗口打开": "Open in separate window",
+  "关闭标签页": "Close tab",
   "文件产物": "File outputs",
   "原内容": "Original content",
   "新内容": "New content",

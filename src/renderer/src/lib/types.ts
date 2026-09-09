@@ -361,6 +361,15 @@ export interface PreviewPayload {
   previewUrl?: string;
 }
 
+/** One open tab in the browser-style preview panel; array order = display order. */
+export interface PreviewTab {
+  id: string;
+  path: string;
+  root: string | null;
+  payload: PreviewPayload | null;
+  loading: boolean;
+}
+
 export interface ExtUiRequest {
   id: string;
   method: "select" | "confirm" | "input" | "editor" | "notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text" | string;
