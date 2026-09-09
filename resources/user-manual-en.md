@@ -599,7 +599,9 @@ Click **Save configuration** to apply immediately. Status light at the top: gray
 
 ### 17.2 Creating a Feishu App (First Time)
 
-1. Sign in at [open.feishu.cn/app](https://open.feishu.cn/app) with your tenant account;
+> ⚠️ **Prerequisite: you need an enterprise/organization.** The Feishu Open Platform requires custom apps to live under an **enterprise tenant**, and WebSocket event push only works for enterprise custom apps. If your account is on the personal plan (no organization), create your own free enterprise first (individuals can create one, no business license needed — you become its admin). Otherwise you'll hit "connects fine but never receives messages" with no publish option in the console.
+
+1. Sign in at [open.feishu.cn/app](https://open.feishu.cn/app) (create an enterprise first if you don't have one);
 2. Create a **custom (enterprise) app**; note the App ID and App Secret on "Credentials & Basic Info";
 3. Add the **Bot** capability under App Capabilities → Bots;
 4. Enable scopes: `im:message.p2p_msg:readonly` (receive p2p messages), `im:message.group_at_msg:readonly` (receive group @-mentions of the bot), `im:message:send_as_bot` (send as the app);

@@ -598,7 +598,9 @@ MPI 支持通过 Android companion 应用远程查看会话并执行经过批准
 
 ### 17.2 创建飞书应用（首次使用）
 
-1. 用企业账号登录 [open.feishu.cn/app](https://open.feishu.cn/app)；
+> ⚠️ **前提：必须有企业/组织。** 飞书开放平台要求自建应用挂在**企业租户**下，且长连接事件推送仅支持企业自建应用。如果你的账号是个人版（没有企业），请先免费创建一个自己的企业（个人可自建，无需营业执照，创建后你就是管理员）——否则会出现「能连上但永远收不到消息、后台找不到发布入口」的现象。
+
+1. 登录 [open.feishu.cn/app](https://open.feishu.cn/app)（没有企业先按上面提示创建一个）；
 2. 创建**企业自建应用**，在「凭证与基础信息」记下 App ID 和 App Secret；
 3. 「应用能力 → 机器人」添加**机器人能力**；
 4. 「权限管理」开通：`im:message.p2p_msg:readonly`（接收单聊消息）、`im:message.group_at_msg:readonly`（接收群聊 @机器人 消息）、`im:message:send_as_bot`（以应用身份发消息）；

@@ -82,16 +82,16 @@ export function MessagingPanel() {
 
   const guideSteps = zh
     ? [
-        "打开飞书开放平台开发者后台 open.feishu.cn/app，用企业账号登录。",
-        "创建「企业自建应用」，在「凭证与基础信息」页记下 App ID 和 App Secret。",
+        "打开飞书开放平台开发者后台 open.feishu.cn/app。如果没有企业/组织，先免费创建一个（个人可自建，无需营业执照）——⚠️ 个人版租户不支持长连接事件推送，机器人会连上但永远收不到消息，且没有「发布」入口。",
+        "在新企业下创建「企业自建应用」，在「凭证与基础信息」页记下 App ID 和 App Secret。",
         "在「应用能力 → 机器人」页添加机器人能力。",
         "在「权限管理」页开通：im:message.p2p_msg:readonly（接收单聊消息）、im:message.group_at_msg:readonly（接收群聊 @机器人 消息）、im:message:send_as_bot（以应用身份发消息）。",
         "在「事件与回调」页选择「使用长连接接收事件」，并添加事件 im.message.receive_v1（接收消息 v2.0）。",
         "创建版本并发布（或先设置测试可用范围），然后在飞书里搜索你的机器人开始对话。",
       ]
     : [
-        "Open the Feishu Open Platform console at open.feishu.cn/app and sign in with your tenant account.",
-        "Create a custom (enterprise) app; note the App ID and App Secret on the Credentials page.",
+        "Open the Feishu Open Platform console at open.feishu.cn/app. If you don't have an enterprise/organization yet, create one for free first (individuals can create their own, no business license needed) — ⚠️ personal tenants do NOT support WebSocket event push: the bot connects but never receives messages, and there is no publish option.",
+        "Create a custom (enterprise) app under it; note the App ID and App Secret on the Credentials page.",
         "Add the Bot capability under App Capabilities → Bots.",
         "Enable scopes: im:message.p2p_msg:readonly (receive p2p messages), im:message.group_at_msg:readonly (receive group @-mentions), im:message:send_as_bot (send as bot).",
         "On Events & Callbacks, choose the WebSocket long-connection mode and subscribe to im.message.receive_v1.",
