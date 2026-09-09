@@ -38,12 +38,10 @@ export function openPreviewWindow(absPath: string, atCursor = false): void {
   const key = absPath.toLowerCase();
   const existing = windows.get(key);
   if (existing && !existing.isDestroyed()) {
-    console.log("[preview-dock] focus existing window:", absPath);
     existing.show();
     existing.focus();
     return;
   }
-  console.log("[preview-dock] open new window:", absPath);
 
   const icon = resolveIcon();
   // Frameless on purpose: the renderer draws its own caption (VS-style
@@ -97,7 +95,6 @@ export function openPreviewWindow(absPath: string, atCursor = false): void {
 export function closePreviewWindow(absPath: string): void {
   const win = windows.get(absPath.toLowerCase());
   if (!win || win.isDestroyed()) return;
-  console.log("[preview-dock] close window:", absPath);
   win.close();
 }
 
@@ -123,7 +120,6 @@ let moveTimer: NodeJS.Timeout | null = null;
 export function previewWindowMoveStart(absPath: string): void {
   const win = windows.get(absPath.toLowerCase());
   if (!win || win.isDestroyed()) return;
-  console.log("[preview-dock] caption move start:", absPath);
   const p = screen.getCursorScreenPoint();
   const b = win.getBounds();
   const [sizeW, sizeH] = win.getSize();
@@ -159,13 +155,10 @@ export function previewWindowMoveEnd(absPath: string): void {
   // dock — but only when the release point is on its preview tab strip.
   if (st.moved && isCursorOverMainWindow()) {
     const c = screen.getCursorScreenPoint();
-    console.log("[preview-dock] caption released over main → candidate:", absPath, `@${Math.round(c.x)},${Math.round(c.y)}`);
     const main = findMainWindow();
     if (main && !main.isDestroyed()) {
       main.webContents.send("preview:dock-candidate", { path: absPath, x: Math.round(c.x), y: Math.round(c.y) });
     }
-  } else {
-    console.log("[preview-dock] caption move end (no dock):", absPath, "moved:", st.moved);
   }
 }
 

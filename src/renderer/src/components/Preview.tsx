@@ -370,10 +370,7 @@ export function Preview() {
   // release point (screen coords); we dock only when it lands on our tab strip.
   useEffect(() => {
     const tryDock = (path: string, clientX: number, clientY: number) => {
-      if (!dockZoneContains(clientX, clientY)) {
-        console.log("[preview-dock] release not over tab strip → no dock:", path);
-        return;
-      }
+      if (!dockZoneContains(clientX, clientY)) return; // not over the tab strip
       const cwd = useStore.getState().activeProjectCwd || undefined;
       void openPreview(path, cwd);
       void window.pi.app.closePreviewWindow(path).catch(() => {});
