@@ -256,7 +256,19 @@ export class FeishuMessagingService {
     let watchdog: ReturnType<typeof setTimeout> | null = null;
 
     try {
-      const threadId = this.currentThreadId || (await this.ensureThread(cfg));
+      // Ack first so the user always gets feedback in Feishu — even if thread
+      // resolution or prompting fails below. Never fail silently.
+      replyMessageId = await this.reply(sourceMessageId, lang.thinking);
+
+      let threadId: string;
+      try {
+        threadId = this.currentThreadId || (await this.ensureThread(cfg));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[messaging] ensureThread failed:", message);
+        await this.deliver(replyMessageId, sourceMessageId, `${lang.errorPrefix}${message.slice(0, 300)}`);
+        return; // finally still clears the job
+      }
 
       // Subscribe before prompting so no delta is missed.
       unsubscribe = this.options.backend.subscribeThread(threadId, (event) => {
@@ -283,7 +295,6 @@ export class FeishuMessagingService {
         }
       });
 
-      replyMessageId = await this.reply(sourceMessageId, lang.thinking);
       watchdog = setTimeout(() => {
         if (!ref.cancelled) buffer += `\n${lang.timeoutNote}`;
         settledResolve();
@@ -307,13 +318,18 @@ export class FeishuMessagingService {
     // Final content: full reply text, truncated for chat delivery.
     const finalText = buffer.trim() || lang.noOutput;
     if (!ref.cancelled && this.client) {
-      if (replyMessageId) {
-        await this.updateReply(replyMessageId, truncateForChat(finalText, MAX_REPLY_CHARS, lang.truncatedNote)).catch(() => undefined);
-      } else {
-        // The ack reply failed earlier — try a fresh message with the result.
-        await this.reply(sourceMessageId, truncateForChat(finalText, MAX_REPLY_CHARS, lang.truncatedNote));
-      }
+      await this.deliver(
+        replyMessageId,
+        sourceMessageId,
+        truncateForChat(finalText, MAX_REPLY_CHARS, lang.truncatedNote),
+      ).catch(() => undefined);
     }
+  }
+
+  /** Updates the ack message when possible; falls back to a fresh reply. */
+  private async deliver(replyMessageId: string | null, sourceMessageId: string, text: string): Promise<void> {
+    if (replyMessageId) await this.updateReply(replyMessageId, text);
+    else await this.reply(sourceMessageId, text);
   }
 
   /** Reuses the channel's dedicated session (matched by title) or creates it. */
@@ -412,6 +428,22 @@ function maskAppId(appId: string): string | null {
 
 // ---- module lifecycle -------------------------------------------------------
 
+/** Makes sure the bound folder is visible to MPI: if it has no sessions yet
+ * and isn't pinned, pin it so thread creation can resolve the project (and the
+ * user sees in the sidebar where Feishu chats land). */
+function ensureChannelProjectVisible(cwd: string): void {
+  const trimmed = typeof cwd === "string" ? cwd.trim() : "";
+  if (!trimmed) return;
+  try {
+    const cfg = getConfig();
+    const pinned = cfg.pinnedProjects || [];
+    if (pinned.some((path: string) => path.toLowerCase() === trimmed.toLowerCase())) return;
+    updateConfig({ pinnedProjects: [...pinned, trimmed] });
+  } catch (err) {
+    console.error("[messaging] failed to pin channel project:", err);
+  }
+}
+
 let service: FeishuMessagingService | null = null;
 
 /** Called once from ipc.ts after the remote backend exists. */
@@ -419,6 +451,7 @@ export function initMessaging(options: MessagingServiceOptions): void {
   if (service) return;
   service = new FeishuMessagingService(options);
   const cfg = sanitizeFeishuConfig(getConfig().feishuChannel);
+  if (cfg.projectCwd) ensureChannelProjectVisible(cfg.projectCwd);
   if (cfg.enabled && cfg.appId && cfg.appSecret && cfg.projectCwd) {
     void service.start(cfg).catch((err) => console.error("[messaging] auto-start failed:", err));
   }
@@ -430,6 +463,7 @@ export function messagingSetConfig(patch: Partial<FeishuChannelConfig>): Messagi
   const current = sanitizeFeishuConfig(getConfig().feishuChannel);
   const next = sanitizeFeishuConfig({ ...current, ...patch });
   updateConfig({ feishuChannel: next });
+  ensureChannelProjectVisible(next.projectCwd);
   if (next.enabled && next.appId && next.appSecret && next.projectCwd) {
     void service.start(next).catch((err) => console.error("[messaging] start failed:", err));
   } else {

@@ -613,7 +613,8 @@ Click **Save configuration** to apply immediately. Status light at the top: gray
 ### 17.3 Usage and Commands
 
 - **DM**: send plain text to the bot;
-- **Groups**: @-mention the bot (only messages that mention it are processed);
+- **Groups**: @-mention the bot (only messages that mention it are processed; requires `im:message.group_at_msg:readonly` and adding the bot to the group);
+- If the bound folder isn't an MPI project yet (no sessions), saving the config auto-pins it in the sidebar so you can see where Feishu chats land;
 - Replies start with a "🤔 Working on it" placeholder, then stream updates as the agent works, finalizing when done; very long output is truncated (full result in the MPI session).
 - Commands: `/new` starts a fresh session (the old one is kept), `/help` shows help;
 - One message at a time — sending while busy gets a "still processing" notice.
