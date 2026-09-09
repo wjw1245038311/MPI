@@ -6,7 +6,7 @@ import { Markdown } from "../lib/markdown";
 import { CODE_LANGUAGE_ALIASES, CODE_LANGUAGES } from "../lib/code-languages";
 import { formatBytes } from "../lib/format";
 import { translateUiText } from "../lib/i18n";
-import { Close, Contract, Copy, Edit, Expand, Minus, Plus, Refresh, SelectArrow } from "./icons";
+import { Close, Contract, Copy, Edit, Expand, Folder, Minus, Plus, Refresh, SelectArrow } from "./icons";
 
 Object.entries(CODE_LANGUAGES).forEach(([name, grammar]) => hljs.registerLanguage(name, grammar as any));
 Object.entries(CODE_LANGUAGE_ALIASES).forEach(([name, aliases]) => {
@@ -198,6 +198,19 @@ export function Preview() {
     }
   };
 
+  const revealInExplorer = async () => {
+    if (!path) return;
+    try {
+      await window.pi.app.revealFileInExplorer(path);
+    } catch (error: any) {
+      const detail = error?.message || String(error);
+      useStore.getState().pushToast(
+        "error",
+        language === "zh" ? `在资源管理器中显示失败：${detail}` : `Could not show file in explorer: ${detail}`,
+      );
+    }
+  };
+
   useEffect(() => {
     if (!expanded) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -292,6 +305,16 @@ export function Preview() {
           >
             <Contract size={15} />
             <span>{language === "zh" ? "收缩" : "Restore"}</span>
+          </button>
+        )}
+        {path && (
+          <button
+            className="iconbtn"
+            title={language === "zh" ? "在资源管理器中显示" : "Show in File Explorer"}
+            aria-label={language === "zh" ? "在资源管理器中显示" : "Show in File Explorer"}
+            onClick={() => void revealInExplorer()}
+          >
+            <Folder size={14} />
           </button>
         )}
         <button

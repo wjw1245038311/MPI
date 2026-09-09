@@ -1740,6 +1740,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ok: true };
   });
 
+  ipcMain.handle("app:revealFileInExplorer", (_e, absPath: string) => {
+    if (!absPath || !existsSync(absPath)) throw new Error("File not found: " + absPath);
+    shell.showItemInFolder(absPath);
+    return { ok: true };
+  });
+
   ipcMain.handle("app:setProjectPinned", (_e, args: { cwd?: string; pinned?: boolean }) => {
     const cwd = typeof args?.cwd === "string" ? args.cwd.trim() : "";
     if (!cwd) throw new Error("Project path is required");

@@ -318,6 +318,7 @@ const prefixes: Array<[string, string]> = [
   ["归档失败：", "Failed to archive: "],
   ["归档：", "Archive: "],
   ["在文件管理器中打开：", "Open in File Explorer: "],
+  ["在资源管理器中显示失败：", "Could not show file in explorer: "],
   ["连接 pi 进程失败：", "Failed to connect to Pi: "],
   ["加载扩展功能失败：", "Failed to load extensions: "],
   ["安装失败：", "Installation failed: "],
