@@ -338,8 +338,17 @@ export class FeishuMessagingService {
       const payload = truncateForChat(finalText, MAX_REPLY_CHARS, lang.truncatedNote);
       if (replyMessageId) {
         const id = replyMessageId;
-        queueUpdate(() => this.updateReplyFinal(id, payload));
+        let finalLanded = false;
+        queueUpdate(async () => {
+          finalLanded = await this.updateReplyFinal(id, payload);
+        });
         await updateChain; // make sure the complete result actually landed
+        if (!finalLanded) {
+          // The ack message could not be finalized (persistent Feishu error) —
+          // deliver the complete result as a fresh message so nothing is lost.
+          console.error("[messaging] final update failed after retries; sending fresh message");
+          await this.reply(sourceMessageId, payload);
+        }
       } else {
         await this.reply(sourceMessageId, payload);
       }
@@ -420,15 +429,18 @@ export class FeishuMessagingService {
     }
   }
 
-  /** Final write with retries — the user must see the complete result. */
-  private async updateReplyFinal(messageId: string, text: string): Promise<void> {
+  /** Final write with retries — the user must see the complete result.
+   * Returns true when the update landed. */
+  private async updateReplyFinal(messageId: string, text: string): Promise<boolean> {
     for (let attempt = 0; ; attempt++) {
       try {
         await this.updateReplyOnce(messageId, text);
-        return;
+        return true;
       } catch (err) {
-        if (attempt >= 2) throw err;
-        console.error(`[messaging] final update failed (attempt ${attempt + 1}):`, err instanceof Error ? err.message : err);
+        if (attempt >= 2) {
+          console.error(`[messaging] final update failed after ${attempt + 1} attempts:`, err instanceof Error ? err.message : err);
+          return false;
+        }
         await new Promise((r) => setTimeout(r, 800));
       }
     }
