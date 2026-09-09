@@ -8,6 +8,7 @@ import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
 import { stopAutomations, stopScheduler } from "./automation";
+import { stopMessaging } from "./messaging/service";
 import { stopAllTuis } from "./tui";
 
 const IS_DEV_BUILD = !app.isPackaged;
@@ -286,6 +287,7 @@ app.on("before-quit", (e) => {
   // Safety net in case a bridge ever fails to settle (stopGraceful is bounded
   // at ~4s internally; this caps the whole sequence well beyond that).
   const hardStop = setTimeout(() => app.quit(), 8000);
+  stopMessaging(); // Feishu channel — drop the long connection before bridges die
   Promise.all([stopAllBridges(), stopAutomations()])
     .catch(() => undefined)
     .finally(() => {
@@ -299,6 +301,7 @@ app.on("window-all-closed", () => {
   // Safety net: on non-darwin this fires during the quit sequence above, after
   // bridges are already stopped (both calls then no-op).
   stopScheduler();
+  stopMessaging();
   void Promise.all([stopAllBridges(), stopAutomations()]).catch(() => undefined);
   stopAllTuis();
   if (process.platform !== "darwin") app.quit();

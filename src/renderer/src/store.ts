@@ -9,6 +9,7 @@ import type {
   ExtUiRequest,
   FileNode,
   McpServerInfo,
+  MessagingState,
   ModelInfo,
   PendingFollowUp,
   PermissionLevel,
@@ -1220,6 +1221,14 @@ interface PiStore {
   saveTask: (task: AutomationTask) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   runTaskNow: (id: string) => Promise<void>;
+
+  // messaging overlay (Feishu channel)
+  messagingOpen: boolean;
+  messagingState: MessagingState | null;
+  openMessaging: () => void;
+  closeMessaging: () => void;
+  loadMessaging: () => Promise<void>;
+  saveMessagingConfig: (patch: Partial<NonNullable<AppConfig["feishuChannel"]>>) => Promise<boolean>;
 
   // thread permission / folder
   setPermission: (threadId: string, level: PermissionLevel) => Promise<void>;
@@ -2917,6 +2926,35 @@ export const useStore = create<PiStore>()((set, get) => {
       await get().refreshProjects();
     } catch (e: any) {
       get().pushToast("error", "执行失败：" + (e?.message || e));
+    }
+  },
+
+  // ---- messaging channels (Feishu) ----
+  messagingOpen: false,
+  messagingState: null as MessagingState | null,
+  openMessaging: () => {
+    set({ messagingOpen: true });
+    void get().loadMessaging();
+  },
+  closeMessaging: () => set({ messagingOpen: false }),
+  loadMessaging: async () => {
+    try {
+      const state = await window.pi.messaging.getState();
+      if (state) set({ messagingState: state as MessagingState });
+    } catch (e: any) {
+      const zh = get().config?.language === "zh";
+      get().pushToast("error", `${zh ? "加载消息接入状态失败：" : "Failed to load channel status: "}${e?.message || e}`);
+    }
+  },
+  saveMessagingConfig: async (patch) => {
+    try {
+      const state = await window.pi.messaging.setConfig(patch);
+      if (state) set({ messagingState: state as MessagingState });
+      return true;
+    } catch (e: any) {
+      const zh = get().config?.language === "zh";
+      get().pushToast("error", `${zh ? "保存消息接入配置失败：" : "Failed to save channel config: "}${e?.message || e}`);
+      return false;
     }
   },
 

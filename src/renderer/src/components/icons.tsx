@@ -290,3 +290,9 @@ export const Terminal = (p: P) => (
     <path d="M12.5 15H17" />
   </svg>
 );
+export const MessageSquare = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M21 14.5a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />
+    <path d="M8 9.5h8M8 13h5" />
+  </svg>
+);

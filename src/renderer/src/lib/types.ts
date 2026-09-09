@@ -422,6 +422,26 @@ export interface AppConfig {
   remoteSignalingUrl: string;
   remoteSignalingEnabled: boolean;
   remoteStunUrls: string[];
+  /** Feishu message channel (导航栏 → 消息接入); absent = off. */
+  feishuChannel?: {
+    enabled: boolean;
+    appId: string;
+    appSecret: string;
+    projectCwd: string;
+    permission: "sandbox" | "full";
+  };
+}
+
+export type MessagingStatus = "off" | "connecting" | "connected" | "reconnecting" | "error";
+
+/** Renderer-facing Feishu channel state (main process never sends the secret). */
+export interface MessagingState {
+  status: MessagingStatus;
+  lastError: string | null;
+  configured: boolean;
+  appIdMasked: string | null;
+  projectCwd: string;
+  permission: PermissionLevel;
 }
 
 export interface AppRuntime {

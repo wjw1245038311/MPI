@@ -15,6 +15,7 @@ const exact: Record<string, string> = {
   "新建任务": "New task",
   "定时任务": "Automations",
   "扩展功能": "Extensions",
+  "消息接入": "Messaging",
   "会话": "Sessions",
   "归档": "Archive",
   "文件": "Files",

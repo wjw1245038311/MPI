@@ -43,6 +43,11 @@ export function usePiEvents() {
         else st.pushToast("error", `定时任务失败：${p.name}${p.error ? " · " + p.error : ""}`);
       }
     });
+    // A dev instance started before the messaging module has an old preload
+    // without this API — skip silently instead of breaking event wiring.
+    const u8 = typeof window.pi.on.messaging === "function"
+      ? window.pi.on.messaging((p) => useStore.setState({ messagingState: p }))
+      : () => undefined;
     const u6 = window.pi.on.projectsChanged(() => {
       void useStore.getState().refreshProjects();
     });
@@ -54,6 +59,7 @@ export function usePiEvents() {
       u7();
       u5();
       u6();
+      u8();
     };
   }, [handleEvent, handleExtUi, handleExit, handleError]);
 }

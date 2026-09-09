@@ -12,6 +12,7 @@ import { Settings } from "./components/Settings";
 import { SearchModal } from "./components/SearchModal";
 import { PluginsPanel } from "./components/PluginsPanel";
 import { AutomationPanel } from "./components/AutomationPanel";
+import { MessagingPanel } from "./components/MessagingPanel";
 import { Folder, Plus } from "./components/icons";
 import { LanguageBridge } from "./components/LanguageBridge";
 import { RemotePanel } from "./components/RemotePanel";
@@ -139,6 +140,7 @@ export default function App() {
       <SearchModal />
       <PluginsPanel />
       <AutomationPanel />
+      <MessagingPanel />
       <Settings />
       {remoteOpen && (
         <div className="settings-backdrop" onMouseDown={() => setRemoteOpen(false)}>

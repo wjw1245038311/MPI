@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+// Type-only import (erased at compile time) — no runtime cycle with messaging/types.
+import type { FeishuChannelConfig } from "./messaging/types";
 
 /**
  * Persisted, app-level settings. Stored under Electron's userData dir so it is
@@ -101,6 +103,9 @@ export interface AppConfig {
   remoteSignalingEnabled: boolean;
   /** Internal STUN endpoints used for direct WebRTC candidate discovery. TURN is intentionally unsupported. */
   remoteStunUrls: string[];
+  /** Feishu message channel (导航栏 → 消息接入). Absent = off. The app secret
+   * stays local to this machine and is never part of backup imports. */
+  feishuChannel?: FeishuChannelConfig;
 }
 
 export const DEFAULT_REMOTE_SIGNALING_URL = "wss://mpi-remote.scholarcn.com/ws";
@@ -164,6 +169,19 @@ const DEFAULTS: AppConfig = {
 let cached: AppConfig | null = null;
 let cachedDir = "";
 
+/** Coerces a persisted (or parsed) channel object into a safe shape. */
+function sanitizeFeishuChannel(value: unknown): FeishuChannelConfig | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const c = value as Record<string, unknown>;
+  return {
+    enabled: c.enabled === true,
+    appId: typeof c.appId === "string" ? c.appId.trim().slice(0, 256) : "",
+    appSecret: typeof c.appSecret === "string" ? c.appSecret.trim().slice(0, 512) : "",
+    projectCwd: typeof c.projectCwd === "string" ? c.projectCwd.trim().slice(0, 4096) : "",
+    permission: c.permission === "full" ? "full" : "sandbox",
+  };
+}
+
 function configPath(dir: string): string {
   return join(dir, "config.json");
 }
@@ -214,6 +232,7 @@ export function loadConfig(userDataDir: string): AppConfig {
           ...task,
           permission: task.permission === "full" ? "full" : "sandbox",
         })),
+        feishuChannel: sanitizeFeishuChannel(parsed.feishuChannel),
       };
       return cached;
     } catch {

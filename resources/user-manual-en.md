@@ -24,9 +24,10 @@ This manual covers all major features of MPI. If you only need to get the first 
 14. [Archive and Trash](#14-archive-and-trash)
 15. [Settings Reference](#15-settings-reference)
 16. [Android Phone Remote Control](#16-android-phone-remote-control)
-17. [Keyboard Shortcuts](#17-keyboard-shortcuts)
-18. [Data and Configuration Locations](#18-data-and-configuration-locations)
-19. [FAQ](#19-faq)
+17. [Messaging Channels (Feishu)](#17-messaging-channels-feishu)
+18. [Keyboard Shortcuts](#18-keyboard-shortcuts)
+19. [Data and Configuration Locations](#19-data-and-configuration-locations)
+20. [FAQ](#20-faq)
 
 ---
 
@@ -579,7 +580,51 @@ MPI supports remotely viewing sessions from an Android companion app and perform
 
 ---
 
-## 17. Keyboard Shortcuts
+## 17. Messaging Channels (Feishu)
+
+Message your MPI from Feishu: DM the bot or @-mention it in a group, and the message runs in a dedicated session under the bound project; the agent's reply streams back into that same message. The channel is online **only while MPI is running**.
+
+### 17.1 Enabling the Channel
+
+Open **Sidebar → Messaging channels** (the fourth item below "New session / Automations / Extensions") and fill in:
+
+| Field | Description |
+| --- | --- |
+| Enable Feishu channel | Master switch; no connection is made while off |
+| App ID / App Secret | Credentials of your custom app from the Feishu Open Platform (the secret stays on this machine and is never shown again) |
+| Bound project | The folder where messages run; a dedicated session named "Feishu bridge" is created there automatically |
+| Session permission | Sandbox (default, blocks operations that need confirmation) / Full access |
+
+Click **Save configuration** to apply immediately. Status light at the top: gray = off, blinking amber = connecting/reconnecting, green = connected, red = failed (details below).
+
+### 17.2 Creating a Feishu App (First Time)
+
+1. Sign in at [open.feishu.cn/app](https://open.feishu.cn/app) with your tenant account;
+2. Create a **custom (enterprise) app**; note the App ID and App Secret on "Credentials & Basic Info";
+3. Add the **Bot** capability under App Capabilities → Bots;
+4. Enable scopes: `im:message.p2p_msg:readonly` (receive p2p messages), `im:message.group_at_msg:readonly` (receive group @-mentions of the bot), `im:message:send_as_bot` (send as the app);
+5. On Events & Callbacks, choose **WebSocket long-connection mode** and subscribe to event `im.message.receive_v1`;
+6. Create a version and publish it (or set a test availability scope first).
+
+> Long-connection mode needs no public IP or tunneling — MPI connects straight to Feishu's WebSocket endpoint. The panel includes this guide as well.
+
+### 17.3 Usage and Commands
+
+- **DM**: send plain text to the bot;
+- **Groups**: @-mention the bot (only messages that mention it are processed);
+- Replies start with a "🤔 Working on it" placeholder, then stream updates as the agent works, finalizing when done; very long output is truncated (full result in the MPI session).
+- Commands: `/new` starts a fresh session (the old one is kept), `/help` shows help;
+- One message at a time — sending while busy gets a "still processing" notice.
+
+### 17.4 Notes
+
+- The channel is online only while MPI runs; messages sent while MPI is off (or the connection is down) are not received;
+- Avoid driving the same dedicated session from both desktop and Feishu at once;
+- Changing the bound project creates a new "Feishu bridge" session in the new project.
+
+---
+
+## 18. Keyboard Shortcuts
 
 | Shortcut | Action |
 | --- | --- |
@@ -593,7 +638,7 @@ MPI supports remotely viewing sessions from an Android companion app and perform
 
 ---
 
-## 18. Data and Configuration Locations
+## 19. Data and Configuration Locations
 
 | Content | Location (Windows) | Notes |
 | --- | --- | --- |
@@ -610,7 +655,7 @@ Dev (development build) and production installs have independent config director
 
 ---
 
-## 19. FAQ
+## 20. FAQ
 
 **Model selector shows "No available models"**
 Go back to "Settings → Models & Providers" and confirm you saved; check API key, Base URL (mind `/v1`), API type and model ID one by one, using "Test availability" to pinpoint the problem. If it still fails, reopen the session once.

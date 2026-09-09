@@ -29,6 +29,7 @@
     "test:npmcommand": "node --experimental-strip-types scripts/test-npm-command.mjs",
     "test:trash": "node --experimental-strip-types scripts/test-trash.mjs",
     "test:backup": "node --experimental-strip-types scripts/test-backup.mjs",
+    "test:messaging": "node --experimental-strip-types scripts/test-messaging.mjs",
     "test:searchtrash": "node --experimental-strip-types scripts/test-search-trash.mjs",
     "test:usage": "node --experimental-strip-types scripts/test-usage.mjs",
     "test:html-reference": "node --experimental-strip-types scripts/test-html-reference.mjs",
@@ -42,6 +43,7 @@
     "test:tuirace": "node scripts/build-tui-race-bundle.mjs && node scripts/test-tui-race.cjs"
   },
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.73.3",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "electron-updater": "^6.8.9",

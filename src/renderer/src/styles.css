@@ -8026,3 +8026,66 @@ mark.hl {
   font-size: 12px;
   color: var(--text-dim);
 }
+
+/* ---- messaging panel (Feishu channel) ------------------------------------ */
+.msg-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.msg-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #9a9a9f;
+  flex: none;
+}
+.msg-status-connected .msg-dot {
+  background: #34c759;
+}
+.msg-status-connecting .msg-dot,
+.msg-status-reconnecting .msg-dot {
+  background: #ff9f0a;
+  animation: msg-pulse 1.2s ease-in-out infinite;
+}
+.msg-status-error .msg-dot {
+  background: #b23a2c;
+}
+@keyframes msg-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.msg-appid {
+  margin-left: auto;
+  font-size: 12px;
+}
+.msg-error {
+  color: #b23a2c;
+  font-size: 12px;
+  margin: 4px 2px 8px;
+  word-break: break-all;
+}
+.msg-guide {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  font-size: 13px;
+}
+.msg-guide summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  user-select: none;
+  margin-bottom: 6px;
+}
+.msg-guide ol {
+  margin: 8px 0 4px 20px;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}

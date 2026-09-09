@@ -106,6 +106,10 @@ const api = {
     deleteTask: (id: string) => ipcRenderer.invoke("automation:deleteTask", id),
     runNow: (id: string) => ipcRenderer.invoke("automation:runNow", id),
   },
+  messaging: {
+    getState: () => ipcRenderer.invoke("messaging:getState"),
+    setConfig: (patch: unknown) => ipcRenderer.invoke("messaging:setConfig", patch),
+  },
   remote: {
     getStatus: () => ipcRenderer.invoke("remote:getStatus"),
     createPairing: () => ipcRenderer.invoke("remote:createPairing"),
@@ -227,6 +231,14 @@ const api = {
     focusThread: (cb: (p: { threadId: string }) => void) => on("app:focus-thread", cb),
     automation: (cb: (p: { type: "start" | "done"; taskId: string; name: string; ok?: boolean; error?: string }) => void) =>
       on("pi:automation", cb),
+    messaging: (cb: (p: {
+      status: "off" | "connecting" | "connected" | "reconnecting" | "error";
+      lastError: string | null;
+      configured: boolean;
+      appIdMasked: string | null;
+      projectCwd: string;
+      permission: PermissionLevel;
+    }) => void) => on("pi:messaging", cb),
     projectsChanged: (cb: (p: { cwd?: string; sessionFile?: string }) => void) => on("pi:projects-changed", cb),
     appUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:appUpdate", cb),
     coreUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:coreUpdate", cb),

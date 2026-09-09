@@ -78,6 +78,8 @@ import { getSkillDetails, getSkillsHubLeaderboard, installSkillFromHub, searchSk
 import { getMcpMarketDetail, searchMcpMarket } from "./mcp-market";
 import { getNpmReadme, searchNpmPackages } from "./npm-registry";
 import { removeAutomationTask, runTaskNow, startScheduler } from "./automation";
+import { getMessagingState, initMessaging, messagingSetConfig } from "./messaging/service";
+import type { FeishuChannelConfig } from "./messaging/types";
 import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
 import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } from "./remote/services";
@@ -1522,6 +1524,17 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   };
 
   const remoteService = new RemoteService(remoteBackend);
+
+  // ---- messaging channels (Feishu) ------------------------------------------
+  // Reuses the same backend as the Android remote client: chat messages are
+  // routed into one dedicated session of the bound project folder.
+  initMessaging({
+    backend: remoteBackend,
+    resolveProjectId: (cwd) => remoteProjectId(cwd),
+    language: () => getConfig().language,
+    onStateChange: (state) => send("pi:messaging", state),
+  });
+
   const remoteHost = new RemoteHost({
     userDataDir: getConfigDir(),
     signalingUrl: process.env.MPI_REMOTE_SIGNALING_URL || getConfig().remoteSignalingUrl || DEFAULT_REMOTE_SIGNALING_URL,
@@ -1609,11 +1622,23 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     app.setLoginItemSettings({ openAtLogin: on, ...(args ? { args } : {}) });
     return (args ? app.getLoginItemSettings({ args }) : app.getLoginItemSettings()).openAtLogin;
   });
-  ipcMain.handle("app:getConfig", () => getConfig());
+  // The Feishu app secret never crosses into the renderer: it is masked here
+  // and only ever written through messaging:setConfig.
+  ipcMain.handle("app:getConfig", () => {
+    const cfg = getConfig();
+    if (cfg.feishuChannel?.appSecret) return { ...cfg, feishuChannel: { ...cfg.feishuChannel, appSecret: "" } };
+    return cfg;
+  });
   ipcMain.handle("app:setConfig", (_e, patch) => {
     const prevCli = getConfig().piCliPath;
     const prevProfile = (getConfig().userProfile || "").trim();
-    const next = updateConfig(patch || {});
+    // Channel credentials are managed exclusively by messaging:setConfig.
+    let cleanPatch = patch;
+    if (cleanPatch && typeof cleanPatch === "object" && "feishuChannel" in cleanPatch) {
+      cleanPatch = { ...cleanPatch };
+      delete (cleanPatch as Record<string, unknown>).feishuChannel;
+    }
+    const next = updateConfig(cleanPatch || {});
     if (patch && ("remoteSignalingUrl" in patch || "remoteStunUrls" in patch)) {
       remoteHost.configure(next.remoteSignalingUrl || DEFAULT_REMOTE_SIGNALING_URL, [...BUILT_IN_REMOTE_STUN_URLS]);
     }
@@ -2573,6 +2598,10 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     await runTaskNow(id);
     return { ok: true };
   });
+
+  // ---- messaging channels ----------------------------------------------------
+  ipcMain.handle("messaging:getState", () => getMessagingState());
+  ipcMain.handle("messaging:setConfig", (_e, patch?: Partial<FeishuChannelConfig>) => messagingSetConfig(patch || {}));
 
   // ---- update pi core -----------------------------------------------------
   ipcMain.handle("app:checkAppUpdate", () => checkForAppUpdate());
