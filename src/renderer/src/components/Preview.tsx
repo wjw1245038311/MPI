@@ -348,6 +348,15 @@ export function Preview() {
     };
   }, [dragTabId]);
 
+  // Main-process dock request: a floating window's tab was released over this
+  // window → (re)open its file here. Works even while the panel is hidden.
+  useEffect(() => {
+    return window.pi.app.onPreviewDockRequest((p) => {
+      const cwd = useStore.getState().activeProjectCwd || undefined;
+      void openPreview(p, cwd);
+    });
+  }, [openPreview]);
+
   // Dock-back fallback: a popped-out window's tab can be dropped anywhere in
   // this window (even while the preview panel is hidden) to dock back — the
   // matching tab is activated/created here and that window closes.

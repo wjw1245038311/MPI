@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, screen, shell } from "electron";
 
 const IS_DEV_BUILD = !app.isPackaged;
 const APP_USER_MODEL_ID = IS_DEV_BUILD ? "com.mpi.app.dev" : "com.mpi.app";
@@ -71,4 +71,49 @@ export function openPreviewWindow(absPath: string): void {
 export function closePreviewWindow(absPath: string): void {
   const win = windows.get(absPath.toLowerCase());
   if (win && !win.isDestroyed()) win.close();
+}
+
+// Dock-back detection (Visual Studio style). HTML5 drag payloads do not
+// reliably cross BrowserWindow boundaries, so instead of relying on drop data
+// we track the pointer while a floating window's tab is being dragged: if it
+// is released over the main window, that file docks back into its preview panel.
+let pendingDock: { path: string; lastOverMain: boolean } | null = null;
+let dockPollTimer: NodeJS.Timeout | null = null;
+
+function findMainWindow(): BrowserWindow | undefined {
+  const previewWins = new Set(windows.values());
+  return BrowserWindow.getAllWindows().find((w) => !previewWins.has(w));
+}
+
+export function previewWindowDragStart(absPath: string): void {
+  pendingDock = { path: absPath, lastOverMain: false };
+  if (dockPollTimer) clearInterval(dockPollTimer);
+  dockPollTimer = setInterval(() => {
+    if (!pendingDock) return;
+    const main = findMainWindow();
+    if (!main || !main.isVisible()) {
+      pendingDock.lastOverMain = false;
+      return;
+    }
+    const p = screen.getCursorScreenPoint();
+    const b = main.getBounds();
+    pendingDock.lastOverMain =
+      p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
+  }, 50);
+}
+
+export function previewWindowDragEnd(absPath: string): void {
+  if (dockPollTimer) {
+    clearInterval(dockPollTimer);
+    dockPollTimer = null;
+  }
+  const pending = pendingDock;
+  pendingDock = null;
+  if (!pending || pending.path !== absPath || !pending.lastOverMain) return;
+  const main = findMainWindow();
+  if (main && !main.isDestroyed()) {
+    // Ask the main renderer to (re)open this file's preview tab, then close us.
+    main.webContents.send("preview:dock-request", pending.path);
+  }
+  closePreviewWindow(absPath);
 }

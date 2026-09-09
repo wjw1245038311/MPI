@@ -48,6 +48,13 @@ export function StandalonePreview({ path }: { path: string }) {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData(MPI_FILE_MIME, path); // also works as a plain file drop
     e.dataTransfer.setData(MPI_PREVIEW_WINDOW_MIME, path); // dock-back marker
+    // Cross-window drag payloads are unreliable; main tracks the pointer while
+    // this drag is in flight and docks us back if it ends over the main window.
+    void window.pi.app.previewWindowDragStart(path).catch(() => {});
+  };
+
+  const onTabDragEnd = () => {
+    void window.pi.app.previewWindowDragEnd(path).catch(() => {});
   };
 
   const ext = (() => {
@@ -66,6 +73,7 @@ export function StandalonePreview({ path }: { path: string }) {
           title={`${zh ? "拖回主窗口的预览面板可停靠回来\n" : "Drag back onto the main window's preview panel to dock it back\n"}${path}`}
           draggable
           onDragStart={onTabDragStart}
+          onDragEnd={onTabDragEnd}
         >
           <span className="preview-tab-ico">{fileIcon(ext, false)}</span>
           {loading && !payload ? <span className="spinner preview-tab-spinner" /> : null}

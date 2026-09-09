@@ -38,7 +38,12 @@ import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
 import { registerTuiIpc } from "./tui";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
-import { closePreviewWindow, openPreviewWindow } from "./preview-window";
+import {
+  closePreviewWindow,
+  openPreviewWindow,
+  previewWindowDragEnd,
+  previewWindowDragStart,
+} from "./preview-window";
 import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
 import { emptyTrash, listTrash, moveToTrash, purgeFromTrash, restoreFromTrash } from "./trash-store";
@@ -1755,6 +1760,18 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
 
   ipcMain.handle("app:closePreviewWindow", (_e, absPath: string) => {
     closePreviewWindow(String(absPath || ""));
+    return { ok: true };
+  });
+
+  // Dock-back detection: while a floating preview window's tab is dragged,
+  // main tracks the pointer; on release over the main window it docks back.
+  ipcMain.handle("app:previewWindowDragStart", (_e, absPath: string) => {
+    previewWindowDragStart(String(absPath || ""));
+    return { ok: true };
+  });
+
+  ipcMain.handle("app:previewWindowDragEnd", (_e, absPath: string) => {
+    previewWindowDragEnd(String(absPath || ""));
     return { ok: true };
   });
 
