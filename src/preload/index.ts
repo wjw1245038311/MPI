@@ -41,7 +41,8 @@ const api = {
     previewWindowDragEnd: (absPath: string) => ipcRenderer.invoke("app:previewWindowDragEnd", absPath),
     previewWindowMoveStart: (absPath: string) => ipcRenderer.invoke("app:previewWindowMoveStart", absPath),
     previewWindowMoveEnd: (absPath: string) => ipcRenderer.invoke("app:previewWindowMoveEnd", absPath),
-    onPreviewDockRequest: (cb: (path: string) => void) => on("preview:dock-request", cb),
+    onPreviewDockCandidate: (cb: (p: { path: string; x: number; y: number }) => void) =>
+      on("preview:dock-candidate", cb),
     prewarm: (cwd: string) => ipcRenderer.invoke("app:prewarm", cwd),
     setProjectPinned: (args: { cwd: string; pinned: boolean }) => ipcRenderer.invoke("app:setProjectPinned", args),
     setThreadPinned: (args: { file: string; pinned: boolean }) => ipcRenderer.invoke("app:setThreadPinned", args),

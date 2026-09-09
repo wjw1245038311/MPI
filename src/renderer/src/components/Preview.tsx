@@ -115,6 +115,10 @@ export function Preview() {
   // Set when a tab drag is consumed by an in-panel drop (reorder / snap-back),
   // so the trailing dragend does not also pop the tab out into a window.
   const tabDragConsumedRef = useRef(false);
+  // Dock-target geometry: floating windows dock back onto the tab strip; when
+  // no tabs are open (strip unrendered) fall back to the panel's top area.
+  const asideRef = useRef<HTMLElement | null>(null);
+  const tabsBarRef = useRef<HTMLDivElement | null>(null);
   // Right-click menu on a tab (open in separate window / close).
   const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
@@ -239,15 +243,38 @@ export function Preview() {
     return types.includes(MPI_FILE_MIME) || types.includes("Files");
   };
 
+  /** True when a viewport point is inside the dock zone (tab strip, padded). */
+  const dockZoneContains = (clientX: number, clientY: number): boolean => {
+    const strip = tabsBarRef.current;
+    if (strip) {
+      const r = strip.getBoundingClientRect();
+      const pad = 12;
+      return clientX >= r.left - pad && clientX <= r.right + pad && clientY >= r.top - pad && clientY <= r.bottom + pad;
+    }
+    const aside = asideRef.current;
+    if (!aside) return false; // panel closed → no dock target at all
+    const r = aside.getBoundingClientRect();
+    return clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.top + 80;
+  };
+
+  /** Screen (DIP) coords → viewport CSS px, accounting for page zoom. */
+  const screenToClient = (x: number, y: number): { x: number; y: number } => {
+    const cw = document.documentElement.clientWidth;
+    const scale = cw > 0 ? window.outerWidth / cw : 1;
+    return { x: (x - window.screenX) / scale, y: (y - window.screenY) / scale };
+  };
+
   // Dropping a file anywhere on the panel opens it in a new tab.
   const onPanelDrop = (e: React.DragEvent) => {
     e.preventDefault();
     fileDropDepthRef.current = 0;
     setFileDropOver(false);
     const cwd = useStore.getState().activeProjectCwd || undefined;
-    // A tab dragged back from a popped-out window → dock it here and close that window.
+    // A tab dragged back from a popped-out window → dock it here and close that
+    // window — but only when released over the tab strip, otherwise leave it floating.
     const fromWindow = e.dataTransfer.getData(MPI_PREVIEW_WINDOW_MIME);
     if (fromWindow) {
+      if (!dockZoneContains(e.clientX, e.clientY)) return;
       void openPreview(fromWindow, cwd);
       void window.pi.app.closePreviewWindow(fromWindow).catch(() => {});
       e.stopPropagation(); // keep the document-level dock fallback from running twice
@@ -348,12 +375,24 @@ export function Preview() {
     };
   }, [dragTabId]);
 
-  // Dock-back fallback (drop-payload path; the main-process pointer-tracking
-  // path is primary — see App.tsx for its dock-request subscription): a
-  // popped-out window's tab can be dropped anywhere in
-  // this window (even while the preview panel is hidden) to dock back — the
-  // matching tab is activated/created here and that window closes.
+  // Dock-back paths (both require the release point to be on the tab strip):
+  // 1) main-process pointer tracking sends a "dock-candidate" with screen coords
+  //    (primary — cross-window drag payloads are unreliable);
+  // 2) HTML5 drop payload from the floating window's tab (bonus path).
   useEffect(() => {
+    const tryDock = (path: string, clientX: number, clientY: number) => {
+      if (!dockZoneContains(clientX, clientY)) {
+        console.log("[preview-dock] release not over tab strip → no dock:", path);
+        return;
+      }
+      const cwd = useStore.getState().activeProjectCwd || undefined;
+      void openPreview(path, cwd);
+      void window.pi.app.closePreviewWindow(path).catch(() => {});
+    };
+    const unsub = window.pi.app.onPreviewDockCandidate(({ path, x, y }) => {
+      const c = screenToClient(x, y);
+      tryDock(path, c.x, c.y);
+    });
     const onDragOver = (e: DragEvent) => {
       if ((e.dataTransfer?.types || []).includes(MPI_PREVIEW_WINDOW_MIME)) e.preventDefault();
     };
@@ -361,13 +400,12 @@ export function Preview() {
       const fromWindow = e.dataTransfer?.getData(MPI_PREVIEW_WINDOW_MIME);
       if (!fromWindow) return;
       e.preventDefault();
-      const cwd = useStore.getState().activeProjectCwd || undefined;
-      void openPreview(fromWindow, cwd);
-      void window.pi.app.closePreviewWindow(fromWindow).catch(() => {});
+      tryDock(fromWindow, e.clientX, e.clientY);
     };
     document.addEventListener("dragover", onDragOver);
     document.addEventListener("drop", onDrop);
     return () => {
+      unsub();
       document.removeEventListener("dragover", onDragOver);
       document.removeEventListener("drop", onDrop);
     };
@@ -397,6 +435,7 @@ export function Preview() {
 
   return (
     <aside
+      ref={asideRef}
       className={`preview ${expanded ? "expanded" : ""} ${fileDropOver ? "drop-files" : ""}`}
       style={expanded ? undefined : { width: previewWidth, flexBasis: previewWidth }}
       onDragEnter={(e) => {
@@ -415,6 +454,7 @@ export function Preview() {
     >
       {tabs.length > 0 && (
         <div
+          ref={tabsBarRef}
           className="preview-tabs"
           role="tablist"
           // Releasing over the strip background (gaps between tabs) snaps back

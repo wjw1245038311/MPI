@@ -120,7 +120,7 @@ export function previewWindowDragStart(absPath: string): void {
 // Caption drag (VS-style): the renderer's custom title bar reports start/end;
 // main moves the window with the cursor and, on release over the main window,
 // docks the file back into its preview panel.
-let moveState: { win: BrowserWindow; offX: number; offY: number; startX: number; startY: number; moved: boolean } | null = null;
+let moveState: { win: BrowserWindow; offX: number; offY: number; startX: number; startY: number; moved: boolean; sizeW: number; sizeH: number } | null = null;
 let moveTimer: NodeJS.Timeout | null = null;
 
 export function previewWindowMoveStart(absPath: string): void {
@@ -129,7 +129,8 @@ export function previewWindowMoveStart(absPath: string): void {
   console.log("[preview-dock] caption move start:", absPath);
   const p = screen.getCursorScreenPoint();
   const b = win.getBounds();
-  moveState = { win, offX: p.x - b.x, offY: p.y - b.y, startX: p.x, startY: p.y, moved: false };
+  const [sizeW, sizeH] = win.getSize();
+  moveState = { win, offX: p.x - b.x, offY: p.y - b.y, startX: p.x, startY: p.y, moved: false, sizeW, sizeH };
   win.setAlwaysOnTop(true);
   if (moveTimer) clearInterval(moveTimer);
   moveTimer = setInterval(() => {
@@ -137,6 +138,13 @@ export function previewWindowMoveStart(absPath: string): void {
     if (!st || st.win.isDestroyed()) return;
     const c = screen.getCursorScreenPoint();
     st.win.setPosition(c.x - st.offX, c.y - st.offY);
+    // Windows/Chromium may auto-resize the window when it crosses a monitor
+    // with a different DPI scale — lock the size so the page doesn't breathe.
+    const [w, h] = st.win.getSize();
+    if (w !== st.sizeW || h !== st.sizeH) {
+      console.log(`[preview-dock] size drift during move: ${w}x${h} → restoring ${st.sizeW}x${st.sizeH}`);
+      st.win.setSize(st.sizeW, st.sizeH);
+    }
     if (Math.abs(c.x - st.startX) + Math.abs(c.y - st.startY) > 4) st.moved = true;
   }, 16);
 }
@@ -150,12 +158,15 @@ export function previewWindowMoveEnd(absPath: string): void {
   moveState = null;
   if (!st || st.win.isDestroyed()) return;
   st.win.setAlwaysOnTop(false);
-  // VS-style: releasing the caption over the main window docks it back.
+  // VS-style: releasing the caption over the main window asks the renderer to
+  // dock — but only when the release point is on its preview tab strip.
   if (st.moved && isCursorOverMainWindow()) {
-    console.log("[preview-dock] caption released over main → docking:", absPath);
+    const c = screen.getCursorScreenPoint();
+    console.log("[preview-dock] caption released over main → candidate:", absPath, `@${Math.round(c.x)},${Math.round(c.y)}`);
     const main = findMainWindow();
-    if (main && !main.isDestroyed()) main.webContents.send("preview:dock-request", absPath);
-    closePreviewWindow(absPath);
+    if (main && !main.isDestroyed()) {
+      main.webContents.send("preview:dock-candidate", { path: absPath, x: Math.round(c.x), y: Math.round(c.y) });
+    }
   } else {
     console.log("[preview-dock] caption move end (no dock):", absPath, "moved:", st.moved);
   }
@@ -177,10 +188,11 @@ export function previewWindowDragEnd(absPath: string): void {
     "mainFound:", !!(main && !main.isDestroyed()),
   );
   if (!pending || pending.path !== absPath || !pending.lastOverMain) return;
+  const c = screen.getCursorScreenPoint();
+  console.log("[preview-dock] drag released over main → candidate:", pending.path, `@${Math.round(c.x)},${Math.round(c.y)}`);
   if (main && !main.isDestroyed()) {
-    // Ask the main renderer to (re)open this file's preview tab, then close us.
-    console.log("[preview-dock] docking back:", pending.path);
-    main.webContents.send("preview:dock-request", pending.path);
+    // The renderer decides: it only docks when the release point is on its
+    // preview tab strip (and closes this window itself in that case).
+    main.webContents.send("preview:dock-candidate", { path: pending.path, x: Math.round(c.x), y: Math.round(c.y) });
   }
-  closePreviewWindow(absPath);
 }
