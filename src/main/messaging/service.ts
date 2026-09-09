@@ -248,6 +248,13 @@ export class FeishuMessagingService {
     let unsubscribe: (() => void) | null = null;
     let buffer = "";
     let lastPushAt = Date.now();
+    // Serialized pipeline for the ack message: every write is queued behind the
+    // previous one, so a slow in-flight update can never land after (and
+    // overwrite) a newer snapshot — that race made replies look "swallowed".
+    let updateChain: Promise<void> = Promise.resolve();
+    const queueUpdate = (fn: () => Promise<void>) => {
+      updateChain = updateChain.then(fn).catch((err) => console.error("[messaging] queued update failed:", err instanceof Error ? err.message : err));
+    };
     let settledResolve: () => void = () => undefined;
     const settled = new Promise<void>((resolve) => {
       settledResolve = resolve;
@@ -283,7 +290,8 @@ export class FeishuMessagingService {
             const now = Date.now();
             if (replyMessageId && now - lastPushAt >= STREAM_UPDATE_INTERVAL_MS) {
               lastPushAt = now;
-              void this.updateReply(replyMessageId, truncateForChat(buffer, MAX_REPLY_CHARS)).catch(() => undefined);
+              const id = replyMessageId;
+              queueUpdate(() => this.updateReply(id, truncateForChat(buffer, MAX_REPLY_CHARS)));
             }
           }
         } else if (event.kind === "message_end") {
@@ -323,14 +331,18 @@ export class FeishuMessagingService {
       this.job = null;
     }
 
-    // Final content: full reply text, truncated for chat delivery.
+    // Final content: full reply text, truncated for chat delivery. Goes through
+    // the same serialized chain (with retries) so it is guaranteed to land last.
     const finalText = buffer.trim() || lang.noOutput;
     if (!ref.cancelled && this.client) {
-      await this.deliver(
-        replyMessageId,
-        sourceMessageId,
-        truncateForChat(finalText, MAX_REPLY_CHARS, lang.truncatedNote),
-      ).catch(() => undefined);
+      const payload = truncateForChat(finalText, MAX_REPLY_CHARS, lang.truncatedNote);
+      if (replyMessageId) {
+        const id = replyMessageId;
+        queueUpdate(() => this.updateReplyFinal(id, payload));
+        await updateChain; // make sure the complete result actually landed
+      } else {
+        await this.reply(sourceMessageId, payload);
+      }
     }
   }
 
@@ -388,17 +400,37 @@ export class FeishuMessagingService {
     }
   }
 
-  private async updateReply(messageId: string, text: string): Promise<void> {
+  /** Single attempt; throws on failure. */
+  private async updateReplyOnce(messageId: string, text: string): Promise<void> {
     const client = this.client;
     if (!client || !messageId || !text) return;
+    const res: any = await client.im.v1.message.update({
+      path: { message_id: messageId },
+      data: { msg_type: "text", content: JSON.stringify({ text }) },
+    });
+    if (res?.code !== undefined && res.code !== 0) throw new Error(res.msg || `Feishu error ${res.code}`);
+  }
+
+  /** Best-effort update for streaming snapshots. */
+  private async updateReply(messageId: string, text: string): Promise<void> {
     try {
-      const res: any = await client.im.v1.message.update({
-        path: { message_id: messageId },
-        data: { msg_type: "text", content: JSON.stringify({ text }) },
-      });
-      if (res?.code !== undefined && res.code !== 0) throw new Error(res.msg || `Feishu error ${res.code}`);
+      await this.updateReplyOnce(messageId, text);
     } catch (err) {
       console.error("[messaging] update failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Final write with retries — the user must see the complete result. */
+  private async updateReplyFinal(messageId: string, text: string): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.updateReplyOnce(messageId, text);
+        return;
+      } catch (err) {
+        if (attempt >= 2) throw err;
+        console.error(`[messaging] final update failed (attempt ${attempt + 1}):`, err instanceof Error ? err.message : err);
+        await new Promise((r) => setTimeout(r, 800));
+      }
     }
   }
 
