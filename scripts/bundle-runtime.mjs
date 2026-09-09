@@ -191,6 +191,43 @@ function bundleNode() {
   }
 }
 
+/**
+ * Locate the npm package tree that ships alongside the Node.js binary used for
+ * the build. Official installs keep it next to node.exe (Windows) or under
+ * <prefix>/lib/node_modules (macOS).
+ */
+function npmSourceDir() {
+  const nodeDir = dirname(process.execPath);
+  const candidates =
+    process.platform === "win32"
+      ? [join(nodeDir, "node_modules", "npm")]
+      : [join(nodeDir, "..", "lib", "node_modules", "npm"), join(nodeDir, "node_modules", "npm")];
+  for (const candidate of candidates) {
+    if (existsSync(join(candidate, "bin", "npm-cli.js"))) return candidate;
+  }
+  throw new Error(`Could not locate the npm package tree next to ${process.execPath}`);
+}
+
+/**
+ * Bundle the npm CLI into the runtime so `pi install` works on machines that
+ * have no Node.js/npm of their own. MPI points Pi's `npmCommand` setting at
+ * <root>/node/node(.exe) + <root>/npm/node_modules/npm/bin/npm-cli.js.
+ */
+function bundleNpm() {
+  const source = npmSourceDir();
+  const dest = join(STAGE, "npm", "node_modules", "npm");
+  mkdirSync(dirname(dest), { recursive: true });
+  log(`copying npm CLI from ${source} -> ${dest}`);
+  cpSync(source, dest, { recursive: true });
+  // Prune documentation only (never the source tree): npm's install path does
+  // not read docs/ or man/ at runtime.
+  for (const name of ["docs", "man", ".github"]) {
+    rmSync(join(dest, name), { recursive: true, force: true });
+  }
+  if (!existsSync(join(dest, "bin", "npm-cli.js"))) throw new Error("bundled npm is missing bin/npm-cli.js");
+  log(`bundled npm CLI: ${directoryStats(dest).files} files/${formatSize(directoryStats(dest).bytes)}`);
+}
+
 function bundlePi(source) {
   const destination = join(STAGE, "pi");
   mkdirSync(destination, { recursive: true });
@@ -232,6 +269,7 @@ function main() {
   rmSync(RUNTIME_OUT, { recursive: true, force: true });
   mkdirSync(RUNTIME_OUT, { recursive: true });
   bundleNode();
+  bundleNpm();
   const runtimeVersion = bundlePi(source);
   if (runtimeVersion !== EXPECTED_PI_VERSION) {
     throw new Error(`Pi runtime version mismatch: expected v${EXPECTED_PI_VERSION}, found v${runtimeVersion}`);

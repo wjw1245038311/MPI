@@ -17,6 +17,14 @@ MPI —— 基于 Pi coding agent（Pi Studio fork）的桌面客户端。本文
 
    验证方式：应用功能无变化；「关于/更新日志」弹窗正常显示 changelog 内容即可确认第 2 条的导入修复生效。
 
+3. **扩展包安装不再依赖系统 Node.js/npm**（修复未装 npm 的电脑上无法安装扩展包的问题）：
+   - 独立 runtime 现内置 npm CLI（`MPI-Runtime-*.tar.gz` 新增 `npm/node_modules/npm`，压缩后约 +2.5MB）。每次执行 pi install/remove/update 前，MPI 自动把 `~/.pi/agent/settings.json` 的 `npmCommand` 指向内置 node + npm-cli.js——用户已显式配置过（如 mise/asdf）则绝不覆盖；runtime 更新后旧的管理值自动刷新。
+   - Pi 走「registry 直下」路径更新时，新 runtime 从旧 runtime 继承内置 npm；存量安装（旧 tarball 解压的 root 无 npm/）首次执行包命令时自动从安装包内嵌 archive 只提取 `./npm` 子树补齐。
+   - **友好报错**：安装/移除/更新因缺 npm 或 git 失败时，不再显示难懂的 `spawn npm ENOENT`——npm 缺失提示先装 Node.js LTS（nodejs.org），git 缺失提示先装 Git（git-scm.com）；移除场景额外说明「已从列表移除但本地文件未清理」。
+   - 新增纯逻辑模块 `src/main/npm-command.ts`（决策矩阵：首写/已正确不动/旧管理值刷新/尊重用户配置/清理失效值 + ENOENT 分类），测试 `npm run test:npmcommand`。
+
+   验证方式：① 在**未安装 Node.js** 的电脑上打开「扩展功能 → 扩展包」，从市场装任一包（如 pi-mcp-market）——安装成功；随后查看 `%USERPROFILE%\.pi\agent\settings.json` 出现 `npmCommand`，指向 `%APPDATA%\MPI\runtime\versions\…` 下的 node.exe 与 npm-cli.js。② 已装 Node.js 的电脑行为不变（内置 npm 优先）；若手动把 settings.json 的 `npmCommand` 改成自己的命令，MPI 不会覆盖它。③ git 源缺 Git 时：安装 `git:` 来源扩展包 → toast「此电脑未安装 git，无法从 git 源安装扩展包…」（可在 PATH 中临时移除 Git 目录模拟）。
+
 ## v0.5.1（2026-09-09）
 
 1. **「扩展功能」面板改造**：顶层拆为 技能 / 扩展包 两个模块；技能模块下三个子 tab——我的技能 / Skill 市场 / 统计。

@@ -103,6 +103,12 @@ export function runtimePathsForRoot(root: string): RuntimePaths | null {
   return existsSync(paths.node) && existsSync(paths.cli) ? paths : null;
 }
 
+/** Entry point of the npm CLI bundled inside a runtime root (may be absent in
+ * legacy or registry-updated runtimes). */
+export function bundledNpmCliPath(root: string): string {
+  return join(root, "npm", "node_modules", "npm", "bin", "npm-cli.js");
+}
+
 function readPointer(): RuntimePointer | null {
   try {
     const parsed = JSON.parse(readFileSync(runtimePointerPath(), "utf8")) as Partial<RuntimePointer>;
@@ -311,6 +317,25 @@ export async function installRuntimePackage(manifest: RuntimeManifest, onProgres
   } finally {
     rmSafe(staging);
   }
+}
+
+/**
+ * One-time migration for runtimes extracted before the npm CLI was bundled:
+ * pull just the ./npm subtree out of the embedded archive into `root` so
+ * extension package installs work without a system Node.js. No-op when the
+ * root already carries npm or no embedded archive is available (dev mode).
+ */
+export async function migrateBundledNpm(root: string): Promise<void> {
+  if (existsSync(bundledNpmCliPath(root))) return;
+  const manifest = getRuntimePackageManifest();
+  if (!manifest) return;
+  let archive: string;
+  try {
+    archive = embeddedRuntimeArchivePath(manifest);
+  } catch {
+    return; // not packaged / archive missing — nothing to migrate from
+  }
+  await runCommand(tarBinary(), ["-xzf", archive, "-C", root, "./npm"]);
 }
 
 /** Ensure the runtime embedded in the installer is present on first launch. */

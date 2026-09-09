@@ -1380,6 +1380,29 @@ function scheduleEventFlush(): void {
   });
 }
 
+/** Friendly message for a failed pi CLI run caused by npm/git being absent
+ * from PATH (legacy runtimes without the bundled npm, or git-based sources). */
+function missingToolMessage(missing: "npm" | "git", zh: boolean): string {
+  return missing === "npm"
+    ? zh
+      ? "此电脑未安装 Node.js/npm，无法安装扩展包。请先安装 Node.js LTS（https://nodejs.org）后重试。"
+      : "Node.js/npm is not installed on this machine, so extension packages can't be installed. Install Node.js LTS from https://nodejs.org first, then try again."
+    : zh
+      ? "此电脑未安装 git，无法从 git 源安装扩展包。请先安装 Git（https://git-scm.com）后重试。"
+      : "Git is not installed on this machine, which is required for git-based extension packages. Install it from https://git-scm.com first, then try again.";
+}
+
+/** Same as above but for removal: the settings entry is gone, local files remain. */
+function missingToolRemoveMessage(missing: "npm" | "git", zh: boolean): string {
+  return missing === "npm"
+    ? zh
+      ? "未找到 npm：扩展包已从列表移除，但本地文件未能清理。请安装 Node.js LTS（https://nodejs.org）后再次移除以清理。"
+      : "npm was not found: the package was removed from the list, but its local files were left behind. Install Node.js LTS (https://nodejs.org) and remove it again to clean up."
+    : zh
+      ? "未找到 git：扩展包已从列表移除，但本地文件未能清理。请安装 Git（https://git-scm.com）后再次移除以清理。"
+      : "Git was not found: the package was removed from the list, but its local files were left behind. Install Git (https://git-scm.com) and remove it again to clean up.";
+}
+
 export const useStore = create<PiStore>()((set, get) => {
   /** Move an unsent draft to `newKey` when the destination holds nothing;
    * keep both otherwise so no in-progress text is ever lost. Used by the
@@ -2658,7 +2681,11 @@ export const useStore = create<PiStore>()((set, get) => {
   installPackage: async (source) => {
     try {
       const res: any = await window.pi.plugins.installPackage(source);
-      if (res?.output) get().pushToast(res.ok ? "info" : "warning", String(res.output).slice(0, 300));
+      if (!res?.ok && (res.missing === "npm" || res.missing === "git")) {
+        get().pushToast("error", missingToolMessage(res.missing, get().config?.language === "zh"));
+      } else if (res?.output) {
+        get().pushToast(res.ok ? "info" : "warning", String(res.output).slice(0, 300));
+      }
       await get().loadPlugins();
       return !!res?.ok;
     } catch (e: any) {
@@ -2668,7 +2695,10 @@ export const useStore = create<PiStore>()((set, get) => {
   },
   removePackage: async (source) => {
     try {
-      await window.pi.plugins.removePackage(source);
+      const res: any = await window.pi.plugins.removePackage(source);
+      if (res?.missing === "npm" || res?.missing === "git") {
+        get().pushToast("warning", missingToolRemoveMessage(res.missing, get().config?.language === "zh"));
+      }
       await get().loadPlugins();
     } catch (e: any) {
       get().pushToast("error", "移除失败：" + (e?.message || e));
@@ -2706,6 +2736,8 @@ export const useStore = create<PiStore>()((set, get) => {
         } else {
           get().pushToast("success", source ? "扩展已更新到最新版本。" : "所有扩展已更新到最新版本。");
         }
+      } else if (res.missing === "npm" || res.missing === "git") {
+        get().pushToast("error", missingToolMessage(res.missing, get().config?.language === "zh"));
       } else if (assertion) {
         // The libuv assertion fires during process teardown on Windows — the
         // actual update (npm) likely completed before the crash.

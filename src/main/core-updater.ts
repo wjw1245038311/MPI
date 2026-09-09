@@ -12,7 +12,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { getBundledRuntime, resetPiRuntime } from "./pi-bridge";
 import {
   activateRuntimeRoot,
@@ -556,6 +556,13 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
     const nodeName = process.platform === "win32" ? "node.exe" : "node";
     mkdirSync(join(targetRoot, "node"), { recursive: true });
     cpSync(runtimeNode, join(targetRoot, "node", nodeName));
+    // Carry the bundled npm CLI over from the previous runtime. This registry
+    // path builds a bare pi tree without it; without this step extension
+    // package installs would break on machines that have no system Node.js.
+    const prevRoot = getActiveRuntimeRoot();
+    if (prevRoot && resolve(prevRoot) !== resolve(targetRoot) && existsSync(join(prevRoot, "npm"))) {
+      cpSync(join(prevRoot, "npm"), join(targetRoot, "npm"));
+    }
     activateRuntimeRoot(targetRoot, targetVersion);
     rmSafe(staging);
     resetPiRuntime(); // next thread open resolves the new runtime

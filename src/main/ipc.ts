@@ -32,6 +32,7 @@ import {
   writeModelsProviders,
   writeThinking,
 } from "./models-service";
+import { classifyMissingTool } from "./npm-command";
 import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtimeKind } from "./pi-bridge";
 import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
@@ -2291,7 +2292,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     if (res.code !== 0) {
       // Never add a failed/partial install to settings: Pi loads configured
       // packages before RPC starts, so one bad entry can brick every thread.
-      return { ok: false, output: installOutput || `pi install exited with code ${res.code}` };
+      return {
+        ok: false,
+        missing: classifyMissingTool(installOutput),
+        output: installOutput || `pi install exited with code ${res.code}`,
+      };
     }
     const probe = await probePiStartup();
     if (!probe.ok) {
@@ -2316,7 +2321,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     removePackageEntry(source); // ensure it is gone from settings regardless of CLI result
     dropWarmBridge();
     ensureWarmBridge();
-    return { ok: true, output: (res.stdout + res.stderr).trim() };
+    return { ok: true, missing: classifyMissingTool(res.stdout + res.stderr), output: (res.stdout + res.stderr).trim() };
   });
   ipcMain.handle("plugins:getSkills", () => listManagedSkills());
   ipcMain.handle("plugins:getSkillContent", (_e, path: string) => getSkillContent(path));
@@ -2358,7 +2363,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       dropWarmBridge();
       ensureWarmBridge();
     }
-    return { ok: res.code === 0, code: res.code, output: (res.stdout + res.stderr).trim() };
+    return { ok: res.code === 0, code: res.code, missing: classifyMissingTool(res.stdout + res.stderr), output: (res.stdout + res.stderr).trim() };
   });
   ipcMain.handle("skillsHub:leaderboard", () => getSkillsHubLeaderboard());
   ipcMain.handle("skillsHub:search", (_e, query: string) => searchSkillsHub(typeof query === "string" ? query : ""));

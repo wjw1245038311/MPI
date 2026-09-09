@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { getConfig } from "./config";
+import { decideNpmCommand, pathStartsWith } from "./npm-command";
 import { resolvePiRuntime } from "./pi-bridge";
+import { bundledNpmCliPath, migrateBundledNpm, runtimeBaseDir } from "./runtime-package";
 import { getAgentDir } from "./session-store";
 
 /**
@@ -113,12 +115,56 @@ export function removePackageEntry(source: string): void {
   writeSettings({ ...settings, packages: packages.filter((e) => entrySource(e) !== source) });
 }
 
+/**
+ * Point Pi's `npmCommand` setting at the npm CLI bundled inside the managed
+ * runtime so extension package install/remove/update works on machines that
+ * have no Node.js/npm of their own. Only app-managed runtimes are touched —
+ * user overrides and PATH-installed pi keep their system npm behavior, as do
+ * users who configured an explicit `npmCommand` themselves.
+ */
+export async function ensureNpmCommand(rt: { node: string; cli: string }): Promise<void> {
+  try {
+    let base = "";
+    try {
+      base = runtimeBaseDir();
+    } catch {
+      return; // config not loaded yet — skip bookkeeping
+    }
+    // rt.cli is <root>/pi/dist/cli.js for managed runtimes.
+    const root = dirname(dirname(rt.cli));
+    if (!pathStartsWith(root, base)) return; // override/PATH runtime — leave alone
+    const npmCli = bundledNpmCliPath(root);
+    if (!existsSync(npmCli)) {
+      // Existing installs extracted from pre-npm tarballs: pull the npm
+      // subtree out of the embedded archive (one-time, best effort).
+      try {
+        await migrateBundledNpm(root);
+      } catch (e) {
+        console.error("[plugins] bundled npm migration failed:", e);
+      }
+    }
+    const settings = readSettings();
+    const decision = decideNpmCommand({
+      settings,
+      nodePath: rt.node,
+      bundledNpmCli: existsSync(npmCli) ? npmCli : null,
+      runtimeBase: base,
+    });
+    if (decision.action === "write") writeSettings({ ...settings, npmCommand: decision.value });
+    else if (decision.action === "clear") writeSettings({ ...settings, npmCommand: undefined });
+  } catch (e) {
+    // Never block a CLI run on this best-effort bookkeeping.
+    console.error("[plugins] ensureNpmCommand failed:", e);
+  }
+}
+
 /** Run a pi CLI command (install/remove/update/list) and capture its output. */
 export function runPiCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise(async (resolve, reject) => {
     let rt: { node: string; cli: string };
     try {
       rt = await resolvePiRuntime(getConfig().piCliPath);
+      await ensureNpmCommand(rt);
     } catch (e) {
       reject(e);
       return;
