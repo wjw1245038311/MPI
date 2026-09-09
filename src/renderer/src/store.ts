@@ -1259,6 +1259,34 @@ const draftPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
  *  same-tick prompt share one process boot instead of spawning two. */
 const connectPromises = new Map<string, Promise<string | null>>();
 
+// ---- last-active session restore ------------------------------------------
+// The on-screen session is persisted (per renderer profile) so restarting the
+// app lands back in it. Captured at module load — before any store update —
+// because bootstrap's own writes would otherwise race the read.
+const LAST_ACTIVE_KEY = "mpi.last-active-thread";
+
+function readLastActive(): { cwd: string; file: string } | null {
+  try {
+    const raw = localStorage.getItem(LAST_ACTIVE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed.cwd === "string" && typeof parsed.file === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastActive(value: { cwd: string; file: string } | null): void {
+  try {
+    if (value) localStorage.setItem(LAST_ACTIVE_KEY, JSON.stringify(value));
+    else localStorage.removeItem(LAST_ACTIVE_KEY);
+  } catch {
+    // Storage unavailable — restore is a nice-to-have, never fatal.
+  }
+}
+
+let pendingRestore = readLastActive();
+
 /* ------------------------------------------------------------------ *
  * Event batching
  * ------------------------------------------------------------------ *
@@ -1507,6 +1535,16 @@ export const useStore = create<PiStore>()((set, get) => {
         // Pre-warm the standby pi process for the active project so the first
         // "new task" adopts a booted process instead of cold-starting.
         window.pi.app.prewarm(projects[0].cwd).catch(() => {});
+      }
+      // Land back in the session that was on screen at last exit, if it still
+      // exists (project not archived, thread file present). Consumed once so a
+      // StrictMode double-bootstrap cannot re-open it.
+      const restore = pendingRestore;
+      pendingRestore = null;
+      if (restore) {
+        const project = projects.find((p) => p.cwd.toLowerCase() === restore.cwd.toLowerCase());
+        const thread = project?.threads.find((t) => t.file.toLowerCase() === restore.file.toLowerCase());
+        if (project && thread) void get().openThread(project.cwd, thread.file);
       }
     } else {
       get().pushToast("error", "Failed to load projects: " + (projectsResult.reason?.message || projectsResult.reason));
@@ -2943,4 +2981,19 @@ export const useStore = create<PiStore>()((set, get) => {
     }
   },
   });
+});
+
+// Persist the on-screen session so a restart lands back in it. Placeholder ids
+// (opening-*) and "no thread open" clear the entry — closing everything means
+// nothing is restored next launch. The guard skips redundant writes during
+// streaming, when every batched update re-fires this listener.
+let lastWrittenActive = "";
+useStore.subscribe((state) => {
+  const id = state.activeThreadId;
+  const t = id ? state.threads[id] : undefined;
+  const value = t?.cwd && t.sessionFile ? { cwd: t.cwd, file: t.sessionFile } : null;
+  const next = value ? `${value.cwd}\u0000${value.file}` : "";
+  if (next === lastWrittenActive) return;
+  lastWrittenActive = next;
+  writeLastActive(value);
 });
