@@ -35,7 +35,8 @@ const api = {
     openProject: (absPath: string) => ipcRenderer.invoke("app:openProject", absPath),
     openFolderInExplorer: (absPath: string) => ipcRenderer.invoke("app:openFolderInExplorer", absPath),
     revealFileInExplorer: (absPath: string) => ipcRenderer.invoke("app:revealFileInExplorer", absPath),
-    openPreviewWindow: (absPath: string) => ipcRenderer.invoke("app:openPreviewWindow", absPath),
+    openPreviewWindow: (absPath: string, opts?: { atCursor?: boolean }) =>
+      ipcRenderer.invoke("app:openPreviewWindow", absPath, opts),
     closePreviewWindow: (absPath: string) => ipcRenderer.invoke("app:closePreviewWindow", absPath),
     previewWindowMoveStart: (absPath: string) => ipcRenderer.invoke("app:previewWindowMoveStart", absPath),
     previewWindowMoveEnd: (absPath: string) => ipcRenderer.invoke("app:previewWindowMoveEnd", absPath),

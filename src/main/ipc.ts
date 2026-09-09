@@ -1753,9 +1753,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ok: true };
   });
 
-  ipcMain.handle("app:openPreviewWindow", (_e, absPath: string) => {
+  ipcMain.handle("app:openPreviewWindow", (_e, absPath: string, opts?: { atCursor?: boolean }) => {
     if (!absPath || !existsSync(absPath)) throw new Error("File not found: " + absPath);
-    openPreviewWindow(absPath);
+    openPreviewWindow(absPath, !!opts?.atCursor);
     return { ok: true };
   });
 

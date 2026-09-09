@@ -312,7 +312,8 @@ export function Preview() {
         const tab = tabs.find((t) => t.id === dragged);
         if (tab) {
           closePreviewTab(dragged);
-          void window.pi.app.openPreviewWindow(tab.path).catch(() => {});
+          // Appear where the tab was released, not centered on screen.
+          void window.pi.app.openPreviewWindow(tab.path, { atCursor: true }).catch(() => {});
         }
       }
       tabDragConsumedRef.current = false;

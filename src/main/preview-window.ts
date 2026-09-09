@@ -19,9 +19,22 @@ function resolveIcon(): string | undefined {
   return undefined;
 }
 
+/** Where to place a drag-popped window: at the cursor (release point),
+ *  clamped into the work area of the display it's on. */
+function cursorPlacement(): { x: number; y: number } {
+  const p = screen.getCursorScreenPoint();
+  const wa = screen.getDisplayNearestPoint(p).workArea;
+  return {
+    x: Math.max(wa.x, Math.min(p.x + 12, wa.x + wa.width - 960)),
+    y: Math.max(wa.y, Math.min(p.y + 16, wa.y + wa.height - 720)),
+  };
+}
+
 /** Open a file in its own native-framed window. Dedup by path: an existing
- * window for the same file is focused instead of spawning another one. */
-export function openPreviewWindow(absPath: string): void {
+ * window for the same file is focused instead of spawning another one.
+ * @param atCursor place the new window where the cursor is (drag-out) instead
+ *                 of centered on screen. */
+export function openPreviewWindow(absPath: string, atCursor = false): void {
   const key = absPath.toLowerCase();
   const existing = windows.get(key);
   if (existing && !existing.isDestroyed()) {
@@ -43,6 +56,7 @@ export function openPreviewWindow(absPath: string): void {
     minHeight: 360,
     title: absPath.split(/[\\/]/).pop() || "Preview",
     icon,
+    ...(atCursor ? cursorPlacement() : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,
