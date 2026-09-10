@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Generate MPI app icon assets from the master artwork.
 
-Source: resources/0.jpg — WJW bamboo-copter (竹蜻蜓) design on a light-blue
-squircle with an "MPI" badge, provided by the maintainer. The source is a
-PagePop template and carries its watermark in the bottom-right margin; this
-script removes it and outputs:
+Source: resources/umbrella.jpg — black umbrella "WW" line art on white,
+provided by the maintainer (v0.5.x rebrand). The script crops the artwork to
+its bounding box, cleans JPEG noise near the edges, and composites it onto a
+white squircle tile so the icon stays readable in both light and dark themes:
 
   * resources/icon.png   1024px master, transparent outside the squircle
   * resources/icon.ico   multi-size Windows icon (16..256)
   * resources/icon.icns  macOS icon set
+
+The tile geometry matches the previous bamboo-copter icon exactly (963px
+squircle at offset 30, corner radius ~182), so the on-screen footprint in the
+taskbar / title bar does not change.
 
 Usage: python scripts/generate-icon.py
 """
@@ -18,65 +22,44 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RES = os.path.normpath(os.path.join(HERE, "..", "resources"))
-SRC = os.path.join(RES, "0.jpg")
+SRC = os.path.join(RES, "umbrella.jpg")
 
-# Bottom-right margin box that contains the PagePop watermark. Pixels inside
-# it are whitened unless they look like the blue tile (B channel clearly
-# above R), so the artwork itself is never touched.
-WM_BOX = (840, 935)
+# Tile geometry (measured from the previous icon.png).
+TILE_L, TILE_T, TILE_R, TILE_B = 30, 30, 992, 992
+CORNER_RADIUS = 182
+CANVAS = 1024
+# Artwork occupies this fraction of the tile height.
+ART_FRACTION = 0.78
 
 
-def load_clean() -> tuple[Image.Image, np.ndarray]:
+def load_art() -> Image.Image:
+    """Crop the artwork to its bounding box and whiten JPEG noise."""
     im = Image.open(SRC).convert("RGB")
     a = np.array(im)
-    h, w, _ = a.shape
-    x0, y0 = WM_BOX
-    box = a[y0:h, x0:w].copy()
-    not_blue = ~((box[:, :, 2].astype(int) > box[:, :, 0].astype(int) + 8))
-    box[not_blue] = [255, 255, 255]
-    a[y0:h, x0:w] = box
-    return Image.fromarray(a), a
-
-
-def tile_bbox(a: np.ndarray):
-    """Bounding box of the squircle (non-white pixels)."""
+    # Near-white pixels (JPEG ringing around the black strokes) → pure white.
+    light = a.min(axis=2) > 235
+    a[light] = [255, 255, 255]
+    im = Image.fromarray(a)
     nw = ~((a[:, :, 0] > 248) & (a[:, :, 1] > 248) & (a[:, :, 2] > 248))
-    rows = np.where(nw.any(axis=1))[0]
-    cols = np.where(nw.any(axis=0))[0]
-    return int(cols.min()), int(rows.min()), int(cols.max()), int(rows.max())
+    ys, xs = np.where(nw)
+    box = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+    return im.crop(box)
 
 
-def corner_radius(a: np.ndarray, L: int, T: int, R: int, B: int) -> int:
-    """Measure the rounded-corner radius at each corner (first row/col where
-    the edge reaches the straight line) and return the median."""
-    nw = ~((a[:, :, 0] > 248) & (a[:, :, 1] > 248) & (a[:, :, 2] > 248))
-
-    def first_straight(fn, start, stop, step):
-        for y in range(start, stop, step):
-            xs = np.where(nw[y, :])[0]
-            if len(xs) and fn(int(xs[0]), int(xs[-1])):
-                return abs(y - (T if step > 0 else B))
-        raise RuntimeError("corner arc not found")
-
-    radii = [
-        first_straight(lambda f, l: f <= L + 2, T, T + 500, 1),      # top-left
-        first_straight(lambda f, l: l >= R - 2, T, T + 500, 1),      # top-right
-        first_straight(lambda f, l: f <= L + 2, B, B - 500, -1),     # bottom-left
-        first_straight(lambda f, l: l >= R - 2, B, B - 500, -1),     # bottom-right
-    ]
-    r = int(sorted(radii)[len(radii) // 2])
-    if not 150 <= r <= 300:
-        raise RuntimeError(f"implausible corner radius {r} (measured {radii})")
-    return r
-
-
-def build_mask(size: int, L: int, T: int, R: int, B: int, r: int) -> Image.Image:
-    """2x-supersampled rounded-rect alpha mask so the squircle edge stays smooth."""
-    s2 = size * 2
+def build_tile() -> Image.Image:
+    """2x-supersampled white squircle on a transparent canvas."""
+    s2 = CANVAS * 2
     mask = Image.new("L", (s2, s2), 0)
     d = ImageDraw.Draw(mask)
-    d.rounded_rectangle([L * 2 - 2, T * 2 - 2, R * 2 + 2, B * 2 + 2], radius=r * 2, fill=255)
-    return mask.resize((size, size), Image.LANCZOS)
+    d.rounded_rectangle(
+        [TILE_L * 2 - 2, TILE_T * 2 - 2, TILE_R * 2 + 2, TILE_B * 2 + 2],
+        radius=CORNER_RADIUS * 2,
+        fill=255,
+    )
+    mask = mask.resize((CANVAS, CANVAS), Image.LANCZOS)
+    tile = Image.new("RGBA", (CANVAS, CANVAS), (255, 255, 255, 0))
+    tile.putalpha(mask)
+    return tile
 
 
 def save_ico(master: Image.Image, path: str) -> None:
@@ -91,13 +74,18 @@ def save_icns(master: Image.Image, path: str) -> None:
 
 
 def main() -> None:
-    im, a = load_clean()
-    L, T, R, B = tile_bbox(a)
-    r = corner_radius(a, L, T, R, B)
-    size = im.width
+    art = load_art()
+    tile_h = TILE_B - TILE_T + 1
+    scale = (tile_h * ART_FRACTION) / art.height
+    new_w, new_h = round(art.width * scale), round(art.height * scale)
+    art = art.resize((new_w, new_h), Image.LANCZOS)
 
-    master = im.convert("RGBA")
-    master.putalpha(build_mask(size, L, T, R, B, r))
+    master = build_tile()
+    # The artwork is black-on-white; pasting it straight onto the white tile
+    # lets its background merge seamlessly with the tile.
+    x = (CANVAS - new_w) // 2
+    y = (CANVAS - new_h) // 2
+    master.paste(art, (x, y))
 
     png_path = os.path.join(RES, "icon.png")
     ico_path = os.path.join(RES, "icon.ico")
@@ -106,7 +94,7 @@ def main() -> None:
     save_ico(master, ico_path)
     save_icns(master, icns_path)
 
-    print(f"tile bbox=({L},{T})-({R},{B}) radius={r}")
+    print(f"artwork {art.width}x{art.height} at ({x},{y}) on {CANVAS}px canvas")
     print(f"wrote: {png_path}")
     print(f"wrote: {ico_path}")
     print(f"wrote: {icns_path}")
