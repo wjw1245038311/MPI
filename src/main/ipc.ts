@@ -89,6 +89,7 @@ import { getSkillDetails, getSkillsHubLeaderboard, installSkillFromHub, searchSk
 import { getMcpMarketDetail, searchMcpMarket } from "./mcp-market";
 import { getNpmReadme, searchNpmPackages } from "./npm-registry";
 import { removeAutomationTask, runTaskNow, startScheduler } from "./automation";
+import { cancelAppRegistration, startAppRegistration } from "./messaging/app-registration";
 import { getMessagingState, initMessaging, messagingSetConfig } from "./messaging/service";
 import type { FeishuChannelConfig } from "./messaging/types";
 import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
@@ -2670,6 +2671,24 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // ---- messaging channels ----------------------------------------------------
   ipcMain.handle("messaging:getState", () => getMessagingState());
   ipcMain.handle("messaging:setConfig", (_e, patch?: Partial<FeishuChannelConfig>) => messagingSetConfig(patch || {}));
+
+  // One-click app creation via QR scan (registerApp). Credentials are saved
+  // in the main process on success; only client_id + user info cross IPC.
+  ipcMain.handle("messaging:startAppRegistration", () => {
+    startAppRegistration((event) => {
+      send("pi:messagingRegistration", event);
+      if (event.phase === "success") {
+        // Re-apply the just-saved credentials: restarts the channel when it
+        // is enabled + bound, and refreshes the renderer's state.
+        try {
+          send("pi:messaging", messagingSetConfig({}));
+        } catch (err) {
+          console.error("[messaging] post-registration apply failed:", err);
+        }
+      }
+    });
+  });
+  ipcMain.handle("messaging:cancelAppRegistration", () => cancelAppRegistration());
 
   // ---- update pi core -----------------------------------------------------
   ipcMain.handle("app:checkAppUpdate", () => checkForAppUpdate());

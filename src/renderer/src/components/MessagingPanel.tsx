@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 import { useStore } from "../store";
 import type { MessagingState } from "../lib/types";
 import { Close, Folder, MessageSquare, Smartphone } from "./icons";
@@ -55,6 +56,52 @@ export function MessagingPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // ---- one-click app creation via QR scan (registerApp) ---------------------
+  type RegState = { kind: "idle" } | { kind: "qr"; url: string; expireAt: number } | { kind: "expired" } | { kind: "error"; code: string; description: string };
+  const [reg, setReg] = useState<RegState>({ kind: "idle" });
+  const [qrData, setQrData] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  useEffect(() => {
+    const unsub = window.pi.on.messagingRegistration((e) => {
+      if (e.phase === "qr_ready" && e.url) {
+        setReg({ kind: "qr", url: e.url, expireAt: Date.now() + (e.expireIn ?? 240) * 1000 });
+      } else if (e.phase === "success") {
+        setReg({ kind: "idle" });
+        const zh = (useStore.getState().config?.language ?? "en") === "zh";
+        useStore.getState().pushToast("success", zh ? `应用创建成功，凭证已保存（${e.clientId}）` : `App created, credentials saved (${e.clientId})`);
+        void useStore.getState().loadMessaging();
+      } else if (e.phase === "error") {
+        setReg({ kind: "error", code: e.code ?? "unknown", description: e.description ?? "" });
+      }
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (reg.kind !== "qr") {
+      setQrData(null);
+      return;
+    }
+    let alive = true;
+    QRCode.toDataURL(reg.url, { width: 240, margin: 1 }).then((d) => {
+      if (alive) setQrData(d);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [reg]);
+
+  useEffect(() => {
+    if (reg.kind !== "qr") return;
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [reg]);
+  const regRemaining = reg.kind === "qr" ? Math.max(0, Math.round((reg.expireAt - nowTick) / 1000)) : 0;
+  useEffect(() => {
+    if (reg.kind === "qr" && regRemaining <= 0) setReg({ kind: "expired" });
+  }, [reg, regRemaining]);
+
   if (!open || !draft) return null;
 
   const zh = language === "zh";
@@ -106,6 +153,19 @@ export function MessagingPanel() {
     { id: "feishu", name: zh ? "飞书" : "Feishu", sub: STATUS_TEXT[status][language] },
     { id: "wechat", name: zh ? "微信" : "WeChat", sub: zh ? "即将支持" : "Coming soon", disabled: true },
   ];
+
+  // ---- QR registration helpers ----------------------------------------------
+  const startReg = () => void window.pi.messaging.startAppRegistration();
+  const cancelReg = () => {
+    void window.pi.messaging.cancelAppRegistration();
+    setReg({ kind: "idle" });
+  };
+  const fmtCountdown = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const regErrorText = (r: { code: string; description: string }) => {
+    if (r.code === "access_denied") return zh ? "已在手机上取消授权。" : "Authorization was cancelled on your phone.";
+    if (r.code === "expired_token") return zh ? "二维码已过期，请重新生成。" : "The QR code expired — regenerate it.";
+    return r.description || r.code;
+  };
 
   return (
     <div className="settings-backdrop" onMouseDown={close}>
@@ -165,6 +225,84 @@ export function MessagingPanel() {
                       {state.lastError}
                     </div>
                   )}
+
+                  {/* quick connect: one-click app creation via QR scan */}
+                  <div className={`msg-qr-card${reg.kind === "idle" && state?.configured ? " compact" : ""}`}>
+                    {reg.kind === "idle" && !state?.configured && (
+                      <>
+                        <div className="msg-qr-title">{zh ? "快速接入（推荐）" : "Quick setup (recommended)"}</div>
+                        <p className="set-hint msg-qr-desc">
+                          {zh
+                            ? "用飞书手机扫描下方二维码，确认后自动创建机器人应用并保存凭证——无需手动建应用、找 App ID。"
+                            : "Scan the QR code with mobile Feishu; after confirming, a bot app is created and its credentials are saved automatically — no console steps needed."}
+                        </p>
+                        <button className="set-btn primary" onClick={startReg}>
+                          {zh ? "📱 扫码创建应用" : "📱 Create app via scan"}
+                        </button>
+                      </>
+                    )}
+                    {reg.kind === "idle" && state?.configured && (
+                      <div className="msg-qr-bound">
+                        <span className="set-hint">
+                          {zh ? `已绑定应用` : `Bound app`}
+                          {state.appIdMasked ? ` · ${state.appIdMasked}` : ""}
+                        </span>
+                        <button className="set-btn ghost" onClick={startReg} title={zh ? "会创建一个新应用，旧应用仍保留在飞书后台" : "Creates a NEW app; the old one stays in your Feishu console"}>
+                          {zh ? "重新扫码创建新应用" : "Create a new app via scan"}
+                        </button>
+                      </div>
+                    )}
+                    {(reg.kind === "qr" || reg.kind === "expired") && (
+                      <>
+                        <div className="msg-qr-row">
+                          {qrData ? (
+                            <img className="msg-qr-img" src={qrData} alt="QR code" />
+                          ) : (
+                            <div className="msg-qr-box msg-qr-loading">
+                              <span className="spinner" />
+                            </div>
+                          )}
+                          <div className="msg-qr-side">
+                            <div className="msg-qr-title">{zh ? "用飞书扫码确认" : "Confirm with Feishu"}</div>
+                            {reg.kind === "qr" ? (
+                              <>
+                                <p className="set-hint">
+                                  {zh
+                                    ? "打开手机飞书 → 扫一扫，在确认页点「同意 / 创建」。"
+                                    : "Open mobile Feishu → scan, then tap confirm on the page."}
+                                </p>
+                                <div className={`msg-qr-countdown${regRemaining <= 10 ? " urgent" : ""}`}>⏱ {fmtCountdown(regRemaining)}</div>
+                              </>
+                            ) : (
+                              <div className="msg-qr-countdown expired">{zh ? "二维码已过期，请重新生成。" : "QR code expired — regenerate it."}</div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="auto-editor-actions">
+                          <button className="set-btn ghost" onClick={cancelReg}>
+                            {zh ? "取消" : "Cancel"}
+                          </button>
+                          <button className="set-btn primary" onClick={startReg}>
+                            {zh ? "重新生成二维码" : "Regenerate QR"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    {reg.kind === "error" && (
+                      <>
+                        <div className="msg-qr-title">{zh ? "扫码创建失败" : "Scan setup failed"}</div>
+                        <p className="set-hint msg-error-text">{regErrorText(reg)}</p>
+                        <div className="auto-editor-actions">
+                          <button className="set-btn ghost" onClick={() => setReg({ kind: "idle" })}>
+                            {zh ? "关闭" : "Dismiss"}
+                          </button>
+                          <button className="set-btn primary" onClick={startReg}>
+                            {zh ? "重试" : "Retry"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
 
                   {/* feishu card */}
                   <div className="set-row wide">
@@ -253,7 +391,12 @@ export function MessagingPanel() {
 
                   {/* setup guide */}
                   <details className="msg-guide">
-                    <summary>{zh ? "飞书应用创建指南（首次使用）" : "Feishu app setup guide (first time)"}</summary>
+                    <summary>{zh ? "飞书应用创建指南（手动方式）" : "Feishu app setup guide (manual)"}</summary>
+                    <div className="set-hint msg-guide-note">
+                      {zh
+                        ? "推荐：直接用上方「扫码创建应用」一键完成——自动配好机器人能力、权限与事件订阅。以下为手动方式（个人版租户不可用，需企业账号）。"
+                        : "Recommended: use the “Create app via scan” card above — it sets up bot capability, scopes and event subscription automatically. Manual steps below (requires an enterprise account; personal tenants are not supported)."}
+                    </div>
                     <ol>
                       {guideSteps.map((step, i) => (
                         <li key={i}>{step}</li>

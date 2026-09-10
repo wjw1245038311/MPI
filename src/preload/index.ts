@@ -120,6 +120,8 @@ const api = {
   messaging: {
     getState: () => ipcRenderer.invoke("messaging:getState"),
     setConfig: (patch: unknown) => ipcRenderer.invoke("messaging:setConfig", patch),
+    startAppRegistration: () => ipcRenderer.invoke("messaging:startAppRegistration"),
+    cancelAppRegistration: () => ipcRenderer.invoke("messaging:cancelAppRegistration"),
   },
   remote: {
     getStatus: () => ipcRenderer.invoke("remote:getStatus"),
@@ -250,6 +252,16 @@ const api = {
       projectCwd: string;
       permission: PermissionLevel;
     }) => void) => on("pi:messaging", cb),
+    messagingRegistration: (cb: (p: {
+      phase: "qr_ready" | "status" | "success" | "error";
+      url?: string;
+      expireIn?: number;
+      status?: "polling" | "slow_down" | "domain_switched";
+      clientId?: string;
+      openId?: string;
+      code?: string;
+      description?: string;
+    }) => void) => on("pi:messagingRegistration", cb),
     todoChanged: (cb: () => void) => on("pi:todo-changed", cb),
     projectsChanged: (cb: (p: { cwd?: string; sessionFile?: string }) => void) => on("pi:projects-changed", cb),
     appUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:appUpdate", cb),

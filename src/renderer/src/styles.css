@@ -8182,6 +8182,83 @@ mark.hl {
   text-align: center;
 }
 
+/* QR quick setup card (one-click app creation via registerApp) */
+.msg-qr-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  margin-bottom: 12px;
+}
+.msg-qr-card.compact {
+  padding: 8px 12px;
+}
+.msg-qr-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.msg-qr-desc {
+  margin: 0;
+}
+.msg-qr-bound {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.msg-qr-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.msg-qr-img,
+.msg-qr-box {
+  width: 132px;
+  height: 132px;
+  flex: 0 0 auto;
+  padding: 6px;
+  border-radius: 8px;
+  background: #fff; /* QR modules need a light backdrop in dark mode too */
+}
+.msg-qr-img {
+  display: block;
+}
+.msg-qr-box {
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+}
+.msg-qr-side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.msg-qr-countdown {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.msg-qr-countdown.urgent {
+  color: #b26a00;
+}
+.msg-qr-countdown.expired {
+  color: #b23a2c;
+}
+.msg-error-text {
+  margin: 0;
+  word-break: break-all;
+}
+.msg-qr-card .auto-editor-actions {
+  margin-top: 2px;
+}
+
 /* ---- todo panel (待办任务) ---- */
 .todo-panel {
   width: min(860px, 94vw);

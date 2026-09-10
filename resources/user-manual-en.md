@@ -609,7 +609,9 @@ Message your MPI from Feishu: DM the bot or @-mention it in a group, and the mes
 
 ### 17.1 Enabling the Channel
 
-Open **Sidebar → Messaging channels** (the fourth item below "New session / Automations / Extensions"). Select the **Feishu** channel in the left list (WeChat is coming soon) and fill in:
+Open **Sidebar → Messaging channels** (the fourth item below "New session / Automations / Extensions"). Select the **Feishu** channel in the left list (WeChat is coming soon).
+
+**Recommended: one-click setup via QR.** Click “📱 Create app via scan” in the quick-setup card, scan with mobile Feishu and confirm — a bot app is created under your enterprise with scopes and event subscription pre-configured, and its credentials are written straight to local config. No console steps needed, and the App Secret never leaves this machine. If QR setup is unavailable for you, use the manual method below:
 
 | Field | Description |
 | --- | --- |
