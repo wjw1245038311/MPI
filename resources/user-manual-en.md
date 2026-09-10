@@ -609,7 +609,7 @@ Message your MPI from Feishu: DM the bot or @-mention it in a group, and the mes
 
 ### 17.1 Enabling the Channel
 
-Open **Sidebar → Messaging channels** (the fourth item below "New session / Automations / Extensions") and fill in:
+Open **Sidebar → Messaging channels** (the fourth item below "New session / Automations / Extensions"). Select the **Feishu** channel in the left list (WeChat is coming soon) and fill in:
 
 | Field | Description |
 | --- | --- |

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import type { MessagingState } from "../lib/types";
-import { Close, Folder, MessageSquare } from "./icons";
+import { Close, Folder, MessageSquare, Smartphone } from "./icons";
+
+type ChannelId = "feishu" | "wechat";
 
 interface Draft {
   enabled: boolean;
@@ -37,9 +39,11 @@ export function MessagingPanel() {
 
   // Re-seed the draft each time the panel opens. Deliberately NOT dependent on
   // `config`: saving (or any unrelated setConfig) would otherwise wipe typing.
+  const [channel, setChannel] = useState<ChannelId>("feishu");
   const [draft, setDraft] = useState<Draft | null>(null);
   useEffect(() => {
     if (!open) return;
+    setChannel("feishu");
     const ch = config?.feishuChannel;
     setDraft({
       enabled: ch?.enabled ?? false,
@@ -98,6 +102,11 @@ export function MessagingPanel() {
         "Create a version and publish it (or set a test availability scope), then find your bot in Feishu and start chatting.",
       ];
 
+  const channels: { id: ChannelId; name: string; sub: string; disabled?: boolean }[] = [
+    { id: "feishu", name: zh ? "飞书" : "Feishu", sub: STATUS_TEXT[status][language] },
+    { id: "wechat", name: zh ? "微信" : "WeChat", sub: zh ? "即将支持" : "Coming soon", disabled: true },
+  ];
+
   return (
     <div className="settings-backdrop" onMouseDown={close}>
       <div className="plugins-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
@@ -109,7 +118,7 @@ export function MessagingPanel() {
             <div>
               <div className="set-brand-title">{zh ? "消息接入" : "Messaging"}</div>
               <div className="set-brand-sub">
-                {zh ? "通过飞书与 MPI 会话对话（仅 MPI 运行时在线）" : "Chat with your MPI sessions from Feishu (online while MPI is running)"}
+                {zh ? "通过聊天工具与 MPI 会话对话（仅 MPI 运行时在线）" : "Chat with your MPI sessions from messaging apps (online while MPI is running)"}
               </div>
             </div>
           </div>
@@ -118,118 +127,153 @@ export function MessagingPanel() {
           </button>
         </header>
 
-        <div className="plugins-body">
-          {/* status */}
-          <div className={`msg-status msg-status-${status}`}>
-            <span className="msg-dot" aria-hidden="true" />
-            <span>{STATUS_TEXT[status][language]}</span>
-            {state?.appIdMasked && <span className="muted msg-appid">{state.appIdMasked}</span>}
-          </div>
-          {status === "error" && state?.lastError && (
-            <div className="msg-error" title={state.lastError}>
-              {state.lastError}
-            </div>
-          )}
-
-          {/* feishu card */}
-          <div className="set-row wide">
-            <label className="set-label">{zh ? "启用飞书接入" : "Enable Feishu channel"}</label>
-            <div className="set-control">
-              <Toggle checked={draft.enabled} onChange={(v) => patch({ enabled: v })} />
-            </div>
-          </div>
-
-          <div className="set-row wide">
-            <label className="set-label">App ID</label>
-            <div className="set-control">
-              <input
-                className="set-input"
-                placeholder={zh ? "cli_xxx（开发者后台 → 凭证与基础信息）" : "cli_xxx (Credentials page)"}
-                value={draft.appId}
-                onChange={(e) => patch({ appId: e.target.value })}
-              />
-            </div>
-          </div>
-
-          <div className="set-row wide">
-            <label className="set-label">App Secret</label>
-            <div className="set-control">
-              <input
-                className="set-input"
-                type="password"
-                autoComplete="off"
-                placeholder={state?.configured ? (zh ? "已配置，留空保持不变" : "Configured — leave empty to keep") : zh ? "开发者后台 → 凭证与基础信息" : "Credentials page"}
-                value={draft.appSecret}
-                onChange={(e) => patch({ appSecret: e.target.value })}
-              />
-            </div>
-          </div>
-
-          <div className="set-row wide">
-            <label className="set-label">{zh ? "绑定项目" : "Bound project"}</label>
-            <div className="set-control">
-              <div className="auto-folder">
-                <input
-                  className="set-input"
-                  placeholder={zh ? "消息将进入该项目下的专属会话" : "Messages go to a dedicated session in this folder"}
-                  value={draft.projectCwd}
-                  onChange={(e) => patch({ projectCwd: e.target.value })}
-                />
-                <button className="set-btn" onClick={pickFolder}>
-                  <Folder size={14} /> {zh ? "选择" : "Browse"}
+        <div className="plugins-body msg-body">
+          <div className="msg-split">
+            {/* channel list */}
+            <aside className="msg-channels" aria-label={zh ? "消息通道" : "Channels"}>
+              <div className="msg-channels-label">{zh ? "通道" : "Channels"}</div>
+              {channels.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  disabled={c.disabled}
+                  aria-current={channel === c.id ? "true" : undefined}
+                  className={`msg-channel${channel === c.id ? " active" : ""}${c.id === "feishu" ? ` msg-status-${status}` : ""}`}
+                  onClick={() => setChannel(c.id)}
+                >
+                  <span className="msg-dot" aria-hidden="true" />
+                  <span className="msg-channel-text">
+                    <span className="msg-channel-name">{c.name}</span>
+                    <span className="msg-channel-sub">{c.sub}</span>
+                  </span>
                 </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="set-row wide">
-            <label className="set-label">{zh ? "会话权限" : "Session permission"}</label>
-            <div className="set-control">
-              <div className="auto-permission-block">
-                <strong>{zh ? "聊天驱动的会话无法等待授权确认：" : "Chat-driven sessions cannot wait for approval prompts:"}</strong>
-                <div className="auto-freq-tabs">
-                  <button
-                    className={`set-btn ${draft.permission !== "full" ? "primary" : "ghost"}`}
-                    onClick={() => patch({ permission: "sandbox" })}
-                  >
-                    {zh ? "沙盒（默认）" : "Sandbox (default)"}
-                  </button>
-                  <button className={`set-btn ${draft.permission === "full" ? "primary" : "ghost"}`} onClick={() => patch({ permission: "full" })}>
-                    {zh ? "完全权限" : "Full access"}
-                  </button>
-                </div>
-                <div className="set-hint">
-                  {zh
-                    ? "沙盒会阻止需要确认的操作；完全权限仅用于你明确信任的项目。切换后对新会话生效。"
-                    : "Sandbox blocks operations that require confirmation; use Full access only for explicitly trusted projects. Applies to new sessions."}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="auto-editor-actions">
-            <button className="set-btn ghost" onClick={close}>
-              {zh ? "取消" : "Cancel"}
-            </button>
-            <button className="set-btn primary" onClick={() => void save()}>
-              {zh ? "保存配置" : "Save configuration"}
-            </button>
-          </div>
-
-          {/* setup guide */}
-          <details className="msg-guide">
-            <summary>{zh ? "飞书应用创建指南（首次使用）" : "Feishu app setup guide (first time)"}</summary>
-            <ol>
-              {guideSteps.map((step, i) => (
-                <li key={i}>{step}</li>
               ))}
-            </ol>
-            <div className="set-hint">
-              {zh
-                ? "接入后：私聊机器人或群里 @它 发送文本即可提问；回复会流式更新在同一条消息里。命令：/new 新建会话，/help 帮助。"
-                : "Once connected: DM the bot or @-mention it in a group with plain text. Replies stream into one message. Commands: /new for a fresh session, /help for help."}
-            </div>
-          </details>
+            </aside>
+
+            {/* detail pane */}
+            <section className="msg-detail">
+              {channel === "feishu" ? (
+                <>
+                  {/* status */}
+                  <div className={`msg-status msg-status-${status}`}>
+                    <span className="msg-dot" aria-hidden="true" />
+                    <span>{STATUS_TEXT[status][language]}</span>
+                    {state?.appIdMasked && <span className="muted msg-appid">{state.appIdMasked}</span>}
+                  </div>
+                  {status === "error" && state?.lastError && (
+                    <div className="msg-error" title={state.lastError}>
+                      {state.lastError}
+                    </div>
+                  )}
+
+                  {/* feishu card */}
+                  <div className="set-row wide">
+                    <label className="set-label">{zh ? "启用飞书接入" : "Enable Feishu channel"}</label>
+                    <div className="set-control">
+                      <Toggle checked={draft.enabled} onChange={(v) => patch({ enabled: v })} />
+                    </div>
+                  </div>
+
+                  <div className="set-row wide">
+                    <label className="set-label">App ID</label>
+                    <div className="set-control">
+                      <input
+                        className="set-input"
+                        placeholder={zh ? "cli_xxx（开发者后台 → 凭证与基础信息）" : "cli_xxx (Credentials page)"}
+                        value={draft.appId}
+                        onChange={(e) => patch({ appId: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="set-row wide">
+                    <label className="set-label">App Secret</label>
+                    <div className="set-control">
+                      <input
+                        className="set-input"
+                        type="password"
+                        autoComplete="off"
+                        placeholder={state?.configured ? (zh ? "已配置，留空保持不变" : "Configured — leave empty to keep") : zh ? "开发者后台 → 凭证与基础信息" : "Credentials page"}
+                        value={draft.appSecret}
+                        onChange={(e) => patch({ appSecret: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="set-row wide">
+                    <label className="set-label">{zh ? "绑定项目" : "Bound project"}</label>
+                    <div className="set-control">
+                      <div className="auto-folder">
+                        <input
+                          className="set-input"
+                          placeholder={zh ? "消息将进入该项目下的专属会话" : "Messages go to a dedicated session in this folder"}
+                          value={draft.projectCwd}
+                          onChange={(e) => patch({ projectCwd: e.target.value })}
+                        />
+                        <button className="set-btn" onClick={pickFolder}>
+                          <Folder size={14} /> {zh ? "选择" : "Browse"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="set-row wide">
+                    <label className="set-label">{zh ? "会话权限" : "Session permission"}</label>
+                    <div className="set-control">
+                      <div className="auto-permission-block">
+                        <strong>{zh ? "聊天驱动的会话无法等待授权确认：" : "Chat-driven sessions cannot wait for approval prompts:"}</strong>
+                        <div className="auto-freq-tabs">
+                          <button
+                            className={`set-btn ${draft.permission !== "full" ? "primary" : "ghost"}`}
+                            onClick={() => patch({ permission: "sandbox" })}
+                          >
+                            {zh ? "沙盒（默认）" : "Sandbox (default)"}
+                          </button>
+                          <button className={`set-btn ${draft.permission === "full" ? "primary" : "ghost"}`} onClick={() => patch({ permission: "full" })}>
+                            {zh ? "完全权限" : "Full access"}
+                          </button>
+                        </div>
+                        <div className="set-hint">
+                          {zh
+                            ? "沙盒会阻止需要确认的操作；完全权限仅用于你明确信任的项目。切换后对新会话生效。"
+                            : "Sandbox blocks operations that require confirmation; use Full access only for explicitly trusted projects. Applies to new sessions."}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="auto-editor-actions">
+                    <button className="set-btn ghost" onClick={close}>
+                      {zh ? "取消" : "Cancel"}
+                    </button>
+                    <button className="set-btn primary" onClick={() => void save()}>
+                      {zh ? "保存配置" : "Save configuration"}
+                    </button>
+                  </div>
+
+                  {/* setup guide */}
+                  <details className="msg-guide">
+                    <summary>{zh ? "飞书应用创建指南（首次使用）" : "Feishu app setup guide (first time)"}</summary>
+                    <ol>
+                      {guideSteps.map((step, i) => (
+                        <li key={i}>{step}</li>
+                      ))}
+                    </ol>
+                    <div className="set-hint">
+                      {zh
+                        ? "接入后：私聊机器人或群里 @它 发送文本即可提问；回复会流式更新在同一条消息里。命令：/new 新建会话，/help 帮助。"
+                        : "Once connected: DM the bot or @-mention it in a group with plain text. Replies stream into one message. Commands: /new for a fresh session, /help for help."}
+                    </div>
+                  </details>
+                </>
+              ) : (
+                <div className="msg-coming">
+                  <Smartphone size={30} />
+                  <div>{zh ? "微信接入正在规划中，敬请期待。" : "The WeChat channel is on the roadmap — stay tuned."}</div>
+                </div>
+              )}
+            </section>
+          </div>
         </div>
       </div>
     </div>
