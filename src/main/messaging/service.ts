@@ -45,9 +45,16 @@ const T = {
     timeoutNote: "等待超时（30 分钟），结果可能仍在 MPI 中生成。",
     truncatedNote: "已截断，完整内容见 MPI",
     newDone: "✅ 已新建会话，后续消息将进入新会话。",
+    listHeader: "📋 本项目最近会话（最多 10 条，➜ = 当前）：",
+    noSessions: "本项目还没有会话。",
+    useHint: "用 /use <序号> 切换，例如 /use 2",
+    useDone: "✅ 已切换到会话：",
+    useNotFound: "没找到对应会话——先用 /list 看看列表。",
     help: [
       "MPI 飞书接入 · 可用命令：",
       "/new — 新建一个会话（旧会话保留）",
+      "/list — 列出本项目最近会话",
+      "/use <序号> — 切换到指定会话（如 /use 2）",
       "/help — 显示本帮助",
       "直接发送文本 = 在当前会话中提问，回复会流式更新这条消息。",
     ].join("\n"),
@@ -61,9 +68,16 @@ const T = {
     timeoutNote: "Timed out after 30 minutes; the result may still be finishing in MPI.",
     truncatedNote: "truncated — full content in MPI",
     newDone: "✅ New session created. Further messages go to it.",
+    listHeader: "📋 Recent sessions in this project (up to 10, ➜ = current):",
+    noSessions: "No sessions in this project yet.",
+    useHint: "Switch with /use <number>, e.g. /use 2",
+    useDone: "✅ Switched to session: ",
+    useNotFound: "Session not found — run /list to see the list.",
     help: [
       "MPI Feishu bridge · commands:",
       "/new — start a fresh session (the old one is kept)",
+      "/list — list recent sessions in this project",
+      "/use <n> — switch to that session (e.g. /use 2)",
       "/help — show this help",
       "Plain text = ask the current session; the reply streams into this message.",
     ].join("\n"),
@@ -207,13 +221,22 @@ export class FeishuMessagingService {
     text = stripMentions(text, Array.isArray(msg.mentions) ? (msg.mentions as FeishuMention[]) : undefined);
     if (!text) return;
 
-    const cmd = text.toLowerCase();
+    const cmd = text.trim().toLowerCase();
     if (cmd === "/new" || cmd === "新建") {
       await this.handleNewCommand(msg.message_id);
       return;
     }
     if (cmd === "/help" || cmd === "帮助") {
       await this.reply(msg.message_id, lang.help);
+      return;
+    }
+    if (cmd === "/list" || cmd === "列表") {
+      void this.handleListCommand(msg.message_id).catch((err) => console.error("[messaging] /list failed:", err));
+      return;
+    }
+    const useMatch = /^\/use\s+(\S+)$/.exec(cmd);
+    if (useMatch) {
+      void this.handleUseCommand(msg.message_id, useMatch[1]).catch((err) => console.error("[messaging] /use failed:", err));
       return;
     }
 
@@ -228,11 +251,81 @@ export class FeishuMessagingService {
     const cfg = sanitizeFeishuConfig(getConfig().feishuChannel);
     try {
       this.currentThreadId = await this.createThread(cfg);
+      this.persistActiveThreadId(this.currentThreadId);
       await this.reply(sourceMessageId, T[this.options.language()].newDone);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[messaging] /new failed:", message);
       await this.reply(sourceMessageId, `${T[this.options.language()].errorPrefix}${message.slice(0, 300)}`);
+    }
+  }
+
+  /** Recent sessions in the bound project, newest first (backing for /list and /use). */
+  private async recentThreads(cfg: FeishuChannelConfig, limit?: number): Promise<Array<{ id: string; title: string }>> {
+    const projectId = this.options.resolveProjectId(cfg.projectCwd);
+    const raw = await this.options.backend.listThreads(projectId);
+    const items = (Array.isArray(raw) ? raw : [])
+      .filter((t: any) => t && typeof t.id === "string")
+      .map((t: any) => ({
+        id: String(t.id),
+        title: typeof t.title === "string" && t.title.trim() ? t.title.trim() : "(untitled)",
+        updatedAt: Number(t.updatedAt ?? 0) || 0,
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return (limit !== undefined ? items.slice(0, limit) : items).map(({ id, title }) => ({ id, title }));
+  }
+
+  private async handleListCommand(sourceMessageId: string): Promise<void> {
+    const cfg = sanitizeFeishuConfig(getConfig().feishuChannel);
+    const lang = T[this.options.language()];
+    try {
+      const list = await this.recentThreads(cfg, 10);
+      if (!list.length) {
+        await this.reply(sourceMessageId, lang.noSessions);
+        return;
+      }
+      const lines = list.map((t, i) => `${i + 1}. ${t.id === this.currentThreadId ? "➜ " : ""}${t.title}`);
+      await this.reply(sourceMessageId, [lang.listHeader, ...lines, lang.useHint].join("\n"));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[messaging] /list failed:", message);
+      await this.reply(sourceMessageId, `${lang.errorPrefix}${message.slice(0, 300)}`);
+    }
+  }
+
+  private async handleUseCommand(sourceMessageId: string, arg: string): Promise<void> {
+    const cfg = sanitizeFeishuConfig(getConfig().feishuChannel);
+    const lang = T[this.options.language()];
+    try {
+      let target: { id: string; title: string } | undefined;
+      if (/^\d+$/.test(arg)) {
+        // Indexes into the same top-10 list that /list shows.
+        const n = Number.parseInt(arg, 10);
+        target = (await this.recentThreads(cfg, 10))[n - 1];
+      } else {
+        target = (await this.recentThreads(cfg)).find((t) => t.id === arg);
+      }
+      if (!target) {
+        await this.reply(sourceMessageId, lang.useNotFound);
+        return;
+      }
+      this.currentThreadId = target.id;
+      this.persistActiveThreadId(target.id);
+      await this.reply(sourceMessageId, `${lang.useDone}${target.title}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[messaging] /use failed:", message);
+      await this.reply(sourceMessageId, `${lang.errorPrefix}${message.slice(0, 300)}`);
+    }
+  }
+
+  /** Remembers the active session so restarts keep routing to it (if it still exists). */
+  private persistActiveThreadId(threadId: string): void {
+    try {
+      const current = sanitizeFeishuConfig(getConfig().feishuChannel);
+      updateConfig({ feishuChannel: { ...current, activeThreadId: threadId } });
+    } catch (err) {
+      console.error("[messaging] persist activeThreadId failed:", err);
     }
   }
 
@@ -372,6 +465,18 @@ export class FeishuMessagingService {
 
   /** Reuses the channel's dedicated session (matched by title) or creates it. */
   private async ensureThread(cfg: FeishuChannelConfig): Promise<string> {
+    // Restore the last explicitly selected session (/new, /use) when it still exists.
+    if (cfg.activeThreadId) {
+      try {
+        const found = (await this.recentThreads(cfg)).find((t) => t.id === cfg.activeThreadId);
+        if (found) {
+          this.currentThreadId = found.id;
+          return found.id;
+        }
+      } catch (err) {
+        console.error("[messaging] restore active thread failed:", err);
+      }
+    }
     const projectId = this.options.resolveProjectId(cfg.projectCwd);
     try {
       const threads = await this.options.backend.listThreads(projectId);

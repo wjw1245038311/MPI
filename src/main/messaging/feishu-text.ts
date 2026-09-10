@@ -50,13 +50,16 @@ export function stripMentions(text: string, mentions?: FeishuMention[]): string 
  * the strip-types test runner (no parameter properties in this file). */
 export function sanitizeFeishuConfig(raw?: Partial<FeishuChannelConfig> | null): FeishuChannelConfig {
   const str = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
-  return {
+  const out: FeishuChannelConfig = {
     enabled: raw?.enabled === true,
     appId: str(raw?.appId, 256),
     appSecret: str(raw?.appSecret, 512),
     projectCwd: str(raw?.projectCwd, 4096),
     permission: raw?.permission === "full" ? "full" : "sandbox",
   };
+  const activeThreadId = str(raw?.activeThreadId, 128);
+  if (activeThreadId) out.activeThreadId = activeThreadId; // keep the key absent when unset
+  return out;
 }
 
 /** Truncates long agent output for chat delivery, appending a note when cut. */

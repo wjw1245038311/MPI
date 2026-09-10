@@ -13,6 +13,8 @@ export interface FeishuChannelConfig {
   projectCwd: string;
   /** Permission level applied to the dedicated session (mapped at the remote boundary). */
   permission: PermissionLevel;
+  /** Last explicitly selected session (/new, /use); restored on restart when it still exists. */
+  activeThreadId?: string;
 }
 
 export type MessagingStatus = "off" | "connecting" | "connected" | "reconnecting" | "error";
