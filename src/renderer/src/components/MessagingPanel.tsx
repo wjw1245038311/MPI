@@ -68,6 +68,9 @@ export function MessagingPanel() {
         setReg({ kind: "qr", url: e.url, expireAt: Date.now() + (e.expireIn ?? 240) * 1000 });
       } else if (e.phase === "success") {
         setReg({ kind: "idle" });
+        // Refresh the draft so a later “Save configuration” doesn't overwrite
+        // the freshly registered credentials with the stale App ID.
+        setDraft((d) => (d && e.clientId ? { ...d, appId: e.clientId } : d));
         const zh = (useStore.getState().config?.language ?? "en") === "zh";
         useStore.getState().pushToast("success", zh ? `应用创建成功，凭证已保存（${e.clientId}）` : `App created, credentials saved (${e.clientId})`);
         void useStore.getState().loadMessaging();
