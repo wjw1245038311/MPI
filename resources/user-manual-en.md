@@ -642,6 +642,7 @@ Click **Save configuration** to apply immediately. Status light at the top: gray
 - If the bound folder isn't an MPI project yet (no sessions), saving the config auto-pins it in the sidebar so you can see where Feishu chats land;
 - Replies start with a "🤔 Working on it" placeholder, then stream updates as the agent works, finalizing when done; very long output is truncated (full result in the MPI session).
 - Commands: `/new` starts a fresh session (the old one is kept), `/list` lists recent sessions in this project, `/use <n>` switches to that session (e.g. `/use 2`; a session id also works), `/help` shows help; the active session is remembered and restored after restart (falls back to the dedicated “Feishu bridge” session if it no longer exists);
+- **Feishu MCP**: the “Enable Feishu MCP” button at the bottom of the form writes the official `@larksuiteoapi/lark-mcp` (npx stdio) into `~/.pi/agent/mcp.json` using the current channel credentials, so agents in sessions can call Feishu APIs directly (default tool set: messages / docs / calendar / Bitable…). Applies to new sessions; manage it under Extensions → My MCP. Requires local Node.js ≥ 20.
 - One message at a time — sending while busy gets a "still processing" notice.
 
 ### 17.4 Notes

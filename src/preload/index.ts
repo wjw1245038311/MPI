@@ -3,6 +3,7 @@ import type {
   ComposerDraft,
   McpMarketDetail,
   McpMarketPage,
+  McpServerInfo,
   NpmPackage,
   PermissionLevel,
   SkillHubSkill,
@@ -103,7 +104,7 @@ const api = {
     searchMcpMarket: (query: string, page?: number): Promise<McpMarketPage> =>
       ipcRenderer.invoke("plugins:mcpMarketSearch", { query, page }),
     getMcpMarketDetail: (id: string): Promise<McpMarketDetail> => ipcRenderer.invoke("plugins:mcpMarketDetail", id),
-    getMcpServers: () => ipcRenderer.invoke("plugins:getMcpServers"),
+    getMcpServers: (): Promise<McpServerInfo[]> => ipcRenderer.invoke("plugins:getMcpServers"),
     setMcpServerDisabled: (name: string, disabled: boolean) => ipcRenderer.invoke("plugins:setMcpServerDisabled", { name, disabled }),
     removeMcpServer: (name: string) => ipcRenderer.invoke("plugins:removeMcpServer", name),
     getSkillsHubLeaderboard: () => ipcRenderer.invoke("skillsHub:leaderboard"),
@@ -122,6 +123,8 @@ const api = {
     setConfig: (patch: unknown) => ipcRenderer.invoke("messaging:setConfig", patch),
     startAppRegistration: () => ipcRenderer.invoke("messaging:startAppRegistration"),
     cancelAppRegistration: () => ipcRenderer.invoke("messaging:cancelAppRegistration"),
+    enableFeishuMcp: (): Promise<{ ok: boolean; error?: string; name?: string; existed?: boolean }> =>
+      ipcRenderer.invoke("messaging:enableFeishuMcp"),
   },
   remote: {
     getStatus: () => ipcRenderer.invoke("remote:getStatus"),

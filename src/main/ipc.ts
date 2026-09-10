@@ -84,13 +84,14 @@ import {
   setMcpServerDisabled,
   setPackageEnabled,
   setSkillEnabled,
+  upsertFeishuMcp,
 } from "./plugins";
 import { getSkillDetails, getSkillsHubLeaderboard, installSkillFromHub, searchSkillsHub } from "./skills-hub";
 import { getMcpMarketDetail, searchMcpMarket } from "./mcp-market";
 import { getNpmReadme, searchNpmPackages } from "./npm-registry";
 import { removeAutomationTask, runTaskNow, startScheduler } from "./automation";
 import { cancelAppRegistration, startAppRegistration } from "./messaging/app-registration";
-import { getMessagingState, initMessaging, messagingSetConfig } from "./messaging/service";
+import { getMessagingState, initMessaging, messagingSetConfig, sanitizeFeishuConfig } from "./messaging/service";
 import type { FeishuChannelConfig } from "./messaging/types";
 import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
@@ -2689,6 +2690,18 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     });
   });
   ipcMain.handle("messaging:cancelAppRegistration", () => cancelAppRegistration());
+
+  // Enable the official Feishu MCP server with the channel's credentials.
+  ipcMain.handle("messaging:enableFeishuMcp", () => {
+    const cfg = sanitizeFeishuConfig(getConfig().feishuChannel);
+    if (!cfg.appId || !cfg.appSecret) return { ok: false, error: "not_configured" };
+    try {
+      const res = upsertFeishuMcp(cfg.appId, cfg.appSecret);
+      return { ok: true as const, ...res };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
 
   // ---- update pi core -----------------------------------------------------
   ipcMain.handle("app:checkAppUpdate", () => checkForAppUpdate());

@@ -38,6 +38,10 @@ MPI —— 基于 Pi coding agent（Pi Studio fork）的桌面客户端。本文
 
    验证方式：① 飞书发 /list → 返回编号会话列表（当前带 ➜）。② /use 2 → 「✅ 已切换到会话」，后续消息进入该会话。③ 重启 MPI 再发消息 → 仍进上次切换的会话。④ /use 99 或无效 ID → 友好报错提示。
 
+9. **「消息接入」飞书渠道支持一键启用官方飞书 MCP**：表单底部新增「🔌 启用飞书 MCP」按钮——把官方 `@larksuiteoapi/lark-mcp`（npx stdio、应用身份模式）以当前渠道凭证写入 `<agentDir>/mcp.json`（条目名 lark-mcp），会话中的智能体即可直接调用飞书 API（默认工具集：消息 / 文档 / 日历 / 多维表等）。对新会话生效；可在「扩展功能 → 我的 MCP」中停用或删除。按钮状态实时反映 mcp.json（已启用显示 ✓，点击可刷新凭证）；未保存 App ID/Secret 时禁用并提示先保存。新增 IPC `messaging:enableFeishuMcp` + plugins.ts `upsertFeishuMcp`（覆盖式写入防旧凭证残留）+ preload `window.pi.messaging.enableFeishuMcp`，顺带给 `getMcpServers` 补上 `Promise<McpServerInfo[]>` 类型；手册 zh/en §18.3 同步。
+
+   验证方式：① 消息接入 → 飞书（已保存凭证）→ 点「🔌 启用飞书 MCP」→ toast 成功、按钮变「✓ 已启用」。② 扩展功能 → 我的 MCP → 列表出现 lark-mcp（stdio）。③ 新会话里让智能体用飞书发消息/读文档 → 工具调用成功。④ 在 My MCP 停用后重开面板 → 按钮回到「启用」态。
+
 ## v0.5.3（2026-09-09）
 
 1. **导航栏文件可拖拽到输入框**：导航栏「文件」tab 的文件行可直接拖到 Composer 输入区，松手即作为附件加入（与「添加文件」按钮同一条链路；目录不可拖）。拖悬在输入区时输入框显示高亮描边提示可放置；同一文件重复拖入不会产生重复附件。

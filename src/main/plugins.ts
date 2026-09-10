@@ -692,3 +692,24 @@ export function removeMcpServer(name: string): void {
   delete file.mcpServers![name];
   writeMcpFile(file);
 }
+
+/** Server name used for the official Feishu/Lark OpenAPI MCP entry. */
+export const FEISHU_MCP_NAME = "lark-mcp";
+
+/**
+ * Upserts the official Feishu/Lark OpenAPI MCP server (`@larksuiteoapi/lark-mcp`)
+ * using the given app credentials: stdio via npx, app-identity mode (no OAuth).
+ * Replaces any existing entry so stale credentials never linger.
+ */
+export function upsertFeishuMcp(appId: string, appSecret: string): { name: string; existed: boolean } {
+  const file = readMcpFile();
+  if (typeof file.mcpServers !== "object" || file.mcpServers === null) file.mcpServers = {};
+  const rawEntry = file.mcpServers[FEISHU_MCP_NAME];
+  const existed = typeof rawEntry === "object" && rawEntry !== null;
+  file.mcpServers[FEISHU_MCP_NAME] = {
+    command: "npx",
+    args: ["-y", "@larksuiteoapi/lark-mcp", "mcp", "-a", appId, "-s", appSecret],
+  };
+  writeMcpFile(file);
+  return { name: FEISHU_MCP_NAME, existed };
+}

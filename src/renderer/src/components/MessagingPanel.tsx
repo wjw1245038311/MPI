@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { useStore } from "../store";
 import type { MessagingState } from "../lib/types";
-import { Close, Folder, MessageSquare, Smartphone } from "./icons";
+import { Close, Folder, MessageSquare, Plug, Smartphone } from "./icons";
 
 type ChannelId = "feishu" | "wechat";
 
@@ -105,6 +105,27 @@ export function MessagingPanel() {
     if (reg.kind === "qr" && regRemaining <= 0) setReg({ kind: "expired" });
   }, [reg, regRemaining]);
 
+  // ---- Feishu MCP (official @larksuiteoapi/lark-mcp via mcp.json) -----------
+  const [mcpEnabled, setMcpEnabled] = useState<boolean | null>(null); // null = not loaded yet
+  const [mcpBusy, setMcpBusy] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    window.pi.plugins
+      .getMcpServers()
+      .then((servers) => {
+        if (!alive) return;
+        const s = servers.find((x) => x.name === "lark-mcp");
+        setMcpEnabled(!!s && !s.disabled);
+      })
+      .catch(() => {
+        if (alive) setMcpEnabled(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open]);
+
   if (!open || !draft) return null;
 
   const zh = language === "zh";
@@ -162,6 +183,23 @@ export function MessagingPanel() {
   const cancelReg = () => {
     void window.pi.messaging.cancelAppRegistration();
     setReg({ kind: "idle" });
+  };
+  const enableFeishuMcp = async () => {
+    if (mcpBusy) return;
+    setMcpBusy(true);
+    try {
+      const res = await window.pi.messaging.enableFeishuMcp();
+      if (res.ok) {
+        setMcpEnabled(true);
+        useStore.getState().pushToast("success", zh ? "飞书 MCP 已启用（lark-mcp），对新会话生效" : "Feishu MCP enabled (lark-mcp); applies to new sessions");
+      } else if (res.error === "not_configured") {
+        useStore.getState().pushToast("warning", zh ? "请先保存 App ID / Secret，再启用飞书 MCP" : "Save the App ID / Secret first, then enable Feishu MCP");
+      } else {
+        useStore.getState().pushToast("error", `${zh ? "启用失败：" : "Enable failed: "}${res.error ?? "unknown error"}`);
+      }
+    } finally {
+      setMcpBusy(false);
+    }
   };
   const fmtCountdown = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   const regErrorText = (r: { code: string; description: string }) => {
@@ -379,6 +417,34 @@ export function MessagingPanel() {
                             ? "沙盒会阻止需要确认的操作；完全权限仅用于你明确信任的项目。切换后对新会话生效。"
                             : "Sandbox blocks operations that require confirmation; use Full access only for explicitly trusted projects. Applies to new sessions."}
                         </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="set-row wide">
+                    <label className="set-label">{zh ? "飞书 MCP" : "Feishu MCP"}</label>
+                    <div className="set-control">
+                      <button
+                        className={`set-btn ${mcpEnabled ? "" : "primary"}`}
+                        disabled={mcpBusy || !state?.configured}
+                        onClick={() => void enableFeishuMcp()}
+                      >
+                        {mcpBusy ? (
+                          zh ? "启用中…" : "Enabling…"
+                        ) : mcpEnabled ? (
+                          <>
+                            ✓ {zh ? "已启用（点击刷新凭证）" : "Enabled (click to refresh credentials)"}
+                          </>
+                        ) : (
+                          <>
+                            <Plug size={14} /> {zh ? "启用飞书 MCP" : "Enable Feishu MCP"}
+                          </>
+                        )}
+                      </button>
+                      <div className="set-hint">
+                        {zh
+                          ? "让会话中的智能体直接调用飞书 API（发消息、文档、日历等默认工具集），使用当前渠道凭证。写入 mcp.json 的 lark-mcp 条目，对新会话生效；可在「扩展功能 → 我的 MCP」中停用或删除。需本机已安装 Node.js ≥ 20。"
+                          : "Lets agents in sessions call Feishu APIs directly (default tool set: messages, docs, calendar…) using the current channel credentials. Writes a lark-mcp entry to mcp.json; applies to new sessions. Manage it under Extensions → My MCP. Requires local Node.js ≥ 20."}
                       </div>
                     </div>
                   </div>
