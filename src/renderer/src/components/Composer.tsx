@@ -1215,7 +1215,7 @@ export function Composer({ threadId }: { threadId: string }) {
                   <Send size={15} />
                 </button>
                 <button className="send-btn stop" title={language === "zh" ? "停止" : "Stop"} onClick={() => abortThread(threadId)}>
-                  <Stop size={14} />
+                  <Stop size={16} />
                 </button>
               </>
             ) : (

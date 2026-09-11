@@ -144,16 +144,6 @@ button {
 .tb-spacer {
   flex: 1;
 }
-.tb-status {
-  -webkit-app-region: no-drag;
-  font-size: 12px;
-  color: var(--text-faint);
-  margin-right: 8px;
-  max-width: 40vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .tb-settings-btn {
   -webkit-app-region: no-drag;
   width: 32px;
@@ -979,8 +969,20 @@ body.sidebar-resizing * {
   animation: message-jump-target .9s ease;
 }
 
-/* In-conversation search: dim non-matching messages, ring the current one,
-   flash each anchor when navigation lands on it. */
+/* In-conversation search (browser find-in-page style): every occurrence is
+   marked inline; the currently displayed one gets a stronger color. Non-
+   matching messages are dimmed, the current message ringed + flashed. */
+.chat-mark {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.chat-mark-current {
+  background: #ffb02e;
+  color: #241a05;
+}
+
 .messages.searching [data-message-key] {
   opacity: .35;
   transition: opacity .12s ease;

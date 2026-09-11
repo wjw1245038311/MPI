@@ -172,7 +172,8 @@ export const Close = (p: P) => (
 );
 export const Send = (p: P) => (
   <svg {...base(p)}>
-    <path d="M12 19V5M5 12l7-7 7 7" />
+    <path d="m22 2-7 20-4-9-9-4Z" />
+    <path d="M22 2 11 13" />
   </svg>
 );
 export const Stop = (p: P) => (

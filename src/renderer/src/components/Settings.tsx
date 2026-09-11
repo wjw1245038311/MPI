@@ -1935,10 +1935,7 @@ export function Settings() {
             <span className="set-brand-mark set-brand-app-icon">
               <img src={appIconUrl} alt="" aria-hidden="true" />
             </span>
-            <div>
-              <div className="set-brand-title">设置</div>
-              <div className="set-brand-sub">MPI</div>
-            </div>
+            <div className="set-brand-title">设置</div>
           </div>
           <nav className="set-tabs">
             {([

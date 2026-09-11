@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
-import { modelShort } from "../lib/format";
 import { Minus, Square, Close, Settings as SettingsIcon } from "./icons";
 import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
 import appIconUrl from "../../../../resources/icon.png";
@@ -14,9 +13,6 @@ interface MenuItem {
 }
 
 export function TitleBar() {
-  const activeThreadId = useStore((s) => s.activeThreadId);
-  const threads = useStore((s) => s.threads);
-  const runtime = useStore((s) => s.runtime);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const openSettings = useStore((s) => s.openSettings);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
@@ -102,27 +98,6 @@ export function TitleBar() {
     },
   ];
 
-  const active = activeThreadId ? threads[activeThreadId] : null;
-  const activeName = active
-    ? active.sessionName || active.cwd.split(/[\\/]/).filter(Boolean).pop() || active.cwd
-    : "";
-  const status = active
-    ? `${activeName} · ${
-        active.error
-          ? language === "zh" ? "连接失败" : "connection failed"
-          : active.connected
-            ? active.model
-              ? modelShort(active.model)
-              : language === "zh" ? "就绪" : "ready"
-            : language === "zh" ? "连接中…" : "connecting…"
-      }`
-    : runtime?.ok
-      ? language === "zh" ? "Pi 已就绪" : "Pi ready"
-      : runtime
-        ? language === "zh" ? "Pi 不可用" : "Pi unavailable"
-        : "MPI";
-  const statusTitle = active?.error || runtime?.error || status;
-
   return (
     <>
     <div className="titlebar">
@@ -153,9 +128,6 @@ export function TitleBar() {
         ))}
       </div>
       <div className="tb-spacer" />
-      <div className="tb-status" title={statusTitle}>
-        {status}
-      </div>
       <button className="tb-settings-btn" onClick={openSettings} title={language === "zh" ? "设置" : "Settings"} aria-label={language === "zh" ? "设置" : "Settings"}>
         <SettingsIcon size={15} />
       </button>

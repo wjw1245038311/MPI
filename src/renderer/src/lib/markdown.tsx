@@ -1,4 +1,4 @@
-import { memo, useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode, type Ref } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -112,9 +112,9 @@ const MD_COMPONENTS = {
   img: ({ src, alt }: any) => <img className="md-img" src={src} alt={alt || ""} />,
 };
 
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({ text, containerRef }: { text: string; containerRef?: Ref<HTMLDivElement> }) {
   return (
-    <div className="md">
+    <div className="md" ref={containerRef}>
       <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={MD_COMPONENTS}>
         {text || ""}
       </ReactMarkdown>

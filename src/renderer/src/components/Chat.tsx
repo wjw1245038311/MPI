@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { getDisplayThreadTitle, normalizeThreadFile, parseSkillBlock, useStore } from "../store";
+import { getDisplayThreadTitle, normalizeThreadFile, useStore } from "../store";
+import { parseSkillBlock } from "../lib/skill-block";
 import { Markdown } from "../lib/markdown";
 import { formatClock } from "../lib/format";
 import { collectFileArtifacts } from "../lib/artifacts";
@@ -7,6 +8,7 @@ import { parseHtmlReferenceText } from "../lib/html-reference";
 import { diffLines } from "../lib/diff";
 import { extractEditPairs, normalizeTranscriptText } from "../lib/tool-args";
 import { findMessageOccurrences } from "../lib/chat-search";
+import { MarkedDiv, useSearchMark } from "../lib/search-mark";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
@@ -46,10 +48,22 @@ export function Chat() {
   // the finalized messages of this thread and step through them.
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState("");
+  // The query that actually drives the search. It follows the input with a
+  // short delay so typing only triggers a full-transcript scan once per pause,
+  // not on every keystroke; clearing applies immediately.
+  const [debouncedChatQuery, setDebouncedChatQuery] = useState("");
   const [chatSearchIdx, setChatSearchIdx] = useState(0);
   const chatSearchInputRef = useRef<HTMLInputElement>(null);
   const searchFlashElRef = useRef<HTMLElement | null>(null);
   const searchFlashTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (chatSearchQuery === debouncedChatQuery) return;
+    const t = window.setTimeout(
+      () => setDebouncedChatQuery(chatSearchQuery),
+      chatSearchQuery.trim() ? 200 : 0,
+    );
+    return () => window.clearTimeout(t);
+  }, [chatSearchQuery, debouncedChatQuery]);
   // True while the viewport sits within NEAR_BOTTOM_PX of the transcript end.
   // Drives the floating "jump to latest" button.
   const [atBottom, setAtBottom] = useState(true);
@@ -276,10 +290,11 @@ export function Chat() {
     [groups],
   );
 
-  // In-conversation search state, derived from the finalized messages only.
+  // In-conversation search state, derived from the finalized messages only
+  // and driven by the debounced query (see above).
   const searchOccurrences = useMemo(
-    () => findMessageOccurrences(thread.messages, chatSearchQuery),
-    [thread.messages, chatSearchQuery],
+    () => findMessageOccurrences(thread.messages, debouncedChatQuery),
+    [thread.messages, debouncedChatQuery],
   );
   const clampedSearchIdx = Math.min(chatSearchIdx, Math.max(0, searchOccurrences.length - 1));
   // Comma-joined signature (stable string) so MessageGroup's memo comparator
@@ -289,6 +304,12 @@ export function Chat() {
     [searchOccurrences],
   );
   const searchingDim = chatSearchOpen && !tuiMode && searchOccurrences.length > 0;
+  // Lowercased query passed to every message for inline <mark> highlighting
+  // (browser find-in-page style); null when there is nothing to highlight.
+  const searchMarkQuery = useMemo(
+    () => (searchingDim ? debouncedChatQuery.trim().toLowerCase() : null),
+    [searchingDim, debouncedChatQuery],
+  );
 
   const jumpToUserMessage = (key: string) => {
     const scroll = scrollRef.current;
@@ -366,7 +387,7 @@ export function Chat() {
     if (!chatSearchOpen || tuiMode || searchOccurrences.length === 0) return;
     scrollToMessageKey(searchOccurrences[clampedSearchIdx].messageKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatSearchIdx, chatSearchQuery, chatSearchOpen]);
+  }, [chatSearchIdx, debouncedChatQuery, chatSearchOpen]);
 
   const onChatSearchInputKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
@@ -398,6 +419,14 @@ export function Chat() {
 
   const cancelRename = () => {
     setEditing(false);
+  };
+
+  // Shared search props for every MessageGroup (all primitives, so the memo
+  // comparator stays cheap).
+  const groupSearchProps = {
+    searchHitKeys: searchingDim ? searchHitSig : null,
+    searchCurrentKey: searchingDim && searchOccurrences.length > 0 ? searchOccurrences[clampedSearchIdx].messageKey : null,
+    searchMarkQuery,
   };
 
   return (
@@ -564,8 +593,7 @@ export function Chat() {
                 toolRuns={thread.toolRuns}
                 locked={thread.isStreaming}
                 onPreviewImage={setPreviewImage}
-                searchHitKeys={searchingDim ? searchHitSig : null}
-                searchCurrentKey={searchingDim && searchOccurrences.length > 0 ? searchOccurrences[clampedSearchIdx].messageKey : null}
+                {...groupSearchProps}
               />
             ))}
             {streaming && streamingExtends && lastGroup && (
@@ -577,8 +605,7 @@ export function Chat() {
                 locked
                 streaming
                 onPreviewImage={setPreviewImage}
-                searchHitKeys={searchingDim ? searchHitSig : null}
-                searchCurrentKey={searchingDim && searchOccurrences.length > 0 ? searchOccurrences[clampedSearchIdx].messageKey : null}
+                {...groupSearchProps}
               />
             )}
             {streaming && !streamingExtends && (
@@ -590,8 +617,7 @@ export function Chat() {
                 locked
                 streaming
                 onPreviewImage={setPreviewImage}
-                searchHitKeys={searchingDim ? searchHitSig : null}
-                searchCurrentKey={searchingDim && searchOccurrences.length > 0 ? searchOccurrences[clampedSearchIdx].messageKey : null}
+                {...groupSearchProps}
               />
             )}
             {thread.error && (
@@ -760,6 +786,7 @@ const MessageGroup = memo(MessageGroupInner, (prev, next) => {
     || prev.onPreviewImage !== next.onPreviewImage
     || prev.searchHitKeys !== next.searchHitKeys
     || prev.searchCurrentKey !== next.searchCurrentKey
+    || prev.searchMarkQuery !== next.searchMarkQuery
   ) {
     return false;
   }
@@ -780,6 +807,7 @@ function MessageGroupInner({
   onPreviewImage,
   searchHitKeys,
   searchCurrentKey,
+  searchMarkQuery,
 }: {
   threadId: string;
   group: MsgGroup;
@@ -791,6 +819,8 @@ function MessageGroupInner({
   searchHitKeys?: string | null;
   /** Message key of the currently displayed occurrence, if any. */
   searchCurrentKey?: string | null;
+  /** Lowercased query for inline <mark> highlighting; null = off/no matches. */
+  searchMarkQuery?: string | null;
 }) {
   const hitSet = useMemo(() => (searchHitKeys ? new Set(searchHitKeys.split(",")) : null), [searchHitKeys]);
   // Class suffix for a message anchor: dimmed unless it matches, ringed when
@@ -801,6 +831,10 @@ function MessageGroupInner({
     if (searchCurrentKey === key) cls += " search-current";
     return cls;
   };
+  // Inline <mark> highlighting for the custom-note branch (browser
+  // find-in-page style; marks live in the DOM — see lib/search-mark).
+  const firstItemText = group.items[0]?.text ?? "";
+  const customMarkRef = useSearchMark(group.role === "custom" ? (searchMarkQuery ?? null) : null, firstItemText);
   const forkThread = useStore((s) => s.forkThread);
   const openPreview = useStore((s) => s.openPreview);
   const cwd = useStore((s) => s.threads[threadId]?.cwd || "");
@@ -872,7 +906,7 @@ function MessageGroupInner({
     return (
       <div className={`msg custom${searchClass(m.key)}`} data-message-key={m.key}>
         <div className="msg-body">
-          <Markdown text={m.text || ""} />
+          <Markdown text={m.text || ""} containerRef={customMarkRef} />
         </div>
       </div>
     );
@@ -905,10 +939,18 @@ function MessageGroupInner({
             {skillBlock ? (
               <>
                 <SkillInvocation name={skillBlock.name} language={language} />
-                {skillBlock.userMessage && <div className="msg-user-text msg-user-skill-request">{skillBlock.userMessage}</div>}
+                {skillBlock.userMessage && (
+                  <MarkedDiv className="msg-user-text msg-user-skill-request" query={searchMarkQuery}>
+                    {skillBlock.userMessage}
+                  </MarkedDiv>
+                )}
               </>
             ) : (
-              parsedHtml.text && <div className="msg-user-text">{parsedHtml.text}</div>
+              parsedHtml.text && (
+                <MarkedDiv className="msg-user-text" query={searchMarkQuery}>
+                  {parsedHtml.text}
+                </MarkedDiv>
+              )
             )}
             {parsedHtml.references.length > 0 && (
               <div className="msg-html-references" aria-label={language === "zh" ? "HTML 元素引用" : "HTML element references"}>
@@ -1007,7 +1049,17 @@ function MessageGroupInner({
         <img className="msg-avatar-img" src={agentAvatar || doraemonAvatarUrl} alt="" />
       </div>
       <div className="msg-body">
-        {renderAssistantBlocks(group.items, toolRuns, language, searchClass)}
+        {renderAssistantBlocks(
+          group.items,
+          toolRuns,
+          language,
+          searchClass,
+          searchMarkQuery ?? null,
+          // When this group carries the in-progress message it is always the
+          // last item — its text changes every stream tick, so skip inline
+          // marks for it (message-level ring/flash still applies).
+          streaming ? group.items[group.items.length - 1]?.key ?? null : null,
+        )}
         {streaming && !hasBlocks && <span className="muted">思考中</span>}
         {streaming && <span className="streaming-dot" />}
         {last.errorMessage && <div style={{ color: "#c0392b", marginTop: 6 }}>{last.errorMessage}</div>}
@@ -1094,6 +1146,8 @@ function renderAssistantBlocks(
   toolRuns: Record<string, ToolRun>,
   language: "en" | "zh",
   searchClass?: (key: string) => string,
+  searchMarkQuery?: string | null,
+  streamingKey?: string | null,
 ): ReactNode[] {
   const toolCount = items
     .flatMap((message) => message.blocks || [])
@@ -1113,7 +1167,8 @@ function renderAssistantBlocks(
           </div>,
         );
       }
-      blockNodes.push(<BlockView key={key} block={block} toolRuns={toolRuns} language={language} />);
+      const blockQuery = message.key === streamingKey ? null : (searchMarkQuery ?? null);
+      blockNodes.push(<BlockView key={key} block={block} toolRuns={toolRuns} language={language} searchQuery={blockQuery} />);
     });
     if (blockNodes.length === 0) return null;
     return (
@@ -1124,8 +1179,25 @@ function renderAssistantBlocks(
   });
 }
 
-function BlockView({ block, toolRuns, language }: { block: ContentBlock; toolRuns: Record<string, ToolRun>; language: "en" | "zh" }) {
-  if (block.type === "text") return <Markdown text={block.text} />;
+function BlockView({
+  block,
+  toolRuns,
+  language,
+  searchQuery,
+}: {
+  block: ContentBlock;
+  toolRuns: Record<string, ToolRun>;
+  language: "en" | "zh";
+  /** Lowercased in-conversation search query to highlight inline; null = off. */
+  searchQuery?: string | null;
+}) {
+  // Marks are injected into the rendered .md DOM (see lib/search-mark); the
+  // content key re-applies them once a streaming block finalizes.
+  const markRef = useSearchMark(
+    block.type === "text" ? (searchQuery ?? null) : null,
+    block.type === "text" ? block.text : "",
+  );
+  if (block.type === "text") return <Markdown text={block.text} containerRef={markRef} />;
   if (block.type === "thinking") return <Thinking text={block.thinking} language={language} />;
   const run = toolRuns[block.id] || (block.contentIndex === undefined ? undefined : Object.values(toolRuns).find((candidate) => candidate.contentIndex === block.contentIndex));
   return <ToolCard id={block.id} name={effectiveToolName(block.name, run)} blockArgs={block.arguments} run={run} language={language} />;
