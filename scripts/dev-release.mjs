@@ -168,8 +168,8 @@ async function main() {
   const remoteUrl = git("remote get-url github");
   if (!/[:/]([^:/]+)\/([^/]+?)(?:\.git)?$/.test(remoteUrl)) throw new Error(`github remote 无法解析：${remoteUrl}`);
   log(`   ✓ github remote: ${remoteUrl}`);
-  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  const currentVersion = pkg.version;
+  // 预检只取版本号；不要持有这个对象——[2/5] 必须在 stash 之后重新读取（见下）。
+  const currentVersion = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
   nextVersion = bumpPatch(currentVersion);
   if (!nextVersion) throw new Error(`package.json 版本号不是 x.y.z：${currentVersion}`);
   log(`   ✓ 版本 ${currentVersion} → ${nextVersion}（patch +1）`);
@@ -190,6 +190,9 @@ async function main() {
 
   // ---- [2/5] bump + changelog ---------------------------------------------
   log("[2/5] 更新 package.json 与 changelog.md");
+  // stash 之后重新读取：预检的 parse 发生在 stash 之前，写回那个旧对象会把
+  // package.json 里的未提交 WIP 漏进 release commit（v0.6.6 曾漏入一行测试脚本）。
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   pkg.version = nextVersion;
   writeFileSync(join(ROOT, "package.json"), JSON.stringify(pkg, null, 2) + "\n", "utf8");
   const md = readFileSync(join(ROOT, "changelog.md"), "utf8");
