@@ -32,8 +32,10 @@ jobs:
 
     # These are unsigned CI artifacts. Configure signing secrets and remove
     # this setting for production distribution builds.
+    # Pi runtime version is NOT pinned here on purpose: bundle-runtime.mjs
+    # falls back to package.json's piRuntimeVersion (single source of truth,
+    # same as local builds).
     env:
-      PI_RUNTIME_VERSION: 0.84.1
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
     steps:
@@ -56,11 +58,16 @@ jobs:
           console.log({actual,expected});
           if(actual.platform!==expected.platform||actual.arch!==expected.arch)throw new Error(JSON.stringify({expected,actual}));"
 
+      - name: Resolve Pi runtime version from package.json
+        id: pi-runtime
+        shell: bash
+        run: echo "version=$(node -p 'require("./package.json").piRuntimeVersion')" >> "$GITHUB_OUTPUT"
+
       - name: Install project dependencies
         run: npm ci
 
       - name: Install the pinned Pi runtime
-        run: npm install --global --no-audit --no-fund @earendil-works/pi-coding-agent@${{ env.PI_RUNTIME_VERSION }}
+        run: npm install --global --no-audit --no-fund @earendil-works/pi-coding-agent@${{ steps.pi-runtime.outputs.version }}
 
       - name: Typecheck
         run: npm run typecheck
