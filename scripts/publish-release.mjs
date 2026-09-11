@@ -126,6 +126,10 @@ function putAsset(url, filePath) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     // 必须显式 Content-Length：pipe() 默认走 chunked 编码，GitHub uploads 端点不接受（HTTP 400）。
+    const total = fs.statSync(filePath).size;
+    let sent = 0;
+    let lastTickAt = Date.now();
+    let lastTickBytes = 0;
     const req = https.request({
       method: 'PUT',
       hostname: u.hostname,
@@ -133,7 +137,7 @@ function putAsset(url, filePath) {
       headers: {
         ...authHeaders(),
         'Content-Type': 'application/octet-stream',
-        'Content-Length': String(fs.statSync(filePath).size),
+        'Content-Length': String(total),
       },
     }, (res) => {
       let body = '';
@@ -146,7 +150,23 @@ function putAsset(url, filePath) {
       });
     });
     req.on('error', reject);
-    createReadStream(filePath).pipe(req);
+    const rs = createReadStream(filePath);
+    // 大文件上行慢（v0.6.5 实测 ~2MB/s，149MB 要十几分钟）：每 5s 打一行进度到日志/对话。
+    if (total > 1_000_000) {
+      const name = path.basename(filePath);
+      rs.on('data', (chunk) => {
+        sent += chunk.length;
+        const now = Date.now();
+        if (now - lastTickAt < 5000) return;
+        const dt = Math.max((now - lastTickAt) / 1000, 0.001);
+        const speed = (sent - lastTickBytes) / dt;
+        lastTickAt = now;
+        lastTickBytes = sent;
+        console.log(`   … ${name} ${((sent / total) * 100).toFixed(0)}%（${(sent / 1048576).toFixed(1)}/${(total / 1048576).toFixed(1)} MB，${(speed / 1048576).toFixed(2)} MB/s）`);
+      });
+    }
+    rs.on('error', reject);
+    rs.pipe(req);
   });
 }
 
