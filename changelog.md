@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.6.3（2026-09-11）
 
 1. **设置「关于 MPI」新增 dev 一键发版面板（仅开发模式可见）**：一键完成 bump patch → changelog Unreleased 改名 → commit → push origin → npm run dist → publish-release.mjs（tag/push/GitHub Release/附件上传），全程日志逐行流式显示在面板内、可随时取消；预检要求工作区干净且 GitHub token 就绪（env GITHUB_TOKEN 或仓库根 .gh-token，token 只在 main 进程读取、不传 renderer），有未提交改动会中止而不会自动提交别人的 WIP。
 
