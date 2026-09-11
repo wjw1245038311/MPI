@@ -6,7 +6,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
-import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, startDevRelease } from "./dev-release";
+import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
 import { getDevReleaseLogWindow, openChangelogWindow, openDevReleaseLogWindow } from "./standalone-windows";
 import {
   BUILT_IN_REMOTE_STUN_URLS,
@@ -3126,6 +3126,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // Buffered history for the standalone log window (pulled on mount; live
   // lines keep streaming via pi:devReleaseLog afterwards).
   ipcMain.handle("app:getDevReleaseLog", () => getDevReleaseLogBuffer());
+  // Data for the release-review conversation (dev panel「发起发版评审」).
+  ipcMain.handle("app:getReleaseReview", () => getReleaseReview());
 
   // ---- edit menu (clipboard on the focused field) ------------------------
   ipcMain.handle("app:editAction", (_e, action: "copy" | "cut" | "paste" | "delete" | "selectAll") => {

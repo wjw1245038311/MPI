@@ -1110,7 +1110,9 @@ interface PiStore {
   toggleProject: (cwd: string) => void;
   setActiveProject: (cwd: string) => void;
 
-  openThread: (cwd: string, sessionFile?: string, permission?: PermissionLevel) => Promise<string | null>;
+  /** Open a thread. `name` (new tasks only) pins the display title before the
+   * first prompt — used by release-review sessions titled with the version. */
+  openThread: (cwd: string, sessionFile?: string, permission?: PermissionLevel, name?: string) => Promise<string | null>;
   /** Ensure a live pi process backs the thread (adopting the warm spare).
    *  Resolves with the thread id, or null if the connection failed. Safe to
    *  call repeatedly: concurrent calls share one in-flight connect. */
@@ -1125,7 +1127,14 @@ interface PiStore {
   /** Reopen a tuiDirty thread's RPC bridge so it reloads history from disk. Call only when the thread is active. */
   reopenTuiThread: (threadId: string) => Promise<void>;
   setActiveThread: (id: string) => void;
-  sendPrompt: (threadId: string, text: string, images?: { data: string; mimeType: string }[], attachments?: { abs: string; name: string }[], mode?: "steer" | "followUp") => Promise<void>;
+  /** Send a user prompt. Resolves with the thread's final id (a brand-new
+   * task starts under a temp id that is remapped on connect), or null when
+   * nothing was sent / the connection failed. */
+  sendPrompt: (threadId: string, text: string, images?: { data: string; mimeType: string }[], attachments?: { abs: string; name: string }[], mode?: "steer" | "followUp") => Promise<string | null>;
+  /** Open a release-review conversation titled with the next version number
+   * and send the review prompt into it (the agent waits for explicit user
+   * confirmation before running scripts/dev-release.mjs). */
+  startReleaseReview: (review: { cwd: string; nextVersion: string; message: string }) => Promise<boolean>;
   setPendingFollowUp: (threadId: string, pending: PendingFollowUp | null) => void;
   sendPendingSteering: (threadId: string) => Promise<void>;
   abortThread: (id: string) => Promise<void>;
@@ -1861,7 +1870,7 @@ export const useStore = create<PiStore>()((set, get) => {
   toggleProject: (cwd) => set((s) => ({ expandedProjects: { ...s.expandedProjects, [cwd]: !s.expandedProjects[cwd] } })),
   setActiveProject: (cwd) => set({ activeProjectCwd: cwd, activeThreadId: null }),
 
-  openThread: async (cwd, sessionFile, permission) => {
+  openThread: async (cwd, sessionFile, permission, name) => {
     // Already on screen: just activate. If it was only disk-rendered so far
     // (no live process yet), kick off / reuse the background connect so it
     // becomes interactive.
@@ -1944,6 +1953,7 @@ export const useStore = create<PiStore>()((set, get) => {
     const tempId = `opening-${uid()}`;
     const placeholder: ThreadState = { ...emptyThread(cwd), loading: false, connected: false, permission: permission || defaultPermission() };
     placeholder.isNewSession = true;
+    if (name) placeholder.sessionName = name;
     set((s) => ({
       threads: { ...s.threads, [tempId]: placeholder },
       openThreadIds: s.openThreadIds.includes(tempId) ? s.openThreadIds : [...s.openThreadIds, tempId],
@@ -2142,7 +2152,7 @@ export const useStore = create<PiStore>()((set, get) => {
     const trimmed = (text || "").trim();
     const hasImg = !!images && images.length > 0;
     const hasAtt = !!attachments && attachments.length > 0;
-    if (!trimmed && !hasImg && !hasAtt) return;
+    if (!trimmed && !hasImg && !hasAtt) return null;
 
     // Built-in TUI slash commands cannot be executed through the RPC prompt
     // path (pi would hand them to the model as literal text). Route the ones
@@ -2171,15 +2181,15 @@ export const useStore = create<PiStore>()((set, get) => {
         if (t?.isStreaming || t?.compacting) {
           const zh = get().config?.language === "zh";
           get().pushToast("info", zh ? "当前会话仍在执行中，结束后再压缩" : "The session is still running — compact after it finishes");
-          return;
+          return null;
         }
         const tid = await get().ensureConnected(threadId);
         if (!tid) {
           restoreDraft(threadId); // ensureConnected already toasted the failure
-          return;
+          return null;
         }
         await get().compactContext(tid, compactMatch[1]?.trim() || undefined);
-        return;
+        return null;
       }
     }
     const wasStreaming = !!get().threads[threadId]?.isStreaming;
@@ -2207,8 +2217,10 @@ export const useStore = create<PiStore>()((set, get) => {
           ...s.threads,
           [threadId]: {
             ...t,
+            // Preserve an explicit name given at creation time (release-review
+            // sessions are titled with the version number); otherwise derive.
             sessionName: t.isNewSession
-              ? (optimisticTitle || null)
+              ? ((t.sessionName && !/^(?:new thread|new task|新线程|新建任务)$/i.test(t.sessionName) ? t.sessionName : null) || optimisticTitle || null)
               : (t.sessionName || (!hasUserMessage && optimisticTitle ? optimisticTitle : null)),
             isNewSession: false,
             creatingSession: false,
@@ -2232,7 +2244,7 @@ export const useStore = create<PiStore>()((set, get) => {
         return { threads: { ...s.threads, [threadId]: { ...t, isStreaming: false, messages: t.messages.filter((m) => m.key !== optimistic.key) } } };
       });
       restoreDraft(threadId);
-      return;
+      return null;
     }
     const piImages = (images || []).map((im) => ({ type: "image", data: im.data, mimeType: im.mimeType }));
     let delivered = false;
@@ -2306,6 +2318,20 @@ export const useStore = create<PiStore>()((set, get) => {
         }, 800);
       }
     }
+    return tid;
+  },
+
+  startReleaseReview: async ({ cwd, nextVersion, message }) => {
+    const name = `v${nextVersion}`;
+    const id = await get().openThread(cwd, undefined, undefined, name);
+    if (!id) return false;
+    // sendPrompt resolves with the thread's final id (a new task starts under
+    // a temp id that is remapped once pi connects).
+    const tid = await get().sendPrompt(id, message);
+    const finalId = tid || id;
+    // Pin the title to the version number: pi session name + local state + sidebar.
+    await get().renameThread(finalId, name);
+    return true;
   },
 
   setPendingFollowUp: (threadId, pending) => {

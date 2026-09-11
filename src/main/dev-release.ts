@@ -92,6 +92,42 @@ function gitArgs(args: string[]): void {
   gitOut(args);
 }
 
+// Module-level so app will-quit can restore synchronously even when the run is
+// interrupted (closing the window mid-release must not leave WIP stuck in stash —
+// that is exactly what happened to v0.6.4: upload was cut off by an app close).
+let stashedCount = 0;
+let releaseNextVersion: string | null = null;
+
+/** Synchronously restore the stashed WIP (idempotent). Called from the pipeline
+ * finally AND from app will-quit. */
+function restoreStashedWip(logFn?: LogFn): void {
+  if (stashedCount === 0 || !releaseNextVersion) return;
+  const log = logFn ?? (() => undefined);
+  try {
+    const headSubject = gitOut(["log", "-1", "--format=%s"]);
+    if (!headSubject.startsWith(`release: v${releaseNextVersion}`)) {
+      // Cancelled/failed before the release commit landed — discard the
+      // pipeline's own uncommitted bump writes so pop applies cleanly.
+      execSync("git checkout -- package.json changelog.md", { cwd: repoRoot(), stdio: "ignore" });
+    }
+    gitArgs(["stash", "pop"]);
+    log(`   ✓ 已自动恢复暂存的未提交改动（${stashedCount} 个文件）`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    log(
+      `⚠ 自动恢复暂存失败：${msg.split("\n")[0].slice(0, 160)}\n   暂存条目仍保留，请在新会话中处理（git stash list / git stash pop）`,
+    );
+  } finally {
+    stashedCount = 0;
+    releaseNextVersion = null;
+  }
+}
+
+// App exits while a release is running (user closes the window) → restore now.
+app.on("will-quit", () => {
+  if (running && stashedCount > 0) restoreStashedWip();
+});
+
 function hasToken(): boolean {
   if ((process.env.GITHUB_TOKEN || "").trim()) return true;
   try {
@@ -222,6 +258,51 @@ export function getDevReleaseStatus(): DevReleaseStatus {
   return { isDev, running, currentVersion, nextVersion, dirtyFiles, hasToken: isDev ? hasToken() : false };
 }
 
+/** 发版评审会话的数据：目标版本 + 工作区 changelog Unreleased 内容 + 工作区状态。
+ * 由 dev 面板「发起发版评审」调用，用于在新对话里展示待发布内容。 */
+export function getReleaseReview(): {
+  ok: boolean;
+  error?: string;
+  cwd?: string;
+  currentVersion?: string;
+  nextVersion?: string;
+  unreleasedMarkdown?: string;
+  hasEntries?: boolean;
+  dirtyFiles?: string[];
+  hasToken?: boolean;
+} {
+  if (app.isPackaged) return { ok: false, error: "仅开发模式可用" };
+  try {
+    const root = repoRoot();
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    const currentVersion: string = pkg.version;
+    const nextVersion = bumpPatch(currentVersion);
+    if (!nextVersion) return { ok: false, error: `package.json 版本号不是 x.y.z：${currentVersion}` };
+    // 工作区 changelog.md 的 Unreleased 小节（## Unreleased → 下一个 ## 标题）。
+    let unreleasedMarkdown = "";
+    let hasEntries = false;
+    try {
+      const lines = readFileSync(join(root, "changelog.md"), "utf8").split("\n");
+      const start = lines.findIndex((l) => /^##\s+Unreleased\s*$/.test(l));
+      if (start >= 0) {
+        let end = lines.length;
+        for (let i = start + 1; i < lines.length; i++) {
+          if (/^##\s/.test(lines[i])) { end = i; break; }
+        }
+        unreleasedMarkdown = lines.slice(start + 1, end).join("\n").trim();
+        hasEntries = /^\s*\d+\.\s+/m.test(unreleasedMarkdown);
+      }
+    } catch {
+      /* changelog 缺失 → 空内容，评审消息里会提示 */
+    }
+    const porcelain = git("status --porcelain");
+    const dirtyFiles = porcelain ? porcelain.split("\n").map((l) => l.slice(3).trim()).filter(Boolean) : [];
+    return { ok: true, cwd: root, currentVersion, nextVersion, unreleasedMarkdown, hasEntries, dirtyFiles, hasToken: hasToken() };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export function cancelDevRelease(): { ok: boolean; error?: string } {
   if (!running) return { ok: false, error: "当前没有进行中的发版" };
   cancelRequested = true;
@@ -244,10 +325,10 @@ export async function startDevRelease(onLog: LogFn): Promise<DevReleaseResult> {
   };
   activeLog = log;
   let prevHead = "";
-  // Hoisted so the finally-block restore can reference them (both stay at
-  // their defaults when pre-checks fail before they are assigned).
+  // Hoisted so the finally-block restore can reference it (stays null when
+  // pre-checks fail before it is assigned). stashedCount/releaseNextVersion are
+  // module-level: app will-quit restores from them if we exit mid-run.
   let nextVersion: string | null = null;
-  let stashedCount = 0;
   try {
     log("== MPI dev 一键发版 ==");
 
@@ -278,6 +359,7 @@ export async function startDevRelease(onLog: LogFn): Promise<DevReleaseResult> {
       const stashMsg = `MPI dev-release ${new Date().toISOString()}`;
       gitArgs(["stash", "push", "-u", "-m", stashMsg]);
       stashedCount = files.length;
+      releaseNextVersion = nextVersion; // sync for the will-quit restore path
       log(`   ✓ 已自动暂存 ${files.length} 个未提交文件（git stash -u，发版结束后自动恢复）`);
     } else {
       log("   ✓ 工作区干净");
@@ -354,23 +436,7 @@ export async function startDevRelease(onLog: LogFn): Promise<DevReleaseResult> {
   } finally {
     // Auto-restore the stashed WIP (if any) before clearing state, so its log
     // lines land in the buffer / standalone window too.
-    if (stashedCount > 0 && nextVersion) {
-      try {
-        const headSubject = gitOut(["log", "-1", "--format=%s"]);
-        if (!headSubject.startsWith(`release: v${nextVersion}`)) {
-          // Cancelled/failed before the release commit landed — discard the
-          // pipeline's own uncommitted bump writes so pop applies cleanly.
-          execSync("git checkout -- package.json changelog.md", { cwd: repoRoot(), stdio: "ignore" });
-        }
-        gitArgs(["stash", "pop"]);
-        log(`   ✓ 已自动恢复暂存的未提交改动（${stashedCount} 个文件）`);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        log(
-          `⚠ 自动恢复暂存失败：${msg.split("\n")[0].slice(0, 160)}\n   暂存条目仍保留，请在新会话中处理（git stash list / git stash pop）`,
-        );
-      }
-    }
+    restoreStashedWip(log);
     running = false;
     cancelRequested = false;
     activeLog = null;

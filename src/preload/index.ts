@@ -90,6 +90,19 @@ const api = {
     openDevReleaseLogWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke("app:openDevReleaseLogWindow"),
     /** Buffered pipeline history for the standalone log window (oldest first). */
     getDevReleaseLog: (): Promise<string[]> => ipcRenderer.invoke("app:getDevReleaseLog"),
+    /** Release-review data: next version + working-tree Unreleased content + workspace state. */
+    getReleaseReview: () =>
+      ipcRenderer.invoke("app:getReleaseReview") as Promise<{
+        ok: boolean;
+        error?: string;
+        cwd?: string;
+        currentVersion?: string;
+        nextVersion?: string;
+        unreleasedMarkdown?: string;
+        hasEntries?: boolean;
+        dirtyFiles?: string[];
+        hasToken?: boolean;
+      }>,
     editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => ipcRenderer.invoke("app:editAction", action),
   },
   drafts: {
