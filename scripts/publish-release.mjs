@@ -3,7 +3,7 @@
  * publish-release.mjs —— 一键发版：打 tag → push → GitHub Release（含附件上传）
  *
  * 用法:
- *   node scripts/publish-release.mjs <version> [--seafile <dir>] [--no-push]
+ *   node scripts/publish-release.mjs <version> [--seafile <dir>] [--no-push] [--force-upload]
  *   npm run release -- 0.6.2
  *
  * 示例:
@@ -21,11 +21,15 @@
  *   3. Release 正文 = changelog.md 的 ## v<version> 小节 + exe SHA256
  *   4. 创建或更新 GitHub Release（已存在则更新描述；同名附件直接替换）
  *   5. 上传 release/ 产物：MPI-Setup-<v>.exe / latest.yml / .blockmap
- *      （>100MB 自动走分片上传 API，每片 32MB，失败整文件重试）
- *   6. 校验远端附件大小与本地一致；--seafile 时复制 exe + sha256 sidecar
+ *      （单请求流式直传 uploads.github.com，对齐 gh CLI；失败整文件重试）
+ *      ⚠ CI（build-installers.yml）在 tag push 后也会向同一 Release 发布 win+mac 产物，
+ *        所以默认「已存在即跳过、只补缺失」；--force-upload 才用本地产物覆盖。
+ *   6. 校验期望附件都在 Release 上（大小差异属正常——CI 与本地构建的 runtime 版本可能不同）；
+ *      --seafile 时复制 exe + sha256 sidecar
  */
 import { execSync } from 'node:child_process';
-import fs from 'node:fs';
+import fs, { createReadStream } from 'node:fs';
+import https from 'node:https';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,14 +41,16 @@ const argv = process.argv.slice(2);
 let version = null;
 let seafileDir = null;
 let noPush = false;
+let forceUpload = false;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--seafile') seafileDir = argv[++i];
   else if (a === '--no-push') noPush = true;
+  else if (a === '--force-upload') forceUpload = true;
   else if (!version) version = a;
 }
 if (!/^\d+\.\d+\.\d+$/.test(version || '')) {
-  console.error('用法: node scripts/publish-release.mjs <x.y.z> [--seafile <dir>] [--no-push]');
+  console.error('用法: node scripts/publish-release.mjs <x.y.z> [--seafile <dir>] [--no-push] [--force-upload]');
   process.exit(1);
 }
 const tag = `v${version}`;
@@ -113,13 +119,46 @@ async function api(method, urlPath, body) {
 }
 
 // ---------- 附件上传 ----------
-async function putChunk(url, buf) {
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: authHeaders({ 'Content-Type': 'application/octet-stream' }),
-    body: buf,
+// 用 https.request 流式上传而不是 fetch：GitHub 收完整个 body 才回响应头，
+// 大文件在慢速上行链路上会超过 undici 默认 headersTimeout(300s) 报 UND_ERR_HEADERS_TIMEOUT；
+// 原生 http(s) 无此限制，且直接从磁盘流式读、不占内存。
+function putAsset(url, filePath) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    // 必须显式 Content-Length：pipe() 默认走 chunked 编码，GitHub uploads 端点不接受（HTTP 400）。
+    const req = https.request({
+      method: 'PUT',
+      hostname: u.hostname,
+      path: `${u.pathname}${u.search}`,
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(fs.statSync(filePath).size),
+      },
+    }, (res) => {
+      let body = '';
+      res.on('data', (d) => { body += d; if (body.length > 4000) body = body.slice(-2000); });
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) return resolve();
+        let detail = '';
+        try { detail = JSON.parse(body)?.errors?.[0]?.code || ''; } catch { /* ignore */ }
+        reject(new Error(`附件 PUT → HTTP ${res.statusCode}${detail ? ` (${detail})` : ''}`));
+      });
+    });
+    req.on('error', reject);
+    createReadStream(filePath).pipe(req);
   });
-  if (!res.ok && res.status !== 201) throw new Error(`分片 PUT → HTTP ${res.status}`);
+}
+
+// GitHub 的 uploads.github.com PUT 遇到同名已存在附件会报 422 already_exists，
+// 不会自动替换（gh CLI --clobber 也是先 DELETE 再上传）。
+async function deleteAssetByName(releaseId, name) {
+  const rel = await api('GET', `/repos/${OWNER}/${REPO}/releases/${releaseId}`);
+  const asset = (rel.assets || []).find((a) => a.name === name);
+  if (!asset) return false;
+  await api('DELETE', `/repos/${OWNER}/${REPO}/releases/assets/${asset.id}`);
+  console.log(`   🗑 已删除旧附件 ${name}（id ${asset.id}），重新上传`);
+  return true;
 }
 
 async function uploadAsset(releaseId, file) {
@@ -129,56 +168,24 @@ async function uploadAsset(releaseId, file) {
   console.log(`⬆ ${name} (${mb(size)})`);
 
   for (let attempt = 1; attempt <= 3; attempt++) {
-    let assetId = null;
     try {
-      if (size <= 100 * 1048576) {
-        // ≤100MB：单次 PUT（同名自动替换旧附件）
-        const url = `https://uploads.github.com/repos/${OWNER}/${REPO}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}&content_type=application%2Foctet-stream`;
-        await putChunk(url, fs.readFileSync(file));
-      } else {
-        // >100MB：分片上传（GitHub 要求）
-        const CHUNK = 32 * 1048576;
-        const initRes = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/releases/${releaseId}/assets`, {
-          method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ name, size, content_type: 'application/octet-stream' }),
-        });
-        if (!initRes.ok) throw new Error(`分片初始化 → HTTP ${initRes.status}: ${(await initRes.text()).slice(0, 200)}`);
-        const fragUrl = initRes.headers.get('location');
-        assetId = (await initRes.json()).id;
-        if (!fragUrl) throw new Error('分片初始化未返回 Location');
-
-        const fd = fs.openSync(file, 'r');
-        try {
-          let offset = 0;
-          let index = 0;
-          while (offset < size) {
-            const len = Math.min(CHUNK, size - offset);
-            const buf = Buffer.alloc(len);
-            fs.readSync(fd, buf, 0, len, offset);
-            const sep = fragUrl.includes('?') ? '&' : '?';
-            const url = index === 0 ? fragUrl : `${fragUrl}${sep}index=${index}`;
-            await putChunk(url, buf);
-            console.log(`   ${(offset + len) / 1048576 | 0}/${Math.ceil(size / CHUNK)} 片`);
-            offset += len;
-            index++;
-          }
-        } finally {
-          fs.closeSync(fd);
-        }
-      }
+      // 单请求流式直传（GitHub 现支持任意大小整文件上传，与 gh CLI 一致；
+      // 旧 >100MB 分片 API POST api.github.com/.../releases/{id}/assets 已废弃返回 404）。
+      const url = `https://uploads.github.com/repos/${OWNER}/${REPO}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}&content_type=application%2Foctet-stream`;
+      await putAsset(url, file);
       console.log(`   ✓ ${name} 上传完成`);
       return;
     } catch (e) {
-      // 分片中途失败：删掉半成品附件，整文件重试
-      if (assetId) {
-        try { await api('DELETE', `/repos/${OWNER}/${REPO}/releases/${releaseId}/assets/${assetId}`); } catch { /* ignore */ }
+      const msg = String(e.message);
+      if (msg.includes('already_exists')) {
+        try { if (await deleteAssetByName(releaseId, name)) continue; } catch { /* fallthrough to retry */ }
       }
-      console.error(`   ⚠ ${name} 上传失败（第 ${attempt}/3 次）: ${String(e.message).slice(0, 120)}`);
+      const cause = e.cause ? ` [${e.cause.code || e.cause.message}]` : '';
+      console.error(`   ⚠ ${name} 上传失败（第 ${attempt}/3 次）: ${msg.slice(0, 120)}${cause}`);
       if (attempt < 3) await sleep(attempt * 5000);
     }
   }
-  console.error(`✗ ${name} 上传失败，可重新运行本脚本续传（同名附件会替换）`);
+  console.error(`✗ ${name} 上传失败，可重新运行本脚本续传`);
   process.exit(1);
 }
 
@@ -248,7 +255,8 @@ function changelogBody(v) {
     console.log(`✓ 创建 Release #${rel.id}`);
   }
 
-  // 5) 上传附件（已存在且大小一致的跳过）
+  // 5) 上传附件（CI build-installers.yml 也会在 tag push 后发布到同一 Release：
+  //    默认已存在即跳过、只补缺失；--force-upload 才用本地产物覆盖同名附件）
   const candidates = [
     `MPI-Setup-${version}.exe`,
     'latest.yml',
@@ -260,24 +268,29 @@ function changelogBody(v) {
   for (const f of candidates) {
     const name = path.basename(f);
     const size = fs.statSync(f).size;
-    if (existingAssets.get(name) === size) {
-      console.log(`= ${name} 已存在且大小一致，跳过`);
+    const remoteSize = existingAssets.get(name);
+    if (remoteSize !== undefined && !forceUpload) {
+      console.log(remoteSize === size
+        ? `= ${name} 已存在且大小一致，跳过`
+        : `= ${name} Release 上已有（${(remoteSize / 1048576).toFixed(1)} MB，与本地 ${(size / 1048576).toFixed(1)} MB 不同——CI 产物），跳过；--force-upload 可用本地产物覆盖`);
       continue;
     }
     await uploadAsset(rel.id, f);
   }
 
-  // 6) 校验
+  // 6) 校验（只查期望附件都在 Release 上；大小差异属正常——CI 与本地构建的 runtime 版本可能不同）
   const final = await api('GET', `/repos/${OWNER}/${REPO}/releases/${rel.id}`);
   console.log('\nRelease 附件校验:');
   let okAll = true;
-  for (const a of final.assets) {
-    const local = candidates.find((f) => path.basename(f) === a.name);
-    const match = !!local && fs.statSync(local).size === a.size;
-    if (!match) okAll = false;
-    console.log(`  ${match ? '✓' : '✗'} ${a.name} (${(a.size / 1048576).toFixed(1)} MB)`);
+  for (const f of candidates) {
+    const name = path.basename(f);
+    const remote = final.assets.find((a) => a.name === name);
+    if (!remote) { okAll = false; console.log(`  ✗ ${name} 缺失`); continue; }
+    const localSize = fs.statSync(f).size;
+    const note = remote.size === localSize ? '' : `（与本地 ${(localSize / 1048576).toFixed(1)} MB 不同，CI 产物）`;
+    console.log(`  ✓ ${name} (${(remote.size / 1048576).toFixed(1)} MB)${note}`);
   }
-  if (!okAll) { console.error('✗ 有附件大小不一致，请重新运行本脚本'); process.exit(1); }
+  if (!okAll) { console.error('✗ Release 缺少期望附件，请重新运行本脚本或检查 CI'); process.exit(1); }
 
   // seafile 分发副本
   if (seafileDir) {
