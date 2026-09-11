@@ -214,6 +214,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
       return;
     }
     await openThread(cwd);
+    useStore.getState().requestComposerFocus();
   };
 
   const onThreadClick = (cwd: string, file: string) => {
@@ -311,6 +312,9 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
         title={language === "zh" ? "拖动调整导航栏宽度；双击恢复默认" : "Drag to resize; double-click to reset"}
       />
       <div className="sb-head">
+        <button className="sb-head-btn" title="新建会话" aria-label="新建会话" onClick={() => void newTask()}>
+          <Plus size={16} />
+        </button>
         <button className="sb-head-btn" title="搜索会话与文件" onClick={() => useStore.getState().openSearch()}>
           <Search size={16} />
         </button>

@@ -1061,6 +1061,8 @@ interface PiStore {
   /** Preview occupies the chat workspace while preserving the mounted chat state. */
   previewExpanded: boolean;
   sidebarTab: "threads" | "files";
+  /** One-shot flag consumed by Composer to focus its input (set by new-session entry points). */
+  composerFocusPending: boolean;
 
   // projects / threads
   activeProjectCwd: string | null;
@@ -1117,6 +1119,8 @@ interface PiStore {
   ensureConnected: (threadId: string) => Promise<string | null>;
   /** Create a new thread in the active project, prompting for a folder if none is open. */
   newTask: () => Promise<void>;
+  /** Ask the Composer to focus its input once (consumed + cleared by Composer). */
+  requestComposerFocus: () => void;
   closeThread: (id: string) => Promise<void>;
   /** Toggle the active thread between GUI rendering and the interactive pi TUI terminal. */
   toggleTui: (threadId: string) => Promise<void>;
@@ -1478,6 +1482,7 @@ export const useStore = create<PiStore>()((set, get) => {
   previewOpen: false,
   previewExpanded: false,
   sidebarTab: "threads",
+  composerFocusPending: false,
   activeProjectCwd: null,
   expandedProjects: {},
   openThreadIds: [],
@@ -2135,8 +2140,11 @@ export const useStore = create<PiStore>()((set, get) => {
       // switching to a fresh empty task.
       await get().refreshProjects();
       await get().openThread(cwd);
+      set({ composerFocusPending: true });
     }
   },
+
+  requestComposerFocus: () => set({ composerFocusPending: true }),
 
   sendPrompt: async (threadId, text, images, attachments, mode) => {
     const trimmed = (text || "").trim();
@@ -2866,7 +2874,9 @@ export const useStore = create<PiStore>()((set, get) => {
   installPackage: async (source) => {
     try {
       const res: any = await window.pi.plugins.installPackage(source);
-      if (!res?.ok && (res.missing === "npm" || res.missing === "git")) {
+      if (!res?.ok && res.cancelled) {
+        get().pushToast("info", "已取消");
+      } else if (!res?.ok && (res.missing === "npm" || res.missing === "git")) {
         get().pushToast("error", missingToolMessage(res.missing, get().config?.language === "zh"));
       } else if (res?.output) {
         get().pushToast(res.ok ? "info" : "warning", String(res.output).slice(0, 300));
@@ -2881,7 +2891,9 @@ export const useStore = create<PiStore>()((set, get) => {
   removePackage: async (source) => {
     try {
       const res: any = await window.pi.plugins.removePackage(source);
-      if (res?.missing === "npm" || res?.missing === "git") {
+      if (!res?.ok && res.cancelled) {
+        get().pushToast("info", "已取消");
+      } else if (res?.missing === "npm" || res?.missing === "git") {
         get().pushToast("warning", missingToolRemoveMessage(res.missing, get().config?.language === "zh"));
       }
       await get().loadPlugins();
@@ -2915,7 +2927,9 @@ export const useStore = create<PiStore>()((set, get) => {
       const text = cleanOutput(raw);
       const assertion = hasLibuvAssertion(raw);
 
-      if (res?.ok) {
+      if (!res?.ok && res.cancelled) {
+        get().pushToast("info", "已取消");
+      } else if (res?.ok) {
         if (extensionsAlreadyLatest(text)) {
           get().pushToast("info", source ? "该扩展已是最新版本。" : "所有扩展已是最新版本。");
         } else {

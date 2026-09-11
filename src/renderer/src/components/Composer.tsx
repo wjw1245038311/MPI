@@ -98,6 +98,7 @@ export function Composer({ threadId }: { threadId: string }) {
   // Select only what the composer renders, as primitives / stable references.
   // Subscribing to the whole thread object made every streaming token
   // re-render the entire composer (textarea included).
+  const composerFocusPending = useStore((s) => s.composerFocusPending);
   const isStreaming = useStore((s) => !!s.threads[threadId]?.isStreaming);
   const pending = useStore((s) => s.threads[threadId]?.pendingFollowUp || null);
   const injected = useStore((s) => s.threads[threadId]?.pendingEditorText);
@@ -320,6 +321,14 @@ export function Composer({ threadId }: { threadId: string }) {
       requestAnimationFrame(() => taRef.current?.focus());
     }
   }, [injected]);
+
+  // One-shot focus request from new-session entry points (sidebar header/nav,
+  // empty state). Consumed here so a stale flag never re-fires on remount.
+  useEffect(() => {
+    if (!composerFocusPending) return;
+    requestAnimationFrame(() => taRef.current?.focus());
+    useStore.setState({ composerFocusPending: false });
+  }, [composerFocusPending]);
 
   // HTML preview annotation mode sends a structured element reference here.
   // Keep the full context attached to the draft while rendering it as a
