@@ -107,6 +107,10 @@ export function Composer({ threadId }: { threadId: string }) {
   const models = useStore((s) => s.threads[threadId]?.models);
   const levels = useStore((s) => s.threads[threadId]?.levels);
   const model = useStore((s) => s.threads[threadId]?.model);
+  // P1-12 auto mode: pill dot + dropdown Auto item.
+  const autoEnabled = !!useStore((s) => s.threads[threadId]?.autoEnabled);
+  const autoStatus = useStore((s) => s.threads[threadId]?.autoStatus ?? null);
+  const setAutoModel = useStore((s) => s.setAutoModel);
   const thinking = useStore((s) => s.threads[threadId]?.thinking);
   const cwd = useStore((s) => s.threads[threadId]?.cwd || "");
   const sessionFile = useStore((s) => s.threads[threadId]?.sessionFile || null);
@@ -247,6 +251,14 @@ export function Composer({ threadId }: { threadId: string }) {
     prevCompactingRef.current = compacting;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compacting]);
+
+  // P1-12: a model change (auto-switch or manual) may mean a different context
+  // window — refresh the gauge so the arc doesn't show stale percentages.
+  const ctxModelKey = `${model?.provider ?? ""}\u0000${model?.id ?? ""}`;
+  useEffect(() => {
+    void loadCtx();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctxModelKey]);
 
   useEffect(() => {
     if (!isStreaming) return;
@@ -1059,7 +1071,14 @@ export function Composer({ threadId }: { threadId: string }) {
               )}
             </div>
             <div className="pill composer-model-pill" ref={modelRef}>
-              <button className="pill-btn" onClick={() => setModelOpen((v) => !v)} title="模型与思考等级">
+              <button
+                className="pill-btn"
+                onClick={() => setModelOpen((v) => !v)}
+                title={autoEnabled ? "模型与思考等级（auto 模式）" : "模型与思考等级"}
+              >
+                {autoEnabled && (
+                  <span className={`model-auto-dot ${autoStatus ?? "ok"}`} title="auto 模式" />
+                )}
                 {modelShort(model)}
                 {thinkLabel && <span className="pill-think-tag">{thinkLabel}</span>}
                 <span className="pill-caret">▾</span>
@@ -1067,6 +1086,28 @@ export function Composer({ threadId }: { threadId: string }) {
               {modelOpen && (
                 <div className="pill-pop model-pop">
                   <div className="pop-head">模型</div>
+                  {/* P1-12: auto mode — switch to the best available model by tier + latency. */}
+                  <button
+                    type="button"
+                    className={`opt model-auto-row ${autoEnabled ? "active" : ""}`}
+                    onClick={() => void setAutoModel(threadId, !autoEnabled)}
+                  >
+                    <span className="o1">
+                      {language === "zh" ? "Auto（自动切换）" : "Auto (auto switch)"}
+                      {autoEnabled && autoStatus && (
+                        <span className={`model-auto-dot ${autoStatus}`} />
+                      )}
+                    </span>
+                    <span className="o2">
+                      {language === "zh"
+                        ? autoEnabled
+                          ? `当前：${modelShort(model)} · 按质量档与延迟自动切换`
+                          : "按质量档与延迟在候选池间自动切换"
+                        : autoEnabled
+                          ? `Current: ${modelShort(model)} · switches by tier & latency`
+                          : "Switches between pool models by tier & latency"}
+                    </span>
+                  </button>
                   {modelList.length === 0 && <div className="ft-empty">{language === "zh" ? "无可用模型（请检查认证）" : "No models available (check auth)"}</div>}
                   {modelGroups.map((group) => {
                     const expanded = expandedProviders[group.provider] === true;

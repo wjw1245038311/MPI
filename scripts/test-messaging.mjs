@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 // service.ts is intentionally NOT imported here: its parameter properties are
 // unsupported by node's strip-only TS mode. All pure logic lives in feishu-text.
-import { parseTextContent, sanitizeFeishuConfig, stripMentions, truncateForChat } from "../src/main/messaging/feishu-text.ts";
+import { parseTextContent, sanitizeFeishuConfig, stripMentions } from "../src/main/messaging/feishu-text.ts";
+import { truncateForChat } from "../src/main/messaging/channel-text.ts";
 
 // --- parseTextContent ---------------------------------------------------------
 assert.equal(parseTextContent('{"text":"hello"}'), "hello");

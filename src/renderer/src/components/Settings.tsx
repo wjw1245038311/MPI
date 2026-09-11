@@ -340,6 +340,8 @@ function ModelRow({
   const [adv, setAdv] = useState(false);
   const [test, setTest] = useState<{ state: "idle" | "testing" | "ok" | "error"; message?: string; latencyMs?: number }>({ state: "idle" });
   const [testElapsed, setTestElapsed] = useState(0);
+  // P1-11: on-demand contextWindow probe (重新探测 button).
+  const [ctxProbe, setCtxProbe] = useState<{ state: "idle" | "probing" | "error" }>({ state: "idle" });
   const testFingerprint = JSON.stringify({
     providerId,
     baseUrl: provider.baseUrl,
@@ -349,7 +351,10 @@ function ModelRow({
     compat: provider.compat,
     model: m,
   });
-  useEffect(() => setTest({ state: "idle" }), [testFingerprint]);
+  useEffect(() => {
+    setTest({ state: "idle" });
+    setCtxProbe({ state: "idle" });
+  }, [testFingerprint]);
   useEffect(() => {
     if (test.state !== "testing") return;
     const started = Date.now();
@@ -382,6 +387,50 @@ function ModelRow({
     patch({ input: arr.length ? arr : undefined });
   };
   const has = (t: "text" | "image") => (m.input || []).includes(t);
+
+  /* ---- P1-11 context auto-resolution UI ---- */
+  const runCtxProbe = async () => {
+    if (!m.id.trim()) return;
+    setCtxProbe({ state: "probing" });
+    try {
+      const res = await window.pi.settings.resolveModelContext({ providerId, provider, model: m });
+      if (res?.value) {
+        // Explicit re-probe overwrites the current value.
+        patch({ contextWindow: res.value, contextWindowAuto: true, contextWindowSource: res.source, contextWindowDetail: res.detail });
+        setCtxProbe({ state: "idle" });
+      } else if (m.contextWindow === undefined) {
+        // Nothing found and nothing to keep — surface the miss on the badge.
+        patch({ contextWindowSource: "none", contextWindowDetail: undefined });
+        setCtxProbe({ state: "idle" });
+      } else {
+        // Keep the existing value; report that the probe failed.
+        setCtxProbe({ state: "error" });
+      }
+    } catch {
+      setCtxProbe({ state: "error" });
+    }
+  };
+  const ctxAuto = !!m.contextWindowAuto;
+  let ctxBadge: string | null = null;
+  let ctxBadgeTitle: string | undefined;
+  if (ctxProbe.state === "probing") {
+    ctxBadge = language === "zh" ? "探测中…" : "Probing…";
+  } else if (ctxProbe.state === "error") {
+    ctxBadge = language === "zh" ? "探测失败（保留原值）" : "Probe failed (kept value)";
+  } else if (ctxAuto) {
+    const src = m.contextWindowSource as string | undefined;
+    if (typeof m.contextWindowDetail === "string") ctxBadgeTitle = m.contextWindowDetail;
+    if (!m.contextWindow && src !== "none") {
+      // Empty + auto: resolution happens on save — the checkbox says it all.
+    } else if (src === "catalog") {
+      ctxBadge = language === "zh" ? "内置目录" : "Catalog";
+    } else if (src === "api") {
+      ctxBadge = language === "zh" ? "API 探测" : "Probed";
+    } else if (!m.contextWindow) {
+      ctxBadge = language === "zh" ? "未探测到 · 默认128K" : "Not found · default 128K";
+    }
+  }
+
   return (
     <div className="set-model">
       <div className="set-model-grid">
@@ -401,12 +450,54 @@ function ModelRow({
           <input type="checkbox" checked={has("image")} onChange={(e) => setInput("image", e.target.checked)} />
           <span>图像</span>
         </label>
-        <TokenLimitInput
-          value={m.contextWindow}
-          onChange={(value) => patch({ contextWindow: value })}
-          label={language === "zh" ? "上下文长度（K 令牌）" : "Context length (K tokens)"}
-          placeholder="128"
-        />
+        <div className="set-ctx-cell">
+          <TokenLimitInput
+            value={m.contextWindow}
+            onChange={(value) => {
+              patch({ contextWindow: value });
+              // Manual entry takes over from auto resolution.
+              if (value !== undefined && m.contextWindowAuto)
+                patch({ contextWindowAuto: false, contextWindowSource: undefined, contextWindowDetail: undefined });
+            }}
+            label={language === "zh" ? "上下文长度（K 令牌）" : "Context length (K tokens)"}
+            placeholder="128"
+          />
+          <label
+            className="set-check set-ctx-auto"
+            title={
+              language === "zh"
+                ? "留空时保存自动解析上下文长度（内置目录 → API 探测）；已有值则不解析"
+                : "When empty, resolve automatically on save (built-in catalog → API probe); existing values are never re-resolved"
+            }
+          >
+            <input
+              type="checkbox"
+              checked={ctxAuto}
+              onChange={(e) =>
+                patch(
+                  e.target.checked
+                    ? { contextWindowAuto: true }
+                    : { contextWindowAuto: false, contextWindowSource: undefined, contextWindowDetail: undefined },
+                )
+              }
+            />
+            <span>{language === "zh" ? "自动" : "Auto"}</span>
+          </label>
+          {ctxBadge && (
+            <span className={`set-ctx-badge ${ctxProbe.state !== "idle" ? "busy" : ""}`} title={ctxBadgeTitle ?? undefined}>
+              {ctxBadge}
+            </span>
+          )}
+          <button
+            type="button"
+            className="set-iconbtn set-ctx-reprobe"
+            title={language === "zh" ? "重新探测上下文长度（覆盖当前值）" : "Re-probe context length (overwrites current value)"}
+            onClick={() => void runCtxProbe()}
+            disabled={!m.id.trim() || ctxProbe.state === "probing"}
+          >
+            {ctxProbe.state === "probing" ? <span className="spinner" /> : "↻"}
+          </button>
+        </div>
         <TokenLimitInput
           value={m.maxTokens}
           onChange={(value) => patch({ maxTokens: value })}
@@ -484,6 +575,191 @@ function ModelRow({
           </Field>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * P1-12 Auto model switching (Settings → 模型与提供商)
+ * ------------------------------------------------------------------ */
+
+/** Mirror of main's DEFAULT_POLICY (src/main/model-autopilot.ts) — keep in sync. */
+const AUTO_POLICY_DEFAULTS = {
+  softDegradeFactor: 3,
+  softDegradeMinMs: 15_000,
+  softDegradeStreak: 2,
+  recoveryIntervalMin: 5,
+  cooldownMin: 10,
+  strictNoDowngrade: false,
+  notify: true,
+};
+
+interface AutoPoolEntry {
+  provider: string;
+  modelId: string;
+  paid?: boolean;
+  tierOverride?: "high" | "mid" | "low";
+}
+
+function AutoModelCard({ providers }: { providers: Record<string, ProviderDef> }) {
+  const language = useStore((s) => s.config?.language || "en");
+  const config = useStore((s) => s.config);
+  const pushToast = useStore((s) => s.pushToast);
+  const zh = language === "zh";
+
+  const [pool, setPool] = useState<AutoPoolEntry[]>(() => config?.autoModels?.pool ?? []);
+  const [policy, setPolicy] = useState(() => ({ ...AUTO_POLICY_DEFAULTS, ...(config?.autoModels?.policy ?? {}) }));
+  const [initial, setInitial] = useState(
+    () => JSON.stringify({ pool: config?.autoModels?.pool ?? [], policy: { ...AUTO_POLICY_DEFAULTS, ...(config?.autoModels?.policy ?? {}) } }),
+  );
+  const dirty = JSON.stringify({ pool, policy }) !== initial;
+  const [saving, setSaving] = useState(false);
+
+  const providerIds = Object.keys(providers).filter((id) => (providers[id]?.models ?? []).length > 0);
+
+  const updateEntry = (i: number, p: Partial<AutoPoolEntry>) =>
+    setPool((list) => list.map((e, idx) => (idx === i ? { ...e, ...p } : e)));
+  const moveEntry = (i: number, dir: -1 | 1) =>
+    setPool((list) => {
+      const j = i + dir;
+      if (j < 0 || j >= list.length) return list;
+      const next = [...list];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+
+  const save = async () => {
+    if (pool.some((e) => !e.provider || !e.modelId)) {
+      pushToast("error", zh ? "候选池存在未填完的行（供应商 / 模型 ID）" : "Pool rows need both a provider and a model id");
+      return;
+    }
+    setSaving(true);
+    try {
+      const next = await window.pi.app.setConfig({ autoModels: { pool, policy } });
+      useStore.setState({ config: next });
+      setInitial(JSON.stringify({ pool, policy }));
+      pushToast("info", zh ? "自动模型配置已保存" : "Auto-model settings saved");
+    } catch (e: any) {
+      pushToast("error", (zh ? "保存失败：" : "Save failed: ") + (e?.message || e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const num = (v: number, min: number) => Math.max(min, Math.round(v));
+
+  return (
+    <div className="set-card">
+      <h3>{zh ? "自动模型（auto）" : "Auto model switching"}</h3>
+      <p className="set-hint">
+        {zh
+          ? "在会话的模型下拉里开启 Auto 后，MPI 会按「免费优先 → 质量档高→低 → 延迟低→高」自动切换候选池中的模型：当前模型报错或连续过慢时切走，更优模型恢复后再切回。只切到不低于当前质量的档位；全部低于时才救急降级（带警告）。非 auto 会话不受任何影响。"
+          : "With Auto enabled in a session's model dropdown, MPI switches between pool models by \u201cfree first → higher tier → lower latency\u201d: it leaves the current model on errors or sustained slowness and returns when a better one recovers. It never switches below the current quality tier unless nothing else is available (rescue, with a warning). Non-auto sessions are unaffected."}
+      </p>
+
+      <div className="set-autopool">
+        {pool.length === 0 && (
+          <div className="ft-empty">{zh ? "候选池为空——添加模型后，在会话里开启 Auto 才会生效。" : "Pool is empty — add models, then enable Auto in a session."}</div>
+        )}
+        {pool.map((entry, i) => (
+          <div className="set-autopool-row" key={`${entry.provider}/${entry.modelId}:${i}`}>
+            <select
+              className="set-select"
+              value={entry.provider}
+              onChange={(e) => {
+                const pid = e.target.value;
+                updateEntry(i, { provider: pid, modelId: (providers[pid]?.models ?? [])[0]?.id ?? "" });
+              }}
+            >
+              <option value="">{zh ? "— 供应商 —" : "— provider —"}</option>
+              {providerIds.map((pid) => (
+                <option key={pid} value={pid}>
+                  {(providers[pid]?.name as string | undefined) ?? pid}
+                </option>
+              ))}
+            </select>
+            <select
+              className="set-select"
+              value={entry.modelId}
+              onChange={(e) => updateEntry(i, { modelId: e.target.value })}
+              disabled={!entry.provider}
+            >
+              <option value="">{zh ? "— 模型 —" : "— model —"}</option>
+              {(providers[entry.provider]?.models ?? []).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name || m.id}
+                </option>
+              ))}
+            </select>
+            <label className="set-check" title={zh ? "收费端点：有免费候选时不会被选用" : "Billed endpoint: never picked while a free candidate is available"}>
+              <input type="checkbox" checked={!!entry.paid} onChange={(e) => updateEntry(i, { paid: e.target.checked || undefined })} />
+              <span>{zh ? "收费" : "Paid"}</span>
+            </label>
+            <select
+              className="set-select set-autopool-tier"
+              value={entry.tierOverride ?? ""}
+              onChange={(e) => updateEntry(i, { tierOverride: (e.target.value || undefined) as AutoPoolEntry["tierOverride"] })}
+              title={zh ? "质量档（默认自动推断）" : "Quality tier (auto-inferred by default)"}
+            >
+              <option value="">{zh ? "档位：自动" : "Tier: auto"}</option>
+              <option value="high">High</option>
+              <option value="mid">Mid</option>
+              <option value="low">Low</option>
+            </select>
+            <button type="button" className="set-iconbtn" title={zh ? "上移（同档平手时优先）" : "Move up (tie-break preference)"} onClick={() => moveEntry(i, -1)} disabled={i === 0}>
+              ↑
+            </button>
+            <button type="button" className="set-iconbtn" title={zh ? "下移" : "Move down"} onClick={() => moveEntry(i, 1)} disabled={i === pool.length - 1}>
+              ↓
+            </button>
+            <button type="button" className="set-iconbtn danger" title={zh ? "移除" : "Remove"} onClick={() => setPool((list) => list.filter((_, idx) => idx !== i))}>
+              ×
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="set-addline"
+          onClick={() => setPool((list) => [...list, { provider: providerIds[0] ?? "", modelId: (providers[providerIds[0]]?.models ?? [])[0]?.id ?? "" }])}
+        >
+          ＋ {zh ? "添加候选模型" : "Add candidate model"}
+        </button>
+      </div>
+
+      <div className="set-autopolicy">
+        <label className="set-addprov-field">
+          <span>{zh ? "慢速倍数（×中位数）" : "Slow factor (× median)"}</span>
+          <input className="set-input num" type="number" min={1} step={0.5} value={policy.softDegradeFactor} onChange={(e) => setPolicy((p) => ({ ...p, softDegradeFactor: Number(e.target.value) || p.softDegradeFactor }))} />
+        </label>
+        <label className="set-addprov-field">
+          <span>{zh ? "慢速阈值（秒）" : "Slow floor (s)"}</span>
+          <input className="set-input num" type="number" min={1} value={Math.round(policy.softDegradeMinMs / 1000)} onChange={(e) => setPolicy((p) => ({ ...p, softDegradeMinMs: num(Number(e.target.value), 1) * 1000 }))} />
+        </label>
+        <label className="set-addprov-field">
+          <span>{zh ? "连续次数" : "Streak (turns)"}</span>
+          <input className="set-input num" type="number" min={1} value={policy.softDegradeStreak} onChange={(e) => setPolicy((p) => ({ ...p, softDegradeStreak: num(Number(e.target.value), 1) }))} />
+        </label>
+        <label className="set-addprov-field">
+          <span>{zh ? "恢复探测（分钟）" : "Recovery probe (min)"}</span>
+          <input className="set-input num" type="number" min={1} value={policy.recoveryIntervalMin} onChange={(e) => setPolicy((p) => ({ ...p, recoveryIntervalMin: num(Number(e.target.value), 1) }))} />
+        </label>
+        <label className="set-addprov-field">
+          <span>{zh ? "切换冷却（分钟）" : "Switch cooldown (min)"}</span>
+          <input className="set-input num" type="number" min={0} value={policy.cooldownMin} onChange={(e) => setPolicy((p) => ({ ...p, cooldownMin: num(Number(e.target.value), 0) }))} />
+        </label>
+        <label className="set-check">
+          <input type="checkbox" checked={!policy.strictNoDowngrade} onChange={(e) => setPolicy((p) => ({ ...p, strictNoDowngrade: !e.target.checked }))} />
+          <span>{zh ? "允许救急降级（带警告）" : "Allow rescue downgrade (warned)"}</span>
+        </label>
+        <label className="set-check">
+          <input type="checkbox" checked={policy.notify !== false} onChange={(e) => setPolicy((p) => ({ ...p, notify: e.target.checked }))} />
+          <span>{zh ? "切换时弹通知" : "Notify on switch"}</span>
+        </label>
+      </div>
+
+      <button className="set-btn primary" onClick={() => void save()} disabled={!!saving || !dirty}>
+        {saving ? <span className="spinner" /> : zh ? "保存自动模型配置" : "Save auto-model settings"}
+      </button>
     </div>
   );
 }
@@ -660,7 +936,25 @@ function ProviderCard({
  * Main panel
  * ------------------------------------------------------------------ */
 
-type Tab = "general" | "profile" | "models" | "thinking" | "archive" | "backup" | "diag" | "update";
+type Tab = "general" | "profile" | "models" | "thinking" | "storage" | "archive" | "backup" | "diag" | "update";
+
+/** Mirror of main's DataMigrationStatus (preload inlines the same shape). */
+interface DataMigrationStatus {
+  sessionStorageDir: string | null;
+  defaultSessionsDir: string;
+  effectiveSessionsDir: string;
+  todoDataDir: string | null;
+  effectiveTodosDir: string;
+  pendingSessions: boolean;
+  pendingTodos: boolean;
+  lastSummary: {
+    sessionsMoved?: number;
+    sessionBytes?: number;
+    todoFilesMoved?: number;
+    todoBytes?: number;
+    errors: string[];
+  } | null;
+}
 
 interface NewProviderDraft {
   id: string;
@@ -927,6 +1221,14 @@ export function Settings() {
     if (!open) return;
     window.pi.app.getAutoLaunch().then(setAutoLaunchState).catch(() => setAutoLaunchState(null));
   }, [open]);
+  // Data storage locations (Settings → 数据存储): live status from main.
+  const [migStatus, setMigStatus] = useState<DataMigrationStatus | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    window.pi.dataMigration.status().then(setMigStatus).catch(() => setMigStatus(null));
+  }, [open]);
+  const refreshMigStatus = () => window.pi.dataMigration.status().then(setMigStatus).catch(() => {});
+
   // Trash confirmation dialogs (per-item purge / empty-all).
   const [trashPurgeConfirm, setTrashPurgeConfirm] = useState<{ id: string; title: string } | null>(null);
   const [trashEmptyConfirm, setTrashEmptyConfirm] = useState(false);
@@ -1463,6 +1765,88 @@ export function Settings() {
     useStore.setState({ config: next });
   };
 
+  // Data storage location changes only record intent — the actual file moves
+  // run on next launch (runPendingDataMigrations in main/index.ts).
+  const changeSessionsDir = async () => {
+    try {
+      const p = await window.pi.app.showOpenDialog("folder");
+      if (!p) return; // user cancelled the picker
+      const res = await window.pi.dataMigration.setSessionsDir(p);
+      if (!res.ok) throw new Error(res.error || "unknown error");
+      pushToast(
+        "info",
+        language === "zh"
+          ? `已设置会话存储位置，下次启动时迁移 ${res.count} 个文件`
+          : `Session storage location set — ${res.count} file(s) will move on next launch`,
+      );
+      await refreshMigStatus();
+    } catch (e: any) {
+      pushToast(
+        "error",
+        (language === "zh" ? "更改会话存储位置失败：" : "Failed to change session storage location: ") + (e?.message || e),
+      );
+    }
+  };
+
+  const resetSessionsDir = async () => {
+    try {
+      const res = await window.pi.dataMigration.setSessionsDir(null);
+      if (!res.ok) throw new Error(res.error || "unknown error");
+      pushToast(
+        "info",
+        language === "zh"
+          ? `已恢复默认会话存储位置，下次启动时迁移 ${res.count} 个文件`
+          : `Session storage reset to default — ${res.count} file(s) will move on next launch`,
+      );
+      await refreshMigStatus();
+    } catch (e: any) {
+      pushToast(
+        "error",
+        (language === "zh" ? "恢复默认会话存储位置失败：" : "Failed to reset session storage location: ") + (e?.message || e),
+      );
+    }
+  };
+
+  const changeTodosDir = async () => {
+    try {
+      const p = await window.pi.app.showOpenDialog("folder");
+      if (!p) return; // user cancelled the picker
+      const res = await window.pi.dataMigration.setTodosDir(p);
+      if (!res.ok) throw new Error(res.error || "unknown error");
+      pushToast(
+        "info",
+        language === "zh"
+          ? `已设置待办数据位置，下次启动时迁移 ${res.count} 个文件`
+          : `Todo data location set — ${res.count} file(s) will move on next launch`,
+      );
+      await refreshMigStatus();
+    } catch (e: any) {
+      pushToast(
+        "error",
+        (language === "zh" ? "更改待办数据位置失败：" : "Failed to change todo data location: ") + (e?.message || e),
+      );
+    }
+  };
+
+  const resetTodosDir = async () => {
+    try {
+      const res = await window.pi.dataMigration.setTodosDir(null);
+      if (!res.ok) throw new Error(res.error || "unknown error");
+      pushToast(
+        "info",
+        language === "zh"
+          ? `已恢复默认待办数据位置，下次启动时迁移 ${res.count} 个文件`
+          : `Todo data location reset to default — ${res.count} file(s) will move on next launch`,
+      );
+      await refreshMigStatus();
+    } catch (e: any) {
+      pushToast(
+        "error",
+        (language === "zh" ? "恢复默认待办数据位置失败：" : "Failed to reset todo data location: ") + (e?.message || e),
+      );
+    }
+  };
+
   const changeAccent = async (accentTheme: (typeof ACCENT_PRESETS)[number]["id"]) => {
     const next = await window.pi.app.setConfig({ accentTheme });
     useStore.setState({ config: next });
@@ -1553,6 +1937,7 @@ export function Settings() {
               ["profile", language === "zh" ? "用户画像" : "User profile"],
               ["models", "模型与提供商"],
               ["thinking", "思考默认值"],
+              ["storage", language === "zh" ? "数据存储" : "Data storage"],
               ["archive", language === "zh" ? "归档回收" : "Archive & trash"],
               ["backup", language === "zh" ? "备份与恢复" : "Backup & restore"],
               ["diag", "诊断与配置"],
@@ -1587,7 +1972,9 @@ export function Settings() {
                   ? "模型与提供商"
                 : tab === "thinking"
                   ? "思考默认值"
-                    : tab === "archive"
+                    : tab === "storage"
+                      ? language === "zh" ? "数据存储" : "Data storage"
+                      : tab === "archive"
                       ? "已归档项目"
                       : tab === "backup"
                         ? language === "zh" ? "备份与恢复" : "Backup & restore"
@@ -1701,6 +2088,7 @@ export function Settings() {
                     <span>{language === "zh" ? "删除的会话先移入回收站（可恢复）" : "Deleted sessions go to the trash first (restorable)"}</span>
                   </label>
                 </Field>
+
                 <Field
                   label={language === "zh" ? "主题模式" : "Theme"}
                   hint={
@@ -2132,6 +2520,8 @@ export function Settings() {
                     )}
                   </>
                 )}
+                {/* P1-12: auto model switching pool + policy */}
+                <AutoModelCard providers={draft.providers} />
               </>
             )}
 
@@ -2172,6 +2562,69 @@ export function Settings() {
                 <div className="set-hint" style={{ marginTop: 8 }}>
                   这些是全局默认值，写入 settings.json。单个模型的思考能力由该模型的“思考”开关与 compat 决定。
                 </div>
+              </div>
+            )}
+
+            {tab === "storage" && (
+              <div className="set-card">
+                <Field
+                  label={language === "zh" ? "会话存储位置" : "Session storage location"}
+                  hint={
+                    language === "zh"
+                      ? "所有 pi 会话记录（.jsonl）的存放目录。更改后下次启动自动迁移，终端 pi 也会跟随新位置；旧文件在迁移完成前仍可正常读取。"
+                      : "Where all pi session records (.jsonl) live. Changes migrate automatically on next launch; terminal pi follows the new location too, and old files stay readable until the move completes."
+                  }
+                >
+                  <div className="set-path-row">
+                    <span className="set-path-value" title={migStatus?.effectiveSessionsDir || ""}>
+                      {migStatus ? migStatus.effectiveSessionsDir : "…"}
+                    </span>
+                    <button type="button" className="btn" onClick={() => void changeSessionsDir()}>
+                      {language === "zh" ? "更改…" : "Change…"}
+                    </button>
+                    {migStatus?.sessionStorageDir && (
+                      <button type="button" className="btn" onClick={() => void resetSessionsDir()}>
+                        {language === "zh" ? "恢复默认" : "Reset"}
+                      </button>
+                    )}
+                  </div>
+                  {migStatus?.pendingSessions && (
+                    <div className="set-hint">
+                      {language === "zh"
+                        ? "⚠ 位置已更改，文件将在下次启动时迁移。重启前应用仍读取旧位置。"
+                        : "⚠ Location changed — files move on next launch. Until then the app still reads the old location."}
+                    </div>
+                  )}
+                </Field>
+                <Field
+                  label={language === "zh" ? "待办数据位置" : "Todo data location"}
+                  hint={
+                    language === "zh"
+                      ? "待办任务（todos.json）、附件与智能体收件箱的存放目录。更改后下次启动自动迁移；旧位置的附件仍可正常打开和删除。"
+                      : "Where todo tasks (todos.json), attachments and the agent inbox live. Changes migrate automatically on next launch; attachments from old locations keep working."
+                  }
+                >
+                  <div className="set-path-row">
+                    <span className="set-path-value" title={migStatus?.effectiveTodosDir || ""}>
+                      {migStatus ? migStatus.effectiveTodosDir : "…"}
+                    </span>
+                    <button type="button" className="btn" onClick={() => void changeTodosDir()}>
+                      {language === "zh" ? "更改…" : "Change…"}
+                    </button>
+                    {migStatus?.todoDataDir && (
+                      <button type="button" className="btn" onClick={() => void resetTodosDir()}>
+                        {language === "zh" ? "恢复默认" : "Reset"}
+                      </button>
+                    )}
+                  </div>
+                  {migStatus?.pendingTodos && (
+                    <div className="set-hint">
+                      {language === "zh"
+                        ? "⚠ 位置已更改，文件将在下次启动时迁移。重启前应用仍读取旧位置。"
+                        : "⚠ Location changed — files move on next launch. Until then the app still reads the old location."}
+                    </div>
+                  )}
+                </Field>
               </div>
             )}
 

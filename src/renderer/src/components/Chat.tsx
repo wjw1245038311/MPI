@@ -6,10 +6,11 @@ import { collectFileArtifacts } from "../lib/artifacts";
 import { parseHtmlReferenceText } from "../lib/html-reference";
 import { diffLines } from "../lib/diff";
 import { extractEditPairs, normalizeTranscriptText } from "../lib/tool-args";
+import { findMessageOccurrences } from "../lib/chat-search";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
-import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, ChevronRight, ChevronsDown, Star, Terminal } from "./icons";
+import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal } from "./icons";
 import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
@@ -41,6 +42,14 @@ export function Chat() {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  // In-conversation search (header button / Ctrl+F): find occurrences across
+  // the finalized messages of this thread and step through them.
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState("");
+  const [chatSearchIdx, setChatSearchIdx] = useState(0);
+  const chatSearchInputRef = useRef<HTMLInputElement>(null);
+  const searchFlashElRef = useRef<HTMLElement | null>(null);
+  const searchFlashTimerRef = useRef<number | null>(null);
   // True while the viewport sits within NEAR_BOTTOM_PX of the transcript end.
   // Drives the floating "jump to latest" button.
   const [atBottom, setAtBottom] = useState(true);
@@ -174,9 +183,39 @@ export function Chat() {
     return () => window.removeEventListener("keydown", close);
   }, [previewImage]);
 
+  // Switching conversations resets the in-conversation search entirely.
+  useEffect(() => {
+    setChatSearchOpen(false);
+    setChatSearchQuery("");
+    setChatSearchIdx(0);
+  }, [activeThreadId]);
+
+  // The terminal view has no message anchors; never keep the bar open there.
+  useEffect(() => {
+    if (tuiMode) setChatSearchOpen(false);
+  }, [tuiMode]);
+
+  // Ctrl/Cmd+F opens (or refocuses) the in-conversation search, unless a
+  // global modal/panel is on top or the thread is in TUI mode.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.key.toLowerCase() !== "f") return;
+      const st = useStore.getState();
+      if (st.settingsOpen || st.searchOpen || st.pluginsOpen || st.automationOpen || st.messagingOpen) return;
+      if (st.tuiThreads[st.activeThreadId ?? ""]) return;
+      e.preventDefault();
+      setChatSearchOpen(true);
+      requestAnimationFrame(() => chatSearchInputRef.current?.focus());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   useEffect(() => {
     return () => {
       if (jumpHighlightTimerRef.current !== null) window.clearTimeout(jumpHighlightTimerRef.current);
+      if (searchFlashTimerRef.current !== null) window.clearTimeout(searchFlashTimerRef.current);
     };
   }, []);
 
@@ -238,6 +277,20 @@ export function Chat() {
     [groups],
   );
 
+  // In-conversation search state, derived from the finalized messages only.
+  const searchOccurrences = useMemo(
+    () => findMessageOccurrences(thread.messages, chatSearchQuery),
+    [thread.messages, chatSearchQuery],
+  );
+  const clampedSearchIdx = Math.min(chatSearchIdx, Math.max(0, searchOccurrences.length - 1));
+  // Comma-joined signature (stable string) so MessageGroup's memo comparator
+  // can compare it cheaply; rebuilt only when the match set actually changes.
+  const searchHitSig = useMemo(
+    () => [...new Set(searchOccurrences.map((o) => o.messageKey))].join(","),
+    [searchOccurrences],
+  );
+  const searchingDim = chatSearchOpen && !tuiMode && searchOccurrences.length > 0;
+
   const jumpToUserMessage = (key: string) => {
     const scroll = scrollRef.current;
     if (!scroll) return;
@@ -266,6 +319,70 @@ export function Chat() {
       if (highlightedUserMessageRef.current === target) highlightedUserMessageRef.current = null;
       jumpHighlightTimerRef.current = null;
     }, 900);
+  };
+
+  // Scroll a message anchor into the vertical center of the viewport and
+  // flash it (same math as jumpToUserMessage, generalized to any message).
+  const scrollToMessageKey = (key: string) => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    const target = Array.from(scroll.querySelectorAll<HTMLElement>("[data-message-key]"))
+      .find((node) => node.dataset.messageKey === key);
+    if (!target) return;
+
+    const scrollRect = scroll.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const targetOffset = targetRect.top - scrollRect.top - (scroll.clientHeight - targetRect.height) / 2;
+    const maxScrollTop = Math.max(0, scroll.scrollHeight - scroll.clientHeight);
+    const nextScrollTop = Math.min(maxScrollTop, Math.max(0, scroll.scrollTop + targetOffset));
+    scroll.scrollTo({
+      top: nextScrollTop,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+
+    searchFlashElRef.current?.classList.remove("chat-search-flash");
+    target.classList.remove("chat-search-flash");
+    void target.offsetWidth;
+    target.classList.add("chat-search-flash");
+    searchFlashElRef.current = target;
+    if (searchFlashTimerRef.current !== null) window.clearTimeout(searchFlashTimerRef.current);
+    searchFlashTimerRef.current = window.setTimeout(() => {
+      target.classList.remove("chat-search-flash");
+      if (searchFlashElRef.current === target) searchFlashElRef.current = null;
+      searchFlashTimerRef.current = null;
+    }, 900);
+  };
+
+  const stepChatSearch = (dir: 1 | -1) => {
+    if (searchOccurrences.length === 0) return;
+    setChatSearchIdx((i) => {
+      const cur = Math.min(i, searchOccurrences.length - 1);
+      return (cur + dir + searchOccurrences.length) % searchOccurrences.length;
+    });
+  };
+
+  // Keep the current occurrence visible: on open/first keystroke jump to the
+  // first match; afterwards follow Enter / arrow navigation.
+  useEffect(() => {
+    if (!chatSearchOpen || tuiMode || searchOccurrences.length === 0) return;
+    scrollToMessageKey(searchOccurrences[clampedSearchIdx].messageKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatSearchIdx, chatSearchQuery, chatSearchOpen]);
+
+  const onChatSearchInputKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      stepChatSearch(e.shiftKey ? -1 : 1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      stepChatSearch(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      stepChatSearch(-1);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setChatSearchOpen(false);
+    }
   };
 
   const startRename = () => {
@@ -330,6 +447,20 @@ export function Chat() {
         )}
         {/* All action buttons live on the right; the title keeps the middle. */}
         <div className="spacer" />
+        <button
+          className={`iconbtn ${chatSearchOpen ? "on" : ""}`}
+          title="搜索本会话消息（Ctrl+F）"
+          onClick={() => {
+            if (chatSearchOpen) {
+              setChatSearchOpen(false);
+            } else {
+              setChatSearchOpen(true);
+              requestAnimationFrame(() => chatSearchInputRef.current?.focus());
+            }
+          }}
+        >
+          <Search size={14} />
+        </button>
         {activeThreadId && (
           <button
             className={`iconbtn ${isPinned ? "on" : ""}`}
@@ -375,15 +506,68 @@ export function Chat() {
         </button>
       </div>
 
+      {chatSearchOpen && !tuiMode && (
+        <div className="chat-search">
+          <span className="chat-search-ico" aria-hidden="true">
+            <Search size={13} />
+          </span>
+          <input
+            ref={chatSearchInputRef}
+            className="chat-search-input"
+            value={chatSearchQuery}
+            onChange={(e) => setChatSearchQuery(e.target.value)}
+            onKeyDown={onChatSearchInputKey}
+            placeholder="搜索本会话…"
+            aria-label="会话内消息搜索"
+            spellCheck={false}
+          />
+          {searchOccurrences.length > 0 ? (
+            <span className="chat-search-count">
+              {clampedSearchIdx + 1}/{searchOccurrences.length}
+            </span>
+          ) : chatSearchQuery.trim() ? (
+            <span className="chat-search-count none">无匹配</span>
+          ) : null}
+          <button
+            className="iconbtn"
+            title="上一个匹配（Shift+Enter）"
+            disabled={searchOccurrences.length === 0}
+            onClick={() => stepChatSearch(-1)}
+          >
+            <ChevronUp size={14} />
+          </button>
+          <button
+            className="iconbtn"
+            title="下一个匹配（Enter）"
+            disabled={searchOccurrences.length === 0}
+            onClick={() => stepChatSearch(1)}
+          >
+            <ChevronDown size={14} />
+          </button>
+          <button className="iconbtn" title="关闭搜索（Esc）" onClick={() => setChatSearchOpen(false)}>
+            <Close size={13} />
+          </button>
+        </div>
+      )}
+
       {tuiMode ? (
         <TuiView threadId={activeThreadId} cwd={thread.cwd} sessionFile={thread.sessionFile} />
       ) : (
         <>
           <div className="chat-stage">
             <div className="chat-scroll" ref={scrollRef} onScroll={rememberScrollPosition}>
-          <div className="messages">
+          <div className={`messages${searchingDim ? " searching" : ""}`}>
             {headGroups.map((g) => (
-              <MessageGroup key={g.key} threadId={activeThreadId} group={g} toolRuns={thread.toolRuns} locked={thread.isStreaming} onPreviewImage={setPreviewImage} />
+              <MessageGroup
+                key={g.key}
+                threadId={activeThreadId}
+                group={g}
+                toolRuns={thread.toolRuns}
+                locked={thread.isStreaming}
+                onPreviewImage={setPreviewImage}
+                searchHitKeys={searchingDim ? searchHitSig : null}
+                searchCurrentKey={searchingDim && searchOccurrences.length > 0 ? searchOccurrences[clampedSearchIdx].messageKey : null}
+              />
             ))}
             {streaming && streamingExtends && lastGroup && (
               <MessageGroup
@@ -394,6 +578,8 @@ export function Chat() {
                 locked
                 streaming
                 onPreviewImage={setPreviewImage}
+                searchHitKeys={searchingDim ? searchHitSig : null}
+                searchCurrentKey={searchingDim && searchOccurrences.length > 0 ? searchOccurrences[clampedSearchIdx].messageKey : null}
               />
             )}
             {streaming && !streamingExtends && (
@@ -405,6 +591,8 @@ export function Chat() {
                 locked
                 streaming
                 onPreviewImage={setPreviewImage}
+                searchHitKeys={searchingDim ? searchHitSig : null}
+                searchCurrentKey={searchingDim && searchOccurrences.length > 0 ? searchOccurrences[clampedSearchIdx].messageKey : null}
               />
             )}
             {thread.error && (
@@ -571,6 +759,8 @@ const MessageGroup = memo(MessageGroupInner, (prev, next) => {
     prev.locked !== next.locked ||
     !!prev.streaming !== !!next.streaming
     || prev.onPreviewImage !== next.onPreviewImage
+    || prev.searchHitKeys !== next.searchHitKeys
+    || prev.searchCurrentKey !== next.searchCurrentKey
   ) {
     return false;
   }
@@ -589,6 +779,8 @@ function MessageGroupInner({
   locked,
   streaming,
   onPreviewImage,
+  searchHitKeys,
+  searchCurrentKey,
 }: {
   threadId: string;
   group: MsgGroup;
@@ -596,7 +788,20 @@ function MessageGroupInner({
   locked?: boolean;
   streaming?: boolean;
   onPreviewImage: (src: string) => void;
+  /** Comma-joined message keys with ≥1 search occurrence; null = inactive. */
+  searchHitKeys?: string | null;
+  /** Message key of the currently displayed occurrence, if any. */
+  searchCurrentKey?: string | null;
 }) {
+  const hitSet = useMemo(() => (searchHitKeys ? new Set(searchHitKeys.split(",")) : null), [searchHitKeys]);
+  // Class suffix for a message anchor: dimmed unless it matches, ringed when
+  // it is the currently displayed occurrence.
+  const searchClass = (key: string): string => {
+    if (!hitSet) return "";
+    let cls = hitSet.has(key) ? " search-hit" : "";
+    if (searchCurrentKey === key) cls += " search-current";
+    return cls;
+  };
   const forkThread = useStore((s) => s.forkThread);
   const openPreview = useStore((s) => s.openPreview);
   const cwd = useStore((s) => s.threads[threadId]?.cwd || "");
@@ -666,7 +871,7 @@ function MessageGroupInner({
   if (group.role === "custom") {
     const m = group.items[0];
     return (
-      <div className="msg custom">
+      <div className={`msg custom${searchClass(m.key)}`} data-message-key={m.key}>
         <div className="msg-body">
           <Markdown text={m.text || ""} />
         </div>
@@ -690,7 +895,7 @@ function MessageGroupInner({
       await openPreview(attachment.path, cwd);
     };
     return (
-      <div className="msg user" data-user-message-key={group.key}>
+      <div className={`msg user${searchClass(m.key)}`} data-user-message-key={group.key} data-message-key={m.key}>
         <div className="msg-user-stack">
           <div className="msg-body">
             {m.sendKind && (
@@ -803,7 +1008,7 @@ function MessageGroupInner({
         <img className="msg-avatar-img" src={agentAvatar || doraemonAvatarUrl} alt="" />
       </div>
       <div className="msg-body">
-        {renderAssistantBlocks(group.items, toolRuns, language)}
+        {renderAssistantBlocks(group.items, toolRuns, language, searchClass)}
         {streaming && !hasBlocks && <span className="muted">思考中</span>}
         {streaming && <span className="streaming-dot" />}
         {last.errorMessage && <div style={{ color: "#c0392b", marginTop: 6 }}>{last.errorMessage}</div>}
@@ -883,29 +1088,41 @@ function plainOfGroup(g: MsgGroup): string {
     .join("\n\n");
 }
 
-function renderAssistantBlocks(items: ViewMessage[], toolRuns: Record<string, ToolRun>, language: "en" | "zh"): ReactNode[] {
+// Each assistant message is wrapped in a keyed .msg-item so in-conversation
+// search can anchor, dim and flash individual messages inside one turn.
+function renderAssistantBlocks(
+  items: ViewMessage[],
+  toolRuns: Record<string, ToolRun>,
+  language: "en" | "zh",
+  searchClass?: (key: string) => string,
+): ReactNode[] {
   const toolCount = items
     .flatMap((message) => message.blocks || [])
     .filter((block) => block.type === "toolCall")
     .length;
   let activityShown = false;
-  const nodes: ReactNode[] = [];
-  items.forEach((message) => {
+  return items.map((message) => {
+    const blockNodes: ReactNode[] = [];
     (message.blocks || []).forEach((block, index) => {
       const key = `${message.key}:${index}`;
       if (block.type === "toolCall" && !activityShown) {
         activityShown = true;
-        nodes.push(
+        blockNodes.push(
           <div className="tool-activity-summary" key={`${key}:activity`}>
             <span className="tool-activity-label">{language === "zh" ? "工具活动" : "Tool activity"}</span>
             <span className="tool-activity-count">{toolCount} {language === "zh" ? "次调用" : toolCount === 1 ? "call" : "calls"}</span>
           </div>,
         );
       }
-      nodes.push(<BlockView key={key} block={block} toolRuns={toolRuns} language={language} />);
+      blockNodes.push(<BlockView key={key} block={block} toolRuns={toolRuns} language={language} />);
     });
+    if (blockNodes.length === 0) return null;
+    return (
+      <div className={`msg-item${searchClass ? searchClass(message.key) : ""}`} data-message-key={message.key} key={message.key}>
+        {blockNodes}
+      </div>
+    );
   });
-  return nodes;
 }
 
 function BlockView({ block, toolRuns, language }: { block: ContentBlock; toolRuns: Record<string, ToolRun>; language: "en" | "zh" }) {

@@ -65,6 +65,45 @@
 ### P1-10 手机远程控制入口（待办，用户拍板「先放到待办」2026-09-09）
 背景：导航栏左下角优化时移除了小手机图标（打开 RemotePanel 的 Smartphone 按钮）——同区域的设置/帮助与顶部标题栏菜单重复被删，token 用量改为「今日用量 / 总用量」常驻直显。Sidebar 的 `onOpenRemote`/`remoteOpen` props 已保留（App.tsx 接线未动），恢复时加回一个 iconbtn（Smartphone 图标）即可；届时可考虑放到更合适的位置（如设置页或标题栏）而非导航栏左下角。
 
+### P1-11 contextWindow 自动探测 ✅ 已实现（用户提出 2026-09-10）
+背景：models.json 里每个模型的「上下文长度」目前要手填（Settings → 模型与提供商），留空时 pi 回退固定默认 **128K**（已验证 runtime 0.84.1 `provider-composer.js` modelFromJson：`contextWindow ?? 128000`，pi 自身无探测能力）。上下文圆环 gauge、自动压缩阈值都依赖这个值；本地 GGUF 模型和免费 API 模型尤其容易填错/漏填。用户要求加「auto」模式免手填。
+
+**解析链（按序取第一个命中）**：
+1. **内置目录查表（离线零成本，首选）**：pi-ai 自带全量模型目录 `<runtime>/pi/node_modules/@earendil-works/pi-ai/dist/providers/data/*.json`（约 604K、30+ provider），每条含 contextWindow/maxTokens/cost/reasoning。运行时加载全部文件建 `modelId → contextWindow` 索引（精确匹配 + `/` 后缀匹配，如目录里 `qwen/qwen3-max` 命中用户裸 id `qwen3-max`）。实测覆盖：qwen3-max=262144、kimi-k3=1048576、gpt-5=400000、deepseek-v4-flash（deepseek.json）、glm-5（经 qwen-token-plan-cn.json）；zhipu 直连的 glm-5.3 无命中→走第 2/3 步。内存缓存，runtime 版本变化时重建；数据目录缺失（dev/override runtime）则跳过本步。
+2. **API 探测（仅查表未命中时，保存动作触发）**：
+   - OpenRouter 风格网关：`GET {base}/models` → 匹配 id 的 `context_length` / `max_context_tokens` 字段（OpenRouter 官方确认返回 context_length；freellmapi 类聚合站一般跟随）。
+   - LM Studio：其 OpenAI 兼容 `/v1/models` **不含** context 字段，但原生 REST `GET http://{host}/api/v1/models` 返回 `context_length`/`max_context_length`（官方文档确认）——按 baseUrl host 探测该端点。用户主力本地 provider 正是 LM Studio，此条价值最高。
+   - Ollama：`GET {base}/api/show?name=<id>` best-effort 解析 num_ctx（默认值随 VRAM 变化，弱保证）。
+   - DashScope compatible-mode 等无文档字段→跳过。探测超时 8s；只在用户保存/手动重探时跑，应用启动不跑。
+3. **兜底**：留 undefined → pi 128K 默认；UI 明示「未探测到 · 用默认 128K（可手填）」。
+
+**存储与 UI 语义**：解析出的数字写回 models.json（pi 需要具体值）；ModelDef 加 `contextWindowAuto?: true` 标记（未知字段 round-trip 安全，models-service 已保证）。Settings 上下文长度输入旁加「自动」勾选：**字段已有值（手填或此前解析过）→ 保存时不解析、原样尊重**（用户确认 2026-09-10）；仅当为空且勾了自动才在保存时解析 + 显示来源徽标（内置目录 / API 探测 / 默认 128K）。手动填写即清除该标记。模型行加小「重新探测」按钮（显式覆盖当前值，本地模型 num_ctx 变化后用）。预设卡片的已知模型可直接预置 auto。
+实现要点：新 `src/main/model-context.ts`（目录加载 + 各 API 探测，纯函数可测）；挂 settings 保存 IPC；TokenLimitInput 加 auto 变体；i18n zh/en。风险：目录 id 命名与用户实际 model id 漂移（后缀匹配缓解 + 手动兜底）；LM Studio context_length 反映当时加载的 num_ctx，改动后需重探。
+
+**实现状态（2026-09-10）**：按方案落地——`src/main/model-context.ts`（目录索引 + OpenAI/LM Studio/Ollama 探测 + resolveModelContext/autoResolveContextWindows）+ IPC `settings:resolveModelContext` + Settings UI（「自动」勾选 / 来源徽标 / ↻ 重探）+ `test:model-context` 18 组全过；changelog Unreleased #12、手册 §4.2。待用户验证。
+
+### P1-12 模型「auto」模式：按质量档+延迟自动切换 ✅ 已实现（用户提出 2026-09-10）
+背景：日常主力是本地模型（LM Studio qwen3.x GGUF @ LAN 机器 + relay），不可能一直可用——机器休眠/LAN 断连/太慢时需要云或免费 API（freellmapi 类）救急。用户要求模型切换加「auto」模式：对话过程中根据延迟质量自动切到可用的、质量高的模型。
+已拍板（2026-09-10）：① **需要自动质量评分**，切换目标至少不低于本地 qwen3.8 的质量；② 每线程 auto 开关确认；③ 阈值默认值按方案（软降级 >3×中位数且>15s、恢复探测 5min、回切冷却 10min）；④ P1-11「字段已有值则不解析」确认；⑤ **收费模型支持标记，auto 优先用免费模型，走不通才用收费**；⑥ **非 auto 模式保持原行为**（不监测、不切换），退出 auto 时自动停止监测。
+
+**核心语义**：
+- **候选池（全局，Settings）**：{provider, modelId} 列表，如 [本地 qwen3.8-27b@q6_k、deepseek-v4-flash、freellmapi 免费模型]。条目从已配置的 provider/模型里选（保证 set_model 有效）。每条目带 `paid` 收费标记：**默认免费**，池编辑器勾选「收费」（如官方 deepseek/openai 端点）；不做自动推断——同一 id 在免费网关与官方端点成本不同，推断不可靠。池内顺序仅作同档平手时的偏好序，质量由档位决定（见下）。
+- **质量档（自动推断 + 可覆盖）**：每候选三档 high/mid/low，默认自动推断、UI 显示推断结果与依据、用户可按条目手动改。推断规则（按序取第一个命中）：① id 命中前沿模型表（gpt-5*、claude-opus/sonnet、kimi-k3/k2.5、qwen3-max、deepseek-v4-pro、glm-5…）→ high（免费网关的 gpt-5 也按 id 命中 high）；② id 规模信号——dense ≥14B 或 MoE active ≥8B → mid（量化后缀 q4/q5 不降档），<14B / active <8B（如 `35b-a3b` 的 3B active）→ low，`*-flash/-mini/-lite` 关键词封顶 mid；③ pi-ai 内置目录 cost 分档兜底（input ≥$0.5/M → high，$0.08–0.5 → mid，<$0.1/免费 → low）；④ 都判不出 → **low（保守）**，可手动上调。基线：本地 qwen3.8-27b@q5/q6 ≈ mid = 用户要求的「不能比它差」门槛。
+- **切换选择规则（免费优先）**：① 健康候选中**先取免费**；免费内部按档位高→低、同档最近 TTFT 低→高、再平手池序靠前。② **只切到 ≥ 当前模型档位的候选**；若无满足下限的免费候选但有收费候选满足 → 用最优收费者 + toast 标注「（无免费候选，使用收费模型 X）」。③ 若所有健康候选都低于当前档位 → 「救急降级」：允许切换但 toast 明确警告「已切换到较低质量模型 X（无同档可用）」（内部仍免费优先），设置可改「严格禁止降档」（则留在当前 + 报错提示）。初始选择（开 auto/新会话）= 按①选最佳健康免费；无健康免费 → 最优收费 + toast。
+- **每线程 auto 开关**：模型 pill 下拉顶部加「Auto」项，选中=该线程进入 auto；手动点具体模型=该线程退出 auto。auto 状态按线程持久化（store + config），池与策略参数放 AppConfig.autoModels（main/renderer types 双份）。
+- **健康信号（被动、零额外成本）**：主进程 onEvent 已收到全部 agent 事件——每个 assistant turn 测 TTFT（agent_start→首个 text_delta）+ 总时长 + 错误分类（401/429/5xx/超时/connection refused），按模型滚动窗口最近 5 次。
+- **切换触发**：
+  - 硬失败：当前模型某 turn 报错/超时 → 立即探测候选（直接 HTTP 最小请求 max_tokens≈1、20s 超时；openai-completions/responses 走 /chat/completions，anthropic-messages 需 x-api-key + anthropic-version 头，google-generative-ai v1 暂不支持）→ 按选择规则选出最优健康者 → `set_model` + toast「已自动切换：A → B（原因）」。
+  - 软降级：TTFT 连续 K 次超阈值（默认 >3× 自身中位数且绝对值 >15s，参数可调）→ 视同降级走同一 failover 路径。
+  - 恢复回切：处于 fallback 状态时每隔 M 分钟（默认 5min，仅当有 auto 线程打开时）重探免费候选与原首选（按选择规则排序）；探测成功 + 冷却期已过（默认 10min，防抖）→ 切回。
+- **探测预算**：每模型每小时最多 3 次主动探测；429 → 标记不健康 10min；全部候选不可用 → 留在当前模型 + 警告 toast「所有候选模型不可用」。
+
+**边界与细节**：**非 auto 线程零开销**——TTFT/错误信号只从 auto 线程采集，退出 auto（手动选具体模型或关开关）即自动停止该线程的监测与探测调度，行为与功能引入前完全一致；只在 turn 之间切换（绝不打断流式）；切换后刷新 ctx gauge（contextWindow 不同）触发 loadCtx；auto 线程开新会话 messageCount===0 时显式 setModel（顺带修掉已知瑕疵「新建会话启动模型=pi 全局默认、被最近一次切换漂移覆盖」，见每会话独立模型验证记录）；健康状态按模型全局共享，决策按线程独立。
+UI：pill 顶部 Auto 项（圆点显示当前生效模型 + 健康色）；Settings 新增「自动模型」卡（池编辑器：增删/上下移序 + 每条目收费标记 + 策略参数：降级阈值 / 恢复间隔 / 通知开关）。
+实现要点：新 `src/main/model-autopilot.ts`（档位推断 + 状态机 + 探测，纯逻辑可测），挂 ipc.ts onEvent；复用现有 set_model IPC；测试覆盖档位推断/免费优先/收费门控/救急降级/failover/回切/防抖。风险：启发式误判档位（UI 显示依据 + 手动覆盖缓解）；免费网关模型 id 与前沿表不匹配 → 默认 low 保守处理；多 auto 线程并发切换需按模型去重探测。
+
+**实现状态（2026-09-10）**：按方案落地——`src/main/model-autopilot.ts`（inferQualityTier / HealthTracker / probeModel / selectBest / ModelAutopilot，纯逻辑 + 注入回调）+ ipc.ts 接线（onEvent 被动信号、`thread:setAutoModel`、60s 恢复定时器、boot:uuid→会话文件 id 迁移、手动 setModel 退出 auto）+ Composer Auto 项与 pill 圆点 + Settings「自动模型」卡（池编辑器 + 策略参数）+ `test:model-autopilot` 28 组全过；changelog Unreleased #13、手册 §4.3（zh/en，原 4.3–4.6 顺延）。实现中修正：① pi **不会**把 model_select 事件流给 RPC 客户端（只到扩展 handler）——渲染端生效模型改由 `pi:autoModel` notify 携带的 `to` 同步；② 候选探测改为并发（原串行最坏 = 池大小 × 20s，现最坏 ≈ 单次超时）；③ **恢复回切语义修正**：recoveryTick 原来只允许「严格更优」上切——本地(mid) failover 到云端(high)后永远回不来。现每线程状态加 `preferred`（开 auto/初始选择时记录，failover 不更新）：回到 preferred 即停（防与上切逻辑互搏成 20min 震荡），离开家时才先试回家、再考虑上切；测试 +2 组（共 30）。待用户验证。
+
 ---
 
 ## Part 2 · pi-agent-desktop 近期有价值改进建议（按相关性分组）

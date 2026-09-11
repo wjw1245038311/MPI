@@ -1,11 +1,12 @@
 import { app } from "electron";
 import { autoUpdater, type ProgressInfo, type UpdateCheckResult, type UpdateInfo } from "electron-updater";
 
-const REPOSITORY = "flowflic/Pi-Studio";
+const REPOSITORY = "wjw1245038311/MPI";
 const RELEASES_LATEST_URL = "https://github.com/" + REPOSITORY + "/releases/latest";
-// MPI 个人 fork：禁用应用自更新，避免上游 flowflic/Pi-Studio 发布覆盖本地魔改。
+// 应用自更新指向 MPI 自己的 GitHub 仓库（与 package.json build.publish 同源）。
+// 发布流程：大版本时把 dist/ 的 MPI-Setup-x.y.z.exe + latest.yml（+ .blockmap）
+// 作为附件挂到 github.com/wjw1245038311/MPI 的 Release 上，electron-updater 从那里检查更新。
 // Pi 核心更新（core-updater.ts，走 npm registry）不受影响。
-const APP_UPDATE_DISABLED = true;
 
 export type AppUpdateStage = "checking" | "downloading" | "ready" | "installing" | "error";
 
@@ -60,6 +61,14 @@ function compareVersions(a: string, b: string): number {
     if (delta !== 0) return delta > 0 ? 1 : -1;
   }
   return 0;
+}
+
+/** Map electron-updater's raw errors to user-readable Chinese (no releases yet / GitHub unreachable). */
+function friendlyUpdaterError(message: unknown): string {
+  const m = String(message || "");
+  if (/404|not found|no release/i.test(m)) return "GitHub 仓库还没有发布版本（或无法访问该仓库）";
+  if (/(ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|fetch failed|network)/i.test(m)) return "无法连接 GitHub，请检查网络后重试";
+  return m;
 }
 
 function isWindowsInstallerSupported(): boolean {
@@ -180,7 +189,7 @@ function configureUpdater(): void {
   });
 
   autoUpdater.on("error", (error, message) => {
-    lastUpdaterError = message || error?.message || String(error);
+    lastUpdaterError = friendlyUpdaterError(message || error?.message || String(error));
     emitProgress({ stage: "error", message: lastUpdaterError });
   });
 }
@@ -197,7 +206,6 @@ async function checkWithUpdater(): Promise<UpdateCheckResult | null> {
 export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
   configureUpdater();
   const current = normalizeVersion(app.getVersion());
-  if (APP_UPDATE_DISABLED) return emptyStatus(current);
   lastUpdaterError = null;
   latestUpdateInfo = null;
 
@@ -210,7 +218,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
     const info = result?.updateInfo || latestUpdateInfo;
     return info ? statusFromInfo(current, info) : emptyStatus(current, lastUpdaterError || undefined);
   } catch (error: any) {
-    const message = error?.message || String(error);
+    const message = friendlyUpdaterError(error?.message || String(error));
     lastUpdaterError = message;
     return emptyStatus(current, message);
   }
@@ -218,7 +226,6 @@ export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
 
 export async function downloadAppUpdate(onProgress?: (progress: AppUpdateProgress) => void): Promise<AppUpdateResult> {
   configureUpdater();
-  if (APP_UPDATE_DISABLED) return { ok: false, downloaded: false, message: "MPI 为个人 fork，应用自更新已禁用" };
   const previousSink = progressSink;
   progressSink = onProgress || null;
   lastUpdaterError = null;
@@ -274,7 +281,7 @@ export async function downloadAppUpdate(onProgress?: (progress: AppUpdateProgres
       message: "MPI v" + version + " 已下载，可以安装并重启",
     };
   } catch (error: any) {
-    const message = error?.message || String(error);
+    const message = friendlyUpdaterError(error?.message || String(error));
     lastUpdaterError = message;
     emitProgress({ stage: "error", message });
     return { ok: false, downloaded: false, message: "MPI 更新失败：" + message };
@@ -285,7 +292,6 @@ export async function downloadAppUpdate(onProgress?: (progress: AppUpdateProgres
 
 export function installAppUpdate(): AppUpdateResult {
   configureUpdater();
-  if (APP_UPDATE_DISABLED) return { ok: false, downloaded: false, message: "MPI 为个人 fork，应用自更新已禁用" };
   if (!downloadedVersion) {
     return { ok: false, downloaded: false, message: "请先下载应用更新" };
   }
@@ -315,7 +321,7 @@ export function installAppUpdate(): AppUpdateResult {
       message: "正在安装 MPI v" + version + "，应用将自动重启",
     };
   } catch (error: any) {
-    const message = error?.message || String(error);
+    const message = friendlyUpdaterError(error?.message || String(error));
     lastUpdaterError = message;
     emitProgress({ stage: "error", message });
     return { ok: false, downloaded: true, version, message: "启动安装程序失败：" + message };

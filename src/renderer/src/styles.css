@@ -740,6 +740,70 @@ body.sidebar-resizing * {
   flex: 1;
 }
 
+/* In-conversation search bar (header button / Ctrl+F). */
+.chat-search {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.chat-search-ico {
+  display: flex;
+  align-items: center;
+  color: var(--text-dim);
+}
+.chat-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+.chat-search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.chat-search-count {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.chat-search-count.none {
+  min-width: 0;
+  color: #c0392b;
+}
+.chat-search .iconbtn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.chat-search .iconbtn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+.chat-search .iconbtn:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
 .chat-stage {
   position: relative;
   display: flex;
@@ -913,6 +977,33 @@ body.sidebar-resizing * {
 }
 .msg.user.message-jump-target .msg-body {
   animation: message-jump-target .9s ease;
+}
+
+/* In-conversation search: dim non-matching messages, ring the current one,
+   flash each anchor when navigation lands on it. */
+.messages.searching [data-message-key] {
+  opacity: .35;
+  transition: opacity .12s ease;
+}
+.messages.searching [data-message-key].search-hit {
+  opacity: 1;
+}
+.messages.searching [data-message-key].search-current {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+@keyframes chat-search-flash {
+  from {
+    background-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+[data-message-key].chat-search-flash {
+  animation: chat-search-flash .9s ease;
+  border-radius: 8px;
 }
 @keyframes message-jump-target {
   0%,
@@ -1178,6 +1269,10 @@ body.sidebar-resizing * {
 .md h3 {
   margin: 16px 0 8px;
   line-height: 1.3;
+}
+/* Breathing room when anchor links (e.g. manual TOC) scroll a heading into view. */
+.md :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-top: 10px;
 }
 .md ul,
 .md ol {
@@ -2830,6 +2925,29 @@ body.sidebar-resizing * {
 .model-pop {
   min-width: 264px;
 }
+/* P1-12 auto mode: health dot (pill button + dropdown Auto row). */
+.model-auto-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2f9e62;
+  box-shadow: 0 0 0 3px rgba(47, 158, 98, 0.14);
+  flex: none;
+}
+.model-auto-dot.warn {
+  background: #d28b26;
+  box-shadow: 0 0 0 3px rgba(210, 139, 38, 0.14);
+}
+.pill-btn .model-auto-dot {
+  margin-right: 5px;
+}
+.model-auto-row .o1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .model-provider-group {
   margin: 1px 0 3px;
 }
@@ -4540,6 +4658,20 @@ textarea.modal-input {
   margin-top: 4px;
   line-height: 1.45;
 }
+.set-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.set-path-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .set-input,
 .set-select {
   width: 100%;
@@ -4789,6 +4921,51 @@ textarea.modal-input {
 }
 .set-model-grid > * {
   min-width: 0;
+}
+/* P1-11 context auto-resolution cell (input + auto checkbox + badge + re-probe). */
+.set-ctx-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.set-ctx-badge {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+}
+.set-ctx-badge.busy {
+  color: var(--accent);
+}
+/* P1-12 auto-model pool editor + policy grid. */
+.set-autopool {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.set-autopool-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto auto auto auto auto;
+  gap: 6px;
+  align-items: center;
+}
+.set-autopool-tier {
+  width: 92px;
+  flex: none;
+}
+.set-autopolicy {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+.set-autopool-row .set-iconbtn.danger:hover {
+  color: #c64d42;
 }
 .set-model-testbar {
   min-height: 31px;
@@ -8557,6 +8734,220 @@ mark.hl {
   border-radius: 8px;
   padding: 4px 8px;
 }
+.todo-edit-time {
+  font-size: 12.5px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 4px 8px;
+}
+.todo-edit-time:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* todo attachments (editor: Feishu-style card grid + full-width add button) */
+/* Feishu Bitable style: the whole dashed box is the drop zone (click → picker, drag/paste anywhere). */
+/* Attachment box (Feishu Bitable style): the ＋ tile on the left is the only click
+   target for picking files; drag & drop / paste work across the editor. */
+.todo-att-area {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 8px;
+  padding: 8px;
+  min-height: 64px;
+}
+.todo-att-area.drop {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+/* ＋ tile — click to open the file picker. */
+.todo-att-add {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  color: var(--text-faint);
+  background: transparent;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+}
+.todo-att-add:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.todo-att-add:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.todo-att-hint {
+  font-size: 12px;
+  color: var(--text-faint);
+  user-select: none;
+  pointer-events: none;
+}
+/* image card (click → full-screen preview) */
+.todo-att.img {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  flex: 0 0 auto;
+}
+.todo-att-imgbtn {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.todo-att.img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  display: block;
+}
+/* file chip */
+.todo-att.file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  padding: 4px 6px;
+}
+.todo-att-name {
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-att-name:hover {
+  color: var(--accent);
+}
+.todo-att-size {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  flex: 0 0 auto;
+}
+.todo-att-x {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
+  text-align: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+.todo-att-x:hover {
+  background: rgba(178, 58, 44, 0.2);
+  color: #b23a2c;
+}
+/* image card × — floats over the thumbnail, revealed on hover */
+.todo-att.img .todo-att-x {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.todo-att.img:hover .todo-att-x {
+  opacity: 1;
+}
+/* Full-screen preview overlay for image attachments (Feishu-style lightbox). */
+.todo-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.78);
+}
+.todo-lightbox-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+}
+.todo-lightbox-name {
+  flex: 1 1 auto;
+  font-size: 12.5px;
+  color: #e8e8e8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-lightbox-bar button {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.todo-lightbox-bar button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.28);
+}
+.todo-lightbox-bar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.todo-lightbox-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  display: flex;
+  padding: 12px 24px 24px;
+}
+.todo-lightbox-body img {
+  margin: auto;
+  max-height: calc(100vh - 96px);
+  object-fit: contain;
+  border-radius: 4px;
+}
+.todo-att-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 6px;
+  padding: 2px 7px;
+}
 
 /* ---- todo panel dark theme ---- */
 :root[data-theme="dark"] .todo-proj:hover {
@@ -8583,4 +8974,16 @@ mark.hl {
 }
 :root[data-theme="dark"] .todo-editor {
   background: rgba(255, 255, 255, 0.03);
+}
+:root[data-theme="dark"] .todo-att-grid {
+  background: rgba(255, 255, 255, 0.03);
+}
+:root[data-theme="dark"] .todo-att.file {
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .todo-att-x {
+  background: rgba(255, 255, 255, 0.14);
+}
+:root[data-theme="dark"] .todo-att-badge {
+  background: rgba(255, 255, 255, 0.08);
 }

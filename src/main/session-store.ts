@@ -1,7 +1,8 @@
-import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, statSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { getConfig } from "./config";
 import { getTrashDir } from "./trash-store";
 
 /**
@@ -46,8 +47,45 @@ export function getAgentDir(): string {
   return process.env.PI_AGENT_DIR || join(homedir(), ".pi", "agent");
 }
 
-export function getSessionsDir(): string {
+/** pi's built-in session location: <agentDir>/sessions. */
+export function defaultSessionsDir(): string {
   return join(getAgentDir(), "sessions");
+}
+
+/** Where MPI reads session files: the user-configured custom dir (Settings →
+ * Data Storage) when set, else pi's default <agentDir>/sessions. The spawned
+ * pi processes follow along via the `sessionDir` key in settings.json that
+ * data-migration keeps in sync. */
+export function getSessionsDir(): string {
+  const custom = (getConfig().sessionStorageDir || "").trim();
+  return custom ? resolve(custom) : defaultSessionsDir();
+}
+
+/** Every .jsonl under the sessions root: loose files at the root (custom dirs
+ * are flat — pi's sessionDir layout never nests per project) plus one level of
+ * subdirectories (the default layout). Non-recursive beyond that. */
+export function listAllSessionFiles(root: string): string[] {
+  const out: string[] = [];
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    if (e.isFile() && e.name.endsWith(".jsonl")) out.push(join(root, e.name));
+  }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    try {
+      for (const f of readdirSync(join(root, e.name))) {
+        if (f.endsWith(".jsonl")) out.push(join(root, e.name, f));
+      }
+    } catch {
+      continue;
+    }
+  }
+  return out.sort();
 }
 
 /** Stream a file line-by-line using only `\n` as delimiter (JSONL-safe). */
@@ -374,22 +412,7 @@ export async function searchThreads(query: string, limit = 50): Promise<ThreadSe
   const root = getSessionsDir();
   if (!existsSync(root)) return [];
 
-  const files: string[] = [];
-  try {
-    const dirs = readdirSync(root, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-    for (const d of dirs) {
-      const dirPath = join(root, d);
-      try {
-        for (const f of readdirSync(dirPath)) if (f.endsWith(".jsonl")) files.push(join(dirPath, f));
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    return [];
-  }
+  const files = listAllSessionFiles(root);
 
   const hits: ThreadSearchHit[] = [];
   let cursor = 0;
@@ -492,43 +515,98 @@ async function sumUsageInFile(
   return { tokens, cost, todayTokens, todayCost };
 }
 
+// ---------------------------------------------------------------------------
+// Usage aggregation cache (keyed by mtime + size)
+// ---------------------------------------------------------------------------
+// The sidebar polls getTotalUsage() every 60s. Re-parsing the whole session
+// library on each poll is a full disk scan for users with many large sessions,
+// so per-file totals are cached and only files whose mtime OR size changed get
+// re-read (steady state: usually just the one actively written session). The
+// "today" bucket is relative to local midnight, so when the day rolls over the
+// whole cache is dropped and rebuilt once. Entries for deleted files are pruned
+// on each call; switching the data-storage dir needs no special handling — new
+// paths simply miss the cache and stale ones get pruned.
+
+interface UsageFileCache {
+  mtimeMs: number;
+  size: number;
+  tokens: number;
+  cost: number;
+  todayTokens: number;
+  todayCost: number;
+}
+
+const usageCache = new Map<string, UsageFileCache>();
+let usageCacheDay = ""; // local day (YYYY-MM-DD) the cached "today" values belong to
+
+function localDayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Drop the mtime+size usage cache (test hook; also safe to call after data migration). */
+export function resetUsageCache(): void {
+  usageCache.clear();
+  usageCacheDay = "";
+}
+
 /** Aggregate token/cost usage across every session file (all-time plus local-today). */
 export async function getTotalUsage(): Promise<TotalUsage> {
   const root = getSessionsDir();
   if (!existsSync(root)) return { tokens: 0, cost: 0, sessions: 0, todayTokens: 0, todayCost: 0 };
-  const files: string[] = [];
-  try {
-    const dirs = readdirSync(root, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-    for (const d of dirs) {
-      try {
-        for (const f of readdirSync(join(root, d))) if (f.endsWith(".jsonl")) files.push(join(root, d, f));
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    return { tokens: 0, cost: 0, sessions: 0, todayTokens: 0, todayCost: 0 };
-  }
+  const files = listAllSessionFiles(root);
   const now = new Date();
   const dayStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+  // "today" values are only valid for the local day they were computed on.
+  const dk = localDayKey(now);
+  if (dk !== usageCacheDay) {
+    usageCache.clear();
+    usageCacheDay = dk;
+  }
+
   let tokens = 0;
   let cost = 0;
   let todayTokens = 0;
   let todayCost = 0;
+  const toParse: Array<{ file: string; mtimeMs: number; size: number }> = [];
+
+  for (const file of files) {
+    let st: Stats;
+    try {
+      st = statSync(file);
+    } catch {
+      continue; // vanished between listing and stat — skip it
+    }
+    const hit = usageCache.get(file);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+      tokens += hit.tokens;
+      cost += hit.cost;
+      todayTokens += hit.todayTokens;
+      todayCost += hit.todayCost;
+    } else {
+      toParse.push({ file, mtimeMs: st.mtimeMs, size: st.size });
+    }
+  }
+
   let cursor = 0;
   async function worker() {
-    while (cursor < files.length) {
+    while (cursor < toParse.length) {
       const idx = cursor++;
-      const r = await sumUsageInFile(files[idx], dayStartMs);
+      const item = toParse[idx];
+      const r = await sumUsageInFile(item.file, dayStartMs);
+      usageCache.set(item.file, { mtimeMs: item.mtimeMs, size: item.size, ...r });
       tokens += r.tokens;
       cost += r.cost;
       todayTokens += r.todayTokens;
       todayCost += r.todayCost;
     }
   }
-  await Promise.all(Array.from({ length: Math.min(8, Math.max(1, files.length)) }, worker));
+  await Promise.all(Array.from({ length: Math.min(8, Math.max(1, toParse.length)) }, worker));
+
+  // Prune entries for files that no longer exist (deleted/trashed sessions).
+  const alive = new Set(files);
+  for (const key of usageCache.keys()) if (!alive.has(key)) usageCache.delete(key);
+
   return { tokens, cost, sessions: files.length, todayTokens, todayCost };
 }
 
@@ -536,28 +614,10 @@ export async function getTotalUsage(): Promise<TotalUsage> {
 export async function scanProjects(): Promise<ProjectSummary[]> {
   const root = getSessionsDir();
   if (!existsSync(root)) return [];
-  let dirs: string[] = [];
-  try {
-    dirs = readdirSync(root, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-  } catch {
-    return [];
-  }
 
   const groups = new Map<string, ProjectSummary>();
   // light concurrency limit
-  const queue: string[] = [];
-  for (const d of dirs) {
-    const dirPath = join(root, d);
-    let files: string[] = [];
-    try {
-      files = readdirSync(dirPath).filter((f) => f.endsWith(".jsonl"));
-    } catch {
-      continue;
-    }
-    for (const f of files) queue.push(join(dirPath, f));
-  }
+  const queue: string[] = listAllSessionFiles(root);
 
   const concurrency = 8;
   let cursor = 0;

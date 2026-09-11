@@ -4,12 +4,15 @@ import { basename, extname, join } from "node:path";
 import { app, BrowserWindow, Menu, shell, Tray } from "electron";
 import { loadConfig, getConfig, updateConfig } from "./config";
 import { flushDrafts } from "./draft-store";
+import { runPendingDataMigrations } from "./data-migration";
 import { flushTodos, ingestInbox } from "./todo-store";
 import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
+import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
 import { stopAutomations, stopScheduler } from "./automation";
 import { stopMessaging } from "./messaging/service";
+import { stopWeChatMessaging } from "./messaging/wechat-service";
 import { stopAllTuis } from "./tui";
 
 const IS_DEV_BUILD = !app.isPackaged;
@@ -27,6 +30,7 @@ if (IS_DEV_BUILD) app.setPath("userData", join(app.getPath("appData"), "MPI Dev"
 if (process.platform === "win32") app.setAppUserModelId(APP_USER_MODEL_ID);
 
 registerHtmlPreviewScheme();
+registerTodoAttachmentScheme();
 
 // Keep the legacy resources/bundled lookup available for older developer
 // builds. New packaged releases carry the standalone runtime archive in the
@@ -245,7 +249,17 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     loadConfig(app.getPath("userData"));
+    // Apply data-location migrations recorded by Settings (session store /
+    // todo data). Must run before the window opens so the UI reads from the
+    // new locations; failures stay pending and retry on the next launch.
+    try {
+      const summary = runPendingDataMigrations();
+      if (summary) console.log("[migration]", JSON.stringify(summary));
+    } catch (e: any) {
+      console.error("[migration] failed:", e?.message || String(e));
+    }
     registerHtmlPreviewProtocol();
+    registerTodoAttachmentProtocol();
     // Remove runtime trees superseded by an in-app core update (they may have
     // been locked by pi child processes during the previous run; nothing holds
     // them now). Best effort — leftovers simply wait for the next launch.
@@ -295,6 +309,7 @@ app.on("before-quit", (e) => {
   // at ~4s internally; this caps the whole sequence well beyond that).
   const hardStop = setTimeout(() => app.quit(), 8000);
   stopMessaging(); // Feishu channel — drop the long connection before bridges die
+  stopWeChatMessaging(); // WeChat (iLink) channel — abort the long-poll
   Promise.all([stopAllBridges(), stopAutomations()])
     .catch(() => undefined)
     .finally(() => {
@@ -309,6 +324,7 @@ app.on("window-all-closed", () => {
   // bridges are already stopped (both calls then no-op).
   stopScheduler();
   stopMessaging();
+  stopWeChatMessaging();
   void Promise.all([stopAllBridges(), stopAutomations()]).catch(() => undefined);
   stopAllTuis();
   if (process.platform !== "darwin") app.quit();

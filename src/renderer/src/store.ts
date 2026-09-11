@@ -10,11 +10,11 @@ import type {
   FileNode,
   McpServerInfo,
   MessagingState,
+  WeChatMessagingState,
   ModelInfo,
   PendingFollowUp,
   PermissionLevel,
   PluginPackage,
-  PreviewPayload,
   PreviewTab,
   ProjectSummary,
   SkillInfo,
@@ -1153,6 +1153,8 @@ interface PiStore {
   setSoundOnComplete: (on: boolean) => Promise<void>;
   refreshOpenThreadModels: () => Promise<void>;
   setModel: (id: string, provider: string, modelId: string) => Promise<void>;
+  /** P1-12: toggle auto mode for a thread. Exiting stops monitoring entirely. */
+  setAutoModel: (id: string, enabled: boolean) => Promise<void>;
   setThinking: (id: string, level: string) => Promise<void>;
   newSessionInThread: (id: string) => Promise<void>;
   forkThread: (id: string, entryId: string) => Promise<void>;
@@ -1229,19 +1231,30 @@ interface PiStore {
   openTodoPanel: () => void;
   closeTodoPanel: () => void;
   loadTodos: () => Promise<void>;
-  addTodo: (args: { cwd?: string; title?: string; note?: string; dueDate?: string | null }) => Promise<TodoItem | null>;
-  updateTodo: (id: string, patch: { title?: string; note?: string; dueDate?: string | null }) => Promise<boolean>;
+  addTodo: (args: { cwd?: string; title?: string; note?: string; dueDate?: string | null; dueTime?: string | null }) => Promise<TodoItem | null>;
+  updateTodo: (
+    id: string,
+    patch: { title?: string; note?: string; dueDate?: string | null; dueTime?: string | null }
+  ) => Promise<boolean>;
   toggleTodo: (id: string) => Promise<void>;
   deleteTodo: (id: string) => Promise<void>;
   clearCompletedTodos: (cwd?: string | null) => Promise<number>;
+  /** Native file dialog; main reads the files itself. */
+  addTodoFiles: (id: string) => Promise<void>;
+  /** Paste / drag-drop from the renderer (ArrayBuffers cross IPC). */
+  addTodoPasted: (id: string, files: File[]) => Promise<void>;
+  removeTodoAttachment: (id: string, attId: string) => Promise<void>;
 
-  // messaging overlay (Feishu channel)
+  // messaging overlay (Feishu + WeChat channels)
   messagingOpen: boolean;
   messagingState: MessagingState | null;
+  wechatState: WeChatMessagingState | null;
   openMessaging: () => void;
   closeMessaging: () => void;
   loadMessaging: () => Promise<void>;
   saveMessagingConfig: (patch: Partial<NonNullable<AppConfig["feishuChannel"]>>) => Promise<boolean>;
+  loadWeChatMessaging: () => Promise<void>;
+  saveWeChatConfig: (patch: Partial<NonNullable<AppConfig["wechatChannel"]>>) => Promise<boolean>;
 
   // thread permission / folder
   setPermission: (threadId: string, level: PermissionLevel) => Promise<void>;
@@ -1327,6 +1340,9 @@ let pendingRestore = readLastActive();
  */
 const eventQueue: { threadId: string; event: any }[] = [];
 let flushScheduled = false;
+// Set once the data-migration launch notice has been shown (or determined
+// unnecessary) so a re-bootstrap never toasts twice.
+let migrationToastShown = false;
 
 function scheduleEventFlush(): void {
   if (flushScheduled) return;
@@ -1517,6 +1533,35 @@ export const useStore = create<PiStore>()((set, get) => {
         set({ runtime: { ok: false, error } });
         get().pushToast("warning", error);
       });
+
+    // One-time notice when a data-location migration ran at this launch
+    // (Settings → 数据存储). main keeps the summary in memory only, so it is
+    // null on launches without pending work.
+    if (!migrationToastShown) {
+      window.pi.dataMigration
+        .status()
+        .then((st) => {
+          const s = st.lastSummary;
+          if (!s) return;
+          migrationToastShown = true;
+          const moved = (s.sessionsMoved || 0) + (s.todoFilesMoved || 0);
+          const zh = get().config?.language === "zh";
+          if (moved > 0 && s.errors.length === 0) {
+            get().pushToast(
+              "info",
+              zh ? `已迁移 ${moved} 个数据文件到新的存储位置` : `Moved ${moved} data file(s) to the new storage location`,
+            );
+          } else if (s.errors.length > 0) {
+            get().pushToast(
+              "warning",
+              zh
+                ? `部分数据文件迁移失败（${s.errors.length}），详见设置 → 数据存储`
+                : `Some data files failed to migrate (${s.errors.length}) — see Settings → Data storage`,
+            );
+          }
+        })
+        .catch(() => {});
+    }
 
     const [configResult, projectsResult, draftsResult] = await Promise.allSettled([
       window.pi.app.getConfig(),
@@ -1974,6 +2019,8 @@ export const useStore = create<PiStore>()((set, get) => {
             creatingSession: prev?.creatingSession,
             model: res.model ?? prev?.model ?? null,
             models: res.models || [],
+            // P1-12: main is the source of truth for auto mode (config + live state).
+            autoEnabled: res.autoEnabled ?? s.config?.autoModelThreads?.[currentFile] ?? prev?.autoEnabled,
             thinking: res.thinkingLevel || prev?.thinking || "off",
             commands: res.commands || [],
             loading: false,
@@ -2395,6 +2442,9 @@ export const useStore = create<PiStore>()((set, get) => {
                 [id]: {
                   ...s.threads[id],
                   model: nextModel,
+                  // Manual selection exits auto mode for this thread (user-confirmed).
+                  autoEnabled: false,
+                  autoStatus: null,
                   ...(typeof res?.thinkingLevel === "string" ? { thinking: res.thinkingLevel } : {}),
                 },
               },
@@ -2407,6 +2457,32 @@ export const useStore = create<PiStore>()((set, get) => {
         .catch(() => {});
     } catch (e: any) {
       get().pushToast("error", e?.message || "set model failed");
+    }
+  },
+
+  // P1-12: toggle auto mode. Main resolves the initial model for empty sessions
+  // (res.initial); later switches arrive via the pi:autoModel notify.
+  setAutoModel: async (id, enabled) => {
+    if (!(await get().ensureConnected(id))) return;
+    try {
+      const res: any = await window.pi.thread.setAutoModel({ threadId: id, enabled });
+      set((s) =>
+        s.threads[id]
+          ? {
+              threads: {
+                ...s.threads,
+                [id]: {
+                  ...s.threads[id],
+                  autoEnabled: enabled,
+                  autoStatus: null,
+                  ...(res?.initial ? { model: res.initial } : {}),
+                },
+              },
+            }
+          : s,
+      );
+    } catch (e: any) {
+      get().pushToast("error", e?.message || "auto mode toggle failed");
     }
   },
 
@@ -3027,10 +3103,51 @@ export const useStore = create<PiStore>()((set, get) => {
       return 0;
     }
   },
+  addTodoFiles: async (id) => {
+    if (typeof window.pi.todo?.addFiles !== "function") {
+      get().pushToast("warning", "当前版本不支持附件，请重启应用");
+      return;
+    }
+    try {
+      const out = await window.pi.todo.addFiles(id);
+      if (out.item) set((s) => ({ todos: s.todos.map((t) => (t.id === id ? out.item! : t)) }));
+      for (const n of out.skipped || []) get().pushToast("info", "已跳过重复附件：「" + n + "」");
+      for (const err of out.errors || []) get().pushToast("error", "附件添加失败：" + err);
+    } catch (e: any) {
+      get().pushToast("error", "附件添加失败：" + (e?.message || e));
+    }
+  },
+  addTodoPasted: async (id, files) => {
+    if (typeof window.pi.todo?.addAttachments !== "function") {
+      get().pushToast("warning", "当前版本不支持附件，请重启应用");
+      return;
+    }
+    try {
+      const payloads = await Promise.all(
+        files.slice(0, 10).map(async (f) => ({ name: f.name, mime: f.type || undefined, size: f.size, data: await f.arrayBuffer() }))
+      );
+      const out = await window.pi.todo.addAttachments(id, payloads);
+      if (out.item) set((s) => ({ todos: s.todos.map((t) => (t.id === id ? out.item! : t)) }));
+      for (const n of out.skipped || []) get().pushToast("info", "已跳过重复附件：「" + n + "」");
+      for (const err of out.errors || []) get().pushToast("error", "附件添加失败：" + err);
+    } catch (e: any) {
+      get().pushToast("error", "附件添加失败：" + (e?.message || e));
+    }
+  },
+  removeTodoAttachment: async (id, attId) => {
+    if (typeof window.pi.todo?.removeAttachment !== "function") return;
+    try {
+      const item = await window.pi.todo.removeAttachment(id, attId);
+      if (item) set((s) => ({ todos: s.todos.map((t) => (t.id === id ? item : t)) }));
+    } catch (e: any) {
+      get().pushToast("error", "移除附件失败：" + (e?.message || e));
+    }
+  },
 
-  // ---- messaging channels (Feishu) ----
+  // ---- messaging channels (Feishu + WeChat) ----
   messagingOpen: false,
   messagingState: null as MessagingState | null,
+  wechatState: null as WeChatMessagingState | null,
   openMessaging: () => {
     set({ messagingOpen: true });
     void get().loadMessaging();
@@ -3053,6 +3170,26 @@ export const useStore = create<PiStore>()((set, get) => {
     } catch (e: any) {
       const zh = get().config?.language === "zh";
       get().pushToast("error", `${zh ? "保存消息接入配置失败：" : "Failed to save channel config: "}${e?.message || e}`);
+      return false;
+    }
+  },
+  loadWeChatMessaging: async () => {
+    try {
+      const state = await window.pi.wechat.getState();
+      if (state) set({ wechatState: state as WeChatMessagingState });
+    } catch (e: any) {
+      const zh = get().config?.language === "zh";
+      get().pushToast("error", `${zh ? "加载微信接入状态失败：" : "Failed to load WeChat channel status: "}${e?.message || e}`);
+    }
+  },
+  saveWeChatConfig: async (patch) => {
+    try {
+      const state = await window.pi.wechat.setConfig(patch);
+      if (state) set({ wechatState: state as WeChatMessagingState });
+      return true;
+    } catch (e: any) {
+      const zh = get().config?.language === "zh";
+      get().pushToast("error", `${zh ? "保存微信接入配置失败：" : "Failed to save WeChat channel config: "}${e?.message || e}`);
       return false;
     }
   },

@@ -11,6 +11,10 @@ register(new URL("./ts-ext-loader.mjs", import.meta.url));
 const agentDir = mkdtempSync(join(tmpdir(), "mpi-comps-"));
 process.env.PI_AGENT_DIR = agentDir;
 
+// getSessionsDir() consults config (custom data-storage dir) — load a throwaway one.
+const { loadConfig } = await import("../src/main/config.ts");
+loadConfig(mkdtempSync(join(tmpdir(), "mpi-comps-cfg-")));
+
 const { readSessionCompactions } = await import("../src/main/session-store.ts");
 
 const sessionsDir = join(agentDir, "sessions", "--C--proj--");

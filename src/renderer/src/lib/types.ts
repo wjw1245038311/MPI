@@ -302,16 +302,30 @@ export interface TrashEntry {
   sizeBytes: number;
 }
 
+/** A file attached to a todo (screenshot, document, ...). The binary lives in
+ * <userData>/todo-attachments/<file>; only this metadata is stored in todos.json.
+ * Images render as thumbnails; other files open with the system app. */
+export interface TodoAttachment {
+  id: string;
+  name: string; // original file name (display)
+  mime: string; // e.g. "image/png" — images preview inline
+  size: number; // bytes on disk
+  file: string; // file name inside todo-attachments/ (uuid + sanitized ext)
+}
+
 /** A personal todo item in the Feishu-style 待办任务 panel.
- * Scoped per project (cwd); dueDate is a local "YYYY-MM-DD" (null = undated).
- * source="agent" marks items added by the pi extension during a conversation
- * (sessionFile points at the originating session for the AI badge). */
+ * Scoped per project (cwd); dueDate is a local "YYYY-MM-DD" (null = undated),
+ * dueTime an optional local "HH:mm" (24h) refining it to the minute — absent
+ * means all-day. source="agent" marks items added by the pi extension during a
+ * conversation (sessionFile points at the originating session for the AI badge). */
 export interface TodoItem {
   id: string;
   title: string;
   note?: string;
   cwd: string;
   dueDate: string | null;
+  dueTime?: string | null; // "HH:mm" or null (all-day)
+  attachments?: TodoAttachment[];
   done: boolean;
   createdAt: number;
   completedAt: number | null;
@@ -329,6 +343,10 @@ export interface ThreadState {
   creatingSession?: boolean;
   model: ModelInfo | null;
   models: ModelInfo[];
+  /** P1-12: this thread is in auto mode (model pill shows the Auto item active). */
+  autoEnabled?: boolean;
+  /** P1-12: last autopilot notification state for the health dot. */
+  autoStatus?: "ok" | "warn" | null;
   thinking: string;
   levels: string[];
   commands: any[];
@@ -416,6 +434,15 @@ export interface AppConfig {
   /** Deleted sessions go to the app trash (restorable) instead of being unlinked
    * immediately. Absent = enabled (safe default, see main/config.ts). */
   trashEnabled?: boolean;
+  /** Custom directory for todo attachment copies (legacy; replaced by
+   * todoDataDir). Kept so old configs keep resolving attachments. */
+  todoAttachmentDir?: string;
+  /** Custom directory for session JSONL files (Settings → Data Storage);
+   * absent = default <agentDir>/sessions. Applies on next launch. */
+  sessionStorageDir?: string;
+  /** Custom folder holding all todo data (todos.json + attachments + inbox);
+   * absent = built-in locations under userData. Applies on next launch. */
+  todoDataDir?: string;
   windowBounds?: { x?: number; y?: number; width: number; height: number; maximized?: boolean };
   theme: "dark" | "light" | "system";
   /** Accent color preset applied on top of the theme (see data-accent CSS blocks). */
@@ -447,6 +474,31 @@ export interface AppConfig {
     projectCwd: string;
     permission: "sandbox" | "full";
   };
+  /** Personal-WeChat (iLink bot) channel; absent = off. */
+  wechatChannel?: {
+    enabled: boolean;
+    botId: string;
+    userId: string;
+    projectCwd: string;
+    permission: "sandbox" | "full";
+  };
+  /** P1-12 auto model switching (Settings → Auto Model); absent = empty pool.
+   * Pool order is only a tie-breaker within equal rank; quality comes from the
+   * tier inference + per-entry override. `paid` defaults to false (free). */
+  autoModels?: {
+    pool: Array<{ provider: string; modelId: string; paid?: boolean; tierOverride?: "high" | "mid" | "low" }>;
+    policy?: {
+      softDegradeFactor?: number;
+      softDegradeMinMs?: number;
+      softDegradeStreak?: number;
+      recoveryIntervalMin?: number;
+      cooldownMin?: number;
+      strictNoDowngrade?: boolean;
+      notify?: boolean;
+    };
+  };
+  /** P1-12 per-thread auto mode (threadId → enabled). */
+  autoModelThreads?: Record<string, boolean>;
 }
 
 export type MessagingStatus = "off" | "connecting" | "connected" | "reconnecting" | "error";
@@ -457,6 +509,16 @@ export interface MessagingState {
   lastError: string | null;
   configured: boolean;
   appIdMasked: string | null;
+  projectCwd: string;
+  permission: PermissionLevel;
+}
+
+/** Renderer-facing WeChat channel state (main process never sends the bot token). */
+export interface WeChatMessagingState {
+  status: MessagingStatus;
+  lastError: string | null;
+  configured: boolean;
+  botIdMasked: string | null;
   projectCwd: string;
   permission: PermissionLevel;
 }
@@ -501,6 +563,12 @@ export interface ModelDef {
   reasoning?: boolean;
   input?: ("text" | "image")[];
   contextWindow?: number;
+  /** P1-11: resolve automatically on save when the field is empty. */
+  contextWindowAuto?: boolean;
+  /** Where a resolved value came from: catalog lookup / API probe / not found. */
+  contextWindowSource?: "catalog" | "api" | "none";
+  /** Probe origin detail for the badge tooltip (e.g. endpoint host). */
+  contextWindowDetail?: string;
   maxTokens?: number;
   cost?: Record<string, unknown>;
   compat?: Record<string, unknown>;

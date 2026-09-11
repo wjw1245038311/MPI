@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-// Type-only import (erased at compile time) — no runtime cycle with messaging/types.
-import type { FeishuChannelConfig } from "./messaging/types";
+// Type-only imports (erased at compile time) — no runtime cycles.
+import type { FeishuChannelConfig, WeChatChannelConfig } from "./messaging/types";
+import type { AutoPolicy, PoolEntry } from "./model-autopilot";
+import { sanitizeWeChatConfig } from "./messaging/wechat-text";
 
 /**
  * Persisted, app-level settings. Stored under Electron's userData dir so it is
@@ -66,6 +68,22 @@ export interface AppConfig {
    * unlinked immediately; toggle in Settings → General. Absent/corrupt = enabled,
    * because accidental deletion is exactly what this protects against. */
   trashEnabled: boolean;
+  /** Custom directory for todo attachment copies (legacy, replaced by
+   * todoDataDir). Still honored as a fallback lookup source when todoDataDir is
+   * unset so attachments added before the upgrade keep resolving. */
+  todoAttachmentDir?: string;
+  /** Custom directory for session JSONL files (Settings → Data Storage).
+   * When set, pi's settings.json gets a `sessionDir` key so terminal pi follows
+   * along too; layout is flat (no per-project subdirs). Absent = default
+   * <agentDir>/sessions with per-project subdirectories. */
+  sessionStorageDir?: string;
+  /** Custom folder holding ALL todo data: todos.json + todo-attachments/ +
+   * todos-inbox/. Absent = built-in locations under userData. */
+  todoDataDir?: string;
+  /** Data-location migrations captured by Settings and applied on the NEXT
+   * launch (running pi processes must not hold open files mid-move).
+   * Consumed and cleared by runPendingDataMigrations() at startup. */
+  pendingDataMigration?: PendingDataMigration;
   /** Last window geometry, restored on launch. */
   windowBounds?: { x?: number; y?: number; width: number; height: number; maximized?: boolean };
   /** "dark" | "light" | "system". */
@@ -106,6 +124,31 @@ export interface AppConfig {
   /** Feishu message channel (导航栏 → 消息接入). Absent = off. The app secret
    * stays local to this machine and is never part of backup imports. */
   feishuChannel?: FeishuChannelConfig;
+  /** Personal-WeChat (iLink bot) message channel. Absent = off. The bot token
+   * stays local to this machine, like the Feishu app secret. */
+  wechatChannel?: WeChatChannelConfig;
+  /** P1-12 auto model switching (Settings → Models & Providers). Absent = off.
+   * Pool order is a tie-break preference; policy knobs default per AutoPolicy. */
+  autoModels?: { pool: PoolEntry[]; policy?: Partial<AutoPolicy> };
+  /** Per-thread auto-mode flag keyed by session file path (boot id until the
+   * thread's real file name is known). Absent/false = manual model selection. */
+  autoModelThreads?: Record<string, boolean>;
+}
+
+/** One pending data-location migration, applied on next launch. */
+export interface PendingDataMigration {
+  /** Move every session .jsonl from `fromDir` (subdirs + loose files) to
+   * `toDir`; also remaps path-keyed references and updates pi's settings.json.
+   * toDir === the default sessions dir means "restore default layout". */
+  sessions?: { fromDir: string; toDir: string };
+  /** Move todos.json + attachment files + inbox files into `toDir`'s standard
+   * sub-layout (todos.json / todo-attachments/ / todos-inbox/). */
+  todos?: {
+    toDir: string;
+    fromTodosFile: string;
+    fromAttachmentDirs: string[];
+    fromInbox: string;
+  };
 }
 
 export const DEFAULT_REMOTE_SIGNALING_URL = "wss://mpi-remote.scholarcn.com/ws";
@@ -182,6 +225,12 @@ function sanitizeFeishuChannel(value: unknown): FeishuChannelConfig | undefined 
   };
 }
 
+/** Coerces a persisted (or parsed) channel object into a safe shape. */
+function sanitizeWeChatChannel(value: unknown): WeChatChannelConfig | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return sanitizeWeChatConfig(value as Partial<WeChatChannelConfig>);
+}
+
 function configPath(dir: string): string {
   return join(dir, "config.json");
 }
@@ -210,6 +259,19 @@ export function loadConfig(userDataDir: string): AppConfig {
           : DEFAULTS.remoteSignalingEnabled,
         diffViewMode: parsed.diffViewMode === "blocks" ? "blocks" : DEFAULTS.diffViewMode,
         trashEnabled: typeof parsed.trashEnabled === "boolean" ? parsed.trashEnabled : DEFAULTS.trashEnabled,
+        todoAttachmentDir:
+          typeof parsed.todoAttachmentDir === "string" && parsed.todoAttachmentDir.trim()
+            ? parsed.todoAttachmentDir.trim()
+            : undefined,
+        sessionStorageDir:
+          typeof parsed.sessionStorageDir === "string" && parsed.sessionStorageDir.trim()
+            ? parsed.sessionStorageDir.trim()
+            : undefined,
+        todoDataDir:
+          typeof parsed.todoDataDir === "string" && parsed.todoDataDir.trim()
+            ? parsed.todoDataDir.trim()
+            : undefined,
+        pendingDataMigration: sanitizePendingDataMigration(parsed.pendingDataMigration),
         userProfile: typeof parsed.userProfile === "string" ? parsed.userProfile : undefined,
         defaultPermission:
           typeof parsed.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(parsed.defaultPermission)
@@ -233,6 +295,7 @@ export function loadConfig(userDataDir: string): AppConfig {
           permission: task.permission === "full" ? "full" : "sandbox",
         })),
         feishuChannel: sanitizeFeishuChannel(parsed.feishuChannel),
+        wechatChannel: sanitizeWeChatChannel(parsed.wechatChannel),
       };
       return cached;
     } catch {
@@ -289,6 +352,41 @@ export function getConfig(): AppConfig {
 export function reloadConfig(): AppConfig {
   if (!cachedDir) throw new Error("config not loaded; call loadConfig() after app ready");
   return loadConfig(cachedDir);
+}
+
+/** Coerce a persisted pending-migration record into a safe shape; drop it
+ * entirely when malformed — a half-baked migration plan must never run. */
+function sanitizePendingDataMigration(value: unknown): PendingDataMigration | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  const out: PendingDataMigration = {};
+  const s = v.sessions;
+  if (s && typeof s === "object") {
+    const so = s as Record<string, unknown>;
+    if (typeof so.fromDir === "string" && so.fromDir.trim() && typeof so.toDir === "string" && so.toDir.trim()) {
+      out.sessions = { fromDir: so.fromDir.trim(), toDir: so.toDir.trim() };
+    }
+  }
+  const t = v.todos;
+  if (t && typeof t === "object") {
+    const to = t as Record<string, unknown>;
+    if (
+      typeof to.toDir === "string" &&
+      to.toDir.trim() &&
+      typeof to.fromTodosFile === "string" &&
+      Array.isArray(to.fromAttachmentDirs) &&
+      (to.fromAttachmentDirs as unknown[]).every((d) => typeof d === "string") &&
+      typeof to.fromInbox === "string"
+    ) {
+      out.todos = {
+        toDir: to.toDir.trim(),
+        fromTodosFile: to.fromTodosFile,
+        fromAttachmentDirs: (to.fromAttachmentDirs as string[]).filter((d) => d.trim()),
+        fromInbox: to.fromInbox,
+      };
+    }
+  }
+  return out.sessions || out.todos ? out : undefined;
 }
 
 /** The userData directory that holds config.json (used for runtime assets like the gate extension). */

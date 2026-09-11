@@ -48,6 +48,75 @@ export function usePiEvents() {
     const u8 = typeof window.pi.on.messaging === "function"
       ? window.pi.on.messaging((p) => useStore.setState({ messagingState: p }))
       : () => undefined;
+    // Same old-preload guard as the Feishu channel above.
+    const u10 = typeof window.pi.on.messagingWechat === "function"
+      ? window.pi.on.messagingWechat((p) => useStore.setState({ wechatState: p }))
+      : () => undefined;
+    // P1-12 auto model switch / warning notifications (toast + pill health dot).
+    const u11 = typeof window.pi.on.autoModel === "function"
+      ? window.pi.on.autoModel((p) => {
+          const st = useStore.getState();
+          if (!st.threads[p.threadId]) return;
+          const status: "ok" | "warn" = p.kind === "switch" && !p.downgraded && !p.usedPaid ? "ok" : "warn";
+          useStore.setState((s) => {
+            const t = s.threads[p.threadId];
+            if (!t) return s;
+            // pi does NOT stream model_select to the RPC client (it only reaches
+            // extension handlers) — keep the pill's effective model in sync from
+            // this notification instead, preferring the full ModelDef so name /
+            // contextWindow survive the switch.
+            const nextModel =
+              p.kind === "switch" && p.to
+                ? t.models?.find((m) => m.provider === p.to!.provider && m.id === p.to!.id) ?? { ...p.to }
+                : undefined;
+            return {
+              threads: {
+                ...s.threads,
+                [p.threadId]: { ...t, autoStatus: status, ...(nextModel ? { model: nextModel } : {}) },
+              },
+            };
+          });
+          if (st.config?.autoModels?.policy?.notify === false) return;
+          const zh = st.config?.language === "zh";
+          let msg: string;
+          if (p.kind === "warn") {
+            switch (p.reason) {
+              case "all-unavailable":
+                msg = zh ? "所有候选模型均不可用，保持当前模型。" : "All candidate models are unavailable; keeping the current model.";
+                break;
+              case "no-candidates":
+                msg = zh ? "自动模型池为空或候选均已移除。" : "The auto-model pool is empty or all candidates were removed.";
+                break;
+              case "strict-no-downgrade":
+                msg = zh ? "只有更低质量的模型可用；严格模式禁止降档，保持当前模型。" : "Only lower-quality models are available; strict mode forbids downgrading, keeping the current model.";
+                break;
+              default:
+                msg = zh ? "自动切换失败（set_model 报错）。" : "Auto-switch failed (set_model error).";
+            }
+          } else {
+            const from = p.from?.id ?? "?";
+            const to = p.to?.id ?? "?";
+            let base: string;
+            switch (p.reason) {
+              case "soft-degrade":
+                base = zh ? `已自动切换：${from} → ${to}（响应过慢）` : `Auto-switched: ${from} → ${to} (responding too slowly)`;
+                break;
+              case "recovery":
+                base = zh ? `已自动切换：${from} → ${to}（更优模型恢复可用）` : `Auto-switched: ${from} → ${to} (better model recovered)`;
+                break;
+              case "initial":
+                base = zh ? `auto 模式已选用：${to}` : `Auto mode selected: ${to}`;
+                break;
+              default:
+                base = zh ? `已自动切换：${from} → ${to}（原模型不可用）` : `Auto-switched: ${from} → ${to} (current model unavailable)`;
+            }
+            if (p.usedPaid) base += zh ? "（无免费候选，使用收费模型）" : " (no free candidate available, using a billed model)";
+            else if (p.downgraded) base += zh ? "（无同档可用，已降级到较低质量模型）" : " (nothing at this tier available, downgraded to a lower-quality model)";
+            msg = base;
+          }
+          st.pushToast(p.kind === "warn" ? "warning" : "info", msg);
+        })
+      : () => undefined;
     const u6 = window.pi.on.projectsChanged(() => {
       void useStore.getState().refreshProjects();
     });
@@ -66,6 +135,8 @@ export function usePiEvents() {
       u6();
       u8();
       u9();
+      u10();
+      u11();
     };
   }, [handleEvent, handleExtUi, handleExit, handleError]);
 }

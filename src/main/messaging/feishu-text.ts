@@ -61,12 +61,3 @@ export function sanitizeFeishuConfig(raw?: Partial<FeishuChannelConfig> | null):
   if (activeThreadId) out.activeThreadId = activeThreadId; // keep the key absent when unset
   return out;
 }
-
-/** Truncates long agent output for chat delivery, appending a note when cut. */
-export function truncateForChat(text: string, maxChars: number, note?: string): string {
-  const clean = text.trim();
-  if (clean.length <= maxChars) return clean;
-  const suffix = note ? `\n…${note}` : "\n…";
-  const budget = Math.max(10, maxChars - suffix.length);
-  return `${clean.slice(0, budget)}${suffix}`;
-}

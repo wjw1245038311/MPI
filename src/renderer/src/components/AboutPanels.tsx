@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import type { Diagnostics } from "../lib/types";
 import { cleanOutput, hasLibuvAssertion, lastLine, stripAnsi } from "../lib/update";
-import { formatBytes } from "../lib/format";
 import { translateUiText } from "../lib/i18n";
 import { ChangelogModal } from "./ChangelogModal";
 

@@ -311,6 +311,9 @@ export interface PiBridgeOptions {
   /** Paths for the 待办任务 bridge extension (mpi-todo-ext): todos.json and the
    * inbox dir where agent-side additions land before main ingests them. */
   todoPaths?: { file: string; inboxDir: string };
+  /** Inbox dir for the channel session bridge (mpi-channel ext): agent-side
+   * mpi_channel_* requests land here before main ingests them. */
+  channelInboxDir?: string;
   onEvent: (event: unknown) => void;
   onExtUi: (request: ExtUiRequest) => void;
   onExit: (info: { code: number | null; signal: NodeJS.Signals | null; stderr: string; expected?: boolean }) => void;
@@ -365,6 +368,11 @@ export class PiBridge {
       env.MPI_TODO_FILE = this.opts.todoPaths.file;
       env.MPI_TODO_INBOX_DIR = this.opts.todoPaths.inboxDir;
       if (this.opts.sessionFile) env.MPI_TODO_SESSION_FILE = this.opts.sessionFile;
+    }
+    if (this.opts.channelInboxDir) {
+      env.MPI_CHANNEL_INBOX_DIR = this.opts.channelInboxDir;
+      // The extension derives its thread id from the session file name.
+      if (this.opts.sessionFile) env.MPI_CHANNEL_SESSION_FILE = this.opts.sessionFile;
     }
 
     this.proc = spawn(rt.node, [rt.cli, ...args], {

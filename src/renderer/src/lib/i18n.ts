@@ -10,6 +10,17 @@ const exact: Record<string, string> = {
   "设置": "Settings",
   "模型与提供商": "Models & providers",
   "思考默认值": "Thinking defaults",
+  "数据存储": "Data storage",
+  "会话存储位置": "Session storage location",
+  "待办数据位置": "Todo data location",
+  "更改…": "Change…",
+  "恢复默认": "Reset",
+  "所有 pi 会话记录（.jsonl）的存放目录。更改后下次启动自动迁移，终端 pi 也会跟随新位置；旧文件在迁移完成前仍可正常读取。":
+    "Where all pi session records (.jsonl) live. Changes migrate automatically on next launch; terminal pi follows the new location too, and old files stay readable until the move completes.",
+  "待办任务（todos.json）、附件与智能体收件箱的存放目录。更改后下次启动自动迁移；旧位置的附件仍可正常打开和删除。":
+    "Where todo tasks (todos.json), attachments and the agent inbox live. Changes migrate automatically on next launch; attachments from old locations keep working.",
+  "⚠ 位置已更改，文件将在下次启动时迁移。重启前应用仍读取旧位置。":
+    "⚠ Location changed — files move on next launch. Until then the app still reads the old location.",
   "诊断与配置": "Diagnostics & config",
   "更新 Pi": "Update Pi",
   "新建任务": "New task",
@@ -78,7 +89,7 @@ const exact: Record<string, string> = {
   "待办任务": "Todos",
   "全部项目": "All projects",
   "目标项目": "Target project",
-  "添加待办，回车创建（支持：明天 / 周五 / 9月30日）": "Add a todo and press Enter (supports: tomorrow / Friday / Sep 30)",
+  "添加待办，回车创建（支持：明天 / 周五 / 9月30日 / 14:30）": "Add a todo and press Enter (supports: tomorrow / Friday / Sep 30 / 14:30)",
   "全部": "All",
   "今天": "Today",
   "明天": "Tomorrow",
@@ -89,7 +100,17 @@ const exact: Record<string, string> = {
   "暂无待办": "No todos yet",
   "备注（可选）": "Note (optional)",
   "截止日期": "Due date",
+  "时间（可选，精确到分钟）": "Time (optional, to the minute)",
   "清除日期": "Clear date",
+  "添加本地文件": "Add local file",
+  "添加本地文件：点击 ＋ 或拖拽": "Add local files: click + or drag & drop",
+  "拖拽文件到此处，或点击 ＋ 添加": "Drag files here, or click + to add",
+  "放大": "Zoom in",
+  "缩小": "Zoom out",
+  "关闭预览": "Close preview",
+  "移除附件": "Remove attachment",
+  "最多 10 个附件": "Up to 10 attachments",
+  "当前版本不支持附件，请重启应用": "This version does not support attachments; restart the app",
   "保存": "Save",
   "标记为未完成": "Mark as not done",
   "标记为已完成": "Mark as done",
@@ -242,6 +263,12 @@ const exact: Record<string, string> = {
   "清空": "Clear",
   "输入关键词，在全部项目的会话中搜索。": "Enter keywords to search sessions across all projects.",
   "匹配会话标题与用户 / 助手消息内容。": "Matches session titles and user or assistant messages.",
+  "搜索本会话消息（Ctrl+F）": "Search messages in this session (Ctrl+F)",
+  "搜索本会话…": "Search this session…",
+  "无匹配": "No matches",
+  "上一个匹配（Shift+Enter）": "Previous match (Shift+Enter)",
+  "下一个匹配（Enter）": "Next match (Enter)",
+  "关闭搜索（Esc）": "Close search (Esc)",
   "未找到包含": "No sessions found containing",
   "的会话。": ".",
   "处匹配": "matches",
@@ -343,6 +370,10 @@ const prefixes: Array<[string, string]> = [
   ["保存待办失败：", "Failed to save todo: "],
   ["更新待办失败：", "Failed to update todo: "],
   ["删除待办失败：", "Failed to delete todo: "],
+  ["已跳过重复附件：", "Skipped duplicate attachment: "],
+  ["附件添加失败：", "Failed to add attachment: "],
+  ["移除附件失败：", "Failed to remove attachment: "],
+  ["打开附件失败：", "Failed to open attachment: "],
   ["清空已完成失败：", "Failed to clear completed todos: "],
   ["未检测到 pi：", "Pi was not detected: "],
   ["归档项目失败：", "Failed to archive project: "],
@@ -568,7 +599,7 @@ export function translateUiText(value: string, language: Language): string {
 
 const originals = new WeakMap<Node, string>();
 const attrOriginals = new WeakMap<Element, Map<string, string>>();
-const PROTECTED_TEXT_SELECTOR = ".md,.toast,.msg-user-text,.thinking-body,.tool-output,.tool-name,.tool-summary,.modal-title,.modal-msg,.extui-card-message,.extui-card-title,.extui-card-options,.pname,.tt-text,.chat-head-title,.chat-head-folder-path,.project-menu-option,.thread-preview,.project-context-name,.archived-project-name,.archived-thread-name,.archived-thread-path,.msg-artifact-name,.msg-artifact-path,.ft-name,.plugins-row-name,.plugins-row-sub,.auto-prompt,.skills-hub-card-name,.skills-hub-card-source,.skills-hub-description,.skills-hub-install-command,.skills-hub-file,.skills-hub-markdown,.preview-title,.set-prov-id,.search-item-title,.search-item-snippet,.search-item-proj,.todo-title,.todo-note,.todo-proj-name,.todo-opt";
+const PROTECTED_TEXT_SELECTOR = ".md,.toast,.msg-user-text,.thinking-body,.tool-output,.tool-name,.tool-summary,.modal-title,.modal-msg,.extui-card-message,.extui-card-title,.extui-card-options,.pname,.tt-text,.chat-head-title,.chat-head-folder-path,.project-menu-option,.thread-preview,.project-context-name,.archived-project-name,.archived-thread-name,.archived-thread-path,.msg-artifact-name,.msg-artifact-path,.ft-name,.plugins-row-name,.plugins-row-sub,.auto-prompt,.skills-hub-card-name,.skills-hub-card-source,.skills-hub-description,.skills-hub-install-command,.skills-hub-file,.skills-hub-markdown,.preview-title,.set-prov-id,.search-item-title,.search-item-snippet,.search-item-proj,.todo-title,.todo-note,.todo-proj-name,.todo-opt,.todo-att-name";
 
 function isProtectedText(element: Element | null): boolean {
   return !!element?.closest(PROTECTED_TEXT_SELECTOR);

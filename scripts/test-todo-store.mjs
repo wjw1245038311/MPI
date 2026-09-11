@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { register } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Source files use bundler-style extensionless imports; resolve them for node.
 register(new URL("./ts-ext-loader.mjs", import.meta.url));
-const { loadConfig } = await import("../src/main/config.ts");
+const { loadConfig, updateConfig } = await import("../src/main/config.ts");
 const store = await import("../src/main/todo-store.ts");
 
 const dir = mkdtempSync(join(tmpdir(), "mpi-todos-"));
@@ -97,6 +97,35 @@ assert.deepEqual(store.ingestInbox(), []);
 const remainingFiles = readdirSync(join(dir, "todos-inbox"));
 assert.ok(remainingFiles.includes("bad.json"), "corrupt inbox file must be left for inspection");
 assert.ok(!remainingFiles.includes("dup.json"), "consumed inbox file must be deleted");
+store.flushTodos();
+
+// --- attachments: dedupe + configurable storage dir -------------------------
+const attTodo = store.addTodo({ cwd: "/p1", title: "with attachment" });
+const shot = { name: "shot.png", mime: "image/png", data: Buffer.from([1, 2, 3, 4]) };
+let attOut = store.addAttachments(attTodo.id, [shot]);
+assert.equal(attOut.added, 1);
+assert.deepEqual(attOut.skipped, []);
+attOut = store.addAttachments(attTodo.id, [{ ...shot }]); // same name+size again
+assert.equal(attOut.added, 0, "same file (name+size) must not be attached twice");
+assert.deepEqual(attOut.skipped, ["shot.png"]);
+let atts = store.listTodos().find((t) => t.id === attTodo.id).attachments;
+assert.equal(atts.length, 1, "dedupe must keep a single attachment row");
+
+// custom dir: new files land there; pre-existing ones still resolve from default
+updateConfig({ todoAttachmentDir: join(dir, "custom-att") });
+const fresh = { name: "new.png", mime: "image/png", data: Buffer.from([9, 9]) };
+attOut = store.addAttachments(attTodo.id, [fresh]);
+assert.equal(attOut.added, 1);
+atts = store.listTodos().find((t) => t.id === attTodo.id).attachments;
+const freshAtt = atts.find((a) => a.name === "new.png");
+assert.ok(existsSync(join(dir, "custom-att", freshAtt.file)), "new file must be written to the custom dir");
+const oldAtt = atts.find((a) => a.name === "shot.png");
+assert.ok(store.resolveAttachmentFile(oldAtt.file), "pre-existing file must resolve from the default dir");
+// removing it unlinks the file even though it lives in the other dir
+const afterRemove = store.removeAttachment(attTodo.id, oldAtt.id);
+assert.equal(afterRemove.attachments.length, 1);
+assert.ok(!existsSync(join(dir, "todo-attachments", oldAtt.file)), "old-dir file must be unlinked on removal");
+updateConfig({ todoAttachmentDir: "" }); // back to default
 store.flushTodos();
 
 console.log("todo store tests passed");

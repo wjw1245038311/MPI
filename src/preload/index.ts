@@ -79,15 +79,70 @@ const api = {
     set: (key: string, draft: ComposerDraft) => ipcRenderer.invoke("drafts:set", key, draft),
     delete: (key: string) => ipcRenderer.invoke("drafts:delete", key),
   },
+  dataMigration: {
+    status: (): Promise<{
+      sessionStorageDir: string | null;
+      defaultSessionsDir: string;
+      effectiveSessionsDir: string;
+      todoDataDir: string | null;
+      effectiveTodosDir: string;
+      pendingSessions: boolean;
+      pendingTodos: boolean;
+      lastSummary: {
+        sessionsMoved?: number;
+        sessionBytes?: number;
+        todoFilesMoved?: number;
+        todoBytes?: number;
+        errors: string[];
+      } | null;
+    }> => ipcRenderer.invoke("data-migration:status"),
+    preview: (kind: "sessions" | "todos", dir: string | null) =>
+      ipcRenderer.invoke("data-migration:preview", kind, dir) as Promise<{
+        ok: boolean;
+        pending: boolean;
+        count: number;
+        bytes: number;
+      }>,
+    setSessionsDir: (dir: string | null) =>
+      ipcRenderer.invoke("data-migration:set-sessions-dir", dir) as Promise<{
+        ok: boolean;
+        error?: string;
+        pending: boolean;
+        count: number;
+        bytes: number;
+      }>,
+    setTodosDir: (dir: string | null) =>
+      ipcRenderer.invoke("data-migration:set-todos-dir", dir) as Promise<{
+        ok: boolean;
+        error?: string;
+        pending: boolean;
+        count: number;
+        bytes: number;
+      }>,
+  },
   todo: {
     list: (): Promise<TodoItem[]> => ipcRenderer.invoke("todo:list"),
-    add: (args: { cwd?: string; title?: string; note?: string; dueDate?: string | null }): Promise<TodoItem | null> =>
+    add: (args: { cwd?: string; title?: string; note?: string; dueDate?: string | null; dueTime?: string | null }): Promise<TodoItem | null> =>
       ipcRenderer.invoke("todo:add", args),
-    update: (id: string, patch: { title?: string; note?: string; dueDate?: string | null }): Promise<TodoItem | null> =>
-      ipcRenderer.invoke("todo:update", id, patch),
+    update: (
+      id: string,
+      patch: { title?: string; note?: string; dueDate?: string | null; dueTime?: string | null }
+    ): Promise<TodoItem | null> => ipcRenderer.invoke("todo:update", id, patch),
     toggle: (id: string): Promise<TodoItem | null> => ipcRenderer.invoke("todo:toggle", id),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke("todo:delete", id),
     clearCompleted: (cwd?: string | null): Promise<number> => ipcRenderer.invoke("todo:clearCompleted", cwd ?? null),
+    /** Native file dialog; main reads the files itself. */
+    addFiles: (id: string): Promise<{ item: TodoItem | null; added: number; skipped: string[]; errors: string[] }> =>
+      ipcRenderer.invoke("todo:addFiles", id),
+    /** Paste / drag-drop from the renderer (ArrayBuffers cross IPC). */
+    addAttachments: (
+      id: string,
+      files: Array<{ name?: string; mime?: string; size?: number; data: ArrayBuffer }>
+    ): Promise<{ item: TodoItem | null; added: number; skipped: string[]; errors: string[] }> => ipcRenderer.invoke("todo:addAttachments", id, files),
+    removeAttachment: (id: string, attId: string): Promise<TodoItem | null> =>
+      ipcRenderer.invoke("todo:removeAttachment", id, attId),
+    /** Open a non-image attachment with the system app; returns "" on success. */
+    openAttachment: (file: string): Promise<string> => ipcRenderer.invoke("todo:openAttachment", file),
   },
   plugins: {
     getPackages: () => ipcRenderer.invoke("plugins:getPackages"),
@@ -126,6 +181,13 @@ const api = {
     enableFeishuMcp: (): Promise<{ ok: boolean; error?: string; name?: string; existed?: boolean }> =>
       ipcRenderer.invoke("messaging:enableFeishuMcp"),
   },
+  wechat: {
+    getState: () => ipcRenderer.invoke("wechat:getState"),
+    setConfig: (patch: unknown) => ipcRenderer.invoke("wechat:setConfig", patch),
+    startQrLogin: () => ipcRenderer.invoke("wechat:startQrLogin"),
+    cancelQrLogin: () => ipcRenderer.invoke("wechat:cancelQrLogin"),
+    submitVerifyCode: (code: string) => ipcRenderer.invoke("wechat:submitVerifyCode", code),
+  },
   remote: {
     getStatus: () => ipcRenderer.invoke("remote:getStatus"),
     createPairing: () => ipcRenderer.invoke("remote:createPairing"),
@@ -161,6 +223,9 @@ const api = {
     compact: (args: { threadId: string; instructions?: string }) => ipcRenderer.invoke("thread:compact", args),
     repairSession: (args: { threadId?: string; sessionFile: string }) => ipcRenderer.invoke("thread:repair-session", args),
     setModel: (args: { threadId: string; provider: string; modelId: string }) => ipcRenderer.invoke("thread:setModel", args),
+    // P1-12 auto mode toggle. Exiting stops monitoring for this thread.
+    setAutoModel: (args: { threadId: string; enabled: boolean }) =>
+      ipcRenderer.invoke("thread:setAutoModel", args) as Promise<{ ok: boolean; initial?: { provider: string; id: string } | null }>,
     refreshModels: (threadId: string) => ipcRenderer.invoke("thread:refreshModels", threadId),
     setThinking: (args: { threadId: string; level: string }) => ipcRenderer.invoke("thread:setThinking", args),
     getThinkingLevels: (threadId: string) => ipcRenderer.invoke("thread:getThinkingLevels", threadId),
@@ -225,6 +290,8 @@ const api = {
     testModel: (args: { providerId: string; provider: Record<string, unknown>; modelId: string }) =>
       ipcRenderer.invoke("settings:testModel", args),
     saveModels: (providers: Record<string, unknown>) => ipcRenderer.invoke("settings:saveModels", providers),
+    resolveModelContext: (args: { providerId: string; provider: Record<string, unknown>; model: Record<string, unknown> }) =>
+      ipcRenderer.invoke("settings:resolveModelContext", args),
     getThinking: () => ipcRenderer.invoke("settings:getThinking"),
     saveThinking: (patch: Record<string, unknown>) => ipcRenderer.invoke("settings:saveThinking", patch),
     getDiagnostics: () => ipcRenderer.invoke("settings:getDiagnostics"),
@@ -245,6 +312,16 @@ const api = {
     exit: (cb: (p: { threadId: string; code: number | null; signal: string | null; stderr: string }) => void) => on("pi:exit", cb),
     error: (cb: (p: { threadId: string; message: string }) => void) => on("pi:error", cb),
     focusThread: (cb: (p: { threadId: string }) => void) => on("app:focus-thread", cb),
+    // P1-12 auto model switch / warning notifications.
+    autoModel: (cb: (p: {
+      threadId: string;
+      kind: "switch" | "warn";
+      from?: { provider: string; id: string };
+      to?: { provider: string; id: string };
+      reason: string;
+      usedPaid?: boolean;
+      downgraded?: boolean;
+    }) => void) => on("pi:autoModel", cb),
     automation: (cb: (p: { type: "start" | "done"; taskId: string; name: string; ok?: boolean; error?: string }) => void) =>
       on("pi:automation", cb),
     messaging: (cb: (p: {
@@ -265,6 +342,23 @@ const api = {
       code?: string;
       description?: string;
     }) => void) => on("pi:messagingRegistration", cb),
+    messagingWechat: (cb: (p: {
+      status: "off" | "connecting" | "connected" | "reconnecting" | "error";
+      lastError: string | null;
+      configured: boolean;
+      botIdMasked: string | null;
+      projectCwd: string;
+      permission: PermissionLevel;
+    }) => void) => on("pi:messagingWechat", cb),
+    wechatRegistration: (cb: (p: {
+      phase: "qr_ready" | "status" | "need_verifycode" | "success" | "error";
+      url?: string;
+      status?: "polling" | "scanned";
+      botId?: string;
+      userId?: string;
+      code?: string;
+      description?: string;
+    }) => void) => on("pi:wechatRegistration", cb),
     todoChanged: (cb: () => void) => on("pi:todo-changed", cb),
     projectsChanged: (cb: (p: { cwd?: string; sessionFile?: string }) => void) => on("pi:projects-changed", cb),
     appUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:appUpdate", cb),

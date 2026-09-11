@@ -72,25 +72,40 @@ export function filterBySection(items: TodoItem[], section: TodoSectionId, now: 
   return items.filter((t) => sectionFor(t, now) === section);
 }
 
-/** Display order inside a section: dated first (overdue at the top), undated last. */
+/** Display order inside a section: dated first (overdue at the top), undated
+ * last. Within one day, all-day items come before timed ones, then by time. */
 export function sortTodos(items: TodoItem[]): TodoItem[] {
-  const key = (t: TodoItem) => t.dueDate ?? "9999-12-31";
+  const key = (t: TodoItem) => `${t.dueDate ?? "9999-12-31"} ${t.dueTime || ""}`;
   return [...items].sort((a, b) => (key(a) === key(b) ? a.createdAt - b.createdAt : key(a) < key(b) ? -1 : 1));
 }
 
-/** True when an open item's due date is before today. */
-export function isOverdue(item: Pick<TodoItem, "dueDate" | "done">, now: Date = new Date()): boolean {
+/** True when an open item is past its deadline: any time after the due date,
+ * or — for items with a minute-level time — after that exact moment today. */
+export function isOverdue(item: Pick<TodoItem, "dueDate" | "dueTime" | "done">, now: Date = new Date()): boolean {
   if (item.done || !item.dueDate) return false;
   const due = parseDateKey(item.dueDate);
-  return !!due && due.getTime() < startOfDay(now);
+  if (!due) return false;
+  const today = startOfDay(now);
+  if (due.getTime() < today) return true;
+  if (due.getTime() === today && item.dueTime) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(item.dueTime);
+    if (m) {
+      const dueAt = new Date(due.getFullYear(), due.getMonth(), due.getDate(), Number(m[1]), Number(m[2])).getTime();
+      return now.getTime() >= dueAt;
+    }
+  }
+  return false;
 }
 
-/** Compact chip label for a due date: 今天 / 明天 / MM-DD. */
-export function dueLabel(dueDate: string, now: Date = new Date()): string {
+/** Compact chip label for a deadline: 今天 / 明天 / MM-DD, plus " HH:mm" when the
+ * item carries a minute-level time. */
+export function dueLabel(dueDate: string, dueTime?: string | null, now: Date = new Date()): string {
   const due = parseDateKey(dueDate);
   if (!due) return dueDate;
+  let label: string;
   const today = startOfDay(now);
-  if (due.getTime() === today) return "今天";
-  if (due.getTime() === today + 86_400_000) return "明天";
-  return formatDateKey(due).slice(5); // MM-DD
+  if (due.getTime() === today) label = "今天";
+  else if (due.getTime() === today + 86_400_000) label = "明天";
+  else label = formatDateKey(due).slice(5); // MM-DD
+  return dueTime ? `${label} ${dueTime}` : label;
 }

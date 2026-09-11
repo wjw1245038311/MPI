@@ -2,6 +2,7 @@ import { memo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import rehypeSlug from "rehype-slug";
 import { CODE_LANGUAGE_ALIASES, CODE_LANGUAGE_NAMES, CODE_LANGUAGES } from "./code-languages";
 import { remarkTrimAutolinkTrailingUnicode } from "./remark-autolink-trim";
 import { useStore } from "../store";
@@ -51,6 +52,9 @@ function CodeBlock({ className, children }: { className?: string; children: Reac
 // The trim plugin must run after gfm (it fixes autolink literals gfm produced).
 const REMARK_PLUGINS = [remarkGfm, remarkTrimAutolinkTrailingUnicode];
 const REHYPE_PLUGINS = [
+  // GitHub-style heading ids so in-document anchor links (e.g. the user
+  // manual's table of contents) can jump to headings inside the app.
+  rehypeSlug,
   [
     rehypeHighlight,
     {
@@ -74,22 +78,32 @@ const MD_COMPONENTS = {
       </code>
     );
   },
-  a: ({ href, children, ...rest }: any) => (
-    <a
-      href={href}
-      {...rest}
-      target="_blank"
-      rel="noreferrer noopener"
-      onClick={(e) => {
-        if (href && /^https?:/i.test(href)) {
-          e.preventDefault();
-          window.open(href, "_blank");
-        }
-      }}
-    >
-      {children}
-    </a>
-  ),
+  a: ({ href, children, ...rest }: any) => {
+    // Fragment links (#anchor) jump to headings inside the app instead of
+    // opening a new window; everything else keeps target="_blank".
+    const isFragment = typeof href === "string" && href.length > 1 && href.startsWith("#");
+    return (
+      <a
+        href={href}
+        {...rest}
+        target={isFragment ? undefined : "_blank"}
+        rel="noreferrer noopener"
+        onClick={(e) => {
+          if (!href) return;
+          if (/^https?:/i.test(href)) {
+            e.preventDefault();
+            window.open(href, "_blank");
+          } else if (isFragment) {
+            e.preventDefault();
+            const el = document.getElementById(href.slice(1));
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }}
+      >
+        {children}
+      </a>
+    );
+  },
   table: ({ children }: any) => (
     <div className="md-table-wrap">
       <table>{children}</table>

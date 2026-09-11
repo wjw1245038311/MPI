@@ -8,13 +8,14 @@
     "isolatedModules": true,
     "noEmit": true,
     "strict": true,
+    "noUnusedLocals": true,
     "skipLibCheck": true,
     "types": ["node", "electron-vite/node"]
   },
   "include": ["src/main", "src/preload/index.ts", "electron.vite.config.ts"],
-  // The todo bridge extension is consumed only as a `?raw` string (todo-extension.ts)
-  // and transpiled by pi's own jiti loader at runtime, which aliases typebox /
-  // @earendil-works/pi-coding-agent to its bundled copies. It is not part of MPI's
-  // compile graph — those imports don't exist in our node_modules.
-  "exclude": ["src/main/mpi-todo-ext.ts"]
+  // The bridge extensions are consumed only as `?raw` strings (todo-extension.ts /
+  // channel-extension.ts) and transpiled by pi's own jiti loader at runtime, which
+  // aliases typebox / @earendil-works/pi-coding-agent to its bundled copies. They
+  // are not part of MPI's compile graph — those imports don't exist in our node_modules.
+  "exclude": ["src/main/mpi-todo-ext.ts", "src/main/messaging/channel-command-ext.ts"]
 }

@@ -1,14 +1,14 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { getConfig, updateConfig } from "../config";
-import type { RemoteBackend } from "../remote/service";
+import { ChannelBase, MAX_REPLY_CHARS, type ChannelServiceOptions } from "./channel-base";
+import { buildChannelTexts, truncateForChat } from "./channel-text";
 import {
   parseTextContent,
   sanitizeFeishuConfig,
   stripMentions,
-  truncateForChat,
   type FeishuMention,
 } from "./feishu-text";
-import type { FeishuChannelConfig, MessagingState, MessagingStatus } from "./types";
+import type { FeishuChannelConfig, MessagingState } from "./types";
 
 /**
  * Feishu (Lark) message channel: a self-built app bot connected over the
@@ -19,14 +19,12 @@ import type { FeishuChannelConfig, MessagingState, MessagingStatus } from "./typ
  *
  * The Feishu server re-pushes events not acknowledged within ~3s, so the
  * event handler returns immediately and all work runs asynchronously with a
- * single in-flight job per channel.
+ * single in-flight job per channel. Session commands, thread resolution and
+ * job execution live in ChannelBase — this class keeps only the WebSocket
+ * transport and the in-place message-update delivery.
  */
 
-const MAX_REPLY_CHARS = 4000;
 const STREAM_UPDATE_INTERVAL_MS = 2500;
-const DEDUP_CAP = 1000;
-/** Hard cap for one agent turn driven from chat (watchdog). */
-const JOB_TIMEOUT_MS = 30 * 60 * 1000;
 
 export function feishuSessionName(language: "en" | "zh"): string {
   return language === "zh" ? "飞书接入" : "Feishu bridge";
@@ -35,80 +33,46 @@ export function feishuSessionName(language: "en" | "zh"): string {
 /** Re-exported for callers that import it from the service module. */
 export { sanitizeFeishuConfig };
 
-const T = {
-  zh: {
-    thinking: "🤔 正在处理，完成后会更新这条消息…",
-    busy: "⏳ 上一条消息还在处理中，请稍后再发。",
-    unsupported: "目前只支持文本消息（图片/文件暂不支持）。",
-    errorPrefix: "出错了：",
-    noOutput: "（任务已完成，但没有产生文字输出）",
-    timeoutNote: "等待超时（30 分钟），结果可能仍在 MPI 中生成。",
-    truncatedNote: "已截断，完整内容见 MPI",
-    newDone: "✅ 已新建会话，后续消息将进入新会话。",
-    listHeader: "📋 本项目最近会话（最多 10 条，➜ = 当前）：",
-    noSessions: "本项目还没有会话。",
-    useHint: "用 /use <序号> 切换，例如 /use 2",
-    useDone: "✅ 已切换到会话：",
-    useNotFound: "没找到对应会话——先用 /list 看看列表。",
-    help: [
-      "MPI 飞书接入 · 可用命令：",
-      "/new — 新建一个会话（旧会话保留）",
-      "/list — 列出本项目最近会话",
-      "/use <序号> — 切换到指定会话（如 /use 2）",
-      "/help — 显示本帮助",
-      "直接发送文本 = 在当前会话中提问，回复会流式更新这条消息。",
-    ].join("\n"),
-  },
-  en: {
-    thinking: "🤔 Working on it — this message will update when done…",
-    busy: "⏳ The previous message is still being processed, please wait.",
-    unsupported: "Only text messages are supported for now (no images/files).",
-    errorPrefix: "Error: ",
-    noOutput: "(Task finished but produced no text output)",
-    timeoutNote: "Timed out after 30 minutes; the result may still be finishing in MPI.",
-    truncatedNote: "truncated — full content in MPI",
-    newDone: "✅ New session created. Further messages go to it.",
-    listHeader: "📋 Recent sessions in this project (up to 10, ➜ = current):",
-    noSessions: "No sessions in this project yet.",
-    useHint: "Switch with /use <number>, e.g. /use 2",
-    useDone: "✅ Switched to session: ",
-    useNotFound: "Session not found — run /list to see the list.",
-    help: [
-      "MPI Feishu bridge · commands:",
-      "/new — start a fresh session (the old one is kept)",
-      "/list — list recent sessions in this project",
-      "/use <n> — switch to that session (e.g. /use 2)",
-      "/help — show this help",
-      "Plain text = ask the current session; the reply streams into this message.",
-    ].join("\n"),
-  },
-} as const;
+const T = buildChannelTexts({
+  titleZh: "飞书接入",
+  titleEn: "Feishu bridge",
+  thinkingZh: "🤔 正在处理，完成后会更新这条消息…",
+  thinkingEn: "🤔 Working on it — this message will update when done…",
+  deliveryZh: "直接发送文本 = 在当前会话中提问，回复会流式更新这条消息。",
+  deliveryEn: "Plain text = ask the current session; the reply streams into this message.",
+});
 
-export interface MessagingServiceOptions {
-  backend: RemoteBackend;
-  /** Maps a project cwd to the opaque remote project id (see ipc.ts). */
-  resolveProjectId: (cwd: string) => string;
-  language: () => "en" | "zh";
-  onStateChange: (state: MessagingState) => void;
-}
+export interface MessagingServiceOptions extends ChannelServiceOptions<MessagingState> {}
 
-interface JobRef {
-  cancelled: boolean;
-  /** Resolves the in-flight job's settle promise immediately (used by stop()). */
-  settleNow?: () => void;
-}
-
-export class FeishuMessagingService {
+export class FeishuMessagingService extends ChannelBase<MessagingState> {
   private wsClient: Lark.WSClient | null = null;
   private client: Lark.Client | null = null;
-  private status: MessagingStatus = "off";
-  private lastError: string | null = null;
-  /** message_id dedup (Feishu may re-push); insertion-ordered. */
-  private readonly seen = new Map<string, true>();
-  private currentThreadId: string | null = null;
-  private job: JobRef | null = null;
+  /** Last user message id — approval notices reply to it so they land in-chat. */
+  private lastSourceMessageId: string | null = null;
 
-  constructor(private readonly options: MessagingServiceOptions) {}
+  constructor(options: MessagingServiceOptions) {
+    super(options, T);
+  }
+
+  protected get logTag(): string {
+    return "[messaging]";
+  }
+
+  protected loadConfig() {
+    return sanitizeFeishuConfig(getConfig().feishuChannel);
+  }
+
+  protected mergeChannelConfig(patch: Record<string, unknown>): void {
+    updateConfig({ feishuChannel: { ...sanitizeFeishuConfig(getConfig().feishuChannel), ...patch } });
+  }
+
+  protected sessionName(language: "en" | "zh"): string {
+    return feishuSessionName(language);
+  }
+
+  protected get channelKind(): "feishu" {
+    return "feishu";
+  }
 
   getState(): MessagingState {
     const cfg = sanitizeFeishuConfig(getConfig().feishuChannel);
@@ -127,7 +91,7 @@ export class FeishuMessagingService {
     if (!config.appId || !config.appSecret) throw new Error("Feishu App ID / Secret is missing");
     if (!config.projectCwd) throw new Error("No project folder bound to the channel");
     this.lastError = null;
-    this.currentThreadId = null;
+    this.setActiveThread(null);
     this.setStatus("connecting");
 
     const appId = config.appId.trim();
@@ -151,9 +115,10 @@ export class FeishuMessagingService {
         if (this.wsClient === wsClient) this.setStatus("reconnecting");
       },
       onReconnected: () => {
-        if (this.wsClient !== wsClient) return;
-        this.lastError = null;
-        this.setStatus("connected");
+        if (this.wsClient === wsClient) {
+          this.lastError = null;
+          this.setStatus("connected");
+        }
       },
     });
     this.wsClient = wsClient;
@@ -186,7 +151,7 @@ export class FeishuMessagingService {
       this.wsClient = null;
     }
     this.client = null;
-    this.currentThreadId = null;
+    this.setActiveThread(null);
     if (this.job) {
       this.job.cancelled = true;
       // Unhang the in-flight job so runJob exits instead of waiting on its watchdog.
@@ -206,6 +171,7 @@ export class FeishuMessagingService {
     // Feishu may re-push the same message (reconnect / slow ack).
     if (this.seen.has(msg.message_id)) return;
     this.rememberSeen(msg.message_id);
+    this.lastSourceMessageId = msg.message_id;
 
     const senderType = event?.sender?.sender_type;
     if (senderType && senderType !== "user") return; // ignore bot-to-bot traffic
@@ -221,125 +187,24 @@ export class FeishuMessagingService {
     text = stripMentions(text, Array.isArray(msg.mentions) ? (msg.mentions as FeishuMention[]) : undefined);
     if (!text) return;
 
-    const cmd = text.trim().toLowerCase();
-    if (cmd === "/new" || cmd === "新建") {
-      await this.handleNewCommand(msg.message_id);
-      return;
-    }
-    if (cmd === "/help" || cmd === "帮助") {
-      await this.reply(msg.message_id, lang.help);
-      return;
-    }
-    if (cmd === "/list" || cmd === "列表") {
-      void this.handleListCommand(msg.message_id).catch((err) => console.error("[messaging] /list failed:", err));
-      return;
-    }
-    const useMatch = /^\/use\s+(\S+)$/.exec(cmd);
-    if (useMatch) {
-      void this.handleUseCommand(msg.message_id, useMatch[1]).catch((err) => console.error("[messaging] /use failed:", err));
-      return;
-    }
+    // Commands reply to the exact message that triggered them (threaded in-chat);
+    // the returned ack message id is irrelevant here.
+    const reply = async (t: string) => {
+      await this.reply(msg.message_id, t);
+    };
+    if (await this.dispatchCommand(text, reply)) return;
 
     if (this.job) {
-      await this.reply(msg.message_id, lang.busy);
+      await reply(lang.busy);
       return;
     }
     void this.runJob(msg.message_id, text).catch((err) => console.error("[messaging] runJob failed:", err));
   }
 
-  private async handleNewCommand(sourceMessageId: string): Promise<void> {
-    const cfg = sanitizeFeishuConfig(getConfig().feishuChannel);
-    try {
-      this.currentThreadId = await this.createThread(cfg);
-      this.persistActiveThreadId(this.currentThreadId);
-      await this.reply(sourceMessageId, T[this.options.language()].newDone);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("[messaging] /new failed:", message);
-      await this.reply(sourceMessageId, `${T[this.options.language()].errorPrefix}${message.slice(0, 300)}`);
-    }
-  }
-
-  /** Recent sessions in the bound project, newest first (backing for /list and /use). */
-  private async recentThreads(cfg: FeishuChannelConfig, limit?: number): Promise<Array<{ id: string; title: string }>> {
-    const projectId = this.options.resolveProjectId(cfg.projectCwd);
-    const raw = await this.options.backend.listThreads(projectId);
-    const items = (Array.isArray(raw) ? raw : [])
-      .filter((t: any) => t && typeof t.id === "string")
-      .map((t: any) => ({
-        id: String(t.id),
-        title: typeof t.title === "string" && t.title.trim() ? t.title.trim() : "(untitled)",
-        updatedAt: Number(t.updatedAt ?? 0) || 0,
-      }))
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-    return (limit !== undefined ? items.slice(0, limit) : items).map(({ id, title }) => ({ id, title }));
-  }
-
-  private async handleListCommand(sourceMessageId: string): Promise<void> {
-    const cfg = sanitizeFeishuConfig(getConfig().feishuChannel);
-    const lang = T[this.options.language()];
-    try {
-      const list = await this.recentThreads(cfg, 10);
-      if (!list.length) {
-        await this.reply(sourceMessageId, lang.noSessions);
-        return;
-      }
-      const lines = list.map((t, i) => `${i + 1}. ${t.id === this.currentThreadId ? "➜ " : ""}${t.title}`);
-      await this.reply(sourceMessageId, [lang.listHeader, ...lines, lang.useHint].join("\n"));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("[messaging] /list failed:", message);
-      await this.reply(sourceMessageId, `${lang.errorPrefix}${message.slice(0, 300)}`);
-    }
-  }
-
-  private async handleUseCommand(sourceMessageId: string, arg: string): Promise<void> {
-    const cfg = sanitizeFeishuConfig(getConfig().feishuChannel);
-    const lang = T[this.options.language()];
-    try {
-      let target: { id: string; title: string } | undefined;
-      if (/^\d+$/.test(arg)) {
-        // Indexes into the same top-10 list that /list shows.
-        const n = Number.parseInt(arg, 10);
-        target = (await this.recentThreads(cfg, 10))[n - 1];
-      } else {
-        target = (await this.recentThreads(cfg)).find((t) => t.id === arg);
-      }
-      if (!target) {
-        await this.reply(sourceMessageId, lang.useNotFound);
-        return;
-      }
-      this.currentThreadId = target.id;
-      this.persistActiveThreadId(target.id);
-      await this.reply(sourceMessageId, `${lang.useDone}${target.title}`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("[messaging] /use failed:", message);
-      await this.reply(sourceMessageId, `${lang.errorPrefix}${message.slice(0, 300)}`);
-    }
-  }
-
-  /** Remembers the active session so restarts keep routing to it (if it still exists). */
-  private persistActiveThreadId(threadId: string): void {
-    try {
-      const current = sanitizeFeishuConfig(getConfig().feishuChannel);
-      updateConfig({ feishuChannel: { ...current, activeThreadId: threadId } });
-    } catch (err) {
-      console.error("[messaging] persist activeThreadId failed:", err);
-    }
-  }
-
   // ---- job execution -------------------------------------------------------
 
   private async runJob(sourceMessageId: string, text: string): Promise<void> {
-    const cfg = sanitizeFeishuConfig(getConfig().feishuChannel);
-    const lang = T[this.options.language()];
-    const ref: JobRef = { cancelled: false };
-    this.job = ref;
-
     let replyMessageId: string | null = null;
-    let unsubscribe: (() => void) | null = null;
-    let buffer = "";
     let lastPushAt = Date.now();
     // Serialized pipeline for the ack message: every write is queued behind the
     // previous one, so a slow in-flight update can never land after (and
@@ -348,164 +213,48 @@ export class FeishuMessagingService {
     const queueUpdate = (fn: () => Promise<void>) => {
       updateChain = updateChain.then(fn).catch((err) => console.error("[messaging] queued update failed:", err instanceof Error ? err.message : err));
     };
-    let settledResolve: () => void = () => undefined;
-    const settled = new Promise<void>((resolve) => {
-      settledResolve = resolve;
-    });
-    ref.settleNow = settledResolve;
-    let watchdog: ReturnType<typeof setTimeout> | null = null;
-    let failureText: string | null = null;
 
-    try {
-      // Ack first so the user always gets feedback in Feishu — even if thread
-      // resolution or prompting fails below. Never fail silently.
-      replyMessageId = await this.reply(sourceMessageId, lang.thinking);
-
-      let threadId: string;
-      try {
-        threadId = this.currentThreadId || (await this.ensureThread(cfg));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error("[messaging] ensureThread failed:", message);
-        await this.deliver(replyMessageId, sourceMessageId, `${lang.errorPrefix}${message.slice(0, 300)}`);
-        return; // finally still clears the job
-      }
-
-      // Subscribe before prompting so no delta is missed.
-      // NOTE: remotePublish sets event.kind to pi's own event type
-      // ("message_update", "agent_settled", …) — not a constant wrapper kind.
-      unsubscribe = this.options.backend.subscribeThread(threadId, (event) => {
-        if (ref.cancelled) return;
-        const ev: any = event.data?.event || {};
-        if (event.kind === "message_update") {
-          const ame = ev.assistantMessageEvent;
-          if (ame?.type === "text_delta" && typeof ame.delta === "string") {
-            buffer += ame.delta;
-            const now = Date.now();
-            if (replyMessageId && now - lastPushAt >= STREAM_UPDATE_INTERVAL_MS) {
-              lastPushAt = now;
-              const id = replyMessageId;
-              queueUpdate(() => this.updateReply(id, truncateForChat(buffer, MAX_REPLY_CHARS)));
-            }
-          }
-        } else if (event.kind === "message_end") {
-          // agent_settled fires even when the turn errored (pi's finally block) —
-          // annotate the buffer with the failure reason when there is one.
-          const m = ev.message;
-          if (m?.role === "assistant" && m.stopReason === "error") {
-            const detail = typeof m.errorMessage === "string" ? ` ${m.errorMessage}` : "";
-            buffer += `\n${lang.errorPrefix}${detail.trim()}`;
-          }
-        } else if (event.kind === "agent_settled") {
-          settledResolve();
-        } else if (event.kind === "thread.error" || event.kind === "thread.exit") {
-          const detail = typeof event.data?.message === "string" ? ` ${event.data.message}` : "";
-          buffer += `\n${lang.errorPrefix}${detail.trim()}`;
-          settledResolve();
+    await this.runAgentTurn({
+      ack: async () => {
+        replyMessageId = await this.reply(sourceMessageId, T[this.options.language()].thinking);
+      },
+      text,
+      onSnapshot: (buffer) => {
+        const now = Date.now();
+        if (replyMessageId && now - lastPushAt >= STREAM_UPDATE_INTERVAL_MS) {
+          lastPushAt = now;
+          const id = replyMessageId;
+          queueUpdate(() => this.updateReply(id, truncateForChat(buffer, MAX_REPLY_CHARS)));
         }
-      });
-
-      watchdog = setTimeout(() => {
-        if (!ref.cancelled) buffer += `\n${lang.timeoutNote}`;
-        settledResolve();
-      }, JOB_TIMEOUT_MS);
-
-      try {
-        await this.options.backend.prompt(threadId, text);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        throw new Error(message);
-      }
-
-      await settled;
-    } catch (err) {
-      // prompt() rejected or something unexpected — report it in the final write
-      // instead of leaving the ack stuck on "working on it".
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("[messaging] runJob failed:", message);
-      failureText = `${lang.errorPrefix}${message.slice(0, 300)}`;
-    } finally {
-      // NOTE: do NOT set ref.cancelled here — it must stay false on normal
-      // completion so the final write below actually runs. Only stop() sets it
-      // (external cancel). Setting it in finally made the final delivery dead code.
-      if (watchdog) clearTimeout(watchdog);
-      unsubscribe?.();
-      this.job = null;
-    }
-
-    // Final content: complete result, or the failure reason when the turn errored.
-    // Goes through the same serialized chain (with retries) so it lands last.
-    const finalText = failureText ?? (buffer.trim() || lang.noOutput);
-    if (!ref.cancelled && this.client) {
-      const payload = truncateForChat(finalText, MAX_REPLY_CHARS, lang.truncatedNote);
-      if (replyMessageId) {
-        const id = replyMessageId;
-        let finalLanded = false;
-        queueUpdate(async () => {
-          finalLanded = await this.updateReplyFinal(id, payload);
-        });
-        await updateChain; // make sure the complete result actually landed
-        if (!finalLanded) {
-          // The ack message could not be finalized (persistent Feishu error) —
-          // deliver the complete result as a fresh message so nothing is lost.
-          console.error("[messaging] final update failed after retries; sending fresh message");
+      },
+      deliver: async (payload) => {
+        if (!this.client) return; // stopped meanwhile — nothing to update
+        if (replyMessageId) {
+          const id = replyMessageId;
+          let finalLanded = false;
+          queueUpdate(async () => {
+            finalLanded = await this.updateReplyFinal(id, payload);
+          });
+          await updateChain; // make sure the complete result actually landed
+          if (!finalLanded) {
+            // The ack message could not be finalized (persistent Feishu error) —
+            // deliver the complete result as a fresh message so nothing is lost.
+            console.error("[messaging] final update failed after retries; sending fresh message");
+            await this.reply(sourceMessageId, payload);
+          }
+        } else {
           await this.reply(sourceMessageId, payload);
         }
-      } else {
-        await this.reply(sourceMessageId, payload);
-      }
-    }
-  }
-
-  /** Updates the ack message when possible; falls back to a fresh reply. */
-  private async deliver(replyMessageId: string | null, sourceMessageId: string, text: string): Promise<void> {
-    if (replyMessageId) await this.updateReply(replyMessageId, text);
-    else await this.reply(sourceMessageId, text);
-  }
-
-  /** Reuses the channel's dedicated session (matched by title) or creates it. */
-  private async ensureThread(cfg: FeishuChannelConfig): Promise<string> {
-    // Restore the last explicitly selected session (/new, /use) when it still exists.
-    if (cfg.activeThreadId) {
-      try {
-        const found = (await this.recentThreads(cfg)).find((t) => t.id === cfg.activeThreadId);
-        if (found) {
-          this.currentThreadId = found.id;
-          return found.id;
-        }
-      } catch (err) {
-        console.error("[messaging] restore active thread failed:", err);
-      }
-    }
-    const projectId = this.options.resolveProjectId(cfg.projectCwd);
-    try {
-      const threads = await this.options.backend.listThreads(projectId);
-      // Match either language variant so a UI-language switch doesn't fork a second session.
-      const names = [feishuSessionName("zh"), feishuSessionName("en")];
-      const found = (Array.isArray(threads) ? threads : []).find((t: any) => names.includes(t?.title) || names.includes(t?.name));
-      if (found && typeof found.id === "string") {
-        this.currentThreadId = found.id;
-        return found.id;
-      }
-    } catch (err) {
-      console.error("[messaging] listThreads failed:", err);
-    }
-    return this.createThread(cfg);
-  }
-
-  private async createThread(cfg: FeishuChannelConfig): Promise<string> {
-    const projectId = this.options.resolveProjectId(cfg.projectCwd);
-    const snapshot: any = await this.options.backend.createThread(
-      projectId,
-      feishuSessionName(this.options.language()),
-      cfg.permission === "full" ? "full" : "sandbox",
-    );
-    if (!snapshot || typeof snapshot.id !== "string") throw new Error("Failed to create the channel session");
-    this.currentThreadId = snapshot.id;
-    return snapshot.id;
+      },
+    });
   }
 
   // ---- outbound ------------------------------------------------------------
+
+  protected async notifyUser(text: string): Promise<void> {
+    if (!this.lastSourceMessageId || !text) return;
+    await this.reply(this.lastSourceMessageId, text);
+  }
 
   private async reply(sourceMessageId: string, text: string): Promise<string | null> {
     const client = this.client;
@@ -559,31 +308,6 @@ export class FeishuMessagingService {
       }
     }
   }
-
-  // ---- bookkeeping ---------------------------------------------------------
-
-  private rememberSeen(messageId: string): void {
-    this.seen.set(messageId, true);
-    if (this.seen.size > DEDUP_CAP) {
-      const keys = this.seen.keys();
-      for (let i = 0; i < DEDUP_CAP / 2; i++) {
-        const next = keys.next();
-        if (next.done) break;
-        this.seen.delete(next.value);
-      }
-    }
-  }
-
-  /** Emits the new state to the renderer. Called after every status or
-   * lastError transition; the payload is cheap, so no dedup needed. */
-  private setStatus(status: MessagingStatus): void {
-    this.status = status;
-    try {
-      this.options.onStateChange(this.getState());
-    } catch (err) {
-      console.error("[messaging] onStateChange failed:", err);
-    }
-  }
 }
 
 function maskAppId(appId: string): string | null {
@@ -596,8 +320,8 @@ function maskAppId(appId: string): string | null {
 
 /** Makes sure the bound folder is visible to MPI: if it has no sessions yet
  * and isn't pinned, pin it so thread creation can resolve the project (and the
- * user sees in the sidebar where Feishu chats land). */
-function ensureChannelProjectVisible(cwd: string): void {
+ * user sees in the sidebar where channel chats land). Shared by all channels. */
+export function ensureChannelProjectVisible(cwd: string): void {
   const trimmed = typeof cwd === "string" ? cwd.trim() : "";
   if (!trimmed) return;
   try {

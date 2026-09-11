@@ -1,8 +1,8 @@
-import { join } from "node:path";
 import { getConfig, getConfigDir, reloadConfig, updateConfig, type AutomationTask, type TaskSchedule } from "./config";
 import { PiBridge } from "./pi-bridge";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile } from "./permission-gate";
-import { ensureTodoExtension, ensureTodoInbox } from "./todo-extension";
+import { ensureTodoExtension } from "./todo-extension";
+import { ensureInboxDir, todosFilePath } from "./todo-store";
 
 /**
  * Scheduled automation. Tasks are user-defined prompts (which may invoke
@@ -213,12 +213,16 @@ async function execute(task: AutomationTask): Promise<void> {
       bridge = new PiBridge({
         cwd: task.cwd,
         piCliPath: getConfig().piCliPath,
-        // Same user-profile injection as interactive sessions.
+        // Same user-profile injection as interactive sessions. Scheduled runs
+        // are never chat-channel sessions, so the mpi_channel_* bridge is not
+        // loaded (desktop/automation sessions don't pay for its tools).
         appendSystemPrompt: getConfig().userProfile?.trim() || undefined,
-        // Same todo bridge as interactive threads (no session file here, so
-        // agent-added todos carry no provenance).
-        extensions: [ensureGateExtension(getConfigDir()), ensureTodoExtension(getConfigDir())],
-        todoPaths: { file: join(getConfigDir(), "todos.json"), inboxDir: ensureTodoInbox(getConfigDir()) },
+        extensions: [
+          ensureGateExtension(getConfigDir()),
+          ensureTodoExtension(getConfigDir()),
+        ],
+        // Live paths so a customized todo data location is honored.
+        todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
         gateModeFile,
         name: automationSessionName(task.name, getConfig().language),
         onEvent: (e: any) => {

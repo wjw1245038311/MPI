@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, watch, type FSWatcher, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, watch, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -28,15 +28,27 @@ import {
 } from "./backup";
 import { deleteDraft, getAllDrafts, setDraft as persistDraft } from "./draft-store";
 import {
+  addAttachments,
   addTodo,
   clearCompletedTodos,
   deleteTodo,
+  ensureInboxDir,
   ingestInbox,
   listTodos,
+  removeAttachment,
+  resolveAttachmentFile,
   toggleTodo,
+  todosFilePath,
   updateTodo,
   type TodoPatch,
 } from "./todo-store";
+import {
+  getDataMigrationStatus,
+  previewMigration,
+  setSessionsDir,
+  setTodosDir,
+} from "./data-migration";
+import { mimeForName } from "./todo-attachment-protocol";
 import type { ComposerDraft } from "../renderer/src/lib/types";
 import { listDir } from "./fs-service";
 import { createHtmlPreviewUrl } from "./html-preview-protocol";
@@ -51,11 +63,13 @@ import {
   writeModelsProviders,
   writeThinking,
 } from "./models-service";
+import { autoResolveContextWindows, resolveModelContext } from "./model-context";
+import { DEFAULT_POLICY, ModelAutopilot } from "./model-autopilot";
 import { classifyMissingTool } from "./npm-command";
 import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtimeKind } from "./pi-bridge";
 import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
-import { ensureTodoExtension, ensureTodoInbox } from "./todo-extension";
+import { ensureTodoExtension } from "./todo-extension";
 import { registerTuiIpc } from "./tui";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
 import {
@@ -92,7 +106,16 @@ import { getNpmReadme, searchNpmPackages } from "./npm-registry";
 import { removeAutomationTask, runTaskNow, startScheduler } from "./automation";
 import { cancelAppRegistration, startAppRegistration } from "./messaging/app-registration";
 import { getMessagingState, initMessaging, messagingSetConfig, sanitizeFeishuConfig } from "./messaging/service";
-import type { FeishuChannelConfig } from "./messaging/types";
+import type { FeishuChannelConfig, WeChatChannelConfig } from "./messaging/types";
+import {
+  cancelWeChatQrLogin,
+  startWeChatQrLogin,
+  submitWeChatVerifyCode,
+} from "./messaging/wechat-registration";
+import { getWeChatState, initWeChatMessaging, wechatSetConfig } from "./messaging/wechat-service";
+import { APPROVAL_GRACE_MS, getChannelThread, isChannelOwnedSession, threadUuidFromSessionFile } from "./messaging/channel-threads";
+import { ensureChannelCommandInbox, startChannelCommandInboxWatcher } from "./messaging/channel-command";
+import { ensureChannelExtension } from "./messaging/channel-extension";
 import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
 import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } from "./remote/services";
@@ -320,6 +343,8 @@ function createHandle(
   send: (ch: string, p: unknown) => void,
 ): BridgeHandle {
   let id = sessionFile || `boot:${randomUUID()}`;
+  // Channel session bridge gating — see the extensions list below.
+  const isChannelSession = isChannelOwnedSession(sessionFile);
   const gateModeFile = createGateModeFile(getConfigDir(), permission);
   let turnStarted = false;
   let promptForNotification = name || "";
@@ -330,6 +355,14 @@ function createHandle(
     setId: (n: string) => {
       if (n && n !== id) {
         bridges.delete(id);
+        autopilot.migrateThread(id, n); // keep auto-mode state across boot:uuid → session file
+        const cfg = getConfig();
+        if (cfg.autoModelThreads?.[id]) {
+          const next = { ...cfg.autoModelThreads };
+          delete next[id];
+          next[n] = true; // persist the flag under the real session file
+          updateConfig({ autoModelThreads: next });
+        }
         id = n;
         bridges.set(n, handle);
       }
@@ -345,8 +378,21 @@ function createHandle(
     // The gate extension is always loaded; its sandbox/full behaviour is decided
     // at runtime by the per-thread mode file, so permission can change live.
     // The todo bridge gives the agent mpi_todo_add / mpi_todo_list (待办任务 panel).
-    extensions: [ensureGateExtension(getConfigDir()), ensureTodoExtension(getConfigDir())],
-    todoPaths: { file: join(getConfigDir(), "todos.json"), inboxDir: ensureTodoInbox(getConfigDir()) },
+    // The channel session bridge (mpi_channel_* tools) loads only for threads
+    // currently owned by a chat channel — desktop/automation sessions never
+    // carry it, so they don't pay its ~300 tokens per request. A thread that
+    // becomes channel-owned later picks the tools up on its next spawn; until
+    // then fast-path commands (/new /list /use + short phrases) still work in
+    // the main process.
+    extensions: [
+      ensureGateExtension(getConfigDir()),
+      ensureTodoExtension(getConfigDir()),
+      ...(isChannelSession ? [ensureChannelExtension(getConfigDir())] : []),
+    ],
+    // Live paths so a customized todo data location (Settings → 数据存储) is
+    // honored from the next spawned bridge on.
+    todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
+    channelInboxDir: isChannelSession ? ensureChannelCommandInbox() : undefined,
     // Keep pi's runtime in sync with the Plugins inventory, including the
     // singular `.pi/agent/skill` compatibility path and other local roots.
     skills: getAdditionalSkillPaths(cwd),
@@ -369,6 +415,9 @@ function createHandle(
         // final user-facing assistant message for the native completion card.
         completedReply = finalAssistantReply(event.message);
       }
+
+      // P1-12: passive latency/health signals — no-op for non-auto threads.
+      autopilot.onAgentEvent(id, event);
 
       send("pi:event", { threadId: id, event });
 
@@ -395,6 +444,32 @@ function createHandle(
           getConfig().language === "zh" ? "zh" : "en",
           sandboxOperationFromTitle((r as any)?.title, getConfig().language === "zh" ? "zh" : "en"),
         );
+        // Channel-owned threads (Feishu/WeChat) can't wait for a desktop click:
+        // tell the user through the channel and auto-deny after the grace
+        // period. A late response is harmless — pi ignores responses for ids
+        // that are no longer pending, and an exited bridge drops it.
+        // The handle id is the session file path once promoted (boot:<uuid>
+        // before that); the registry is keyed by the session-file UUID.
+        const regKey = id.endsWith(".jsonl") ? threadUuidFromSessionFile(id) : null;
+        const entry = regKey ? getChannelThread(regKey) : undefined;
+        if (entry) {
+          const lang = getConfig().language === "zh" ? "zh" : "en";
+          const op = sandboxOperationFromTitle((r as any)?.title, lang);
+          void Promise.resolve(
+            entry.notifyApproval(
+              lang === "zh"
+                ? `⚠️ 有操作需要授权：${op}。请在 MPI 中 ${APPROVAL_GRACE_MS / 1000} 秒内批准；无响应将自动拒绝，任务会继续。`
+                : `⚠️ Operation needs approval: ${op}. Approve it in MPI within ${APPROVAL_GRACE_MS / 1000}s or it will be auto-denied and the task continues.`,
+            ),
+          ).catch((err) => console.error("[messaging] approval notify failed:", err));
+          setTimeout(() => {
+            try {
+              handle.bridge.respondExtUi((r as any).id, { cancelled: true });
+            } catch (err) {
+              console.error("[messaging] auto-deny failed:", err);
+            }
+          }, APPROVAL_GRACE_MS);
+        }
       }
     },
     onExit: (info) => {
@@ -438,6 +513,20 @@ let lastOpenCwd: string | null = null;
 let warmFailures = 0;
 let warmEnabled = false;
 let sendToRenderer: ((ch: string, p: unknown) => void) | null = null;
+
+/**
+ * P1-12 auto model switching. Passive health signals come from the per-thread
+ * onEvent hook (auto threads only); switches go through each thread's bridge.
+ */
+const autopilot = new ModelAutopilot({
+  getProviders: () => readModelsFile().providers,
+  setModel: async (threadId, provider, modelId) => {
+    const h = bridges.get(threadId);
+    if (!h) throw new Error("Thread not open: " + threadId);
+    await h.bridge.setModel(provider, modelId);
+  },
+  notify: (p) => sendToRenderer?.("pi:autoModel", p),
+});
 
 function warmCwd(): string {
   // Prefer the project actually used most recently (persisted), so the first
@@ -635,6 +724,18 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   sendToRenderer = send;
   systemNotifications = createSystemNotificationCenter(getWin);
   warmEnabled = true;
+
+  // P1-12: sync the autopilot with persisted pool/policy, then run recovery
+  // probes at most once per configured interval while auto threads are open.
+  autopilot.setConfig(getConfig().autoModels?.pool ?? [], getConfig().autoModels?.policy);
+  let lastAutoRecoveryTick = 0;
+  setInterval(() => {
+    if (!autopilot.hasActiveThreads()) return;
+    const intervalMs = (getConfig().autoModels?.policy?.recoveryIntervalMin ?? DEFAULT_POLICY.recoveryIntervalMin) * 60_000;
+    if (Date.now() - lastAutoRecoveryTick < intervalMs) return;
+    lastAutoRecoveryTick = Date.now();
+    void autopilot.recoveryTick().catch(() => {});
+  }, 60_000);
   // Pi TUI terminal sessions (interactive pi in a PTY, xterm.js in renderer).
   registerTuiIpc(ipcMain, send);
   // ---- remote companion backend -----------------------------------------
@@ -1540,14 +1641,32 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
 
   const remoteService = new RemoteService(remoteBackend);
 
-  // ---- messaging channels (Feishu) ------------------------------------------
+  // ---- messaging channels (Feishu + WeChat) -----------------------------------
   // Reuses the same backend as the Android remote client: chat messages are
   // routed into one dedicated session of the bound project folder.
+  // Resolves an opaque/draft thread id to its session-file UUID — the key both
+  // the channel registry and the pi-side extension can compute.
+  const resolveSessionUuid = async (threadId: string): Promise<string | null> => {
+    try {
+      const ref = await remoteThread(threadId);
+      return ref.sessionFile ? threadUuidFromSessionFile(ref.sessionFile) : null;
+    } catch {
+      return null; // unknown/deleted thread — leave unregistered
+    }
+  };
   initMessaging({
     backend: remoteBackend,
     resolveProjectId: (cwd) => remoteProjectId(cwd),
+    resolveSessionUuid,
     language: () => getConfig().language,
     onStateChange: (state) => send("pi:messaging", state),
+  });
+  initWeChatMessaging({
+    backend: remoteBackend,
+    resolveProjectId: (cwd) => remoteProjectId(cwd),
+    resolveSessionUuid,
+    language: () => getConfig().language,
+    onStateChange: (state) => send("pi:messagingWechat", state),
   });
 
   const remoteHost = new RemoteHost({
@@ -1647,6 +1766,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("app:setConfig", (_e, patch) => {
     const prevCli = getConfig().piCliPath;
     const prevProfile = (getConfig().userProfile || "").trim();
+    // P1-12: keep the live autopilot in sync when pool/policy change.
+    if (patch && typeof patch === "object" && "autoModels" in patch) {
+      const am = (patch as any).autoModels;
+      autopilot.setConfig(am?.pool ?? [], am?.policy);
+    }
     // Channel credentials are managed exclusively by messaging:setConfig.
     let cleanPatch = patch;
     if (cleanPatch && typeof cleanPatch === "object" && "feishuChannel" in cleanPatch) {
@@ -1794,11 +1918,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
   };
   ipcMain.handle("todo:list", () => listTodos());
-  ipcMain.handle("todo:add", (_e, args?: { cwd?: string; title?: string; note?: string; dueDate?: string | null }) => {
-    const item = addTodo(args || {});
-    if (item) notifyTodosChanged();
-    return item;
-  });
+  ipcMain.handle(
+    "todo:add",
+    (_e, args?: { cwd?: string; title?: string; note?: string; dueDate?: string | null; dueTime?: string | null }) => {
+      const item = addTodo(args || {});
+      if (item) notifyTodosChanged();
+      return item;
+    }
+  );
   ipcMain.handle("todo:update", (_e, id: unknown, patch?: TodoPatch) => {
     const item = updateTodo(id, patch || {});
     if (item) notifyTodosChanged();
@@ -1820,12 +1947,74 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return removed;
   });
 
+  // Attachments: two intake paths — a native file dialog (main reads the files
+  // itself, no bytes cross IPC) and renderer paste/drag-drop (ArrayBuffers).
+  ipcMain.handle("todo:addFiles", (_e, todoId: unknown) => {
+    const win = getWin();
+    if (!win || typeof todoId !== "string") return { item: null, added: 0, skipped: [], errors: ["no window"] };
+    const language = getConfig().language;
+    const result = dialog.showOpenDialogSync(win, {
+      title: language === "zh" ? "添加本地文件" : "Add local file",
+      properties: ["openFile", "multiSelections"],
+      filters: [
+        { name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"] },
+        { name: "文档", extensions: ["pdf", "txt", "md", "doc", "docx", "xls", "xlsx", "csv", "zip"] },
+        { name: "所有文件", extensions: ["*"] },
+      ],
+    });
+    if (!result || result.length === 0) return { item: null, added: 0, skipped: [], errors: [] };
+    const inputs = [] as Array<{ name?: string; mime?: string; data: Buffer }>;
+    const readErrors: string[] = [];
+    for (const p of result.slice(0, 20)) {
+      try {
+        inputs.push({ name: basename(p), mime: mimeForName(p), data: readFileSync(p) });
+      } catch (err) {
+        readErrors.push(`${basename(p)}: ${String((err as Error)?.message || err)}`);
+      }
+    }
+    const out = addAttachments(todoId, inputs);
+    if (out.added > 0) notifyTodosChanged();
+    return { ...out, errors: [...readErrors, ...out.errors] };
+  });
+
+  ipcMain.handle(
+    "todo:addAttachments",
+    (_e, todoId: unknown, files?: Array<{ name?: string; mime?: string; size?: number; data?: ArrayBuffer }>) => {
+      if (!Array.isArray(files)) return { item: null, added: 0, errors: ["invalid payload"] };
+      const inputs = files.slice(0, 20).map((f) => ({
+        name: typeof f?.name === "string" ? f.name : undefined,
+        mime: typeof f?.mime === "string" && f.mime ? f.mime : undefined,
+        data: f?.data instanceof ArrayBuffer ? Buffer.from(f.data) : Buffer.alloc(0),
+      }));
+      const out = addAttachments(todoId, inputs);
+      if (out.added > 0) notifyTodosChanged();
+      return out;
+    }
+  );
+
+  ipcMain.handle("todo:removeAttachment", (_e, todoId: unknown, attId: unknown) => {
+    const item = removeAttachment(todoId, attId);
+    if (item) notifyTodosChanged(); // file deletion always happens; metadata may be unchanged
+    return item;
+  });
+
+  ipcMain.handle("todo:openAttachment", async (_e, file: unknown) => {
+    const target = resolveAttachmentFile(file); // null for malformed / missing names
+    if (!target) return "附件文件不存在";
+    try {
+      return shell.openPath(target); // empty string on success, error message otherwise
+    } catch (err) {
+      return String((err as Error)?.message || err);
+    }
+  });
+
   // Agent-side additions arrive as one JSON file per todo in the inbox dir
   // (mpi-todo-ext never writes todos.json). Watch + poll; ingest is idempotent.
-  const todoInbox = ensureTodoInbox(getConfigDir());
-  let todoInboxWatcher: FSWatcher | null = null;
+  const todoInbox = ensureInboxDir();
   try {
-    todoInboxWatcher = watch(todoInbox, () => {
+    // No handle kept (same pattern as the channel-command inbox): Node keeps an
+    // fs.watch watcher alive until close()/process exit; the poll is the fallback.
+    watch(todoInbox, () => {
       if (ingestInbox().length > 0) notifyTodosChanged();
     });
   } catch {
@@ -1839,6 +2028,20 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
   }, 2000);
   todoInboxPoll.unref?.();
+
+  // Channel session commands (mpi_channel_* tools): same watch + poll pattern.
+  startChannelCommandInboxWatcher();
+
+  // ---- data storage location (Settings → 数据存储) -------------------------
+  // Changing a location only records intent; the actual file moves happen on
+  // next launch via runPendingDataMigrations() in index.ts.
+  ipcMain.handle("data-migration:status", () => getDataMigrationStatus());
+  ipcMain.handle(
+    "data-migration:preview",
+    (_e, kind: unknown, dir: unknown) => previewMigration(kind === "todos" ? "todos" : "sessions", dir),
+  );
+  ipcMain.handle("data-migration:set-sessions-dir", (_e, dir: unknown) => setSessionsDir(dir));
+  ipcMain.handle("data-migration:set-todos-dir", (_e, dir: unknown) => setTodosDir(dir));
 
   ipcMain.handle("app:resolveRuntime", async () => {
     try {
@@ -2123,8 +2326,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     (_e, args: { providerId: string; provider: Record<string, unknown>; modelId: string }) =>
       testModelAvailability(args.providerId, args.provider as any, args.modelId),
   );
-  ipcMain.handle("settings:saveModels", (_e, providers: Record<string, unknown>) => {
-    writeModelsProviders(providers as any);
+  // P1-11: resolve contextWindow for models marked auto but still empty before
+  // writing; models with an existing value are never re-resolved.
+  ipcMain.handle("settings:saveModels", async (_e, providers: Record<string, unknown>) => {
+    const resolved = await autoResolveContextWindows(providers as any);
+    writeModelsProviders(resolved);
     // The standby process also caches its model registry. Recreate it now so a
     // new task opened after saving does not adopt a stale pre-save process.
     dropWarmBridge();
@@ -2134,6 +2340,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     // for Anthropic).
     return { ok: true, models: readModelsFile() };
   });
+  // P1-11: on-demand contextWindow resolution (Settings “重新探测” button).
+  ipcMain.handle(
+    "settings:resolveModelContext",
+    (_e, args: { providerId: string; provider: Record<string, unknown>; model: Record<string, unknown> }) =>
+      resolveModelContext(args.providerId, args.provider as any, args.model as any),
+  );
   ipcMain.handle("settings:getThinking", () => readThinking());
   ipcMain.handle("settings:saveThinking", (_e, patch: Record<string, unknown>) => writeThinking(patch as any));
   ipcMain.handle("settings:getDiagnostics", () => getDiagnostics());
@@ -2261,6 +2473,18 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         if (perms[state.sessionFile] !== permission) updateConfig({ threadPermissions: { ...perms, [state.sessionFile]: permission } });
       }
       const gathered = await gatherThread(handle.bridge, finalId, permission);
+      // P1-12: restore per-thread auto mode. New sessions (no messages yet)
+      // explicitly pick their initial model — this also fixes the "new session
+      // starts on drifted pi global default" quirk for auto threads.
+      if (getConfig().autoModelThreads?.[finalId]) {
+        const cur = ((gathered.model as any) || { provider: "", id: "" });
+        autopilot.setAuto(finalId, true, cur);
+        if (cur.id && (gathered.messages ?? []).length === 0) {
+          // Fire-and-forget: probes must not block thread open; the switch
+          // reaches the renderer via the pi:autoModel notify (carries `to`).
+          void autopilot.resolveInitial(finalId, cur).catch(() => {});
+        }
+      }
       if (!sessionFile) {
         // Opening without a session file is the explicit "New thread" flow.
         // The process may have been a warm spare whose previous session name
@@ -2268,6 +2492,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         // cross the new-thread boundary.
         return {
           ...gathered,
+          autoEnabled: autopilot.isAuto(finalId),
           sessionName: null,
           messages: [],
           branchMessages: [],
@@ -2275,7 +2500,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
           isNewSession: true,
         };
       }
-      return gathered;
+      return { ...gathered, autoEnabled: autopilot.isAuto(finalId) };
     } catch (e) {
       bridges.delete(handle.getId());
       removeGateModeFile(handle.gateModeFile);
@@ -2363,6 +2588,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       pinnedThreads: (current.pinnedThreads || []).filter((path) => !sameSessionFile(path, target)),
       archivedThreads: (current.archivedThreads || []).filter((thread) => !sameSessionFile(thread.file, target)),
       threadPermissions,
+      autoModelThreads: Object.fromEntries(
+        Object.entries(current.autoModelThreads ?? {}).filter(([path]) => !sameSessionFile(path, target)),
+      ),
     });
 
     for (const [localId] of Array.from(remoteLocalToId.entries())) {
@@ -2399,6 +2627,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       // before the process dies; the UI closes the tab immediately.
       void h.bridge.stopGraceful();
       bridges.delete(threadId);
+      autopilot.onThreadClosed(threadId); // auto monitoring stops with the thread
     }
     return true;
   });
@@ -2446,9 +2675,43 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return h.bridge.compact(instructions || undefined);
   });
 
+  // P1-12: enable/disable auto mode for a thread. Exiting stops monitoring
+  // entirely (non-auto threads keep the original behaviour).
+  ipcMain.handle("thread:setAutoModel", async (_e, args: { threadId: string; enabled: boolean }) => {
+    const h = bridges.get(args.threadId);
+    if (!h) throw new Error("Thread not open");
+    const state: any = await h.bridge.getState();
+    const model = (state.model as any) || { provider: "", id: "" };
+    autopilot.setAuto(args.threadId, !!args.enabled, model);
+    const threads = { ...(getConfig().autoModelThreads ?? {}) };
+    if (args.enabled) threads[args.threadId] = true;
+    else delete threads[args.threadId];
+    updateConfig({ autoModelThreads: threads });
+    let initial: { provider: string; id: string } | null = null;
+    if (args.enabled && model.id) {
+      const msgs: any = await h.bridge.getMessages();
+      if ((msgs?.messages ?? []).length === 0) {
+        try {
+          initial = await autopilot.resolveInitial(args.threadId, model);
+        } catch {
+          /* probes are best effort */
+        }
+      }
+    }
+    return { ok: true, initial };
+  });
+
   ipcMain.handle("thread:setModel", async (_e, args: { threadId: string; provider: string; modelId: string }) => {
     const h = bridges.get(args.threadId);
     if (!h) throw new Error("Thread not open");
+    // Manual selection exits auto mode for this thread (user-confirmed).
+    autopilot.setAuto(args.threadId, false, { provider: args.provider, id: args.modelId });
+    const threads = getConfig().autoModelThreads ?? {};
+    if (threads[args.threadId]) {
+      const next = { ...threads };
+      delete next[args.threadId];
+      updateConfig({ autoModelThreads: next });
+    }
     const model = await h.bridge.setModel(args.provider, args.modelId);
     // Pi clamps the current thinking level when the selected model exposes a
     // narrower thinkingLevelMap. Return the effective value so the renderer's
@@ -2690,6 +2953,29 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     });
   });
   ipcMain.handle("messaging:cancelAppRegistration", () => cancelAppRegistration());
+
+  // ---- WeChat (iLink bot) channel --------------------------------------------
+  ipcMain.handle("wechat:getState", () => getWeChatState());
+  ipcMain.handle("wechat:setConfig", (_e, patch?: Partial<WeChatChannelConfig>) => wechatSetConfig(patch || {}));
+
+  // QR onboarding: credentials are saved in the main process on success; only
+  // bot id + user info cross IPC (the token never reaches the renderer).
+  ipcMain.handle("wechat:startQrLogin", () => {
+    startWeChatQrLogin((event) => {
+      send("pi:wechatRegistration", event);
+      if (event.phase === "success") {
+        // Re-apply the just-saved credentials: restarts the channel when it is
+        // enabled + bound, and refreshes the renderer's state.
+        try {
+          send("pi:messagingWechat", wechatSetConfig({}));
+        } catch (err) {
+          console.error("[wechat] post-login apply failed:", err);
+        }
+      }
+    });
+  });
+  ipcMain.handle("wechat:cancelQrLogin", () => cancelWeChatQrLogin());
+  ipcMain.handle("wechat:submitVerifyCode", (_e, code?: string) => submitWeChatVerifyCode(code || ""));
 
   // Enable the official Feishu MCP server with the channel's credentials.
   ipcMain.handle("messaging:enableFeishuMcp", () => {
