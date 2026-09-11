@@ -1,6 +1,6 @@
 {
   "name": "mpi",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "piRuntimeVersion": "0.85.1",
   "private": true,
   "license": "MIT",
@@ -43,6 +43,7 @@
     "test:model-context": "node --experimental-strip-types scripts/test-model-context.mjs",
     "test:model-autopilot": "node --experimental-strip-types scripts/test-model-autopilot.mjs",
     "test:usage": "node --experimental-strip-types scripts/test-usage.mjs",
+    "test:transfers": "node --experimental-strip-types scripts/test-transfer-monitor.mjs",
     "test:html-reference": "node --experimental-strip-types scripts/test-html-reference.mjs",
     "bundle": "node scripts/bundle-runtime.mjs",
     "finalize-runtime": "node scripts/finalize-runtime.mjs",
