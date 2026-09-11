@@ -8,24 +8,24 @@ MPI 是一个独立的 Electron 桌面客户端，用于运行 [Pi coding agent]
 
 ## 界面预览
 
-当前界面将主工作区、插件管理、公开 Skills Hub 和 Android 远程控制配置整合在同一个桌面客户端中。
+当前界面将主工作区、扩展功能与技能管理、待办任务和消息接入（飞书/微信）整合在同一个桌面客户端中。
 
 <table>
   <tr>
     <td width="50%"><img src="imageassets/newpi01.png" alt="MPI 主页" width="100%"></td>
-    <td width="50%"><img src="imageassets/newpi03.png" alt="MPI 插件管理" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi03.png" alt="MPI 扩展功能与技能管理" width="100%"></td>
   </tr>
   <tr>
     <td align="center">主页</td>
-    <td align="center">插件管理</td>
+    <td align="center">扩展功能与技能</td>
   </tr>
   <tr>
-    <td width="50%"><img src="imageassets/newpi04.png" alt="MPI Skills Hub" width="100%"></td>
-    <td width="50%"><img src="imageassets/newpi02.png" alt="MPI Android 远程控制配置" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi04.png" alt="MPI 待办任务" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi02.png" alt="MPI 消息接入（飞书/微信）" width="100%"></td>
   </tr>
   <tr>
-    <td align="center">Skills Hub</td>
-    <td align="center">Android 远程控制配置</td>
+    <td align="center">待办任务</td>
+    <td align="center">消息接入（飞书/微信）</td>
   </tr>
 </table>
 

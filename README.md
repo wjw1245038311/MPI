@@ -8,24 +8,24 @@ MPI is an independent Electron desktop client for the [Pi coding agent](https://
 
 ## Screenshots
 
-The current interface brings the main workspace, plugin manager, public Skills Hub, and Android remote-control settings into one desktop client.
+The current interface brings the main workspace, extensions & skills management, per-project todos, and chat-app messaging (Feishu/WeChat) into one desktop client.
 
 <table>
   <tr>
     <td width="50%"><img src="imageassets/newpi01.png" alt="MPI home workspace" width="100%"></td>
-    <td width="50%"><img src="imageassets/newpi03.png" alt="MPI plugin manager" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi03.png" alt="MPI extensions & skills management" width="100%"></td>
   </tr>
   <tr>
     <td align="center">Home workspace</td>
-    <td align="center">Plugin manager</td>
+    <td align="center">Extensions & skills</td>
   </tr>
   <tr>
-    <td width="50%"><img src="imageassets/newpi04.png" alt="MPI Skills Hub" width="100%"></td>
-    <td width="50%"><img src="imageassets/newpi02.png" alt="MPI Android remote-control settings" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi04.png" alt="MPI todo tasks" width="100%"></td>
+    <td width="50%"><img src="imageassets/newpi02.png" alt="MPI messaging channels (Feishu/WeChat)" width="100%"></td>
   </tr>
   <tr>
-    <td align="center">Skills Hub</td>
-    <td align="center">Android remote-control settings</td>
+    <td align="center">Todo tasks</td>
+    <td align="center">Messaging (Feishu/WeChat)</td>
   </tr>
 </table>
 
