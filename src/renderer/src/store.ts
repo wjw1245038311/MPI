@@ -1061,8 +1061,6 @@ interface PiStore {
   /** Preview occupies the chat workspace while preserving the mounted chat state. */
   previewExpanded: boolean;
   sidebarTab: "threads" | "files";
-  /** One-shot flag consumed by Composer to focus its input (set by new-session entry points). */
-  composerFocusPending: boolean;
 
   // projects / threads
   activeProjectCwd: string | null;
@@ -1119,8 +1117,6 @@ interface PiStore {
   ensureConnected: (threadId: string) => Promise<string | null>;
   /** Create a new thread in the active project, prompting for a folder if none is open. */
   newTask: () => Promise<void>;
-  /** Ask the Composer to focus its input once (consumed + cleared by Composer). */
-  requestComposerFocus: () => void;
   closeThread: (id: string) => Promise<void>;
   /** Toggle the active thread between GUI rendering and the interactive pi TUI terminal. */
   toggleTui: (threadId: string) => Promise<void>;
@@ -1482,7 +1478,6 @@ export const useStore = create<PiStore>()((set, get) => {
   previewOpen: false,
   previewExpanded: false,
   sidebarTab: "threads",
-  composerFocusPending: false,
   activeProjectCwd: null,
   expandedProjects: {},
   openThreadIds: [],
@@ -2140,11 +2135,8 @@ export const useStore = create<PiStore>()((set, get) => {
       // switching to a fresh empty task.
       await get().refreshProjects();
       await get().openThread(cwd);
-      set({ composerFocusPending: true });
     }
   },
-
-  requestComposerFocus: () => set({ composerFocusPending: true }),
 
   sendPrompt: async (threadId, text, images, attachments, mode) => {
     const trimmed = (text || "").trim();

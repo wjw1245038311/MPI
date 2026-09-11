@@ -98,10 +98,7 @@ export default function App() {
       useStore.getState().setActiveProject(p);
       cwd = p;
     }
-    if (cwd) {
-      await useStore.getState().openThread(cwd);
-      useStore.getState().requestComposerFocus();
-    }
+    if (cwd) await useStore.getState().openThread(cwd);
   };
 
   return (
