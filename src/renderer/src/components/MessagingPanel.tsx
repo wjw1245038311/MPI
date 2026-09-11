@@ -87,7 +87,7 @@ export function MessagingPanel() {
         // the freshly registered credentials with the stale App ID.
         setDraft((d) => (d && e.clientId ? { ...d, appId: e.clientId } : d));
         const zh = (useStore.getState().config?.language ?? "en") === "zh";
-        useStore.getState().pushToast("success", zh ? `应用创建成功，凭证已保存（${e.clientId}）` : `App created, credentials saved (${e.clientId})`);
+        useStore.getState().pushToast("success", zh ? `接入成功，凭证已保存（${e.clientId}）` : `Connected — credentials saved (${e.clientId})`);
         void useStore.getState().loadMessaging();
       } else if (e.phase === "error") {
         setReg({ kind: "error", code: e.code ?? "unknown", description: e.description ?? "" });
@@ -365,11 +365,11 @@ export function MessagingPanel() {
                         <div className="msg-qr-title">{zh ? "快速接入（推荐）" : "Quick setup (recommended)"}</div>
                         <p className="set-hint msg-qr-desc">
                           {zh
-                            ? "用飞书手机扫描下方二维码，确认后自动创建机器人应用并保存凭证——无需手动建应用、找 App ID。"
-                            : "Scan the QR code with mobile Feishu; after confirming, a bot app is created and its credentials are saved automatically — no console steps needed."}
+                            ? "用飞书手机扫描下方二维码：可选择已有应用，或新建机器人应用；确认后自动保存凭证——无需手动找 App ID/Secret。"
+                            : "Scan the QR code with mobile Feishu; pick an existing app or create a new bot, and its credentials are saved automatically — no console steps needed."}
                         </p>
                         <button className="set-btn primary" onClick={startReg}>
-                          {zh ? "📱 扫码创建应用" : "📱 Create app via scan"}
+                          {zh ? "📱 扫码选择或创建应用" : "📱 Pick or create app via scan"}
                         </button>
                       </>
                     )}
@@ -379,8 +379,8 @@ export function MessagingPanel() {
                           {zh ? `已绑定应用` : `Bound app`}
                           {state.appIdMasked ? ` · ${state.appIdMasked}` : ""}
                         </span>
-                        <button className="set-btn ghost" onClick={startReg} title={zh ? "会创建一个新应用，旧应用仍保留在飞书后台" : "Creates a NEW app; the old one stays in your Feishu console"}>
-                          {zh ? "重新扫码创建新应用" : "Create a new app via scan"}
+                        <button className="set-btn ghost" onClick={startReg} title={zh ? "可改选其他已有应用或新建；当前绑定的应用不受影响" : "Switch to another existing app or create a new one; the current binding is untouched"}>
+                          {zh ? "重新扫码（更换 / 新建应用）" : "Re-scan (switch or create app)"}
                         </button>
                       </div>
                     )}
@@ -400,7 +400,7 @@ export function MessagingPanel() {
                               <>
                                 <p className="set-hint">
                                   {zh
-                                    ? "打开手机飞书 → 扫一扫，在确认页点「同意 / 创建」。"
+                                    ? "打开手机飞书 → 扫一扫：选「已有应用」或新建，确认后自动保存。"
                                     : "Open mobile Feishu → scan, then tap confirm on the page."}
                                 </p>
                                 <div className={`msg-qr-countdown${regRemaining <= 10 ? " urgent" : ""}`}>⏱ {fmtCountdown(regRemaining)}</div>

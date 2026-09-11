@@ -5,9 +5,10 @@ import { sanitizeFeishuConfig } from "./feishu-text";
 /**
  * One-click Feishu app creation via QR scan (official node-sdk `registerApp`,
  * OAuth 2.0 Device Authorization Grant / RFC 8628). The user scans the
- * verification URL with mobile Feishu and confirms; the platform creates a
- * self-built bot app under their tenant and returns App ID + Secret directly
- * to this process — no developer-console steps, no vendor backend involved.
+ * verification URL with mobile Feishu and confirms; on the confirm page they
+ * either pick an existing bot app or let the platform create a new self-built
+ * one under their tenant. Either way App ID + Secret come back directly to
+ * this process — no developer-console steps, no vendor backend involved.
  *
  * Security: the returned secret is written straight into config.json here in
  * the main process and never crosses IPC to the renderer (same policy as
@@ -65,8 +66,9 @@ export function startAppRegistration(onEvent: (event: RegistrationEvent) => void
       },
       events: { items: { tenant: ["im.message.receive_v1"] } },
     },
-    // Always create a new app — never let the flow overwrite an existing one.
-    createOnly: true,
+    // No `createOnly` → the scan page offers both "select an existing app"
+    // and "create new" (same as Hermes). Picking an existing app re-authorizes
+    // it with our additive addons and returns its credentials.
     onQRCodeReady: (info) => {
       if (controller !== c) return;
       onEvent({ phase: "qr_ready", url: info.url, expireIn: info.expireIn });

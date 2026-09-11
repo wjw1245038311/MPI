@@ -619,7 +619,7 @@ Message your MPI from Feishu or WeChat: DM the bot (Feishu also supports @-menti
 
 Open **Sidebar → Messaging channels** (the fourth item below "New session / Automations / Extensions"). The left column lists the channels — Feishu / WeChat; click to switch.
 
-Recommended: one-click setup via QR. Click "📱 Create app via scan" in the quick-setup card, scan with mobile Feishu and confirm; a bot app is created under your enterprise with scopes and event subscription pre-configured, and its credentials are written straight to local config. No console steps needed, and the App Secret never leaves this machine. If QR setup is unavailable for you, use the manual method below:
+Recommended: one-click setup via QR. Click "📱 Pick or create app via scan" in the quick-setup card and scan with mobile Feishu; on the confirm page choose either **an existing app** (reuse a bot already created under your enterprise — the page shows which scopes/events will be added and asks you to re-authorize) or **create a new one** (a bot app is created under your enterprise with scopes and event subscription pre-configured). Either way its credentials are written straight to local config. No console steps needed, and the App Secret never leaves this machine. If QR setup is unavailable for you, use the manual method below:
 
 | Field | Description |
 | --- | --- |
