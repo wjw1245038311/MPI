@@ -306,7 +306,7 @@ export function Preview() {
       setDropPos(null);
       // The drag ended without an in-app drop → it was released outside the
       // window (desktop/taskbar) → detach into a separate window. Visual
-      // Studio semantics: the tab MOVES — it is removed from this panel and
+      // Visual Studio-style semantics: the tab MOVES — it is removed from this panel and
       // the floating window takes over (drag its tab back to dock it here).
       if (dragged && !tabDragConsumedRef.current) {
         const tab = tabs.find((t) => t.id === dragged);
