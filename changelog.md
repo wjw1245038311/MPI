@@ -4,6 +4,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **设置「关于 MPI」新增 dev 一键发版面板（仅开发模式可见）**：一键完成 bump patch → changelog Unreleased 改名 → commit → push origin → npm run dist → publish-release.mjs（tag/push/GitHub Release/附件上传），全程日志逐行流式显示在面板内、可随时取消；预检要求工作区干净且 GitHub token 就绪（env GITHUB_TOKEN 或仓库根 .gh-token，token 只在 main 进程读取、不传 renderer），有未提交改动会中止而不会自动提交别人的 WIP。
+
+   验证方式：① dev 模式（npm run dev）下设置 → 关于 MPI 底部出现第三张卡片「dev 一键发版」；安装包版本里该卡片不显示。② 卡片展示当前版本→下一版本、工作区状态、token 状态；有未提交改动时列出文件并禁用发布按钮。③ 干净工作区 + token 就绪时点「发布新版本」→ 日志逐行流式输出（预检 → bump → commit → push → 构建 → 发布），完成后 toast「vX.Y.Z 发版完成」，GitHub 上生成 tag/Release/安装包附件。④ 进行中点「取消」→ 终止当前步骤；若版本提交已做出会给出 git reset 撤销提示。
+
 ## v0.6.2（2026-09-11）
 
 1. **设置新增「扩展选模」开关（默认开）——扩展要模型不再弹窗**：扩展需要选择模型时，MPI 自动使用当前会话的模型、不再弹出询问。对 pi-web-access 联网搜索的具体效果：① 每次搜索不再打开浏览器整理窗口（`workflow=auto-summary`），直接返回 AI 生成的摘要；② 摘要模型实时跟随当前会话的模型（每轮开始同步，手动切模 / Auto 模式切换后同样生效）；③ 摘要生成超时从默认 30s 放宽到 5 分钟，本地/慢速模型不会退化成确定性兜底摘要。实现：新增 `src/main/web-search-config.ts` 管理 `~/.pi/web-search.json`（与终端 pi 共享）的 workflow / summaryModel / summaryGenerationDeadlineMs 三个键——读改写保留 API Key 等其它全部键；首次触碰把原值备份到 `<userData>/web-search-orig.json`，关闭开关时精确还原（MPI 新建的文件会删掉、用户后加的键保留）；文件损坏绝不覆盖。另加通用拦截：任何扩展的 `ui.select` 选项若全是 provider/model 形式，自动用当前会话模型应答（定时任务无人值守同样生效），后续其它插件弹窗选模也按此处理。新增配置项 `extAutoPickModel`（缺省=开）+ 设置→通用「扩展选模」行；测试 `test:websearch`。注意：该文件与终端 pi 共享，开启后终端里的联网搜索也会默认走 auto-summary（单次调用仍可传 workflow 覆盖）。

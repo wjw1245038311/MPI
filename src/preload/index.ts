@@ -72,6 +72,18 @@ const api = {
     installAppUpdate: () => ipcRenderer.invoke("app:installAppUpdate"),
     checkCoreUpdate: () => ipcRenderer.invoke("app:checkCoreUpdate"),
     relaunch: () => ipcRenderer.invoke("app:relaunch"),
+    isDev: (): Promise<boolean> => ipcRenderer.invoke("app:isDev"),
+    devReleaseStatus: (): Promise<{
+      isDev: boolean;
+      running: boolean;
+      currentVersion: string | null;
+      nextVersion: string | null;
+      dirtyFiles: string[];
+      hasToken: boolean;
+    }> => ipcRenderer.invoke("app:devReleaseStatus"),
+    devReleaseStart: (): Promise<{ ok: boolean; version?: string; error?: string; cancelled?: boolean }> =>
+      ipcRenderer.invoke("app:devReleaseStart"),
+    devReleaseCancel: () => ipcRenderer.invoke("app:devReleaseCancel") as Promise<{ ok: boolean; error?: string }>,
     editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => ipcRenderer.invoke("app:editAction", action),
   },
   drafts: {
@@ -363,6 +375,7 @@ const api = {
     projectsChanged: (cb: (p: { cwd?: string; sessionFile?: string }) => void) => on("pi:projects-changed", cb),
     appUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:appUpdate", cb),
     coreUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:coreUpdate", cb),
+    devReleaseLog: (cb: (line: string) => void) => on("pi:devReleaseLog", cb),
   },
 };
 

@@ -6,6 +6,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
+import { cancelDevRelease, getDevReleaseStatus, startDevRelease } from "./dev-release";
 import {
   BUILT_IN_REMOTE_STUN_URLS,
   DEFAULT_REMOTE_SIGNALING_URL,
@@ -3091,6 +3092,15 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     app.relaunch();
     app.exit(0);
   });
+
+  // ---- dev release (one-click publish, dev mode only) --------------------
+  // Pipeline lives in dev-release.ts; long-running child output is streamed
+  // to the renderer as "pi:devReleaseLog" lines. The GitHub token never
+  // crosses into the renderer — status only reports hasToken.
+  ipcMain.handle("app:isDev", () => !app.isPackaged);
+  ipcMain.handle("app:devReleaseStatus", () => getDevReleaseStatus());
+  ipcMain.handle("app:devReleaseStart", async () => startDevRelease((line) => send("pi:devReleaseLog", line)));
+  ipcMain.handle("app:devReleaseCancel", () => cancelDevRelease());
 
   // ---- edit menu (clipboard on the focused field) ------------------------
   ipcMain.handle("app:editAction", (_e, action: "copy" | "cut" | "paste" | "delete" | "selectAll") => {

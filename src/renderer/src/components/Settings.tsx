@@ -6,6 +6,7 @@ import { reasoningLevelLabel } from "../lib/reasoning";
 import { translateUiText } from "../lib/i18n";
 import { Archive, Check, ChevronRight, Close, Edit, Plus, Refresh, Folder, Search, Trash } from "./icons";
 import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
+import { DevReleasePanel } from "./DevReleasePanel";
 import appIconUrl from "../../../../resources/icon.png";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
@@ -2978,6 +2979,8 @@ export function Settings() {
               <>
                 <AppUpdatePanel onChangelogOpenChange={setChangelogOpen} />
                 <PiCoreUpdatePanel />
+                {/* dev-only：打包版里面板自身返回 null */}
+                <DevReleasePanel />
               </>
             )}
           </div>
