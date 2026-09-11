@@ -13,6 +13,7 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { beginTransfer, endTransfer, updateTransfer } from "./transfer-monitor";
 import { getBundledRuntime, resetPiRuntime, resolvePiRuntime } from "./pi-bridge";
 import {
   activateRuntimeRoot,
@@ -189,44 +190,67 @@ async function verifyIntegrity(file: string, integrity?: string): Promise<void> 
   if (actual !== m[2]) throw new Error(`integrity check failed for ${file} (${m[1]})`);
 }
 
-/** Download url → dest with optional coarse progress (needs content-length). */
-async function downloadFile(url: string, dest: string, onPct?: (pct: number) => void): Promise<void> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-  if (!res.ok) throw new Error(`HTTP ${res.status} downloading ${url}`);
-  const total = Number(res.headers.get("content-length")) || 0;
-  const body = res.body as unknown as { getReader: () => { read: () => Promise<{ done: boolean; value?: Uint8Array }> } } | null;
-  await new Promise<void>((resolve, reject) => {
-    if (!body) {
-      reject(new Error(`empty response body for ${url}`));
-      return;
-    }
-    const reader = body.getReader();
-    const out = createWriteStream(dest);
-    let got = 0;
-    let lastPct = -1;
-    const pump = async (): Promise<void> => {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const buf = Buffer.from(value as Uint8Array);
-        got += buf.length;
-        if (!out.write(buf)) await new Promise<void>((r) => out.once("drain", () => r()));
-        if (total && onPct) {
-          const pct = Math.min(99, Math.floor((got / total) * 100));
-          if (pct !== lastPct) {
-            lastPct = pct;
-            onPct(pct);
-          }
-        }
+/** Download url → dest with optional byte-level progress (needs
+ * content-length for totals) and an optional external abort signal (the
+ * long-task monitor's cancel button). The fixed timeout is combined with the
+ * external signal; aborts surface as a friendly error. */
+async function downloadFile(
+  url: string,
+  dest: string,
+  onBytes?: (got: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, DOWNLOAD_TIMEOUT_MS);
+  if (signal) {
+    if (signal.aborted) ctrl.abort();
+    else signal.addEventListener("abort", () => ctrl.abort(), { once: true });
+  }
+  const abortError = (): Error =>
+    timedOut
+      ? new Error(`下载超时（${Math.round(DOWNLOAD_TIMEOUT_MS / 1000)}s）：${url}`)
+      : new Error(signal?.aborted ? "下载已取消" : `download aborted: ${url}`);
+
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status} downloading ${url}`);
+    const total = Number(res.headers.get("content-length")) || 0;
+    const body = res.body as unknown as { getReader: () => { read: () => Promise<{ done: boolean; value?: Uint8Array }> } } | null;
+    await new Promise<void>((resolve, reject) => {
+      if (!body) {
+        reject(new Error(`empty response body for ${url}`));
+        return;
       }
-      out.end(() => resolve());
-      out.on("error", reject);
-    };
-    pump().catch((e) => {
-      out.destroy();
-      reject(e);
+      const reader = body.getReader();
+      const out = createWriteStream(dest);
+      let got = 0;
+      const pump = async (): Promise<void> => {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const buf = Buffer.from(value as Uint8Array);
+          got += buf.length;
+          if (!out.write(buf)) await new Promise<void>((r) => out.once("drain", () => r()));
+          onBytes?.(got, total);
+        }
+        out.end(() => resolve());
+        out.on("error", reject);
+      };
+      pump().catch((e) => {
+        out.destroy();
+        reject(e);
+      });
     });
-  });
+  } catch (e) {
+    if (ctrl.signal.aborted) throw abortError();
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function runCommand(cmd: string, args: string[]): Promise<void> {
@@ -456,6 +480,8 @@ export async function checkForCoreUpdate(cliOverride?: string): Promise<CoreUpda
  */
 export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUpdateResult> {
   const progress: ProgressFn = onProgress || (() => undefined);
+  /** Long-task-monitor entry for the network phase (set once downloading starts). */
+  let coreTransferId: string | null = null;
   // Never reuse a failed staging tree in the same process. A previous attempt
   // may have left a locked package directory behind after its cleanup failed.
   const staging = join(runtimeBaseDir(), `.staging-${process.pid}-${Date.now()}-${randomUUID().slice(0, 8)}`);
@@ -501,9 +527,27 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
     mkdirSync(staging, { recursive: true });
     const tgz = join(staging, "pi.tgz");
 
+    // Long-task monitor entry covering the whole network phase (main tarball
+    // + dependency tarballs). Cancel aborts every in-flight fetch.
+    const dlCtrl = new AbortController();
+    coreTransferId = beginTransfer({ kind: "download", label: "正在下载 Pi 核心…", cancellable: true, onCancel: () => dlCtrl.abort() });
+
+    let lastPct = -1;
     progress({ stage: "downloading", message: "正在下载 Pi 核心…", pct: 0 });
-    await downloadFile(tarballUrl, tgz, (pct) =>
-      progress({ stage: "downloading", message: "正在下载 Pi 核心…", pct }),
+    await downloadFile(
+      tarballUrl,
+      tgz,
+      (got, total) => {
+        if (total > 0) {
+          const pct = Math.min(99, Math.floor((got / total) * 100));
+          if (pct !== lastPct) {
+            lastPct = pct;
+            progress({ stage: "downloading", message: "正在下载 Pi 核心…", pct });
+          }
+        }
+        updateTransfer(coreTransferId!, { doneBytes: got, ...(total ? { totalBytes: total } : {}) });
+      },
+      dlCtrl.signal,
     );
     await verifyIntegrity(tgz, manifest.dist?.integrity);
 
@@ -546,7 +590,7 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
       const tmpTgz = join(extractTmp, `d${i}.tgz`);
       mkdirSync(tmpDir, { recursive: true });
       try {
-        await downloadFile(e.resolved as string, tmpTgz);
+        await downloadFile(e.resolved as string, tmpTgz, undefined, dlCtrl.signal);
         await verifyIntegrity(tmpTgz, e.integrity);
         await runCommand(tarBinary(), ["-xzf", tmpTgz, "-C", tmpDir]);
         mkdirSync(dirname(dest), { recursive: true });
@@ -564,6 +608,9 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
         });
       }
     });
+
+    if (coreTransferId) endTransfer(coreTransferId);
+    coreTransferId = null;
 
     // ---- prune ------------------------------------------------------------
     progress({ stage: "pruning", message: "正在精简运行时文件…" });
@@ -602,6 +649,8 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
     };
   } catch (e: any) {
     rmSafe(staging);
+    if (coreTransferId) endTransfer(coreTransferId);
+    coreTransferId = null;
     const message = e?.message || String(e);
     progress({ stage: "error", message });
     return { ok: false, updated: false, message: `Pi 更新失败：${message}` };

@@ -352,6 +352,9 @@ const exact: Record<string, string> = {
   "更新 pi CLI 本体（不含扩展，扩展请在「扩展功能」面板更新）。会先检查是否为最新版本，结果以提示呈现。更新完成后新开的会话使用新版本。": "to update the Pi CLI itself. Extensions are updated separately in the Extensions panel. Pi checks the current version first, and new sessions use the updated version.",
   "正在检查最新版本…": "Checking for updates…",
   "正在下载 Pi 核心…": "Downloading Pi core…",
+  "更新全部扩展包": "Update all extension packages",
+  "更新 Pi CLI（系统安装）": "Updating Pi CLI (system install)",
+  "已取消": "Cancelled",
   "正在解压安装包…": "Extracting package…",
   "正在精简运行时文件…": "Pruning runtime files…",
   "正在激活新版本…": "Activating the new version…",
@@ -552,6 +555,9 @@ function translateToEnglish(value: string): string {
     .replace(/^已更新到\s+v(.+)$/, "Updated to v$1")
     .replace(/^Pi 核心已更新到\s+v(.+)，新开的会话将使用新版本。$/, "Pi core updated to v$1. New sessions will use it.")
     .replace(/^正在下载 MPI v(.+)…$/, "Downloading MPI v$1…")
+    .replace(/^安装扩展包 (.+)$/, "Installing extension package $1")
+    .replace(/^更新扩展包 (.+)$/, "Updating extension package $1")
+    .replace(/^移除扩展包 (.+)$/, "Removing extension package $1")
     .replace(/^MPI v(.+) 已下载，可以安装并重启$/, "MPI v$1 downloaded and ready to install")
     .replace(/^MPI 已经是最新版本（v(.+)）$/, "MPI is already up to date (v$1)")
     .replace(/^正在安装 MPI v(.+)，应用将自动重启$/, "Installing MPI v$1; the app will restart")
@@ -584,6 +590,9 @@ function translateToChinese(value: string): string {
     .replace(/^Daily at\s+/, "每天 ")
     .replace(/^Weekly on\s+/, "每周 ")
     .replace(/^Update to\s+v(.+)$/, "更新到 v$1")
+    .replace(/^Installing extension package (.+)$/, "安装扩展包 $1")
+    .replace(/^Updating extension package (.+)$/, "更新扩展包 $1")
+    .replace(/^Removing extension package (.+)$/, "移除扩展包 $1")
     .replace(/^Pi runtime v(.+) is ready$/, "Pi 运行时 v$1 已就绪")
     .replace(/^Preparing embedded Pi runtime v(.+)$/, "正在准备内置 Pi 运行时 v$1")
     .replace(/^Extracting embedded Pi runtime$/, "正在解压内置 Pi 运行时")

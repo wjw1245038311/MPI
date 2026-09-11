@@ -307,6 +307,13 @@ export const Terminal = (p: P) => (
     <path d="M12.5 15H17" />
   </svg>
 );
+export const Download = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 3.5v10" />
+    <path d="m8 10 4 4 4-4" />
+    <path d="M4.5 16.5v2a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2" />
+  </svg>
+);
 export const MessageSquare = (p: P) => (
   <svg {...base(p)}>
     <path d="M21 14.5a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />

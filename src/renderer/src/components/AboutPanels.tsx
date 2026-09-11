@@ -283,9 +283,13 @@ export function PiCoreUpdatePanel() {
           setUpdatedTo(res.to);
         } else if (res.ok) {
           pushToast("info", res.output);
+        } else if (res.cancelled) {
+          pushToast("info", "已取消");
         } else {
           pushToast("error", res.output);
         }
+      } else if (!res?.ok && res.cancelled) {
+        pushToast("info", "已取消");
       } else {
         // System-installed pi (npm/pnpm global) updated itself via `pi update`.
         const raw = stripAnsi(res?.output || "");

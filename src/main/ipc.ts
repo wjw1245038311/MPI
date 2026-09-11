@@ -50,6 +50,7 @@ import {
   setSessionsDir,
   setTodosDir,
 } from "./data-migration";
+import { cancelTransfer as cancelActiveTransfer, getTransfers, setTransferBroadcaster } from "./transfer-monitor";
 import { mimeForName } from "./todo-attachment-protocol";
 import type { ComposerDraft } from "../renderer/src/lib/types";
 import { listDir } from "./fs-service";
@@ -99,10 +100,12 @@ import {
   listPackages,
   listManagedSkills,
   listSkills,
+  nameOf,
   probePiStartup,
   removeMcpServer,
   removePackageEntry,
   runPiCli,
+  TransferCancelledError,
   setMcpServerDisabled,
   setPackageEnabled,
   setSkillEnabled,
@@ -765,6 +768,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   sendToRenderer = send;
   systemNotifications = createSystemNotificationCenter(getWin);
   warmEnabled = true;
+
+  // Long-task monitor: broadcast active transfers (extension installs,
+  // Pi core / app update downloads) to the renderer's floating card.
+  setTransferBroadcaster((list) => send("pi:transfers", list));
+  ipcMain.handle("transfers:snapshot", () => getTransfers());
+  ipcMain.handle("transfers:cancel", (_e, id: string) => cancelActiveTransfer(typeof id === "string" ? id : ""));
 
   // P1-12: sync the autopilot with persisted pool/policy, then run recovery
   // probes at most once per configured interval while auto threads are open.
@@ -2875,7 +2884,13 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ok: true };
   });
   ipcMain.handle("plugins:installPackage", async (_e, source: string) => {
-    const res = await runPiCli(["install", source]);
+    let res;
+    try {
+      res = await runPiCli(["install", source], { transferLabel: "安装扩展包 " + nameOf(source) });
+    } catch (e) {
+      if (e instanceof TransferCancelledError) return { ok: false, cancelled: true, output: "已取消" };
+      throw e;
+    }
     const installOutput = (res.stdout + res.stderr).trim();
     if (res.code !== 0) {
       // Never add a failed/partial install to settings: Pi loads configured
@@ -2905,7 +2920,13 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ok: true, output: installOutput };
   });
   ipcMain.handle("plugins:removePackage", async (_e, source: string) => {
-    const res = await runPiCli(["remove", source]);
+    let res;
+    try {
+      res = await runPiCli(["remove", source], { transferLabel: "移除扩展包 " + nameOf(source) });
+    } catch (e) {
+      if (e instanceof TransferCancelledError) return { ok: false, cancelled: true, output: "已取消" };
+      throw e;
+    }
     removePackageEntry(source); // ensure it is gone from settings regardless of CLI result
     dropWarmBridge();
     ensureWarmBridge();
@@ -2946,7 +2967,13 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // checks installed vs latest internally and only touches outdated packages.
   ipcMain.handle("plugins:updatePackages", async (_e, source?: string) => {
     const args = source ? ["update", source] : ["update", "--extensions"];
-    const res = await runPiCli(args);
+    let res;
+    try {
+      res = await runPiCli(args, { transferLabel: source ? "更新扩展包 " + nameOf(source) : "更新全部扩展包" });
+    } catch (e) {
+      if (e instanceof TransferCancelledError) return { ok: false, cancelled: true, output: "已取消" };
+      throw e;
+    }
     if (res.code === 0) {
       dropWarmBridge();
       ensureWarmBridge();
@@ -3089,11 +3116,19 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         from: result.from ?? null,
         to: result.to ?? null,
         output: result.message,
+        // Cancelled download surfaces as a neutral toast, not an error.
+        ...(!result.ok && /已取消/.test(result.message) ? { cancelled: true } : {}),
       };
     }
 
     // System-installed pi (npm/pnpm global): it can self-update.
-    const res = await runPiCli(["update"]);
+    let res;
+    try {
+      res = await runPiCli(["update"], { transferLabel: "更新 Pi CLI（系统安装）" });
+    } catch (e) {
+      if (e instanceof TransferCancelledError) return { ok: false, managed: false, cancelled: true, output: "已取消" };
+      throw e;
+    }
     resetPiRuntime(); // pick up the new version on next thread open
     return { ok: res.code === 0, managed: false, kind, code: res.code, output: (res.stdout + res.stderr).trim() };
   });

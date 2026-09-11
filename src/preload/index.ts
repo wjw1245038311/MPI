@@ -7,6 +7,7 @@ import type {
   NpmPackage,
   PermissionLevel,
   SkillHubSkill,
+  TransferInfo,
   TodoItem,
   TrashEntry,
 } from "../renderer/src/lib/types";
@@ -104,6 +105,12 @@ const api = {
         hasToken?: boolean;
       }>,
     editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => ipcRenderer.invoke("app:editAction", action),
+  },
+  transfers: {
+    /** Snapshot of in-flight transfers (late-subscriber catch-up). */
+    getSnapshot: (): Promise<TransferInfo[]> => ipcRenderer.invoke("transfers:snapshot"),
+    on: (cb: (list: TransferInfo[]) => void) => on("pi:transfers", cb),
+    cancel: (id: string): Promise<boolean> => ipcRenderer.invoke("transfers:cancel", id),
   },
   drafts: {
     getAll: (): Promise<Record<string, ComposerDraft>> => ipcRenderer.invoke("drafts:getAll"),

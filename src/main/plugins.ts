@@ -1,8 +1,9 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { getConfig } from "./config";
+import { beginTransfer, endTransfer, updateTransfer } from "./transfer-monitor";
 import { decideNpmCommand, pathStartsWith } from "./npm-command";
 import { resolvePiRuntime } from "./pi-bridge";
 import { bundledNpmCliPath, migrateBundledNpm, runtimeBaseDir } from "./runtime-package";
@@ -72,7 +73,7 @@ function kindOf(source: string): "npm" | "git" | "local" {
   return "local";
 }
 
-function nameOf(source: string): string {
+export function nameOf(source: string): string {
   let s = source.replace(/^(npm|git):/, "");
   s = s.replace(/^(https?|ssh|git):\/\//, "");
   s = s.split("@").slice(0, s.startsWith("@") ? 2 : 1).join("@") || s;
@@ -158,8 +159,42 @@ export async function ensureNpmCommand(rt: { node: string; cli: string }): Promi
   }
 }
 
-/** Run a pi CLI command (install/remove/update/list) and capture its output. */
-export function runPiCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+/** Thrown when a monitored run is cancelled from the long-task monitor. */
+export class TransferCancelledError extends Error {}
+
+/** Kill a spawned process and its children (npm spawns node grandchildren). */
+function killProcessTree(proc: ChildProcess): void {
+  if (!proc.pid) return;
+  try {
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    } else {
+      proc.kill("SIGTERM");
+    }
+  } catch {
+    // best effort — the exit handler still settles the promise
+  }
+}
+
+/** Drop npm's `http fetch …` log lines (added via npm_config_loglevel for
+ * progress visibility) so existing output consumers see clean text. */
+function stripHttpFetchLines(text: string): string {
+  if (!text.includes("http fetch")) return text;
+  return text.split(/\r?\n/).filter((l) => !/^http fetch /.test(l.trim())).join("\n");
+}
+
+export interface RunPiCliOptions {
+  /** Register this run in the long-task monitor under this label (Chinese).
+   * Enables per-fetch npm logging and a cancel button. */
+  transferLabel?: string;
+}
+
+/** Run a pi CLI command (install/remove/update/list) and capture its output.
+ * With `transferLabel`, the run is tracked in the global long-task monitor:
+ * the last output line streams to the UI as detail, npm logs every registry
+ * fetch (so slow installs show which package is being pulled), and cancel
+ * kills the process tree. */
+export function runPiCli(args: string[], opts?: RunPiCliOptions): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise(async (resolve, reject) => {
     let rt: { node: string; cli: string };
     try {
@@ -169,17 +204,61 @@ export function runPiCli(args: string[]): Promise<{ code: number | null; stdout:
       reject(e);
       return;
     }
-    const proc = spawn(rt.node, [rt.cli, ...args], { cwd: getAgentDir(), env: { ...process.env }, windowsHide: true });
+
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (opts?.transferLabel) env.npm_config_loglevel = "http";
+
+    let transferId: string | null = null;
+    let cancelled = false;
+    // Bounded tail of combined output for the monitor's detail line.
+    let tail = "";
+    const feedTail = (chunkText: string): void => {
+      tail += chunkText;
+      if (tail.length > 512) tail = tail.slice(-512);
+    };
+    const lastLineOf = (): string | undefined => {
+      const lines = tail.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      return lines.length ? lines[lines.length - 1].slice(0, 200) : undefined;
+    };
+
+    const proc = spawn(rt.node, [rt.cli, ...args], { cwd: getAgentDir(), env, windowsHide: true });
+    if (opts?.transferLabel) {
+      transferId = beginTransfer({
+        kind: "download",
+        label: opts.transferLabel,
+        cancellable: true,
+        onCancel: () => {
+          cancelled = true;
+          killProcessTree(proc);
+        },
+      });
+    }
+
     let stdout = "";
     let stderr = "";
+    const onChunk = (d: Buffer): string => {
+      const text = d.toString("utf8");
+      feedTail(text);
+      if (transferId) updateTransfer(transferId, { detail: lastLineOf() });
+      return text;
+    };
     proc.stdout.on("data", (d: Buffer) => {
-      stdout += d.toString("utf8");
+      stdout += onChunk(d);
     });
     proc.stderr.on("data", (d: Buffer) => {
-      stderr += d.toString("utf8");
+      stderr += onChunk(d);
     });
-    proc.on("error", reject);
-    proc.on("exit", (code) => resolve({ code, stdout, stderr }));
+
+    const finish = (fn: () => void): void => {
+      if (transferId) endTransfer(transferId);
+      fn();
+    };
+    proc.on("error", (e) => finish(() => reject(e)));
+    proc.on("exit", (code, signal) => {
+      if (cancelled) return finish(() => reject(new TransferCancelledError()));
+      void signal;
+      finish(() => resolve({ code, stdout: stripHttpFetchLines(stdout), stderr: stripHttpFetchLines(stderr) }));
+    });
   });
 }
 

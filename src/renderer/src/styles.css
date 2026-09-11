@@ -4338,6 +4338,147 @@ textarea.modal-input {
   z-index: 200;
   -webkit-app-region: no-drag;
 }
+
+/* ---------- long task monitor (ring button + popover, in the composer) --
+ * A 30px ring (same pattern as the context-usage ring, mounted right next to
+ * it in cb-right) that only appears while an operation has run longer than
+ * 10s. Clicking opens a popover with live progress; nothing renders when no
+ * long task is active.
+ */
+.ltm-wrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.ltm-wrap > .ctx-ring-btn {
+  position: relative; /* anchor for the count badge */
+}
+.ltm-badge {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+/* Indeterminate ring arc (no byte accounting, e.g. agent bash commands). */
+.ctx-ring.spin .fill {
+  stroke-dasharray: 12 35.1;
+  animation: ltm-spin 0.9s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes ltm-spin {
+  from {
+    transform: rotate(-90deg);
+  }
+  to {
+    transform: rotate(270deg);
+  }
+}
+.ltm-pop {
+  position: absolute;
+  right: 0;
+  bottom: 38px;
+  width: 360px;
+  max-height: min(52vh, 440px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  padding: 12px 14px;
+  z-index: 70;
+  animation: pill-in 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ltm-pop-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ltm-pop-count {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.ltm-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 10px;
+}
+.ltm-pop .ltm-card + .ltm-card {
+  margin-top: 8px;
+}
+.ltm-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+.ltm-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+.ltm-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ltm-elapsed {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.ltm-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  flex: none;
+}
+.ltm-card .upd-bar {
+  margin-bottom: 0;
+}
+.ltm-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.ltm-tail {
+  margin: 7px 0 0;
+  padding: 7px 9px;
+  max-height: 84px;
+  overflow: hidden;
+  background: var(--code-bg);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 .toast {
   background: #2b2d28;
   color: #fff;

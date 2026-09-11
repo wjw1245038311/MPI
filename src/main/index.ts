@@ -10,6 +10,7 @@ import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
+import { startDevReleaseProgressTail } from "./dev-release-progress";
 import { stopAutomations, stopScheduler } from "./automation";
 import { stopMessaging } from "./messaging/service";
 import { stopWeChatMessaging } from "./messaging/wechat-service";
@@ -265,6 +266,9 @@ if (!gotLock) {
     // them now). Best effort — leftovers simply wait for the next launch.
     cleanupOldRuntimes();
     registerIpc(getWin);
+    // Dev only: tail the release pipeline's JSONL progress file (the CLI runs
+    // outside this app) so the long-task monitor shows live upload bytes/speed.
+    if (IS_DEV_BUILD) startDevReleaseProgressTail();
     createWindow();
     createTray();
     app.on("activate", () => {

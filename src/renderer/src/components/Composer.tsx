@@ -6,6 +6,7 @@ import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage } from "../lib/types";
 import { MPI_FILE_MIME } from "../lib/file-drag";
 import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh } from "./icons";
+import { LongTaskMonitor } from "./LongTaskMonitor";
 
 let _pid = 0;
 const pid = () => `p${_pid++}`;
@@ -974,6 +975,9 @@ export function Composer({ threadId }: { threadId: string }) {
           </div>
 
           <div className="cb-right">
+            {/* Long-running task ring: appears next to the context ring only
+                while an operation has run >10s; click for live progress. */}
+            <LongTaskMonitor />
             <div className="pill ctx-ring-wrap" ref={ctxRef}>
               <button
                 type="button"

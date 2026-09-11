@@ -1,5 +1,6 @@
 import { app } from "electron";
 import { autoUpdater, type ProgressInfo, type UpdateCheckResult, type UpdateInfo } from "electron-updater";
+import { beginTransfer, endTransfer, updateTransfer } from "./transfer-monitor";
 
 const REPOSITORY = "wjw1245038311/MPI";
 const RELEASES_LATEST_URL = "https://github.com/" + REPOSITORY + "/releases/latest";
@@ -50,6 +51,8 @@ let lastUpdaterError: string | null = null;
 let checkPromise: Promise<UpdateCheckResult | null> | null = null;
 let downloadPromise: Promise<Array<string>> | null = null;
 let progressSink: ((progress: AppUpdateProgress) => void) | null = null;
+/** Active long-task-monitor entry for the in-flight app update download. */
+let appDownloadTransferId: string | null = null;
 
 function normalizeVersion(raw: string): string {
   const value = String(raw || "").trim().replace(/^v/i, "");
@@ -182,11 +185,20 @@ function configureUpdater(): void {
       message: "正在下载 MPI v" + normalizeVersion(latestUpdateInfo?.version || "") + "…",
       ...(pct === undefined ? {} : { pct }),
     });
+    if (appDownloadTransferId) {
+      updateTransfer(appDownloadTransferId, {
+        doneBytes: info.transferred,
+        totalBytes: info.total,
+        speedBps: Number.isFinite(info.bytesPerSecond) ? info.bytesPerSecond : undefined,
+      });
+    }
   });
 
   autoUpdater.on("update-downloaded", (info) => {
     latestUpdateInfo = info;
     downloadedVersion = normalizeVersion(info.version);
+    if (appDownloadTransferId) endTransfer(appDownloadTransferId);
+    appDownloadTransferId = null;
     emitProgress({
       stage: "ready",
       message: "MPI v" + downloadedVersion + " 已下载，可以安装并重启",
@@ -196,6 +208,8 @@ function configureUpdater(): void {
 
   autoUpdater.on("error", (error, message) => {
     lastUpdaterError = friendlyUpdaterError(message || error?.message || String(error));
+    if (appDownloadTransferId) endTransfer(appDownloadTransferId);
+    appDownloadTransferId = null;
     emitProgress({ stage: "error", message: lastUpdaterError });
   });
 }
@@ -270,12 +284,19 @@ export async function downloadAppUpdate(onProgress?: (progress: AppUpdateProgres
     }
 
     emitProgress({ stage: "downloading", message: "正在下载 MPI v" + version + "…", pct: 0 });
+    // electron-updater has no cancel API, so the monitor shows progress only.
+    appDownloadTransferId = beginTransfer({ kind: "download", label: "正在下载 MPI v" + version + "…", cancellable: false });
     if (!downloadPromise) {
       downloadPromise = autoUpdater.downloadUpdate().finally(() => {
         downloadPromise = null;
       });
     }
-    await downloadPromise;
+    try {
+      await downloadPromise;
+    } finally {
+      if (appDownloadTransferId) endTransfer(appDownloadTransferId);
+      appDownloadTransferId = null;
+    }
 
     if (downloadedVersion !== version) {
       throw new Error("更新下载完成但没有收到 update-downloaded 事件");

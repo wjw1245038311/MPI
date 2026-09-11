@@ -257,6 +257,21 @@ export interface ViewMessage {
   errorMessage?: string;
 }
 
+/** In-flight transfer reported by the main process for the long-task monitor
+ * (bottom-right floating card). Labels are Chinese; translated in renderer. */
+export interface TransferInfo {
+  id: string;
+  kind: "download" | "upload";
+  label: string;
+  startedAt: number;
+  totalBytes?: number;
+  doneBytes?: number;
+  speedBps?: number;
+  /** Last meaningful output line, for diagnostics. */
+  detail?: string;
+  cancellable: boolean;
+}
+
 export interface ToolRun {
   id: string;
   name: string;
