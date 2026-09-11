@@ -25,6 +25,12 @@ resources/runtime-manifest.json
 .tmp-*/
 mpi-gates/
 
+# Internal working docs (local only)
+SUBAGENT-PLAN.md
+improvement-suggestions.md
+review-todo-*.md
+MPI-USER-MANUAL.md
+
 # Secrets and logs
 .env
 .env.*
