@@ -25,6 +25,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：① 设置 → 关于 MPI（或帮助 → 关于 MPI）点「查看更新日志」→ 弹出标题为「MPI 更新日志」的独立窗口，内容完整可滚动、右上角有当前版本徽标。② 窗口可正常拖动/缩放/关闭，关闭不影响设置页；不再出现卡住或闪动。③ 再次点击重新打开（或聚焦）同一窗口。
 
+5. **dev 一键发版不再要求工作区干净**：原来有未提交改动时「发布新版本」按钮置灰、必须先手动 commit/stash 才能发版，太麻烦。现在按钮随时可点：预检阶段自动 git stash -u 暂存全部未提交改动（含 untracked），构建/发布仍只基于已提交代码；流水线结束（成功/失败/取消）后自动 pop 恢复。若 WIP 恰好与本次 bump 改了同一区域导致恢复冲突，暂存条目保留并在日志中提示——在新会话里 git stash list / git stash pop 处理即可。
+
+   验证方式：① 工作区有未提交文件时点「发布新版本」→ 不再置灰；日志 [1/5] 列出文件后显示「已自动暂存 N 个未提交文件」。② 发版完成后 git status 恢复原样（WIP 文件全部回来）。③ 中途取消也能自动恢复。④ token 缺失时点击会在预检阶段报错，且不会留下 stash。
+
 ## v0.6.3（2026-09-11）
 
 1. **设置「关于 MPI」新增 dev 一键发版面板（仅开发模式可见）**：一键完成 bump patch → changelog Unreleased 改名 → commit → push origin → npm run dist → publish-release.mjs（tag/push/GitHub Release/附件上传），全程日志逐行流式显示在面板内、可随时取消；预检要求工作区干净且 GitHub token 就绪（env GITHUB_TOKEN 或仓库根 .gh-token，token 只在 main 进程读取、不传 renderer），有未提交改动会中止而不会自动提交别人的 WIP。

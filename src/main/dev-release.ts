@@ -7,8 +7,11 @@
  * 里该面板不渲染、IPC 也会拒绝。
  *
  * 安全边界：
- *   - 预检要求工作区干净（有未提交改动直接中止并列出文件），绝不自动
- *     commit/stash 别人的 WIP——发版只包含已提交内容 + 本次 bump 提交；
+ *   - 工作区不干净不再阻断发布：预检时自动 git stash -u 暂存未提交改动（含
+ *     untracked），构建/发布仍只基于已提交代码，流水线结束后 finally 里自动
+ *     pop 恢复；若 pop 冲突（WIP 恰好改了 package.json/changelog.md 同区域等），
+ *     暂存条目保留、日志提示在新会话中 git stash list/pop 处理。绝不自动 commit
+ *     别人的 WIP——发版只包含已提交内容 + 本次 bump 提交；
  *   - GitHub token 只在 main 进程读取（env GITHUB_TOKEN 或仓库根 .gh-token，
  *     后者已 gitignore），任何情况下不传给 renderer；
  *   - 构建/发布子进程可整体取消（Windows taskkill /T 杀进程树）。
@@ -76,6 +79,17 @@ function git(args: string): string {
     const msg = e instanceof Error ? String(e.message).split("\n").slice(0, 4).join(" ") : String(e);
     throw new Error(`git ${args} 失败：${msg}`);
   }
+}
+
+/** spawnSync + 参数数组（不走 shell）：stash message / commit message 含特殊字符也安全。 */
+function gitOut(args: string[]): string {
+  const r = spawnSync("git", args, { cwd: repoRoot(), encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git ${args[0]} 失败：${(r.stderr || r.error?.message || "").trim().split("\n")[0]}`);
+  return (r.stdout || "").trim();
+}
+
+function gitArgs(args: string[]): void {
+  gitOut(args);
 }
 
 function hasToken(): boolean {
@@ -230,18 +244,16 @@ export async function startDevRelease(onLog: LogFn): Promise<DevReleaseResult> {
   };
   activeLog = log;
   let prevHead = "";
+  // Hoisted so the finally-block restore can reference them (both stay at
+  // their defaults when pre-checks fail before they are assigned).
+  let nextVersion: string | null = null;
+  let stashedCount = 0;
   try {
     log("== MPI dev 一键发版 ==");
 
     // ---- [1/5] 预检 -------------------------------------------------------
     log("[1/5] 预检");
-    const porcelain = git("status --porcelain");
-    if (porcelain) {
-      const files = porcelain.split("\n").map((l) => l.slice(3).trim()).filter(Boolean);
-      for (const f of files) log(`   · ${f}`);
-      throw new Error(`工作区有未提交改动（${files.length} 个文件），请先 commit 或 stash 后再发版`);
-    }
-    log("   ✓ 工作区干净");
+    // Token first: a hard failure here must not leave a stash behind.
     if (!hasToken()) {
       throw new Error("缺少 GitHub token：设置环境变量 GITHUB_TOKEN，或在仓库根目录写入 .gh-token（已 gitignore）");
     }
@@ -251,9 +263,25 @@ export async function startDevRelease(onLog: LogFn): Promise<DevReleaseResult> {
     log(`   ✓ github remote: ${remoteUrl}`);
     const pkg = JSON.parse(readFileSync(join(repoRoot(), "package.json"), "utf8"));
     const currentVersion: string = pkg.version;
-    const nextVersion = bumpPatch(currentVersion);
+    nextVersion = bumpPatch(currentVersion);
     if (!nextVersion) throw new Error(`package.json 版本号不是 x.y.z：${currentVersion}`);
     log(`   ✓ 版本 ${currentVersion} → ${nextVersion}（patch +1）`);
+
+    // Dirty tree no longer blocks the release: stash uncommitted changes (incl.
+    // untracked) so the build only contains committed code; finally restores
+    // them. Stash is the LAST pre-check step — every hard failure above must
+    // not leave a stash behind.
+    const porcelain = git("status --porcelain");
+    if (porcelain) {
+      const files = porcelain.split("\n").map((l) => l.slice(3).trim()).filter(Boolean);
+      for (const f of files) log(`   · ${f}`);
+      const stashMsg = `MPI dev-release ${new Date().toISOString()}`;
+      gitArgs(["stash", "push", "-u", "-m", stashMsg]);
+      stashedCount = files.length;
+      log(`   ✓ 已自动暂存 ${files.length} 个未提交文件（git stash -u，发版结束后自动恢复）`);
+    } else {
+      log("   ✓ 工作区干净");
+    }
 
     // ---- [2/5] bump + changelog -------------------------------------------
     assertNotCancelled();
@@ -271,14 +299,9 @@ export async function startDevRelease(onLog: LogFn): Promise<DevReleaseResult> {
     assertNotCancelled();
     log("[3/5] 提交版本");
     prevHead = git("rev-parse HEAD");
-    // spawnSync + 参数数组（不走 shell）：commit message / 分支名含特殊字符也安全。
-    const runGit = (args: string[]) => {
-      const r = spawnSync("git", args, { cwd: repoRoot(), encoding: "utf8" });
-      if (r.status !== 0) throw new Error(`git ${args[0]} 失败：${(r.stderr || r.error?.message || "").trim().split("\n")[0]}`);
-    };
-    runGit(["add", "package.json", "changelog.md"]);
+    gitArgs(["add", "package.json", "changelog.md"]);
     const msg = `release: v${nextVersion}${summary ? `——${summary}` : ""}`;
-    runGit(["commit", "-m", msg]);
+    gitArgs(["commit", "-m", msg]);
     log(`   ✓ 已提交 ${git("rev-parse --short HEAD")}：${msg}`);
 
     // ---- [4/5] push origin + 构建安装包 ------------------------------------
@@ -286,7 +309,7 @@ export async function startDevRelease(onLog: LogFn): Promise<DevReleaseResult> {
     log("[4/5] 推送 origin 并构建安装包（npm run dist，约数分钟）");
     const branch = git("rev-parse --abbrev-ref HEAD");
     try {
-      runGit(["push", "origin", branch]);
+      gitArgs(["push", "origin", branch]);
       log(`   ✓ 已推送 origin/${branch}`);
     } catch (e) {
       const m = e instanceof Error ? e.message.split("\n")[0] : String(e);
@@ -329,6 +352,25 @@ export async function startDevRelease(onLog: LogFn): Promise<DevReleaseResult> {
     log(`✗ ${message}`);
     return { ok: false, error: message };
   } finally {
+    // Auto-restore the stashed WIP (if any) before clearing state, so its log
+    // lines land in the buffer / standalone window too.
+    if (stashedCount > 0 && nextVersion) {
+      try {
+        const headSubject = gitOut(["log", "-1", "--format=%s"]);
+        if (!headSubject.startsWith(`release: v${nextVersion}`)) {
+          // Cancelled/failed before the release commit landed — discard the
+          // pipeline's own uncommitted bump writes so pop applies cleanly.
+          execSync("git checkout -- package.json changelog.md", { cwd: repoRoot(), stdio: "ignore" });
+        }
+        gitArgs(["stash", "pop"]);
+        log(`   ✓ 已自动恢复暂存的未提交改动（${stashedCount} 个文件）`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log(
+          `⚠ 自动恢复暂存失败：${msg.split("\n")[0].slice(0, 160)}\n   暂存条目仍保留，请在新会话中处理（git stash list / git stash pop）`,
+        );
+      }
+    }
     running = false;
     cancelRequested = false;
     activeLog = null;

@@ -52,7 +52,6 @@ export function DevReleasePanel() {
   if (!status?.isDev) return null;
 
   const running = status.running;
-  const blocked = !running && (status.dirtyFiles.length > 0 || !status.hasToken);
 
   const start = async () => {
     setLogLines([]);
@@ -90,7 +89,8 @@ export function DevReleasePanel() {
       <div className="set-card-title">dev 一键发版</div>
       <div className="set-hint" style={{ marginBottom: 12 }}>
         仅开发模式可用：bump patch → changelog Unreleased 改名 → commit → push origin → npm run dist →
-        发布到 GitHub Release。要求工作区干净（有未提交改动会中止，不会自动提交别人的 WIP）。
+        发布到 GitHub Release。工作区有未提交改动时自动 git stash -u 暂存（构建仍只含已提交代码），
+        发版结束后自动恢复；若恢复冲突，暂存条目保留，可在新会话中用 git stash list/pop 处理。
       </div>
       <div className="set-diag-grid" style={{ marginBottom: 12 }}>
         <div className="set-diag-k">版本</div>
@@ -114,7 +114,7 @@ export function DevReleasePanel() {
         </pre>
       )}
       <div className="set-diag-btns">
-        <button className="set-btn primary" onClick={start} disabled={blocked || running}>
+        <button className="set-btn primary" onClick={start} disabled={running} title={!status.hasToken ? "缺少 GitHub token（env GITHUB_TOKEN 或仓库根 .gh-token），点击会在预检阶段报错" : undefined}>
           {running ? "发版进行中…" : `发布新版本（v${status.nextVersion ?? "?"}）`}
         </button>
         {running && (
