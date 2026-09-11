@@ -65,6 +65,12 @@ import {
 } from "./models-service";
 import { autoResolveContextWindows, resolveModelContext } from "./model-context";
 import { DEFAULT_POLICY, ModelAutopilot } from "./model-autopilot";
+import {
+  autoAnswerModelSelect,
+  createWebSearchFlow,
+  isLikelyModelSelect,
+  type WebSearchFlow,
+} from "./web-search-config";
 import { classifyMissingTool } from "./npm-command";
 import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtimeKind } from "./pi-bridge";
 import { reorderPinned } from "./pinned-order";
@@ -162,6 +168,25 @@ interface BridgeHandle {
 const bridges = new Map<string, BridgeHandle>();
 let systemNotifications: SystemNotificationCenter | null = null;
 let activeRemoteHost: RemoteHost | null = null;
+
+// "扩展自动选模" (Settings → General): keeps pi-web-access's web-search.json in
+// sync with each conversation's current model and auto-answers extension
+// model-picker dialogs. Lazy so it never depends on config-dir init order.
+let webSearchFlowInstance: WebSearchFlow | null = null;
+function webSearchFlow(): WebSearchFlow {
+  if (!webSearchFlowInstance) webSearchFlowInstance = createWebSearchFlow(getConfigDir());
+  return webSearchFlowInstance;
+}
+
+/** Re-read the thread's live model and push it into web-search.json (no-op
+ * when the feature is switched off). Fire-and-forget: never blocks a turn. */
+function refreshWebSearchFlow(bridge: PiBridge): void {
+  if (getConfig().extAutoPickModel === false) return;
+  void bridge
+    .getState()
+    .then((s: any) => webSearchFlow().sync(s?.model ?? null))
+    .catch(() => {});
+}
 
 // Opening a folder makes it available for the current workspace session, but
 // it must not silently become a persisted pinned project. Keep empty folders
@@ -405,6 +430,9 @@ function createHandle(
       if (event?.type === "agent_start") {
         turnStarted = true;
         completedReply = null;
+        // pi-web-access re-reads web-search.json on every search, so syncing at
+        // turn start covers initial model, manual switches and auto failover.
+        refreshWebSearchFlow(handle.bridge);
       }
       if (event?.type === "message_start" && event.message?.role === "user") {
         turnStarted = true;
@@ -437,6 +465,17 @@ function createHandle(
       }
     },
     onExtUi: (r) => {
+      // "扩展自动选模": a dialog whose options are all provider/model strings is
+      // answered with this thread's current model instead of popping up. No
+      // match (or feature off) falls through to the normal UI path below.
+      if (getConfig().extAutoPickModel !== false && isLikelyModelSelect(r)) {
+        void autoAnswerModelSelect(handle.bridge, r as any)
+          .then((answered) => {
+            if (!answered) send("pi:extui", { threadId: id, request: r });
+          })
+          .catch(() => send("pi:extui", { threadId: id, request: r }));
+        return;
+      }
       send("pi:extui", { threadId: id, request: r });
       if (isSandboxApprovalRequest(r)) {
         systemNotifications?.notifySandboxApproval(
@@ -1766,6 +1805,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("app:setConfig", (_e, patch) => {
     const prevCli = getConfig().piCliPath;
     const prevProfile = (getConfig().userProfile || "").trim();
+    const prevExtAutoPick = getConfig().extAutoPickModel !== false;
     // P1-12: keep the live autopilot in sync when pool/policy change.
     if (patch && typeof patch === "object" && "autoModels" in patch) {
       const am = (patch as any).autoModels;
@@ -1788,6 +1828,17 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     } else if (((next.userProfile || "").trim() || "") !== prevProfile) {
       dropWarmBridge(); // standby was booted with the old profile text
       ensureWarmBridge();
+    }
+    // "扩展自动选模" toggle: off → restore web-search.json to its pre-MPI values;
+    // on → re-sync immediately from any live thread.
+    if (prevExtAutoPick && next.extAutoPickModel === false) {
+      try {
+        webSearchFlow().restore();
+      } catch (err) {
+        console.error("[web-search] restore failed:", err);
+      }
+    } else if (!prevExtAutoPick && next.extAutoPickModel !== false) {
+      for (const h of bridges.values()) refreshWebSearchFlow(h.bridge);
     }
     return next;
   });

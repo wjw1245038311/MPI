@@ -111,6 +111,13 @@ export interface AppConfig {
    * session's system prompt via pi's --append-system-prompt.
    * Absent/empty = no injection. MPI-only: terminal pi is not affected. */
   userProfile?: string;
+  /** "扩展自动选模" (Settings → General). When an extension needs to pick a
+   * model (e.g. the pi-web-access web-search summary) it uses this
+   * conversation's current model without popping up, and web searches skip
+   * the browser curation window entirely. Implemented by managing
+   * workflow/summaryModel in ~/.pi/web-search.json (shared with terminal pi).
+   * Absent = enabled — the per-search popup is exactly what this removes. */
+  extAutoPickModel?: boolean;
   /** cwd of the most recently opened thread; seeds the warm spare's project. */
   lastThreadCwd?: string;
   /** User-defined scheduled automation tasks. */
@@ -273,6 +280,8 @@ export function loadConfig(userDataDir: string): AppConfig {
             : undefined,
         pendingDataMigration: sanitizePendingDataMigration(parsed.pendingDataMigration),
         userProfile: typeof parsed.userProfile === "string" ? parsed.userProfile : undefined,
+        extAutoPickModel:
+          typeof parsed.extAutoPickModel === "boolean" ? parsed.extAutoPickModel : undefined,
         defaultPermission:
           typeof parsed.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(parsed.defaultPermission)
             ? (parsed.defaultPermission as PermissionLevel)
@@ -460,6 +469,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (typeof p.userAvatar === "string" && p.userAvatar.startsWith("data:image/")) out.userAvatar = p.userAvatar;
   if (typeof p.agentAvatar === "string" && p.agentAvatar.startsWith("data:image/")) out.agentAvatar = p.agentAvatar;
   if (typeof p.userProfile === "string") out.userProfile = p.userProfile;
+  if (typeof p.extAutoPickModel === "boolean") out.extAutoPickModel = p.extAutoPickModel;
   if (typeof p.lastThreadCwd === "string" && p.lastThreadCwd) out.lastThreadCwd = p.lastThreadCwd;
 
   if (Array.isArray(p.automationTasks)) {

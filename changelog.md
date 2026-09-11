@@ -4,6 +4,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **设置新增「扩展选模」开关（默认开）——扩展要模型不再弹窗**：扩展需要选择模型时，MPI 自动使用当前会话的模型、不再弹出询问。对 pi-web-access 联网搜索的具体效果：① 每次搜索不再打开浏览器整理窗口（`workflow=auto-summary`），直接返回 AI 生成的摘要；② 摘要模型实时跟随当前会话的模型（每轮开始同步，手动切模 / Auto 模式切换后同样生效）；③ 摘要生成超时从默认 30s 放宽到 5 分钟，本地/慢速模型不会退化成确定性兜底摘要。实现：新增 `src/main/web-search-config.ts` 管理 `~/.pi/web-search.json`（与终端 pi 共享）的 workflow / summaryModel / summaryGenerationDeadlineMs 三个键——读改写保留 API Key 等其它全部键；首次触碰把原值备份到 `<userData>/web-search-orig.json`，关闭开关时精确还原（MPI 新建的文件会删掉、用户后加的键保留）；文件损坏绝不覆盖。另加通用拦截：任何扩展的 `ui.select` 选项若全是 provider/model 形式，自动用当前会话模型应答（定时任务无人值守同样生效），后续其它插件弹窗选模也按此处理。新增配置项 `extAutoPickModel`（缺省=开）+ 设置→通用「扩展选模」行；测试 `test:websearch`。注意：该文件与终端 pi 共享，开启后终端里的联网搜索也会默认走 auto-summary（单次调用仍可传 workflow 覆盖）。
+
+   验证方式：① 设置 → 通用 → 「扩展选模」行存在且默认勾选。② 会话里让智能体联网搜索（如“搜一下 xxx”）→ 不再弹出浏览器窗口，工具结果直接带 AI 摘要。③ 用文本编辑器打开 `~/.pi/web-search.json`：workflow="auto-summary"、summaryModel=当前会话模型（provider/model-id）、你原有的其它键原样保留。④ 把会话切到另一个模型再搜一次 → summaryModel 随之更新。⑤ 取消勾选「扩展选模」保存 → web-search.json 恢复为 MPI 触碰前的状态（原本没有该文件则被删除）。
+
 ## v0.6.1（2026-09-11）
 
 1. **首个发布在 MPI 自有 GitHub 仓库的正式版本**：发布到 `wjw1245038311/MPI` 的 Releases——应用内「帮助 → 关于 MPI」→「检查最新版本」从此真正可用：从本仓库检查更新，后续大版本都发在这里，可在应用内直接下载安装包。（自更新功能 v0.6.0 已启用并指向本仓库，但当时 GitHub 上还没有任何 release；本版本补齐。）

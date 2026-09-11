@@ -1760,6 +1760,15 @@ export function Settings() {
     }
   };
 
+  const changeExtAutoPickModel = async (extAutoPickModel: boolean) => {
+    try {
+      const next = await window.pi.app.setConfig({ extAutoPickModel });
+      useStore.setState({ config: next });
+    } catch (e: any) {
+      pushToast("error", "保存扩展选模设置失败：" + (e?.message || e));
+    }
+  };
+
   const changeDiffViewMode = async (diffViewMode: "unified" | "blocks") => {
     const next = await window.pi.app.setConfig({ diffViewMode });
     useStore.setState({ config: next });
@@ -2086,6 +2095,20 @@ export function Settings() {
                   <label className="theme-sys-check">
                     <input type="checkbox" checked={config?.trashEnabled !== false} onChange={(e) => void changeTrashEnabled(e.target.checked)} />
                     <span>{language === "zh" ? "删除的会话先移入回收站（可恢复）" : "Deleted sessions go to the trash first (restorable)"}</span>
+                  </label>
+                </Field>
+
+                <Field
+                  label={language === "zh" ? "扩展选模" : "Extension model pick"}
+                  hint={
+                    language === "zh"
+                      ? "扩展需要选择模型时（如 pi-web-access 联网搜索的摘要）不再弹窗询问，直接使用当前会话的模型；联网搜索也不再弹出浏览器整理窗口。设置写入 ~/.pi/web-search.json（与终端 pi 共享），关闭后恢复每次询问。"
+                      : "When an extension needs to pick a model (e.g. the pi-web-access web search summary) it uses this conversation's current model directly instead of popping up, and web searches skip the browser curation window. Written to ~/.pi/web-search.json (shared with terminal pi); turning off restores the per-use prompt."
+                  }
+                >
+                  <label className="theme-sys-check">
+                    <input type="checkbox" checked={config?.extAutoPickModel !== false} onChange={(e) => void changeExtAutoPickModel(e.target.checked)} />
+                    <span>{language === "zh" ? "扩展自动使用当前会话的模型（不弹窗）" : "Extensions auto-use this conversation's model (no popups)"}</span>
                   </label>
                 </Field>
 

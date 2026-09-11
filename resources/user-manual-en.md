@@ -25,7 +25,7 @@ This manual covers all major features of MPI, organized as "interface → config
 15. [Archive and Trash](#15-archive-and-trash)
 16. [Settings Reference](#16-settings-reference)
 17. [Android Phone Remote Control](#17-android-phone-remote-control)
-18. [Messaging Channels (Feishu)](#18-messaging-channels-feishu)
+18. [Messaging Channels (Feishu / WeChat)](#18-messaging-channels-feishu--wechat)
 19. [Keyboard Shortcuts](#19-keyboard-shortcuts)
 20. [Data and Configuration Locations](#20-data-and-configuration-locations)
 21. [FAQ](#21-faq)
@@ -484,6 +484,14 @@ MCP (Model Context Protocol) servers provide pi with external tools and data sou
 
 > The MCP module depends on the `pi-mcp-market` extension; when it's missing you see an unavailable card + one-click install button. Actually connecting to and running servers also requires `pi-mcp-adapter`.
 
+### 12.4 Extension model pick (no popups)
+
+Some extensions need a model and pop up to ask which one to use (the classic case: pi-web-access opens a browser curation window on every web search and asks which model should write the summary). With **Settings → General → "Extension model pick"** (on by default):
+
+- **No popup**: MPI answers an extension's model-selection request automatically, using this conversation's current model. Unattended scheduled runs behave the same way.
+- **Web searches skip the browser window**: pi-web-access switches to the `auto-summary` workflow — a search returns an AI summary directly instead of opening the curation page; a single call can still pass `workflow: "summary-review"` for interactive curation.
+- **Summary follows the conversation model**: at the start of each turn MPI writes the current model into `~/.pi/web-search.json` (shared with terminal pi), so switching models takes effect immediately. The summary deadline is raised to 5 minutes so slow local models still produce a full summary. Before its first edit MPI backs up the file's original values and restores them exactly when you turn the switch off.
+
 ---
 
 ## 13. Pi TUI Terminal Mode
@@ -534,6 +542,7 @@ Rules: archiving is a reversible tidying operation and doesn't touch the files t
 | Avatars | Upload custom chat avatars for "User" and "MPI agent"; images are compressed locally to ≤192px before saving, never uploaded anywhere. Can "Restore defaults" (Nobita / Doraemon). |
 | Launch at startup | Start MPI automatically when logging in. |
 | Trash | Deleted sessions go to the trash first (recoverable); turning off makes deletes immediately permanent. |
+| Extension model pick | When an extension needs a model, MPI uses this conversation's current model automatically instead of popping up; web searches skip the browser curation window (see [12.4](#124-extension-model-pick-no-popups)). On by default; turning it off restores the per-use prompt and `~/.pi/web-search.json`. |
 | Theme mode | A "Follow system" checkbox + light/dark preview cards; click to switch instantly. |
 | Accent color | 7 options: Follow theme (default), White, Light gray, Dark gray, Green, Red, Blue; the send button and selection highlights follow it. |
 | Diff display | Two modes for edit-tool diffs, "Unified view / Split before-after", unified by default. |

@@ -463,6 +463,10 @@ export interface AppConfig {
   /** Free-form user profile text appended to every session's system prompt
    * (Settings → User Profile); absent/empty = no injection. */
   userProfile?: string;
+  /** "扩展自动选模" (Settings → General): extensions that need a model use the
+   * current conversation's model without popping up; web searches skip the
+   * browser curation window. Absent = enabled. */
+  extAutoPickModel?: boolean;
   remoteSignalingUrl: string;
   remoteSignalingEnabled: boolean;
   remoteStunUrls: string[];

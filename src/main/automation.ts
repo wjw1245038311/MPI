@@ -1,4 +1,10 @@
 import { getConfig, getConfigDir, reloadConfig, updateConfig, type AutomationTask, type TaskSchedule } from "./config";
+import {
+  autoAnswerModelSelect,
+  createWebSearchFlow,
+  isLikelyModelSelect,
+  type WebSearchFlow,
+} from "./web-search-config";
 import { PiBridge } from "./pi-bridge";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile } from "./permission-gate";
 import { ensureTodoExtension } from "./todo-extension";
@@ -41,6 +47,20 @@ const running = new Set<string>();
 const activeBridges = new Set<PiBridge>();
 const activeBridgesByTask = new Map<string, Set<PiBridge>>();
 let notify: ((p: AutomationNotify) => void) | null = null;
+
+// "扩展自动选模" — same web-search.json sync as interactive threads so an
+// unattended run's web searches also skip the browser popup and summarize with
+// the run's own model. Lazy (config dir must be initialized).
+let automationWebSearchFlow: WebSearchFlow | null = null;
+function refreshAutomationWebSearchFlow(bridge: PiBridge): void {
+  if (getConfig().extAutoPickModel === false) return;
+  if (!automationWebSearchFlow) automationWebSearchFlow = createWebSearchFlow(getConfigDir());
+  const flow = automationWebSearchFlow;
+  void bridge
+    .getState()
+    .then((s: any) => flow.sync(s?.model ?? null))
+    .catch(() => {});
+}
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -226,6 +246,10 @@ async function execute(task: AutomationTask): Promise<void> {
         gateModeFile,
         name: automationSessionName(task.name, getConfig().language),
         onEvent: (e: any) => {
+          if (e?.type === "agent_start") {
+            refreshAutomationWebSearchFlow(bridge!);
+            return;
+          }
           if (e?.type === "message_end" && e.message?.role === "assistant") {
             lastAssistantMessage = {
               stopReason: e.message.stopReason,
@@ -246,12 +270,25 @@ async function execute(task: AutomationTask): Promise<void> {
           });
         },
         onExtUi: (r: any) => {
-          // Unattended runs cannot answer dialogs. Cancel it immediately and
-          // surface a failure after the agent settles instead of reporting a
-          // misleading success.
-          const method = textValue(r?.method) || "extension UI";
-          if (method !== "notify" && !cancelledUiMethod) cancelledUiMethod = method;
-          bridge?.respondExtUi(r.id, { cancelled: true });
+          const cancelUi = (req: any) => {
+            // Unattended runs cannot answer dialogs. Cancel it immediately and
+            // surface a failure after the agent settles instead of reporting a
+            // misleading success.
+            const method = textValue(req?.method) || "extension UI";
+            if (method !== "notify" && !cancelledUiMethod) cancelledUiMethod = method;
+            bridge?.respondExtUi(req.id, { cancelled: true });
+          };
+          // Model-picker dialogs are answered with the run's current model so
+          // web searches don't fail headless; everything else still cancels.
+          if (getConfig().extAutoPickModel !== false && isLikelyModelSelect(r)) {
+            void autoAnswerModelSelect(bridge!, r)
+              .then((answered) => {
+                if (!answered) cancelUi(r);
+              })
+              .catch(() => cancelUi(r));
+            return;
+          }
+          cancelUi(r);
         },
         onExit: (info) => finish(() => reject(new Error(formatProcessExit(info)))),
         onError: (err) => finish(() => reject(err)),
