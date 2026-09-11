@@ -7,7 +7,7 @@
   "author": {
     "name": "MPI"
   },
-  "description": "MPI - personal agent UI forked from Pi Studio (a desktop client for the pi coding agent).",
+  "description": "MPI - a personal Electron desktop client for the pi coding agent.",
   "engines": {
     "node": ">=24.14.0 <25"
   },

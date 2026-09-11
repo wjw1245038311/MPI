@@ -34,7 +34,7 @@
 
 ## 1. 认识 MPI
 
-MPI 是 [Pi coding agent](https://github.com/earendil-works/pi) 的独立桌面客户端。它是 Pi Studio 的个人 fork，和 Pi 维护者没有隶属关系，也没有官方背书。项目、会话、模型配置、扩展、权限控制、定时任务、待办任务和文件预览都整合在同一个桌面工作区里。
+MPI 是 [Pi coding agent](https://github.com/earendil-works/pi) 的独立桌面客户端。项目、会话、模型配置、扩展、权限控制、定时任务、待办任务和文件预览都整合在同一个桌面工作区里。
 
 几个常用概念：
 

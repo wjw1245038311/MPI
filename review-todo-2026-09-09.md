@@ -39,8 +39,8 @@
   - ⚠️ 技术细节：原生 RPC fork 默认 position="before" **只接受用户消息 entryId**（传 agent 回复 id 会抛 Invalid entry ID），所以分支按钮必须挂在用户消息上；旧「从某条回复分叉」的能力由「点下一条提问的分支」或「克隆」覆盖
 
 ### B. 应用自更新整条链路是死代码（~300 行 + 1 个依赖 + UI 区块）
-- `app-updater.ts` 里 `APP_UPDATE_DISABLED = true` 硬编码（个人 fork，避免上游 flowflic/Pi-Studio 发布覆盖本地魔改），于是 electron-updater 集成、`electron-updater` 依赖、IPC ×3（check/download/installAppUpdate）、preload 入口、Settings「MPI 应用更新」整块 UI 全部空转。
-- **附带风险**：package.json `build.publish` 仍指向上游 `flowflic/Pi-Studio` GitHub releases——将来若有人跑 `electron-builder --publish always`，会把 MPI 发布到别人的仓库（当前 dist 流程不带 publish，暂无实际影响）。
+- `app-updater.ts` 里 `APP_UPDATE_DISABLED = true` 硬编码（个人项目，避免上游发布覆盖本地修改），于是 electron-updater 集成、`electron-updater` 依赖、IPC ×3（check/download/installAppUpdate）、preload 入口、Settings「MPI 应用更新」整块 UI 全部空转。
+- **附带风险**：package.json `build.publish` 仍指向上游项目的 GitHub releases——将来若有人跑 `electron-builder --publish always`，会把 MPI 发布到别人的仓库（当前 dist 流程不带 publish，暂无实际影响）。
 - 选项：① 保持现状（想保留"以后接自己的更新源再启用"的余地）；② 彻底移除 app-updater.ts + 依赖 + IPC + UI 区块 + publish 配置，Settings 只留版本号展示；③ 换成指向自己发布源的轻量版本检查。
 
 ### C. i18n DOM 桥接设计：能用但脆弱
@@ -56,7 +56,7 @@
 - 风险：几乎没有（strict 已开，只是多两个检查项）。
 
 ### F. .gitignore 残留 android/* 条目
-- 仓库里没有 android/ 目录（Android companion 是独立项目），这些 ignore 规则是从上游 Pi Studio 带过来的。可删可留，无实际影响。
+- 仓库里没有 android/ 目录（Android companion 是独立项目），这些 ignore 规则是从上游项目带过来的。可删可留，无实际影响。
 
 ## 三、审查过但确认没问题的点（供参考）
 

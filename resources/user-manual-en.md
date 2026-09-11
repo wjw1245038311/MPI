@@ -34,7 +34,7 @@ This manual covers all major features of MPI, organized as "interface → config
 
 ## 1. Getting to Know MPI
 
-MPI is a standalone desktop client for the [Pi coding agent](https://github.com/earendil-works/pi). It's a personal fork of Pi Studio, with no affiliation to and no official endorsement by the Pi maintainers. Projects, sessions, model configuration, extensions, permission control, scheduled tasks, todo tasks and file preview all live in one desktop workspace.
+MPI is a standalone desktop client for the [Pi coding agent](https://github.com/earendil-works/pi). Projects, sessions, model configuration, extensions, permission control, scheduled tasks, todo tasks and file preview all live in one desktop workspace.
 
 A few concepts you'll meet often:
 

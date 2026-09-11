@@ -1,6 +1,6 @@
 # Third-party notices
 
-MPI (a personal fork of Pi Studio) is distributed under the MIT License for its own code only. This file records the major components used by the source tree and the packaged application. Third-party software remains under its own license.
+MPI is distributed under the MIT License for its own code only. This file records the major components used by the source tree and the packaged application. Third-party software remains under its own license.
 
 When redistributing a built application, keep this notice together with the application and retain the license and copyright files shipped with the bundled dependencies.
 

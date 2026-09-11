@@ -89,8 +89,7 @@ export function Chat() {
 
   // Length of the last streaming block's content. blocks.length only changes
   // when a NEW block starts; without this, text/thinking deltas inside one
-  // block never re-run the effect and long replies stop following the bottom
-  // (same bug as Pi-Studio issue #5).
+  // block never re-run the effect and long replies stop following the bottom.
   const streamTailLen = (() => {
     const blocks = streaming?.blocks;
     if (!blocks || blocks.length === 0) return 0;
