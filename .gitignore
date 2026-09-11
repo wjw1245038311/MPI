@@ -32,6 +32,7 @@ review-todo-*.md
 MPI-USER-MANUAL.md
 
 # Secrets and logs
+.gh-token
 .env
 .env.*
 !.env.example

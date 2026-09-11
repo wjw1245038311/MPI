@@ -48,6 +48,7 @@
     "finalize-runtime": "node scripts/finalize-runtime.mjs",
     "pack": "npm run bundle && npm run build && electron-builder --dir && npm run finalize-runtime",
     "dist": "npm run bundle && npm run build && electron-builder && node scripts/write-sha256.mjs && npm run finalize-runtime",
+    "release": "node scripts/publish-release.mjs",
     "test:remote": "node scripts/test-remote-protocol.mjs",
     "test:remote-signaling": "node scripts/test-remote-signaling.mjs",
     "signaling": "node signaling/server.mjs",
