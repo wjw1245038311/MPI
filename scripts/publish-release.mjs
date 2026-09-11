@@ -30,11 +30,30 @@
 import { execSync } from 'node:child_process';
 import fs, { createReadStream } from 'node:fs';
 import https from 'node:https';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------- 进度桥文件（JSONL）----------
+// dev 发版流水线是应用外的 CLI 进程，main 没有 IPC 可挂；这里每行 append 一个
+// JSON 对象到临时文件，src/main/dev-release-progress.ts 轮询后喂给 transfer-monitor，
+// LongTaskMonitor 即可显示真实上传字节/速度。协议：
+//   { run, op:"begin", id, label, totalBytes } / { …,"op":"update", doneBytes, speedBps }
+//   { …,"op":"end" } / { …,"op":"done" }（脚本结束）
+const RUN_ID = Date.now();
+const PROGRESS_FILE = process.env.MPI_RELEASE_PROGRESS_FILE || path.join(os.tmpdir(), 'mpi-dev-release-progress.jsonl');
+
+function progressLine(obj) {
+  try { fs.appendFileSync(PROGRESS_FILE, JSON.stringify({ run: RUN_ID, ...obj }) + '\n', 'utf8'); } catch { /* 进度写失败不能影响上传 */ }
+}
+
+// 正常/异常退出都收尾：done 行 + 删文件（被 kill -9 时残留由读端按 runId/截断/心跳处理）。
+process.on('exit', () => {
+  try { progressLine({ op: 'done' }); fs.unlinkSync(PROGRESS_FILE); } catch { /* ignore */ }
+});
 
 // ---------- 参数解析 ----------
 const argv = process.argv.slice(2);
@@ -127,9 +146,17 @@ function putAsset(url, filePath) {
     const u = new URL(url);
     // 必须显式 Content-Length：pipe() 默认走 chunked 编码，GitHub uploads 端点不接受（HTTP 400）。
     const total = fs.statSync(filePath).size;
+    const name = path.basename(filePath);
     let sent = 0;
     let lastTickAt = Date.now();
     let lastTickBytes = 0;
+    let ended = false;
+    const finishProgress = () => {
+      if (ended) return;
+      ended = true;
+      progressLine({ op: 'end', id: name });
+    };
+    progressLine({ op: 'begin', id: name, label: `正在上传 ${name}`, totalBytes: total });
     const req = https.request({
       method: 'PUT',
       hostname: u.hostname,
@@ -143,17 +170,17 @@ function putAsset(url, filePath) {
       let body = '';
       res.on('data', (d) => { body += d; if (body.length > 4000) body = body.slice(-2000); });
       res.on('end', () => {
+        finishProgress();
         if (res.statusCode >= 200 && res.statusCode < 300) return resolve();
         let detail = '';
         try { detail = JSON.parse(body)?.errors?.[0]?.code || ''; } catch { /* ignore */ }
         reject(new Error(`附件 PUT → HTTP ${res.statusCode}${detail ? ` (${detail})` : ''}`));
       });
     });
-    req.on('error', reject);
+    req.on('error', (e) => { finishProgress(); reject(e); });
     const rs = createReadStream(filePath);
-    // 大文件上行慢（v0.6.5 实测 ~2MB/s，149MB 要十几分钟）：每 5s 打一行进度到日志/对话。
+    // 大文件上行慢（v0.6.5 实测 ~2MB/s，149MB 要十几分钟）：每 5s 打一行进度到日志/对话 + JSONL 桥。
     if (total > 1_000_000) {
-      const name = path.basename(filePath);
       rs.on('data', (chunk) => {
         sent += chunk.length;
         const now = Date.now();
@@ -163,9 +190,10 @@ function putAsset(url, filePath) {
         lastTickAt = now;
         lastTickBytes = sent;
         console.log(`   … ${name} ${((sent / total) * 100).toFixed(0)}%（${(sent / 1048576).toFixed(1)}/${(total / 1048576).toFixed(1)} MB，${(speed / 1048576).toFixed(2)} MB/s）`);
+        progressLine({ op: 'update', id: name, doneBytes: sent, speedBps: Math.round(speed) });
       });
     }
-    rs.on('error', reject);
+    rs.on('error', (e) => { finishProgress(); reject(e); });
     rs.pipe(req);
   });
 }
@@ -225,6 +253,9 @@ function changelogBody(v) {
 // ---------- 主流程 ----------
 (async () => {
   console.log(`== MPI v${version} 发版（${OWNER}/${REPO}）==`);
+
+  // 新运行开始：截断旧文件，读端据此识别新一轮 run。
+  try { fs.writeFileSync(PROGRESS_FILE, '', 'utf8'); } catch { /* ignore */ }
 
   const dirty = git('status --porcelain');
   if (dirty) console.warn(`⚠ 工作区有未提交改动：\n${dirty}\n  tag 指向当前 HEAD，未提交内容不会进 release。`);
