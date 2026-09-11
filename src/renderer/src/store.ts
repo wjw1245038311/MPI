@@ -2874,9 +2874,7 @@ export const useStore = create<PiStore>()((set, get) => {
   installPackage: async (source) => {
     try {
       const res: any = await window.pi.plugins.installPackage(source);
-      if (!res?.ok && res.cancelled) {
-        get().pushToast("info", "已取消");
-      } else if (!res?.ok && (res.missing === "npm" || res.missing === "git")) {
+      if (!res?.ok && (res.missing === "npm" || res.missing === "git")) {
         get().pushToast("error", missingToolMessage(res.missing, get().config?.language === "zh"));
       } else if (res?.output) {
         get().pushToast(res.ok ? "info" : "warning", String(res.output).slice(0, 300));
@@ -2891,9 +2889,7 @@ export const useStore = create<PiStore>()((set, get) => {
   removePackage: async (source) => {
     try {
       const res: any = await window.pi.plugins.removePackage(source);
-      if (!res?.ok && res.cancelled) {
-        get().pushToast("info", "已取消");
-      } else if (res?.missing === "npm" || res?.missing === "git") {
+      if (res?.missing === "npm" || res?.missing === "git") {
         get().pushToast("warning", missingToolRemoveMessage(res.missing, get().config?.language === "zh"));
       }
       await get().loadPlugins();
@@ -2927,9 +2923,7 @@ export const useStore = create<PiStore>()((set, get) => {
       const text = cleanOutput(raw);
       const assertion = hasLibuvAssertion(raw);
 
-      if (!res?.ok && res.cancelled) {
-        get().pushToast("info", "已取消");
-      } else if (res?.ok) {
+      if (res?.ok) {
         if (extensionsAlreadyLatest(text)) {
           get().pushToast("info", source ? "该扩展已是最新版本。" : "所有扩展已是最新版本。");
         } else {

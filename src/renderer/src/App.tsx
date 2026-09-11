@@ -7,7 +7,6 @@ import { Sidebar } from "./components/Sidebar";
 import { Chat } from "./components/Chat";
 import { Preview } from "./components/Preview";
 import { Toasts } from "./components/Toasts";
-import { LongTaskMonitor } from "./components/LongTaskMonitor";
 import { ExtUiModal } from "./components/ExtUiModal";
 import { Settings } from "./components/Settings";
 import { SearchModal } from "./components/SearchModal";
@@ -140,7 +139,6 @@ export default function App() {
         )}
         {previewOpen && <Preview />}
       </div>
-      <LongTaskMonitor />
       <Toasts />
       <ExtUiModal />
       <SearchModal />
