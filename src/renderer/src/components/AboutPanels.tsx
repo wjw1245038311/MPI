@@ -3,7 +3,6 @@ import { useStore } from "../store";
 import type { Diagnostics } from "../lib/types";
 import { cleanOutput, hasLibuvAssertion, lastLine, stripAnsi } from "../lib/update";
 import { translateUiText } from "../lib/i18n";
-import { ChangelogModal } from "./ChangelogModal";
 
 /* Map each updater stage onto a slice of one continuous 0–100 bar, so the
  * fill never jumps backwards when a new stage starts. Stages without a
@@ -24,12 +23,12 @@ function overallUpdatePct(stage: string, pct?: number): number | null {
   return Math.min(100, Math.round(span[0] + ((span[1] - span[0]) * pct) / 100));
 }
 
-/** MPI application update card. Self-contained: owns its state, IPC
- * subscriptions and the changelog modal. Used by Settings「关于 MPI」and the
- * Help-menu about panel alike.
- * @param onChangelogOpenChange lets a host (Settings) keep its Escape-to-close
- *   guard in sync while the nested changelog modal is open. */
-export function AppUpdatePanel({ onChangelogOpenChange }: { onChangelogOpenChange?: (open: boolean) => void } = {}) {
+/** MPI application update card. Self-contained: owns its state and IPC
+ * subscriptions. Used by Settings「关于 MPI」and the Help-menu about panel alike.
+ * The changelog opens in a standalone native window (app:openChangelogWindow),
+ * not a nested modal — fixed-position modals inside Settings get trapped by
+ * ancestor containing blocks (.set-card:hover transform) and flicker. */
+export function AppUpdatePanel() {
   const language = useStore((s) => s.config?.language || "en");
   const pushToast = useStore((s) => s.pushToast);
 
@@ -43,6 +42,7 @@ export function AppUpdatePanel({ onChangelogOpenChange }: { onChangelogOpenChang
     releaseUrl: string | null;
     assetName: string | null;
     supported: boolean;
+    packaged: boolean;
     installable: boolean;
     downloaded: boolean;
     error?: string;
@@ -50,7 +50,6 @@ export function AppUpdatePanel({ onChangelogOpenChange }: { onChangelogOpenChang
   const [appUpdateProgress, setAppUpdateProgress] = useState<{ stage: string; message: string; pct?: number } | null>(null);
   const [appUpdateError, setAppUpdateError] = useState<string | null>(null);
   const [appUpdateReady, setAppUpdateReady] = useState(false);
-  const [changelogOpen, setChangelogOpen] = useState(false);
 
   useEffect(() => {
     window.pi.app
@@ -74,12 +73,14 @@ export function AppUpdatePanel({ onChangelogOpenChange }: { onChangelogOpenChang
     });
   }, []);
 
-  useEffect(() => {
-    onChangelogOpenChange?.(changelogOpen);
-    // Reset when the panel unmounts (tab switch) so a stale flag can't block
-    // the host's Escape-to-close.
-    return () => onChangelogOpenChange?.(false);
-  }, [changelogOpen, onChangelogOpenChange]);
+  // dev 实例若在新增该 IPC 前启动，preload 里没有此方法——明确提示重启而不是静默失败。
+  const openChangelog = () => {
+    if (typeof window.pi.app.openChangelogWindow !== "function") {
+      pushToast("warning", language === "zh" ? "当前实例缺少更新日志窗口接口，请完整重启 MPI（Ctrl+R 不够）" : "This build is missing the changelog window API — fully restart MPI (Ctrl+R is not enough)");
+      return;
+    }
+    void window.pi.app.openChangelogWindow().catch(() => pushToast("error", language === "zh" ? "打开更新日志窗口失败" : "Could not open the changelog window"));
+  };
 
   const checkAppRelease = async () => {
     setAppUpdating(true);
@@ -89,9 +90,24 @@ export function AppUpdatePanel({ onChangelogOpenChange }: { onChangelogOpenChang
       const status: any = await window.pi.app.checkAppUpdate();
       setAppUpdateStatus(status);
       setAppUpdateReady(Boolean(status?.downloaded));
-      if (status?.error) setAppUpdateError(status.error);
+      if (status?.error) {
+        setAppUpdateError(status.error);
+        pushToast("error", language === "zh" ? `检查更新失败：${status.error}` : `Update check failed: ${status.error}`);
+      } else if (!status?.packaged) {
+        // Dev runs (npm run dev) cannot reach the GitHub Releases feed — say so
+        // instead of leaving the click without any feedback.
+        pushToast("info", language === "zh" ? "开发模式不支持应用内更新检查（仅已安装版本可用）" : "App update checks are only available in installed builds");
+      } else if (status?.hasUpdate) {
+        pushToast("success", language === "zh" ? `发现新版本 v${status.latest}` : `New version v${status.latest} found`);
+      } else if (status?.latest) {
+        pushToast("info", language === "zh" ? `MPI 已是最新版本（v${status.current}）` : `MPI is up to date (v${status.current})`);
+      } else {
+        pushToast("warning", language === "zh" ? "未能获取最新版本信息，请稍后重试" : "Could not determine the latest version — please retry");
+      }
     } catch (e: any) {
-      setAppUpdateError(e?.message || String(e));
+      const msg = e?.message || String(e);
+      setAppUpdateError(msg);
+      pushToast("error", language === "zh" ? `检查更新失败：${msg}` : `Update check failed: ${msg}`);
     } finally {
       setAppUpdating(false);
     }
@@ -158,6 +174,13 @@ export function AppUpdatePanel({ onChangelogOpenChange }: { onChangelogOpenChang
         <div className="set-diag-k">{language === "zh" ? "来源" : "Source"}</div>
         <div className="set-diag-v">{language === "zh" ? "GitHub 发布页" : "GitHub Releases"}</div>
       </div>
+      {appUpdateStatus && !appUpdateStatus.packaged && (
+        <div className="set-hint" style={{ marginBottom: 12 }}>
+          {language === "zh"
+            ? "当前为开发模式（npm run dev），应用更新检查仅在已安装版本中可用。"
+            : "Running in development mode — app update checks are only available in installed builds."}
+        </div>
+      )}
       <div className="set-diag-btns">
         <button className="set-btn ghost" onClick={checkAppRelease} disabled={appUpdating}>
           {appUpdating && appUpdateProgress?.stage === "checking"
@@ -168,7 +191,7 @@ export function AppUpdatePanel({ onChangelogOpenChange }: { onChangelogOpenChang
               ? "检查最新版本"
               : "Check for updates"}
         </button>
-        <button className="set-btn ghost" onClick={() => setChangelogOpen(true)}>
+        <button className="set-btn ghost" onClick={openChangelog}>
           {language === "zh" ? "查看更新日志" : "View changelog"}
         </button>
         {appUpdateStatus?.hasUpdate && !appUpdateReady && (
@@ -205,8 +228,6 @@ export function AppUpdatePanel({ onChangelogOpenChange }: { onChangelogOpenChang
       )}
       {appUpdateError && !appUpdating && <div className="set-diag-err">⚠ {translateUiText(appUpdateError, language)}</div>}
 
-      {/* Nested here so backdrop clicks stop at this modal. */}
-      <ChangelogModal open={changelogOpen} currentVersion={appUpdateStatus?.current || appVersion} onClose={() => setChangelogOpen(false)} />
     </div>
   );
 }

@@ -13,7 +13,7 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { getBundledRuntime, resetPiRuntime } from "./pi-bridge";
+import { getBundledRuntime, resetPiRuntime, resolvePiRuntime } from "./pi-bridge";
 import {
   activateRuntimeRoot,
   cleanupRuntimeVersions,
@@ -411,14 +411,39 @@ function singleRootDir(dir: string): string {
 
 /* ------------------------------ public API ------------------------------ */
 
-/** Check pi.dev for the latest release and compare with the managed runtime. */
-export async function checkForCoreUpdate(): Promise<CoreUpdateStatus> {
-  const { version: current, source } = readManagedPiStatus();
+/** Version from the package.json that owns a cli.js (same layout as diagnostics). */
+function readVersionFromCli(cli: string): string | null {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dirname(dirname(cli)), "package.json"), "utf8")) as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Check pi.dev for the latest release and compare with the runtime MPI will
+ * actually use. The comparison must follow the same resolution as diagnostics
+ * and app:updatePi: dev mode and a custom piCliPath point at a system install,
+ * where the managed copy is absent — comparing only it made every check report
+ * an update even when the running Pi was already latest (the panel then showed
+ * current = latest with a stale「可更新」tag). */
+export async function checkForCoreUpdate(cliOverride?: string): Promise<CoreUpdateStatus> {
+  const { version: managedVersion, source } = readManagedPiStatus();
+  let current: string | null = managedVersion;
+  try {
+    const rt = await resolvePiRuntime(cliOverride);
+    current = readVersionFromCli(rt.cli) || current;
+  } catch {
+    /* no resolvable pi at all — keep the managed value (possibly null) */
+  }
   try {
     const rel = await fetchJson<{ version?: string; packageName?: string; note?: string | null }>(VERSION_URL);
     const latest = typeof rel.version === "string" ? rel.version.trim() : "";
     if (!latest) return { current, latest: null, hasUpdate: false, source, error: "版本检查返回为空" };
-    const hasUpdate = current ? compareVersions(latest, current) > 0 : true;
+    if (!current) {
+      return { current: null, latest, hasUpdate: false, source, error: "无法确定当前 Pi 版本（未找到可用的 pi）" };
+    }
+    const hasUpdate = compareVersions(latest, current) > 0;
     return { current, latest, hasUpdate, note: rel.note || null, source };
   } catch (e: any) {
     return { current, latest: null, hasUpdate: false, source, error: e?.message || String(e) };

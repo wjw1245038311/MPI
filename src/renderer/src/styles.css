@@ -3981,18 +3981,26 @@ textarea.modal-input {
   margin-top: 6px;
 }
 
-/* Changelog viewer (update panel) */
-.changelog-modal {
-  width: min(780px, 94vw);
-  max-height: 86vh;
+/* Changelog viewer — standalone native window (#changelog). The old nested
+   modal got trapped inside Settings by ancestor containing blocks
+   (.set-card:hover applies a transform, .settings-backdrop uses backdrop-filter),
+   anchored to the card instead of the viewport and flickered as hover toggled.
+   A separate BrowserWindow has none of that. */
+.changelog-window {
   display: flex;
   flex-direction: column;
-  padding: 16px 18px;
+  height: 100vh;
+  background: var(--bg);
 }
-.changelog-head {
+.changelog-win-head {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 14px 18px 4px;
+}
+.changelog-win-title {
+  font-weight: 700;
+  font-size: 15px;
 }
 .changelog-version-badge {
   font-family: var(--mono);
@@ -4003,20 +4011,17 @@ textarea.modal-input {
   border-radius: 999px;
   padding: 2px 9px;
 }
-.changelog-close {
-  margin-left: auto;
-  font-size: 18px;
-  line-height: 1;
-}
-.changelog-sub {
+.changelog-win-sub {
   font-size: 12px;
   color: var(--text-faint);
-  margin-bottom: 10px;
+  padding: 0 18px 10px;
 }
-.changelog-body {
+.changelog-win-body {
+  flex: 1;
   overflow-y: auto;
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  margin: 0 18px;
+  padding: 12px 2px 24px 0;
   font-size: 13px;
   line-height: 1.6;
 }
@@ -4579,6 +4584,10 @@ textarea.modal-input {
   box-shadow: var(--shadow-sm);
   transition: box-shadow 0.18s, transform 0.18s;
 }
+/* ⚠ Do NOT render position:fixed elements inside .set-card — the hover
+   transform makes this card their containing block (the changelog modal used
+   to anchor here, jump and flicker as hover toggled; it now opens in a
+   standalone window). Same trap: .settings-backdrop's backdrop-filter. */
 .set-card:hover {
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
@@ -8988,4 +8997,60 @@ mark.hl {
 }
 :root[data-theme="dark"] .todo-att-badge {
   background: rgba(255, 255, 255, 0.08);
+}
+
+/* ---------- standalone dev release log window (#dev-release-log) ---------- */
+.devlog-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+}
+.devlog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+.devlog-count {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.devlog-copy {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 4px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.devlog-copy:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.devlog-copy:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.devlog-body {
+  flex: 1;
+  margin: 0;
+  padding: 12px 14px;
+  overflow-y: auto;
+  background: var(--code-bg);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }

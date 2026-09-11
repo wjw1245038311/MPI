@@ -76,6 +76,15 @@ export function DevReleasePanel() {
     }
   };
 
+  // dev 实例若在新增该 IPC 前启动，preload 里没有此方法——明确提示重启而不是静默失败。
+  const openLogWindow = () => {
+    if (typeof window.pi.app.openDevReleaseLogWindow !== "function") {
+      pushToast("warning", "当前 dev 实例缺少日志窗口接口，请完整重启 MPI（Ctrl+R 不够）");
+      return;
+    }
+    void window.pi.app.openDevReleaseLogWindow().catch(() => pushToast("error", "打开日志窗口失败"));
+  };
+
   return (
     <div className="set-card">
       <div className="set-card-title">dev 一键发版</div>
@@ -111,6 +120,11 @@ export function DevReleasePanel() {
         {running && (
           <button className="set-btn ghost" onClick={cancel}>
             取消
+          </button>
+        )}
+        {(logLines.length > 0 || running) && (
+          <button className="set-btn ghost" onClick={openLogWindow} title="在独立窗口查看完整流水线日志">
+            独立窗口查看完整日志
           </button>
         )}
       </div>

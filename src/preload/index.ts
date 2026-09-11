@@ -71,6 +71,8 @@ const api = {
     downloadAppUpdate: () => ipcRenderer.invoke("app:downloadAppUpdate"),
     installAppUpdate: () => ipcRenderer.invoke("app:installAppUpdate"),
     checkCoreUpdate: () => ipcRenderer.invoke("app:checkCoreUpdate"),
+    /** Open (or focus) the standalone changelog window. */
+    openChangelogWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke("app:openChangelogWindow"),
     relaunch: () => ipcRenderer.invoke("app:relaunch"),
     isDev: (): Promise<boolean> => ipcRenderer.invoke("app:isDev"),
     devReleaseStatus: (): Promise<{
@@ -84,6 +86,10 @@ const api = {
     devReleaseStart: (): Promise<{ ok: boolean; version?: string; error?: string; cancelled?: boolean }> =>
       ipcRenderer.invoke("app:devReleaseStart"),
     devReleaseCancel: () => ipcRenderer.invoke("app:devReleaseCancel") as Promise<{ ok: boolean; error?: string }>,
+    /** Open (or focus) the standalone pipeline-log window. */
+    openDevReleaseLogWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke("app:openDevReleaseLogWindow"),
+    /** Buffered pipeline history for the standalone log window (oldest first). */
+    getDevReleaseLog: (): Promise<string[]> => ipcRenderer.invoke("app:getDevReleaseLog"),
     editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => ipcRenderer.invoke("app:editAction", action),
   },
   drafts: {

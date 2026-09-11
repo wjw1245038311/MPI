@@ -1276,8 +1276,6 @@ export function Settings() {
   const [saving, setSaving] = useState<null | "models" | "thinking" | "profile">(null);
   const [flash, setFlash] = useState<null | "models" | "thinking" | "profile">(null);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
-  // Mirrors the changelog modal state inside AppUpdatePanel (Escape guard).
-  const [changelogOpen, setChangelogOpen] = useState(false);
   const [paths, setPaths] = useState<{ agentDir: string; models: string; settings: string; auth: string } | null>(null);
   const [adding, setAdding] = useState(false);
   const [newProvider, setNewProvider] = useState<NewProviderDraft>(emptyNewProvider);
@@ -1502,13 +1500,12 @@ export function Settings() {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      // The changelog modal owns Escape while it is open (its own listener closes it).
-      if (e.key === "Escape" && !changelogOpen) attemptClose();
+      if (e.key === "Escape") attemptClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, draft, thinking, initialProviders, initialThinking, changelogOpen]);
+  }, [open, draft, thinking, initialProviders, initialThinking]);
 
   const modelDirty = useMemo(() => JSON.stringify(draft.providers) !== initialProviders, [draft.providers, initialProviders]);
   const thinkDirty = useMemo(() => JSON.stringify(thinking) !== initialThinking, [thinking, initialThinking]);
@@ -2977,7 +2974,7 @@ export function Settings() {
 
             {tab === "update" && (
               <>
-                <AppUpdatePanel onChangelogOpenChange={setChangelogOpen} />
+                <AppUpdatePanel />
                 <PiCoreUpdatePanel />
                 {/* dev-only：打包版里面板自身返回 null */}
                 <DevReleasePanel />

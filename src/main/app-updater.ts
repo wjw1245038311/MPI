@@ -26,6 +26,10 @@ export interface AppUpdateStatus {
   assetName: string | null;
   /** Whether this platform has a supported installer asset. */
   supported: boolean;
+  /** Whether the current process is a packaged (installed) build. Dev runs
+   * cannot check GitHub Releases, so the renderer explains that instead of
+   * silently returning an empty status with no feedback. */
+  packaged: boolean;
   /** Whether the current process can install and restart the packaged app. */
   installable: boolean;
   downloaded: boolean;
@@ -118,6 +122,7 @@ function statusFromInfo(current: string, info: UpdateInfo): AppUpdateStatus {
     releaseUrl: releaseUrl(latest),
     assetName: updateAssetName(info),
     supported,
+    packaged: app.isPackaged,
     installable,
     downloaded: downloadedVersion === latest,
     ...(lastUpdaterError ? { error: lastUpdaterError } : {}),
@@ -133,6 +138,7 @@ function emptyStatus(current: string, error?: string): AppUpdateStatus {
     releaseUrl: RELEASES_LATEST_URL,
     assetName: null,
     supported: isWindowsInstallerSupported(),
+    packaged: app.isPackaged,
     installable: isPackagedInstallable(),
     downloaded: false,
     ...(error ? { error } : {}),

@@ -6,7 +6,8 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
-import { cancelDevRelease, getDevReleaseStatus, startDevRelease } from "./dev-release";
+import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, startDevRelease } from "./dev-release";
+import { getDevReleaseLogWindow, openChangelogWindow, openDevReleaseLogWindow } from "./standalone-windows";
 import {
   BUILT_IN_REMOTE_STUN_URLS,
   DEFAULT_REMOTE_SIGNALING_URL,
@@ -3045,7 +3046,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("app:checkAppUpdate", () => checkForAppUpdate());
   ipcMain.handle("app:downloadAppUpdate", async () => downloadAppUpdate((p) => send("pi:appUpdate", p)));
   ipcMain.handle("app:installAppUpdate", () => installAppUpdate());
-  ipcMain.handle("app:checkCoreUpdate", () => checkForCoreUpdate());
+  // Pass the configured piCliPath so the comparison follows the same runtime
+  // resolution as app:updatePi (dev mode / custom installs are not managed).
+  ipcMain.handle("app:checkCoreUpdate", () => checkForCoreUpdate(getConfig().piCliPath));
+  // Changelog opens in its own native window (not an in-app modal): nested
+  // modals get trapped by ancestor containing blocks (.set-card:hover
+  // transform / .settings-backdrop backdrop-filter) and can't be dismissed.
+  ipcMain.handle("app:openChangelogWindow", () => {
+    openChangelogWindow();
+    return { ok: true };
+  });
 
   ipcMain.handle("app:updatePi", async () => {
     // Resolve first so the source is known for sure (the old guard consulted
@@ -3099,8 +3109,23 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // crosses into the renderer — status only reports hasToken.
   ipcMain.handle("app:isDev", () => !app.isPackaged);
   ipcMain.handle("app:devReleaseStatus", () => getDevReleaseStatus());
-  ipcMain.handle("app:devReleaseStart", async () => startDevRelease((line) => send("pi:devReleaseLog", line)));
+  // Stream each pipeline line to the main window AND the standalone log
+  // window when it is open (the panel's inline box only shows a tail).
+  ipcMain.handle("app:devReleaseStart", async () =>
+    startDevRelease((line) => {
+      send("pi:devReleaseLog", line);
+      const lw = getDevReleaseLogWindow();
+      if (lw && !lw.isDestroyed()) lw.webContents.send("pi:devReleaseLog", line);
+    }),
+  );
   ipcMain.handle("app:devReleaseCancel", () => cancelDevRelease());
+  ipcMain.handle("app:openDevReleaseLogWindow", () => {
+    openDevReleaseLogWindow();
+    return { ok: true };
+  });
+  // Buffered history for the standalone log window (pulled on mount; live
+  // lines keep streaming via pi:devReleaseLog afterwards).
+  ipcMain.handle("app:getDevReleaseLog", () => getDevReleaseLogBuffer());
 
   // ---- edit menu (clipboard on the focused field) ------------------------
   ipcMain.handle("app:editAction", (_e, action: "copy" | "cut" | "paste" | "delete" | "selectAll") => {

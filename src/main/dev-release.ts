@@ -45,6 +45,21 @@ let cancelRequested = false;
 let activeLog: LogFn | null = null;
 let activeChild: { pid?: number } | null = null;
 
+/** Ring buffer of recent pipeline lines so a standalone log window opened
+ * mid-run (or after the run finished) can replay the full history. */
+const LOG_BUFFER_MAX = 5000;
+let logBuffer: string[] = [];
+
+function bufferLine(line: string): void {
+  logBuffer.push(line);
+  if (logBuffer.length > LOG_BUFFER_MAX) logBuffer.splice(0, logBuffer.length - LOG_BUFFER_MAX);
+}
+
+/** Snapshot of the buffered pipeline lines (oldest first). */
+export function getDevReleaseLogBuffer(): string[] {
+  return [...logBuffer];
+}
+
 function repoRoot(): string {
   // dev 下 main bundle 位于 <repo>/out/main/ → ../.. 即仓库根（同 autoLaunchArgs 的推导）。
   const root = resolve(__dirname, "../..");
@@ -207,8 +222,13 @@ export async function startDevRelease(onLog: LogFn): Promise<DevReleaseResult> {
 
   running = true;
   cancelRequested = false;
-  activeLog = onLog;
-  const log = (line: string) => onLog(line);
+  // Buffer every line (including the cancel notice, which goes through
+  // activeLog) so the standalone log window can replay history.
+  const log = (line: string) => {
+    bufferLine(line);
+    onLog(line);
+  };
+  activeLog = log;
   let prevHead = "";
   try {
     log("== MPI dev 一键发版 ==");
