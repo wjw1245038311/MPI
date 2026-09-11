@@ -31,6 +31,9 @@ improvement-suggestions.md
 review-todo-*.md
 MPI-USER-MANUAL.md
 
+# Orphaned upstream screenshot (local only)
+guide-assets/
+
 # Secrets and logs
 .env
 .env.*

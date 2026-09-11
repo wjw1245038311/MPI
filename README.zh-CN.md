@@ -12,16 +12,16 @@ MPI 是一个独立的 Electron 桌面客户端，用于运行 [Pi coding agent]
 
 <table>
   <tr>
-    <td width="50%"><img src="imageassets/newpi01.png" alt="MPI 主页" width="100%"></td>
-    <td width="50%"><img src="imageassets/newpi03.png" alt="MPI 扩展功能与技能管理" width="100%"></td>
+    <td width="50%"><img src="imageassets/mpi01.png" alt="MPI 主页" width="100%"></td>
+    <td width="50%"><img src="imageassets/mpi03.png" alt="MPI 扩展功能与技能管理" width="100%"></td>
   </tr>
   <tr>
     <td align="center">主页</td>
     <td align="center">扩展功能与技能</td>
   </tr>
   <tr>
-    <td width="50%"><img src="imageassets/newpi04.png" alt="MPI 待办任务" width="100%"></td>
-    <td width="50%"><img src="imageassets/newpi02.png" alt="MPI 消息接入（飞书/微信）" width="100%"></td>
+    <td width="50%"><img src="imageassets/mpi04.png" alt="MPI 待办任务" width="100%"></td>
+    <td width="50%"><img src="imageassets/mpi02.png" alt="MPI 消息接入（飞书/微信）" width="100%"></td>
   </tr>
   <tr>
     <td align="center">待办任务</td>

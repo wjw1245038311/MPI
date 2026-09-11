@@ -12,16 +12,16 @@ The current interface brings the main workspace, extensions & skills management,
 
 <table>
   <tr>
-    <td width="50%"><img src="imageassets/newpi01.png" alt="MPI home workspace" width="100%"></td>
-    <td width="50%"><img src="imageassets/newpi03.png" alt="MPI extensions & skills management" width="100%"></td>
+    <td width="50%"><img src="imageassets/mpi01.png" alt="MPI home workspace" width="100%"></td>
+    <td width="50%"><img src="imageassets/mpi03.png" alt="MPI extensions & skills management" width="100%"></td>
   </tr>
   <tr>
     <td align="center">Home workspace</td>
     <td align="center">Extensions & skills</td>
   </tr>
   <tr>
-    <td width="50%"><img src="imageassets/newpi04.png" alt="MPI todo tasks" width="100%"></td>
-    <td width="50%"><img src="imageassets/newpi02.png" alt="MPI messaging channels (Feishu/WeChat)" width="100%"></td>
+    <td width="50%"><img src="imageassets/mpi04.png" alt="MPI todo tasks" width="100%"></td>
+    <td width="50%"><img src="imageassets/mpi02.png" alt="MPI messaging channels (Feishu/WeChat)" width="100%"></td>
   </tr>
   <tr>
     <td align="center">Todo tasks</td>
