@@ -5,12 +5,13 @@
  * 由「发版评审会话」中的 agent 在用户明确确认后执行：
  *   node scripts/dev-release.mjs
  *
- * 流程与 src/main/dev-release.ts 一致：
+ * 流程（面板「发版评审」会话运行本脚本；src/main/dev-release.ts 为旧的应用内流水线，已不再使用）：
  *   [1/5] 预检（token / github remote / 版本号；工作区脏则自动 git stash -u）
  *   [2/5] bump patch + changelog Unreleased → vN（日期）
  *   [3/5] commit「release: vX——摘要」
- *   [4/5] push origin + npm run dist（构建安装包，约数分钟）
- *   [5/5] publish-release.mjs 发布到 GitHub Release（+ Seafile 分发副本）
+ *   [4/5] push origin main+tag（触发 GitHub Actions 构建）+ 本地 npm run dist 并行（只为 Seafile 副本）
+ *   [5/5] publish-release.mjs --wait-ci 等 CI 附件就位 → 校验 → Seafile 分发副本
+ *         （家庭上行慢，大文件由 CI 在 GitHub 自家网络上传；超时可手动重跑不带 --wait-ci 走本地上传兜底）
  *
  * 安全边界：
  *   - 工作区不干净不再阻断：自动 stash -u（含 untracked），构建只基于已提交
@@ -211,8 +212,16 @@ async function main() {
   log(`   ✓ 已提交 ${git("rev-parse --short HEAD")}：${msg}`);
 
   // ---- [4/5] push origin + 构建安装包 --------------------------------------
-  log("[4/5] 推送 origin 并构建安装包（npm run dist，约数分钟）");
+  log("[4/5] 推送 origin 并触发 GitHub Actions 构建；并行构建本地安装包（仅供 Seafile 副本，不再从家里上传）");
   const branch = git("rev-parse --abbrev-ref HEAD");
+  const tagName = `v${nextVersion}`;
+  try {
+    git(`rev-parse -q --verify refs/tags/${tagName}`);
+    log(`   ✓ tag ${tagName} 已存在，跳过创建`);
+  } catch {
+    gitOut(["tag", tagName]);
+    log(`   ✓ 创建 tag ${tagName} → ${git("rev-parse --short HEAD")}`);
+  }
   try {
     gitOut(["push", "origin", branch]);
     log(`   ✓ 已推送 origin/${branch}`);
@@ -220,16 +229,23 @@ async function main() {
     const m = e instanceof Error ? e.message.split("\n")[0] : String(e);
     log(`   ⚠ push origin 失败（不阻断，github 由发布脚本推送）：${m.slice(0, 160)}`);
   }
+  try {
+    gitOut(["push", "origin", tagName]);
+    log(`   ✓ 已推送 ${tagName}（GitHub Actions 构建开始）`);
+  } catch (e) {
+    const m = e instanceof Error ? e.message.split("\n")[0] : String(e);
+    log(`   ⚠ tag push 失败（发布脚本会重试）：${m.slice(0, 160)}`);
+  }
   const isWin = process.platform === "win32";
   const distCode = await runStream(isWin ? "cmd" : "sh", isWin ? ["/d", "/s", "/c", "npm run dist"] : ["-c", "npm run dist"]);
   if (distCode !== 0) {
-    throw new Error(`构建失败（npm run dist 退出码 ${distCode}）。版本提交已保留：如需撤销可 git reset --hard ${prevHead.slice(0, 7)}`);
+    throw new Error(`构建失败（npm run dist 退出码 ${distCode}）。版本提交已保留：如需撤销可 git reset --hard ${prevHead.slice(0, 7)}；tag 可用 git push origin :refs/tags/${tagName} 删除`);
   }
-  log("   ✓ 安装包构建完成");
+  log("   ✓ 本地安装包构建完成（仅供 Seafile 分发副本）");
 
   // ---- [5/5] 发布到 GitHub Release -----------------------------------------
-  log("[5/5] 发布到 GitHub Release（tag → push → 附件上传）");
-  const args = [join(ROOT, "scripts", "publish-release.mjs"), nextVersion];
+  log("[5/5] 等待 GitHub Actions 上传附件，随后校验并复制 Seafile");
+  const args = [join(ROOT, "scripts", "publish-release.mjs"), nextVersion, "--wait-ci"];
   if (existsSync(SEAFILE_DIR)) {
     args.push("--seafile", SEAFILE_DIR);
     log(`   · Seafile 分发副本：${SEAFILE_DIR}`);

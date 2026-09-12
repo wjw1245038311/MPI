@@ -3,12 +3,13 @@
  * publish-release.mjs —— 一键发版：打 tag → push → GitHub Release（含附件上传）
  *
  * 用法:
- *   node scripts/publish-release.mjs <version> [--seafile <dir>] [--no-push] [--force-upload]
+ *   node scripts/publish-release.mjs <version> [--wait-ci [分钟]] [--seafile <dir>] [--no-push] [--force-upload]
  *   npm run release -- 0.6.2
  *
  * 示例:
  *   node scripts/publish-release.mjs 0.6.2
  *   node scripts/publish-release.mjs 0.6.2 --seafile "E:/Seafile/wei_jw2/我的资料库/Agent"
+ *   node scripts/publish-release.mjs 0.6.7 --wait-ci        # 不本地上传，等 GitHub Actions 传完（dev-release 默认）
  *
  * Token（二选一）:
  *   - 环境变量 GITHUB_TOKEN
@@ -19,11 +20,16 @@
  *   1. 本地打 tag v<version>（必须指向当前 HEAD；已存在且一致则跳过，可重复执行）
  *   2. push 当前分支 + tag 到 github remote
  *   3. Release 正文 = changelog.md 的 ## v<version> 小节 + exe SHA256
- *   4. 创建或更新 GitHub Release（已存在则更新描述；同名附件直接替换）
- *   5. 上传 release/ 产物：MPI-Setup-<v>.exe / latest.yml / .blockmap
- *      （单请求流式直传 uploads.github.com，对齐 gh CLI；失败整文件重试）
- *      ⚠ CI（build-installers.yml）在 tag push 后也会向同一 Release 发布 win+mac 产物，
- *        所以默认「已存在即跳过、只补缺失」；--force-upload 才用本地产物覆盖。
+ *   4. 创建或更新 GitHub Release（已存在则更新描述）
+ *   5. 附件（两种模式，二选一）：
+ *      - 默认：上传 release/ 产物 MPI-Setup-<v>.exe / latest.yml / .blockmap
+ *        （单请求流式直传 uploads.github.com，对齐 gh CLI；失败整文件重试）。
+ *        ⚠ CI（build-installers.yml）在 tag push 后也会向同一 Release 发布 win+mac 产物，
+ *          所以默认「已存在即跳过、只补缺失」；--force-upload 才用本地产物覆盖。
+ *      - --wait-ci [分钟]（默认 20）：不本地上传——每 15s 轮询直到 CI 的三个附件就位再校验，
+ *        超时则报错并提示去掉该参数走本地上传兜底。dev-release.mjs 用此模式：家庭上行慢
+ *        （~1Mbps），CI 在 GitHub 自家网络上传，大文件不必从家里出网。等待期间往 JSONL
+ *        桥写心跳行，dev 应用的长任务监控会显示「正在等待 GitHub Actions 构建上传…」。
  *   6. 校验期望附件都在 Release 上（大小差异属正常——CI 与本地构建的 runtime 版本可能不同）；
  *      --seafile 时复制 exe + sha256 sidecar
  */
@@ -61,11 +67,17 @@ let version = null;
 let seafileDir = null;
 let noPush = false;
 let forceUpload = false;
+/** >0 → --wait-ci mode (minutes); don't upload locally, wait for GitHub Actions assets. */
+let waitCiMinutes = 0;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--seafile') seafileDir = argv[++i];
   else if (a === '--no-push') noPush = true;
   else if (a === '--force-upload') forceUpload = true;
+  else if (a === '--wait-ci') {
+    const next = argv[i + 1] || '';
+    waitCiMinutes = /^\d+$/.test(next) ? Number(argv[++i]) : 20;
+  }
   else if (!version) version = a;
 }
 if (!/^\d+\.\d+\.\d+$/.test(version || '')) {
@@ -237,6 +249,40 @@ async function uploadAsset(releaseId, file) {
   process.exit(1);
 }
 
+/**
+ * --wait-ci mode: poll until all expected assets are on the Release (uploaded by GitHub
+ * Actions from its own network). Writes a heartbeat line to the JSONL bridge every tick so
+ * the dev app's long-task monitor keeps a live "waiting for CI" entry (the tailer drops
+ * entries after 30s of silence). Returns the final release object.
+ */
+async function waitForCiAssets(releaseId, expectedNames, minutes) {
+  const deadline = Date.now() + minutes * 60_000;
+  progressLine({ op: 'begin', id: 'ci-wait', label: '正在等待 GitHub Actions 构建上传…' });
+  console.log(`⏳ 等待 GitHub Actions 附件（超时 ${minutes} 分钟，每 15s 检查一次）…`);
+  try {
+    for (;;) {
+      const r = await api('GET', `/repos/${OWNER}/${REPO}/releases/${releaseId}`);
+      const have = new Set((r.assets || []).map((a) => a.name));
+      const missing = expectedNames.filter((n) => !have.has(n));
+      if (!missing.length) {
+        console.log('✓ GitHub Actions 附件已全部就位');
+        return r;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(
+          `等待 CI 附件超时（${minutes} 分钟），仍缺：${missing.join(', ')}。` +
+          `可检查 GitHub Actions 运行状态，或修复后重跑本地上传路径：node scripts/publish-release.mjs ${version}`,
+        );
+      }
+      progressLine({ op: 'update', id: 'ci-wait' }); // heartbeat — keep the monitor entry alive
+      console.log(`   … 还差 ${missing.length} 个附件（${missing.join(', ')}）`);
+      await sleep(15_000);
+    }
+  } finally {
+    progressLine({ op: 'end', id: 'ci-wait' });
+  }
+}
+
 // ---------- changelog 正文提取 ----------
 function changelogBody(v) {
   const md = fs.readFileSync(path.join(REPO_ROOT, 'changelog.md'), 'utf8');
@@ -306,50 +352,69 @@ function changelogBody(v) {
     console.log(`✓ 创建 Release #${rel.id}`);
   }
 
-  // 5) 上传附件（CI build-installers.yml 也会在 tag push 后发布到同一 Release：
-  //    默认已存在即跳过、只补缺失；--force-upload 才用本地产物覆盖同名附件）
-  const candidates = [
+  // Release 上期望的附件名（CI 与本地产物同名）
+  const expectedNames = [
     `MPI-Setup-${version}.exe`,
     'latest.yml',
     `MPI-Setup-${version}.exe.blockmap`,
-  ].map((f) => path.join(REPO_ROOT, 'release', f)).filter(fs.existsSync);
-  if (!candidates.length) { console.error('✗ release/ 下没有产物，先跑 npm run dist'); process.exit(1); }
+  ];
 
-  const existingAssets = new Map(rel.assets.map((a) => [a.name, a.size]));
-  for (const f of candidates) {
-    const name = path.basename(f);
-    const size = fs.statSync(f).size;
-    const remoteSize = existingAssets.get(name);
-    if (remoteSize !== undefined && !forceUpload) {
-      console.log(remoteSize === size
-        ? `= ${name} 已存在且大小一致，跳过`
-        : `= ${name} Release 上已有（${(remoteSize / 1048576).toFixed(1)} MB，与本地 ${(size / 1048576).toFixed(1)} MB 不同——CI 产物），跳过；--force-upload 可用本地产物覆盖`);
-      continue;
+  let final;
+  if (waitCiMinutes > 0) {
+    // --wait-ci：不本地上传——GitHub Actions 在 tag push 后从自家网络传，家庭上行慢
+    // （~1Mbps），大文件不必出网。轮询直到全部就位。
+    final = await waitForCiAssets(rel.id, expectedNames, waitCiMinutes);
+  } else {
+    // 5) 上传附件（CI build-installers.yml 也会在 tag push 后发布到同一 Release：
+    //    默认已存在即跳过、只补缺失；--force-upload 才用本地产物覆盖同名附件）
+    const candidates = expectedNames
+      .map((f) => path.join(REPO_ROOT, 'release', f))
+      .filter(fs.existsSync);
+    if (!candidates.length) { console.error('✗ release/ 下没有产物，先跑 npm run dist'); process.exit(1); }
+
+    const existingAssets = new Map(rel.assets.map((a) => [a.name, a.size]));
+    for (const f of candidates) {
+      const name = path.basename(f);
+      const size = fs.statSync(f).size;
+      const remoteSize = existingAssets.get(name);
+      if (remoteSize !== undefined && !forceUpload) {
+        console.log(remoteSize === size
+          ? `= ${name} 已存在且大小一致，跳过`
+          : `= ${name} Release 上已有（${(remoteSize / 1048576).toFixed(1)} MB，与本地 ${(size / 1048576).toFixed(1)} MB 不同——CI 产物），跳过；--force-upload 可用本地产物覆盖`);
+        continue;
+      }
+      await uploadAsset(rel.id, f);
     }
-    await uploadAsset(rel.id, f);
   }
 
   // 6) 校验（只查期望附件都在 Release 上；大小差异属正常——CI 与本地构建的 runtime 版本可能不同）
-  const final = await api('GET', `/repos/${OWNER}/${REPO}/releases/${rel.id}`);
+  if (!final) final = await api('GET', `/repos/${OWNER}/${REPO}/releases/${rel.id}`);
   console.log('\nRelease 附件校验:');
   let okAll = true;
-  for (const f of candidates) {
-    const name = path.basename(f);
+  for (const name of expectedNames) {
     const remote = final.assets.find((a) => a.name === name);
     if (!remote) { okAll = false; console.log(`  ✗ ${name} 缺失`); continue; }
-    const localSize = fs.statSync(f).size;
-    const note = remote.size === localSize ? '' : `（与本地 ${(localSize / 1048576).toFixed(1)} MB 不同，CI 产物）`;
+    const localFile = path.join(REPO_ROOT, 'release', name);
+    let note = '';
+    if (fs.existsSync(localFile)) {
+      const localSize = fs.statSync(localFile).size;
+      if (remote.size !== localSize) note = `（与本地 ${(localSize / 1048576).toFixed(1)} MB 不同，CI 产物）`;
+    }
     console.log(`  ✓ ${name} (${(remote.size / 1048576).toFixed(1)} MB)${note}`);
   }
   if (!okAll) { console.error('✗ Release 缺少期望附件，请重新运行本脚本或检查 CI'); process.exit(1); }
 
-  // seafile 分发副本
+  // seafile 分发副本（用本地产物；--wait-ci 且未本地构建时跳过并提示）
   if (seafileDir) {
     const exe = path.join(REPO_ROOT, 'release', `MPI-Setup-${version}.exe`);
-    fs.mkdirSync(seafileDir, { recursive: true });
-    fs.copyFileSync(exe, path.join(seafileDir, path.basename(exe)));
-    if (fs.existsSync(shaFile)) fs.copyFileSync(shaFile, path.join(seafileDir, path.basename(shaFile)));
-    console.log(`✓ 已复制到 Seafile 目录: ${seafileDir}`);
+    if (!fs.existsSync(exe)) {
+      console.log(`⚠ 本地 ${path.basename(exe)} 不存在（--wait-ci 模式且未本地构建），跳过 Seafile 复制；可从 Release 手动下载放置`);
+    } else {
+      fs.mkdirSync(seafileDir, { recursive: true });
+      fs.copyFileSync(exe, path.join(seafileDir, path.basename(exe)));
+      if (fs.existsSync(shaFile)) fs.copyFileSync(shaFile, path.join(seafileDir, path.basename(shaFile)));
+      console.log(`✓ 已复制到 Seafile 目录: ${seafileDir}`);
+    }
   }
 
   console.log(`\n🎉 https://github.com/${OWNER}/${REPO}/releases/tag/${tag}`);
