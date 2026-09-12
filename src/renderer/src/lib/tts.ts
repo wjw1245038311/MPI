@@ -183,17 +183,33 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+let edgeFallbackWarned = false;
+/** Last upstream Edge failure reason (surfaced via SpeakResult.detail). */
+let edgeLastError: string | null = null;
+let currentAudio: HTMLAudioElement | null = null;
+let currentObjectUrl: string | null = null;
+
 export interface SpeakOptions {
-  /** Explicit voice URI (Settings); absent = auto-pick by `lang`. */
+  /** Explicit system voice URI (Settings); absent = auto-pick by `lang`. */
   voiceUri?: string;
   /** Rate multiplier 0.5–2; absent = 1. */
   rate?: number;
   lang?: "zh" | "en";
+  /** Playback engine; absent = "system" (offline speechSynthesis). */
+  backend?: "system" | "edge";
+  /** Edge voice short name; absent = auto-pick by `lang`. */
+  edgeVoice?: string;
 }
 
 export interface SpeakResult {
   ok: boolean;
   error?: "unsupported" | "no-voice" | "empty-text";
+  /** True when the requested Edge engine failed and system TTS took over
+   * (reported at most once per session). */
+  fallback?: boolean;
+  /** Upstream detail of the Edge failure (i18n key or short error string),
+   * surfaced in the fallback toast so users can report what actually broke. */
+  detail?: string;
 }
 
 /**
@@ -202,12 +218,151 @@ export interface SpeakResult {
  * the background and reports progress through subscribeTts().
  */
 export async function speakMessage(messageId: string, rawText: string, opts: SpeakOptions = {}): Promise<SpeakResult> {
-  const s = synth();
-  if (!s) return { ok: false, error: "unsupported" };
-
-  const text = cleanForSpeech(rawText, (opts.lang || "en") === "zh");
+  const lang = opts.lang || "en";
+  const text = cleanForSpeech(rawText, lang === "zh");
   const chunks = chunkText(text);
   if (!chunks.length) return { ok: false, error: "empty-text" };
+
+  // Edge engine: free online neural voices. On any pre-playback failure we fall
+  // through to the offline system engine (and say so once).
+  if (opts.backend === "edge" && typeof window !== "undefined" && typeof window.pi?.voice?.synthesize === "function") {
+    const edge = await speakEdge(messageId, chunks, opts);
+    if (edge) return edge;
+    const sys = await speakSystem(messageId, chunks, opts);
+    const fallback = !edgeFallbackWarned;
+    edgeFallbackWarned = true;
+    const detail = edgeLastError || undefined;
+    edgeLastError = null;
+    return fallback ? { ...sys, fallback: true, detail } : sys;
+  }
+
+  return speakSystem(messageId, chunks, opts);
+}
+
+/** Stop playback immediately and reset state. Safe to call when idle. */
+export function stopTts(): void {
+  generation++;
+  stopEdgeAudio();
+  try {
+    synth()?.cancel();
+  } catch {
+    // ignore
+  }
+  setState({ status: "idle" });
+}
+
+/** Cancel any in-flight Edge <audio> and release its blob URL. */
+function stopEdgeAudio(): void {
+  if (currentAudio) {
+    try {
+      currentAudio.pause();
+    } catch {
+      // ignore
+    }
+    currentAudio = null;
+  }
+  if (currentObjectUrl) {
+    try {
+      URL.revokeObjectURL(currentObjectUrl);
+    } catch {
+      // ignore
+    }
+    currentObjectUrl = null;
+  }
+}
+
+/** base64 → bytes (the renderer has atob). */
+function base64ToBytes(b64: string): ArrayBuffer {
+  const bin = atob(b64);
+  const buf = new ArrayBuffer(bin.length);
+  const view = new Uint8Array(buf);
+  for (let i = 0; i < bin.length; i++) view[i] = bin.charCodeAt(i);
+  return buf;
+}
+
+/**
+ * Play one synthesized MP3. Resolves true when it finished, false on error.
+ * A newer generation (stop / new speak) pauses the element immediately.
+ */
+function playBase64Audio(base64: string, mime: string, myGen: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let url: string;
+    let audio: HTMLAudioElement;
+    try {
+      url = URL.createObjectURL(new Blob([base64ToBytes(base64)], { type: mime || "audio/mpeg" }));
+      audio = new Audio(url);
+      audio.preload = "auto";
+    } catch {
+      resolve(false);
+      return;
+    }
+    currentAudio = audio;
+    currentObjectUrl = url;
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (currentAudio === audio) currentAudio = null;
+      if (currentObjectUrl === url) currentObjectUrl = null;
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
+      resolve(ok);
+    };
+    audio.onended = () => done(true);
+    audio.onerror = () => done(false);
+    if (myGen !== generation) {
+      done(false);
+      return;
+    }
+    audio.play().catch(() => done(false));
+  });
+}
+
+/**
+ * Edge playback loop. Returns null when nothing was played and the caller should
+ * fall back to the system engine; otherwise the in-flight result.
+ */
+async function speakEdge(messageId: string, chunks: string[], opts: SpeakOptions): Promise<SpeakResult | null> {
+  const myGen = ++generation;
+  stopEdgeAudio();
+  setState({ status: "speaking", messageId });
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (myGen !== generation) return { ok: true };
+    let res: Awaited<ReturnType<typeof window.pi.voice.synthesize>> | null = null;
+    try {
+      res = await window.pi.voice.synthesize({ text: chunks[i], voice: opts.edgeVoice, rate: opts.rate });
+    } catch (e) {
+      res = null;
+      edgeLastError = `ipc:${String((e as Error)?.message || e).slice(0, 120)}`;
+    }
+    if (myGen !== generation) return { ok: true };
+    const base64 = res?.ok ? res.audioBase64 : undefined;
+    if (!base64) {
+      edgeLastError = typeof res?.error === "string" && res.error ? res.error.slice(0, 120) : "no-audio";
+      setState({ status: "idle" });
+      // Nothing heard yet → let the caller fall back; otherwise stop cleanly.
+      return i === 0 ? null : { ok: true };
+    }
+    const played = await playBase64Audio(base64, res?.mime || "audio/mpeg", myGen);
+    if (myGen !== generation) return { ok: true };
+    if (!played) {
+      edgeLastError = "playback-failed";
+      setState({ status: "idle" });
+      return i === 0 ? null : { ok: true };
+    }
+  }
+  if (myGen === generation) setState({ status: "idle" });
+  return { ok: true };
+}
+
+/** Offline engine: the original speechSynthesis chunk chain. */
+async function speakSystem(messageId: string, chunks: string[], opts: SpeakOptions): Promise<SpeakResult> {
+  const s = synth();
+  if (!s) return { ok: false, error: "unsupported" };
 
   let voice: SpeechSynthesisVoice | null = null;
   if (opts.voiceUri) {
@@ -238,17 +393,6 @@ export async function speakMessage(messageId: string, rawText: string, opts: Spe
   }
   if (myGen === generation) setState({ status: "idle" });
   return { ok: true };
-}
-
-/** Stop playback immediately and reset state. Safe to call when idle. */
-export function stopTts(): void {
-  generation++;
-  try {
-    synth()?.cancel();
-  } catch {
-    // ignore
-  }
-  setState({ status: "idle" });
 }
 
 function speakChunk(

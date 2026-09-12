@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import type { PermissionLevel, TaskModeDef } from "../lib/types";
-import { BUILTIN_DEFAULT_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
-import { Close, Edit, Plus, Trash } from "./icons";
+import { BUILTIN_BALANCED_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
+import { Close, Edit, Info, Plus, Trash } from "./icons";
+import { TaskModeDetailModal } from "./TaskModeDetailModal";
 
 /** One-line parameter labels shared by the form selects. */
 const PERMISSION_OPTIONS: { value: PermissionLevel; zh: string; en: string }[] = [
@@ -27,12 +28,14 @@ type FormState = {
   name: string;
   permission: string;
   thinking: string;
+  /** Hard read-only floor (overrides the permission pill, incl. full). */
+  enforce: boolean;
   instructions: string;
   specFile: string;
 };
 
 /** Management dialog for user-defined task modes (add / edit / delete).
- * Built-in short/long task modes can be re-parameterized but not deleted. */
+ * Built-in modes can be re-parameterized but not deleted. */
 export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const config = useStore((s) => s.config);
   const saveTaskModes = useStore((s) => s.saveTaskModes);
@@ -43,10 +46,14 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
   const modes = normalizeTaskModes(config?.taskModes, language);
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [detail, setDetail] = useState<TaskModeDef | null>(null);
 
   // Reset to the list view each time the dialog opens.
   useEffect(() => {
-    if (open) setForm(null);
+    if (open) {
+      setForm(null);
+      setDetail(null);
+    }
   }, [open]);
 
   // Esc closes even when focus is inside an input.
@@ -62,13 +69,14 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
   if (!open) return null;
 
   const startAdd = () =>
-    setForm({ id: null, name: "", permission: "sandbox", thinking: "", instructions: "", specFile: "" });
+    setForm({ id: null, name: "", permission: "sandbox", thinking: "", enforce: false, instructions: "", specFile: "" });
   const startEdit = (m: TaskModeDef) =>
     setForm({
       id: m.id,
       name: m.name || "",
       permission: m.permission ?? "",
       thinking: m.thinking ?? "",
+      enforce: m.enforce === "readonly",
       instructions: m.instructions ?? "",
       specFile: m.specFile ?? "",
     });
@@ -84,8 +92,16 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
   };
 
   // Name must be unique among the OTHER modes (editing keeps its own name).
-  const nameTaken = !!form && modes.some((m) => m.id !== form.id && m.name?.trim() === form.name.trim());
+  // Compare effective display names so a custom mode can never shadow a
+  // built-in (which stores no `name` field) and produce two “调研” rows.
+  const normalizeName = (value: string) => value.trim().toLocaleLowerCase();
+  const candidateName = normalizeName(form?.name ?? "");
+  const nameTaken =
+    candidateName.length > 0 &&
+    modes.some((m) => m.id !== form?.id && normalizeName(taskModeName(m, language)) === candidateName);
   const isBuiltinEdit = !!form?.id && modes.some((m) => m.id === form.id && m.builtin);
+  // Research/review carry a non-removable read-only floor (see normalizeTaskModes).
+  const enforceLocked = !!form?.id && ["research", "review"].includes(form.id);
   const formNameValid = !form || isBuiltinEdit || (form.name.trim().length > 0 && !nameTaken);
 
   const save = async () => {
@@ -99,15 +115,24 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
       let next: TaskModeDef[];
       if (form.id) {
         // Edit existing (built-ins keep their fixed display name).
-        next = modes.map((m) =>
-          m.id === form.id
-            ? { ...m, ...(form.name.trim() && !m.builtin ? { name: form.name.trim().slice(0, 40) } : {}), permission: (form.permission || undefined) as PermissionLevel | undefined, thinking: form.thinking || undefined, ...behaviour }
-            : m,
-        );
+        next = modes.map((m) => {
+          if (m.id !== form.id) return m;
+          const updated: TaskModeDef = {
+            ...m,
+            ...(form.name.trim() && !m.builtin ? { name: form.name.trim().slice(0, 40) } : {}),
+            permission: (form.permission || undefined) as PermissionLevel | undefined,
+            thinking: form.thinking || undefined,
+            ...behaviour,
+          };
+          // Unchecking must REMOVE the flag — a spread of `m` would keep it.
+          if (form.enforce) updated.enforce = "readonly";
+          else delete updated.enforce;
+          return updated;
+        });
       } else {
         next = [
           ...modes,
-          { id: crypto.randomUUID(), name: form.name.trim().slice(0, 40), permission: (form.permission || undefined) as PermissionLevel | undefined, thinking: form.thinking || undefined, ...behaviour },
+          { id: crypto.randomUUID(), name: form.name.trim().slice(0, 40), permission: (form.permission || undefined) as PermissionLevel | undefined, thinking: form.thinking || undefined, ...(form.enforce ? { enforce: "readonly" as const } : {}), ...behaviour },
         ];
       }
       const ok = await saveTaskModes(next);
@@ -125,8 +150,8 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
   const remove = async (id: string) => {
     const target = modes.find((m) => m.id === id);
     if (!target || target.builtin) return;
-    // A deleted mode that was the default would leave a dangling id — fall back to baseline.
-    const nextDefault = config?.defaultTaskModeId === id ? BUILTIN_DEFAULT_ID : undefined;
+    // A deleted mode that was the default would leave a dangling id — fall back to balanced.
+    const nextDefault = config?.defaultTaskModeId === id ? BUILTIN_BALANCED_ID : undefined;
     const ok = await saveTaskModes(modes.filter((m) => m.id !== id), nextDefault);
     if (ok) void resyncTaskMode(id, true); // clear the injection in threads still on it
   };
@@ -183,6 +208,26 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
               </select>
             </div>
             <div className="tm-field">
+              <label className="tm-check-label">
+                <input
+                  type="checkbox"
+                  checked={form.enforce || enforceLocked}
+                  disabled={enforceLocked}
+                  onChange={(e) => setForm({ ...form, enforce: e.target.checked })}
+                />
+                {zh ? "强制只读（优先于权限级别，含完全权限）" : "Enforced read-only (overrides permission level, incl. full access)"}
+              </label>
+              <small className="tm-hint">
+                {enforceLocked
+                  ? zh
+                    ? "调研/审查模式固定为强制只读，不可关闭；如需可执行的调研请另建自定义模式。"
+                    : "Research/review are always enforced read-only and cannot be switched off; create a custom mode if you need research with execution."
+                  : zh
+                    ? "激活期间系统会拦截该会话的一切写操作（bash 修改命令、文件写入/编辑、子智能体），即使权限设为完全权限；只读工具与提问卡片不受影响。"
+                    : "While active, the system blocks every mutation in this thread (mutating bash commands, file writes/edits, subagents) even under full access; read-only tools and question cards are unaffected."}
+              </small>
+            </div>
+            <div className="tm-field">
               <label>{zh ? "行为指令（可选）" : "Behavioural instructions (optional)"}</label>
               <textarea
                 rows={4}
@@ -228,8 +273,8 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
           <>
             <p className="tm-hint">
               {zh
-                ? "任务模式 = 权限级别 + 思考等级的命名预设，点击输入框左下的模式按钮即可应用。内置模式可改参数、不可删除。"
-                : "A task mode is a named preset of permission level + thinking level, applied from the pill in the composer. Built-ins can be re-parameterized but not deleted."}
+                ? "任务模式 = 权限级别 + 思考等级（+可选强制只读）的命名预设，点击输入框左下的模式按钮即可应用。内置调研/审查模式固定带「强制只读」：激活期间任何写操作都会被系统拦截，与权限设置无关；内置模式可改参数、不可删除。"
+                : "A task mode is a named preset of permission level + thinking level (+ optional enforced read-only), applied from the pill in the composer. Built-in research/review are always enforced read-only: while active, every write operation is blocked by the system regardless of the permission setting; built-ins can be re-parameterized but not deleted."}
             </p>
             <div className="tm-list">
               {modes.map((m) => (
@@ -241,6 +286,9 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
                     </span>
                     <span className="tm-row-summary">{taskModeSummary(m, language)}</span>
                   </div>
+                  <button className="iconbtn" title={zh ? "查看说明" : "View description"} onClick={() => setDetail(m)}>
+                    <Info size={14} />
+                  </button>
                   <button className="iconbtn" title={zh ? "编辑参数" : "Edit parameters"} onClick={() => startEdit(m)}>
                     <Edit size={14} />
                   </button>
@@ -263,6 +311,7 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
           </>
         )}
       </div>
+      {detail && <TaskModeDetailModal mode={detail} language={language} onClose={() => setDetail(null)} />}
     </div>
   );
 }

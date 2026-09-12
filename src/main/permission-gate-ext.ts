@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 type RiskLevel = "allow" | "approval" | "always";
 type ShellDecision = {
@@ -143,6 +143,15 @@ const SAFE_TOOLS = new Set([
   // user's selection as text (no I/O) — gating it would stack an approval
   // card on top of the choice card itself.
   "mpi_ask_choice",
+  // mpi_request_mode_switch only renders a confirmation card; main performs
+  // the actual permission switch AFTER explicit user approval. Gating it
+  // under enforced read-only would break the research closed loop (plan →
+  // request switch → execute): the agent could never ask to leave the mode.
+  "mpi_request_mode_switch",
+  // mpi_todo_* only touch MPI's own todo panel via main IPC — part of the
+  // normal research workflow ("record a follow-up task"), no shell/file risk.
+  "mpi_todo_add",
+  "mpi_todo_list",
   "ask_question",
   "plan_question",
   "plan_complete",
@@ -728,22 +737,109 @@ export default function permissionGate(pi: any) {
     return "sandbox";
   };
 
-  // The UI language rarely changes; re-parsing the whole config.json on every
-  // tool call was pure waste. Cache by mtime+size — a stat is cheap and the
-  // read/parse only happens when main actually rewrote the file.
-  let langCache: { mtimeMs: number; size: number; lang: "en" | "zh" } | null = null;
-  const language = (): "en" | "zh" => {
-    if (!modeFile) return "en";
+  // The UI language and the trusted-tools list rarely change; re-parsing the
+  // whole config.json on every tool call was pure waste. Cache by mtime+size —
+  // a stat is cheap and the read/parse only happens when main rewrote it.
+  let configCache: {
+    mtimeMs: number;
+    size: number;
+    lang: "en" | "zh";
+    trusted: Set<string>;
+    enforcedUuids: Map<string, "readonly">;
+  } | null = null;
+  const readConfigMeta = (): { lang: "en" | "zh"; trusted: Set<string>; enforcedUuids: Map<string, "readonly"> } => {
+    if (!modeFile) return { lang: "en", trusted: new Set(), enforcedUuids: new Map() };
     try {
       const configPath = resolve(dirname(modeFile), "..", "config.json");
       const st = statSync(configPath);
-      if (langCache && langCache.mtimeMs === st.mtimeMs && langCache.size === st.size) return langCache.lang;
+      if (configCache && configCache.mtimeMs === st.mtimeMs && configCache.size === st.size) {
+        return { lang: configCache.lang, trusted: configCache.trusted, enforcedUuids: configCache.enforcedUuids };
+      }
       const config = JSON.parse(readFileSync(configPath, "utf8"));
       const lang: "en" | "zh" = config?.language === "zh" ? "zh" : "en";
-      langCache = { mtimeMs: st.mtimeMs, size: st.size, lang };
-      return lang;
+      const rawTrusted = Array.isArray(config?.trustedTools) ? (config!.trustedTools as unknown[]) : [];
+      const trusted = new Set(
+        rawTrusted.filter((t): t is string => typeof t === "string" && t.trim().length > 0).map((t) => t.trim()),
+      );
+      // Which threads are on an enforced mode: join config.threadTaskModes
+      // (uuid → mode id, kept by main on every apply/clear) with the modes'
+      // enforce flags. Research/review count as enforced even when a legacy
+      // saved config predates the flag — mirrors normalizeTaskModes in the
+      // renderer, which force-seeds them.
+      const modeEnforce = new Map<string, "readonly">([
+        ["research", "readonly"],
+        ["review", "readonly"],
+      ]);
+      if (Array.isArray(config?.taskModes)) {
+        for (const m of config.taskModes as unknown[]) {
+          const e = m as Record<string, unknown> | null;
+          if (e && typeof e === "object" && e.enforce === "readonly" && typeof e.id === "string") {
+            modeEnforce.set(e.id, "readonly");
+          }
+        }
+      }
+      const enforcedUuids = new Map<string, "readonly">();
+      if (config?.threadTaskModes && typeof config.threadTaskModes === "object") {
+        for (const [uuid, modeId] of Object.entries(config.threadTaskModes as Record<string, unknown>)) {
+          if (typeof uuid === "string" && typeof modeId === "string" && modeEnforce.has(modeId)) {
+            enforcedUuids.set(uuid, "readonly");
+          }
+        }
+      }
+      configCache = { mtimeMs: st.mtimeMs, size: st.size, lang, trusted, enforcedUuids };
+      return { lang, trusted, enforcedUuids };
     } catch {
-      return "en";
+      return { lang: "en", trusted: new Set(), enforcedUuids: new Map() };
+    }
+  };
+  const language = (): "en" | "zh" => readConfigMeta().lang;
+
+  // Task-mode enforcement floor (调研/审查 etc.): main writes the active mode's
+  // state to <userData>/taskmodes/<sessionUuid>.json on every apply. The gate
+  // must honor it BEFORE the full early-return — an enforced-read-only mode
+  // stays read-only even when the permission pill says "full".
+  const taskModeDir = process.env.MPI_TASKMODE_DIR || "";
+  let enforceCache: { file: string; mtimeMs: number; size: number; parsed: Record<string, unknown> | null } | null =
+    null;
+  const readEnforce = (ctx: any): "readonly" | null => {
+    try {
+      const sessionFile: string | undefined = ctx?.sessionManager?.getSessionFile?.();
+      const m = /_(.+)\.jsonl$/.exec(basename(sessionFile || ""));
+      if (!m) return null; // draft thread without a session file yet
+      const uuid = m[1];
+      // 1) Per-thread state file (main rewrites it on every mode apply).
+      if (taskModeDir) {
+        try {
+          const file = join(taskModeDir, `${uuid}.json`);
+          const st = statSync(file);
+          let parsed: Record<string, unknown> | null;
+          if (
+            enforceCache &&
+            enforceCache.file === file &&
+            enforceCache.mtimeMs === st.mtimeMs &&
+            enforceCache.size === st.size
+          ) {
+            parsed = enforceCache.parsed;
+          } else {
+            try {
+              parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+            } catch {
+              parsed = null; // corrupt → treat as absent
+            }
+            enforceCache = { file, mtimeMs: st.mtimeMs, size: st.size, parsed };
+          }
+          if (parsed?.enforce === "readonly") return "readonly";
+        } catch {
+          /* no state file → fall through to the config source */
+        }
+      }
+      // 2) Config fallback: the thread's recorded mode is an enforced one.
+      //    Catches legacy threads whose state file predates the enforce field
+      //    (written by older builds before a re-apply happens).
+      return readConfigMeta().enforcedUuids.get(uuid) ?? null;
+    } catch {
+      // Never break the agent loop over an enforcement lookup problem.
+      return null;
     }
   };
 
@@ -768,7 +864,7 @@ export default function permissionGate(pi: any) {
     title: string,
     reason: string,
     detail: string,
-    options: { exactKey?: string; prefixKey?: string; toolKey?: string; cacheable?: boolean } = {},
+    options: { exactKey?: string; prefixKey?: string; toolKey?: string; cacheable?: boolean; allowAlways?: boolean } = {},
   ) => {
     const zh = language() === "zh";
     if (!ctx.hasUI) {
@@ -786,12 +882,16 @@ export default function permissionGate(pi: any) {
         ? `本会话允许工具：${options.toolKey}`
         : `Allow tool for this session: ${options.toolKey}`
       : "";
+    // Stable cross-process contract with main (ipc.ts intercepts the response
+    // and persists the choice into config.trustedTools).
+    const allowAlways = options.allowAlways ? (zh ? "始终允许该工具（跨会话）" : "Always allow this tool (persistent)") : "";
     const deny = zh ? "拒绝" : "Deny";
     const choices = [
       allowOnce,
       ...(options.cacheable && options.exactKey ? [allowExact] : []),
       ...(options.cacheable && allowPrefix ? [allowPrefix] : []),
       ...(options.cacheable && allowTool ? [allowTool] : []),
+      ...(allowAlways ? [allowAlways] : []),
       deny,
     ];
     // Stable prefix matched by the main process (system notifications) and the
@@ -806,6 +906,8 @@ export default function permissionGate(pi: any) {
     if (choice === allowExact && options.exactKey) approvedExact.add(options.exactKey);
     if (allowPrefix && choice === allowPrefix && options.prefixKey) approvedPrefixes.add(options.prefixKey);
     if (allowTool && choice === allowTool && options.toolKey) approvedTools.add(options.toolKey);
+    // Session-level grant now; main persists the cross-session trust itself.
+    if (allowAlways && choice === allowAlways && options.toolKey) approvedTools.add(options.toolKey);
     return undefined;
   };
 
@@ -821,8 +923,22 @@ export default function permissionGate(pi: any) {
 
   pi.on("tool_call", async (event: any, ctx: any) => {
     const mode = currentMode();
-    if (mode === "full") return undefined;
+    // Task-mode enforcement floor first: an enforced-read-only mode (research/
+    // review) wins over the permission pill — even "full". Without this check
+    // before the early-return, research+full would gate nothing at all.
+    const enforce = readEnforce(ctx);
+    if (mode === "full" && !enforce) return undefined;
+    const effective: GateMode = enforce ? "readonly" : mode;
     const zh = language() === "zh";
+    // Suffix for block messages when the floor — not the pill — is in charge.
+    const roSuffix = enforce ? (zh ? "（任务模式强制只读）" : " (task mode enforces read-only)") : "";
+    // Read-only blocks must also steer the model, not just refuse: stop retrying
+    // variants and surface the mode conflict to the user in its reply. 2026-09
+    // review-mode test — the agent tried four blocked commands before telling
+    // the user the request was incompatible with the mode.
+    const stopAndReport = zh
+      ? "请立即停止尝试同类操作，并在回复中第一时间告知用户当前模式无法完成该请求。"
+      : "Stop attempting similar operations and tell the user in your reply that the current mode cannot fulfil this request.";
 
     if (event.toolName === "bash") {
       const command = String(event.input?.command || "");
@@ -833,17 +949,17 @@ export default function permissionGate(pi: any) {
       // approved this exact operation for the thread; readonly blocks them.
       if (decision.risk === "allow") {
         if (!decision.writes) return undefined; // read-only always passes
-        if (mode === "sandbox" || (mode === "strict" && hasShellApproval(decision))) return undefined;
+        if (effective === "sandbox" || (effective === "strict" && hasShellApproval(decision))) return undefined;
       } else if (decision.risk === "approval" && hasShellApproval(decision)) {
         return undefined;
       }
-      if (mode === "readonly") {
+      if (effective === "readonly") {
         const reason =
           zh ? decision.reasonZh || decision.reason : decision.reason;
         return blocked(
           zh
-            ? `只读模式已阻止：${reason || "该操作可能修改本地状态"}。如用户需要执行修改操作，请提示其将权限切换到沙盒或更高。`
-            : `Read-only mode blocked this operation: ${reason || "it may mutate local state"}. If the user needs changes, ask them to switch permission to Sandbox or higher.`,
+            ? `只读模式已阻止：${reason || "该操作可能修改本地状态"}${roSuffix}。如用户需要执行修改操作，请提示其将权限切换到沙盒或更高（强制只读模式下需先切换任务模式）。${stopAndReport}`
+            : `Read-only mode blocked this operation: ${reason || "it may mutate local state"}${roSuffix}. If the user needs changes, ask them to switch permission to Sandbox or higher (or leave the enforced task mode first). ${stopAndReport}`,
         );
       }
       return requestApproval(ctx, "Shell", zh ? decision.reasonZh || decision.reason : decision.reason, command, {
@@ -859,11 +975,11 @@ export default function permissionGate(pi: any) {
       // Sensitive/unverifiable writes are gated in every non-full mode; readonly
       // blocks them outright instead of prompting.
       const gateWrite = (reason: string, detail: string) =>
-        mode === "readonly"
+        effective === "readonly"
           ? blocked(
               zh
-                ? `只读模式已阻止文件修改：${reason}。如用户需要修改文件，请提示其将权限切换到沙盒或更高。`
-                : `Read-only mode blocked this file change: ${reason}. If the user needs changes, ask them to switch permission to Sandbox or higher.`,
+                ? `只读模式已阻止文件修改：${reason}${roSuffix}。如用户需要修改文件，请提示其将权限切换到沙盒或更高（强制只读模式下需先切换任务模式）。${stopAndReport}`
+                : `Read-only mode blocked this file change: ${reason}${roSuffix}. If the user needs changes, ask them to switch permission to Sandbox or higher (or leave the enforced task mode first). ${stopAndReport}`,
             )
           : requestApproval(ctx, event.toolName, reason, detail, { cacheable: false });
       if (!path) {
@@ -892,7 +1008,7 @@ export default function permissionGate(pi: any) {
       }
       // Strict mode gates every non-sensitive write/edit too; the tool-level
       // grant ("allow this tool for this thread") keeps long refactors usable.
-      if (mode === "strict") {
+      if (effective === "strict") {
         if (approvedTools.has(event.toolName)) return undefined;
         return requestApproval(
           ctx,
@@ -902,13 +1018,22 @@ export default function permissionGate(pi: any) {
           { toolKey: event.toolName, cacheable: true },
         );
       }
+      // Read-only is a hard floor for ordinary project-local writes too — the
+      // gateWrite calls above only cover sensitive/unverifiable paths.
+      if (effective === "readonly") {
+        return blocked(
+          zh
+            ? `只读模式已阻止文件修改：${path}${roSuffix}。如用户需要修改文件，请提示其将权限切换到沙盒或更高（强制只读模式下需先切换任务模式）。${stopAndReport}`
+            : `Read-only mode blocked this file change: ${path}${roSuffix}. If the user needs changes, ask them to switch permission to Sandbox or higher (or leave the enforced task mode first). ${stopAndReport}`,
+        );
+      }
       return undefined; // sandbox: non-sensitive writes run without prompting
     }
 
     const toolName = String(event.toolName || "");
     if (SAFE_TOOLS.has(toolName)) return undefined;
     if (SUBAGENT_TOOLS.has(toolName)) {
-      if (mode === "readonly") {
+      if (effective === "readonly") {
         return blocked(
           zh ? "只读模式已阻止子智能体：其内部操作无法逐项拦截。" : "Read-only mode blocks child agents: their internal operations cannot be intercepted per tool.",
         );
@@ -923,11 +1048,21 @@ export default function permissionGate(pi: any) {
         { cacheable: false },
       );
     }
-    if (approvedTools.has(toolName)) return undefined;
     const mutating = MUTATING_TOOL_NAME.test(toolName);
-    if (mode === "readonly") {
-      return blocked(zh ? `只读模式已阻止扩展工具 ${toolName}。` : `Read-only mode blocked extension tool ${toolName}.`);
+    // Read-only is a hard floor: even tools approved earlier in the session
+    // must not pass once the thread became read-only (pill or enforced).
+    if (effective === "readonly") {
+      return blocked(
+        zh
+          ? `只读模式已阻止扩展工具 ${toolName}${roSuffix}。${stopAndReport}`
+          : `Read-only mode blocked extension tool ${toolName}${roSuffix}. ${stopAndReport}`,
+      );
     }
+    if (approvedTools.has(toolName)) return undefined;
+    // Persistently trusted extension tools (“始终允许该工具” / Settings) skip
+    // approval in sandbox/strict. Deliberately NOT honored under readonly —
+    // trust is a friction reducer, not a bypass of the read-only contract.
+    if (readConfigMeta().trusted.has(toolName)) return undefined;
     return requestApproval(
       ctx,
       toolName || "Extension tool",
@@ -939,7 +1074,7 @@ export default function permissionGate(pi: any) {
           ? "该扩展工具没有声明可验证的只读风险级别。"
           : "This extension tool has no verifiable read-only risk declaration.",
       redactInput(event.input),
-      { toolKey: toolName, cacheable: !mutating },
+      { toolKey: toolName, cacheable: !mutating, allowAlways: true },
     );
   });
 

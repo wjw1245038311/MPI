@@ -3,7 +3,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { getSessionsDir } from "./session-store";
 
 /**
- * Backup & restore (Settings → 备份与恢复).
+ * Backup & restore (Settings → 数据管理).
  *
  * Two independent artifacts:
  * - Config backup: a single JSON document wrapping the app's config.json.

@@ -77,7 +77,7 @@ The installers are not code-signed yet, so the OS may show a security warning on
 
 ### 2.4 Verifying the installer (optional)
 
-If a `.exe.sha256` file with the same base name ships next to the installer, you can verify integrity first: run `Get-FileHash .\MPI-Setup-x.y.z.exe -Algorithm SHA256` in PowerShell and compare the output character by character with the sidecar file. You can also view the verification steps inside the app: **Settings → About MPI → View changelog** (the modal footer includes "How to verify the install").
+If a `.exe.sha256` file with the same base name ships next to the installer, you can verify integrity first: run `Get-FileHash .\MPI-Setup-x.y.z.exe -Algorithm SHA256` in PowerShell and compare the output character by character with the sidecar file. You can also view the verification steps inside the app: **Settings → System & diagnostics → App update → View changelog** (the modal footer includes "How to verify the install").
 
 ### 2.5 First launch
 
@@ -88,7 +88,7 @@ If a `.exe.sha256` file with the same base name ships next to the installer, you
 
 ### 2.6 Launch at startup
 
-**Settings → General → Launch at startup**. When enabled, MPI starts automatically when you log in (on Windows this creates a shortcut in the Start menu's Startup folder). Unchecking removes it.
+**Settings → System & diagnostics → Launch at startup**. When enabled, MPI starts automatically when you log in (on Windows this creates a shortcut in the Start menu's Startup folder). Unchecking removes it.
 
 ---
 
@@ -153,6 +153,7 @@ Composer, left to right:
 | --- | --- |
 | `+` | Add file/image attachments |
 | `/ Commands` | Open the slash-command menu (built-in commands, extension commands and skills) |
+| Task mode pill (⚡) | One-click preset of "permission + thinking + behaviour instructions" (Balanced/Iterate/Research/Review, plus custom), see [6.7](#67-task-modes-switch-how-the-agent-works-in-one-click) |
 | Permission pill | Switch the current session's permission mode (four levels, see [Section 8](#8-permission-modes)) |
 | Ring button | Context usage progress ring + detail popover (see [Section 9](#9-context-management)) |
 | Model pill | Pick provider / model / thinking level, plus "Session tools" (completion sound toggle) |
@@ -225,14 +226,14 @@ Note: the actually available levels also depend on the model's live capability l
 
 ### 4.5 Thinking defaults
 
-**Settings → Thinking Defaults**:
+**Settings → Conversation → Default thinking depth**:
 
 - Default thinking depth, default provider / default model: initial choices for new sessions (still switchable at any time inside a session).
 - Hide thinking blocks: when on, thinking content is not shown in replies.
 
 ### 4.6 Troubleshooting "my config has no effect"
 
-1. Open **Settings → Diagnostics & Config** to see the actual paths of `models.json`, `settings.json` and `auth.json`, and make sure you're editing the right file.
+1. Open **Settings → System & diagnostics** to see the actual paths of `models.json`, `settings.json` and `auth.json`, and make sure you're editing the right file.
 2. Common causes: misspelled model ID; Base URL missing or with an extra `/v1`; API type mismatched with the protocol; key without permission; "Thinking" not enabled on the model, so no levels appear.
 
 ### 4.7 User Profile
@@ -274,9 +275,9 @@ Clicking fork/clone while a reply is streaming asks you to wait for it to finish
 
 ### 5.5 Archive and Delete
 
-- Archive session: hover the session row and click the archive icon (or right-click). Archived sessions disappear from the sidebar and default search; find them under "Settings → Archive & Trash" or Ctrl+K (with "Archive & trash" checked) and restore with one click.
+- Archive session: hover the session row and click the archive icon (or right-click). Archived sessions disappear from the sidebar and default search; find them under "Settings → Data management → Archive & Trash" or Ctrl+K (with "Archive & trash" checked) and restore with one click.
 - Archive project: right-click a project → "Archive project". All of its sessions are archived together; restoring works the same way.
-- Delete session: hover and click the trash icon, or right-click "Delete". By default this moves it to the trash (recoverable); only deleting again from the trash is permanent. Turning off the trash switch in "Settings → General" makes deletes immediately permanent. See [Section 16](#16-archive-and-trash).
+- Delete session: hover and click the trash icon, or right-click "Delete". By default this moves it to the trash (recoverable); only deleting again from the trash is permanent. Turning off the trash switch in "Settings → Data management" makes deletes immediately permanent. See [Section 16](#16-archive-and-trash).
 
 ### 5.6 Other session behaviors
 
@@ -322,6 +323,23 @@ Any send failure (connection failure, RPC error, …) rolls back the displayed u
 - Under agent replies: copy, helpful/not-helpful feedback.
 - The "completion sound" toggle lives under "Session tools" in the model selector popover; it plays a short beep when the agent finishes a task and can be turned off.
 
+### 6.7 Task modes (switch how the agent works in one click)
+
+A task mode is a named preset of "permission level + thinking depth + optional behaviour instructions", switched from the ⚡ button to the left of the permission pill in the composer (takes effect immediately; it does not affect model selection). Open the dropdown: each row shows its name and a parameter summary (e.g. "Sandbox · Low thinking"), the ⓘ at the row end reveals the full parameters and instructions, and "Manage task modes…" at the bottom creates / edits custom modes.
+
+Four built-ins:
+
+| Mode | Parameters | Use |
+| --- | --- | --- |
+| **Balanced** (default) | Sandbox · low thinking | Everyday development; the recommended default, applied to new sessions automatically. |
+| **Iterate** | Full access · low thinking · with spec | Runs long tasks through the loop-dev workflow: reconnoitre, split, present a plan and wait for approval, then execute and verify step by step. |
+| **Research** | Enforced read-only · medium thinking | Investigate only: presents a sourced research report and waits for your confirmation before implementing. |
+| **Review** | Enforced read-only · x-high thinking | Review only: lists issues by severity with fix suggestions, without changing code. |
+
+- **Enforced read-only**: while Research / Review is active, every write operation is blocked by the system regardless of the permission level (a safety floor you cannot bypass by raising permissions). Once the agent has produced a plan and needs to act, it may pop a "mode switch request" card; clicking "Approve and switch" lifts the enforced read-only for that session in real time and continues execution (denying or closing keeps it read-only); to research and act over the long term, copy the parameters into a custom mode.
+- **Custom modes**: the management modal lets you create modes and edit their parameters and instructions; instructions can be a block of text or point at an external markdown "spec" file, injected into the system prompt every turn while active (live; edit the file to update). Built-ins can be re-parameterized but not deleted.
+- Applying a mode sets the chosen parameters in one go; parameters set to "leave unchanged" keep the session's current value.
+
 ---
 
 ## 7. Voice System
@@ -335,21 +353,21 @@ The microphone button sits right of "Add files" in the composer's bottom bar:
 1. Click to start recording — the button turns red with a pulsing dot and an elapsed-time counter; recordings auto-stop at 3 minutes, Esc cancels (no text produced).
 2. Click again to stop. The audio is converted locally to WAV and sent to your configured transcription service; the result is **appended to the editor** (never auto-sent) so you can review and edit it first.
 
-The transcription service is configured under **Settings → General → Voice system**. Two backends:
-
-| Backend | Description | Default model |
-| --- | --- | --- |
-| OpenAI-compatible | Any `/v1/audio/transcriptions` endpoint (OpenAI or compatible gateways) | whisper-1 |
-| Gemini | Google's inline-audio API; only the API key is needed | gemini-2.5-flash |
+The transcription service is configured under **Settings → Conversation → Voice system**: it supports any **OpenAI-compatible `/v1/audio/transcriptions` endpoint** (OpenAI or a compatible gateway; default model `whisper-1`).
 
 For credentials you can either **reference an already-configured provider** from Models & Providers (its base URL/key are read live — rotating a key needs no re-save of voice settings) or enter a Base URL + API Key manually. The "Test connection" button sends a silent-audio probe to verify endpoint, key and model.
 
 ### 7.2 Voice Output (Read Aloud)
 
 - **Per-message**: each agent reply has a speaker button in its footer; click to read that message aloud (the button becomes a stop icon), click again to stop immediately. Code blocks collapse into a single "(code block)" marker, links are read by their label only, and thinking content is never spoken.
-- **Auto-read**: tick "Auto-read the agent's reply when a turn settles" under Settings → General → Voice system. The visible session's replies are then read automatically after each turn; background sessions stay silent.
+- **Auto-read**: tick "Auto-read the agent's reply when a turn settles" under Settings → Conversation → Voice system. The visible session's replies are then read automatically after each turn; background sessions stay silent.
 
-Read-aloud uses the platform's built-in speech synthesis (on Windows: the voices installed with your OS — Chinese requires an installed zh voice), fully offline with no extra dependencies. Under **Settings → General → Voice system** you can pick the voice (default follows the UI language, preferring a matching-language voice), adjust the rate from 0.5× to 2×, and press "Preview" to audition.
+There are two read-aloud engines (Settings → Conversation → Voice system → Voice output):
+
+- **System voice (offline, default)**: uses the platform's built-in speech synthesis (on Windows: the voices installed with your OS — Chinese requires an installed zh voice), fully offline with no extra dependencies.
+- **Edge online neural voice (free)**: synthesized by Microsoft Edge's Read Aloud service for more natural voices. Offers 13 curated Chinese/English neural voices (Mandarin / Taiwan / Cantonese / US & UK English), needs no API key, but **requires network access**. If synthesis fails (offline or service unavailable) it automatically falls back to the system voice and tells you once that it has done so.
+
+With either engine you can pick the voice (default follows the UI language, preferring a matching-language voice), adjust the rate from 0.5× to 2×, and press "Preview" to audition.
 
 ---
 
@@ -364,7 +382,8 @@ MPI uses permission gates to control how Pi executes shell commands, writes file
 | Sandbox (default) | Low-risk in-project operations (e.g. `npm run build`) auto-run; dangerous commands, writes outside the project, etc. prompt for confirmation. | Everyday development, the recommended default. |
 | Full | Nothing is intercepted. | Tasks/environments you explicitly trust. |
 
-- Default permission for new sessions: a dropdown in Settings → General (Read-only/Strict/Sandbox/Full) controlling the initial level of subsequently created sessions; existing sessions keep their own settings.
+- Default permission for new sessions: a dropdown in Settings → Permissions & security (Read-only/Strict/Sandbox/Full) controlling the initial level of subsequently created sessions; existing sessions keep their own settings. Task modes (see [6.7](#67-task-modes-switch-how-the-agent-works-in-one-click)) also set the permission and thinking levels in one go; Research / Review are enforced read-only.
+- Trusted tools: in Settings → Permissions & security, click a card under "Common extension tools (click to trust)" or type a tool name to stop an extension tool (e.g. `mem0_memory`) from prompting every time under sandbox/strict. `bash` and file write/edit tools can never be trusted; read-only modes are unaffected.
 - Confirmation dialog: when authorization is needed, a "Permission required" dialog shows the exact command and target path; review it before allowing or denying. Beginners should read the command and its target location first.
 - Automations can't wait for human approval, so they only offer Sandbox / Full (see [Section 11](#11-automations-scheduled-tasks)).
 
@@ -472,7 +491,7 @@ Smart date parsing: you can write dates straight into the text. `send report tom
 
 Click a row to expand its inline editor: change title / note / due date and time (or clear them) and save, or delete directly (no confirmation dialog).
 
-Attachments: the dashed box below the description is the attachment area (Feishu Bitable style), with a permanent ＋ tile on its left. Click it to open the system file picker; you can also drag & drop files/images straight into the editor (the dashed box highlights while dragging), or click inside the box and press `Ctrl+V` to paste. Up to 10 attachments per todo, 50 MB each. Adding the same file again (picking/pasting/dragging a file with the same name and size) is deduped automatically: only one copy is kept, with a notice. Existing attachments show as cards: images as thumbnails (click for a full-screen preview overlay, zoom in/out at top-right, Esc to close), other files with name and size (click to open with the default app); × appears on hover to remove. Attachments are stored as copies (deleting the original has no effect), by default under `%APPDATA%\MPI\todo-attachments\`; the location is changeable in Settings → General (existing attachments stay where they are).
+Attachments: the dashed box below the description is the attachment area (Feishu Bitable style), with a permanent ＋ tile on its left. Click it to open the system file picker; you can also drag & drop files/images straight into the editor (the dashed box highlights while dragging), or click inside the box and press `Ctrl+V` to paste. Up to 10 attachments per todo, 50 MB each. Adding the same file again (picking/pasting/dragging a file with the same name and size) is deduped automatically: only one copy is kept, with a notice. Existing attachments show as cards: images as thumbnails (click for a full-screen preview overlay, zoom in/out at top-right, Esc to close), other files with name and size (click to open with the default app); × appears on hover to remove. Attachments are stored as copies (deleting the original has no effect), by default under `%APPDATA%\MPI\todo-attachments\`; the location is changeable in Settings → Data management (existing attachments stay where they are).
 
 ### 12.2 Smart sections
 
@@ -516,7 +535,7 @@ MCP (Model Context Protocol) servers provide pi with external tools and data sou
 
 ### 13.4 Extension model pick (no popups)
 
-Some extensions need a model and pop up to ask which one to use (the classic case: pi-web-access opens a browser curation window on every web search and asks which model should write the summary). With **Settings → General → "Extension model pick"** (on by default):
+Some extensions need a model and pop up to ask which one to use (the classic case: pi-web-access opens a browser curation window on every web search and asks which model should write the summary). With **Settings → Conversation → "Extension model pick"** (on by default):
 
 - **No popup**: MPI answers an extension's model-selection request automatically, using this conversation's current model. Unattended scheduled runs behave the same way.
 - **Web searches skip the browser window**: pi-web-access switches to the `auto-summary` workflow — a search returns an AI summary directly instead of opening the curation page; a single call can still pass `workflow: "summary-review"` for interactive curation.
@@ -549,7 +568,7 @@ The 🔍 button in the conversation toolbar, just left of the pin star icon, or 
 
 ## 16. Archive and Trash
 
-The **Settings → Archive & Trash** page manages three kinds of entries, all grouped by project (group headers show project name + count, collapsible); the search box at the top filters all three (substring match on title/project name/path):
+The **Settings → Data management → Archive & Trash** page manages three kinds of entries, all grouped by project (group headers show project name + count, collapsible); the search box at the top filters all three (substring match on title/project name/path):
 
 | Section | Content | Actions |
 | --- | --- | --- |
@@ -557,44 +576,56 @@ The **Settings → Archive & Trash** page manages three kinds of entries, all gr
 | Archived sessions | Individually archived sessions (archive time shown; full file path on hover) | Restore to the original project. |
 | Trash | Deleted sessions (on by default; shows delete time + size used), with "Empty trash" in the header (with confirmation) | "Restore session" back to its project / "Delete forever" (with confirmation). |
 
-Rules: archiving is a reversible tidying operation and doesn't touch the files themselves. Deleting goes to the trash first by default (`<userData>/trash/`); only deleting again from the trash is permanent. Turning off the trash switch in "Settings → General" makes deletes immediately permanent (entries already in the trash can still be restored or emptied).
+Rules: archiving is a reversible tidying operation and doesn't touch the files themselves. Deleting goes to the trash first by default (`<userData>/trash/`); only deleting again from the trash is permanent. Turning off the trash switch in "Settings → Data management" makes deletes immediately permanent (entries already in the trash can still be restored or emptied).
 
 ---
 
 ## 17. Settings Reference
 
-**Settings** entries: ⚙ in the title bar, menu "Edit → Open settings…". Left tabs below.
+**Settings** entries: ⚙ in the title bar, menu "Edit → Open settings…". There are 7 tabs: **Conversation / User profile / Models & providers / Permissions & security / Data management / Appearance / System & diagnostics**.
 
-### 17.1 General (default tab)
+> **Draft + explicit save**: every tab except "Appearance" is "edit then save" — changes land in a draft, a save button appears in the tab header and a small dot marks the tab, and nothing is written until you click save (a "Saved ✓" confirmation appears); closing settings with unsaved changes warns first. The Appearance tab takes effect immediately and auto-saves — no manual save needed.
 
-| Row | Notes |
+### 17.1 Conversation (default tab)
+
+| Item | Notes |
 | --- | --- |
-| Avatars | Upload custom chat avatars for "User" and "MPI agent"; images are compressed locally to ≤192px before saving, never uploaded anywhere. Can "Restore defaults" (Nobita / Doraemon). |
-| Launch at startup | Start MPI automatically when logging in. |
-| Trash | Deleted sessions go to the trash first (recoverable); turning off makes deletes immediately permanent. |
-| Voice system | Voice input (transcription service config + connection test) and voice output (voice / rate / preview / auto-read). See [Section 7](#7-voice-system). |
+| Default thinking depth | Initial thinking level for new sessions; the model must support reasoning for it to apply. |
+| Hide thinking blocks | When on, the agent's thinking is not shown — you only see the final reply. |
+| Voice system | Voice input (transcription service config + connection test) and voice output (system / Edge engine, voice / rate / preview / auto-read). See [Section 7](#7-voice-system). |
 | Extension model pick | When an extension needs a model, MPI uses this conversation's current model automatically instead of popping up; web searches skip the browser curation window (see [13.4](#134-extension-model-pick-no-popups)). On by default; turning it off restores the per-use prompt and `~/.pi/web-search.json`. |
-| Theme mode | A "Follow system" checkbox + light/dark preview cards; click to switch instantly. |
-| Accent color | 7 options: Follow theme (default), White, Light gray, Dark gray, Green, Red, Blue; the send button and selection highlights follow it. |
 | Diff display | Two modes for edit-tool diffs, "Unified view / Split before-after", unified by default. |
-| Window zoom | 50%–150%, shortcuts Ctrl+= / Ctrl+- (25% steps), Ctrl+0 to reset; persists across restarts. |
+| Default provider | Initial provider for new sessions (written to `~/.pi/agent/settings.json`, shared with terminal pi). |
+| Default model | Initial model for new sessions. |
 
 ### 17.2 User Profile
 
-See [Section 4](#4-configuring-models) (4.7). Edit, then click "Save" to apply; a small dot on the tab indicates unsaved changes.
+See [Section 4](#4-configuring-models) (4.7). Edit, then click "Save" to apply.
 
-### 17.3 Models & Providers / Thinking Defaults
+### 17.3 Models & Providers
 
-See [Section 4](#4-configuring-models). The top of the page has "Reload" and "Save models" buttons; model/thinking settings are written to `~/.pi/agent` (shared with terminal pi), and a small dot on the tab indicates unsaved changes.
+See [Section 4](#4-configuring-models). The top of the page has "Reload" and "Save models" buttons; model settings are written to `~/.pi/agent` (shared with terminal pi).
 
-### 17.4 Data Storage
+### 17.4 Permissions & Security
 
-Two independent data locations can be moved anywhere on this machine (system folder picker):
+| Item | Notes |
+| --- | --- |
+| New session permission | Read-only / Strict / Sandbox / Full, the initial level of subsequently created sessions. See [Section 8](#8-permission-modes). |
+| Common extension tools (click to trust) | Cards for common tools that would otherwise prompt; click a card to add/remove it from the trusted list. |
+| Trusted tools (always allowed) | Tag list of trusted tools, removable individually or added by typing a name. Trusted extension tools skip approval under sandbox/strict (e.g. `mem0_memory`). Read-only is unaffected; `bash` and file write/edit tools can never be trusted. |
 
-| Item | Default location | Contents |
-| --- | --- | --- |
-| Session storage location | `~/.pi/agent/sessions` | All pi session records (.jsonl). Changing it also syncs the `sessionDir` key in `~/.pi/agent/settings.json`, so terminal pi follows along. |
-| Todo data location | `%APPDATA%\MPI` (app config dir) | `todos.json`, attachments (`todo-attachments\`) and the agent inbox (`todos-inbox\`). |
+Click "Save permissions" in the tab header to apply.
+
+### 17.5 Data Management
+
+Three sections: **Storage locations**, **Archive & Trash**, and **Backup & restore**, plus the trash switch.
+
+| Item | Notes |
+| --- | --- |
+| Trash | Deleted sessions go to the trash first (recoverable); turning off makes deletes immediately permanent. See [Section 16](#16-archive-and-trash). |
+| Storage locations | Two independent locations can be moved anywhere: **Session storage location** (default `~/.pi/agent/sessions`, all pi session records `.jsonl`; changing it also syncs `sessionDir` in `~/.pi/agent/settings.json` so terminal pi follows) and **Todo data location** (default app config dir `%APPDATA%\MPI`, holding `todos.json`, attachments `todo-attachments\`, agent inbox `todos-inbox\`). |
+| Archive & Trash | See [Section 16](#16-archive-and-trash). |
+| Backup & restore | Two independent targets (app settings / sessions), each with export/import (below). |
 
 A change takes effect in two steps: picking a new folder only records the intent, an amber warning appears under the row ("Location changed; files move on next launch. Until then the app still reads the old location"), and after fully quitting MPI and restarting, all files are moved to the new location before the window opens. Migration rules:
 
@@ -605,28 +636,45 @@ A change takes effect in two steps: picking a new folder only records the intent
 
 When a custom location is set, each row shows a "Reset" button; hover the path text to see the currently effective directory. Migration results are logged in the console (`[migration]`).
 
-### 17.5 Archive & Trash
+Backup & restore (two independent targets):
 
-See [Section 16](#16-archive-and-trash).
-
-### 17.6 Backup & Restore
-
-Two independent backup targets, each with its own export/import pair:
-
-App settings: exports MPI's app configuration (`config.json`: theme, language, pins, avatars, user profile, automations, remote signaling…) as a single JSON file (default name `mpi-config-backup-<date>.json`). Import first shows how many recognizable settings the file contains and asks for confirmation; on confirm it overwrites only those fields (everything else is kept). Model providers / thinking defaults live in `~/.pi/agent` (shared with terminal pi) and are not part of this backup; machine-specific items (pi path, window position) are never restored.
-
-Sessions: tick the projects to export (select all / clear, each row shows session count and size), packaging their raw session JSONL files into a zip (`mpi-sessions-backup-<date>.zip`, project directory structure preserved). Import first reports "N new / M already present": by default only new sessions are imported and existing files are skipped; choose "Overwrite all" to restore from the backup instead. Imported sessions reappear under their original projects (the sidebar refreshes automatically).
+- **App settings**: exports the app configuration (`config.json`: theme, language, pins, avatars, user profile, automations, remote signaling…) as a single JSON file (default name `mpi-config-backup-<date>.json`). Import first shows how many recognizable settings the file contains and asks for confirmation; on confirm it overwrites only those fields (everything else is kept). Model providers / thinking defaults live in `~/.pi/agent` (shared with terminal pi) and are not part of this backup; machine-specific items (pi path, window position) are never restored.
+- **Sessions**: tick the projects to export (select all / clear, each row shows session count and size), packaging their raw session JSONL files into a zip (`mpi-sessions-backup-<date>.zip`, project directory structure preserved). Import first reports "N new / M already present": by default only new sessions are imported and existing files are skipped; choose "Overwrite all" to restore from the backup instead. Imported sessions reappear under their original projects (the sidebar refreshes automatically).
 
 Typical uses: migrating to a new PC, or taking a snapshot before big changes.
 
-### 17.7 Diagnostics & Config
+### 17.6 Appearance
 
-Shows Pi runtime status and the actual paths of each config file (`models.json` / `settings.json` / `auth.json`), clickable to open in File Explorer. Model/thinking settings are written to `~/.pi/agent` (shared with terminal pi); general settings live in the app's config directory; check here first when troubleshooting "I changed it but nothing happened".
+This tab takes effect immediately and auto-saves — no manual save needed.
 
-### 17.8 About MPI
+| Item | Notes |
+| --- | --- |
+| Avatars | Upload custom chat avatars for "User" and "MPI agent"; images are compressed locally to ≤192px before saving, never uploaded anywhere. Can "Restore defaults" (Nobita / Doraemon). |
+| Theme mode | A "Follow system" checkbox + light/dark preview cards; click to switch instantly. |
+| Accent color | 7 options: Follow theme (default), White, Light gray, Dark gray, Green, Red, Blue; the send button and selection highlights follow it. |
+| Language | UI language (Chinese / English). |
+| Window zoom | 50%–150%, shortcuts Ctrl+= / Ctrl+- (25% steps), Ctrl+0 to reset; persists across restarts. |
 
-- MPI app update: current/latest version, source (GitHub Releases), "View changelog" (bundled changelog, no network needed; footer includes SHA256 install verification steps), and "Install and restart" when a new version is found.
-- Update Pi core: manages the bundled pi runtime version. Update extensions in the "Extensions" panel instead.
+### 17.7 System & Diagnostics
+
+| Item | Notes |
+| --- | --- |
+| Launch at startup | Start MPI automatically when logging in (on Windows via the Start menu's Startup folder). |
+| App update | Current/latest version, source (GitHub Releases), "View changelog" (bundled changelog, no network needed; footer includes SHA256 install verification steps), and "Install and restart" when a new version is found. |
+| Update Pi core | Manages the bundled pi runtime version. Update extensions in the "Extensions" panel instead. |
+| Pi runtime | Shows node, node version, pi cli.js, pi version and other runtime status. |
+| Config files | Actual paths of each config file (`models.json` / `settings.json` / `auth.json`), clickable to open in File Explorer. Model/thinking settings are written to `~/.pi/agent` (shared with terminal pi); other settings live in the app config directory; check here first when troubleshooting "I changed it but nothing happened". |
+
+### 17.8 Developer-build-only features (not visible to regular users)
+
+Visible only in unpackaged **development builds**; the released build has none of these entries, so regular users can skip this.
+
+- **Developer tools**: the dropdown right of "Help" in the title bar, with three items:
+  - **Automated tests**: opens the test panel, listing cases grouped by feature; run logic cases, simulate scenario cases with a real session, and browse history.
+  - **One-click dev release**: the maintainer flow for starting a release review (shows version, worktree status, GitHub token, etc.).
+  - **Write user manual**: opens a new session that syncs this manual from the changelog via the project's user-manual skill.
+
+> These are maintainer tools, not part of the regular user-facing feature set.
 
 ---
 
@@ -720,11 +768,11 @@ One message at a time: sending while busy gets a "still processing" notice.
 | Content | Location (Windows) | Notes |
 | --- | --- | --- |
 | Pi agent config | `%USERPROFILE%\.pi\agent\` | `models.json`, `settings.json`, `auth.json`, extension/skill/MCP configs, shared with terminal pi. |
-| Session files | `~/.pi/agent/sessions/` (organized by project; changeable in Settings → Data Storage) | JSONL format; broken-session repair backups in `sessions/mpi-repair-backups/`. Location changes migrate automatically on next launch; terminal pi follows. |
+| Session files | `~/.pi/agent/sessions/` (organized by project; changeable in Settings → Data management → Storage locations) | JSONL format; broken-session repair backups in `sessions/mpi-repair-backups/`. Location changes migrate automatically on next launch; terminal pi follows. |
 | App config | `%APPDATA%\MPI\config.json` | General settings: theme, language, avatars, default permission, etc. |
 | Drafts | `%APPDATA%\MPI\drafts.json` | Unsent input; last 40 kept. |
-| Todo tasks | `%APPDATA%\MPI\todos.json` (changeable in Settings → Data Storage) | Per-project todos; agent writes arrive via the `todos-inbox/` inbox and are deduped on ingest. |
-| Todo attachments | `%APPDATA%\MPI\todo-attachments\` (changeable in Settings → Data Storage) | Image/file attachments for todos, stored as copies; existing ones stay put after a location change and are cleaned up when a todo is deleted. |
+| Todo tasks | `%APPDATA%\MPI\todos.json` (changeable in Settings → Data management → Storage locations) | Per-project todos; agent writes arrive via the `todos-inbox/` inbox and are deduped on ingest. |
+| Todo attachments | `%APPDATA%\MPI\todo-attachments\` (changeable in Settings → Data management → Storage locations) | Image/file attachments for todos, stored as copies; existing ones stay put after a location change and are cleaned up when a todo is deleted. |
 | Trash | `%APPDATA%\MPI\trash\` | Deleted session files. |
 | Bundled runtime | `%APPDATA%\MPI\runtime\versions\…` | Extracted on first launch; the built-in npm used for package installs lives here too. |
 
@@ -768,4 +816,4 @@ No. Their config directories are separate (`MPI Dev` / `MPI`), but they share th
 
 ---
 
-*This manual is written for MPI 0.6.x; UI wording follows the English interface (Chinese-interface terms are annotated where needed). For feature changes, refer to the changelog under "Settings → About MPI → View changelog".*
+*This manual is written for MPI 0.6.x; UI wording follows the English interface (Chinese-interface terms are annotated where needed). For feature changes, refer to the changelog under "Settings → System & diagnostics → App update → View changelog".*

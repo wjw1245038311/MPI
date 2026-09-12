@@ -6,7 +6,7 @@ import { getTrashDir } from "./trash-store";
 import { allAttachmentDirs, inboxDir, todosFilePath } from "./todo-store";
 
 /**
- * Data-location migrations (Settings → 数据存储). The user picks a new home for
+ * Data-location migrations (Settings → 数据管理). The user picks a new home for
  * the session JSONL files and/or the todo data; Settings records a pending
  * migration in config.json and the actual file moves happen on the NEXT launch
  * (runPendingDataMigrations), because running pi processes must not hold open
@@ -451,7 +451,7 @@ function runTodoMigration(pending: NonNullable<PendingDataMigration["todos"]>): 
 }
 
 // ---------------------------------------------------------------------------
-// IPC facade (Settings → 数据存储)
+// IPC facade (Settings → 数据管理)
 // ---------------------------------------------------------------------------
 
 export interface DataMigrationStatus {

@@ -1,0 +1,17 @@
+{
+  "id": "scenario-mode-switch-loop",
+  "title": "调研→批准切换→同轮实施 的完整闭环",
+  "feature": "任务模式·强制只读与切换",
+  "kind": "scenario",
+  "source": "changelog#10 / docs/TASKMODE-ENFORCE-DESIGN.md",
+  "harnessCaseId": "c2-full-loop",
+  "preprompt": "调研任务：如何给这个待办清单项目（todo-cli）增加「导出为 Markdown 文件」功能？请先广泛收集信息，输出完整调研方案（结论区分已核实与推测 + 建议执行步骤）；按调研模式要求出完方案后停下来等我确认；当前系统强制只读，如需写文件实施，请通过权限切换请求卡片征求我的同意。",
+  "assertions": [
+    "只读阶段出现 write/edit 被拒证据",
+    "出现权限切换请求卡片（modeSwitchRequested）",
+    "批准后同轮可写并生成产物（docs/*.txt 约 500 字）",
+    "切换前零文件变更（noPreSwitchWrites）"
+  ],
+  "passCriteria": "harness checks: modeSwitchRequested && txtCreated && txtAbout500Chars && exportCommandImplemented && noPreSwitchWrites",
+  "repeat": 1
+}

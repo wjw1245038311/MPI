@@ -1,5 +1,5 @@
 /**
- * pi-web-access (联网搜索) flow management — "扩展自动选模" (Settings → General).
+ * pi-web-access (联网搜索) flow management — "扩展自动选模" (Settings → Conversation).
  *
  * The pi-web-access extension opens an external browser curation window on every
  * web_search call and asks the user to pick a summary model. MPI removes that

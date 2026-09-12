@@ -256,6 +256,12 @@ export const Help = (p: P) => (
     <path d="M9.5 9a2.5 2.5 0 0 1 4.5 1.5c0 1.5-2 2-2 3.5M12 17h.01" />
   </svg>
 );
+export const Info = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 11v5M12 7.5h.01" />
+  </svg>
+);
 export const Dots = (p: P) => (
   <svg {...base(p)}>
     <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />

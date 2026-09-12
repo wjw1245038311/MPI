@@ -1,0 +1,17 @@
+{
+  "id": "logic-trusted-tools",
+  "title": "工具信任列表：常用扩展工具一键信任，bash/write/edit 永不可信",
+  "feature": "设置·权限与安全",
+  "kind": "logic",
+  "source": "changelog#13 / src/renderer/src/lib/trusted-tools.ts",
+  "description": "纯逻辑用例：验证信任列表的 presets、永不可信底线与 toggle 语义。",
+  "logicTest": "trusted-tools",
+  "assertions": [
+    "COMMON_EXTENSION_TOOLS 名称唯一、均通过 isTrustableToolName、含中英文案",
+    "bash/write/edit 及空名被 isTrustableToolName 拒绝",
+    "toggleTrustedTool 增/删/trim/去重且不修改入参",
+    "isTrustedTool trim 不敏感且 null 安全",
+    "所有 preset 两次 toggle 后回到空"
+  ],
+  "passCriteria": "test-trusted-tools.mjs 全绿"
+}

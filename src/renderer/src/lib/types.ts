@@ -445,10 +445,10 @@ export interface Toast {
 
 /** 任务模式 (task mode): a named preset bundling per-thread behaviour knobs —
  * permission level + thinking level. Model stays independent (own pill).
- * Built-ins are the short/long task defaults; users can add custom modes.
+ * Built-ins are the seeded presets; users can add custom modes.
  * Mirrors src/main/config.ts TaskModeDef (main only persists it verbatim). */
 export interface TaskModeDef {
-  /** "short" | "long" for built-ins, uuid for user modes. */
+  /** Stable built-in slug (balanced/iterate/research/review) or a uuid for user modes. */
   id: string;
   /** Display name — required for custom modes; ignored for built-ins. */
   name?: string;
@@ -461,9 +461,15 @@ export interface TaskModeDef {
   /** Short behavioural instructions injected into the system prompt while this
    * mode is active (live, per turn via the mpi-taskmode extension). Absent = none. */
   instructions?: string;
-  /** Optional absolute path to a markdown spec document (“设计说明书”, skill-like)
+  /** Optional absolute path (or `@agent/…` token resolved against pi's agent dir)
+   * to a markdown spec document (“设计说明书”, skill-like)
    * appended after `instructions`. External file → edits apply live without re-saving. */
   specFile?: string;
+  /** Hard enforcement floor: while this mode is active the thread is forced
+   * read-only in the pi process (gate blocks every mutation, write/edit tools
+   * are hidden) — regardless of the permission pill, including full access.
+   * Built-in research/review modes carry it. */
+  enforce?: "readonly";
 }
 
 export interface AppConfig {
@@ -478,7 +484,7 @@ export interface AppConfig {
   /** Custom directory for todo attachment copies (legacy; replaced by
    * todoDataDir). Kept so old configs keep resolving attachments. */
   todoAttachmentDir?: string;
-  /** Custom directory for session JSONL files (Settings → Data Storage);
+  /** Custom directory for session JSONL files (Settings → Data management);
    * absent = default <agentDir>/sessions. Applies on next launch. */
   sessionStorageDir?: string;
   /** Custom folder holding all todo data (todos.json + attachments + inbox);
@@ -498,9 +504,14 @@ export interface AppConfig {
   /** Permission level applied to brand-new conversations; existing threads keep their own level. */
   defaultPermission?: PermissionLevel;
   /** User-managed task-mode presets (composer pill left of the permission one).
-   * Absent = built-in short/long task modes only. */
+   * Absent = built-in short task modes only. */
   taskModes?: TaskModeDef[];
-  /** Which task mode new conversations display as active ("short" by default). */
+  /** Extension tools the user has persistently trusted (“始终允许该工具” on an
+   * approval card, or added in Settings): auto-approved in sandbox/strict,
+   * still blocked under readonly/enforced read-only. bash/write/edit can never
+   * be trusted — they always go through their own classification. */
+  trustedTools?: string[];
+  /** Which task mode new conversations start on ("balanced" by default). */
   defaultTaskModeId?: string;
   /** Custom user avatar as a data URL; absent = built-in Nobita avatar. */
   userAvatar?: string;
@@ -509,7 +520,7 @@ export interface AppConfig {
   /** Free-form user profile text appended to every session's system prompt
    * (Settings → User Profile); absent/empty = no injection. */
   userProfile?: string;
-  /** "扩展自动选模" (Settings → General): extensions that need a model use the
+  /** "扩展自动选模" (Settings → Conversation): extensions that need a model use the
    * current conversation's model without popping up; web searches skip the
    * browser curation window. Absent = enabled. */
   extAutoPickModel?: boolean;
@@ -560,6 +571,10 @@ export interface AppConfig {
     sttModel?: string;
     /** speechSynthesis voice URI; absent = auto-pick by UI language. */
     ttsVoiceUri?: string;
+    /** TTS engine; absent = "system" (offline speechSynthesis). */
+    ttsBackend?: "system" | "edge";
+    /** Edge TTS voice short name; absent = auto-pick by UI language. */
+    ttsEdgeVoice?: string;
     /** Speech rate 0.5–2; absent = 1. */
     ttsRate?: number;
     /** Auto-read the reply when a turn settles on the visible thread. */
@@ -703,4 +718,93 @@ export interface HtmlElementReference {
   text?: string;
   outerHTML?: string;
   styles?: Record<string, string | number>;
+}
+
+/* ------------------------------------------------------------------ *
+ * 功能测试注册表（dev-only「自动化测试」面板）
+ * 数据源：tests/registry/*.json；主进程侧解析器见 src/main/test-registry.ts
+ * ------------------------------------------------------------------ */
+export type TestCaseKind = "logic" | "scenario";
+
+export interface TestRegistryCase {
+  id: string;
+  title: string;
+  feature: string;
+  kind: TestCaseKind;
+  /** 来源（changelog 条目 / 设计文档），用于追溯 */
+  source: string;
+  description?: string;
+  /** kind=logic：run-all-tests 过滤词（npm test -- <logicTest>） */
+  logicTest?: string;
+  /** kind=scenario：scripts/e2e/harness.mjs 的用例 id */
+  harnessCaseId?: string;
+  /** kind=scenario：人读的场景提示词 */
+  preprompt?: string;
+  /** 人读的断言点（来自 changelog「验证方式：」） */
+  assertions?: string[];
+  passCriteria: string;
+  /** 期望重复次数（安全边界类 N-of-M），默认 1 */
+  repeat?: number;
+}
+
+export interface RegistryParseError {
+  file: string;
+  errors: string[];
+}
+
+export interface RegistryScan {
+  cases: TestRegistryCase[];
+  errors: RegistryParseError[];
+}
+
+/** 流式测试日志（pi:testLog），按用例 id 关联 */
+export interface TestRunLogLine {
+  caseId: string;
+  line: string;
+}
+
+/** logic 用例运行结果 */
+export interface LogicRunResult {
+  ok: boolean;
+  exitCode: number | null;
+  output: string;
+}
+
+/** harness 产出的 result.json（字段随 harness 演进，故保留索引签名） */
+export interface ScenarioResultFile {
+  case: string;
+  provider?: string;
+  modelId?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  status?: string;
+  checks?: Record<string, boolean | number | null>;
+  errors?: string[];
+  filesCreated?: string[];
+  blockedEvidence?: unknown[];
+  modeSwitchRequests?: unknown[];
+  [key: string]: unknown;
+}
+
+/** scenario 用例运行结果（含模拟对话转录） */
+export interface ScenarioRunResult {
+  ok: boolean;
+  status: "pass" | "fail" | "timeout" | "error" | "no-result";
+  exitCode: number | null;
+  result: ScenarioResultFile | null;
+  transcript: string | null;
+  error?: string;
+}
+
+/** harness results-summary.json 的一条汇总记录 */
+export interface ScenarioHistoryEntry {
+  case: string;
+  model?: string;
+  status?: string;
+  txtFile?: string;
+  filesCreated?: number;
+  modeSwitchRequests?: number;
+  approvalCards?: number;
+  blockedEvidence?: number;
+  [key: string]: unknown;
 }

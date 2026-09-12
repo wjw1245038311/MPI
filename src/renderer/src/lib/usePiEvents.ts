@@ -117,6 +117,33 @@ export function usePiEvents() {
           st.pushToast(p.kind === "warn" ? "warning" : "info", msg);
         })
       : () => undefined;
+    // Agent-initiated permission switch approved on its confirmation card:
+    // main already flipped the gate + cleared the enforced task mode — sync
+    // the pills and tell the user what changed.
+    const u12 = typeof window.pi.on.modeSwitched === "function"
+      ? window.pi.on.modeSwitched((p) => {
+          const st = useStore.getState();
+          if (!st.threads[p.threadId]) return;
+          useStore.setState((s) => {
+            const t = s.threads[p.threadId];
+            if (!t) return s;
+            return { threads: { ...s.threads, [p.threadId]: { ...t, permission: p.permission, taskMode: undefined } } };
+          });
+          const zh = st.config?.language === "zh";
+          const names: Record<string, string> = {
+            readonly: zh ? "只读" : "Read-only",
+            strict: zh ? "严格" : "Strict",
+            sandbox: zh ? "沙盒" : "Sandbox",
+            full: zh ? "完全权限" : "Full access",
+          };
+          st.pushToast(
+            "info",
+            zh
+              ? `已按 agent 请求切换到「${names[p.permission] ?? p.permission}」权限，强制只读已解除`
+              : `Switched to “${names[p.permission] ?? p.permission}” per the agent's request; enforced read-only lifted`,
+          );
+        })
+      : () => undefined;
     const u6 = window.pi.on.projectsChanged(() => {
       void useStore.getState().refreshProjects();
     });
@@ -137,6 +164,7 @@ export function usePiEvents() {
       u9();
       u10();
       u11();
+      u12();
     };
   }, [handleEvent, handleExtUi, handleExit, handleError]);
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -197,9 +197,17 @@ assert.equal(strict.calls(), 3, "sensitive writes must prompt even with an appro
 const readonly = makeHarness((_title, options) => options[0], "readonly");
 const blockedBuild = await readonly.call("bash", { command: "npm run build" });
 assert.equal(blockedBuild?.block, true, "readonly must block mutating bash outright");
-await readonly.call("write", { path: "src/generated.ts", content: "export {}" });
+const blockedLocalWrite = await readonly.call("write", { path: "src/generated.ts", content: "export {}" });
+assert.equal(blockedLocalWrite?.block, true, "readonly must block ordinary project-local writes too");
 const blockedEdit = await readonly.call("edit", { path: ".env", oldText: "x", newText: "y" });
 assert.equal(blockedEdit?.block, true, "readonly must block file edits");
+// Stop-and-report steering (2026-09 review-mode fix): read-only blocks must
+// tell the model to stop retrying and surface the mode conflict in its reply.
+assert.match(
+  String(blockedBuild.reason),
+  /Stop attempting similar operations/i,
+  "readonly block steers the model to report the conflict immediately",
+);
 await readonly.call("run_subagent", { task: "inspect" });
 const blockedTool = await readonly.call("custom_lookup", { query: "one" });
 assert.equal(blockedTool?.block, true, "readonly must block unknown extension tools");
@@ -216,6 +224,120 @@ assert.equal(live.calls(), 1, "sandbox should prompt for npm install");
 live.setMode("full");
 await live.call("bash", { command: "rm -rf build" });
 assert.equal(live.calls(), 1, "switching to full must stop gating immediately without restart");
+
+// ---- task-mode enforce floor + trusted tools ---------------------------------
+{
+  // Dedicated root so the gate's config.json lookup (dirname(modeFile)/..) and
+  // the taskmode state dir are fully under test control.
+  const root = mkdtempSync(join(tmpdir(), "mpi-gate-enforce-"));
+  const gatesDir = join(root, "mpi-gates");
+  mkdirSync(gatesDir);
+  const taskmodesDir = join(root, "taskmodes");
+  mkdirSync(taskmodesDir);
+  writeFileSync(join(root, "config.json"), JSON.stringify({ language: "en", trustedTools: ["mem0_memory"] }), "utf8");
+
+  const originalTaskEnv = process.env.MPI_TASKMODE_DIR;
+  process.env.MPI_TASKMODE_DIR = taskmodesDir;
+  const modeFile = join(gatesDir, "h-enforce.mode");
+  writeFileSync(modeFile, "full", "utf8");
+  process.env.MPI_GATE_MODE_FILE = modeFile;
+
+  let handler;
+  installGate({ on(name, cb) { if (name === "tool_call") handler = cb; }, registerCommand() {} });
+  const ctx = {
+    cwd: process.cwd(),
+    hasUI: true,
+    ui: { async select(_title, options) { return options[0]; } },
+    sessionManager: { getSessionFile: () => "proj_abc123.jsonl" },
+  };
+  const call = (toolName, input) => handler({ toolName, input }, ctx);
+  const writeState = (state) => {
+    if (state === null) rmSync(join(taskmodesDir, "abc123.json"), { force: true });
+    else writeFileSync(join(taskmodesDir, "abc123.json"), JSON.stringify(state), "utf8");
+  };
+
+  // full + no enforce → everything passes (existing behavior).
+  writeState(null);
+  assert.equal(await call("bash", { command: "npm run build" }), undefined, "full without enforce gates nothing");
+
+  // full + enforce=readonly → the floor wins over the permission pill.
+  writeState({ enforce: "readonly" });
+  const blockedBuild = await call("bash", { command: "npm run build" });
+  assert.equal(blockedBuild?.block, true, "enforced read-only must block mutating bash even under full");
+  assert.match(String(blockedBuild.reason), /task mode enforces read-only/i);
+  const blockedWrite = await call("write", { path: "src/generated.ts", content: "x" });
+  assert.equal(blockedWrite?.block, true, "enforced read-only must block file writes even under full");
+  // Stop-and-report steering (2026-09 review-mode fix): every enforced
+  // read-only block — bash, write and extension tools alike — must carry the
+  // "stop retrying + tell the user in your reply" instruction.
+  assert.match(String(blockedBuild.reason), /Stop attempting similar operations/i, "enforced bash block steers model");
+  assert.match(String(blockedWrite.reason), /Stop attempting similar operations/i, "enforced write block steers model");
+  const blockedExtSteer = await call("custom_lookup", { q: 1 });
+  assert.equal(blockedExtSteer?.block, true);
+  assert.match(String(blockedExtSteer.reason), /Stop attempting similar operations/i, "enforced extension-tool block steers model");
+  const blockedSub = await call("run_subagent", { task: "t" });
+  assert.equal(blockedSub?.block, true, "enforced read-only must block subagents even under full");
+  // Read-only bash and safe tools still pass.
+  assert.equal(await call("bash", { command: "git status --short" }), undefined);
+  assert.equal(await call("read", { path: "package.json" }), undefined);
+
+  // F10 closed loop (regression): the mode-switch request tool must stay
+  // usable under enforced read-only — it only renders a confirmation card,
+  // and main performs the actual switch after explicit user approval.
+  // Blocking it trapped the agent inside research mode with no way to ask out.
+  assert.equal(
+    await call("mpi_request_mode_switch", { to: "sandbox", reason: "execute plan" }),
+    undefined,
+    "mpi_request_mode_switch must pass under enforced read-only (F10 closed loop)",
+  );
+  // mpi_todo_* are part of the normal research workflow (design doc F5).
+  assert.equal(await call("mpi_todo_add", { title: "follow up" }), undefined, "todo add must pass under enforced read-only");
+  assert.equal(await call("mpi_todo_list", {}), undefined, "todo list must pass under enforced read-only");
+
+  // Trusted extension tool must NOT bypass the floor (trust ≠ read-only escape).
+  const blockedTrusted = await call("mem0_memory", { action: "search", query: "q" });
+  assert.equal(blockedTrusted?.block, true, "trusted tools must not bypass enforced read-only");
+
+  // Clearing the mode restores full behavior live (no restart).
+  writeState(null);
+  assert.equal(await call("bash", { command: "npm run build" }), undefined, "clearing enforce restores full access");
+
+  // sandbox + trusted tool → no prompt; untrusted extension tool → prompts and
+  // offers the persistent “always allow” option (bash never does).
+  writeFileSync(modeFile, "sandbox", "utf8");
+  assert.equal(await call("mem0_memory", { action: "search", query: "q" }), undefined, "trusted tool skips approval in sandbox");
+  let lastOptions = null;
+  const ctxCapture = {
+    ...ctx,
+    ui: { async select(_title, options) { lastOptions = [...options]; return "Allow once"; } },
+  };
+  await handler({ toolName: "custom_lookup", input: { q: 1 } }, ctxCapture);
+  assert.ok(
+    lastOptions?.some((o) => o === "Always allow this tool (persistent)"),
+    "extension tool approval offers the persistent trust option",
+  );
+  await handler({ toolName: "bash", input: { command: "npm install" } }, ctxCapture);
+  assert.ok(
+    !lastOptions?.some((o) => o === "Always allow this tool (persistent)"),
+    "bash approval never offers persistent trust",
+  );
+
+  // Legacy upgrade path: a state file written by an older build (no enforce
+  // field) while config records the thread on research → still enforced via
+  // the config fallback, so pre-existing threads close the hole after upgrade.
+  writeState({ instructions: "legacy" });
+  writeFileSync(
+    join(root, "config.json"),
+    JSON.stringify({ language: "en", trustedTools: [], threadTaskModes: { abc123: "research" } }),
+    "utf8",
+  );
+  const blockedLegacy = await call("bash", { command: "npm run build" });
+  assert.equal(blockedLegacy?.block, true, "legacy threads on research stay enforced via config fallback");
+
+  if (originalTaskEnv === undefined) delete process.env.MPI_TASKMODE_DIR;
+  else process.env.MPI_TASKMODE_DIR = originalTaskEnv;
+  rmSync(root, { recursive: true, force: true });
+}
 
 if (originalModeEnv === undefined) delete process.env.MPI_GATE_MODE_FILE;
 else process.env.MPI_GATE_MODE_FILE = originalModeEnv;

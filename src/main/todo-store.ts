@@ -10,7 +10,7 @@ import type { TodoAttachment, TodoItem } from "../renderer/src/lib/types";
  *
  * Stored as a single JSON array under the app's userData dir (next to
  * config.json and drafts.json, so dev/prod profiles stay separated like every
- * other setting). When config.todoDataDir is set (Settings → 数据存储),
+ * other setting). When config.todoDataDir is set (Settings → 数据管理),
  * everything lives under that folder instead: todos.json / todo-attachments/
  * / todos-inbox/ — old locations keep working as fallback lookup sources.
  *

@@ -43,3 +43,21 @@ export function choiceResultText(language: ChoiceLanguage, choice: string | null
   }
   return language === "zh" ? `用户已选择：「${choice}」。请按此选项继续执行。` : `User selected: "${choice}". Proceed with this option.`;
 }
+
+// ---- mode-switch request (mpi_request_mode_switch) --------------------------
+// The agent asks to leave an enforced read-only task mode (e.g. research) so it
+// can execute the plan it just presented. Main intercepts the dialog + response
+// and performs the live switch; keep these markers in sync with mpi-choice-ext.ts.
+
+/** Stable title prefix written by the extension before ctx.ui.select(). */
+export const MODE_SWITCH_TITLE_PREFIX_RE = /^(?:模式切换请求|Mode\s+switch\s+request)\s*[:：]/i;
+
+export function isModeSwitchTitle(title: unknown): boolean {
+  if (typeof title !== "string") return false;
+  const firstLine = title.split(/\r?\n/, 1)[0].trim();
+  return MODE_SWITCH_TITLE_PREFIX_RE.test(firstLine);
+}
+
+/** Exact option labels the extension offers (main matches them on response). */
+export const MODE_SWITCH_APPROVE_LABELS: readonly string[] = ["同意并切换", "Approve & switch"];
+export const MODE_SWITCH_DENY_LABELS: readonly string[] = ["拒绝", "Deny"];

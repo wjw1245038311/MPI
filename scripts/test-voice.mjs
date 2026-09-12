@@ -8,6 +8,7 @@ const {
   STT_DEFAULT_MODELS,
   buildGeminiRequest,
   buildOpenAiRequest,
+  isLoopbackHost,
   makeSilentWavBase64,
   parseGeminiTranscript,
   resolveStt,
@@ -78,6 +79,30 @@ const ok = (label) => {
     /voice\.stt\.no-base-url/,
   );
   ok("openai without base URL rejected");
+
+  // A self-hosted (loopback) endpoint may omit the key; remote ones may not.
+  assert.ok(isLoopbackHost("http://127.0.0.1:8800/v1"));
+  assert.ok(isLoopbackHost("127.0.0.1"));
+  assert.ok(isLoopbackHost("localhost:9000"));
+  assert.ok(isLoopbackHost("http://[::1]:8800/v1"));
+  assert.ok(!isLoopbackHost("https://api.openai.com/v1"));
+  assert.ok(!isLoopbackHost(""));
+  assert.ok(!isLoopbackHost(undefined));
+
+  const local = resolveStt(
+    { sttBackend: "openai", sttProviderId: "__manual__", sttBaseUrl: "http://127.0.0.1:8800/v1", sttModel: "SenseVoiceSmall" },
+    {},
+  );
+  assert.equal(local.apiKey, "");
+  assert.equal(local.baseUrl, "http://127.0.0.1:8800/v1");
+  assert.equal(local.model, "SenseVoiceSmall");
+  const localReq = buildOpenAiRequest(local, "QUJD");
+  assert.ok(!("Authorization" in localReq.headers), "no bogus Bearer header for a key-less local service");
+  assert.throws(
+    () => resolveStt({ sttBackend: "openai", sttProviderId: "__manual__", sttBaseUrl: "https://remote.example/v1" }, {}),
+    /voice\.stt\.no-key/,
+  );
+  ok("loopback endpoint allows a blank key (remote still enforced)");
 }
 
 /* ---------------- request builders ---------------- */

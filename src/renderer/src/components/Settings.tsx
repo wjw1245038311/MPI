@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useStore } from "../store";
-import type { ApiType, Diagnostics, ModelDef, ModelsFile, PermissionLevel, ProviderDef, ThinkingDefaults } from "../lib/types";
+import type { ApiType, AppConfig, Diagnostics, ModelDef, ModelsFile, PermissionLevel, ProviderDef, ThinkingDefaults } from "../lib/types";
 import { formatBytes } from "../lib/format";
 import { sttTranscribeErrorText } from "../lib/stt";
 import { speakMessage, ttsVoices } from "../lib/tts";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { translateUiText } from "../lib/i18n";
+import { COMMON_EXTENSION_TOOLS, isTrustableToolName, isTrustedTool, toggleTrustedTool } from "../lib/trusted-tools";
+import { EDGE_VOICES, defaultEdgeVoice } from "../lib/edge-voices";
 import { Archive, Check, ChevronRight, Close, Edit, Plus, Refresh, Folder, Search, Trash } from "./icons";
 import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
-import { DevReleasePanel } from "./DevReleasePanel";
 import appIconUrl from "../../../../resources/icon.png";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
@@ -939,7 +940,7 @@ function ProviderCard({
  * Main panel
  * ------------------------------------------------------------------ */
 
-type Tab = "general" | "profile" | "models" | "thinking" | "storage" | "archive" | "backup" | "diag" | "update";
+type Tab = "conversation" | "profile" | "models" | "permissions" | "data" | "appearance" | "system";
 
 /** Mirror of main's DataMigrationStatus (preload inlines the same shape). */
 interface DataMigrationStatus {
@@ -1200,6 +1201,31 @@ function groupByCwd<T>(items: T[], getCwd: (item: T) => string, getTs: (item: T)
   return [...map.values()].sort((a, b) => b.latest - a.latest);
 }
 
+/** Stable string key for a voice config (order-independent, ignores cleared keys). */
+function canonVoice(v: Record<string, unknown> | undefined): string {
+  if (!v) return "{}";
+  return JSON.stringify(
+    Object.keys(v)
+      .filter((k) => v[k] !== undefined)
+      .sort()
+      .map((k) => [k, v[k]]),
+  );
+}
+
+/** Every persisted voice key — sent on save so cleared fields really clear. */
+const VOICE_KEYS = [
+  "sttBackend",
+  "sttProviderId",
+  "sttBaseUrl",
+  "sttApiKey",
+  "sttModel",
+  "ttsVoiceUri",
+  "ttsBackend",
+  "ttsEdgeVoice",
+  "ttsRate",
+  "ttsAutoRead",
+] as const;
+
 export function Settings() {
   const open = useStore((s) => s.settingsOpen);
   const close = useStore((s) => s.closeSettings);
@@ -1216,15 +1242,21 @@ export function Settings() {
   const projects = useStore((s) => s.projects);
   const language = config?.language || "en";
 
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTab] = useState<Tab>("conversation");
   // Auto-launch at system login — OS-level state (Electron login items), not
-  // config.json; read live each time settings opens. null = still loading.
-  const [autoLaunch, setAutoLaunchState] = useState<boolean | null>(null);
+  // config.json; read live each time settings opens, edited as a draft.
   useEffect(() => {
     if (!open) return;
-    window.pi.app.getAutoLaunch().then(setAutoLaunchState).catch(() => setAutoLaunchState(null));
+    window.pi.app
+      .getAutoLaunch()
+      .then((v) => {
+        const seeded = { autoLaunch: v === true };
+        setSysDraft(seeded);
+        setInitialSys(JSON.stringify(seeded));
+      })
+      .catch(() => setInitialSys(JSON.stringify({ autoLaunch: false })));
   }, [open]);
-  // Data storage locations (Settings → 数据存储): live status from main.
+  // Data storage locations (Settings → 数据管理): live status from main.
   const [migStatus, setMigStatus] = useState<DataMigrationStatus | null>(null);
   useEffect(() => {
     if (!open) return;
@@ -1238,7 +1270,7 @@ export function Settings() {
   // Refresh the trash list whenever the archive tab is visible (deletes happen
   // in the sidebar, so there is no other signal to reload on).
   useEffect(() => {
-    if (open && tab === "archive") loadTrash();
+    if (open && tab === "data") loadTrash();
   }, [open, tab, loadTrash]);
   // Archive tab: search query + collapsed project groups (lowercased cwd keys).
   const [archiveQuery, setArchiveQuery] = useState("");
@@ -1274,9 +1306,42 @@ export function Settings() {
   // session's system prompt. Lives in AppConfig; draft/initial mirror the
   // models/thinking save pattern.
   const [profileDraft, setProfileDraft] = useState("");
+  // ---- trusted tools (“始终允许该工具”) + default permission ----------------
+  // Permission settings are edited as a draft and only written on save, matching
+  // the models/thinking/profile pattern. The trusted list is also written by the
+  // approval card (“始终允许”); we re-seed on every open so it stays in sync.
+  const [trustDraft, setTrustDraft] = useState("");
+  const [permDraft, setPermDraft] = useState<{ defaultPermission: PermissionLevel; trustedTools: string[] }>({
+    defaultPermission: "sandbox",
+    trustedTools: [],
+  });
+  const [initialPerms, setInitialPerms] = useState("");
+  const [dataDraft, setDataDraft] = useState<{ trashEnabled: boolean }>({ trashEnabled: true });
+  const [initialData, setInitialData] = useState("");
+  const [sysDraft, setSysDraft] = useState<{ autoLaunch: boolean }>({ autoLaunch: false });
+  const [initialSys, setInitialSys] = useState("");
+  const [voiceDraft, setVoiceDraft] = useState<NonNullable<AppConfig["voice"]>>({});
+  const [initialVoice, setInitialVoice] = useState("{}");
+  const setTrustedTools = (next: string[]) => setPermDraft((d) => ({ ...d, trustedTools: next }));
+  const addTrustedTool = () => {
+    const name = trustDraft.trim();
+    if (!name) return;
+    if (!isTrustableToolName(name)) {
+      pushToast(
+        "warning",
+        language === "zh"
+          ? `${name} 不能加入信任列表（bash / 写入 / 编辑工具永不被信任）。`
+          : `${name} cannot be trusted (bash / write / edit are never trusted).`,
+      );
+      return;
+    }
+    setTrustDraft("");
+    if (permDraft.trustedTools.includes(name)) return;
+    setTrustedTools([...permDraft.trustedTools, name]);
+  };
   const [initialProfile, setInitialProfile] = useState("");
-  const [saving, setSaving] = useState<null | "models" | "thinking" | "profile">(null);
-  const [flash, setFlash] = useState<null | "models" | "thinking" | "profile">(null);
+  const [saving, setSaving] = useState<null | "models" | "thinking" | "profile" | "permissions" | "data" | "system" | "conversation">(null);
+  const [flash, setFlash] = useState<null | "models" | "thinking" | "profile" | "permissions" | "data" | "system" | "conversation">(null);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
   const [paths, setPaths] = useState<{ agentDir: string; models: string; settings: string; auth: string } | null>(null);
   const [adding, setAdding] = useState(false);
@@ -1286,7 +1351,7 @@ export function Settings() {
   const [presetQuery, setPresetQuery] = useState("");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
 
-  // ---- Voice system (Settings → General → 语音系统) -------------------------
+  // ---- Voice system (Settings → Conversation → 语音系统) -------------------------
   // STT credential sources come from models.json; TTS voices from the platform
   // speechSynthesis. Both load when settings opens.
   const [sttProviders, setSttProviders] = useState<{ id: string; baseUrl?: string }[]>([]);
@@ -1336,7 +1401,7 @@ export function Settings() {
   // guard every call site and tell the user to fully restart (see reorderPinned).
   const backupApi = typeof window.pi?.backup === "object" && window.pi.backup ? window.pi.backup : null;
   useEffect(() => {
-    if (!open || tab !== "backup") return;
+    if (!open || tab !== "data") return;
     setBkGroups(null);
     if (!backupApi) {
       setBkGroups([]);
@@ -1504,7 +1569,7 @@ export function Settings() {
 
   useEffect(() => {
     if (!open) return;
-    setTab("general");
+    setTab("conversation");
     setInvalidJson({});
     setAdding(false);
     setNewProvider(emptyNewProvider());
@@ -1515,6 +1580,20 @@ export function Settings() {
     const savedProfile = config?.userProfile || "";
     setProfileDraft(savedProfile);
     setInitialProfile(savedProfile);
+    // Permission draft (default level + trusted tools) — seeded per open so
+    // approval-card “始终允许” additions show up next time Settings opens.
+    const seededPerms = {
+      defaultPermission: (config?.defaultPermission || "sandbox") as PermissionLevel,
+      trustedTools: [...(config?.trustedTools || [])],
+    };
+    setPermDraft(seededPerms);
+    setInitialPerms(JSON.stringify(seededPerms));
+    const seededData = { trashEnabled: config?.trashEnabled !== false };
+    setDataDraft(seededData);
+    setInitialData(JSON.stringify(seededData));
+    const seededVoice = { ...(config?.voice || {}) };
+    setVoiceDraft(seededVoice);
+    setInitialVoice(canonVoice(seededVoice));
     (async () => {
       try {
         const [models, think, d, p] = await Promise.all([
@@ -1548,9 +1627,13 @@ export function Settings() {
   const modelDirty = useMemo(() => JSON.stringify(draft.providers) !== initialProviders, [draft.providers, initialProviders]);
   const thinkDirty = useMemo(() => JSON.stringify(thinking) !== initialThinking, [thinking, initialThinking]);
   const profileDirty = profileDraft !== initialProfile;
+  const permDirty = useMemo(() => JSON.stringify(permDraft) !== initialPerms, [permDraft, initialPerms]);
+  const dataDirty = useMemo(() => JSON.stringify(dataDraft) !== initialData, [dataDraft, initialData]);
+  const sysDirty = useMemo(() => initialSys !== "" && JSON.stringify(sysDraft) !== initialSys, [sysDraft, initialSys]);
+  const voiceDirty = useMemo(() => canonVoice(voiceDraft) !== initialVoice, [voiceDraft, initialVoice]);
   function attemptClose() {
     if (
-      (modelDirty || thinkDirty || profileDirty) &&
+      (modelDirty || thinkDirty || profileDirty || permDirty || dataDirty || sysDirty || voiceDirty) &&
       !window.confirm(language === "zh" ? "有未保存的更改，确定放弃并关闭？" : "Discard unsaved changes and close?")
     ) return;
     close();
@@ -1698,17 +1781,32 @@ export function Settings() {
       setSaving(null);
     }
   };
-  const saveThinking = async () => {
-    setSaving("thinking");
+  /** Write the voice draft to config.json (used by save + voice test/preview). */
+  const flushVoice = async () => {
+    const patch: Record<string, unknown> = {};
+    for (const k of VOICE_KEYS) patch[k] = (voiceDraft as Record<string, unknown>)[k];
+    const current = useStore.getState().config?.voice || {};
+    const nextVoice: Record<string, unknown> = { ...current, ...patch };
+    for (const k of Object.keys(nextVoice)) if (nextVoice[k] === undefined) delete nextVoice[k];
+    const cfg = await window.pi.app.setConfig({ voice: nextVoice });
+    useStore.setState({ config: cfg });
+    const seeded = { ...(cfg?.voice || {}) };
+    setVoiceDraft(seeded);
+    setInitialVoice(canonVoice(seeded));
+  };
+
+  const saveConversation = async () => {
+    setSaving("conversation");
     try {
       const res = await window.pi.settings.saveThinking(thinking as Record<string, unknown>);
       setThinking(res);
       setInitialThinking(JSON.stringify(res));
-      setFlash("thinking");
+      await flushVoice();
+      setFlash("conversation");
       setTimeout(() => setFlash(null), 1500);
-      pushToast("info", "思考默认值已保存到 settings.json。");
+      pushToast("info", language === "zh" ? "对话设置已保存。" : "Conversation settings saved.");
     } catch (e: any) {
-      pushToast("error", "保存失败：" + (e?.message || e));
+      pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
     } finally {
       setSaving(null);
     }
@@ -1729,6 +1827,30 @@ export function Settings() {
           ? "用户画像已保存，对新会话生效。"
           : "User profile saved. Applies to new sessions.",
       );
+    } catch (e: any) {
+      pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const savePermissions = async () => {
+    setSaving("permissions");
+    try {
+      const next = await window.pi.app.setConfig({
+        defaultPermission: permDraft.defaultPermission,
+        trustedTools: permDraft.trustedTools.length ? permDraft.trustedTools : undefined,
+      });
+      useStore.setState({ config: next });
+      const stored = {
+        defaultPermission: (next?.defaultPermission || "sandbox") as PermissionLevel,
+        trustedTools: [...(next?.trustedTools || [])],
+      };
+      setPermDraft(stored);
+      setInitialPerms(JSON.stringify(stored));
+      setFlash("permissions");
+      setTimeout(() => setFlash(null), 1500);
+      pushToast("info", language === "zh" ? "权限设置已保存。" : "Permission settings saved.");
     } catch (e: any) {
       pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
     } finally {
@@ -1787,12 +1909,21 @@ export function Settings() {
     useStore.setState({ config: next });
   };
 
-  const changeTrashEnabled = async (trashEnabled: boolean) => {
+  const saveData = async () => {
+    setSaving("data");
     try {
-      const next = await window.pi.app.setConfig({ trashEnabled });
+      const next = await window.pi.app.setConfig({ trashEnabled: dataDraft.trashEnabled });
       useStore.setState({ config: next });
+      const stored = { trashEnabled: next?.trashEnabled !== false };
+      setDataDraft(stored);
+      setInitialData(JSON.stringify(stored));
+      setFlash("data");
+      setTimeout(() => setFlash(null), 1500);
+      pushToast("info", language === "zh" ? "数据管理设置已保存。" : "Data settings saved.");
     } catch (e: any) {
-      pushToast("error", "保存回收站设置失败：" + (e?.message || e));
+      pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
+    } finally {
+      setSaving(null);
     }
   };
 
@@ -1806,9 +1937,11 @@ export function Settings() {
   };
 
   // ---- Voice system handlers -------------------------------------------------
-  const voiceCfg = config?.voice;
-  /** Merge a partial voice config; undefined values clear the key. */
-  const setVoice = (patch: Record<string, unknown>) => useStore.getState().setVoiceConfig(patch as any);
+  // Edited as a draft (like permissions/data/system) and flushed by the
+  // “保存对话设置” button; the voice test flushes first so it acts on exactly
+  // what the user sees.
+  const voiceCfg = voiceDraft;
+  const setVoice = (patch: Record<string, unknown>) => setVoiceDraft((d) => ({ ...d, ...patch }));
   const sttManual = !voiceCfg?.sttProviderId || voiceCfg.sttProviderId === "__manual__";
 
   const testVoiceStt = async () => {
@@ -1818,6 +1951,7 @@ export function Settings() {
     }
     setVoiceTesting(true);
     try {
+      await flushVoice();
       const res = await voiceApi.test();
       if (res.ok) {
         pushToast("success", language === "zh" ? "连接成功：识别服务可用（静音测试无文本属正常）" : "Connected: the transcription service is reachable (empty text on a silent probe is expected)");
@@ -1837,6 +1971,17 @@ export function Settings() {
       voiceUri: voiceCfg?.ttsVoiceUri,
       rate: voiceCfg?.ttsRate,
       lang: language as "zh" | "en",
+      backend: voiceCfg?.ttsBackend === "edge" ? "edge" : "system",
+      edgeVoice: voiceCfg?.ttsEdgeVoice,
+    }).then((res) => {
+      const st = useStore.getState();
+      if (res.fallback) {
+        const d = res.detail ? (language === "zh" ? `（${res.detail}）` : ` (${res.detail})`) : "";
+        st.pushToast("warning", language === "zh" ? `Edge 在线语音不可用，已回退系统语音${d}` : `Edge online voice unavailable — fell back to the system voice${d}`);
+      } else if (!res.ok) {
+        const d = res.detail ? (language === "zh" ? `（${res.detail}）` : ` (${res.detail})`) : "";
+        st.pushToast("error", language === "zh" ? `朗读失败：没有可用的语音引擎${d}` : `Could not read aloud: no usable voice engine${d}`);
+      }
     });
   };
 
@@ -1950,23 +2095,21 @@ export function Settings() {
     }
   };
 
-  const changeAutoLaunch = async (enabled: boolean) => {
+  const saveSystem = async () => {
+    setSaving("system");
     try {
-      const next = await window.pi.app.setAutoLaunch(enabled);
-      setAutoLaunchState(next);
+      const next = await window.pi.app.setAutoLaunch(sysDraft.autoLaunch);
+      const stored = { autoLaunch: next === true };
+      setSysDraft(stored);
+      setInitialSys(JSON.stringify(stored));
+      setFlash("system");
+      setTimeout(() => setFlash(null), 1500);
+      pushToast("info", language === "zh" ? "系统设置已保存。" : "System settings saved.");
     } catch (e: any) {
-      pushToast(
-        "error",
-        language === "zh"
-          ? `开机自启动设置失败：${e?.message || e}`
-          : `Failed to change auto-launch: ${e?.message || e}`,
-      );
+      pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
+    } finally {
+      setSaving(null);
     }
-  };
-
-  const changeDefaultPermission = async (defaultPermission: PermissionLevel) => {
-    const next = await window.pi.app.setConfig({ defaultPermission });
-    useStore.setState({ config: next });
   };
 
   // ---- custom avatars (user + agent), stored as downscaled data URLs -------
@@ -2010,56 +2153,67 @@ export function Settings() {
           </div>
           <nav className="set-tabs">
             {([
-              ["general", language === "zh" ? "通用设置" : "General"],
+              ["conversation", language === "zh" ? "对话设置" : "Conversation"],
               ["profile", language === "zh" ? "用户画像" : "User profile"],
               ["models", "模型与提供商"],
-              ["thinking", "思考默认值"],
-              ["storage", language === "zh" ? "数据存储" : "Data storage"],
-              ["archive", language === "zh" ? "归档回收" : "Archive & trash"],
-              ["backup", language === "zh" ? "备份与恢复" : "Backup & restore"],
-              ["diag", "诊断与配置"],
-              ["update", language === "zh" ? "关于 MPI" : "About MPI"],
+              ["permissions", language === "zh" ? "权限与安全" : "Permissions & security"],
+              ["data", language === "zh" ? "数据管理" : "Data management"],
+              ["appearance", language === "zh" ? "外观" : "Appearance"],
+              ["system", language === "zh" ? "系统与诊断" : "System & diagnostics"],
             ] as [Tab, string][]).map(([id, label]) => (
               <button key={id} className={`set-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
                 <span className="set-tab-bar" />
                 {label}
                 {id === "profile" && profileDirty && <span className="set-dot" />}
                 {id === "models" && modelDirty && <span className="set-dot" />}
-                {id === "thinking" && thinkDirty && <span className="set-dot" />}
+                {id === "conversation" && (thinkDirty || voiceDirty) && <span className="set-dot" />}
+                {id === "permissions" && permDirty && <span className="set-dot" />}
+                {id === "data" && dataDirty && <span className="set-dot" />}
+                {id === "system" && sysDirty && <span className="set-dot" />}
               </button>
             ))}
           </nav>
           <div className="set-side-foot">
-            模型/思考设置写入 <code>~/.pi/agent</code>，与终端 pi 共享；通用设置存于应用配置目录。
+            {language === "zh" ? (
+              <>
+                模型与思考默认值写入 <code>~/.pi/agent</code>，与终端 pi 共享；其余设置存于应用配置目录。
+              </>
+            ) : (
+              <>
+                Model & thinking defaults are written to <code>~/.pi/agent</code> and shared with terminal pi; other settings live in the app config directory.
+              </>
+            )}
           </div>
         </aside>
 
         <section className="set-main">
           <header className="set-head">
             <h2>
-              {tab === "general"
+              {tab === "conversation"
                 ? language === "zh"
-                  ? "通用设置"
-                  : "General"
+                  ? "对话设置"
+                  : "Conversation"
                 : tab === "profile"
                   ? language === "zh"
                     ? "用户画像"
                     : "User profile"
                   : tab === "models"
-                  ? "模型与提供商"
-                : tab === "thinking"
-                  ? "思考默认值"
-                    : tab === "storage"
-                      ? language === "zh" ? "数据存储" : "Data storage"
-                      : tab === "archive"
-                      ? "已归档项目"
-                      : tab === "backup"
-                        ? language === "zh" ? "备份与恢复" : "Backup & restore"
-                        : tab === "update"
+                    ? "模型与提供商"
+                  : tab === "permissions"
+                    ? language === "zh"
+                      ? "权限与安全"
+                      : "Permissions & security"
+                    : tab === "data"
                       ? language === "zh"
-                        ? "关于 MPI"
-                        : "About MPI"
-                        : "诊断与配置文件"}
+                        ? "数据管理"
+                        : "Data management"
+                      : tab === "appearance"
+                        ? language === "zh"
+                          ? "外观"
+                          : "Appearance"
+                        : language === "zh"
+                          ? "系统与诊断"
+                          : "System & diagnostics"}
             </h2>
             <div className="set-head-actions">
               {tab === "models" && (
@@ -2079,10 +2233,28 @@ export function Settings() {
                   {profileDirty && flash !== "profile" && <span className="set-dot" />}
                 </button>
               )}
-              {tab === "thinking" && (
-                <button className={`set-btn primary ${flash === "thinking" ? "saved" : ""}`} onClick={saveThinking} disabled={!!saving}>
-                  {saving === "thinking" ? <span className="spinner" /> : flash === "thinking" ? "已保存 ✓" : "保存思考默认值"}
-                  {thinkDirty && flash !== "thinking" && <span className="set-dot" />}
+              {tab === "conversation" && (
+                <button className={`set-btn primary ${flash === "conversation" ? "saved" : ""}`} onClick={saveConversation} disabled={!!saving}>
+                  {saving === "conversation" ? <span className="spinner" /> : flash === "conversation" ? (language === "zh" ? "已保存 ✓" : "Saved ✓") : language === "zh" ? "保存对话设置" : "Save conversation settings"}
+                  {(thinkDirty || voiceDirty) && flash !== "conversation" && <span className="set-dot" />}
+                </button>
+              )}
+              {tab === "permissions" && (
+                <button className={`set-btn primary ${flash === "permissions" ? "saved" : ""}`} onClick={savePermissions} disabled={!!saving}>
+                  {saving === "permissions" ? <span className="spinner" /> : flash === "permissions" ? (language === "zh" ? "已保存 ✓" : "Saved ✓") : language === "zh" ? "保存权限设置" : "Save permissions"}
+                  {permDirty && flash !== "permissions" && <span className="set-dot" />}
+                </button>
+              )}
+              {tab === "data" && (
+                <button className={`set-btn primary ${flash === "data" ? "saved" : ""}`} onClick={saveData} disabled={!!saving}>
+                  {saving === "data" ? <span className="spinner" /> : flash === "data" ? (language === "zh" ? "已保存 ✓" : "Saved ✓") : language === "zh" ? "保存数据设置" : "Save data settings"}
+                  {dataDirty && flash !== "data" && <span className="set-dot" />}
+                </button>
+              )}
+              {tab === "system" && (
+                <button className={`set-btn primary ${flash === "system" ? "saved" : ""}`} onClick={saveSystem} disabled={!!saving || initialSys === ""}>
+                  {saving === "system" ? <span className="spinner" /> : flash === "system" ? (language === "zh" ? "已保存 ✓" : "Saved ✓") : language === "zh" ? "保存系统设置" : "Save system settings"}
+                  {sysDirty && flash !== "system" && <span className="set-dot" />}
                 </button>
               )}
               <button className="set-iconbtn" title="关闭" onClick={attemptClose}>
@@ -2092,79 +2264,23 @@ export function Settings() {
           </header>
 
           <div className="set-body">
-            {tab === "general" && (
+            {tab === "conversation" && (
               <div className="set-card">
-                <Field
-                  label={language === "zh" ? "头像" : "Avatars"}
-                  hint={
-                    language === "zh"
-                      ? "聊天消息左侧的头像（默认：用户=大雄、智能体=哆啦A梦）。上传的图片会自动压缩后保存；恢复默认回到内置角色。"
-                      : "Avatars shown beside chat messages (defaults: User = Nobita, Agent = Doraemon). Uploaded images are downscaled before saving; reset restores the built-in characters."
-                  }
-                >
-                  <div className="avatar-row">
-                    <input ref={userAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "user")} />
-                    <input ref={agentAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "agent")} />
-                    <div className="avatar-slot">
-                      <span className="avatar-preview">
-                        {config?.userAvatar ? <img src={config.userAvatar} alt="" /> : <img src={nobitaAvatarUrl} alt="" />}
-                      </span>
-                      <div className="avatar-slot-actions">
-                        <button type="button" className="set-btn" onClick={() => userAvatarInputRef.current?.click()}>
-                          {language === "zh" ? "更换" : "Change"}
-                        </button>
-                        {config?.userAvatar && (
-                          <button type="button" className="set-btn ghost" onClick={() => void resetAvatar("user")}>
-                            {language === "zh" ? "恢复默认" : "Reset"}
-                          </button>
-                        )}
-                      </div>
-                      <span className="avatar-slot-label">{language === "zh" ? "用户" : "User"}</span>
-                    </div>
-                    <div className="avatar-slot">
-                      <span className="avatar-preview">
-                        {config?.agentAvatar ? <img src={config.agentAvatar} alt="" /> : <img src={doraemonAvatarUrl} alt="" />}
-                      </span>
-                      <div className="avatar-slot-actions">
-                        <button type="button" className="set-btn" onClick={() => agentAvatarInputRef.current?.click()}>
-                          {language === "zh" ? "更换" : "Change"}
-                        </button>
-                        {config?.agentAvatar && (
-                          <button type="button" className="set-btn ghost" onClick={() => void resetAvatar("agent")}>
-                            {language === "zh" ? "恢复默认" : "Reset"}
-                          </button>
-                        )}
-                      </div>
-                      <span className="avatar-slot-label">{language === "zh" ? "MPI 智能体" : "MPI Agent"}</span>
-                    </div>
-                  </div>
+                <Field label="默认思考深度" hint="新建会话的初始思考等级；模型需 reasoning=true 才生效">
+                  <select className="set-select" value={thinking.defaultThinkingLevel || "off"} onChange={(e) => setThinking((t) => ({ ...t, defaultThinkingLevel: e.target.value }))}>
+                    {availableThinkingLevels.map((l) => (
+                      <option key={l} value={l}>
+                        {reasoningLevelLabel(l, config?.language || "en")}
+                      </option>
+                    ))}
+                  </select>
                 </Field>
-                <Field
-                  label={language === "zh" ? "开机自启动" : "Launch at startup"}
-                  hint={
-                    language === "zh"
-                      ? "登录系统时自动启动 MPI（Windows 下通过开始菜单的启动项实现）。"
-                      : "Starts MPI automatically when you sign in (uses the OS startup folder on Windows)."
-                  }
-                >
-                  <label className="theme-sys-check">
-                    <input type="checkbox" checked={autoLaunch === true} onChange={(e) => void changeAutoLaunch(e.target.checked)} />
-                    <span>{language === "zh" ? "登录系统时自动启动" : "Start automatically at sign-in"}</span>
-                  </label>
+                <Field label="隐藏思考块">
+                  <Toggle checked={!!thinking.hideThinkingBlock} onChange={(v) => setThinking((t) => ({ ...t, hideThinkingBlock: v }))} />
                 </Field>
-                <Field
-                  label={language === "zh" ? "回收站" : "Trash"}
-                  hint={
-                    language === "zh"
-                      ? "开启后，删除的会话先移入回收站（设置 → 归档回收），可恢复；只有在那里删除才算永久删除。关闭后删除会立即永久生效。"
-                      : "When on, deleted sessions go to the trash (Settings → Archive & trash) and stay restorable; only deleting there removes them for good. When off, delete removes a session immediately."
-                  }
-                >
-                  <label className="theme-sys-check">
-                    <input type="checkbox" checked={config?.trashEnabled !== false} onChange={(e) => void changeTrashEnabled(e.target.checked)} />
-                    <span>{language === "zh" ? "删除的会话先移入回收站（可恢复）" : "Deleted sessions go to the trash first (restorable)"}</span>
-                  </label>
-                </Field>
+                <div className="set-hint" style={{ marginTop: 8 }}>
+                  这些是全局默认值，写入 settings.json。单个模型的思考能力由该模型的“思考”开关与 compat 决定。
+                </div>
 
                 <Field
                   label={language === "zh" ? "语音系统" : "Voice system"}
@@ -2185,7 +2301,6 @@ export function Settings() {
                       >
                         <option value="">{language === "zh" ? "未配置（麦克风按钮不可用）" : "Not configured (mic button disabled)"}</option>
                         <option value="openai">OpenAI 兼容 /audio/transcriptions</option>
-                        <option value="gemini">Gemini（内联音频）</option>
                       </select>
                     </div>
                     {voiceCfg?.sttBackend && (
@@ -2276,19 +2391,59 @@ export function Settings() {
 
                     <div className="voice-subtitle">{language === "zh" ? "语音输出（朗读）" : "Voice output (read aloud)"}</div>
                     <div className="voice-row">
-                      <span className="voice-label">{language === "zh" ? "声音" : "Voice"}</span>
+                      <span className="voice-label">{language === "zh" ? "朗读引擎" : "Engine"}</span>
                       <select
                         className="set-select voice-select"
-                        value={voiceCfg?.ttsVoiceUri || ""}
-                        onChange={(e) => setVoice({ ttsVoiceUri: e.target.value || undefined })}
+                        value={voiceCfg?.ttsBackend === "edge" ? "edge" : "system"}
+                        onChange={(e) => {
+                          const backend = e.target.value === "edge" ? "edge" : "system";
+                          setVoice({
+                            ttsBackend: backend,
+                            ...(backend === "edge" && !voiceCfg?.ttsEdgeVoice
+                              ? { ttsEdgeVoice: defaultEdgeVoice(language as "zh" | "en") }
+                              : {}),
+                          });
+                        }}
                       >
-                        <option value="">{language === "zh" ? "自动（跟随界面语言）" : "Auto (follow UI language)"}</option>
-                        {sortedTtsVoices.map((v) => (
-                          <option key={v.voiceURI} value={v.voiceURI}>
-                            {v.name}（{v.lang}）
-                          </option>
-                        ))}
+                        <option value="system">{language === "zh" ? "系统语音（离线，默认）" : "System voice (offline, default)"}</option>
+                        <option value="edge">{language === "zh" ? "Edge 在线神经语音（免费）" : "Edge online neural voice (free)"}</option>
                       </select>
+                    </div>
+                    {voiceCfg?.ttsBackend === "edge" && (
+                      <div className="voice-hint">
+                        {language === "zh"
+                          ? "需联网，由微软 Edge 朗读服务合成；无需 API Key。若合成失败会自动回退到系统语音。"
+                          : "Needs network access and is synthesized by Microsoft Edge's Read Aloud service; no API key required. Falls back to the system voice on failure."}
+                      </div>
+                    )}
+                    <div className="voice-row">
+                      <span className="voice-label">{language === "zh" ? "声音" : "Voice"}</span>
+                      {voiceCfg?.ttsBackend === "edge" ? (
+                        <select
+                          className="set-select voice-select"
+                          value={voiceCfg?.ttsEdgeVoice || defaultEdgeVoice(language as "zh" | "en")}
+                          onChange={(e) => setVoice({ ttsEdgeVoice: e.target.value })}
+                        >
+                          {EDGE_VOICES.map((v) => (
+                            <option key={v.shortName} value={v.shortName}>
+                              {language === "zh" ? v.zh : v.en}（{v.lang}）
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <select
+                          className="set-select voice-select"
+                          value={voiceCfg?.ttsVoiceUri || ""}
+                          onChange={(e) => setVoice({ ttsVoiceUri: e.target.value || undefined })}
+                        >
+                          <option value="">{language === "zh" ? "自动（跟随界面语言）" : "Auto (follow UI language)"}</option>
+                          {sortedTtsVoices.map((v) => (
+                            <option key={v.voiceURI} value={v.voiceURI}>
+                              {v.name}（{v.lang}）
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                     <div className="voice-row">
                       <span className="voice-label">{language === "zh" ? "语速" : "Rate"}</span>
@@ -2327,7 +2482,192 @@ export function Settings() {
                     <span>{language === "zh" ? "扩展自动使用当前会话的模型（不弹窗）" : "Extensions auto-use this conversation's model (no popups)"}</span>
                   </label>
                 </Field>
+                <Field
+                  label={language === "zh" ? "Diff 显示" : "Diff view"}
+                  hint={
+                    language === "zh"
+                      ? "聊天中编辑类工具结果的展示方式；统一为 git 风格单栏 -/+ 视图。"
+                      : "How edit-tool results render in the transcript; unified is a git-style single-column +/- view."
+                  }
+                >
+                  <select
+                    className="set-select"
+                    value={config?.diffViewMode || "unified"}
+                    onChange={(e) => changeDiffViewMode(e.target.value as "unified" | "blocks")}
+                  >
+                    <option value="unified">{language === "zh" ? "统一（单栏）" : "Unified (single column)"}</option>
+                    <option value="blocks">{language === "zh" ? "前后分块" : "Before / after blocks"}</option>
+                  </select>
+                </Field>
+              </div>
+            )}
 
+            {tab === "permissions" && (
+              <div className="set-card">
+                <Field
+                  label={language === "zh" ? "新建会话默认权限" : "New session permission"}
+                  hint={
+                    language === "zh"
+                      ? "仅影响之后新建的会话；已有会话保留各自设置，可随时在输入框左侧的权限菜单中切换。只读=修改直接阻止；严格=仅只读自动执行；沙盒=低风险明确操作自动执行、危险操作需确认；完全权限=不拦截。"
+                      : "Applies to sessions created from now on; existing sessions keep their own level and can be switched anytime from the permission menu in the composer. Read-only blocks mutations; strict auto-runs only read-only; sandbox auto-runs low-risk explicit operations; full intercepts nothing."
+                  }
+                >
+                  <select
+                    className="set-select"
+                    value={permDraft.defaultPermission}
+                    onChange={(e) => setPermDraft((d) => ({ ...d, defaultPermission: e.target.value as PermissionLevel }))}
+                  >
+                    <option value="readonly">{language === "zh" ? "只读（修改直接阻止）" : "Read-only (mutations blocked)"}</option>
+                    <option value="strict">{language === "zh" ? "严格（仅只读自动执行）" : "Strict (read-only auto-runs)"}</option>
+                    <option value="sandbox">{language === "zh" ? "沙盒（低风险操作自动执行，默认）" : "Sandbox (low-risk auto-runs, default)"}</option>
+                    <option value="full">{language === "zh" ? "完全权限" : "Full access"}</option>
+                  </select>
+                </Field>
+                <Field
+                  wide
+                  label={language === "zh" ? "常用扩展工具（点击一键信任）" : "Common extension tools (click to trust)"}
+                  hint={
+                    language === "zh"
+                      ? "以下是常见的需要审批的扩展工具。点击卡片即可加入 / 移出信任列表（仍需点上方「保存权限设置」生效）。未列出的工具可在下方手动输入名称。"
+                      : "These are the common extension tools that would otherwise prompt. Click a card to add/remove it from the trusted list (still needs “Save permissions” above). For anything else, type a name below."
+                  }
+                >
+                  <div className="trust-grid">
+                    {COMMON_EXTENSION_TOOLS.map((tool) => {
+                      const trusted = isTrustedTool(permDraft.trustedTools, tool.name);
+                      return (
+                        <button
+                          key={tool.name}
+                          type="button"
+                          className={`trust-card${trusted ? " trusted" : ""}`}
+                          aria-pressed={trusted}
+                          title={
+                            trusted
+                              ? language === "zh" ? "点击移出信任列表" : "Click to remove from trusted tools"
+                              : language === "zh" ? "点击加入信任列表" : "Click to add to trusted tools"
+                          }
+                          onClick={() => setTrustedTools(toggleTrustedTool(permDraft.trustedTools, tool.name))}
+                        >
+                          <span className="trust-card-name">
+                            {tool.name}
+                            {trusted ? "  ✓" : ""}
+                          </span>
+                          <span className="trust-card-desc">{language === "zh" ? tool.zh : tool.en}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+                <Field
+                  wide
+                  label={language === "zh" ? "已信任工具（始终允许）" : "Trusted tools (always allowed)"}
+                  hint={
+                    language === "zh"
+                      ? "列表中的扩展工具在沙盒/严格权限下不再弹审批（例如 mem0_memory）。可在权限确认卡片上点「始终允许该工具」自动加入，也可在此手动输入名称。只读 / 强制只读模式不受影响；bash 与文件写入/编辑工具不可被信任。"
+                      : "Extension tools in this list skip approval under sandbox/strict permissions (e.g. mem0_memory). Add them from an approval card's “Always allow this tool” option or type a name here. Read-only / enforced read-only modes are unaffected; bash and file write/edit tools can never be trusted."
+                  }
+                >
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                    {permDraft.trustedTools.length === 0 && (
+                      <span className="set-hint" style={{ margin: 0 }}>
+                        {language === "zh" ? "（空）" : "(empty)"}
+                      </span>
+                    )}
+                    {permDraft.trustedTools.map((t) => (
+                      <span
+                        key={t}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "2px 8px",
+                          borderRadius: 10,
+                          background: "rgba(127,127,127,.15)",
+                          fontSize: 12,
+                        }}
+                      >
+                        {t}
+                        <button
+                          className="iconbtn"
+                          style={{ padding: 0 }}
+                          title={language === "zh" ? "从信任列表移除" : "Remove from trusted tools"}
+                          onClick={() => setTrustedTools(permDraft.trustedTools.filter((x) => x !== t))}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      className="set-input"
+                      value={trustDraft}
+                      placeholder={language === "zh" ? "工具名称，如 mem0_memory" : "Tool name, e.g. mem0_memory"}
+                      onChange={(e) => setTrustDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") addTrustedTool();
+                      }}
+                    />
+                    <button className="btn" onClick={addTrustedTool} disabled={!trustDraft.trim()}>
+                      {language === "zh" ? "添加" : "Add"}
+                    </button>
+                  </div>
+                </Field>
+              </div>
+            )}
+
+            {tab === "appearance" && (
+              <div className="set-card">
+                <div className="set-note">
+                  {language === "zh"
+                    ? "这里的设置即时生效并自动保存，无需手动保存。"
+                    : "These settings take effect immediately and are saved automatically — no manual save needed."}
+                </div>
+                <Field
+                  label={language === "zh" ? "头像" : "Avatars"}
+                  hint={
+                    language === "zh"
+                      ? "聊天消息左侧的头像（默认：用户=大雄、智能体=哆啦A梦）。上传的图片会自动压缩后保存；恢复默认回到内置角色。"
+                      : "Avatars shown beside chat messages (defaults: User = Nobita, Agent = Doraemon). Uploaded images are downscaled before saving; reset restores the built-in characters."
+                  }
+                >
+                  <div className="avatar-row">
+                    <input ref={userAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "user")} />
+                    <input ref={agentAvatarInputRef} type="file" accept="image/*" hidden onChange={(e) => void onAvatarPicked(e, "agent")} />
+                    <div className="avatar-slot">
+                      <span className="avatar-preview">
+                        {config?.userAvatar ? <img src={config.userAvatar} alt="" /> : <img src={nobitaAvatarUrl} alt="" />}
+                      </span>
+                      <div className="avatar-slot-actions">
+                        <button type="button" className="set-btn" onClick={() => userAvatarInputRef.current?.click()}>
+                          {language === "zh" ? "更换" : "Change"}
+                        </button>
+                        {config?.userAvatar && (
+                          <button type="button" className="set-btn ghost" onClick={() => void resetAvatar("user")}>
+                            {language === "zh" ? "恢复默认" : "Reset"}
+                          </button>
+                        )}
+                      </div>
+                      <span className="avatar-slot-label">{language === "zh" ? "用户" : "User"}</span>
+                    </div>
+                    <div className="avatar-slot">
+                      <span className="avatar-preview">
+                        {config?.agentAvatar ? <img src={config.agentAvatar} alt="" /> : <img src={doraemonAvatarUrl} alt="" />}
+                      </span>
+                      <div className="avatar-slot-actions">
+                        <button type="button" className="set-btn" onClick={() => agentAvatarInputRef.current?.click()}>
+                          {language === "zh" ? "更换" : "Change"}
+                        </button>
+                        {config?.agentAvatar && (
+                          <button type="button" className="set-btn ghost" onClick={() => void resetAvatar("agent")}>
+                            {language === "zh" ? "恢复默认" : "Reset"}
+                          </button>
+                        )}
+                      </div>
+                      <span className="avatar-slot-label">{language === "zh" ? "MPI 智能体" : "MPI Agent"}</span>
+                    </div>
+                  </div>
+                </Field>
                 <Field
                   label={language === "zh" ? "主题模式" : "Theme"}
                   hint={
@@ -2413,23 +2753,6 @@ export function Settings() {
                   </select>
                 </Field>
                 <Field
-                  label={language === "zh" ? "Diff 显示" : "Diff view"}
-                  hint={
-                    language === "zh"
-                      ? "聊天中编辑类工具结果的展示方式；统一为 git 风格单栏 -/+ 视图。"
-                      : "How edit-tool results render in the transcript; unified is a git-style single-column +/- view."
-                  }
-                >
-                  <select
-                    className="set-select"
-                    value={config?.diffViewMode || "unified"}
-                    onChange={(e) => changeDiffViewMode(e.target.value as "unified" | "blocks")}
-                  >
-                    <option value="unified">{language === "zh" ? "统一（单栏）" : "Unified (single column)"}</option>
-                    <option value="blocks">{language === "zh" ? "前后分块" : "Before / after blocks"}</option>
-                  </select>
-                </Field>
-                <Field
                   label={language === "zh" ? "窗口缩放" : "Window zoom"}
                   hint={
                     language === "zh"
@@ -2447,25 +2770,6 @@ export function Settings() {
                         {p === 100 ? `${p}%（${language === "zh" ? "默认" : "default"}）` : `${p}%`}
                       </option>
                     ))}
-                  </select>
-                </Field>
-                <Field
-                  label={language === "zh" ? "新建会话默认权限" : "New session permission"}
-                  hint={
-                    language === "zh"
-                      ? "仅影响之后新建的会话；已有会话保留各自设置，可随时在输入框左侧的权限菜单中切换。只读=修改直接阻止；严格=仅只读自动执行；沙盒=低风险明确操作自动执行、危险操作需确认；完全权限=不拦截。"
-                      : "Applies to sessions created from now on; existing sessions keep their own level and can be switched anytime from the permission menu in the composer. Read-only blocks mutations; strict auto-runs only read-only; sandbox auto-runs low-risk explicit operations; full intercepts nothing."
-                  }
-                >
-                  <select
-                    className="set-select"
-                    value={config?.defaultPermission || "sandbox"}
-                    onChange={(e) => changeDefaultPermission(e.target.value as PermissionLevel)}
-                  >
-                    <option value="readonly">{language === "zh" ? "只读（修改直接阻止）" : "Read-only (mutations blocked)"}</option>
-                    <option value="strict">{language === "zh" ? "严格（仅只读自动执行）" : "Strict (read-only auto-runs)"}</option>
-                    <option value="sandbox">{language === "zh" ? "沙盒（低风险操作自动执行，默认）" : "Sandbox (low-risk auto-runs, default)"}</option>
-                    <option value="full">{language === "zh" ? "完全权限" : "Full access"}</option>
                   </select>
                 </Field>
               </div>
@@ -2761,51 +3065,36 @@ export function Settings() {
                 )}
                 {/* P1-12: auto model switching pool + policy */}
                 <AutoModelCard providers={draft.providers} />
+
+                <div className="set-card">
+                  <Field label="默认提供商" hint="新建会话的初始提供商；写入 settings.json（~/.pi/agent），与终端 pi 共享。">
+                    <select className="set-select" value={thinking.defaultProvider || ""} onChange={(e) => setThinking((t) => ({ ...t, defaultProvider: e.target.value || undefined, defaultModel: undefined }))}>
+                      <option value="">（未设）</option>
+                      {providerKeys.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="默认模型">
+                    <select className="set-select" value={thinking.defaultModel || ""} onChange={(e) => setThinking((t) => ({ ...t, defaultModel: e.target.value || undefined }))} disabled={!thinking.defaultProvider}>
+                      <option value="">（未设）</option>
+                      {defaultModels.map((id) => (
+                        <option key={id} value={id}>
+                          {id}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
               </>
             )}
 
-            {tab === "thinking" && (
-              <div className="set-card">
-                <Field label="默认思考深度" hint="新建会话的初始思考等级；模型需 reasoning=true 才生效">
-                  <select className="set-select" value={thinking.defaultThinkingLevel || "off"} onChange={(e) => setThinking((t) => ({ ...t, defaultThinkingLevel: e.target.value }))}>
-                    {availableThinkingLevels.map((l) => (
-                      <option key={l} value={l}>
-                        {reasoningLevelLabel(l, config?.language || "en")}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="默认提供商">
-                  <select className="set-select" value={thinking.defaultProvider || ""} onChange={(e) => setThinking((t) => ({ ...t, defaultProvider: e.target.value || undefined, defaultModel: undefined }))}>
-                    <option value="">（未设）</option>
-                    {providerKeys.map((k) => (
-                      <option key={k} value={k}>
-                        {k}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="默认模型">
-                  <select className="set-select" value={thinking.defaultModel || ""} onChange={(e) => setThinking((t) => ({ ...t, defaultModel: e.target.value || undefined }))} disabled={!thinking.defaultProvider}>
-                    <option value="">（未设）</option>
-                    {defaultModels.map((id) => (
-                      <option key={id} value={id}>
-                        {id}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="隐藏思考块">
-                  <Toggle checked={!!thinking.hideThinkingBlock} onChange={(v) => setThinking((t) => ({ ...t, hideThinkingBlock: v }))} />
-                </Field>
-                <div className="set-hint" style={{ marginTop: 8 }}>
-                  这些是全局默认值，写入 settings.json。单个模型的思考能力由该模型的“思考”开关与 compat 决定。
-                </div>
-              </div>
-            )}
 
-            {tab === "storage" && (
+            {tab === "data" && (
               <div className="set-card">
+                <div className="set-card-title">{language === "zh" ? "存储位置" : "Storage locations"}</div>
                 <Field
                   label={language === "zh" ? "会话存储位置" : "Session storage location"}
                   hint={
@@ -2867,8 +3156,23 @@ export function Settings() {
               </div>
             )}
 
-            {tab === "archive" && (
+            {tab === "data" && (
               <div className="set-card">
+                <div className="set-card-title">{language === "zh" ? "归档与回收" : "Archive & trash"}</div>
+                <Field
+                  label={language === "zh" ? "回收站" : "Trash"}
+                  hint={
+                    language === "zh"
+                      ? "开启后，删除的会话先移入回收站（设置 → 数据管理），可恢复；只有在那里删除才算永久删除。关闭后删除会立即永久生效。"
+                      : "When on, deleted sessions go to the trash (Settings → Data management) and stay restorable; only deleting there removes them for good. When off, delete removes a session immediately."
+                  }
+                >
+                  <label className="theme-sys-check">
+                    <input type="checkbox" checked={dataDraft.trashEnabled} onChange={(e) => setDataDraft({ trashEnabled: e.target.checked })} />
+                    <span>{language === "zh" ? "删除的会话先移入回收站（可恢复）" : "Deleted sessions go to the trash first (restorable)"}</span>
+                  </label>
+                </Field>
+
                 {/* Search across archived projects, sessions and trash entries. */}
                 <div className="archive-search-row">
                   <div className="archive-search-box">
@@ -3047,8 +3351,9 @@ export function Settings() {
               </div>
             )}
 
-            {tab === "backup" && (
+            {tab === "data" && (
               <div className="set-card">
+                <div className="set-card-title">{language === "zh" ? "备份与恢复" : "Backup & restore"}</div>
                 {/* App settings (config.json) */}
                 <div className="set-card-title">{language === "zh" ? "应用设置" : "App settings"}</div>
                 <div className="set-hint archived-project-hint">
@@ -3141,8 +3446,27 @@ export function Settings() {
               </div>
             )}
 
-            {tab === "diag" && (
+            {tab === "system" && (
               <>
+                <div className="set-card">
+                  <Field
+                    label={language === "zh" ? "开机自启动" : "Launch at startup"}
+                    hint={
+                      language === "zh"
+                        ? "登录系统时自动启动 MPI（Windows 下通过开始菜单的启动项实现）。"
+                        : "Starts MPI automatically when you sign in (uses the OS startup folder on Windows)."
+                    }
+                  >
+                    <label className="theme-sys-check">
+                      <input type="checkbox" checked={sysDraft.autoLaunch} disabled={initialSys === ""} onChange={(e) => setSysDraft({ autoLaunch: e.target.checked })} />
+                      <span>{language === "zh" ? "登录系统时自动启动" : "Start automatically at sign-in"}</span>
+                    </label>
+                  </Field>
+                </div>
+
+                <AppUpdatePanel />
+                <PiCoreUpdatePanel />
+
                 <div className="set-card">
                   <div className="set-card-title">Pi 运行时</div>
                   {diag?.error && <div className="set-diag-err">⚠ {diag.error}</div>}
@@ -3193,14 +3517,6 @@ export function Settings() {
               </>
             )}
 
-            {tab === "update" && (
-              <>
-                <AppUpdatePanel />
-                <PiCoreUpdatePanel />
-                {/* dev-only：打包版里面板自身返回 null */}
-                <DevReleasePanel />
-              </>
-            )}
           </div>
         </section>
 

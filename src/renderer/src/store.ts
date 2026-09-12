@@ -28,7 +28,7 @@ import type {
   ViewAttachment,
   ViewMessage,
 } from "./lib/types";
-import { normalizeTaskModes } from "./lib/task-modes";
+import { normalizeTaskModes, resolveDefaultTaskMode, taskModeName } from "./lib/task-modes";
 import { cleanOutput, extensionsAlreadyLatest, hasLibuvAssertion, lastLine, stripAnsi } from "./lib/update";
 import { playCompletionChime } from "./lib/sound";
 import { speakMessage } from "./lib/tts";
@@ -1428,6 +1428,8 @@ function scheduleEventFlush(): void {
               voiceUri: voiceCfg?.ttsVoiceUri,
               rate: voiceCfg?.ttsRate,
               lang: st.config?.language === "zh" ? "zh" : "en",
+              backend: voiceCfg?.ttsBackend === "edge" ? "edge" : "system",
+              edgeVoice: voiceCfg?.ttsEdgeVoice,
             });
           }
         }
@@ -1558,7 +1560,7 @@ export const useStore = create<PiStore>()((set, get) => {
       });
 
     // One-time notice when a data-location migration ran at this launch
-    // (Settings → 数据存储). main keeps the summary in memory only, so it is
+    // (Settings → 数据管理). main keeps the summary in memory only, so it is
     // null on launches without pending work.
     if (!migrationToastShown) {
       window.pi.dataMigration
@@ -1578,8 +1580,8 @@ export const useStore = create<PiStore>()((set, get) => {
             get().pushToast(
               "warning",
               zh
-                ? `部分数据文件迁移失败（${s.errors.length}），详见设置 → 数据存储`
-                : `Some data files failed to migrate (${s.errors.length}) — see Settings → Data storage`,
+                ? `部分数据文件迁移失败（${s.errors.length}），详见设置 → 数据管理`
+                : `Some data files failed to migrate (${s.errors.length}) — see Settings → Data management`,
             );
           }
         })
@@ -1831,7 +1833,7 @@ export const useStore = create<PiStore>()((set, get) => {
       get().pushToast(
         "success",
         result?.trashed
-          ? "会话已移入回收站，可在设置「归档回收」中恢复或永久删除。"
+          ? "会话已移入回收站，可在设置「数据管理」中恢复或永久删除。"
           : "会话已永久删除，无法恢复。",
       );
     } catch (e: any) {
@@ -1994,6 +1996,14 @@ export const useStore = create<PiStore>()((set, get) => {
       expandedProjects: { ...s.expandedProjects, [cwd]: true },
     }));
     get().ensureConnected(tempId);
+    // New conversations start on the default task mode (balanced unless the
+    // user configured another existing mode): apply it once the bridge is live
+    // so permission + thinking + injected content all take effect.
+    const defaultMode = resolveDefaultTaskMode(
+      normalizeTaskModes(get().config?.taskModes, get().config?.language === "zh" ? "zh" : "en"),
+      get().config?.defaultTaskModeId,
+    );
+    if (defaultMode) void get().applyTaskMode(tempId, defaultMode.id);
     return tempId;
   },
 
@@ -2838,7 +2848,22 @@ export const useStore = create<PiStore>()((set, get) => {
   },
 
   respondExtUi: (threadId, id, payload) => {
-    window.pi.thread.extuiResponse({ threadId, id, payload }).catch(() => {});
+    window.pi.thread
+      .extuiResponse({ threadId, id, payload })
+      .then((res: any) => {
+        // main reports side effects of the click (persistent tool trust).
+        if (!res || typeof res !== "object") return;
+        const zh = get().config?.language === "zh";
+        if (typeof res.trustedAdded === "string" && res.trustedAdded) {
+          get().pushToast(
+            "success",
+            zh
+              ? `已始终允许工具 ${res.trustedAdded}（跨会话生效，可在设置中撤销）`
+              : `Tool ${res.trustedAdded} is now always allowed across sessions (revoke in Settings)`,
+          );
+        }
+      })
+      .catch(() => {});
     set((s) => ({ extuiQueue: s.extuiQueue.filter((q) => q.request.id !== id) }));
   },
 
@@ -3320,7 +3345,18 @@ export const useStore = create<PiStore>()((set, get) => {
       modeId,
       instructions: mode.instructions || "",
       specFile: mode.specFile || "",
+      enforce: mode.enforce === "readonly" ? "readonly" : "",
     });
+    // Enforced modes override the permission pill (incl. full) — say so.
+    if (mode.enforce === "readonly") {
+      const zh = get().config?.language === "zh";
+      get().pushToast(
+        "info",
+        zh
+          ? `「${taskModeName(mode, zh ? "zh" : "en")}」模式强制只读：文件写入、网络请求与非白名单命令均被系统拦截，仅可读取代码/文件和执行只读查询；如需执行操作请先切换任务模式或权限。`
+          : `The ${taskModeName(mode, zh ? "zh" : "en")} mode enforces read-only: file writes, network requests and non-whitelisted commands are blocked by the system — only reading code/files and read-only queries work. Switch task mode or permission first if you need execution.`,
+      );
+    }
   },
 
   saveTaskModes: async (modes, defaultId) => {
@@ -3354,6 +3390,7 @@ export const useStore = create<PiStore>()((set, get) => {
           modeId: removed ? "" : modeId,
           instructions: mode?.instructions || "",
           specFile: mode?.specFile || "",
+          enforce: mode?.enforce === "readonly" ? "readonly" : "",
         });
       } catch {
         /* the thread may have closed in the meantime */

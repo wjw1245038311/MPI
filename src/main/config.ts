@@ -48,7 +48,7 @@ export const PERMISSION_LEVELS = ["readonly", "strict", "sandbox", "full"] as co
 export type PermissionLevel = (typeof PERMISSION_LEVELS)[number];
 
 /** 任务模式: a named preset bundling per-thread behaviour knobs (permission +
- * thinking level; model stays independent). Built-ins are the short/long task
+ * thinking level; model stays independent). Built-ins are the short task
  * defaults; users can add custom modes. The renderer normalizes this list
  * (src/renderer/src/lib/task-modes.ts) — main only persists it verbatim.
  *
@@ -69,6 +69,11 @@ export interface TaskModeDef {
    * content is appended after `instructions`. External file: edits apply live.
    * Must be an absolute path; missing files are skipped at read time. */
   specFile?: string;
+  /** Hard enforcement floor (renderer-normalized): while this mode is active the
+   * thread is forced read-only in the pi process — the permission gate blocks
+   * every mutation and write/edit tools are hidden, regardless of the
+   * permission pill (including full). Built-in research/review carry it. */
+  enforce?: "readonly";
 }
 
 export interface AppConfig {
@@ -89,14 +94,14 @@ export interface AppConfig {
   /** Individual sessions hidden from normal navigation until restored in Settings. */
   archivedThreads: ArchivedThread[];
   /** Deleted sessions go to the app trash (restorable) instead of being
-   * unlinked immediately; toggle in Settings → General. Absent/corrupt = enabled,
+   * unlinked immediately; toggle in Settings → Conversation. Absent/corrupt = enabled,
    * because accidental deletion is exactly what this protects against. */
   trashEnabled: boolean;
   /** Custom directory for todo attachment copies (legacy, replaced by
    * todoDataDir). Still honored as a fallback lookup source when todoDataDir is
    * unset so attachments added before the upgrade keep resolving. */
   todoAttachmentDir?: string;
-  /** Custom directory for session JSONL files (Settings → Data Storage).
+  /** Custom directory for session JSONL files (Settings → Data management).
    * When set, pi's settings.json gets a `sessionDir` key so terminal pi follows
    * along too; layout is flat (no per-project subdirs). Absent = default
    * <agentDir>/sessions with per-project subdirectories. */
@@ -128,16 +133,23 @@ export interface AppConfig {
   /** Per-thread permission level, keyed by session file path. Defaults to defaultPermission when absent. */
   threadPermissions: Record<string, PermissionLevel>;
   /** User-managed task-mode presets (composer pill left of the permission one).
-   * Absent = built-in short/long task modes only; the renderer re-seeds and
-   * sanitizes on read, so a hand-edited config can't break the UI. */
+   * Absent = built-in task modes only; the renderer re-seeds and sanitizes on
+   * read, so a hand-edited config can't break the UI. */
   taskModes?: TaskModeDef[];
-  /** Which task mode new conversations display as active ("short" by default). */
+  /** Which task mode new conversations start on ("balanced" by default; a
+   * removed/unknown id falls back to balanced). Applied live on creation. */
   defaultTaskModeId?: string;
   /** Per-thread applied task-mode id, keyed by session UUID — the same key as
    * the <userData>/taskmodes/<uuid>.json state file. The injection itself is
    * driven by that state file; this map only lets the UI restore which mode a
    * thread was on after restart/reopen so the ⚡ pill stays in sync. */
   threadTaskModes?: Record<string, string>;
+  /** Extension tools the user has persistently trusted (“始终允许该工具” on an
+   * approval card, or added in Settings → Conversation): auto-approved by the
+   * permission gate in sandbox/strict; still blocked under readonly / enforced
+   * read-only. bash/write/edit can never be trusted — they always go through
+   * their own classification. */
+  trustedTools?: string[];
   /** Custom user avatar as a data URL (downscaled in the renderer); absent = built-in Nobita avatar. */
   userAvatar?: string;
   /** Custom agent avatar as a data URL; absent = built-in Doraemon avatar. */
@@ -146,7 +158,7 @@ export interface AppConfig {
    * session's system prompt via pi's --append-system-prompt.
    * Absent/empty = no injection. MPI-only: terminal pi is not affected. */
   userProfile?: string;
-  /** "扩展自动选模" (Settings → General). When an extension needs to pick a
+  /** "扩展自动选模" (Settings → Conversation). When an extension needs to pick a
    * model (e.g. the pi-web-access web-search summary) it uses this
    * conversation's current model without popping up, and web searches skip
    * the browser curation window entirely. Implemented by managing
@@ -177,7 +189,7 @@ export interface AppConfig {
   autoModelThreads?: Record<string, boolean>;
   /** Voice system (语音系统): STT for composer voice input + TTS for reading
    * agent replies aloud. Absent = unconfigured; the mic button then points to
-   * Settings → General → 语音系统. See src/main/voice.ts for STT backends and
+   * Settings → Conversation → 语音系统. See src/main/voice.ts for STT backends and
    * src/renderer/src/lib/tts.ts for the speechSynthesis-based TTS engine. */
   voice?: VoiceConfig;
 }
@@ -189,6 +201,15 @@ export interface AppConfig {
  *   from the referenced provider is used (endpoint is Google's fixed one).
  */
 export type SttBackend = "openai" | "gemini";
+
+/** Text-to-speech engine selected in Settings → Conversation → 语音系统.
+ * - "system" (default): the renderer's Web Speech API (speechSynthesis), using
+ *   the OS voices — fully offline.
+ * - "edge": Microsoft Edge's free online neural voices, synthesized in the main
+ *   process (see src/main/edge-tts.ts). No API key; falls back to "system" on
+ *   failure.
+ */
+export type TtsBackend = "system" | "edge";
 
 /** Sentinel sttProviderId meaning "use the manual baseUrl/apiKey fields below". */
 export const STT_PROVIDER_MANUAL = "__manual__";
@@ -211,6 +232,11 @@ export interface VoiceConfig {
    * language (zh → a zh voice, en → an en voice). Renderer-side only, but kept
    * here so the choice survives restarts and travels with config backups. */
   ttsVoiceUri?: string;
+  /** TTS engine; absent = "system" (offline speechSynthesis). */
+  ttsBackend?: TtsBackend;
+  /** Edge TTS voice short name (e.g. "zh-CN-XiaoxiaoNeural"); absent = auto-pick
+   * by UI language. Only used when ttsBackend === "edge". */
+  ttsEdgeVoice?: string;
   /** Speech rate multiplier, clamped to 0.5–2; absent = 1. */
   ttsRate?: number;
   /** Auto-read the agent's reply aloud when a turn settles on the visible
@@ -335,6 +361,10 @@ function sanitizeVoice(value: unknown): VoiceConfig | undefined {
   }
   if (typeof v.ttsVoiceUri === "string" && v.ttsVoiceUri.trim()) {
     out.ttsVoiceUri = v.ttsVoiceUri.trim().slice(0, 512);
+  }
+  if (v.ttsBackend === "system" || v.ttsBackend === "edge") out.ttsBackend = v.ttsBackend;
+  if (typeof v.ttsEdgeVoice === "string" && v.ttsEdgeVoice.trim()) {
+    out.ttsEdgeVoice = v.ttsEdgeVoice.trim().slice(0, 128);
   }
   if (typeof v.ttsRate === "number" && Number.isFinite(v.ttsRate)) {
     out.ttsRate = Math.min(2, Math.max(0.5, v.ttsRate));
@@ -519,7 +549,7 @@ export function getConfigDir(): string {
 }
 
 /**
- * Validate an externally supplied config object (Settings → 备份与恢复 import).
+ * Validate an externally supplied config object (Settings → 数据管理 import).
  * Returns ONLY the fields that are present AND well-formed, so importing a
  * stale or foreign backup never clobbers newer settings with defaults.
  * Machine-specific fields (piCliPath, windowBounds) and transport-locked

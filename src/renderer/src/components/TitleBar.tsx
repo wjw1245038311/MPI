@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import { Minus, Square, Close, Settings as SettingsIcon } from "./icons";
 import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
+import { DevReleasePanel } from "./DevReleasePanel";
+import { TestPanel } from "./TestPanel";
 import appIconUrl from "../../../../resources/icon.png";
 
-type MenuId = "file" | "edit" | "view" | "help";
+type MenuId = "file" | "edit" | "view" | "help" | "devtools";
 
 interface MenuItem {
   label: string;
@@ -39,11 +41,40 @@ export function TitleBar() {
   }, [menu]);
 
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [devReleaseOpen, setDevReleaseOpen] = useState(false);
+  const [testPanelOpen, setTestPanelOpen] = useState(false);
+  // Dev-only toolbar entries: the whole 「开发工具」 menu is hidden in packaged builds.
+  const [isDev, setIsDev] = useState(false);
+  useEffect(() => {
+    window.pi.app
+      .isDev()
+      .then(setIsDev)
+      .catch(() => undefined);
+  }, []);
 
   const st = () => useStore.getState();
   const act = (fn: () => void) => () => {
     setMenu(null);
     fn();
+  };
+
+  // Dev-only: open a fresh session inside the MPI repo and ask the agent to run
+  // the user-manual skill (cwd = repo root so .pi/skills/user-manual is found).
+  const openManualSync = async () => {
+    const root = await window.pi.app.getDevRepoRoot().catch(() => null);
+    if (!root) {
+      useStore.getState().pushToast("error", "用户手册编写仅在开发模式可用");
+      return;
+    }
+    const s = useStore.getState();
+    const id = await s.openThread(root, undefined, undefined, "用户手册同步");
+    if (!id) return;
+    await s.sendPrompt(
+      id,
+      "请按 user-manual skill 同步 MPI 用户手册：先读 .pi/manual-sync.json 与 changelog.md，" +
+        "运行 `node scripts/manual-sync.mjs --report`，列出用户可见变更与建议章节并等我确认；" +
+        "确认后中英文同步修改 resources/user-manual.md 与 resources/user-manual-en.md，最后更新水印。",
+    );
   };
 
   // Open the bundled user manual in a preview tab (main resolves its path).
@@ -126,6 +157,26 @@ export function TitleBar() {
             )}
           </div>
         ))}
+        {isDev && (
+          <div className="tb-menu-wrap">
+            <button className={`tb-menu-btn ${menu === "devtools" ? "open" : ""}`} onClick={() => setMenu((cur) => (cur === "devtools" ? null : "devtools"))}>
+              开发工具
+            </button>
+            {menu === "devtools" && (
+              <div className="tb-dropdown tb-dd-dev">
+                <button className="tb-dd-item" onClick={act(() => setTestPanelOpen(true))}>
+                  自动化测试
+                </button>
+                <button className="tb-dd-item" onClick={act(() => setDevReleaseOpen(true))}>
+                  dev 一键发布
+                </button>
+                <button className="tb-dd-item" onClick={act(() => void openManualSync())}>
+                  用户手册编写
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="tb-spacer" />
       <button className="tb-settings-btn" onClick={openSettings} title={language === "zh" ? "设置" : "Settings"} aria-label={language === "zh" ? "设置" : "Settings"}>
@@ -155,6 +206,32 @@ export function TitleBar() {
           </div>
           <AppUpdatePanel />
           <PiCoreUpdatePanel />
+        </div>
+      </div>
+    )}
+    {devReleaseOpen && (
+      <div className="modal-backdrop" onMouseDown={() => setDevReleaseOpen(false)}>
+        <div className="modal about-modal" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="about-modal-head">
+            <span>开发专用工具 · dev 一键发版</span>
+            <button className="iconbtn" onClick={() => setDevReleaseOpen(false)} title={language === "zh" ? "关闭" : "Close"} aria-label={language === "zh" ? "关闭" : "Close"}>
+              <Close size={14} />
+            </button>
+          </div>
+          <DevReleasePanel />
+        </div>
+      </div>
+    )}
+    {testPanelOpen && (
+      <div className="modal-backdrop" onMouseDown={() => setTestPanelOpen(false)}>
+        <div className="modal test-modal" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="about-modal-head">
+            <span>开发专用工具 · 自动化测试</span>
+            <button className="iconbtn" onClick={() => setTestPanelOpen(false)} title={language === "zh" ? "关闭" : "Close"} aria-label={language === "zh" ? "关闭" : "Close"}>
+              <Close size={14} />
+            </button>
+          </div>
+          <TestPanel />
         </div>
       </div>
     )}

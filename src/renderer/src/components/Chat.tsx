@@ -1175,7 +1175,13 @@ function TtsButton({ messageId, text }: { messageId: string; text: string }) {
       voiceUri: voiceCfg?.ttsVoiceUri,
       rate: voiceCfg?.ttsRate,
       lang: zh ? "zh" : "en",
+      backend: voiceCfg?.ttsBackend === "edge" ? "edge" : "system",
+      edgeVoice: voiceCfg?.ttsEdgeVoice,
     }).then((res) => {
+      if (res.fallback) {
+        const d = res.detail ? (zh ? `（${res.detail}）` : ` (${res.detail})`) : "";
+        st.pushToast("warning", zh ? `Edge 在线语音不可用，已回退系统语音${d}` : `Edge online voice unavailable — fell back to the system voice${d}`);
+      }
       if (!res.ok && res.error === "unsupported") {
         st.pushToast("error", zh ? "当前系统不支持语音合成（未找到可用的 TTS 引擎）" : "Speech synthesis is not supported on this system (no TTS engine found)");
       } else if (!res.ok && res.error === "no-voice") {
@@ -1186,12 +1192,13 @@ function TtsButton({ messageId, text }: { messageId: string; text: string }) {
 
   return (
     <button
-      className={speaking === "on" ? "tts-speaking" : ""}
+      className={`tts-btn${speaking === "on" ? " tts-speaking" : ""}`}
       title={speaking === "on" ? (zh ? "停止朗读" : "Stop reading") : zh ? "朗读这条回复" : "Read this reply aloud"}
       aria-label={speaking === "on" ? (zh ? "停止朗读" : "Stop reading") : zh ? "朗读这条回复" : "Read this reply aloud"}
       onClick={onClick}
     >
       {speaking === "on" ? <Stop size={12} /> : <Volume size={12} />}
+      <span className="tts-label">{speaking === "on" ? (zh ? "停止" : "Stop") : zh ? "朗读" : "Read"}</span>
     </button>
   );
 }

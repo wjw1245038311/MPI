@@ -1,12 +1,17 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import type {
   ComposerDraft,
+  LogicRunResult,
   McpMarketDetail,
   McpMarketPage,
   McpServerInfo,
   NpmPackage,
   PermissionLevel,
+  RegistryScan,
+  ScenarioHistoryEntry,
+  ScenarioRunResult,
   SkillHubSkill,
+  TestRunLogLine,
   TransferInfo,
   TodoItem,
   TrashEntry,
@@ -79,6 +84,7 @@ const api = {
     openChangelogWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke("app:openChangelogWindow"),
     relaunch: () => ipcRenderer.invoke("app:relaunch"),
     isDev: (): Promise<boolean> => ipcRenderer.invoke("app:isDev"),
+    getDevRepoRoot: (): Promise<string | null> => ipcRenderer.invoke("app:getDevRepoRoot"),
     devReleaseStatus: (): Promise<{
       isDev: boolean;
       running: boolean;
@@ -214,6 +220,17 @@ const api = {
     deleteTask: (id: string) => ipcRenderer.invoke("automation:deleteTask", id),
     runNow: (id: string) => ipcRenderer.invoke("automation:runNow", id),
   },
+  tests: {
+    // dev-only「自动化测试」面板：注册表在 tests/registry/*.json，运行输出流式返回。
+    list: (): Promise<RegistryScan> => ipcRenderer.invoke("tests:list"),
+    runLogic: (args: { caseId: string; logicTest: string }): Promise<LogicRunResult> =>
+      ipcRenderer.invoke("tests:runLogic", args),
+    runScenario: (args: { caseId: string; harnessCaseId: string }): Promise<ScenarioRunResult> =>
+      ipcRenderer.invoke("tests:runScenario", args),
+    readResult: (args: { harnessCaseId: string }): Promise<ScenarioRunResult> =>
+      ipcRenderer.invoke("tests:readResult", args),
+    history: (): Promise<ScenarioHistoryEntry[]> => ipcRenderer.invoke("tests:history"),
+  },
   messaging: {
     getState: () => ipcRenderer.invoke("messaging:getState"),
     setConfig: (patch: unknown) => ipcRenderer.invoke("messaging:setConfig", patch),
@@ -280,9 +297,10 @@ const api = {
     extuiResponse: (args: { threadId: string; id: string; payload: Record<string, unknown> }) =>
       ipcRenderer.invoke("thread:extuiResponse", args),
     setPermission: (args: { threadId: string; permission: PermissionLevel }) => ipcRenderer.invoke("thread:setPermission", args),
-    // Task-mode behaviour state (instructions + spec doc) for the mpi-taskmode
-    // extension; empty content clears it. Takes effect on the next turn.
-    setTaskMode: (args: { threadId: string; modeId?: string; instructions?: string; specFile?: string }) =>
+    // Task-mode behaviour state (instructions + spec doc + enforce floor) for
+    // the mpi-taskmode extension; empty content clears it. Takes effect on the
+    // next turn.
+    setTaskMode: (args: { threadId: string; modeId?: string; instructions?: string; specFile?: string; enforce?: string }) =>
       ipcRenderer.invoke("thread:setTaskMode", args),
   },
   trash: {
@@ -326,6 +344,15 @@ const api = {
     /** Connectivity probe for the Settings test button (short silent WAV). */
     test: () =>
       ipcRenderer.invoke("voice:test") as Promise<{ ok: boolean; text?: string; error?: string }>,
+    /** Synthesize text with an Edge neural voice (base64 MP3). `voice`/`rate`
+     * override the saved config (used by the Settings preview of the draft). */
+    synthesize: (args: { text: string; voice?: string; rate?: number }) =>
+      ipcRenderer.invoke("voice:synthesize", args) as Promise<{
+        ok: boolean;
+        audioBase64?: string;
+        mime?: string;
+        error?: string;
+      }>,
   },
   tui: {
     start: (args: { threadId: string; cwd: string; sessionFile?: string | null }) =>
@@ -376,6 +403,9 @@ const api = {
       usedPaid?: boolean;
       downgraded?: boolean;
     }) => void) => on("pi:autoModel", cb),
+    // Agent-initiated permission switch approved (mpi_request_mode_switch):
+    // main already flipped the gate + cleared the enforced task mode.
+    modeSwitched: (cb: (p: { threadId: string; permission: PermissionLevel; taskMode: null }) => void) => on("pi:modeSwitched", cb),
     automation: (cb: (p: { type: "start" | "done"; taskId: string; name: string; ok?: boolean; error?: string }) => void) =>
       on("pi:automation", cb),
     messaging: (cb: (p: {
@@ -418,6 +448,7 @@ const api = {
     appUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:appUpdate", cb),
     coreUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:coreUpdate", cb),
     devReleaseLog: (cb: (line: string) => void) => on("pi:devReleaseLog", cb),
+    testLog: (cb: (p: TestRunLogLine) => void) => on("pi:testLog", cb),
   },
 };
 

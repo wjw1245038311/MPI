@@ -7,6 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
+import { listTests, readScenarioHistory, readScenarioResult, runLogicTest, runScenarioCase } from "./test-runner";
 import { getDevReleaseLogWindow, openChangelogWindow, openDevReleaseLogWindow } from "./standalone-windows";
 import {
   BUILT_IN_REMOTE_STUN_URLS,
@@ -68,6 +69,7 @@ import {
 } from "./models-service";
 import { autoResolveContextWindows, resolveModelContext } from "./model-context";
 import { testStt, transcribeAudio } from "./voice";
+import { synthesizeEdge } from "./edge-tts";
 import { DEFAULT_POLICY, ModelAutopilot } from "./model-autopilot";
 import {
   autoAnswerModelSelect,
@@ -80,7 +82,12 @@ import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtim
 import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
 import { ensureChoiceExtension } from "./choice-extension";
-import { stripChoicePrefix } from "./choice-logic.ts";
+import {
+  isModeSwitchTitle,
+  MODE_SWITCH_APPROVE_LABELS,
+  MODE_SWITCH_DENY_LABELS,
+  stripChoicePrefix,
+} from "./choice-logic.ts";
 import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureTodoExtension } from "./todo-extension";
 import { registerTuiIpc } from "./tui";
@@ -179,7 +186,7 @@ const bridges = new Map<string, BridgeHandle>();
 let systemNotifications: SystemNotificationCenter | null = null;
 let activeRemoteHost: RemoteHost | null = null;
 
-// "扩展自动选模" (Settings → General): keeps pi-web-access's web-search.json in
+// "扩展自动选模" (Settings → Conversation): keeps pi-web-access's web-search.json in
 // sync with each conversation's current model and auto-answers extension
 // model-picker dialogs. Lazy so it never depends on config-dir init order.
 let webSearchFlowInstance: WebSearchFlow | null = null;
@@ -432,7 +439,7 @@ function createHandle(
       ensureTaskModeExtension(getConfigDir()),
       ...(isChannelSession ? [ensureChannelExtension(getConfigDir())] : []),
     ],
-    // Live paths so a customized todo data location (Settings → 数据存储) is
+    // Live paths so a customized todo data location (Settings → 数据管理) is
     // honored from the next spawned bridge on.
     todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
     choiceConfigFile: join(getConfigDir(), "config.json"),
@@ -502,12 +509,46 @@ function createHandle(
       // before that); the registry is keyed by the session-file UUID.
       const regKey = id.endsWith(".jsonl") ? threadUuidFromSessionFile(id) : null;
       const entry = regKey ? getChannelThread(regKey) : undefined;
-      if (isSandboxApprovalRequest(r)) {
+      if (isModeSwitchTitle((r as any)?.title)) {
+        // Agent asked to leave an enforced read-only mode and execute its plan.
+        // Remember the target; the response interceptor applies it on approval.
+        const to = parseModeSwitchTarget((r as any)?.title);
+        if (to) pendingModeSwitch.set(String((r as any).id), { threadId: id, to });
+        systemNotifications?.notifySandboxApproval(
+          id,
+          lang,
+          lang === "zh" ? "agent 请求切换权限（见 MPI 确认卡片）" : "Agent requested a permission switch (see the MPI card)",
+        );
+        // Channel-owned threads can't wait for a desktop click — same
+        // notify + auto-cancel treatment as sandbox approvals.
+        if (entry) {
+          void Promise.resolve(
+            entry.notifyApproval(
+              lang === "zh"
+                ? `⚠️ agent 请求切换本会话权限，请在 MPI 中 ${APPROVAL_GRACE_MS / 1000} 秒内确认；无响应将自动拒绝。`
+                : `⚠️ The agent requested a permission switch for this thread. Confirm in MPI within ${APPROVAL_GRACE_MS / 1000}s or it will be auto-denied.`,
+            ),
+          ).catch((err) => console.error("[messaging] mode-switch notify failed:", err));
+          setTimeout(() => {
+            try {
+              handle.bridge.respondExtUi((r as any).id, { cancelled: true });
+            } catch (err) {
+              console.error("[messaging] mode-switch auto-cancel failed:", err);
+            }
+          }, APPROVAL_GRACE_MS);
+        }
+      } else if (isSandboxApprovalRequest(r)) {
         systemNotifications?.notifySandboxApproval(
           id,
           lang,
           sandboxOperationFromTitle((r as any)?.title, lang),
         );
+        // Remember extension-tool approvals so a “始终允许该工具” click can be
+        // persisted cross-session. Shell/write/edit are never persistable.
+        const op = sandboxOperationFromTitle((r as any)?.title, lang);
+        if (op && op !== "Shell" && op !== "write" && op !== "edit") {
+          pendingTrustTool.set(String((r as any).id), op);
+        }
         // Channel-owned threads (Feishu/WeChat) can't wait for a desktop click:
         // tell the user through the channel and auto-deny after the grace
         // period. A late response is harmless — pi ignores responses for ids
@@ -595,6 +636,67 @@ let lastOpenCwd: string | null = null;
 let warmFailures = 0;
 let warmEnabled = false;
 let sendToRenderer: ((ch: string, p: unknown) => void) | null = null;
+
+// ---- Agent-initiated permission switch (mpi_request_mode_switch) ----------
+// The extension renders the confirmation card; main performs the actual live
+// switch when the user approves. Pending requests are keyed by extui request id.
+const pendingModeSwitch = new Map<string, { threadId: string; to: PermissionLevel }>();
+
+/** Reverse lookup of the permission display names used in the dialog title
+ * (keep in sync with PERMISSION_NAMES in mpi-choice-ext.ts). */
+const MODE_SWITCH_NAME_TO_LEVEL: Record<string, PermissionLevel> = {
+  只读: "readonly",
+  "Read-only": "readonly",
+  严格: "strict",
+  Strict: "strict",
+  沙盒: "sandbox",
+  Sandbox: "sandbox",
+  完全权限: "full",
+  "Full access": "full",
+};
+
+/** Parse the target level out of a mode-switch dialog title. */
+function parseModeSwitchTarget(title: unknown): PermissionLevel | null {
+  if (typeof title !== "string") return null;
+  const firstLine = title.split(/\r?\n/, 1)[0] || "";
+  const m = /(?:切换到「(.+?)」权限|switch to\s+"([^"]+)")/.exec(firstLine);
+  const name = (m?.[1] || m?.[2] || "").trim();
+  return MODE_SWITCH_NAME_TO_LEVEL[name] ?? null;
+}
+
+/** Apply an approved agent-initiated switch: flip the gate live, persist it,
+ * and clear the enforced task mode so its read-only floor lifts. */
+function applyAgentModeSwitch(threadId: string, to: PermissionLevel): boolean {
+  const h = bridges.get(threadId);
+  if (!h) return false;
+  h.permission = to;
+  writeGateMode(h.gateModeFile, to);
+  let cfg = getConfig();
+  if (threadId.endsWith(".jsonl")) {
+    updateConfig({ threadPermissions: { ...cfg.threadPermissions, [threadId]: to } });
+    cfg = getConfig();
+  }
+  const uuid = threadUuidFromSessionFile(threadId);
+  if (uuid) {
+    try {
+      unlinkSync(join(getConfigDir(), "taskmodes", `${uuid}.json`));
+    } catch {
+      /* no state file for this session */
+    }
+    const modes = { ...(cfg.threadTaskModes || {}) };
+    delete modes[uuid];
+    updateConfig({ threadTaskModes: modes });
+  }
+  sendToRenderer?.("pi:modeSwitched", { threadId, permission: to, taskMode: null });
+  return true;
+}
+
+// ---- Persistent tool trust (“始终允许该工具”) ---------------------------------
+// Approval requests for extension tools are remembered by extui request id so
+// the response interceptor can persist the choice into config.trustedTools.
+const pendingTrustTool = new Map<string, string>();
+/** Labels offered by the gate (keep in sync with permission-gate-ext.ts). */
+const ALWAYS_ALLOW_LABELS: readonly string[] = ["始终允许该工具（跨会话）", "Always allow this tool (persistent)"];
 
 /**
  * P1-12 auto model switching. Passive health signals come from the per-thread
@@ -1896,7 +1998,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return next;
   });
 
-  // ---- backup & restore (Settings → 备份与恢复) ---------------------------
+  // ---- backup & restore (Settings → 数据管理) ---------------------------
   const backupStamp = () => new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
 
   ipcMain.handle("backup:listSessions", () => listBackupProjects());
@@ -2136,7 +2238,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // Channel session commands (mpi_channel_* tools): same watch + poll pattern.
   startChannelCommandInboxWatcher();
 
-  // ---- data storage location (Settings → 数据存储) -------------------------
+  // ---- data storage location (Settings → 数据管理) -------------------------
   // Changing a location only records intent; the actual file moves happen on
   // next launch via runPendingDataMigrations() in index.ts.
   ipcMain.handle("data-migration:status", () => getDataMigrationStatus());
@@ -2440,6 +2542,24 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("voice:test", () =>
     testStt({ cfg: getConfig().voice, providers: readModelsFile().providers }),
   );
+  // ---- voice system (TTS, Edge) -------------------------------------------
+  // Free online neural voices. Explicit args win (Settings preview uses the
+  // unsaved draft); otherwise the saved voice config supplies voice + rate.
+  ipcMain.handle("voice:synthesize", async (_e, args: { text?: string; voice?: string; rate?: number }) => {
+    const cfg = getConfig().voice;
+    const r = await synthesizeEdge({
+      text: args?.text,
+      voice: args?.voice || cfg?.ttsEdgeVoice,
+      rate: typeof args?.rate === "number" ? args.rate : cfg?.ttsRate,
+    });
+    // Dev diagnostic: the renderer surfaces r.error in a toast; this line lands
+    // in the `npm run dev` terminal for anyone watching it.
+    console.log(
+      `[tts] edge synth ok=${r.ok} voice=${args?.voice || cfg?.ttsEdgeVoice || "(default)"}` +
+        ` bytes=${r.audioBase64 ? Math.round((r.audioBase64.length * 3) / 4) : 0} err=${r.error || "-"}`,
+    );
+    return r;
+  });
 
   // ---- settings: models.json / settings.json / diagnostics ----------------
   ipcMain.handle("settings:getModels", () => readModelsFile());
@@ -2661,7 +2781,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // the UI can restore which mode a thread was on after restart/reopen.
   ipcMain.handle(
     "thread:setTaskMode",
-    (_e, args: { threadId: string; modeId?: string; instructions?: string; specFile?: string }) => {
+    (_e, args: { threadId: string; modeId?: string; instructions?: string; specFile?: string; enforce?: string }) => {
       const id = typeof args?.threadId === "string" ? args.threadId : "";
       const key = id.endsWith(".jsonl")
         ? threadUuidFromSessionFile(id)
@@ -2671,16 +2791,30 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       mkdirSync(dir, { recursive: true });
       const file = join(dir, `${key}.json`);
       const instructions = typeof args?.instructions === "string" ? args.instructions.trim() : "";
-      const specFile =
-        typeof args?.specFile === "string" && isAbsolute(args.specFile) ? args.specFile.trim() : "";
-      if (!instructions && !specFile) {
+      // Built-in modes ship a portable `@agent/…` spec token; resolve it
+      // against pi's agent dir here so the state file always holds a real path
+      // (and the seeded mode works on any machine/user).
+      const rawSpec = typeof args?.specFile === "string" ? args.specFile.trim() : "";
+      const specFile = rawSpec.startsWith("@agent/")
+        ? join(getAgentDir(), rawSpec.slice("@agent/".length))
+        : isAbsolute(rawSpec)
+          ? rawSpec
+          : "";
+      // Hard read-only floor (research/review): the gate and the taskmode
+      // extension both read it from this file; empty content deletes the file.
+      const enforce = args?.enforce === "readonly" ? ("readonly" as const) : null;
+      if (!instructions && !specFile && !enforce) {
         try {
           unlinkSync(file);
         } catch {
           /* already absent */
         }
       } else {
-        writeFileSync(file, JSON.stringify({ instructions, specFile }), "utf8");
+        writeFileSync(
+          file,
+          JSON.stringify({ instructions, specFile, ...(enforce ? { enforce } : {}) }),
+          "utf8",
+        );
       }
       const modes = { ...(getConfig().threadTaskModes || {}) };
       const modeId = typeof args?.modeId === "string" ? args.modeId.trim() : "";
@@ -2990,11 +3124,40 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return h.bridge.getSessionStats();
   });
 
-  ipcMain.handle("thread:extuiResponse", (_e, args: { threadId: string; id: string; payload: Record<string, unknown> }) => {
-    const h = bridges.get(args.threadId);
-    if (h) h.bridge.respondExtUi(args.id, args.payload || {});
-    return true;
-  });
+  ipcMain.handle(
+    "thread:extuiResponse",
+    (_e, args: { threadId: string; id: string; payload: Record<string, unknown> }) => {
+      const h = bridges.get(args.threadId);
+      if (h) h.bridge.respondExtUi(args.id, args.payload || {});
+      // Agent-initiated permission switch: on approval perform the live
+      // switch NOW — before the extension's next tool call hits the gate.
+      const pendingSwitch = pendingModeSwitch.get(args.id);
+      pendingModeSwitch.delete(args.id);
+      if (pendingSwitch) {
+        const value = typeof args.payload?.value === "string" ? args.payload.value : "";
+        const approved = MODE_SWITCH_APPROVE_LABELS.includes(value);
+        const denied = MODE_SWITCH_DENY_LABELS.includes(value);
+        if (approved && applyAgentModeSwitch(pendingSwitch.threadId, pendingSwitch.to)) {
+          return { ok: true, modeSwitched: pendingSwitch.to };
+        }
+        // Denied / closed / thread gone → nothing to do; the extension's own
+        // result text already tells the agent not to assume approval.
+        if (denied || !approved) return { ok: true };
+      }
+      // “始终允许该工具” on an extension-tool approval card → persist trust so
+      // future sessions/threads skip this dialog. The gate picks it up live via
+      // its config.json mtime cache.
+      const trustedTool = pendingTrustTool.get(args.id);
+      pendingTrustTool.delete(args.id);
+      let trustedAdded: string | undefined;
+      if (trustedTool && ALWAYS_ALLOW_LABELS.includes(String(args.payload?.value ?? ""))) {
+        const cur = getConfig();
+        updateConfig({ trustedTools: [...new Set([...(cur.trustedTools || []), trustedTool])] });
+        trustedAdded = trustedTool;
+      }
+      return { ok: true, ...(trustedAdded ? { trustedAdded } : {}) };
+    },
+  );
 
   // ---- plugins (pi packages + standalone skills) -------------------------
   ipcMain.handle("plugins:getPackages", () => listPackages());
@@ -3264,6 +3427,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // to the renderer as "pi:devReleaseLog" lines. The GitHub token never
   // crosses into the renderer — status only reports hasToken.
   ipcMain.handle("app:isDev", () => !app.isPackaged);
+  // Repository root (only meaningful in a dev build): where the user-manual
+  // skill, changelog.md and resources/user-manual*.md live. The renderer uses
+  // it to open the manual-sync session with cwd = repo so the project-level
+  // .pi/skills/user-manual skill is discovered.
+  ipcMain.handle("app:getDevRepoRoot", () => (app.isPackaged ? null : app.getAppPath()));
   ipcMain.handle("app:devReleaseStatus", () => getDevReleaseStatus());
   // Stream each pipeline line to the main window AND the standalone log
   // window when it is open (the panel's inline box only shows a tail).
@@ -3284,6 +3452,23 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("app:getDevReleaseLog", () => getDevReleaseLogBuffer());
   // Data for the release-review conversation (dev panel「发起发版评审」).
   ipcMain.handle("app:getReleaseReview", () => getReleaseReview());
+
+  // ---- feature test panel (dev only) -------------------------------------
+  // Registry lives in tests/registry/*.json; the runner spawns L1/L2 commands
+  // and streams child output as "pi:testLog" lines. Non-dev refuses outright.
+  const requireDev = <T>(fn: () => T): T => {
+    if (app.isPackaged) throw new Error("自动化测试面板仅在开发模式可用");
+    return fn();
+  };
+  ipcMain.handle("tests:list", () => requireDev(() => listTests()));
+  ipcMain.handle("tests:runLogic", (_e, args: { caseId: string; logicTest: string }) =>
+    requireDev(() => runLogicTest(args.logicTest, (line) => send("pi:testLog", { caseId: args.caseId, line }))),
+  );
+  ipcMain.handle("tests:runScenario", (_e, args: { caseId: string; harnessCaseId: string }) =>
+    requireDev(() => runScenarioCase(args.harnessCaseId, (line) => send("pi:testLog", { caseId: args.caseId, line }))),
+  );
+  ipcMain.handle("tests:readResult", (_e, args: { harnessCaseId: string }) => requireDev(() => readScenarioResult(args.harnessCaseId)));
+  ipcMain.handle("tests:history", () => requireDev(() => readScenarioHistory()));
 
   // ---- edit menu (clipboard on the focused field) ------------------------
   ipcMain.handle("app:editAction", (_e, action: "copy" | "cut" | "paste" | "delete" | "selectAll") => {

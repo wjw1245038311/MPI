@@ -1,0 +1,38 @@
+name: Tests
+
+# Shift-left gate (see docs/E2E-TESTING.md): every PR and push to main runs the
+# L0 static check + full L1 unit suite before anything reaches packaging.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  l0-l1:
+    name: typecheck + L1 suite (windows-x64)
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up native Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.14.0
+          cache: npm
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: L0 — Typecheck
+        run: npm run typecheck
+
+      # Aggregate runner (scripts/run-all-tests.mjs): discovers scripts/test-*.mjs,
+      # skips environment-dependent diagnostics with a reason, exits non-zero on
+      # any failure/timeout.
+      - name: L1 — Unit suite
+        run: npm test

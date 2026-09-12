@@ -41,14 +41,14 @@ export function sttTranscribeErrorText(error: string, zh: boolean): string {
   switch (error) {
     case "voice.stt.not-configured":
       return zh
-        ? "语音输入未配置：请先在 设置 → 通用 → 语音系统 中选择识别服务"
-        : "Voice input is not configured: pick a transcription service in Settings → General → Voice";
+        ? "语音输入未配置：请先在 设置 → 对话设置 → 语音系统 中选择识别服务"
+        : "Voice input is not configured: pick a transcription service in Settings → Conversation → Voice";
     case "voice.stt.no-key":
-      return zh ? "缺少 API key，请在 设置 → 通用 → 语音系统 中检查配置" : "Missing API key — check Settings → General → Voice";
+      return zh ? "缺少 API key，请在 设置 → 对话设置 → 语音系统 中检查配置" : "Missing API key — check Settings → Conversation → Voice";
     case "voice.stt.no-base-url":
       return zh
-        ? "缺少服务地址（OpenAI 兼容端点需要 Base URL），请检查 设置 → 通用 → 语音系统"
-        : "Missing base URL (the OpenAI-compatible backend needs one) — check Settings → General → Voice";
+        ? "缺少服务地址（OpenAI 兼容端点需要 Base URL），请检查 设置 → 对话设置 → 语音系统"
+        : "Missing base URL (the OpenAI-compatible backend needs one) — check Settings → Conversation → Voice";
     case "voice.stt.too-large":
       return zh ? "录音过长，无法识别（上限约 3 分钟）" : "Recording too long to transcribe (~3 minute cap)";
     case "voice.stt.timeout":
@@ -57,8 +57,8 @@ export function sttTranscribeErrorText(error: string, zh: boolean): string {
       const providerMissing = error.match(/^voice\.stt\.provider-missing:(.+)$/);
       if (providerMissing) {
         return zh
-          ? `引用的提供商「${providerMissing[1]}」不存在，请在 设置 → 通用 → 语音系统 中重新选择`
-          : `Referenced provider “${providerMissing[1]}” no longer exists — re-pick it in Settings → General → Voice`;
+          ? `引用的提供商「${providerMissing[1]}」不存在，请在 设置 → 对话设置 → 语音系统 中重新选择`
+          : `Referenced provider “${providerMissing[1]}” no longer exists — re-pick it in Settings → Conversation → Voice`;
       }
       if (error.startsWith("voice.stt.bad-response:")) {
         return zh ? `识别服务返回了无法解析的内容：${error.slice(24).slice(0, 80)}` : `Unparseable response from the transcription service: ${error.slice(24).slice(0, 80)}`;

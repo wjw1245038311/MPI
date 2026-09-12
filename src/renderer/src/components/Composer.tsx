@@ -2,14 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { draftKeyFor, useStore } from "../store";
 import { formatTokens, modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
-import { BUILTIN_DEFAULT_ID, BUILTIN_LONG_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
+import { BUILTIN_BALANCED_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
 import { useOutsideClose } from "../lib/useOutsideClose";
-import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage } from "../lib/types";
+import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage, TaskModeDef } from "../lib/types";
 import { MPI_FILE_MIME } from "../lib/file-drag";
 import { SttError, startRecording, sttRecordErrorText, sttTranscribeErrorText, type RecordingHandle } from "../lib/stt";
-import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh, Settings, Mic } from "./icons";
+import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh, Settings, Mic, Info } from "./icons";
 import { LongTaskMonitor } from "./LongTaskMonitor";
 import { TaskModesModal } from "./TaskModesModal";
+import { TaskModeDetailModal } from "./TaskModeDetailModal";
 
 let _pid = 0;
 const pid = () => `p${_pid++}`;
@@ -155,8 +156,8 @@ export function Composer({ threadId }: { threadId: string }) {
   // Sanitized task-mode list (built-ins re-seeded with localized defaults;
   // corrupt config safe).
   const taskModes = useMemo(() => normalizeTaskModes(taskModesRaw, language), [taskModesRaw, language]);
-  // No explicit choice yet → the baseline “default” mode (no injection).
-  const activeTaskModeId = taskMode ?? defaultTaskModeId ?? BUILTIN_DEFAULT_ID;
+  // No explicit choice yet → the everyday default “balanced” mode.
+  const activeTaskModeId = taskMode ?? defaultTaskModeId ?? BUILTIN_BALANCED_ID;
   const activeTaskMode = taskModes.find((m) => m.id === activeTaskModeId) || taskModes[0];
 
   const draftKey = useMemo(() => draftKeyFor({ sessionFile, cwd }, threadId), [sessionFile, cwd, threadId]);
@@ -186,6 +187,7 @@ export function Composer({ threadId }: { threadId: string }) {
   // Task-mode dropdown + management modal.
   const [tmOpen, setTmOpen] = useState(false);
   const [tmManageOpen, setTmManageOpen] = useState(false);
+  const [tmDetail, setTmDetail] = useState<TaskModeDef | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
   // Voice input (STT): idle → recording → transcribing. The handle lives in a
@@ -529,8 +531,8 @@ export function Composer({ threadId }: { threadId: string }) {
       pushToast(
         "warning",
         language === "zh"
-          ? "语音输入未配置：请先在 设置 → 通用 → 语音系统 中选择识别服务"
-          : "Voice input is not configured: pick a transcription service in Settings → General → Voice",
+          ? "语音输入未配置：请先在 设置 → 对话设置 → 语音系统 中选择识别服务"
+          : "Voice input is not configured: pick a transcription service in Settings → Conversation → Voice",
       );
       openSettings();
       return;
@@ -1069,7 +1071,7 @@ export function Composer({ threadId }: { threadId: string }) {
             {/* 任务模式 preset (permission + thinking level); left of the permission pill. */}
             <div className="pill taskmode-pill composer-optional-action" ref={tmRef}>
               <button
-                className={`pill-btn tm-btn ${activeTaskModeId === BUILTIN_LONG_ID ? "tm-long" : ""}`}
+                className="pill-btn tm-btn"
                 title={
                   language === "zh"
                     ? `任务模式：权限+思考等级+行为指令预设。当前「${taskModeName(activeTaskMode, language)}」（${taskModeSummary(activeTaskMode, language)}）；点击切换或管理自定义模式`
@@ -1082,22 +1084,33 @@ export function Composer({ threadId }: { threadId: string }) {
               {tmOpen && (
                 <div className="pill-pop taskmode-pop">
                   {taskModes.map((m) => (
-                    <button
-                      key={m.id}
-                      className={`opt ${m.id === activeTaskModeId ? "active" : ""}`}
-                      onClick={() => {
-                        setTmOpen(false);
-                        void applyTaskMode(threadId, m.id);
-                      }}
-                    >
-                      <span className="o1">
-                        {taskModeName(m, language)}
-                        {m.builtin && (
-                          <small className="tm-builtin-inline">{language === "zh" ? "内置" : "Built-in"}</small>
-                        )}
-                      </span>
-                      <span className="o2">{taskModeSummary(m, language)}</span>
-                    </button>
+                    <div key={m.id} className="tm-opt-row">
+                      <button
+                        className={`opt ${m.id === activeTaskModeId ? "active" : ""}`}
+                        onClick={() => {
+                          setTmOpen(false);
+                          void applyTaskMode(threadId, m.id);
+                        }}
+                      >
+                        <span className="o1">
+                          {taskModeName(m, language)}
+                          {m.builtin && (
+                            <small className="tm-builtin-inline">{language === "zh" ? "内置" : "Built-in"}</small>
+                          )}
+                        </span>
+                        <span className="o2">{taskModeSummary(m, language)}</span>
+                      </button>
+                      <button
+                        className="iconbtn tm-opt-info"
+                        title={language === "zh" ? "查看说明" : "View description"}
+                        onClick={() => {
+                          setTmOpen(false);
+                          setTmDetail(m);
+                        }}
+                      >
+                        <Info size={13} />
+                      </button>
+                    </div>
                   ))}
                   <div className="tm-manage-sep" />
                   <button
@@ -1480,6 +1493,7 @@ export function Composer({ threadId }: { threadId: string }) {
         </div>
       </div>
       <TaskModesModal open={tmManageOpen} onClose={() => setTmManageOpen(false)} />
+      {tmDetail && <TaskModeDetailModal mode={tmDetail} language={language} onClose={() => setTmDetail(null)} />}
     </div>
   );
 }

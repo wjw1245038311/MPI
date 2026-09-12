@@ -4,7 +4,7 @@
  *
  * The renderer records microphone audio (MediaRecorder), converts it to a small
  * 16 kHz mono WAV and hands us base64. We transcribe it with one of two
- * backends, both configured in Settings → General → 语音系统:
+ * backends, both configured in Settings → Conversation → 语音系统:
  *
  * - "openai": any OpenAI-compatible /v1/audio/transcriptions endpoint (OpenAI
  *   itself or compatible gateways). Multipart upload; model defaults whisper-1.
@@ -51,6 +51,25 @@ export const STT_MAX_B64_CHARS = 12_000_000;
 const TRANSCRIBE_TIMEOUT_MS = 120_000;
 
 /**
+ * True when a base URL (or bare host) points at the local machine. A
+ * self-hosted OpenAI-compatible STT service normally needs no credentials, so a
+ * blank key is allowed for loopback endpoints while every remote service still
+ * has to present one.
+ */
+export function isLoopbackHost(urlOrHost: string | undefined): boolean {
+  const raw = (urlOrHost || "").trim();
+  if (!raw) return false;
+  let host = raw;
+  try {
+    host = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`).hostname;
+  } catch {
+    host = raw;
+  }
+  host = host.replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+/**
  * Resolve backend + endpoint + key + model from the persisted voice config and
  * the live models.json providers. Throws an Error with a short, displayable
  * message when the configuration is incomplete or inconsistent.
@@ -71,7 +90,7 @@ export function resolveStt(
   }
 
   const apiKey = (cfg?.sttApiKey || "").trim() || provider?.apiKey?.trim() || "";
-  if (!apiKey) {
+  if (!apiKey && !isLoopbackHost(cfg?.sttBaseUrl || provider?.baseUrl)) {
     throw new Error("voice.stt.no-key");
   }
 
@@ -101,9 +120,13 @@ export interface OpenAiSttRequest {
 
 /** Build the /audio/transcriptions request for a WAV payload. */
 export function buildOpenAiRequest(resolved: ResolvedStt, wavBase64: string): OpenAiSttRequest {
+  // Omit the header entirely for key-less local endpoints (avoids a stray
+  // "Bearer " that some servers reject).
+  const headers: Record<string, string> = {};
+  if (resolved.apiKey) headers.Authorization = `Bearer ${resolved.apiKey}`;
   return {
     url: `${resolved.baseUrl}/audio/transcriptions`,
-    headers: { Authorization: `Bearer ${resolved.apiKey}` },
+    headers,
     fields: { model: resolved.model },
     file: { name: "recording.wav", type: "audio/wav", base64: wavBase64 },
   };
