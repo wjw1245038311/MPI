@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.6.10（2026-09-13）
 
 1. **任务模式「强制只读」硬执行 + 工具信任列表（修复调研+完全权限直接执行的洞）**：此前调研/审查模式的“不写代码”只是注入系统提示词的软约束，且权限设为完全权限时 permission-gate 第一行即放行一切——实测中调研模式+完全权限下 agent 未出方案就直接部署了语音模块。本次给任务模式增加独立于权限 pill 的硬执行属性 `enforce: "readonly"`：内置**调研/审查固定带「强制只读」**（管理弹窗里不可关闭，旧配置升级后由 normalizeTaskModes 自动补上），激活期间 permission-gate 在 full 早退之前先读本线程 taskmode 状态（含 config.threadTaskModes 兜底，覆盖旧版本写的状态文件）并走现有 readonly 拦截分支——mutating bash、write/edit、子智能体全部被拦且阻止原因带「任务模式强制只读」后缀；mpi-taskmode 扩展同时用 `pi.setActiveTools()` 把 write/edit 从模型可见工具中隐藏（旧版 pi runtime 无此 API 时自动降级，仅靠 gate 拦截）。调研指令改为工作流式：必须先输出完整方案（结论+来源+执行步骤）再停下等确认。新增 **`mpi_request_mode_switch`** 工具：agent 出完方案后弹「模式切换请求」卡片，用户点「同意并切换」→ main 实时切权限+清除强制只读（pill/状态文件同步刷新），agent 同回合继续执行；拒绝/关闭则保持只读。新增 **trustedTools 信任列表**解决 mem0_memory 等扩展工具每次新会话都要审批的摩擦：审批卡片新增第 5 选项「始终允许该工具（跨会话）」→ 写入 config.trustedTools，沙盒/严格下免审；设置 → 通用可手动增删。安全边界：bash/write/edit 永不可被信任；只读/强制只读模式下信任列表不生效（防旁路）。顺带修复一个既有漏洞：**readonly 模式此前对普通项目内 write/edit 并不拦截**（只有敏感路径走 gateWrite），现已补上硬拦截。
 
