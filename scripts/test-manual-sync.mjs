@@ -119,11 +119,12 @@ const SAMPLE = `# Changelog
 // --- 真实 changelog 冒烟 ----------------------------------------------------
 {
   const sections = parseChangelog(readFileSync(CHANGELOG_PATH, "utf8"));
-  const titles = sections.map((s) => s.title);
-  assert.ok(titles.some((t) => t.toLowerCase() === "unreleased"), "真实 changelog 含 Unreleased");
-  assert.ok(titles.some((t) => t.startsWith("v0.6.9")), "真实 changelog 含 v0.6.9");
+  assert.ok(sections.length >= 1, "至少一个分节");
   assert.ok(sections.every((s) => s.items.length >= 1), "每个已存在分节至少有 1 条");
-  ok("真实 changelog.md 可解析");
+  // 发版会把 Unreleased 改名为 vX（日期），故此处不要求 Unreleased 存在
+  const released = sections.filter((s) => /^v\d/.test(s.title));
+  assert.ok(released.length >= 1, "至少一个已发布版本分节");
+  ok("真实 changelog.md 可解析（不依赖 Unreleased 是否存在）");
 }
 
 console.log(`\nmanual-sync: ${passed} group(s) passed`);
