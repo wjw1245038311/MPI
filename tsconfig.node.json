@@ -21,6 +21,7 @@
   "exclude": [
     "src/main/mpi-todo-ext.ts",
     "src/main/mpi-choice-ext.ts",
+    "src/main/mpi-taskmode-ext.ts",
     "src/main/messaging/channel-command-ext.ts"
   ]
 }

@@ -1255,6 +1255,9 @@ interface PiStore {
   applyTaskMode: (threadId: string, modeId: string) => Promise<void>;
   /** Persist the user-managed task-mode list (management modal). */
   saveTaskModes: (modes: TaskModeDef[], defaultId?: string) => Promise<boolean>;
+  /** Re-push a saved mode's behaviour to open threads still on it, or clear
+   * the injection when the mode was deleted. */
+  resyncTaskMode: (modeId: string, removed?: boolean) => Promise<void>;
   switchThreadFolder: (threadId: string) => Promise<void>;
   /** Move a not-yet-sent task to another working folder without losing the composer draft. */
   changeDraftThreadFolder: (threadId: string, cwd: string) => Promise<void>;
@@ -2027,6 +2030,9 @@ export const useStore = create<PiStore>()((set, get) => {
             messages: optimistic.length ? [...views, ...optimistic] : views,
             toolRuns,
             permission: res.permission || t.permission,
+            // main reports the last applied task mode (config.threadTaskModes);
+            // fall back to the pre-merge value when it has no entry yet.
+            taskMode: res.taskMode ?? prev?.taskMode,
             pendingEditorText: prev?.pendingEditorText,
           };
           const threads: Record<string, ThreadState> = { ...s.threads, [id]: merged };
@@ -2501,11 +2507,14 @@ export const useStore = create<PiStore>()((set, get) => {
   },
 
   setThinking: async (id, level) => {
-    if (!(await get().ensureConnected(id))) return;
+    // ensureConnected may remap a draft's temp id to the live bridge id — use
+    // the returned id for the RPC or main answers "Thread not open".
+    const live = await get().ensureConnected(id);
+    if (!live) return;
     try {
-      const res: any = await window.pi.thread.setThinking({ threadId: id, level });
+      const res: any = await window.pi.thread.setThinking({ threadId: live, level });
       const effectiveLevel = typeof res?.thinkingLevel === "string" ? res.thinkingLevel : level;
-      set((s) => (s.threads[id] ? { threads: { ...s.threads, [id]: { ...s.threads[id], thinking: effectiveLevel } } } : s));
+      set((s) => (s.threads[live] ? { threads: { ...s.threads, [live]: { ...s.threads[live], thinking: effectiveLevel } } } : s));
     } catch (e: any) {
       get().pushToast("error", e?.message || "set thinking failed");
     }
@@ -3248,17 +3257,32 @@ export const useStore = create<PiStore>()((set, get) => {
   // ---- task modes (presets bundling permission + thinking level) ----------
   applyTaskMode: async (threadId, modeId) => {
     const cfg = get().config;
-    const mode = normalizeTaskModes(cfg?.taskModes).find((m) => m.id === modeId);
+    const language = cfg?.language === "zh" ? "zh" : "en";
+    const mode = normalizeTaskModes(cfg?.taskModes, language).find((m) => m.id === modeId);
     if (!mode || !get().threads[threadId]) return;
+    // Connect first: a draft's temp id (opening-*) remaps to the live bridge
+    // id here. Every sub-call below needs that live id — setThinking would hit
+    // "Thread not open" and main cannot derive a session UUID from a temp id,
+    // which silently dropped the mode's instructions on brand-new threads.
+    const live = (await get().ensureConnected(threadId)) || threadId;
     set((s) =>
-      s.threads[threadId]
-        ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], taskMode: modeId } } }
+      s.threads[live]
+        ? { threads: { ...s.threads, [live]: { ...s.threads[live], taskMode: modeId } } }
         : s,
     );
     // Apply each configured parameter through the existing live-switch actions
     // (model stays independent — its own pill on the right).
-    if (mode.permission) await get().setPermission(threadId, mode.permission);
-    if (mode.thinking) await get().setThinking(threadId, mode.thinking);
+    if (mode.permission) await get().setPermission(live, mode.permission);
+    if (mode.thinking) await get().setThinking(live, mode.thinking);
+    // Behavioural content: main writes the per-thread state file and the
+    // mpi-taskmode extension injects it into the system prompt from the next
+    // turn on — live switching without a pi process restart. Empty = clear.
+    await window.pi.thread.setTaskMode({
+      threadId: live,
+      modeId,
+      instructions: mode.instructions || "",
+      specFile: mode.specFile || "",
+    });
   },
 
   saveTaskModes: async (modes, defaultId) => {
@@ -3273,6 +3297,34 @@ export const useStore = create<PiStore>()((set, get) => {
       const zh = get().config?.language === "zh";
       get().pushToast("error", `${zh ? "保存任务模式失败：" : "Failed to save task modes: "}${e?.message || e}`);
       return false;
+    }
+  },
+
+  // State files are written at apply time, so without this an edit/delete in
+  // the management modal would keep injecting stale content into already-open
+  // threads until the user re-applies the mode. Permission/thinking are NOT
+  // re-applied here — a preset's parameters take effect when it is applied.
+  resyncTaskMode: async (modeId, removed = false) => {
+    const cfg = get().config;
+    const language = cfg?.language === "zh" ? "zh" : "en";
+    const mode = removed ? null : normalizeTaskModes(cfg?.taskModes, language).find((m) => m.id === modeId);
+    for (const [tid, t] of Object.entries(get().threads)) {
+      if (t.taskMode !== modeId) continue;
+      try {
+        await window.pi.thread.setTaskMode({
+          threadId: tid,
+          modeId: removed ? "" : modeId,
+          instructions: mode?.instructions || "",
+          specFile: mode?.specFile || "",
+        });
+      } catch {
+        /* the thread may have closed in the meantime */
+      }
+      if (removed) {
+        set((s) =>
+          s.threads[tid] ? { threads: { ...s.threads, [tid]: { ...s.threads[tid], taskMode: undefined } } } : s,
+        );
+      }
     }
   },
 

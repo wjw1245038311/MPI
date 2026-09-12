@@ -51,7 +51,10 @@ const api = {
     setThreadPinned: (args: { file: string; pinned: boolean }) => ipcRenderer.invoke("app:setThreadPinned", args),
     reorderPinned: (args: { kind: "project" | "thread"; id: string; target: number }) =>
       ipcRenderer.invoke("app:reorderPinned", args),
-    showOpenDialog: (kind: "folder" | "file" | "files") => ipcRenderer.invoke("app:showOpenDialog", kind),
+    showOpenDialog: (
+      kind: "folder" | "file" | "files",
+      opts?: { filters?: { name: string; extensions: string[] }[] },
+    ) => ipcRenderer.invoke("app:showOpenDialog", kind, opts),
     getFileTree: (cwd: string, rel?: string) => ipcRenderer.invoke("app:getFileTree", cwd, rel),
     fileExists: (absPath: string) => ipcRenderer.invoke("app:fileExists", absPath),
     getPathForFile: (file: File) => {
@@ -277,6 +280,10 @@ const api = {
     extuiResponse: (args: { threadId: string; id: string; payload: Record<string, unknown> }) =>
       ipcRenderer.invoke("thread:extuiResponse", args),
     setPermission: (args: { threadId: string; permission: PermissionLevel }) => ipcRenderer.invoke("thread:setPermission", args),
+    // Task-mode behaviour state (instructions + spec doc) for the mpi-taskmode
+    // extension; empty content clears it. Takes effect on the next turn.
+    setTaskMode: (args: { threadId: string; modeId?: string; instructions?: string; specFile?: string }) =>
+      ipcRenderer.invoke("thread:setTaskMode", args),
   },
   trash: {
     list: (): Promise<TrashEntry[]> => ipcRenderer.invoke("trash:list"),

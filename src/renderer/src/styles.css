@@ -7707,6 +7707,37 @@ mark.hl {
   opacity: .6;
   background: #f5f5f0;
 }
+.tm-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 72px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.tm-spec-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tm-spec-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-dim);
+  /* Long absolute paths: keep the file name visible, elide the prefix. */
+  direction: rtl;
+  text-align: left;
+}
 .tm-error {
   color: #c0392b;
   font-size: 11px;

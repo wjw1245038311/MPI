@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import type { PermissionLevel, TaskModeDef } from "../lib/types";
-import { normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
+import { BUILTIN_DEFAULT_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
 import { Close, Edit, Plus, Trash } from "./icons";
 
 /** One-line parameter labels shared by the form selects. */
@@ -22,17 +22,25 @@ const THINKING_OPTIONS: { value: string; zh: string; en: string }[] = [
   { value: "max", zh: "最高", en: "Max" },
 ];
 
-type FormState = { id: string | null; name: string; permission: string; thinking: string };
+type FormState = {
+  id: string | null;
+  name: string;
+  permission: string;
+  thinking: string;
+  instructions: string;
+  specFile: string;
+};
 
 /** Management dialog for user-defined task modes (add / edit / delete).
  * Built-in short/long task modes can be re-parameterized but not deleted. */
 export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const config = useStore((s) => s.config);
   const saveTaskModes = useStore((s) => s.saveTaskModes);
+  const resyncTaskMode = useStore((s) => s.resyncTaskMode);
   const language = useStore((s) => s.config?.language || "en");
   const zh = language === "zh";
 
-  const modes = normalizeTaskModes(config?.taskModes);
+  const modes = normalizeTaskModes(config?.taskModes, language);
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -53,9 +61,27 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
 
   if (!open) return null;
 
-  const startAdd = () => setForm({ id: null, name: "", permission: "sandbox", thinking: "" });
+  const startAdd = () =>
+    setForm({ id: null, name: "", permission: "sandbox", thinking: "", instructions: "", specFile: "" });
   const startEdit = (m: TaskModeDef) =>
-    setForm({ id: m.id, name: m.name || "", permission: m.permission ?? "", thinking: m.thinking ?? "" });
+    setForm({
+      id: m.id,
+      name: m.name || "",
+      permission: m.permission ?? "",
+      thinking: m.thinking ?? "",
+      instructions: m.instructions ?? "",
+      specFile: m.specFile ?? "",
+    });
+
+  const browseSpec = async () => {
+    // The label promises a .md document — filter the picker to match.
+    const picked = await window.pi.app.showOpenDialog("file", {
+      filters: [{ name: zh ? "Markdown 文档" : "Markdown documents", extensions: ["md", "markdown"] }],
+    });
+    if (!picked) return;
+    const path = Array.isArray(picked) ? picked[0] : picked;
+    if (path && form) setForm({ ...form, specFile: path });
+  };
 
   // Name must be unique among the OTHER modes (editing keeps its own name).
   const nameTaken = !!form && modes.some((m) => m.id !== form.id && m.name?.trim() === form.name.trim());
@@ -66,22 +92,31 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
     if (!form || saving) return;
     setSaving(true);
     try {
+      const behaviour = {
+        instructions: form.instructions.trim() || undefined,
+        specFile: form.specFile.trim() || undefined,
+      };
       let next: TaskModeDef[];
       if (form.id) {
         // Edit existing (built-ins keep their fixed display name).
         next = modes.map((m) =>
           m.id === form.id
-            ? { ...m, ...(form.name.trim() && !m.builtin ? { name: form.name.trim().slice(0, 40) } : {}), permission: (form.permission || undefined) as PermissionLevel | undefined, thinking: form.thinking || undefined }
+            ? { ...m, ...(form.name.trim() && !m.builtin ? { name: form.name.trim().slice(0, 40) } : {}), permission: (form.permission || undefined) as PermissionLevel | undefined, thinking: form.thinking || undefined, ...behaviour }
             : m,
         );
       } else {
         next = [
           ...modes,
-          { id: crypto.randomUUID(), name: form.name.trim().slice(0, 40), permission: (form.permission || undefined) as PermissionLevel | undefined, thinking: form.thinking || undefined },
+          { id: crypto.randomUUID(), name: form.name.trim().slice(0, 40), permission: (form.permission || undefined) as PermissionLevel | undefined, thinking: form.thinking || undefined, ...behaviour },
         ];
       }
       const ok = await saveTaskModes(next);
-      if (ok) setForm(null);
+      if (ok) {
+        // Open threads still on this mode keep the state file written at apply
+        // time — re-push the edited behaviour content so it takes effect live.
+        if (form.id) void resyncTaskMode(form.id);
+        setForm(null);
+      }
     } finally {
       setSaving(false);
     }
@@ -90,7 +125,10 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
   const remove = async (id: string) => {
     const target = modes.find((m) => m.id === id);
     if (!target || target.builtin) return;
-    await saveTaskModes(modes.filter((m) => m.id !== id));
+    // A deleted mode that was the default would leave a dangling id — fall back to baseline.
+    const nextDefault = config?.defaultTaskModeId === id ? BUILTIN_DEFAULT_ID : undefined;
+    const ok = await saveTaskModes(modes.filter((m) => m.id !== id), nextDefault);
+    if (ok) void resyncTaskMode(id, true); // clear the injection in threads still on it
   };
 
   return (
@@ -144,10 +182,38 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
                 ))}
               </select>
             </div>
+            <div className="tm-field">
+              <label>{zh ? "行为指令（可选）" : "Behavioural instructions (optional)"}</label>
+              <textarea
+                rows={4}
+                maxLength={4000}
+                value={form.instructions}
+                placeholder={
+                  zh
+                    ? "例如：先拆解任务再逐步执行；输出前自查一遍…（应用该模式后每轮注入系统提示词）"
+                    : "e.g. break the task down first, then execute step by step; self-check before finalizing… (injected into the system prompt every turn while this mode is active)"
+                }
+                onChange={(e) => setForm({ ...form, instructions: e.target.value })}
+              />
+            </div>
+            <div className="tm-field">
+              <label>{zh ? "设计说明书（可选，.md 文件）" : "Spec document (optional, .md file)"}</label>
+              <div className="tm-spec-row">
+                <span className="tm-spec-path" title={form.specFile || undefined}>
+                  {form.specFile || (zh ? "未选择文件" : "No file selected")}
+                </span>
+                <button className="btn" onClick={() => void browseSpec()}>{zh ? "浏览…" : "Browse…"}</button>
+                {form.specFile && (
+                  <button className="btn" onClick={() => setForm({ ...form, specFile: "" })}>
+                    {zh ? "清除" : "Clear"}
+                  </button>
+                )}
+              </div>
+            </div>
             <p className="tm-hint">
               {zh
-                ? "应用该模式时会批量设置所选参数；「不改变」的参数保持会话当前值。模型不受任务模式影响。"
-                : "Applying a mode sets the chosen parameters in one go; “leave unchanged” keeps the thread's current value. The model is not affected by task modes."}
+                ? "应用该模式时会批量设置所选参数；「不改变」的参数保持会话当前值。行为指令与说明书在激活期间每轮注入系统提示词（实时生效，无需重启）；说明书是外部文件，直接编辑文件即可更新内容。模型不受任务模式影响。"
+                : "Applying a mode sets the chosen parameters in one go; “leave unchanged” keeps the thread's current value. Instructions and the spec document are injected into the system prompt every turn while active (live, no restart); the spec is an external file — edit it directly to update its content. The model is not affected by task modes."}
             </p>
             <div className="tm-actions">
               <button className="btn" onClick={() => setForm(null)}>

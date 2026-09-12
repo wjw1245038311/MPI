@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { draftKeyFor, useStore } from "../store";
 import { formatTokens, modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
-import { BUILTIN_LONG_ID, BUILTIN_SHORT_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
+import { BUILTIN_DEFAULT_ID, BUILTIN_LONG_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage } from "../lib/types";
 import { MPI_FILE_MIME } from "../lib/file-drag";
@@ -150,9 +150,11 @@ export function Composer({ threadId }: { threadId: string }) {
   // Unsent content lives in the store keyed per thread (see draftKeyFor) so it
   // survives app restarts and swaps correctly when switching threads; main
   // persists it with LRU eviction. expandedHtmlReferences stays local — pure UI.
-  // Sanitized task-mode list (built-ins re-seeded; corrupt config safe).
-  const taskModes = useMemo(() => normalizeTaskModes(taskModesRaw), [taskModesRaw]);
-  const activeTaskModeId = taskMode ?? defaultTaskModeId ?? BUILTIN_SHORT_ID;
+  // Sanitized task-mode list (built-ins re-seeded with localized defaults;
+  // corrupt config safe).
+  const taskModes = useMemo(() => normalizeTaskModes(taskModesRaw, language), [taskModesRaw, language]);
+  // No explicit choice yet → the baseline “default” mode (no injection).
+  const activeTaskModeId = taskMode ?? defaultTaskModeId ?? BUILTIN_DEFAULT_ID;
   const activeTaskMode = taskModes.find((m) => m.id === activeTaskModeId) || taskModes[0];
 
   const draftKey = useMemo(() => draftKeyFor({ sessionFile, cwd }, threadId), [sessionFile, cwd, threadId]);
@@ -894,8 +896,8 @@ export function Composer({ threadId }: { threadId: string }) {
                 className={`pill-btn tm-btn ${activeTaskModeId === BUILTIN_LONG_ID ? "tm-long" : ""}`}
                 title={
                   language === "zh"
-                    ? `任务模式：权限+思考等级预设。当前「${taskModeName(activeTaskMode, language)}」（${taskModeSummary(activeTaskMode, language)}）；点击切换或管理自定义模式`
-                    : `Task mode: permission + thinking preset. Current “${taskModeName(activeTaskMode, language)}” (${taskModeSummary(activeTaskMode, language)}); click to switch or manage custom modes`
+                    ? `任务模式：权限+思考等级+行为指令预设。当前「${taskModeName(activeTaskMode, language)}」（${taskModeSummary(activeTaskMode, language)}）；点击切换或管理自定义模式`
+                    : `Task mode: permission + thinking + behaviour preset. Current “${taskModeName(activeTaskMode, language)}” (${taskModeSummary(activeTaskMode, language)}); click to switch or manage custom modes`
                 }
                 onClick={() => setTmOpen((v) => !v)}
               >

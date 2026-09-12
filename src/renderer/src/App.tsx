@@ -88,6 +88,20 @@ export default function App() {
   // chime can play later without a fresh gesture requirement.
   useEffect(() => unlockAudio(), []);
 
+  // Dock-back for popped-out previews while the panel is CLOSED: Preview's own
+  // zone-check listener only exists while it is mounted, so a release over the
+  // main window would otherwise be dropped silently (the floating window just
+  // stays open). With no visible tab strip there is no zone to miss — accept
+  // any release point inside the main window; openPreview re-opens the panel.
+  useEffect(() => {
+    return window.pi.app.onPreviewDockCandidate(({ path }) => {
+      const st = useStore.getState();
+      if (st.previewOpen) return; // panel visible → Preview's zone check owns docking
+      void st.openPreview(path, st.activeProjectCwd || undefined);
+      void window.pi.app.closePreviewWindow(path).catch(() => {});
+    });
+  }, []);
+
   const newTask = async () => {
     let cwd: string | null = useStore.getState().activeProjectCwd;
     if (!cwd) {

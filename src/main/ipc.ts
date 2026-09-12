@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -80,6 +80,7 @@ import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
 import { ensureChoiceExtension } from "./choice-extension";
 import { stripChoicePrefix } from "./choice-logic.ts";
+import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureTodoExtension } from "./todo-extension";
 import { registerTuiIpc } from "./tui";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
@@ -425,12 +426,16 @@ function createHandle(
       // automation spawns its own list without it, so unattended runs never
       // block on a dialog nobody can click.
       ensureChoiceExtension(getConfigDir()),
+      // 任务模式 behaviour bridge: appends the active mode's instructions/spec
+      // doc to the system prompt every turn (live switching, no restart).
+      ensureTaskModeExtension(getConfigDir()),
       ...(isChannelSession ? [ensureChannelExtension(getConfigDir())] : []),
     ],
     // Live paths so a customized todo data location (Settings → 数据存储) is
     // honored from the next spawned bridge on.
     todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
     choiceConfigFile: join(getConfigDir(), "config.json"),
+    taskModeStateDir: join(getConfigDir(), "taskmodes"),
     channelInboxDir: isChannelSession ? ensureChannelCommandInbox() : undefined,
     // Keep pi's runtime in sync with the Plugins inventory, including the
     // singular `.pi/agent/skill` compatibility path and other local roots.
@@ -707,6 +712,9 @@ async function gatherThread(bridge: PiBridge, threadId: string, permission: Perm
     bridge.getCommands().catch(() => ({ commands: [] })),
     bridge.getEntries().catch(() => ({ entries: [], leafId: null })),
   ]);
+  // Which task mode this session was last set to (config.threadTaskModes is
+  // keyed by the same UUID the mpi-taskmode extension uses for its state file).
+  const uuid = threadUuidFromSessionFile(threadId) || /^boot:(.+)$/.exec(threadId)?.[1] || null;
   return {
     threadId,
     cwd: bridge.cwd,
@@ -720,6 +728,7 @@ async function gatherThread(bridge: PiBridge, threadId: string, permission: Perm
     models: modelsRes?.models ?? [],
     commands: synchronizedCommands(cmdsRes?.commands, bridge.cwd),
     permission,
+    taskMode: uuid ? (getConfig().threadTaskModes || {})[uuid] ?? null : null,
   };
 }
 
@@ -2356,24 +2365,32 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { ok: true };
   });
 
-  ipcMain.handle("app:showOpenDialog", async (_e, kind: "folder" | "file" | "files") => {
-    const w = getWin();
-    const properties: any[] =
-      kind === "folder"
-        ? ["openDirectory", "createDirectory"]
-        : kind === "files"
-          ? ["openFile", "multiSelections"]
-          : ["openFile"];
-    const language = getConfig().language;
-    const res = await dialog.showOpenDialog(w!, {
-      properties,
-      title: kind === "folder"
-        ? language === "zh" ? "打开项目文件夹" : "Open project folder"
-        : language === "zh" ? "添加文件" : "Attach files",
+  ipcMain.handle(
+    "app:showOpenDialog",
+    async (_e, kind: "folder" | "file" | "files", opts?: { filters?: { name: string; extensions: string[] }[] }) => {
+      const w = getWin();
+      const properties: any[] =
+        kind === "folder"
+          ? ["openDirectory", "createDirectory"]
+          : kind === "files"
+            ? ["openFile", "multiSelections"]
+            : ["openFile"];
+      const language = getConfig().language;
+      // Optional caller-supplied file filters (e.g. the task-mode spec picker
+      // restricts to .md so the dialog matches its label).
+      const filters = opts?.filters?.length
+        ? opts.filters.map((f) => ({ name: f.name, extensions: f.extensions }))
+        : undefined;
+      const res = await dialog.showOpenDialog(w!, {
+        properties,
+        ...(filters ? { filters } : {}),
+        title: kind === "folder"
+          ? language === "zh" ? "打开项目文件夹" : "Open project folder"
+          : language === "zh" ? "添加文件" : "Attach files",
+      });
+      if (res.canceled) return null;
+      return kind === "folder" ? res.filePaths[0] : res.filePaths;
     });
-    if (res.canceled) return null;
-    return kind === "folder" ? res.filePaths[0] : res.filePaths;
-  });
 
   // ---- files / preview ----------------------------------------------------
   ipcMain.handle("app:getFileTree", (_e, cwd: string, rel?: string) => listDir(cwd, rel));
@@ -2609,8 +2626,13 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     if (typeof args?.permission !== "string" || !(PERMISSION_LEVELS as readonly string[]).includes(args.permission)) {
       return { ok: false, error: "Invalid permission level" };
     }
-    const perms = getConfig().threadPermissions;
-    updateConfig({ threadPermissions: { ...perms, [args.threadId]: args.permission } });
+    // Persist only for real session files: draft temp ids (opening-*) and boot
+    // ids would leave dead keys in config that nothing ever cleans up. Real
+    // files get persisted by thread:open / finishBranch once the name is known.
+    if (args.threadId.endsWith(".jsonl")) {
+      const perms = getConfig().threadPermissions;
+      updateConfig({ threadPermissions: { ...perms, [args.threadId]: args.permission } });
+    }
     // Flip the running thread's gate mode live; the pi process keeps running.
     const h = bridges.get(args.threadId);
     if (h) {
@@ -2619,6 +2641,44 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
     return { ok: true };
   });
+
+  // Task-mode behaviour state for the mpi-taskmode extension. Keyed by session
+  // UUID (the extension derives it from its own --session file name); written
+  // on every mode apply so switching modes takes effect on the next turn with
+  // no pi process restart. Empty content deletes the file (= no injection).
+  // The chosen mode id is also persisted per UUID in config.threadTaskModes so
+  // the UI can restore which mode a thread was on after restart/reopen.
+  ipcMain.handle(
+    "thread:setTaskMode",
+    (_e, args: { threadId: string; modeId?: string; instructions?: string; specFile?: string }) => {
+      const id = typeof args?.threadId === "string" ? args.threadId : "";
+      const key = id.endsWith(".jsonl")
+        ? threadUuidFromSessionFile(id)
+        : /^boot:(.+)$/.exec(id)?.[1] ?? null;
+      if (!key) return { ok: true }; // draft thread without a session yet
+      const dir = join(getConfigDir(), "taskmodes");
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, `${key}.json`);
+      const instructions = typeof args?.instructions === "string" ? args.instructions.trim() : "";
+      const specFile =
+        typeof args?.specFile === "string" && isAbsolute(args.specFile) ? args.specFile.trim() : "";
+      if (!instructions && !specFile) {
+        try {
+          unlinkSync(file);
+        } catch {
+          /* already absent */
+        }
+      } else {
+        writeFileSync(file, JSON.stringify({ instructions, specFile }), "utf8");
+      }
+      const modes = { ...(getConfig().threadTaskModes || {}) };
+      const modeId = typeof args?.modeId === "string" ? args.modeId.trim() : "";
+      if (modeId) modes[key] = modeId;
+      else delete modes[key];
+      updateConfig({ threadTaskModes: modes });
+      return { ok: true };
+    },
+  );
 
   // One-click repair for permanently bricked sessions (upstream #8720/#8667):
   // rewrites the session JSONL so the provider stops rejecting every turn.
@@ -2660,9 +2720,24 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     for (const [id, handle] of Array.from(bridges.entries())) {
       if (!sameSessionFile(id, target) && !sameSessionFile(handle.getId(), target)) continue;
       bridges.delete(id);
-      handle.bridge.stop();
+      // Settle an in-flight turn first so the trashed JSONL doesn't end on a
+      // dangling tool call (upstream #9124); idle bridges stop immediately.
+      if (handle.bridge.hasActiveRun) await handle.bridge.stopGraceful(2500);
+      else handle.bridge.stop();
     }
     if (warmHandle && sameSessionFile(warmHandle.getId(), target)) dropWarmBridge();
+
+    // Drop the task-mode state file + config entry for this session's UUID so
+    // deleted threads don't leave orphaned injections behind (and a restore
+    // from trash doesn't silently re-apply an old mode).
+    const uuid = threadUuidFromSessionFile(target);
+    if (uuid) {
+      try {
+        unlinkSync(join(getConfigDir(), "taskmodes", `${uuid}.json`));
+      } catch {
+        /* no state file for this session */
+      }
+    }
 
     const current = getConfig();
     // Trash enabled (default): the JSONL is moved to <userData>/trash and stays
@@ -2685,6 +2760,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       autoModelThreads: Object.fromEntries(
         Object.entries(current.autoModelThreads ?? {}).filter(([path]) => !sameSessionFile(path, target)),
       ),
+      threadTaskModes: uuid
+        ? Object.fromEntries(Object.entries(current.threadTaskModes ?? {}).filter(([k]) => k !== uuid))
+        : current.threadTaskModes,
     });
 
     for (const [localId] of Array.from(remoteLocalToId.entries())) {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 // Type-only imports (erased at compile time) — no runtime cycles.
 import type { FeishuChannelConfig, WeChatChannelConfig } from "./messaging/types";
@@ -50,13 +50,25 @@ export type PermissionLevel = (typeof PERMISSION_LEVELS)[number];
 /** 任务模式: a named preset bundling per-thread behaviour knobs (permission +
  * thinking level; model stays independent). Built-ins are the short/long task
  * defaults; users can add custom modes. The renderer normalizes this list
- * (src/renderer/src/lib/task-modes.ts) — main only persists it verbatim. */
+ * (src/renderer/src/lib/task-modes.ts) — main only persists it verbatim.
+ *
+ * `instructions` / `specFile` carry the mode's BEHAVIOUR: while a mode is
+ * active on a thread, main writes them to <userData>/taskmodes/<uuid>.json and
+ * the mpi-taskmode extension appends them to the system prompt every turn
+ * (before_agent_start) — live switching, no process restart. */
 export interface TaskModeDef {
   id: string;
   name?: string;
   builtin?: boolean;
   permission?: PermissionLevel;
   thinking?: string;
+  /** Short behavioural instructions injected into the system prompt while this
+   * mode is active (e.g. “先拆解任务再逐步执行”). Absent = no injection. */
+  instructions?: string;
+  /** Optional path to a markdown spec document (“设计说明书”, skill-like) whose
+   * content is appended after `instructions`. External file: edits apply live.
+   * Must be an absolute path; missing files are skipped at read time. */
+  specFile?: string;
 }
 
 export interface AppConfig {
@@ -121,6 +133,11 @@ export interface AppConfig {
   taskModes?: TaskModeDef[];
   /** Which task mode new conversations display as active ("short" by default). */
   defaultTaskModeId?: string;
+  /** Per-thread applied task-mode id, keyed by session UUID — the same key as
+   * the <userData>/taskmodes/<uuid>.json state file. The injection itself is
+   * driven by that state file; this map only lets the UI restore which mode a
+   * thread was on after restart/reopen so the ⚡ pill stays in sync. */
+  threadTaskModes?: Record<string, string>;
   /** Custom user avatar as a data URL (downscaled in the renderer); absent = built-in Nobita avatar. */
   userAvatar?: string;
   /** Custom agent avatar as a data URL; absent = built-in Doraemon avatar. */
@@ -326,7 +343,14 @@ export function loadConfig(userDataDir: string): AppConfig {
       };
       return cached;
     } catch {
-      // corrupt file -> fall back to defaults but keep a copy
+      // Corrupt file -> fall back to defaults but keep a copy so the user's
+      // settings are recoverable (the next updateConfig would otherwise
+      // silently overwrite them with defaults).
+      try {
+        copyFileSync(file, `${file}.bak`);
+      } catch {
+        /* best effort — the fallback below still applies */
+      }
     }
   }
   // New (or unreadable) profile: inherit user-facing appearance settings from
@@ -481,6 +505,11 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
     }
     out.threadPermissions = perms;
   }
+
+  // NOTE: taskModes / defaultTaskModeId are intentionally NOT imported — specFile
+  // entries hold machine-specific absolute paths that would dangle on another
+  // machine. Custom modes can be re-created in the management dialog, or copied
+  // over manually from a backup of config.json.
 
   // Avatars are data URLs produced by the renderer; require the prefix so a
   // corrupted/foreign file cannot inject arbitrary strings into <img src>.

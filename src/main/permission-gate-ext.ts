@@ -728,11 +728,20 @@ export default function permissionGate(pi: any) {
     return "sandbox";
   };
 
+  // The UI language rarely changes; re-parsing the whole config.json on every
+  // tool call was pure waste. Cache by mtime+size — a stat is cheap and the
+  // read/parse only happens when main actually rewrote the file.
+  let langCache: { mtimeMs: number; size: number; lang: "en" | "zh" } | null = null;
   const language = (): "en" | "zh" => {
     if (!modeFile) return "en";
     try {
-      const config = JSON.parse(readFileSync(resolve(dirname(modeFile), "..", "config.json"), "utf8"));
-      return config?.language === "zh" ? "zh" : "en";
+      const configPath = resolve(dirname(modeFile), "..", "config.json");
+      const st = statSync(configPath);
+      if (langCache && langCache.mtimeMs === st.mtimeMs && langCache.size === st.size) return langCache.lang;
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      const lang: "en" | "zh" = config?.language === "zh" ? "zh" : "en";
+      langCache = { mtimeMs: st.mtimeMs, size: st.size, lang };
+      return lang;
     } catch {
       return "en";
     }

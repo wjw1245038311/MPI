@@ -95,7 +95,15 @@ const MD_COMPONENTS = {
             window.open(href, "_blank");
           } else if (isFragment) {
             e.preventDefault();
-            const el = document.getElementById(href.slice(1));
+            // react-markdown percent-encodes non-ASCII in hrefs (#1-%E8%AE%A4…)
+            // while rehype-slug keeps heading ids raw — decode before lookup.
+            let id = href.slice(1);
+            try {
+              id = decodeURIComponent(id);
+            } catch {
+              /* malformed % sequence — fall back to the raw value */
+            }
+            const el = document.getElementById(id);
             if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
           }
         }}

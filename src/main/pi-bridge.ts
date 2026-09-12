@@ -318,6 +318,10 @@ export interface PiBridgeOptions {
    * MPI_CHOICE_CONFIG so it can read the current UI language live (same
    * pattern as the gate's mode file). */
   choiceConfigFile?: string;
+  /** Dir holding per-thread task-mode state files (<uuid>.json), exposed to the
+   * task-mode extension as MPI_TASKMODE_DIR; it reads its own thread's file on
+   * every turn and injects instructions/spec into the system prompt. */
+  taskModeStateDir?: string;
   onEvent: (event: unknown) => void;
   onExtUi: (request: ExtUiRequest) => void;
   onExit: (info: { code: number | null; signal: NodeJS.Signals | null; stderr: string; expected?: boolean }) => void;
@@ -379,6 +383,7 @@ export class PiBridge {
       if (this.opts.sessionFile) env.MPI_CHANNEL_SESSION_FILE = this.opts.sessionFile;
     }
     if (this.opts.choiceConfigFile) env.MPI_CHOICE_CONFIG = this.opts.choiceConfigFile;
+    if (this.opts.taskModeStateDir) env.MPI_TASKMODE_DIR = this.opts.taskModeStateDir;
 
     this.proc = spawn(rt.node, [rt.cli, ...args], {
       cwd: this.opts.cwd,

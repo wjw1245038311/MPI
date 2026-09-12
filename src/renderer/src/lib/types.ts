@@ -458,6 +458,12 @@ export interface TaskModeDef {
   permission?: PermissionLevel;
   /** Thinking level applied when the mode is used. Omitted = leave unchanged. */
   thinking?: string;
+  /** Short behavioural instructions injected into the system prompt while this
+   * mode is active (live, per turn via the mpi-taskmode extension). Absent = none. */
+  instructions?: string;
+  /** Optional absolute path to a markdown spec document (“设计说明书”, skill-like)
+   * appended after `instructions`. External file → edits apply live without re-saving. */
+  specFile?: string;
 }
 
 export interface AppConfig {

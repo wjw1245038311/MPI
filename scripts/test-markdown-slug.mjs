@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ReactMarkdown from "react-markdown";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
@@ -46,6 +49,37 @@ for (const file of ["resources/user-manual.md", "resources/user-manual-en.md"]) 
 {
   const ids = await headingIds("## 12. Extensions: Skills / Packages / MCP\n## 14. 全局搜索（Ctrl+K）");
   assert.deepEqual(ids, ["12-extensions-skills--packages--mcp", "14-全局搜索ctrlk"]);
+}
+
+// Component-level regression: react-markdown percent-encodes non-ASCII hrefs
+// (#1-%E8%AE%A4…) while rehype-slug keeps heading ids raw — the renderer must
+// decode before getElementById or CJK TOC links silently do nothing.
+{
+  const seen = { links: [], ids: [] };
+  const components = {
+    a: (props) => {
+      if (typeof props.href === "string" && props.href.startsWith("#")) seen.links.push(props.href);
+      return React.createElement("a", { href: props.href }, props.children);
+    },
+    h2: (props) => {
+      if (typeof props.id === "string") seen.ids.push(props.id);
+      return React.createElement("h2", { id: props.id }, props.children);
+    },
+  };
+  const src = "# 目录\n1. [认识 MPI](#1-认识-mpi)\n\n## 1. 认识 MPI\n正文";
+  renderToStaticMarkup(
+    React.createElement(ReactMarkdown, { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeSlug], components }, src),
+  );
+  assert.equal(seen.links.length, 1);
+  assert.equal(seen.ids.length, 1);
+  const raw = seen.links[0].slice(1);
+  let decoded;
+  try {
+    decoded = decodeURIComponent(raw); // what the renderer does
+  } catch {
+    decoded = raw; // malformed % sequence — same fallback as the component
+  }
+  assert.equal(decoded, seen.ids[0], `decoded href ${seen.links[0]} must resolve to heading id`);
 }
 
 console.log("markdown slug tests passed");

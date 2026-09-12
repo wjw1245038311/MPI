@@ -85,6 +85,8 @@ export function openPreviewWindow(absPath: string, atCursor = false): void {
       moveState = null;
       if (moveTimer) clearInterval(moveTimer);
       moveTimer = null;
+      if (moveWatchdog) clearTimeout(moveWatchdog);
+      moveWatchdog = null;
     }
   });
   windows.set(key, win);
@@ -116,6 +118,9 @@ function isCursorOverMainWindow(): boolean {
 // docks the file back into its preview panel.
 let moveState: { win: BrowserWindow; offX: number; offY: number; startX: number; startY: number; moved: boolean; sizeW: number; sizeH: number } | null = null;
 let moveTimer: NodeJS.Timeout | null = null;
+/** Force-ends a caption drag if the renderer dies mid-drag (mouseup/blur never
+ * arrive) — without it the 16ms loop would glue the window to the cursor. */
+let moveWatchdog: NodeJS.Timeout | null = null;
 
 export function previewWindowMoveStart(absPath: string): void {
   const win = windows.get(absPath.toLowerCase());
@@ -126,6 +131,11 @@ export function previewWindowMoveStart(absPath: string): void {
   moveState = { win, offX: p.x - b.x, offY: p.y - b.y, startX: p.x, startY: p.y, moved: false, sizeW, sizeH };
   win.setAlwaysOnTop(true);
   if (moveTimer) clearInterval(moveTimer);
+  if (moveWatchdog) clearTimeout(moveWatchdog);
+  moveWatchdog = setTimeout(() => {
+    moveWatchdog = null;
+    previewWindowMoveEnd(absPath);
+  }, 15_000);
   moveTimer = setInterval(() => {
     const st = moveState;
     if (!st || st.win.isDestroyed()) return;
@@ -146,6 +156,10 @@ export function previewWindowMoveEnd(absPath: string): void {
   if (moveTimer) {
     clearInterval(moveTimer);
     moveTimer = null;
+  }
+  if (moveWatchdog) {
+    clearTimeout(moveWatchdog);
+    moveWatchdog = null;
   }
   const st = moveState;
   moveState = null;
