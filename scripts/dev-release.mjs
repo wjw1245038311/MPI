@@ -181,6 +181,22 @@ async function main() {
   if (porcelain) {
     const files = porcelain.split("\n").map((l) => l.slice(3).trim()).filter(Boolean);
     for (const f of files) log(`   · ${f}`);
+    // 发版说明与二进制一致性提醒（v0.6.8 教训）：Unreleased 有条目 + 工作区脏 →
+    // 条目对应的代码若未提交，将不会进入本次构建，Release 正文会夸大内容。
+    try {
+      const md = readFileSync(join(ROOT, "changelog.md"), "utf8");
+      const mlines = md.split("\n");
+      const uStart = mlines.findIndex((l) => /^##\s+Unreleased\s*$/.test(l));
+      if (uStart >= 0) {
+        let uEnd = mlines.length;
+        for (let i = uStart + 1; i < mlines.length; i++) if (/^##\s/.test(mlines[i])) { uEnd = i; break; }
+        const nEntries = mlines.slice(uStart + 1, uEnd).filter((l) => /^\s*\d+\.\s+/.test(l)).length;
+        if (nEntries > 0) {
+          log(`   ⚠ changelog Unreleased 有 ${nEntries} 条待发布条目，但工作区有 ${files.length} 个未提交文件`);
+          log(`     构建只基于已提交代码：请确认每条目的代码都已 commit（或先把该条目移出本次范围），否则 Release 正文会与安装包内容不一致。`);
+        }
+      }
+    } catch { /* changelog 读取失败不阻断发版 */ }
     const stashMsg = `MPI dev-release ${new Date().toISOString()}`;
     gitOut(["stash", "push", "-u", "-m", stashMsg]);
     stashedCount = files.length;
