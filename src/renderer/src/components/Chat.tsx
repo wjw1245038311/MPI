@@ -1,5 +1,6 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { getDisplayThreadTitle, normalizeThreadFile, useStore } from "../store";
+import { getTtsState, speakMessage, stopTts, subscribeTts } from "../lib/tts";
 import { parseSkillBlock } from "../lib/skill-block";
 import { Markdown } from "../lib/markdown";
 import { formatClock } from "../lib/format";
@@ -13,7 +14,7 @@ import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from ".
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
-import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal } from "./icons";
+import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
 import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
@@ -1111,6 +1112,9 @@ function MessageGroupInner({
             {last.model && <span>{last.model}</span>}
             {last.timestamp && <span>{formatClock(last.timestamp)}</span>}
             <span className="msg-actions">
+              {speechTextOfGroup(group) && (
+                <TtsButton messageId={last.key} text={speechTextOfGroup(group)} />
+              )}
               <button title={language === "zh" ? "复制" : "Copy"} onClick={() => navigator.clipboard?.writeText(plainOfGroup(group))}>
                 <Copy size={12} />
               </button>
@@ -1138,6 +1142,58 @@ function plainOfGroup(g: MsgGroup): string {
     )
     .filter(Boolean)
     .join("\n\n");
+}
+
+/** Text blocks only — thinking is never read aloud. */
+function speechTextOfGroup(g: MsgGroup): string {
+  return g.items
+    .map((m) => (m.blocks || []).map((b) => (b.type === "text" ? b.text : "")).filter(Boolean).join("\n\n"))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * Speaker button for an assistant group. Subscribes to the TTS state itself so
+ * only this tiny component re-renders when playback starts/stops — never the
+ * whole message (markdown re-rendering would be wasteful).
+ */
+function TtsButton({ messageId, text }: { messageId: string; text: string }) {
+  const speaking = useSyncExternalStore(subscribeTts, () =>
+    getTtsState().status === "speaking" && getTtsState().messageId === messageId ? "on" : "off",
+  );
+  const language = useStore((s) => s.config?.language || "en");
+  const zh = language === "zh";
+
+  const onClick = () => {
+    if (speaking === "on") {
+      stopTts();
+      return;
+    }
+    const st = useStore.getState();
+    const voiceCfg = st.config?.voice;
+    void speakMessage(messageId, text, {
+      voiceUri: voiceCfg?.ttsVoiceUri,
+      rate: voiceCfg?.ttsRate,
+      lang: zh ? "zh" : "en",
+    }).then((res) => {
+      if (!res.ok && res.error === "unsupported") {
+        st.pushToast("error", zh ? "当前系统不支持语音合成（未找到可用的 TTS 引擎）" : "Speech synthesis is not supported on this system (no TTS engine found)");
+      } else if (!res.ok && res.error === "no-voice") {
+        st.pushToast("error", zh ? "朗读失败：系统没有可用的语音，请安装 TTS 引擎或更换声音" : "Could not read aloud: no usable voice on this system — install a TTS engine or pick another voice");
+      }
+    });
+  };
+
+  return (
+    <button
+      className={speaking === "on" ? "tts-speaking" : ""}
+      title={speaking === "on" ? (zh ? "停止朗读" : "Stop reading") : zh ? "朗读这条回复" : "Read this reply aloud"}
+      aria-label={speaking === "on" ? (zh ? "停止朗读" : "Stop reading") : zh ? "朗读这条回复" : "Read this reply aloud"}
+      onClick={onClick}
+    >
+      {speaking === "on" ? <Stop size={12} /> : <Volume size={12} />}
+    </button>
+  );
 }
 
 // Each assistant message is wrapped in a keyed .msg-item so in-conversation

@@ -31,6 +31,7 @@ import type {
 import { normalizeTaskModes } from "./lib/task-modes";
 import { cleanOutput, extensionsAlreadyLatest, hasLibuvAssertion, lastLine, stripAnsi } from "./lib/update";
 import { playCompletionChime } from "./lib/sound";
+import { speakMessage } from "./lib/tts";
 import { parseSkillBlock } from "./lib/skill-block";
 export type { ParsedSkillBlock } from "./lib/skill-block";
 
@@ -1144,6 +1145,8 @@ interface PiStore {
   compactContext: (threadId: string, instructions?: string) => Promise<void>;
   repairSession: (threadId: string) => Promise<void>;
   setSoundOnComplete: (on: boolean) => Promise<void>;
+  /** Voice system (语音系统): merge a partial voice config and persist it. */
+  setVoiceConfig: (patch: Partial<NonNullable<AppConfig["voice"]>>) => Promise<void>;
   refreshOpenThreadModels: () => Promise<void>;
   setModel: (id: string, provider: string, modelId: string) => Promise<void>;
   /** P1-12: toggle auto mode for a thread. Exiting stops monitoring entirely. */
@@ -1408,6 +1411,26 @@ function scheduleEventFlush(): void {
         st.setPendingFollowUp(threadId, null);
         const { imgs, atts } = pendingToArgs(p);
         st.sendPrompt(threadId, pendingPromptText(p), imgs, atts);
+      }
+      // Voice system (TTS): auto-read the reply of the VISIBLE thread once its
+      // turn settles. Background threads stay silent; error-only turns skip.
+      if (st.config?.voice?.ttsAutoRead && st.activeThreadId === threadId) {
+        const msgs = st.threads[threadId]?.messages || [];
+        const lastMsg = msgs[msgs.length - 1];
+        if (lastMsg?.role === "assistant" && !lastMsg.errorMessage) {
+          const text = (lastMsg.blocks || [])
+            .map((b: ContentBlock) => (b.type === "text" ? b.text : ""))
+            .filter(Boolean)
+            .join("\n\n");
+          if (text.trim()) {
+            const voiceCfg = st.config.voice;
+            void speakMessage(lastMsg.key, text, {
+              voiceUri: voiceCfg?.ttsVoiceUri,
+              rate: voiceCfg?.ttsRate,
+              lang: st.config?.language === "zh" ? "zh" : "en",
+            });
+          }
+        }
       }
       // Message events do not include their persisted session entry ids.
       // Refresh once the turn settles so the Agent reply's Fork/Clone actions
@@ -2426,6 +2449,21 @@ export const useStore = create<PiStore>()((set, get) => {
   setSoundOnComplete: async (on) => {
     try {
       const config = await window.pi.app.setConfig({ soundOnComplete: on });
+      set({ config });
+    } catch (e: any) {
+      get().pushToast("error", e?.message || "Failed to update settings");
+    }
+  },
+
+  setVoiceConfig: async (patch) => {
+    try {
+      const current = useStore.getState().config?.voice;
+      const next = { ...(current || {}), ...patch };
+      // Drop keys explicitly cleared to undefined so the persisted object stays lean.
+      for (const key of Object.keys(next) as (keyof typeof next)[]) {
+        if (next[key] === undefined) delete next[key];
+      }
+      const config = await window.pi.app.setConfig({ voice: next });
       set({ config });
     } catch (e: any) {
       get().pushToast("error", e?.message || "Failed to update settings");

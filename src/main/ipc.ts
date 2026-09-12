@@ -67,6 +67,7 @@ import {
   writeThinking,
 } from "./models-service";
 import { autoResolveContextWindows, resolveModelContext } from "./model-context";
+import { testStt, transcribeAudio } from "./voice";
 import { DEFAULT_POLICY, ModelAutopilot } from "./model-autopilot";
 import {
   autoAnswerModelSelect,
@@ -2429,6 +2430,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     menu.popup({ window: BrowserWindow.fromWebContents(event.sender) || undefined });
     return { ok: true };
   });
+
+  // ---- voice system (STT) --------------------------------------------------
+  // Providers are read live so a key rotated in Settings keeps working without
+  // re-saving the voice config; the API key itself never crosses IPC.
+  ipcMain.handle("voice:transcribe", (_e, args: { dataBase64?: string }) =>
+    transcribeAudio(args || {}, { cfg: getConfig().voice, providers: readModelsFile().providers }),
+  );
+  ipcMain.handle("voice:test", () =>
+    testStt({ cfg: getConfig().voice, providers: readModelsFile().providers }),
+  );
 
   // ---- settings: models.json / settings.json / diagnostics ----------------
   ipcMain.handle("settings:getModels", () => readModelsFile());

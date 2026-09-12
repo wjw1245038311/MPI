@@ -318,6 +318,15 @@ const api = {
     }): Promise<{ ok: boolean; imported?: number; skipped?: number; overwritten?: number; error?: string }> =>
       ipcRenderer.invoke("backup:importSessions", args),
   },
+  voice: {
+    /** Transcribe a base64 WAV recording (16 kHz mono) with the configured STT
+     * backend. `error` is either an i18n key (voice.stt.*) or an API detail. */
+    transcribe: (args: { dataBase64: string }) =>
+      ipcRenderer.invoke("voice:transcribe", args) as Promise<{ ok: boolean; text?: string; error?: string }>,
+    /** Connectivity probe for the Settings test button (short silent WAV). */
+    test: () =>
+      ipcRenderer.invoke("voice:test") as Promise<{ ok: boolean; text?: string; error?: string }>,
+  },
   tui: {
     start: (args: { threadId: string; cwd: string; sessionFile?: string | null }) =>
       ipcRenderer.invoke("tui:start", args) as Promise<{ ok: boolean; error?: string; gen?: number }>,

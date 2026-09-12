@@ -549,6 +549,22 @@ export interface AppConfig {
   };
   /** P1-12 per-thread auto mode (threadId → enabled). */
   autoModelThreads?: Record<string, boolean>;
+  /** Voice system (语音系统): STT for the composer mic button + TTS for reading
+   * replies aloud. Absent = unconfigured; see main/config.ts for semantics. */
+  voice?: {
+    sttBackend?: "openai" | "gemini";
+    /** Provider id from models.json, or "__manual__" for the fields below. */
+    sttProviderId?: string;
+    sttBaseUrl?: string;
+    sttApiKey?: string;
+    sttModel?: string;
+    /** speechSynthesis voice URI; absent = auto-pick by UI language. */
+    ttsVoiceUri?: string;
+    /** Speech rate 0.5–2; absent = 1. */
+    ttsRate?: number;
+    /** Auto-read the reply when a turn settles on the visible thread. */
+    ttsAutoRead?: boolean;
+  };
 }
 
 export type MessagingStatus = "off" | "connecting" | "connected" | "reconnecting" | "error";

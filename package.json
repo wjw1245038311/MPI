@@ -44,6 +44,7 @@
     "test:chatsearch": "node --experimental-strip-types scripts/test-chat-search.mjs",
     "test:model-context": "node --experimental-strip-types scripts/test-model-context.mjs",
     "test:model-autopilot": "node --experimental-strip-types scripts/test-model-autopilot.mjs",
+    "test:voice": "node --experimental-strip-types scripts/test-voice.mjs",
     "test:usage": "node --experimental-strip-types scripts/test-usage.mjs",
     "test:transfers": "node --experimental-strip-types scripts/test-transfer-monitor.mjs",
     "test:releaseprogress": "node --experimental-strip-types scripts/test-release-progress-tail.mjs",

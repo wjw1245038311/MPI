@@ -14,21 +14,22 @@ This manual covers all major features of MPI, organized as "interface → config
 4. [Configuring Models](#4-configuring-models)
 5. [Projects and Sessions](#5-projects-and-sessions)
 6. [Chatting with the Agent](#6-chatting-with-the-agent)
-7. [Permission Modes](#7-permission-modes)
-8. [Context Management](#8-context-management)
-9. [File Preview and HTML Element References](#9-file-preview-and-html-element-references)
-10. [Automations (Scheduled Tasks)](#10-automations-scheduled-tasks)
-11. [Todo Tasks](#11-todo-tasks)
-12. [Extensions: Skills / Packages / MCP](#12-extensions-skills--packages--mcp)
-13. [Pi TUI Terminal Mode](#13-pi-tui-terminal-mode)
-14. [Global Search (Ctrl+K)](#14-global-search-ctrlk)
-15. [Archive and Trash](#15-archive-and-trash)
-16. [Settings Reference](#16-settings-reference)
-17. [Android Phone Remote Control](#17-android-phone-remote-control)
-18. [Messaging Channels (Feishu / WeChat)](#18-messaging-channels-feishu--wechat)
-19. [Keyboard Shortcuts](#19-keyboard-shortcuts)
-20. [Data and Configuration Locations](#20-data-and-configuration-locations)
-21. [FAQ](#21-faq)
+7. [Voice System](#7-voice-system)
+8. [Permission Modes](#8-permission-modes)
+9. [Context Management](#9-context-management)
+10. [File Preview and HTML Element References](#10-file-preview-and-html-element-references)
+11. [Automations (Scheduled Tasks)](#11-automations-scheduled-tasks)
+12. [Todo Tasks](#12-todo-tasks)
+13. [Extensions: Skills / Packages / MCP](#13-extensions-skills--packages--mcp)
+14. [Pi TUI Terminal Mode](#14-pi-tui-terminal-mode)
+15. [Global Search (Ctrl+K)](#15-global-search-ctrlk)
+16. [Archive and Trash](#16-archive-and-trash)
+17. [Settings Reference](#17-settings-reference)
+18. [Android Phone Remote Control](#18-android-phone-remote-control)
+19. [Messaging Channels (Feishu / WeChat)](#19-messaging-channels-feishu--wechat)
+20. [Keyboard Shortcuts](#20-keyboard-shortcuts)
+21. [Data and Configuration Locations](#21-data-and-configuration-locations)
+22. [FAQ](#22-faq)
 
 ---
 
@@ -122,7 +123,7 @@ The main window has four areas:
 Top to bottom:
 
 1. Top button row: 🔍 global search (same as Ctrl+K), collapse sidebar.
-2. Quick entry buttons: "New session", "Automations" (clock icon), "Todo tasks" (checked-box icon) and "Extensions" (plug icon). They open a new session, the [automations panel](#10-automations-scheduled-tasks), the [todo panel](#11-todo-tasks) and the [extensions panel](#12-extensions-skills--packages--mcp) respectively.
+2. Quick entry buttons: "New session", "Automations" (clock icon), "Todo tasks" (checked-box icon) and "Extensions" (plug icon). They open a new session, the [automations panel](#11-automations-scheduled-tasks), the [todo panel](#12-todo-tasks) and the [extensions panel](#13-extensions-skills--packages--mcp) respectively.
 3. Tabs: `Sessions` / `Files`. The "Sessions" tab shows the project list plus each project's session list; the "Files" tab shows the file tree of the current session's project, and clicking any file opens it in the preview pane. File rows can be dragged straight into the composer as attachments (folders are not draggable).
 4. Project area: the `+` button opens a folder (create or pick a project); each project row has its name, a session-count badge, a `+` (new session in that project) and a star pin button; right-clicking a project offers **Move up / Move down** (pinned items only), Open in File Explorer, Pin/Unpin project, Archive project.
 5. Session area: pinned sessions on top, recent sessions below sorted by activity time. Each session row has a permanent star button on the right (outline = unpinned, filled = pinned); click to toggle; hovering also reveals archive and delete icons. Right-clicking a session offers **Move up / Move down** (pinned items only), Pin/Unpin session, Clone session, Delete. You can also drag to reorder: dragging within the pinned zone reorders it; dragging a recent-zone entry into the pinned zone pins it at that position; dragging a pinned entry out to the end unpins it.
@@ -135,7 +136,7 @@ The sidebar width can be adjusted by dragging its right edge; double-click reset
 Top bar:
 
 - Left: session title (**double-click to rename**), working folder path (hover for the full path, click to open in File Explorer), connection status hint.
-- Right buttons (left to right): ⭐ pin/unpin current session, ✎ rename, 📁 switch working folder, ＋ new session (start a fresh conversation in the current context), ⌨ **Terminal** (switch to Pi TUI, see [Section 13](#13-pi-tui-terminal-mode)), 👁 toggle preview.
+- Right buttons (left to right): ⭐ pin/unpin current session, ✎ rename, 📁 switch working folder, ＋ new session (start a fresh conversation in the current context), ⌨ **Terminal** (switch to Pi TUI, see [Section 14](#14-pi-tui-terminal-mode)), 👁 toggle preview.
 
 Message list:
 
@@ -152,8 +153,8 @@ Composer, left to right:
 | --- | --- |
 | `+` | Add file/image attachments |
 | `/ Commands` | Open the slash-command menu (built-in commands, extension commands and skills) |
-| Permission pill | Switch the current session's permission mode (four levels, see [Section 7](#7-permission-modes)) |
-| Ring button | Context usage progress ring + detail popover (see [Section 8](#8-context-management)) |
+| Permission pill | Switch the current session's permission mode (four levels, see [Section 8](#8-permission-modes)) |
+| Ring button | Context usage progress ring + detail popover (see [Section 9](#9-context-management)) |
 | Model pill | Pick provider / model / thinking level, plus "Session tools" (completion sound toggle) |
 | Send / Stop | Send the message; becomes a "Stop" button while the agent is running |
 
@@ -161,7 +162,7 @@ Above the composer, the current working folder is shown (click to switch project
 
 ### 3.4 Preview pane (right)
 
-Toggle it from "Toggle preview" in the chat top bar (or the View menu). It renders or highlights Markdown, HTML, source code, images and common office documents; see [Section 9](#9-file-preview-and-html-element-references) for details.
+Toggle it from "Toggle preview" in the chat top bar (or the View menu). It renders or highlights Markdown, HTML, source code, images and common office documents; see [Section 10](#10-file-preview-and-html-element-references) for details.
 
 ---
 
@@ -275,7 +276,7 @@ Clicking fork/clone while a reply is streaming asks you to wait for it to finish
 
 - Archive session: hover the session row and click the archive icon (or right-click). Archived sessions disappear from the sidebar and default search; find them under "Settings → Archive & Trash" or Ctrl+K (with "Archive & trash" checked) and restore with one click.
 - Archive project: right-click a project → "Archive project". All of its sessions are archived together; restoring works the same way.
-- Delete session: hover and click the trash icon, or right-click "Delete". By default this moves it to the trash (recoverable); only deleting again from the trash is permanent. Turning off the trash switch in "Settings → General" makes deletes immediately permanent. See [Section 15](#15-archive-and-trash).
+- Delete session: hover and click the trash icon, or right-click "Delete". By default this moves it to the trash (recoverable); only deleting again from the trash is permanent. Turning off the trash switch in "Settings → General" makes deletes immediately permanent. See [Section 16](#16-archive-and-trash).
 
 ### 5.6 Other session behaviors
 
@@ -323,7 +324,36 @@ Any send failure (connection failure, RPC error, …) rolls back the displayed u
 
 ---
 
-## 7. Permission Modes
+## 7. Voice System
+
+MPI supports two-way voice interaction: **voice input** (speak → transcribed into the editor) and **voice output** (agent replies read aloud).
+
+### 7.1 Voice Input (Transcription)
+
+The microphone button sits right of "Add files" in the composer's bottom bar:
+
+1. Click to start recording — the button turns red with a pulsing dot and an elapsed-time counter; recordings auto-stop at 3 minutes, Esc cancels (no text produced).
+2. Click again to stop. The audio is converted locally to WAV and sent to your configured transcription service; the result is **appended to the editor** (never auto-sent) so you can review and edit it first.
+
+The transcription service is configured under **Settings → General → Voice system**. Two backends:
+
+| Backend | Description | Default model |
+| --- | --- | --- |
+| OpenAI-compatible | Any `/v1/audio/transcriptions` endpoint (OpenAI or compatible gateways) | whisper-1 |
+| Gemini | Google's inline-audio API; only the API key is needed | gemini-2.5-flash |
+
+For credentials you can either **reference an already-configured provider** from Models & Providers (its base URL/key are read live — rotating a key needs no re-save of voice settings) or enter a Base URL + API Key manually. The "Test connection" button sends a silent-audio probe to verify endpoint, key and model.
+
+### 7.2 Voice Output (Read Aloud)
+
+- **Per-message**: each agent reply has a speaker button in its footer; click to read that message aloud (the button becomes a stop icon), click again to stop immediately. Code blocks collapse into a single "(code block)" marker, links are read by their label only, and thinking content is never spoken.
+- **Auto-read**: tick "Auto-read the agent's reply when a turn settles" under Settings → General → Voice system. The visible session's replies are then read automatically after each turn; background sessions stay silent.
+
+Read-aloud uses the platform's built-in speech synthesis (on Windows: the voices installed with your OS — Chinese requires an installed zh voice), fully offline with no extra dependencies. Under **Settings → General → Voice system** you can pick the voice (default follows the UI language, preferring a matching-language voice), adjust the rate from 0.5× to 2×, and press "Preview" to audition.
+
+---
+
+## 8. Permission Modes
 
 MPI uses permission gates to control how Pi executes shell commands, writes files and performs extension operations. Each session is configured independently; the permission pill on the left of the composer switches it at any time (takes effect immediately, no session restart needed).
 
@@ -336,19 +366,19 @@ MPI uses permission gates to control how Pi executes shell commands, writes file
 
 - Default permission for new sessions: a dropdown in Settings → General (Read-only/Strict/Sandbox/Full) controlling the initial level of subsequently created sessions; existing sessions keep their own settings.
 - Confirmation dialog: when authorization is needed, a "Permission required" dialog shows the exact command and target path; review it before allowing or denying. Beginners should read the command and its target location first.
-- Automations can't wait for human approval, so they only offer Sandbox / Full (see [Section 10](#10-automations-scheduled-tasks)).
+- Automations can't wait for human approval, so they only offer Sandbox / Full (see [Section 11](#11-automations-scheduled-tasks)).
 
 > Tip: permission gates greatly reduce accidental damage but don't replace OS-level isolation; pair them with a system sandbox for untrusted code environments.
 
 ---
 
-## 8. Context Management
+## 9. Context Management
 
-### 8.1 Usage ring
+### 9.1 Usage ring
 
 The ring button in the composer's bottom bar (left of the model selector) shows current context usage live: arc = share, color in four bands, ≤60% green / 60–74% yellow / 75–89% orange / ≥90% red. It loads on session switch, refreshes immediately after a stream ends or compaction completes, and polls every 15 seconds while running.
 
-### 8.2 Context window popover
+### 9.2 Context window popover
 
 Click the ring to see: current model name, progress bar, "~used / total + percentage", "Compactions N×" (hover for the last one's time), a compaction suggestion colored by usage band, plus refresh and compact icons at the top right.
 
@@ -358,25 +388,25 @@ Click the ring to see: current model name, progress bar, "~used / total + percen
 - ≥90%: strongly recommended to compact now
 - After 3 or more cumulative compactions an extra warning appears: early details may be lost, so write important conclusions into files or memory.
 
-### 8.3 Compacting context
+### 9.3 Compacting context
 
 Three triggers: the compact icon in the popover's top-right corner (same as `/compact`); typing `/compact [note]` in the composer; and pi's automatic compaction when a long conversation hits its threshold (failures show a warning toast).
 
 After compaction, token counts display as estimates (`~` prefix) until the next reply provides real numbers.
 
-### 8.4 One-click repair for broken sessions
+### 9.4 One-click repair for broken sessions
 
 In rare cases a provider rejects an entire session history because of "blank tool results" or "orphaned tool_results", making the conversation impossible to continue. A red banner with a "Repair and reload" button then appears above the composer: MPI repairs the session file (placeholder replacement, cleanup of stale compaction records), automatically backs it up to `sessions/mpi-repair-backups/` before modifying, and reopens the session when done.
 
 ---
 
-## 9. File Preview and HTML Element References
+## 10. File Preview and HTML Element References
 
-### 9.1 Opening files
+### 10.1 Opening files
 
 Click any file in the sidebar "Files" tab; click a file artifact chip in a chat message; or click an attachment chip (view it inside MPI).
 
-### 9.2 Supported types
+### 10.2 Supported types
 
 | Type | Behavior |
 | --- | --- |
@@ -386,7 +416,7 @@ Click any file in the sidebar "Files" tab; click a file artifact chip in a chat 
 | Images | Click to open in a lightbox. |
 | Office documents, etc. | Best-effort rendering; for complex formats use the system's default app. |
 
-### 9.3 Preview header buttons (left to right)
+### 10.3 Preview header buttons (left to right)
 
 - Show in File Explorer: locates and selects the file (errors if it doesn't exist).
 - Refresh preview: re-reads the file content.
@@ -395,7 +425,7 @@ Click any file in the sidebar "Files" tab; click a file artifact chip in a chat 
 
 The left edge is draggable to resize the preview width; double-click resets to default.
 
-### 9.4 HTML element references (annotation mode)
+### 10.4 HTML element references (annotation mode)
 
 When previewing an HTML file, a "Select an HTML element and reference it in the composer" button appears in the header:
 
@@ -406,11 +436,11 @@ When previewing an HTML file, a "Select an HTML element and reference it in the 
 
 ---
 
-## 10. Automations (Scheduled Tasks)
+## 11. Automations (Scheduled Tasks)
 
 The clock icon in the sidebar opens the "Automations" panel. Note: scheduling only happens while MPI is running; nothing executes while the app is closed.
 
-### 10.1 Creating a task
+### 11.1 Creating a task
 
 Click `+` and fill in:
 
@@ -422,7 +452,7 @@ Click `+` and fill in:
 | Repeat | Hourly (at minute N) / Daily (HH:mm) / Weekly (check weekdays + HH:mm). |
 | Run permission | Sandbox (default, operations needing confirmation are blocked) or Full. Automations can't wait for human approval; grant Full only to tasks you explicitly trust. |
 
-### 10.2 Managing tasks
+### 11.2 Managing tasks
 
 Each row shows name, schedule summary, last status (failures in red with the reason on hover), and an enable switch. "Run now" triggers one manual run; "Edit" modifies and saves; delete asks for confirmation.
 
@@ -430,11 +460,11 @@ Task results appear as standalone sessions under the corresponding project, pref
 
 ---
 
-## 11. Todo Tasks
+## 12. Todo Tasks
 
 The checked-box icon in the sidebar opens the "Todo tasks" panel. Todos are tracked per project, with due dates (down to the minute), notes, file/image attachments and smart date parsing; the agent can also add todos from a conversation (marked with an AI badge).
 
-### 11.1 Adding todos
+### 12.1 Adding todos
 
 Type into the input at the top of the panel and press Enter to create. With "All projects" selected on the left, pick the target project in the dropdown first; when a specific project is selected, new todos automatically belong to it.
 
@@ -444,21 +474,21 @@ Click a row to expand its inline editor: change title / note / due date and time
 
 Attachments: the dashed box below the description is the attachment area (Feishu Bitable style), with a permanent ＋ tile on its left. Click it to open the system file picker; you can also drag & drop files/images straight into the editor (the dashed box highlights while dragging), or click inside the box and press `Ctrl+V` to paste. Up to 10 attachments per todo, 50 MB each. Adding the same file again (picking/pasting/dragging a file with the same name and size) is deduped automatically: only one copy is kept, with a notice. Existing attachments show as cards: images as thumbnails (click for a full-screen preview overlay, zoom in/out at top-right, Esc to close), other files with name and size (click to open with the default app); × appears on hover to remove. Attachments are stored as copies (deleting the original has no effect), by default under `%APPDATA%\MPI\todo-attachments\`; the location is changeable in Settings → General (existing attachments stay where they are).
 
-### 11.2 Smart sections
+### 12.2 Smart sections
 
 The panel groups todos by time dimension, each chip showing a count: All / Today (includes overdue; overdue in red) / Tomorrow / This week (Mon–Sun) / Later (dates after this week) / No date / Done. In the "Done" section, "Clear done" at the bottom bulk-deletes completed items in the current scope.
 
-### 11.3 Project scope and agent collaboration
+### 12.3 Project scope and agent collaboration
 
-Selecting a project in the left column filters to that project's todos; "All projects" shows everything with a project-name tag on each row. When the agent calls `mpi_todo_add` / `mpi_todo_list` during a conversation, items are written into this panel through an inbox mechanism (the main process watches and dedupes them). Such rows carry an AI badge; clicking it jumps straight to the source session. Data lives in `%APPDATA%\MPI\todos.json` (see [Section 20](#20-data-and-configuration-locations)); dev and production builds are independent.
+Selecting a project in the left column filters to that project's todos; "All projects" shows everything with a project-name tag on each row. When the agent calls `mpi_todo_add` / `mpi_todo_list` during a conversation, items are written into this panel through an inbox mechanism (the main process watches and dedupes them). Such rows carry an AI badge; clicking it jumps straight to the source session. Data lives in `%APPDATA%\MPI\todos.json` (see [Section 21](#21-data-and-configuration-locations)); dev and production builds are independent.
 
 ---
 
-## 12. Extensions: Skills / Packages / MCP
+## 13. Extensions: Skills / Packages / MCP
 
 The plug icon in the sidebar opens the "Extensions" panel (managing pi's extension packages and skills), with three top-level module tabs: Skills N / Packages M / MCP K (each with a count).
 
-### 12.1 Skills
+### 13.1 Skills
 
 A skill is an instruction set in `SKILL.md` form that pi loads automatically at the right moments; it can also be invoked explicitly via `/skill:name`. Three sub-tabs:
 
@@ -466,7 +496,7 @@ A skill is an instruction set in `SKILL.md` form that pi loads automatically at 
 - Skill marketplace: browse and search the public [skills.sh](https://skills.sh/) catalog with one-click install into Pi; a fixed strip above the search box links to other marketplaces (虾评 / SkillHub / SkillsMP).
 - Stats: total/enabled/disabled stat cards, distribution bars by source directory, and a disabled-skills list (one-click re-enable).
 
-### 12.2 Extension packages
+### 13.2 Extension packages
 
 A pi extension is a code package installed from npm/git/local path that can add tools, commands and UI to pi. Two sub-tabs:
 
@@ -475,7 +505,7 @@ A pi extension is a code package installed from npm/git/local path that can add 
 
 > Package installation uses MPI's built-in npm, so it works on machines without Node.js; installing from git sources requires Git to be installed on the system (a clear hint is shown when missing). If you manually configured `npmCommand` in `~/.pi/agent/settings.json`, MPI won't override it.
 
-### 12.3 MCP
+### 13.3 MCP
 
 MCP (Model Context Protocol) servers provide pi with external tools and data sources. Two sub-tabs:
 
@@ -484,7 +514,7 @@ MCP (Model Context Protocol) servers provide pi with external tools and data sou
 
 > The MCP module depends on the `pi-mcp-market` extension; when it's missing you see an unavailable card + one-click install button. Actually connecting to and running servers also requires `pi-mcp-adapter`.
 
-### 12.4 Extension model pick (no popups)
+### 13.4 Extension model pick (no popups)
 
 Some extensions need a model and pop up to ask which one to use (the classic case: pi-web-access opens a browser curation window on every web search and asks which model should write the summary). With **Settings → General → "Extension model pick"** (on by default):
 
@@ -494,7 +524,7 @@ Some extensions need a model and pop up to ask which one to use (the classic cas
 
 ---
 
-## 13. Pi TUI Terminal Mode
+## 14. Pi TUI Terminal Mode
 
 The "Terminal" button in the chat top bar switches the whole session area into an interactive pi terminal:
 
@@ -507,7 +537,7 @@ For users who prefer keyboard flow and want direct access to all of pi's TUI com
 
 ---
 
-## 14. Global Search (Ctrl+K)
+## 15. Global Search (Ctrl+K)
 
 The 🔍 button at the top of the sidebar or Ctrl+K opens global session search: type a keyword, it full-text matches titles and message content across all sessions. Checking the "Archive & trash" checkbox also searches archived sessions and trash entries; result rows carry status badges (Archived / Project archived / Trash) and each row has a "Restore" button that puts it straight back into the sidebar. Esc or the close key at the top right dismisses.
 
@@ -517,7 +547,7 @@ The 🔍 button in the conversation toolbar, just left of the pin star icon, or 
 
 ---
 
-## 15. Archive and Trash
+## 16. Archive and Trash
 
 The **Settings → Archive & Trash** page manages three kinds of entries, all grouped by project (group headers show project name + count, collapsible); the search box at the top filters all three (substring match on title/project name/path):
 
@@ -531,32 +561,33 @@ Rules: archiving is a reversible tidying operation and doesn't touch the files t
 
 ---
 
-## 16. Settings Reference
+## 17. Settings Reference
 
 **Settings** entries: ⚙ in the title bar, menu "Edit → Open settings…". Left tabs below.
 
-### 16.1 General (default tab)
+### 17.1 General (default tab)
 
 | Row | Notes |
 | --- | --- |
 | Avatars | Upload custom chat avatars for "User" and "MPI agent"; images are compressed locally to ≤192px before saving, never uploaded anywhere. Can "Restore defaults" (Nobita / Doraemon). |
 | Launch at startup | Start MPI automatically when logging in. |
 | Trash | Deleted sessions go to the trash first (recoverable); turning off makes deletes immediately permanent. |
-| Extension model pick | When an extension needs a model, MPI uses this conversation's current model automatically instead of popping up; web searches skip the browser curation window (see [12.4](#124-extension-model-pick-no-popups)). On by default; turning it off restores the per-use prompt and `~/.pi/web-search.json`. |
+| Voice system | Voice input (transcription service config + connection test) and voice output (voice / rate / preview / auto-read). See [Section 7](#7-voice-system). |
+| Extension model pick | When an extension needs a model, MPI uses this conversation's current model automatically instead of popping up; web searches skip the browser curation window (see [13.4](#134-extension-model-pick-no-popups)). On by default; turning it off restores the per-use prompt and `~/.pi/web-search.json`. |
 | Theme mode | A "Follow system" checkbox + light/dark preview cards; click to switch instantly. |
 | Accent color | 7 options: Follow theme (default), White, Light gray, Dark gray, Green, Red, Blue; the send button and selection highlights follow it. |
 | Diff display | Two modes for edit-tool diffs, "Unified view / Split before-after", unified by default. |
 | Window zoom | 50%–150%, shortcuts Ctrl+= / Ctrl+- (25% steps), Ctrl+0 to reset; persists across restarts. |
 
-### 16.2 User Profile
+### 17.2 User Profile
 
 See [Section 4](#4-configuring-models) (4.7). Edit, then click "Save" to apply; a small dot on the tab indicates unsaved changes.
 
-### 16.3 Models & Providers / Thinking Defaults
+### 17.3 Models & Providers / Thinking Defaults
 
 See [Section 4](#4-configuring-models). The top of the page has "Reload" and "Save models" buttons; model/thinking settings are written to `~/.pi/agent` (shared with terminal pi), and a small dot on the tab indicates unsaved changes.
 
-### 16.4 Data Storage
+### 17.4 Data Storage
 
 Two independent data locations can be moved anywhere on this machine (system folder picker):
 
@@ -574,11 +605,11 @@ A change takes effect in two steps: picking a new folder only records the intent
 
 When a custom location is set, each row shows a "Reset" button; hover the path text to see the currently effective directory. Migration results are logged in the console (`[migration]`).
 
-### 16.5 Archive & Trash
+### 17.5 Archive & Trash
 
-See [Section 15](#15-archive-and-trash).
+See [Section 16](#16-archive-and-trash).
 
-### 16.6 Backup & Restore
+### 17.6 Backup & Restore
 
 Two independent backup targets, each with its own export/import pair:
 
@@ -588,18 +619,18 @@ Sessions: tick the projects to export (select all / clear, each row shows sessio
 
 Typical uses: migrating to a new PC, or taking a snapshot before big changes.
 
-### 16.7 Diagnostics & Config
+### 17.7 Diagnostics & Config
 
 Shows Pi runtime status and the actual paths of each config file (`models.json` / `settings.json` / `auth.json`), clickable to open in File Explorer. Model/thinking settings are written to `~/.pi/agent` (shared with terminal pi); general settings live in the app's config directory; check here first when troubleshooting "I changed it but nothing happened".
 
-### 16.8 About MPI
+### 17.8 About MPI
 
 - MPI app update: current/latest version, source (GitHub Releases), "View changelog" (bundled changelog, no network needed; footer includes SHA256 install verification steps), and "Install and restart" when a new version is found.
 - Update Pi core: manages the bundled pi runtime version. Update extensions in the "Extensions" panel instead.
 
 ---
 
-## 17. Android Phone Remote Control
+## 18. Android Phone Remote Control
 
 > Current status: the UI entry for this feature is temporarily hidden in recent versions (to be restored after polish); below describes its designed capabilities, for reference.
 
@@ -611,11 +642,11 @@ MPI supports remotely viewing sessions from an Android companion app and perform
 
 ---
 
-## 18. Messaging Channels (Feishu / WeChat)
+## 19. Messaging Channels (Feishu / WeChat)
 
 Message your MPI from Feishu or WeChat: DM the bot (Feishu also supports @-mentions in groups), and the message runs in a dedicated session under the bound project. Feishu replies stream back into that same message; WeChat shows a typing indicator while working, then delivers the result as a new message. Both channels are online only while MPI is running.
 
-### 18.1 Enabling the Channel
+### 19.1 Enabling the Channel
 
 Open **Sidebar → Messaging channels** (the fourth item below "New session / Automations / Extensions"). The left column lists the channels — Feishu / WeChat; click to switch.
 
@@ -632,7 +663,7 @@ Click **Save configuration** to apply immediately. Status light at the top: gray
 
 **WeChat**: click "📱 Connect WeChat via scan" in the quick-setup card and confirm with mobile WeChat (some accounts are asked for a numeric verification code); credentials are saved automatically — no enterprise setup or callback URL needed. Then pick the bound project, flip the master switch, and **Save configuration**. Once bound, the masked bot id is shown and "Re-scan to connect" replaces the current binding; the status light works as for Feishu.
 
-### 18.2 Creating a Feishu App (First Time)
+### 19.2 Creating a Feishu App (First Time)
 
 > ⚠️ Prerequisite: you need an enterprise/organization. The Feishu Open Platform requires custom apps to live under an enterprise tenant, and WebSocket event push only works for enterprise custom apps. If your account is on the personal plan (no organization), create your own free enterprise first (individuals can create one, no business license needed; you become its admin). Otherwise you'll hit "connects fine but never receives messages" with no publish option in the console.
 
@@ -645,7 +676,7 @@ Click **Save configuration** to apply immediately. Status light at the top: gray
 
 > Long-connection mode needs no public IP or tunneling; MPI connects straight to Feishu's WebSocket endpoint. The panel includes this guide as well.
 
-### 18.3 Usage and Commands
+### 19.3 Usage and Commands
 
 - DM: send plain text to the bot;
 - Groups: @-mention the bot (only messages that mention it are processed; requires `im:message.group_at_msg:readonly` and adding the bot to the group);
@@ -660,7 +691,7 @@ Feishu MCP: the "Enable Feishu MCP" button at the bottom of the form writes the 
 
 One message at a time: sending while busy gets a "still processing" notice.
 
-### 18.4 Notes
+### 19.4 Notes
 
 - The channel is online only while MPI runs; messages sent while MPI is off (or the connection is down) are not received;
 - Avoid driving the same dedicated session from both desktop and the chat app at once;
@@ -669,7 +700,7 @@ One message at a time: sending while busy gets a "still processing" notice.
 
 ---
 
-## 19. Keyboard Shortcuts
+## 20. Keyboard Shortcuts
 
 | Shortcut | Action |
 | --- | --- |
@@ -684,7 +715,7 @@ One message at a time: sending while busy gets a "still processing" notice.
 
 ---
 
-## 20. Data and Configuration Locations
+## 21. Data and Configuration Locations
 
 | Content | Location (Windows) | Notes |
 | --- | --- | --- |
@@ -703,7 +734,7 @@ Dev (development build) and production installs have independent config director
 
 ---
 
-## 21. FAQ
+## 22. FAQ
 
 **Model selector shows "No available models"**
 Go back to "Settings → Models & Providers" and confirm you saved; check API key, Base URL (mind `/v1`), API type and model ID one by one, using "Test availability" to pinpoint the problem. If it still fails, reopen the session once.

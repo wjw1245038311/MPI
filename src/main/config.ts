@@ -175,6 +175,47 @@ export interface AppConfig {
   /** Per-thread auto-mode flag keyed by session file path (boot id until the
    * thread's real file name is known). Absent/false = manual model selection. */
   autoModelThreads?: Record<string, boolean>;
+  /** Voice system (语音系统): STT for composer voice input + TTS for reading
+   * agent replies aloud. Absent = unconfigured; the mic button then points to
+   * Settings → General → 语音系统. See src/main/voice.ts for STT backends and
+   * src/renderer/src/lib/tts.ts for the speechSynthesis-based TTS engine. */
+  voice?: VoiceConfig;
+}
+
+/** Speech-to-text backend used by the composer mic button.
+ * - "openai": any OpenAI-compatible /v1/audio/transcriptions endpoint (OpenAI,
+ *   compatible gateways). Multipart upload, model defaults to whisper-1.
+ * - "gemini": Gemini generateContent with inline base64 audio; only the API key
+ *   from the referenced provider is used (endpoint is Google's fixed one).
+ */
+export type SttBackend = "openai" | "gemini";
+
+/** Sentinel sttProviderId meaning "use the manual baseUrl/apiKey fields below". */
+export const STT_PROVIDER_MANUAL = "__manual__";
+
+export interface VoiceConfig {
+  /** STT backend; absent = voice input not configured yet. */
+  sttBackend?: SttBackend;
+  /** Provider id from ~/.pi/agent/models.json whose baseUrl/apiKey are read live
+   * at transcription time (key rotation keeps working), or STT_PROVIDER_MANUAL.
+   * Absent with a backend set = manual fields must be filled. */
+  sttProviderId?: string;
+  /** Manual / override base URL (OpenAI-compatible: the "/v1" root). Ignored for
+   * gemini unless you really want to point at a proxy. */
+  sttBaseUrl?: string;
+  /** Manual API key; takes precedence over the referenced provider's key. */
+  sttApiKey?: string;
+  /** Model id sent to the backend (defaults: whisper-1 / gemini-2.5-flash). */
+  sttModel?: string;
+  /** TTS voice URI from speechSynthesis.getVoices(); absent = auto-pick by UI
+   * language (zh → a zh voice, en → an en voice). Renderer-side only, but kept
+   * here so the choice survives restarts and travels with config backups. */
+  ttsVoiceUri?: string;
+  /** Speech rate multiplier, clamped to 0.5–2; absent = 1. */
+  ttsRate?: number;
+  /** Auto-read the agent's reply aloud when a turn settles on the visible
+   * thread. Absent/false = off (per-message speaker buttons always work). */
+  ttsAutoRead?: boolean;
 }
 
 /** One pending data-location migration, applied on next launch. */
@@ -273,6 +314,37 @@ function sanitizeWeChatChannel(value: unknown): WeChatChannelConfig | undefined 
   return sanitizeWeChatConfig(value as Partial<WeChatChannelConfig>);
 }
 
+/** Coerces a persisted voice-system object into a safe shape; drop it entirely
+ * when malformed so the mic button falls back to "not configured". */
+function sanitizeVoice(value: unknown): VoiceConfig | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  const out: VoiceConfig = {};
+  if (v.sttBackend === "openai" || v.sttBackend === "gemini") out.sttBackend = v.sttBackend;
+  if (typeof v.sttProviderId === "string" && v.sttProviderId.trim()) {
+    out.sttProviderId = v.sttProviderId.trim().slice(0, 256);
+  }
+  if (typeof v.sttBaseUrl === "string" && v.sttBaseUrl.trim()) {
+    out.sttBaseUrl = v.sttBaseUrl.trim().replace(/\/+$/, "").slice(0, 1024);
+  }
+  if (typeof v.sttApiKey === "string" && v.sttApiKey.trim()) {
+    out.sttApiKey = v.sttApiKey.trim().slice(0, 512);
+  }
+  if (typeof v.sttModel === "string" && v.sttModel.trim()) {
+    out.sttModel = v.sttModel.trim().slice(0, 256);
+  }
+  if (typeof v.ttsVoiceUri === "string" && v.ttsVoiceUri.trim()) {
+    out.ttsVoiceUri = v.ttsVoiceUri.trim().slice(0, 512);
+  }
+  if (typeof v.ttsRate === "number" && Number.isFinite(v.ttsRate)) {
+    out.ttsRate = Math.min(2, Math.max(0.5, v.ttsRate));
+  }
+  if (typeof v.ttsAutoRead === "boolean") out.ttsAutoRead = v.ttsAutoRead;
+  // Keep the object whenever ANY field survived — dropping it just because the
+  // STT backend was cleared would silently wipe TTS settings too.
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function configPath(dir: string): string {
   return join(dir, "config.json");
 }
@@ -340,6 +412,7 @@ export function loadConfig(userDataDir: string): AppConfig {
         })),
         feishuChannel: sanitizeFeishuChannel(parsed.feishuChannel),
         wechatChannel: sanitizeWeChatChannel(parsed.wechatChannel),
+        voice: sanitizeVoice(parsed.voice),
       };
       return cached;
     } catch {
@@ -552,6 +625,11 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
     out.remoteSignalingUrl = p.remoteSignalingUrl.trim();
   }
   if (typeof p.remoteSignalingEnabled === "boolean") out.remoteSignalingEnabled = p.remoteSignalingEnabled;
+
+  // Voice settings are portable (no machine-specific paths); the API key is a
+  // user credential like any other and travels with config backups on purpose.
+  const voice = sanitizeVoice(p.voice);
+  if (voice) out.voice = voice;
 
   return out;
 }

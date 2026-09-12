@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { useStore } from "../store";
 import type { ApiType, Diagnostics, ModelDef, ModelsFile, PermissionLevel, ProviderDef, ThinkingDefaults } from "../lib/types";
 import { formatBytes } from "../lib/format";
+import { sttTranscribeErrorText } from "../lib/stt";
+import { speakMessage, ttsVoices } from "../lib/tts";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { translateUiText } from "../lib/i18n";
 import { Archive, Check, ChevronRight, Close, Edit, Plus, Refresh, Folder, Search, Trash } from "./icons";
@@ -1284,6 +1286,42 @@ export function Settings() {
   const [presetQuery, setPresetQuery] = useState("");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
 
+  // ---- Voice system (Settings → General → 语音系统) -------------------------
+  // STT credential sources come from models.json; TTS voices from the platform
+  // speechSynthesis. Both load when settings opens.
+  const [sttProviders, setSttProviders] = useState<{ id: string; baseUrl?: string }[]>([]);
+  const [ttsVoiceList, setTtsVoiceList] = useState<SpeechSynthesisVoice[]>([]);
+  const [voiceTesting, setVoiceTesting] = useState(false);
+  // Dev instances started before this feature shipped lack window.pi.voice —
+  // guard call sites and tell the user to fully restart (see backupApi).
+  const voiceApi = typeof window.pi?.voice === "object" && window.pi.voice ? window.pi.voice : null;
+  useEffect(() => {
+    if (!open) return;
+    window.pi.settings
+      .getModels()
+      .then((m: ModelsFile) => setSttProviders(Object.entries(m.providers || {}).map(([id, p]) => ({ id, baseUrl: p.baseUrl }))))
+      .catch(() => setSttProviders([]));
+    const loadVoices = () => setTtsVoiceList(ttsVoices());
+    loadVoices();
+    // Voices often arrive asynchronously on first access; poll briefly.
+    let tries = 0;
+    const timer = window.setInterval(() => {
+      tries += 1;
+      if (ttsVoices().length > 0 || tries >= 6) {
+        clearInterval(timer);
+        loadVoices();
+      }
+    }, 500);
+    return () => clearInterval(timer);
+  }, [open]);
+  // Voices matching the UI language first (stable sort keeps platform order).
+  const sortedTtsVoices = useMemo(() => {
+    const target = language === "zh" ? "zh" : "en";
+    return [...ttsVoiceList].sort(
+      (a, b) => Number((b.lang || "").toLowerCase().startsWith(target)) - Number((a.lang || "").toLowerCase().startsWith(target)),
+    );
+  }, [ttsVoiceList, language]);
+
   // ---- Backup & restore tab ---------------------------------------------
   // Project groups come from main (dirName = sessions subdirectory); the
   // friendly project name is decorated from the sidebar's live projects.
@@ -1767,6 +1805,41 @@ export function Settings() {
     }
   };
 
+  // ---- Voice system handlers -------------------------------------------------
+  const voiceCfg = config?.voice;
+  /** Merge a partial voice config; undefined values clear the key. */
+  const setVoice = (patch: Record<string, unknown>) => useStore.getState().setVoiceConfig(patch as any);
+  const sttManual = !voiceCfg?.sttProviderId || voiceCfg.sttProviderId === "__manual__";
+
+  const testVoiceStt = async () => {
+    if (!voiceApi) {
+      pushToast("warning", language === "zh" ? "当前版本不支持语音系统，请完整重启应用" : "This build predates the voice system — fully restart the app");
+      return;
+    }
+    setVoiceTesting(true);
+    try {
+      const res = await voiceApi.test();
+      if (res.ok) {
+        pushToast("success", language === "zh" ? "连接成功：识别服务可用（静音测试无文本属正常）" : "Connected: the transcription service is reachable (empty text on a silent probe is expected)");
+      } else {
+        pushToast("error", sttTranscribeErrorText(res.error || "", language === "zh"));
+      }
+    } catch (e: any) {
+      pushToast("error", `${language === "zh" ? "测试失败：" : "Test failed: "}${e?.message || e}`);
+    } finally {
+      setVoiceTesting(false);
+    }
+  };
+
+  /** Speak a short sample with the currently selected voice/rate. */
+  const previewTts = () => {
+    void speakMessage("settings-preview", language === "zh" ? "你好，我是 MPI。语音朗读功能正常。" : "Hello from MPI. Voice output is working.", {
+      voiceUri: voiceCfg?.ttsVoiceUri,
+      rate: voiceCfg?.ttsRate,
+      lang: language as "zh" | "en",
+    });
+  };
+
   const changeDiffViewMode = async (diffViewMode: "unified" | "blocks") => {
     const next = await window.pi.app.setConfig({ diffViewMode });
     useStore.setState({ config: next });
@@ -2091,6 +2164,154 @@ export function Settings() {
                     <input type="checkbox" checked={config?.trashEnabled !== false} onChange={(e) => void changeTrashEnabled(e.target.checked)} />
                     <span>{language === "zh" ? "删除的会话先移入回收站（可恢复）" : "Deleted sessions go to the trash first (restorable)"}</span>
                   </label>
+                </Field>
+
+                <Field
+                  label={language === "zh" ? "语音系统" : "Voice system"}
+                  hint={
+                    language === "zh"
+                      ? "输入框左侧的麦克风按钮：说话 → 转成文字填入输入框（需先配置识别服务，录音最长 3 分钟）。智能体回复右下角的喇叭按钮可朗读该条回复；开启自动朗读后，当前可见会话每轮结束会自动读出回复。"
+                      : "The microphone button left of the editor: speak and it is transcribed into the draft (configure a transcription service first; recordings cap at 3 minutes). The speaker button on each agent reply reads that message aloud; with auto-read on, replies are read automatically when a turn settles in the visible session."
+                  }
+                >
+                  <div className="voice-settings">
+                    <div className="voice-subtitle">{language === "zh" ? "语音输入（识别）" : "Voice input (transcription)"}</div>
+                    <div className="voice-row">
+                      <span className="voice-label">{language === "zh" ? "识别服务" : "Service"}</span>
+                      <select
+                        className="set-select voice-select"
+                        value={voiceCfg?.sttBackend || ""}
+                        onChange={(e) => setVoice({ sttBackend: e.target.value || undefined })}
+                      >
+                        <option value="">{language === "zh" ? "未配置（麦克风按钮不可用）" : "Not configured (mic button disabled)"}</option>
+                        <option value="openai">OpenAI 兼容 /audio/transcriptions</option>
+                        <option value="gemini">Gemini（内联音频）</option>
+                      </select>
+                    </div>
+                    {voiceCfg?.sttBackend && (
+                      <>
+                        <div className="voice-row">
+                          <span className="voice-label">{language === "zh" ? "凭证来源" : "Credentials"}</span>
+                          <select
+                            className="set-select voice-select"
+                            value={voiceCfg.sttProviderId || "__manual__"}
+                            onChange={(e) => setVoice({ sttProviderId: e.target.value })}
+                          >
+                            <option value="__manual__">{language === "zh" ? "手动填写" : "Manual entry"}</option>
+                            {sttProviders.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.id}
+                                {(() => {
+                                  try {
+                                    return p.baseUrl ? `（${new URL(p.baseUrl).host}）` : "";
+                                  } catch {
+                                    return "";
+                                  }
+                                })()}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {sttManual ? (
+                      <>
+                        {voiceCfg.sttBackend === "openai" && (
+                          <div className="voice-row">
+                            <span className="voice-label">Base URL</span>
+                            <input
+                              className="set-input voice-input"
+                              type="text"
+                              placeholder="https://api.openai.com/v1"
+                              value={voiceCfg.sttBaseUrl || ""}
+                              onChange={(e) => setVoice({ sttBaseUrl: e.target.value })}
+                            />
+                          </div>
+                        )}
+                        {voiceCfg.sttBackend === "gemini" && (
+                          <div className="voice-row">
+                            <span className="voice-label">Base URL</span>
+                            <input
+                              className="set-input voice-input"
+                              type="text"
+                              placeholder={language === "zh" ? "留空 = Google 官方端点（代理才填）" : "empty = Google's endpoint (proxies only)"}
+                              value={voiceCfg.sttBaseUrl || ""}
+                              onChange={(e) => setVoice({ sttBaseUrl: e.target.value })}
+                            />
+                          </div>
+                        )}
+                        <div className="voice-row">
+                          <span className="voice-label">API Key</span>
+                          <input
+                            className="set-input voice-input"
+                            type="password"
+                            placeholder="sk-…"
+                            value={voiceCfg.sttApiKey || ""}
+                            onChange={(e) => setVoice({ sttApiKey: e.target.value })}
+                          />
+                        </div>
+                      </>
+                        ) : (
+                          <div className="voice-hint">
+                            {language === "zh"
+                              ? `使用「模型与提供商」中 ${voiceCfg.sttProviderId} 的地址与 key（修改后自动同步）`
+                              : `Uses the base URL & key of provider “${voiceCfg.sttProviderId}” from Models (kept in sync automatically)`}
+                          </div>
+                        )}
+                        <div className="voice-row">
+                          <span className="voice-label">{language === "zh" ? "模型" : "Model"}</span>
+                          <input
+                            className="set-input voice-input"
+                            type="text"
+                            placeholder={voiceCfg.sttBackend === "gemini" ? "gemini-2.5-flash" : "whisper-1"}
+                            value={voiceCfg.sttModel || ""}
+                            onChange={(e) => setVoice({ sttModel: e.target.value })}
+                          />
+                        </div>
+                        <div className="voice-row">
+                          <button type="button" className="set-btn" disabled={voiceTesting} onClick={() => void testVoiceStt()}>
+                            {voiceTesting ? (language === "zh" ? "测试中…" : "Testing…") : language === "zh" ? "测试连接" : "Test connection"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    <div className="voice-subtitle">{language === "zh" ? "语音输出（朗读）" : "Voice output (read aloud)"}</div>
+                    <div className="voice-row">
+                      <span className="voice-label">{language === "zh" ? "声音" : "Voice"}</span>
+                      <select
+                        className="set-select voice-select"
+                        value={voiceCfg?.ttsVoiceUri || ""}
+                        onChange={(e) => setVoice({ ttsVoiceUri: e.target.value || undefined })}
+                      >
+                        <option value="">{language === "zh" ? "自动（跟随界面语言）" : "Auto (follow UI language)"}</option>
+                        {sortedTtsVoices.map((v) => (
+                          <option key={v.voiceURI} value={v.voiceURI}>
+                            {v.name}（{v.lang}）
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="voice-row">
+                      <span className="voice-label">{language === "zh" ? "语速" : "Rate"}</span>
+                      <input
+                        type="range"
+                        min={0.5}
+                        max={2}
+                        step={0.1}
+                        value={voiceCfg?.ttsRate ?? 1}
+                        onChange={(e) => setVoice({ ttsRate: Number(e.target.value) })}
+                      />
+                      <span className="voice-rate-value">{(voiceCfg?.ttsRate ?? 1).toFixed(1)}×</span>
+                    </div>
+                    <div className="voice-row">
+                      <button type="button" className="set-btn ghost" onClick={previewTts}>
+                        {language === "zh" ? "试听" : "Preview"}
+                      </button>
+                    </div>
+                    <label className="theme-sys-check">
+                      <input type="checkbox" checked={!!voiceCfg?.ttsAutoRead} onChange={(e) => setVoice({ ttsAutoRead: e.target.checked })} />
+                      <span>{language === "zh" ? "任务完成后自动朗读智能体回复（仅当前可见会话）" : "Auto-read the agent's reply when a turn settles (visible session only)"}</span>
+                    </label>
+                  </div>
                 </Field>
 
                 <Field

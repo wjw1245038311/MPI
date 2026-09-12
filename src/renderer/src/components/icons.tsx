@@ -186,6 +186,20 @@ export const Play = (p: P) => (
     <path d="M8 5.5v13l11-6.5z" />
   </svg>
 );
+export const Mic = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="9" y="2.5" width="6" height="11" rx="3" />
+    <path d="M5 11a7 7 0 0 0 14 0" />
+    <path d="M12 18v3.5" />
+  </svg>
+);
+export const Volume = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M11 5 6.5 9H3v6h3.5L11 19z" />
+    <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+    <path d="M18.5 5.5a9.5 9.5 0 0 1 0 13" />
+  </svg>
+);
 export const Shield = (p: P) => (
   <svg {...base(p)}>
     <path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" />

@@ -6,7 +6,8 @@ import { BUILTIN_DEFAULT_ID, BUILTIN_LONG_ID, normalizeTaskModes, taskModeName, 
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage } from "../lib/types";
 import { MPI_FILE_MIME } from "../lib/file-drag";
-import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh, Settings } from "./icons";
+import { SttError, startRecording, sttRecordErrorText, sttTranscribeErrorText, type RecordingHandle } from "../lib/stt";
+import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh, Settings, Mic } from "./icons";
 import { LongTaskMonitor } from "./LongTaskMonitor";
 import { TaskModesModal } from "./TaskModesModal";
 
@@ -138,6 +139,7 @@ export function Composer({ threadId }: { threadId: string }) {
   const sendPendingSteering = useStore((s) => s.sendPendingSteering);
   const changeDraftThreadFolder = useStore((s) => s.changeDraftThreadFolder);
   const pushToast = useStore((s) => s.pushToast);
+  const openSettings = useStore((s) => s.openSettings);
   const compacting = useStore((s) => !!s.threads[threadId]?.compacting);
   const connected = useStore((s) => !!s.threads[threadId]?.connected);
   const hasMessages = useStore(
@@ -186,6 +188,14 @@ export function Composer({ threadId }: { threadId: string }) {
   const [tmManageOpen, setTmManageOpen] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
+  // Voice input (STT): idle → recording → transcribing. The handle lives in a
+  // ref; the draft key is captured at start so a thread switch mid-recording
+  // still lands the transcript in the thread where it was spoken.
+  const [recState, setRecState] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [recSeconds, setRecSeconds] = useState(0);
+  const recHandleRef = useRef<RecordingHandle | null>(null);
+  const recTimerRef = useRef<number | null>(null);
+  const recDraftKeyRef = useRef<string>("");
   // Highlight while a file is dragged over the composer (sidebar file tree or OS
   // files). A depth counter avoids flicker when moving across child elements.
   const [fileDragOver, setFileDragOver] = useState(false);
@@ -440,6 +450,136 @@ export function Composer({ threadId }: { threadId: string }) {
     const names = paths.map((p) => p.split(/[\\/]/).pop() || p);
     patchDraft({ files: [...files, ...paths.map((abs, i) => ({ abs, name: names[i] }))] });
   };
+
+  /* ---------------- Voice input (STT) ---------------- */
+  // ~3 min ≈ 5.8 MB of 16 kHz mono WAV — comfortably inside API and IPC limits.
+  const MAX_REC_SECONDS = 180;
+  const formatRecSeconds = (total: number) => `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+
+  const stopRecTimer = () => {
+    if (recTimerRef.current !== null) {
+      window.clearInterval(recTimerRef.current);
+      recTimerRef.current = null;
+    }
+  };
+
+  /** Discard the recording (Esc / unmount). */
+  const cancelRecording = () => {
+    const handle = recHandleRef.current;
+    recHandleRef.current = null;
+    stopRecTimer();
+    setRecSeconds(0);
+    setRecState("idle");
+    try {
+      handle?.cancel();
+    } catch {
+      // already stopped
+    }
+  };
+
+  /** Stop the mic, transcribe, and append the text to the captured draft. */
+  const finishRecording = async () => {
+    const handle = recHandleRef.current;
+    if (!handle) return;
+    recHandleRef.current = null;
+    stopRecTimer();
+    setRecState("transcribing");
+    try {
+      const audio = await handle.stop();
+      const res = await window.pi.voice.transcribe({ dataBase64: audio.base64 });
+      if (!res.ok) {
+        pushToast("error", sttTranscribeErrorText(res.error || "", language === "zh"));
+        return;
+      }
+      const transcript = (res.text || "").trim();
+      // Append into the draft of the thread where recording STARTED — this
+      // composer instance survives thread switches, so trust the captured key.
+      const key = recDraftKeyRef.current;
+      if (!key) return;
+      const current = useStore.getState().drafts[key];
+      const base = (current?.text || "").trimEnd();
+      setDraft(key, { ...EMPTY_DRAFT, ...current, text: transcript ? `${base ? `${base} ` : ""}${transcript}` : (current?.text ?? "") });
+      if (!transcript) {
+        pushToast("info", language === "zh" ? "未识别到语音内容" : "No speech recognized");
+      } else if (useStore.getState().activeThreadId === threadId) {
+        requestAnimationFrame(() => taRef.current?.focus());
+      }
+    } catch (e: any) {
+      pushToast(
+        "error",
+        e instanceof SttError
+          ? sttRecordErrorText(e.code, language === "zh")
+          : language === "zh"
+            ? `语音识别失败：${e?.message || e}`
+            : `Transcription failed: ${e?.message || e}`,
+      );
+    } finally {
+      setRecSeconds(0);
+      setRecState("idle");
+    }
+  };
+
+  const startVoiceInput = async () => {
+    // Dev instances started before this feature shipped lack window.pi.voice.
+    if (typeof window.pi?.voice !== "object" || !window.pi.voice) {
+      pushToast("warning", language === "zh" ? "当前版本不支持语音系统，请完整重启应用" : "This build predates the voice system — fully restart the app");
+      return;
+    }
+    if (!useStore.getState().config?.voice?.sttBackend) {
+      pushToast(
+        "warning",
+        language === "zh"
+          ? "语音输入未配置：请先在 设置 → 通用 → 语音系统 中选择识别服务"
+          : "Voice input is not configured: pick a transcription service in Settings → General → Voice",
+      );
+      openSettings();
+      return;
+    }
+    try {
+      const handle = await startRecording();
+      recHandleRef.current = handle;
+      recDraftKeyRef.current = draftKey || "";
+      setRecSeconds(0);
+      setRecState("recording");
+      let elapsed = 0;
+      recTimerRef.current = window.setInterval(() => {
+        elapsed += 1;
+        setRecSeconds(elapsed);
+        if (elapsed >= MAX_REC_SECONDS) void finishRecording(); // auto-stop at the cap
+      }, 1000);
+    } catch (e: any) {
+      pushToast(
+        "error",
+        e instanceof SttError ? sttRecordErrorText(e.code, language === "zh") : language === "zh" ? "无法启动录音" : "Could not start recording",
+      );
+    }
+  };
+
+  const toggleVoiceInput = () => {
+    if (recState === "idle") void startVoiceInput();
+    else if (recState === "recording") void finishRecording();
+  };
+
+  // Esc cancels an in-flight recording; unmount releases the microphone.
+  useEffect(() => {
+    if (recState !== "recording") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelRecording();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recState]);
+  useEffect(() => {
+    return () => {
+      recHandleRef.current?.cancel();
+      stopRecTimer();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onPaste = async (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
@@ -890,6 +1030,42 @@ export function Composer({ threadId }: { threadId: string }) {
             <button className="iconbtn" title={language === "zh" ? "添加文件" : "Add files"} onClick={addFiles}>
               <Plus size={17} />
             </button>
+            {recState === "idle" ? (
+              <button
+                className="iconbtn"
+                title={
+                  language === "zh"
+                    ? "语音输入：点击开始说话，再点结束并转成文字（Esc 取消）"
+                    : "Voice input: click to start speaking, click again to stop and transcribe (Esc cancels)"
+                }
+                onClick={() => void toggleVoiceInput()}
+              >
+                <Mic size={17} />
+              </button>
+            ) : (
+              <button
+                className={`iconbtn mic-recording ${recState === "transcribing" ? "busy" : ""}`}
+                title={
+                  recState === "recording"
+                    ? language === "zh"
+                      ? `正在录音（最长 3:00）——点击结束并识别，Esc 取消`
+                      : `Recording (max 3:00) — click to stop and transcribe, Esc cancels`
+                    : language === "zh"
+                      ? "正在识别语音…"
+                      : "Transcribing…"
+                }
+                onClick={() => recState === "recording" && void finishRecording()}
+              >
+                {recState === "recording" ? (
+                  <>
+                    <span className="mic-dot" aria-hidden="true" />
+                    {formatRecSeconds(recSeconds)}
+                  </>
+                ) : (
+                  <span className="spinner" />
+                )}
+              </button>
+            )}
             {/* 任务模式 preset (permission + thinking level); left of the permission pill. */}
             <div className="pill taskmode-pill composer-optional-action" ref={tmRef}>
               <button
