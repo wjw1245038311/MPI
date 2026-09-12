@@ -47,6 +47,18 @@ export type AccentTheme = (typeof ACCENT_THEMES)[number];
 export const PERMISSION_LEVELS = ["readonly", "strict", "sandbox", "full"] as const;
 export type PermissionLevel = (typeof PERMISSION_LEVELS)[number];
 
+/** 任务模式: a named preset bundling per-thread behaviour knobs (permission +
+ * thinking level; model stays independent). Built-ins are the short/long task
+ * defaults; users can add custom modes. The renderer normalizes this list
+ * (src/renderer/src/lib/task-modes.ts) — main only persists it verbatim. */
+export interface TaskModeDef {
+  id: string;
+  name?: string;
+  builtin?: boolean;
+  permission?: PermissionLevel;
+  thinking?: string;
+}
+
 export interface AppConfig {
   /**
    * Path to pi's cli.js, or empty string to auto-detect via `npm root -g`.
@@ -103,6 +115,12 @@ export interface AppConfig {
   defaultPermission: PermissionLevel;
   /** Per-thread permission level, keyed by session file path. Defaults to defaultPermission when absent. */
   threadPermissions: Record<string, PermissionLevel>;
+  /** User-managed task-mode presets (composer pill left of the permission one).
+   * Absent = built-in short/long task modes only; the renderer re-seeds and
+   * sanitizes on read, so a hand-edited config can't break the UI. */
+  taskModes?: TaskModeDef[];
+  /** Which task mode new conversations display as active ("short" by default). */
+  defaultTaskModeId?: string;
   /** Custom user avatar as a data URL (downscaled in the renderer); absent = built-in Nobita avatar. */
   userAvatar?: string;
   /** Custom agent avatar as a data URL; absent = built-in Doraemon avatar. */

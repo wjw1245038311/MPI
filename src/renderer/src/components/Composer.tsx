@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { draftKeyFor, useStore } from "../store";
 import { formatTokens, modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
+import { BUILTIN_LONG_ID, BUILTIN_SHORT_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage } from "../lib/types";
 import { MPI_FILE_MIME } from "../lib/file-drag";
-import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh } from "./icons";
+import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh, Settings } from "./icons";
 import { LongTaskMonitor } from "./LongTaskMonitor";
+import { TaskModesModal } from "./TaskModesModal";
 
 let _pid = 0;
 const pid = () => `p${_pid++}`;
@@ -103,6 +105,12 @@ export function Composer({ threadId }: { threadId: string }) {
   const pending = useStore((s) => s.threads[threadId]?.pendingFollowUp || null);
   const injected = useStore((s) => s.threads[threadId]?.pendingEditorText);
   const permission = useStore((s) => s.threads[threadId]?.permission);
+  // Task-mode preset (pill left of the permission one): raw config refs so
+  // zustand sees stable values; normalized via useMemo below.
+  const taskMode = useStore((s) => s.threads[threadId]?.taskMode);
+  const taskModesRaw = useStore((s) => s.config?.taskModes);
+  const defaultTaskModeId = useStore((s) => s.config?.defaultTaskModeId);
+  const applyTaskMode = useStore((s) => s.applyTaskMode);
   const language = useStore((s) => s.config?.language || "en");
   const commands = useStore((s) => s.threads[threadId]?.commands);
   const models = useStore((s) => s.threads[threadId]?.models);
@@ -142,6 +150,11 @@ export function Composer({ threadId }: { threadId: string }) {
   // Unsent content lives in the store keyed per thread (see draftKeyFor) so it
   // survives app restarts and swaps correctly when switching threads; main
   // persists it with LRU eviction. expandedHtmlReferences stays local — pure UI.
+  // Sanitized task-mode list (built-ins re-seeded; corrupt config safe).
+  const taskModes = useMemo(() => normalizeTaskModes(taskModesRaw), [taskModesRaw]);
+  const activeTaskModeId = taskMode ?? defaultTaskModeId ?? BUILTIN_SHORT_ID;
+  const activeTaskMode = taskModes.find((m) => m.id === activeTaskModeId) || taskModes[0];
+
   const draftKey = useMemo(() => draftKeyFor({ sessionFile, cwd }, threadId), [sessionFile, cwd, threadId]);
   const draft = useStore((s) => (draftKey ? s.drafts[draftKey] : undefined));
   const setDraft = useStore((s) => s.setDraft);
@@ -166,6 +179,9 @@ export function Composer({ threadId }: { threadId: string }) {
   const [thinkOpen, setThinkOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [permOpen, setPermOpen] = useState(false);
+  // Task-mode dropdown + management modal.
+  const [tmOpen, setTmOpen] = useState(false);
+  const [tmManageOpen, setTmManageOpen] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
   // Highlight while a file is dragged over the composer (sidebar file tree or OS
@@ -175,12 +191,14 @@ export function Composer({ threadId }: { threadId: string }) {
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const tmRef = useRef<HTMLDivElement>(null);
   const permRef = useRef<HTMLDivElement>(null);
   const cmdRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<HTMLDivElement>(null);
   const projectRef = useRef<HTMLDivElement>(null);
 
   // close popups on outside click / Escape
+  useOutsideClose(tmRef, tmOpen, () => setTmOpen(false));
   useOutsideClose(permRef, permOpen, () => setPermOpen(false));
   useOutsideClose(cmdRef, cmdOpen, () => setCmdOpen(false));
   useOutsideClose(modelRef, modelOpen, () => setModelOpen(false));
@@ -870,6 +888,54 @@ export function Composer({ threadId }: { threadId: string }) {
             <button className="iconbtn" title={language === "zh" ? "添加文件" : "Add files"} onClick={addFiles}>
               <Plus size={17} />
             </button>
+            {/* 任务模式 preset (permission + thinking level); left of the permission pill. */}
+            <div className="pill taskmode-pill composer-optional-action" ref={tmRef}>
+              <button
+                className={`pill-btn tm-btn ${activeTaskModeId === BUILTIN_LONG_ID ? "tm-long" : ""}`}
+                title={
+                  language === "zh"
+                    ? `任务模式：权限+思考等级预设。当前「${taskModeName(activeTaskMode, language)}」（${taskModeSummary(activeTaskMode, language)}）；点击切换或管理自定义模式`
+                    : `Task mode: permission + thinking preset. Current “${taskModeName(activeTaskMode, language)}” (${taskModeSummary(activeTaskMode, language)}); click to switch or manage custom modes`
+                }
+                onClick={() => setTmOpen((v) => !v)}
+              >
+                <Zap size={13} /> {taskModeName(activeTaskMode, language)} ▾
+              </button>
+              {tmOpen && (
+                <div className="pill-pop taskmode-pop">
+                  {taskModes.map((m) => (
+                    <button
+                      key={m.id}
+                      className={`opt ${m.id === activeTaskModeId ? "active" : ""}`}
+                      onClick={() => {
+                        setTmOpen(false);
+                        void applyTaskMode(threadId, m.id);
+                      }}
+                    >
+                      <span className="o1">
+                        {taskModeName(m, language)}
+                        {m.builtin && (
+                          <small className="tm-builtin-inline">{language === "zh" ? "内置" : "Built-in"}</small>
+                        )}
+                      </span>
+                      <span className="o2">{taskModeSummary(m, language)}</span>
+                    </button>
+                  ))}
+                  <div className="tm-manage-sep" />
+                  <button
+                    className="opt"
+                    onClick={() => {
+                      setTmOpen(false);
+                      setTmManageOpen(true);
+                    }}
+                  >
+                    <span className="o1">
+                      <Settings size={12} /> {language === "zh" ? "管理任务模式…" : "Manage task modes…"}
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="pill perm-pill composer-optional-action" ref={permRef}>
               {(() => {
                 const perm = permission || "sandbox";
@@ -1235,6 +1301,7 @@ export function Composer({ threadId }: { threadId: string }) {
           </div>
         </div>
       </div>
+      <TaskModesModal open={tmManageOpen} onClose={() => setTmManageOpen(false)} />
     </div>
   );
 }

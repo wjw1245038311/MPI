@@ -390,6 +390,9 @@ export interface ThreadState {
   error?: string;
   /** Permission level the thread's pi process runs under. */
   permission: PermissionLevel;
+  /** Last task-mode preset applied to this thread (display only; the
+   * individual pills remain the source of truth). Absent = default mode. */
+  taskMode?: string;
   /** text injected by an extension via set_editor_text */
   pendingEditorText?: string;
   /** Follow-up queued via Enter while streaming; delivered when the agent settles. */
@@ -440,6 +443,23 @@ export interface Toast {
   text: string;
 }
 
+/** 任务模式 (task mode): a named preset bundling per-thread behaviour knobs —
+ * permission level + thinking level. Model stays independent (own pill).
+ * Built-ins are the short/long task defaults; users can add custom modes.
+ * Mirrors src/main/config.ts TaskModeDef (main only persists it verbatim). */
+export interface TaskModeDef {
+  /** "short" | "long" for built-ins, uuid for user modes. */
+  id: string;
+  /** Display name — required for custom modes; ignored for built-ins. */
+  name?: string;
+  /** Built-in modes cannot be deleted (params stay editable). */
+  builtin?: boolean;
+  /** Permission applied when the mode is used. Omitted = leave unchanged. */
+  permission?: PermissionLevel;
+  /** Thinking level applied when the mode is used. Omitted = leave unchanged. */
+  thinking?: string;
+}
+
 export interface AppConfig {
   piCliPath: string;
   pinnedProjects: string[];
@@ -471,6 +491,11 @@ export interface AppConfig {
   diffViewMode?: "unified" | "blocks";
   /** Permission level applied to brand-new conversations; existing threads keep their own level. */
   defaultPermission?: PermissionLevel;
+  /** User-managed task-mode presets (composer pill left of the permission one).
+   * Absent = built-in short/long task modes only. */
+  taskModes?: TaskModeDef[];
+  /** Which task mode new conversations display as active ("short" by default). */
+  defaultTaskModeId?: string;
   /** Custom user avatar as a data URL; absent = built-in Nobita avatar. */
   userAvatar?: string;
   /** Custom agent avatar as a data URL; absent = built-in Doraemon avatar. */

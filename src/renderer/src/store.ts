@@ -19,6 +19,7 @@ import type {
   ProjectSummary,
   SkillInfo,
   SkillHubSkill,
+  TaskModeDef,
   ThreadState,
   Toast,
   TodoItem,
@@ -27,6 +28,7 @@ import type {
   ViewAttachment,
   ViewMessage,
 } from "./lib/types";
+import { normalizeTaskModes } from "./lib/task-modes";
 import { cleanOutput, extensionsAlreadyLatest, hasLibuvAssertion, lastLine, stripAnsi } from "./lib/update";
 import { playCompletionChime } from "./lib/sound";
 import { parseSkillBlock } from "./lib/skill-block";
@@ -1249,6 +1251,10 @@ interface PiStore {
 
   // thread permission / folder
   setPermission: (threadId: string, level: PermissionLevel) => Promise<void>;
+  /** Apply a task-mode preset to the thread (permission + thinking level). */
+  applyTaskMode: (threadId: string, modeId: string) => Promise<void>;
+  /** Persist the user-managed task-mode list (management modal). */
+  saveTaskModes: (modes: TaskModeDef[], defaultId?: string) => Promise<boolean>;
   switchThreadFolder: (threadId: string) => Promise<void>;
   /** Move a not-yet-sent task to another working folder without losing the composer draft. */
   changeDraftThreadFolder: (threadId: string, cwd: string) => Promise<void>;
@@ -3238,6 +3244,38 @@ export const useStore = create<PiStore>()((set, get) => {
       get().pushToast("error", "切换权限失败：" + (e?.message || e));
     }
   },
+
+  // ---- task modes (presets bundling permission + thinking level) ----------
+  applyTaskMode: async (threadId, modeId) => {
+    const cfg = get().config;
+    const mode = normalizeTaskModes(cfg?.taskModes).find((m) => m.id === modeId);
+    if (!mode || !get().threads[threadId]) return;
+    set((s) =>
+      s.threads[threadId]
+        ? { threads: { ...s.threads, [threadId]: { ...s.threads[threadId], taskMode: modeId } } }
+        : s,
+    );
+    // Apply each configured parameter through the existing live-switch actions
+    // (model stays independent — its own pill on the right).
+    if (mode.permission) await get().setPermission(threadId, mode.permission);
+    if (mode.thinking) await get().setThinking(threadId, mode.thinking);
+  },
+
+  saveTaskModes: async (modes, defaultId) => {
+    try {
+      const config = await window.pi.app.setConfig({
+        taskModes: modes,
+        ...(defaultId ? { defaultTaskModeId: defaultId } : {}),
+      });
+      set({ config });
+      return true;
+    } catch (e: any) {
+      const zh = get().config?.language === "zh";
+      get().pushToast("error", `${zh ? "保存任务模式失败：" : "Failed to save task modes: "}${e?.message || e}`);
+      return false;
+    }
+  },
+
   switchThreadFolder: async (threadId) => {
     try {
       const path = await window.pi.app.showOpenDialog("folder");

@@ -7586,6 +7586,138 @@ mark.hl {
   min-width: 240px;
 }
 
+/* ---- 任务模式 pill (left of the permission pill) + management modal ------ */
+.taskmode-pill {
+  position: relative;
+}
+.tm-btn {
+  gap: 5px;
+  font-size: 12px;
+}
+/* Long-task mode gets a subtle blue tint so the active preset is visible at a glance. */
+.tm-btn.tm-long {
+  background: #eef4fb;
+  border-color: #c3d6ec;
+  color: #2b5f9e;
+}
+.taskmode-pop {
+  min-width: 240px;
+  right: auto;
+  left: 0;
+  transform-origin: bottom left;
+}
+.tm-builtin-inline {
+  margin-left: 6px;
+  font-size: 9.5px;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.tm-manage-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 6px;
+}
+
+/* ---- task-mode management modal ------------------------------------------ */
+.tm-modal {
+  width: min(520px, 92vw);
+}
+.tm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.tm-title {
+  font-weight: 700;
+  font-size: 15px;
+}
+.tm-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.tm-list {
+  display: grid;
+  gap: 6px;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+.tm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.tm-row-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.tm-row-name {
+  font-size: 13px;
+  font-weight: 650;
+}
+.tm-builtin {
+  margin-left: 6px;
+  font-size: 9.5px;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.tm-row-summary {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.iconbtn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+.tm-form {
+  display: grid;
+  gap: 10px;
+}
+.tm-field {
+  display: grid;
+  gap: 4px;
+}
+.tm-field label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.tm-field input,
+.tm-field select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+}
+.tm-field input:disabled {
+  opacity: .6;
+  background: #f5f5f0;
+}
+.tm-error {
+  color: #c0392b;
+  font-size: 11px;
+}
+.tm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 /* ============================================================
    Settings: pi update console
    ============================================================ */
