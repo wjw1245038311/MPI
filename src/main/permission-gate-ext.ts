@@ -139,6 +139,10 @@ const SAFE_TOOLS = new Set([
   "grep",
   "find",
   "ls",
+  // MPI's own bridge: mpi_ask_choice only shows a dialog and returns the
+  // user's selection as text (no I/O) — gating it would stack an approval
+  // card on top of the choice card itself.
+  "mpi_ask_choice",
   "ask_question",
   "plan_question",
   "plan_complete",

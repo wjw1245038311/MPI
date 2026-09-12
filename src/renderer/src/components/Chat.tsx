@@ -12,7 +12,8 @@ import { MarkedDiv, useSearchMark } from "../lib/search-mark";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
-import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal } from "./icons";
+import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
+import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal } from "./icons";
 import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
@@ -1200,7 +1201,10 @@ function BlockView({
   if (block.type === "text") return <Markdown text={block.text} containerRef={markRef} />;
   if (block.type === "thinking") return <Thinking text={block.thinking} language={language} />;
   const run = toolRuns[block.id] || (block.contentIndex === undefined ? undefined : Object.values(toolRuns).find((candidate) => candidate.contentIndex === block.contentIndex));
-  return <ToolCard id={block.id} name={effectiveToolName(block.name, run)} blockArgs={block.arguments} run={run} language={language} />;
+  const name = effectiveToolName(block.name, run);
+  // Plan-choice calls render as a compact option card instead of raw JSON.
+  if (name === "mpi_ask_choice") return <ChoiceToolCard id={block.id} blockArgs={block.arguments} run={run} language={language} />;
+  return <ToolCard id={block.id} name={name} blockArgs={block.arguments} run={run} language={language} />;
 }
 
 const SkillInvocation = memo(function SkillInvocation({ name, language }: { name: string; language: "en" | "zh" }) {
@@ -1395,6 +1399,86 @@ const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language }: 
               <div className="tool-empty compact">{emptyMessage}</div>
             )}
           </section>
+        </div>
+      )}
+    </div>
+  );
+});
+
+/**
+ * History rendering for mpi_ask_choice (方案选择): a compact card showing the
+ * question and every option, with the user's selection highlighted. The live,
+ * clickable version is ExtUiPromptCard above the composer; this one is read-
+ * only history. Errors or missing arguments fall back to the generic ToolCard.
+ */
+const ChoiceToolCard = memo(function ChoiceToolCard({ id, blockArgs, run, language }: { id: string; blockArgs?: unknown; run?: ToolRun; language: "en" | "zh" }) {
+  const args = parseToolArgs(run, blockArgs);
+  const question = typeof args?.question === "string" ? args.question.trim() : "";
+  // Options may be plain strings or {label, detail} objects (mpi_ask_choice).
+  const options = choiceOptions(args?.options);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  if (run?.isError || (!question && !options.length)) {
+    return <ToolCard id={id} name="mpi_ask_choice" blockArgs={blockArgs} run={run} language={language} />;
+  }
+  const outcome = parseChoiceOutcome(run?.resultText ?? run?.partialText);
+  const selectedValue = outcome?.kind === "selected" ? outcome.value : null;
+  const cancelled = outcome?.kind === "cancelled";
+  const status = toolStatus(run);
+  const zh = language === "zh";
+  let badge: ReactNode;
+  if (run?.running) badge = <span className="spinner" />;
+  else if (selectedValue) badge = zh ? `已选：${selectedValue}` : `Selected: ${selectedValue}`;
+  else if (cancelled) badge = zh ? "未选择" : "No selection";
+  else if (status === "done") badge = zh ? "已完成" : "Done";
+  else badge = zh ? "等待选择…" : "Awaiting selection…";
+
+  return (
+    <div className={`choice-tool state-${status}`}>
+      <div className="choice-head">
+        <span className="choice-icon" aria-hidden="true"><Branch size={14} /></span>
+        <span className="choice-question" title={question}>{question || (zh ? "方案选择" : "Plan choice")}</span>
+        <span className={`tool-status state-${status}`} title={typeof badge === "string" ? badge : undefined}>{badge}</span>
+      </div>
+      {options.length > 0 && (
+        <div className="choice-options">
+          {options.map((opt, index) => {
+            const selected = selectedValue !== null && opt.label === selectedValue;
+            const isOpen = expanded.has(index);
+            return (
+              <div key={`${index}-${opt.label}`} className={`choice-option ${selected ? "selected" : ""}`}>
+                <div className="co-row">
+                  {selected && <Check size={13} />}
+                  <span>{opt.label}</span>
+                  {opt.detail && (
+                    <button
+                      className={`opt-detail-toggle ${isOpen ? "open" : ""}`}
+                      title={isOpen ? (zh ? "收起细节" : "Collapse details") : zh ? "展开细节" : "Expand details"}
+                      onClick={() =>
+                        setExpanded((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(index)) next.delete(index);
+                          else next.add(index);
+                          return next;
+                        })
+                      }
+                    >
+                      {zh ? "细节" : "Detail"} <ChevronRight size={12} />
+                    </button>
+                  )}
+                </div>
+                {opt.detail && isOpen && <div className="opt-detail">{opt.detail}</div>}
+              </div>
+            );
+          })}
+          {/* A plan typed via the card's “其它/Other” input matches no option label. */}
+          {selectedValue !== null && !options.some((o) => o.label === selectedValue) && (
+            <div className="choice-option selected">
+              <div className="co-row">
+                <Check size={13} />
+                <span>{selectedValue}</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

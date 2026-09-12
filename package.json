@@ -37,6 +37,7 @@
     "test:commandparse": "node --experimental-strip-types scripts/test-command-parse.mjs",
     "test:channelcmd": "node --experimental-strip-types scripts/test-channel-command.mjs",
     "test:channelext": "node --experimental-strip-types scripts/test-channel-ext.mjs",
+    "test:choice": "node --experimental-strip-types scripts/test-choice.mjs",
     "test:wechat": "node --experimental-strip-types scripts/test-wechat.mjs",
     "test:searchtrash": "node --experimental-strip-types scripts/test-search-trash.mjs",
     "test:chatsearch": "node --experimental-strip-types scripts/test-chat-search.mjs",

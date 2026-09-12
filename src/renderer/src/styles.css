@@ -2096,6 +2096,74 @@ body.sidebar-resizing * {
 .composer-confirmation-region:empty {
   display: none;
 }
+/* ---- 方案选择 history card (mpi_ask_choice tool calls in the transcript) --- */
+.choice-tool {
+  margin: 7px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.012);
+}
+.choice-tool.state-running {
+  border-left-color: var(--accent);
+}
+.choice-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.choice-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.choice-question {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 650;
+}
+.choice-options {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+.choice-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.co-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.choice-option svg {
+  flex: 0 0 auto;
+}
+.choice-option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.choice-option.selected {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 650;
+}
+.choice-option.selected svg {
+  color: var(--accent);
+}
+
 .extui-card {
   width: 100%;
   padding: 14px 16px;
@@ -2126,6 +2194,11 @@ body.sidebar-resizing * {
   border-radius: 8px;
   background: #f1e4c9;
   color: #865d1c;
+}
+/* Plan-choice dialogs use the accent tint instead of the amber approval one. */
+.extui-card.choice-card .extui-card-icon {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .extui-card-kicker {
   color: #946419;
@@ -2167,34 +2240,140 @@ body.sidebar-resizing * {
   gap: 6px;
   margin-top: 10px;
 }
-.extui-card-options button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 10px;
-  text-align: left;
+/* Each option is a wrapper (.extui-opt) holding the clickable label plus an
+   optional “细节/Detail” toggle; the border/hover live on the wrapper. */
+.extui-card-options .extui-opt {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
 }
-.extui-card-options button small {
-  color: var(--text-faint);
-  font-size: 9.5px;
+.extui-card-options .extui-opt:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
-.extui-card-options button.recommended {
+.extui-card-options .extui-opt.recommended {
   border-color: #b8cdbd;
 }
-.extui-card-options button.deny {
+.extui-card-options .extui-opt.deny {
   color: #9a3d32;
 }
-.extui-card-options button.deny:hover {
+.extui-card-options .extui-opt.deny:hover {
   border-color: #d9a7a0;
   background: #fff3f1;
 }
-.extui-card-options button:hover {
-  border-color: var(--accent);
+.extui-opt-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 8px;
+}
+.extui-opt-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 6px;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.extui-opt-label:hover {
   background: var(--accent-soft);
+}
+.extui-card-options small {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 9.5px;
+}
+/* “细节/Detail” expand toggle (live card + history choice card). */
+.opt-detail-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2.5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.opt-detail-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.opt-detail-toggle svg {
+  transition: transform 0.12s ease;
+}
+.opt-detail-toggle.open svg {
+  transform: rotate(90deg);
+}
+.opt-detail {
+  margin: 0 8px 8px;
+  padding: 7px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 6px;
+  background: #f7f7f2;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* “其它/Other” free-plan input on plan-choice cards. */
+.extui-card-options .other-opt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.extui-card-options .other-opt:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.extui-other-input {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: #fff;
+}
+.extui-other-input textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.extui-other-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.extui-other-input .extui-card-actions {
+  margin-top: 0;
 }
 .composer {
   /* No max-width — the input follows the window width when stretched. */

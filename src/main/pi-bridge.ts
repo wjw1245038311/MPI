@@ -314,6 +314,10 @@ export interface PiBridgeOptions {
   /** Inbox dir for the channel session bridge (mpi-channel ext): agent-side
    * mpi_channel_* requests land here before main ingests them. */
   channelInboxDir?: string;
+  /** Path to <userData>/config.json, exposed to the choice extension as
+   * MPI_CHOICE_CONFIG so it can read the current UI language live (same
+   * pattern as the gate's mode file). */
+  choiceConfigFile?: string;
   onEvent: (event: unknown) => void;
   onExtUi: (request: ExtUiRequest) => void;
   onExit: (info: { code: number | null; signal: NodeJS.Signals | null; stderr: string; expected?: boolean }) => void;
@@ -374,6 +378,7 @@ export class PiBridge {
       // The extension derives its thread id from the session file name.
       if (this.opts.sessionFile) env.MPI_CHANNEL_SESSION_FILE = this.opts.sessionFile;
     }
+    if (this.opts.choiceConfigFile) env.MPI_CHOICE_CONFIG = this.opts.choiceConfigFile;
 
     this.proc = spawn(rt.node, [rt.cli, ...args], {
       cwd: this.opts.cwd,

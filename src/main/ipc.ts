@@ -78,6 +78,8 @@ import { classifyMissingTool } from "./npm-command";
 import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtimeKind } from "./pi-bridge";
 import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
+import { ensureChoiceExtension } from "./choice-extension";
+import { stripChoicePrefix } from "./choice-logic.ts";
 import { ensureTodoExtension } from "./todo-extension";
 import { registerTuiIpc } from "./tui";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
@@ -133,6 +135,7 @@ import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } fro
 import { RemoteService, type RemoteBackend } from "./remote/service";
 import {
   createSystemNotificationCenter,
+  isChoiceRequest,
   isSandboxApprovalRequest,
   sandboxOperationFromTitle,
   type SystemNotificationCenter,
@@ -417,11 +420,17 @@ function createHandle(
     extensions: [
       ensureGateExtension(getConfigDir()),
       ensureTodoExtension(getConfigDir()),
+      // 方案选择 bridge: mpi_ask_choice renders clickable option cards in the
+      // chat (existing extension-UI select). Interactive threads only —
+      // automation spawns its own list without it, so unattended runs never
+      // block on a dialog nobody can click.
+      ensureChoiceExtension(getConfigDir()),
       ...(isChannelSession ? [ensureChannelExtension(getConfigDir())] : []),
     ],
     // Live paths so a customized todo data location (Settings → 数据存储) is
     // honored from the next spawned bridge on.
     todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
+    choiceConfigFile: join(getConfigDir(), "config.json"),
     channelInboxDir: isChannelSession ? ensureChannelCommandInbox() : undefined,
     // Keep pi's runtime in sync with the Plugins inventory, including the
     // singular `.pi/agent/skill` compatibility path and other local roots.
@@ -482,22 +491,22 @@ function createHandle(
         return;
       }
       send("pi:extui", { threadId: id, request: r });
+      const lang = getConfig().language === "zh" ? "zh" : "en";
+      // The handle id is the session file path once promoted (boot:<uuid>
+      // before that); the registry is keyed by the session-file UUID.
+      const regKey = id.endsWith(".jsonl") ? threadUuidFromSessionFile(id) : null;
+      const entry = regKey ? getChannelThread(regKey) : undefined;
       if (isSandboxApprovalRequest(r)) {
         systemNotifications?.notifySandboxApproval(
           id,
-          getConfig().language === "zh" ? "zh" : "en",
-          sandboxOperationFromTitle((r as any)?.title, getConfig().language === "zh" ? "zh" : "en"),
+          lang,
+          sandboxOperationFromTitle((r as any)?.title, lang),
         );
         // Channel-owned threads (Feishu/WeChat) can't wait for a desktop click:
         // tell the user through the channel and auto-deny after the grace
         // period. A late response is harmless — pi ignores responses for ids
         // that are no longer pending, and an exited bridge drops it.
-        // The handle id is the session file path once promoted (boot:<uuid>
-        // before that); the registry is keyed by the session-file UUID.
-        const regKey = id.endsWith(".jsonl") ? threadUuidFromSessionFile(id) : null;
-        const entry = regKey ? getChannelThread(regKey) : undefined;
         if (entry) {
-          const lang = getConfig().language === "zh" ? "zh" : "en";
           const op = sandboxOperationFromTitle((r as any)?.title, lang);
           void Promise.resolve(
             entry.notifyApproval(
@@ -511,6 +520,29 @@ function createHandle(
               handle.bridge.respondExtUi((r as any).id, { cancelled: true });
             } catch (err) {
               console.error("[messaging] auto-deny failed:", err);
+            }
+          }, APPROVAL_GRACE_MS);
+        }
+      } else if (isChoiceRequest(r)) {
+        // Plan-choice card (mpi_ask_choice): same rules as approvals — notify
+        // the desktop, and for channel-owned threads tell the user + auto-
+        // cancel after the grace period so the agent falls back to plain text
+        // instead of hanging on a click nobody can make.
+        systemNotifications?.notifyChoicePending(id, lang, stripChoicePrefix((r as any)?.title ?? ""));
+        if (entry) {
+          const question = stripChoicePrefix((r as any)?.title ?? "");
+          void Promise.resolve(
+            entry.notifyApproval(
+              lang === "zh"
+                ? `🤔 有方案待选择：${question}。请在 MPI 中 ${APPROVAL_GRACE_MS / 1000} 秒内点击选项；无响应将自动取消，我会改用文字列出选项。`
+                : `🤔 A plan-choice is waiting: ${question}. Pick an option in MPI within ${APPROVAL_GRACE_MS / 1000}s or it will be auto-cancelled and I'll list the options as text.`,
+            ),
+          ).catch((err) => console.error("[messaging] choice notify failed:", err));
+          setTimeout(() => {
+            try {
+              handle.bridge.respondExtUi((r as any).id, { cancelled: true });
+            } catch (err) {
+              console.error("[messaging] choice auto-cancel failed:", err);
             }
           }, APPROVAL_GRACE_MS);
         }
