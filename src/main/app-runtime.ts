@@ -13,7 +13,8 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
   AppManifest,
@@ -75,8 +76,40 @@ function killTree(pid: number): void {
   }
 }
 
+/** Does the nearest package.json at/above `from` declare ESM ("type": "module")? */
+function isEsmContext(from: string): boolean {
+  let dir = dirname(from);
+  for (;;) {
+    try {
+      const pj = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { type?: unknown };
+      return pj.type === "module";
+    } catch {
+      // no readable package.json here — keep walking up
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return false; // filesystem root
+    dir = parent;
+  }
+}
+
 export const defaultRuntimeDeps: RuntimeDeps = {
-  loadModule: (absPath) => import(pathToFileURL(absPath).href) as Promise<ServiceModule>,
+  loadModule: async (absPath) => {
+    // An app reinstall/update replaces the service files IN PLACE, so a plain
+    // import() would keep serving the module cached from the previous version
+    // until MPI restarts. Load fresh every time:
+    const ext = extname(absPath).toLowerCase();
+    if (ext !== ".cjs" && isEsmContext(absPath)) {
+      // True ESM: the cache is keyed by URL, so a changing query re-evaluates.
+      const url = pathToFileURL(absPath);
+      url.searchParams.set("mpiReload", String(Date.now()));
+      return import(url.href) as Promise<ServiceModule>;
+    }
+    // CJS (.cjs / .js without type:module): require() with cache invalidation
+    // (import()-ing a replaced .cjs still returns the cached evaluation).
+    const req = createRequire(absPath);
+    delete req.cache[req.resolve(absPath)];
+    return Promise.resolve(req(absPath) as ServiceModule);
+  },
   spawnProcess: (command, args, cwd, env, shell, onOutput) => {
     const child = spawn(command, args, {
       cwd,

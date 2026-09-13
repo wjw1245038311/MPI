@@ -89,6 +89,16 @@ function voicePatch(baseUrl, modelName) {
   return patch;
 }
 
+/** Read the real served model name from the bundled model/model.json (null when absent). */
+function bundledModelName(dir) {
+  try {
+    const desc = JSON.parse(fs.readFileSync(path.join(dir, "model", "model.json"), "utf8"));
+    return typeof desc.name === "string" && desc.name.trim() ? desc.name.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 module.exports.activate = async function activate(host) {
   const dir = host.app.dir;
   const values = host.getFieldValues();
@@ -106,7 +116,9 @@ module.exports.activate = async function activate(host) {
     host.log(`[local-voice] using configured endpoint ${customBase}`);
     const res = await probeModels(customBase, 5000);
     if (res.ok) {
-      host.status("ready", "connected to configured endpoint");
+      // Surface the live endpoint + model so it can be copied over on a fresh machine.
+      host.log(`[local-voice] ready — base=${customBase} model=${modelName}`);
+      host.status("ready", `${customBase} · ${modelName}`);
       return { voice: voicePatch(customBase, modelName) };
     }
     const detail = res.error === "auth" ? "configured endpoint rejected the request (401/403)" : `cannot reach configured endpoint (${res.error})`;
@@ -149,8 +161,13 @@ module.exports.activate = async function activate(host) {
     host.status("error", "bundled server did not become ready in time — open the log and look for [child] lines for the real error");
     return {};
   }
-  host.status("ready");
-  return { voice: voicePatch(base, modelName) };
+  // The bundled server serves exactly one model: whatever model/model.json says.
+  // Show base URL + that name (status line, log, voice settings) so a fresh
+  // machine install can be verified / copied over directly.
+  const actualModel = bundledModelName(dir) || modelName;
+  host.log(`[local-voice] ready — base=${base} model=${actualModel}`);
+  host.status("ready", `${base} · ${actualModel}`);
+  return { voice: voicePatch(base, actualModel) };
 };
 
 module.exports.deactivate = function deactivate(host) {

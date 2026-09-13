@@ -48,6 +48,9 @@ Thumbs.db
 qa-*.png
 nul
 tmp/
+# Staging dir for app packages to upload/share (large zips, never commit).
+# Anchored to repo root: a bare "Apps/" would case-insensitively match examples/apps/ on Windows.
+/Apps/
 
 # Generated test bundle (npm run test:tuirace)
 scripts/.tui-race-bundle.cjs

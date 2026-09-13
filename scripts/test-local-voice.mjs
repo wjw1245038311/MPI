@@ -70,9 +70,15 @@ try {
 
   const res = await store.setAppEnabled("local-voice", true);
   assert.equal(res.status.state, "ready", `enable failed: ${res.status.detail || res.status.state}`);
+  // The ready status must surface the live base URL + model name (copy-over on a fresh machine).
+  assert.ok(
+    res.status.detail && res.status.detail.includes("127.0.0.1") && res.status.detail.includes("SenseVoiceSmall"),
+    `status detail should show base URL + model name, got: ${res.status.detail}`,
+  );
   const voice = getConfig().voice;
   assert.equal(voice.sttBackend, "openai");
   assert.ok(voice.sttBaseUrl && voice.sttBaseUrl.startsWith("http://127.0.0.1:"), "voice must point at the bundled server");
+  assert.equal(voice.sttModel, "SenseVoiceSmall", "sttModel must be the bundled model's real name from model.json");
   assert.ok(store.getAppLogs("local-voice").some((l) => l.includes("spawned bundled server")), "service log records the spawn");
   ok("example: enable spawns the bundled server and wires config.voice");
 
@@ -87,6 +93,24 @@ try {
   const out = await (await fetch(`${voice.sttBaseUrl}/audio/transcriptions`, { method: "POST", body: fd })).json();
   assert.ok(out.text && out.text.length > 0, `expected transcription text, got ${JSON.stringify(out)}`);
   ok("example: bundled server transcribes WAV to text");
+
+  // Simulate an in-place app update (reinstall replaces <userData>/apps/<id>):
+  // the running main process must pick up the new code WITHOUT a restart.
+  const idxPath = join(USERDATA, "apps", "local-voice", "service", "index.cjs");
+  const patched = readFileSync(idxPath, "utf8").replace(
+    'host.status("ready", `${base} · ${actualModel}`);',
+    'host.status("ready", `${base} · ${actualModel} (v2)`);',
+  );
+  assert.ok(patched.includes("(v2)"), "test setup: could not patch index.cjs ready status line");
+  writeFileSync(idxPath, patched);
+  await store.setAppEnabled("local-voice", false);
+  const res2 = await store.setAppEnabled("local-voice", true);
+  assert.equal(res2.status.state, "ready", `re-enable after update failed: ${res2.status.detail || res2.status.state}`);
+  assert.ok(
+    res2.status.detail && res2.status.detail.includes("(v2)"),
+    `updated service code was not picked up (stale module cache?): ${res2.status.detail}`,
+  );
+  ok("example: in-place app update is picked up without restarting MPI");
 
   await store.setAppEnabled("local-voice", false);
   const after = getConfig().voice;

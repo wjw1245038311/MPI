@@ -342,19 +342,19 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             <span className="ico">
               <Plug size={15} />
             </span>
-            扩展功能
+            {language === "zh" ? "扩展功能" : "Extensions"}
           </button>
           <button className="sb-nav-item" onClick={() => useStore.getState().openAppStore()}>
             <span className="ico">
               <AppStore size={15} />
             </span>
-            应用商店
+            {language === "zh" ? "应用商店" : "App Store"}
           </button>
           <button className="sb-nav-item" onClick={() => useStore.getState().openMessaging()}>
             <span className="ico">
               <MessageSquare size={15} />
             </span>
-            消息接入
+            {language === "zh" ? "消息接入" : "Messaging"}
           </button>
         </div>
 

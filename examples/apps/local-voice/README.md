@@ -40,7 +40,9 @@ Assemble `runtime/` + `model/` in place, then use **加载目录** to install th
 
 - **Bundled (default)** — leave “服务地址” empty; the app starts `server.cjs` on a loopback
   port using MPI's own executable as a Node runtime (`ELECTRON_RUN_AS_NODE`), then points
-  MPI voice settings at `http://127.0.0.1:<port>/v1`.
+  MPI voice settings at `http://127.0.0.1:<port>/v1`. The real base URL + model name (from the
+  package's `model/model.json`) are shown on the app’s “Service” status line and in its log,
+  so you can copy them straight over when reinstalling on another machine.
 - **External** — fill in your own OpenAI-compatible STT `/v1` URL; the app only probes it and
   wires MPI to it (no bundled server).
 

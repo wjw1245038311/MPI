@@ -4,6 +4,24 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **local-voice 示例包：启用后在「服务状态」行显示实际 base URL 与模型名（换机重装可直接照抄）**：此前内置服务就绪后只报 `status("ready")` 不带详情，应用商店详情页只能看到「运行中」，不知道服务最终落在哪个端口、用的什么模型——把 zip 拷到新电脑装好后无从核对。现 `service/index.cjs` 两种模式都把实际生效的端点写进状态详情与日志：**内置服务模式**读包内 `model/model.json` 的真实 name（而非配置字段默认值，避免换模型打包后显示与实际不符），就绪后记 `[local-voice] ready — base=http://127.0.0.1:<port>/v1 model=<name>` 并把状态详情置为 `<base> · <model>`；**外部服务模式**同样显示所连端点 + 写入语音设置的模型名。内置模式下 `config.voice.sttModel` 也改为写 model.json 的真实 name（本地服务忽略该字段，仅影响设置页展示与日后改指真实端点时的正确性）。manifest guide 中英各补一句「实际地址/模型显示在服务状态行」；modelName 字段加 hint 说明内置模式以 model.json 为准。
+
+   验证方式：`node scripts/test-local-voice.mjs`（spike 工件在位时全链路跑通）新增断言——启用后 `status.detail` 同时包含 `127.0.0.1` 与 `SenseVoiceSmall`、`config.voice.sttModel === "SenseVoiceSmall"`；原有安装/拉起/识别/停用还原各项不变。重新打包：`node scripts/build-app-pack.mjs --app=examples/apps/local-voice --model=sensevoice --runtime-dir=tmp/sherpa-spike/node_modules --model-dir=tmp/sherpa-spike/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09 --out=tmp/local-voice-win32-x64.zip`。应用商店打开「本地语音服务」详情 → 启用后「服务状态：运行中」旁出现 `http://127.0.0.1:<port>/v1 · SenseVoiceSmall`（「查看日志」里也有同一行）。✅ 纯示例包改动（examples/apps/local-voice/ + 测试），不动 MPI 主程序；无需重启，应用商店里停用→启用或重装 zip 即生效。
+
+2. **应用商店「服务状态」行加一键复制按钮：修复长地址被截断没法拷贝的问题**：上一条把 base URL+模型名显示在状态详情后，实测发现 `.appstore-status-detail` 有 `max-width:45% + text-overflow:ellipsis`，长地址只显示一半带省略号，选不中完整文本、无法拷贝。现 state=ready 时详情旁多一个「复制」按钮：只拷 `<base> · <model>` 里的地址部分（无分隔符则拷整段），成功/失败均有 toast；详情 span 加 `title` 悬停可见全文。
+
+   验证方式：dev 重启后 → 应用商店 → 「本地语音服务」详情 → 启用后状态行出现「复制」按钮，点击 → toast「已复制：http://127.0.0.1:<port>/v1」，粘贴确认是完整地址；鼠标悬停详情可见未截断全文。⚠️ renderer 改动（AppStorePanel.tsx + styles.css），dev 需重启后生效。
+
+3. **修复应用就地重装/更新后仍跑旧代码的 bug（ESM/CJS 模块缓存）**：实测发现从新 zip 重装 local-voice 并重新启用后，服务状态详情仍是旧格式——`app-runtime.ts` 用 `import(file://…)` 加载 service 模块，Node 按 URL 永久缓存，而重装只是替换同路径文件，主进程不重启就一直跑内存里的旧模块（日志里新代码的 ready 行缺失即为证据）。现 `defaultRuntimeDeps.loadModule` 每次激活都强制重新求值：`.cjs`/无 type:module 的 `.js` 走 `createRequire` + 删 `require.cache[resolved]` 再 require（实测 import()+query 对 .cjs 无效——CJS 层按文件名缓存，Electron Node 上验证过）；真 ESM（.mjs / type:module）用带时间戳 query 的 URL 破缓存。test-local-voice.mjs 新增回归用例：安装后改写已安装目录里的 index.cjs（模拟重装），停用→重新启用，断言新代码的状态详情出现。
+
+   验证方式：`node scripts/test-local-voice.mjs` 6 项全过（含「in-place app update is picked up without restarting MPI」）；`npm test` 全套绿。⚠️ main 改动，dev 需完整重启后生效——重启后重新启用 local-voice 即可看到状态详情与复制按钮；此后应用就地重装/更新无需再重启 MPI。
+
+4. **应用商店英文界面补翻（侧栏导航标签 + 加载失败 toast）**：切到英文后侧栏「扩展功能 / 应用商店 / 消息接入」三个入口仍是硬编码中文，`loadAppStore` 的失败 toast 也只有中文。现按各面板官方英文名本地化（Extensions / App Store / Messaging），toast 补英文分支；应用商店面板本体与测试连接文案经逐行审查确认已是双语。
+
+   验证方式：设置 → 外观 → 语言切 English → 侧栏显示 Extensions / App Store / Messaging；打开应用商店，标题/部署指引/服务状态行/按钮/toast 均为英文、无中文残留。⚠️ renderer 改动（Sidebar.tsx + store.ts），dev 需重启后生效。
+
 ## v0.6.11（2026-09-13）
 
 1. **修复部分 Windows 机器 `npm run dev` 启动失败（`listen EACCES: permission denied 127.0.0.1:5173`）**：开启 Hyper-V/WSL2（如 Docker Desktop）的机器上，系统会为虚拟化组件保留动态端口排除范围（可用 `netsh interface ipv4 show excludedportrange protocol=tcp` 查看），Vite 默认 dev server 端口 5173 若落入其中则绑定报 EACCES——这不是「端口被占用」（EADDRINUSE），Vite 不会自动换下一个可用端口，直接崩溃。现把 renderer dev server 固定在 electron.vite.config.ts `server.port = 6173`；main/preload 通过 `ELECTRON_RENDERER_URL` 环境变量读取实际地址，无需其它改动。纯开发环境变更，不影响打包产物与 CI（CI 只跑 typecheck/test/build）。若未来重启后 6173 也恰好落入排除范围（概率低），把该数字改成任意可用端口即可。

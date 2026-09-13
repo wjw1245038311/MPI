@@ -9,9 +9,11 @@
   "assertions": [
     "示例包经应用商店目录安装为已安装/禁用",
     "启用后服务状态 ready，且日志记录已拉起内置服务",
-    "config.voice 指向内置服务（openai + 127.0.0.1 地址）",
+    "ready 状态详情显示实际 base URL + 模型名（如 http://127.0.0.1:<port>/v1 · SenseVoiceSmall），换机重装可直接照抄",
+    "config.voice 指向内置服务（openai + 127.0.0.1 地址，sttModel=包内 model.json 真实 name）",
     "GET /v1/models 返回模型列表",
     "POST /v1/audio/transcriptions 返回非空识别文本",
+    "就地更新（重装替换已安装目录）后重新启用即加载新代码，无需重启 MPI（app-runtime loadModule 破缓存）",
     "停用后 voice 接线被还原，托管子进程被回收"
   ],
   "passCriteria": "test-local-voice.mjs 全部检查通过（无 spike 工件时 SKIP）"

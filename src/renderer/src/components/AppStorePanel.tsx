@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import type { AppConfigField, AppLocalizedText, AppStoreEntry } from "../lib/types";
 import { sttTranscribeErrorText } from "../lib/stt";
-import { AppStore as AppStoreIcon, Check, ChevronRight, Close, Info, Refresh, Trash } from "./icons";
+import { AppStore as AppStoreIcon, Check, ChevronRight, Close, Copy, Info, Refresh, Trash } from "./icons";
 
 /** Pick localized manifest text for the UI language (fallback to the other). */
 function pickLoc(value: AppLocalizedText | undefined, lang: "zh" | "en"): string {
@@ -72,6 +72,7 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
   const uninstallApp = useStore((s) => s.uninstallApp);
   const setAppEnabled = useStore((s) => s.setAppEnabled);
   const restartAppService = useStore((s) => s.restartAppService);
+  const pushToast = useStore((s) => s.pushToast);
 
   const [values, setValues] = useState<Record<string, string>>({});
   const [loadingCfg, setLoadingCfg] = useState(true);
@@ -83,6 +84,7 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
 
   const hasService = !!entry.service;
   const status = entry.status;
+  const statusDetail = status?.detail;
 
   const refreshLogs = async () => {
     if (typeof window.pi.apps?.logs !== "function") return;
@@ -124,6 +126,18 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
     // Key on id only: the panel remounts per app, and store refreshes after
     // install/enable must not clobber values the user is currently editing.
   }, [entry.id]);
+
+  // Copy the live endpoint out of the ready status detail ("<base> · <model>" → just the base),
+  // so a fresh-machine install can paste it straight into any STT config.
+  const copyStatusDetail = async (detail: string) => {
+    const target = detail.split(" · ")[0].trim() || detail;
+    try {
+      await navigator.clipboard.writeText(target);
+      pushToast("success", zh ? `已复制：${target}` : `Copied: ${target}`);
+    } catch {
+      pushToast("error", zh ? "复制失败" : "Copy failed");
+    }
+  };
 
   const hasVoiceIntegration = !!entry.integrations?.voiceStt;
 
@@ -257,7 +271,23 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
                 {zh ? "服务状态：" : "Service: "}
                 {stateLabel(status?.state, zh)}
               </span>
-              {status?.detail && <span className="appstore-status-detail">{status.detail}</span>}
+              {statusDetail && (
+                <>
+                  <span className="appstore-status-detail" title={statusDetail}>
+                    {statusDetail}
+                  </span>
+                  {status?.state === "ready" && (
+                    <button
+                      type="button"
+                      className="set-btn ghost appstore-status-copy"
+                      title={zh ? "复制服务地址" : "Copy base URL"}
+                      onClick={() => void copyStatusDetail(statusDetail)}
+                    >
+                      <Copy size={12} /> {zh ? "复制" : "Copy"}
+                    </button>
+                  )}
+                </>
+              )}
               <button
                 type="button"
                 className="set-btn ghost appstore-status-btn"

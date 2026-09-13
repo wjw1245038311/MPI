@@ -3110,7 +3110,8 @@ export const useStore = create<PiStore>()((set, get) => {
       set({ appStoreEntries: entries, appsLoading: false });
     } catch (e: any) {
       set({ appsLoading: false });
-      get().pushToast("error", "加载应用商店失败：" + (e?.message || e));
+      const zh = get().config?.language === "zh";
+      get().pushToast("error", `${zh ? "加载应用商店失败：" : "Failed to load App Store: "}${e?.message || e}`);
     }
   },
   installAppFromZip: async () => {

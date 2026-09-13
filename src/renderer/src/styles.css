@@ -6744,6 +6744,11 @@ mark.hl {
   white-space: nowrap;
   max-width: 45%;
 }
+.appstore-status-copy {
+  padding: 3px 8px;
+  font-size: 11.5px;
+  border-radius: 6px;
+}
 .appstore-status-btn {
   margin-left: auto;
 }
