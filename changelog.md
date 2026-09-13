@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.6.12（2026-09-13）
 
 1. **local-voice 示例包：启用后在「服务状态」行显示实际 base URL 与模型名（换机重装可直接照抄）**：此前内置服务就绪后只报 `status("ready")` 不带详情，应用商店详情页只能看到「运行中」，不知道服务最终落在哪个端口、用的什么模型——把 zip 拷到新电脑装好后无从核对。现 `service/index.cjs` 两种模式都把实际生效的端点写进状态详情与日志：**内置服务模式**读包内 `model/model.json` 的真实 name（而非配置字段默认值，避免换模型打包后显示与实际不符），就绪后记 `[local-voice] ready — base=http://127.0.0.1:<port>/v1 model=<name>` 并把状态详情置为 `<base> · <model>`；**外部服务模式**同样显示所连端点 + 写入语音设置的模型名。内置模式下 `config.voice.sttModel` 也改为写 model.json 的真实 name（本地服务忽略该字段，仅影响设置页展示与日后改指真实端点时的正确性）。manifest guide 中英各补一句「实际地址/模型显示在服务状态行」；modelName 字段加 hint 说明内置模式以 model.json 为准。
 
