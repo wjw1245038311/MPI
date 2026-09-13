@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.6.11（2026-09-13）
 
 1. **修复部分 Windows 机器 `npm run dev` 启动失败（`listen EACCES: permission denied 127.0.0.1:5173`）**：开启 Hyper-V/WSL2（如 Docker Desktop）的机器上，系统会为虚拟化组件保留动态端口排除范围（可用 `netsh interface ipv4 show excludedportrange protocol=tcp` 查看），Vite 默认 dev server 端口 5173 若落入其中则绑定报 EACCES——这不是「端口被占用」（EADDRINUSE），Vite 不会自动换下一个可用端口，直接崩溃。现把 renderer dev server 固定在 electron.vite.config.ts `server.port = 6173`；main/preload 通过 `ELECTRON_RENDERER_URL` 环境变量读取实际地址，无需其它改动。纯开发环境变更，不影响打包产物与 CI（CI 只跑 typecheck/test/build）。若未来重启后 6173 也恰好落入排除范围（概率低），把该数字改成任意可用端口即可。
 
