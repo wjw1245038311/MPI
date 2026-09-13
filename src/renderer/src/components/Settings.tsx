@@ -1631,6 +1631,18 @@ export function Settings() {
   const dataDirty = useMemo(() => JSON.stringify(dataDraft) !== initialData, [dataDraft, initialData]);
   const sysDirty = useMemo(() => initialSys !== "" && JSON.stringify(sysDraft) !== initialSys, [sysDraft, initialSys]);
   const voiceDirty = useMemo(() => canonVoice(voiceDraft) !== initialVoice, [voiceDraft, initialVoice]);
+  // Re-sync the voice draft when main's persisted voice config changes behind us —
+  // e.g. an app-store enable writes sttBaseUrl/sttModel while Settings is open.
+  // Skipped while the user has unsaved voice edits so their draft stays intact;
+  // without this, a stale draft flushed later would wipe values written by other writers.
+  const persistedVoiceSig = canonVoice(config?.voice);
+  useEffect(() => {
+    if (!open || voiceDirty) return;
+    const seeded = { ...(config?.voice || {}) };
+    setVoiceDraft(seeded);
+    setInitialVoice(canonVoice(seeded));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistedVoiceSig]);
   function attemptClose() {
     if (
       (modelDirty || thinkDirty || profileDirty || permDirty || dataDirty || sysDirty || voiceDirty) &&

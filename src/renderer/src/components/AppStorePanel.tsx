@@ -79,6 +79,7 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [showLogs, setShowLogs] = useState(false);
 
@@ -134,6 +135,10 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
     try {
       await navigator.clipboard.writeText(target);
       pushToast("success", zh ? `已复制：${target}` : `Copied: ${target}`);
+      // The toast alone is easy to miss — flip the button label so the click
+      // has unambiguous, in-place feedback (v0.6.13 field report: “点了复制也没用”).
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
     } catch {
       pushToast("error", zh ? "复制失败" : "Copy failed");
     }
@@ -283,7 +288,7 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
                       title={zh ? "复制服务地址" : "Copy base URL"}
                       onClick={() => void copyStatusDetail(statusDetail)}
                     >
-                      <Copy size={12} /> {zh ? "复制" : "Copy"}
+                      <Copy size={12} /> {copied ? (zh ? "已复制 ✓" : "Copied ✓") : zh ? "复制" : "Copy"}
                     </button>
                   )}
                 </>

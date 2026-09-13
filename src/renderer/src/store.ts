@@ -3144,6 +3144,10 @@ export const useStore = create<PiStore>()((set, get) => {
     const zh = get().config?.language === "zh";
     try {
       await window.pi.apps.uninstall(id);
+      // Uninstall restores the voice settings the app had written — refresh the
+      // renderer's config copy so Settings drafts can't clobber them (stale-draft wipe).
+      const cfg = await window.pi.app.getConfig();
+      if (cfg) set({ config: cfg });
       get().pushToast("info", zh ? "应用已卸载" : "App removed");
       await get().loadAppStore();
     } catch (e: any) {
@@ -3154,6 +3158,11 @@ export const useStore = create<PiStore>()((set, get) => {
     const zh = get().config?.language === "zh";
     try {
       await window.pi.apps.setEnabled(id, enabled);
+      // Enabling/disabling rewrites config.voice in the main process — refresh
+      // the renderer's copy so a Settings draft seeded from it can't clobber the
+      // values the app just wrote (stale-draft wipe, v0.6.13 field report).
+      const cfg = await window.pi.app.getConfig();
+      if (cfg) set({ config: cfg });
       get().pushToast(
         "success",
         enabled
