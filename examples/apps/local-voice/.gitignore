@@ -1,0 +1,3 @@
+# Build artifacts filled by scripts/build-app-pack.mjs — never committed.
+/runtime/
+/model/

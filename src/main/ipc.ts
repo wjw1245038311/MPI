@@ -69,6 +69,19 @@ import {
 } from "./models-service";
 import { autoResolveContextWindows, resolveModelContext } from "./model-context";
 import { testStt, transcribeAudio } from "./voice";
+import {
+  getAppConfig,
+  getAppExtensionPaths,
+  getAppLogs,
+  installAppFromDir,
+  installAppFromZip,
+  listApps,
+  restartAppService,
+  saveAppConfig,
+  setAppEnabled,
+  testAppVoice,
+  uninstallApp,
+} from "./app-store";
 import { synthesizeEdge } from "./edge-tts";
 import { DEFAULT_POLICY, ModelAutopilot } from "./model-autopilot";
 import {
@@ -438,6 +451,9 @@ function createHandle(
       // doc to the system prompt every turn (live switching, no restart).
       ensureTaskModeExtension(getConfigDir()),
       ...(isChannelSession ? [ensureChannelExtension(getConfigDir())] : []),
+      // App-shipped pi extensions (manifest v2 `pi.extensions`): enabled apps
+      // only, pointed straight at their installed dir (see app-store.ts).
+      ...getAppExtensionPaths(),
     ],
     // Live paths so a customized todo data location (Settings → 数据管理) is
     // honored from the next spawned bridge on.
@@ -2541,6 +2557,44 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   );
   ipcMain.handle("voice:test", () =>
     testStt({ cfg: getConfig().voice, providers: readModelsFile().providers }),
+  );
+
+  // ---- app store (platform: load third-party app packages) --------------
+  // Apps are developer-supplied zip packages or unpacked directories; MPI
+  // validates the manifest, installs into userData/apps, and hosts the service.
+  ipcMain.handle("apps:list", () => listApps());
+  ipcMain.handle("apps:installZip", async () => {
+    const r = await dialog.showOpenDialog({
+      title: "选择应用包 / Choose an app package",
+      properties: ["openFile"],
+      filters: [{ name: "MPI App", extensions: ["zip"] }],
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    return installAppFromZip(r.filePaths[0]);
+  });
+  ipcMain.handle("apps:installDir", async () => {
+    const r = await dialog.showOpenDialog({
+      title: "选择应用目录 / Choose an app directory",
+      properties: ["openDirectory"],
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    return installAppFromDir(r.filePaths[0]);
+  });
+  ipcMain.handle("apps:uninstall", (_e, id: string) => uninstallApp(String(id || "")));
+  ipcMain.handle("apps:setEnabled", (_e, args: { id?: string; enabled?: boolean }) =>
+    setAppEnabled(String(args?.id || ""), !!args?.enabled),
+  );
+  ipcMain.handle("apps:getConfig", (_e, id: string) => getAppConfig(String(id || "")));
+  ipcMain.handle("apps:saveConfig", (_e, args: { id?: string; values?: Record<string, unknown> }) =>
+    saveAppConfig(String(args?.id || ""), (args?.values as Record<string, unknown>) || {}),
+  );
+  // v2: rolling service log of an installed app (used by the detail view).
+  ipcMain.handle("apps:logs", (_e, id: string) => getAppLogs(String(id || "")));
+  // v2: restart an enabled app's service (deactivate + activate, no config write).
+  ipcMain.handle("apps:restart", (_e, id: string) => restartAppService(String(id || "")));
+  // Draft probe for the store's Test Connection button — never touches config.
+  ipcMain.handle("apps:testVoice", (_e, args: { id?: string; values?: Record<string, unknown> }) =>
+    testAppVoice(String(args?.id || ""), (args?.values as Record<string, unknown>) || {}),
   );
   // ---- voice system (TTS, Edge) -------------------------------------------
   // Free online neural voices. Explicit args win (Settings preview uses the

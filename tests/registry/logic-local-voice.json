@@ -1,0 +1,18 @@
+{
+  "id": "logic-local-voice",
+  "title": "示例包自包含服务：目录安装→启用拉起内置 sherpa→识别出文本→停用还原",
+  "feature": "应用商店（应用包平台）",
+  "kind": "logic",
+  "source": "changelog#2(Unreleased) / examples/apps/local-voice/",
+  "description": "以真实 app-store 主进程路径 + 真实子进程（非 mock）安装 examples/apps/local-voice 示例包：启用后用随包 sherpa-onnx 运行时与模型拉起 OpenAI 兼容识别服务，GET /v1/models 与 POST /v1/audio/transcriptions 可用，停用后回收进程并还原 config.voice。依赖开发用 sherpa 运行时+模型（tmp/sherpa-spike），缺失时由 run-all-tests.mjs 跳过。",
+  "logicTest": "local-voice",
+  "assertions": [
+    "示例包经应用商店目录安装为已安装/禁用",
+    "启用后服务状态 ready，且日志记录已拉起内置服务",
+    "config.voice 指向内置服务（openai + 127.0.0.1 地址）",
+    "GET /v1/models 返回模型列表",
+    "POST /v1/audio/transcriptions 返回非空识别文本",
+    "停用后 voice 接线被还原，托管子进程被回收"
+  ],
+  "passCriteria": "test-local-voice.mjs 全部检查通过（无 spike 工件时 SKIP）"
+}

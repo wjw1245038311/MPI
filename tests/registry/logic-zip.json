@@ -1,0 +1,17 @@
+{
+  "id": "logic-zip",
+  "title": "自研 zip 工具：列目录/读取/流式解压/路径穿越防护",
+  "feature": "应用商店（应用包平台）",
+  "kind": "logic",
+  "source": "changelog#2(Unreleased) / src/main/zip.ts",
+  "description": "验证应用商店加载第三方 zip 包所用的自研 zip 读取器：中央目录解析（stored/deflate + zip64 尺寸/偏移）、单条读取、流式解压、包裹目录剥离，以及路径穿越/绝对路径/盘符/空路径的拒绝。",
+  "logicTest": "zip",
+  "assertions": [
+    "listZipEntries 正确解析 deflate 与 stored 条目（含目录条目）",
+    "readZipEntry 按名读取单条内容，缺失返回 null",
+    "extractZip 保持目录结构与二进制字节，支持 stripPrefix 剥离包裹目录",
+    "safeZipDest 拒绝 ../、绝对路径、盘符、空路径",
+    "含路径穿越条目的归档整体拒绝解压且不落盘越权目标"
+  ],
+  "passCriteria": "test-zip.mjs 全部检查通过"
+}

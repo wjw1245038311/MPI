@@ -1,0 +1,54 @@
+{
+  "id": "local-voice",
+  "name": { "zh": "本地语音服务", "en": "Local Voice Service" },
+  "version": "3.0.0",
+  "category": "voice",
+  "description": {
+    "zh": "在 MPI 内一键启用的本地语音识别。应用包自带 sherpa-onnx 运行时与语音模型，启用后自动拉起识别服务并把 MPI 语音输入指向它——无需系统 Python/Node，无需联网，零配置。",
+    "en": "One-click local speech recognition inside MPI. The package bundles the sherpa-onnx runtime and a speech model; enabling it starts the recognition server and points MPI's voice input at it — no system Python/Node, no network, zero config."
+  },
+  "guide": {
+    "zh": "启用后：\n1. 应用用随包运行时+模型在本机拉起识别服务（默认端口 8800）。\n2. MPI「设置 → 对话设置 → 语音系统」自动指向该服务（OpenAI 兼容）。\n3. 点击麦克风即可离线识别。\n\n若你已经有自己的 STT 服务：在下方「服务地址」填入它的 /v1 地址，应用将不再启动内置服务，只做连接探测。\n\n本应用为开发者示例：源码在 examples/apps/local-voice/，用 scripts/build-app-pack.mjs 打包成自包含 zip 后由应用商店「从 zip 安装」。",
+    "en": "Once enabled:\n1. The app starts a recognition server on this machine using the bundled runtime + model (default port 8800).\n2. MPI Settings → Conversation → Voice points at it automatically (OpenAI-compatible).\n3. Click the mic to transcribe offline.\n\nAlready run your own STT? Fill in its /v1 URL under “Service URL”; the app will skip the bundled server and only probe your endpoint.\n\nThis is a developer sample: source lives in examples/apps/local-voice/; use scripts/build-app-pack.mjs to build a self-contained zip and install it from the App Store."
+  },
+  "capabilities": ["process", "network"],
+  "service": { "entry": "service/index.cjs", "autostart": true },
+  "config": {
+    "fields": [
+      {
+        "key": "baseUrl",
+        "type": "url",
+        "label": { "zh": "服务地址（留空使用内置服务）", "en": "Service URL (empty = use bundled server)" },
+        "placeholder": { "zh": "http://127.0.0.1:8820/v1", "en": "http://127.0.0.1:8820/v1" },
+        "default": "",
+        "hint": {
+          "zh": "已自建 STT 时填入其 OpenAI 兼容地址；留空则由应用自带运行时+模型启动本地服务。",
+          "en": "Point at your own OpenAI-compatible STT; leave empty to run the bundled local server."
+        }
+      },
+      {
+        "key": "port",
+        "type": "text",
+        "label": { "zh": "内置服务端口", "en": "Bundled server port" },
+        "default": "8800",
+        "hint": {
+          "zh": "内置服务监听的本机端口；被占用时会自动改用空闲端口。",
+          "en": "Local port for the bundled server; a free port is chosen automatically if busy."
+        }
+      },
+      {
+        "key": "modelName",
+        "type": "text",
+        "label": { "zh": "模型名（写入语音设置）", "en": "Model name (written to voice settings)" },
+        "default": "SenseVoiceSmall"
+      }
+    ]
+  },
+  "integrations": {
+    "voiceStt": {
+      "sttBackend": "openai",
+      "sttBaseUrl": "{{baseUrl}}",
+      "sttModel": "{{modelName}}"
+    }
+  }
+}

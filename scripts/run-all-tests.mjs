@@ -35,6 +35,16 @@ function skipReason(name) {
   // 交互式 PTY 诊断（需显式参数 / 特定全局 pi CLI 安装位置），只手动跑
   if (name === "tui-spawn") return "manual dev diagnostic (needs global pi CLI at AppData/Roaming/npm)";
   if (name === "tui-resume") return "manual dev diagnostic (needs explicit <session.jsonl> arg)";
+  // 本地语音示例包端到端测试依赖开发用 sherpa 运行时+模型（tmp/sherpa-spike）
+  if (name === "local-voice") {
+    const spike = join(ROOT, "tmp", "sherpa-spike");
+    const modelDir = join(spike, "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09");
+    const ready =
+      existsSync(join(spike, "node_modules", "sherpa-onnx-node")) &&
+      existsSync(join(modelDir, "model.int8.onnx")) &&
+      existsSync(join(modelDir, "tokens.txt"));
+    return ready ? null : "sherpa spike artifacts not present (tmp/sherpa-spike)";
+  }
   return null;
 }
 

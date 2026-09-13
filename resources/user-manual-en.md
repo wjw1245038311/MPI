@@ -27,9 +27,10 @@ This manual covers all major features of MPI, organized as "interface → config
 17. [Settings Reference](#17-settings-reference)
 18. [Android Phone Remote Control](#18-android-phone-remote-control)
 19. [Messaging Channels (Feishu / WeChat)](#19-messaging-channels-feishu--wechat)
-20. [Keyboard Shortcuts](#20-keyboard-shortcuts)
-21. [Data and Configuration Locations](#21-data-and-configuration-locations)
-22. [FAQ](#22-faq)
+20. [App Store](#20-app-store)
+21. [Keyboard Shortcuts](#21-keyboard-shortcuts)
+22. [Data and Configuration Locations](#22-data-and-configuration-locations)
+23. [FAQ](#23-faq)
 
 ---
 
@@ -499,7 +500,7 @@ The panel groups todos by time dimension, each chip showing a count: All / Today
 
 ### 12.3 Project scope and agent collaboration
 
-Selecting a project in the left column filters to that project's todos; "All projects" shows everything with a project-name tag on each row. When the agent calls `mpi_todo_add` / `mpi_todo_list` during a conversation, items are written into this panel through an inbox mechanism (the main process watches and dedupes them). Such rows carry an AI badge; clicking it jumps straight to the source session. Data lives in `%APPDATA%\MPI\todos.json` (see [Section 21](#21-data-and-configuration-locations)); dev and production builds are independent.
+Selecting a project in the left column filters to that project's todos; "All projects" shows everything with a project-name tag on each row. When the agent calls `mpi_todo_add` / `mpi_todo_list` during a conversation, items are written into this panel through an inbox mechanism (the main process watches and dedupes them). Such rows carry an AI badge; clicking it jumps straight to the source session. Data lives in `%APPDATA%\MPI\todos.json` (see [Section 22](#22-data-and-configuration-locations)); dev and production builds are independent.
 
 ---
 
@@ -748,7 +749,67 @@ One message at a time: sending while busy gets a "still processing" notice.
 
 ---
 
-## 20. Keyboard Shortcuts
+## 20. App Store
+
+The **App Store** is MPI's **application-loading platform** (think WeChat mini-programs): MPI only handles **import, install, host, and uninstall**. Everything that makes up an app — manifest, service code, runtime dependencies, models — is prepared by its developer and imported as a package; **the MPI installer ships no app payload**. An app is a **self-contained package** that may include ①**a service module** (runs in the MPI main process to probe/start a service and report status + logs), ②**Pi extensions** (injected into new sessions when enabled), and ③**its own runtime and models** (bundled in the package, ready to use on import). Enabling writes the corresponding settings (disabling restores them exactly — fields you edited by hand are never clobbered) and loads the app's service and extensions.
+
+> **Trust notice**: apps with a service module or extensions run with full MPI main-process privileges (the same trust model as Pi plugins — there is no sandbox in this round). That's why **installing an app that declares capabilities shows a confirmation dialog** listing what it asks for (e.g. “Start and manage child processes”, “Make network requests”). Only install apps from sources you trust.
+
+> How this differs from **Extensions**: Extensions manage general Pi skills / packages / MCP servers; apps in the App Store wire up features of the MPI client itself and may ship their own extensions. The two don't interfere.
+
+### 20.1 Opening and Importing Apps
+
+1. Click **App Store** in the left sidebar (below “Extensions”).
+2. Import an app in one of two ways:
+   - **Install from zip**: pick a self-contained `.zip` prepared by the developer (manifest + service + runtime + model).
+   - **Load folder**: pick an already-extracted app folder (containing `mpi-app.json`); use this when you want to edit the app's files yourself.
+3. After import a card appears: app name, version, category, description, and current state (Installed / Enabled).
+4. Click any card to open its detail page with the setup guide and config form; use the arrow at the top-left to go back.
+
+### 20.2 The First App: Local Voice Service (works right after install)
+
+This app connects **offline speech recognition** to MPI's voice input (the microphone button), enabling fully offline dictation. It **bundles its own runtime and model**: on enable it **starts a local recognition service** using the sherpa-onnx runtime and SenseVoiceSmall model inside the package — nothing for you to install or deploy beforehand.
+
+**Steps**:
+
+1. Install **Local Voice Service** from zip (the first time shows a **capability confirmation** listing “Start and manage child processes” and “Make network requests”; confirm to continue).
+2. The form on the detail page is best **left at its defaults**:
+   - **External endpoint**: empty = use the app's bundled service; if you already run your own OpenAI-compatible STT server, put its `/v1` root here (e.g. `http://127.0.0.1:8820/v1`) and the app will **not** start the bundled service, only probe it.
+   - **Bundled service port**: default `8800`; if it's taken the app picks a free port automatically.
+   - **Model**: default `SenseVoiceSmall`.
+3. Click **Enable app** → the detail page shows a **service status** (Starting / Running / Error / Stopped) and a **Show log** button. The first start loads the model and may take ten-plus seconds; when it reads **Running** the app is wired in.
+4. Open Settings → Conversation → Voice System to double-check: the transcription service is OpenAI-compatible and points at `http://127.0.0.1:8800/v1`. From then on the microphone button uses this bundled service.
+5. If the status shows **Error**, click **Show log** for the reason, and **Restart** to retry.
+
+### 20.3 Building / Packaging Your Own App
+
+An app package is a **self-contained zip** whose root needs at minimum one `mpi-app.json` (manifest + config form, plus optional service / Pi extensions / capability declarations). To ship a runtime and model, use the conventional `runtime/` and `model/` folders; a service module can launch its bundled Node service directly via `host.execPath` + `ELECTRON_RUN_AS_NODE`, with no external node/python.
+
+- Reference implementation and docs: `examples/apps/local-voice/` in the repo (see its `README.md` for the packaging flow).
+- One-command packaging: `node scripts/build-app-pack.mjs --app=examples/apps/local-voice` (prepares the current-platform runtime and model and produces `<id>-<platform>-<arch>.zip`).
+- Once you have the zip, import it in the App Store via **Install from zip**.
+
+> App packages run with full MPI main-process privileges (no sandbox). Only install packages from sources you trust.
+
+### 20.4 Disabling and Uninstalling
+
+- **Disable (restore settings)**: rolls back only the fields this app wrote; a field you edited by hand after enabling keeps your edit and is not reverted. It also **stops any service process the app launched** (the bundled service stops with it) and unloads the app's own Pi extensions (new sessions no longer load them; extensions you keep in `~/.pi/agent` are untouched).
+- **Uninstall**: asks for confirmation. Removes the installed files and saved form values; if the app was enabled, it disables first and restores settings.
+
+### 20.5 Troubleshooting
+
+**Service status stays Error / Stopped**
+Open **Show log** to read the probe/start result. If you're using the bundled service, make sure the package's `runtime/` and `model/` are present (the zip may be incomplete); if you set an external endpoint, connection refused usually means the server isn't running or the port is wrong. Fix it and click **Restart**.
+
+**Voice input still uses the old service after enabling**
+The app writes to Settings → Conversation → Voice System; if you changed the transcription service manually afterwards (e.g. switched back to the cloud), MPI follows your latest manual choice — by design. To use the local service again, enable the app once more.
+
+**The list is empty**
+That just means no app has been imported yet. Click **Install from zip** or **Load folder** at the top to import your first app.
+
+---
+
+## 21. Keyboard Shortcuts
 
 | Shortcut | Action |
 | --- | --- |
@@ -763,7 +824,7 @@ One message at a time: sending while busy gets a "still processing" notice.
 
 ---
 
-## 21. Data and Configuration Locations
+## 22. Data and Configuration Locations
 
 | Content | Location (Windows) | Notes |
 | --- | --- | --- |
@@ -782,7 +843,7 @@ Dev (development build) and production installs have independent config director
 
 ---
 
-## 22. FAQ
+## 23. FAQ
 
 **Model selector shows "No available models"**
 Go back to "Settings → Models & Providers" and confirm you saved; check API key, Base URL (mind `/v1`), API type and model ID one by one, using "Test availability" to pinpoint the problem. If it still fails, reopen the session once.

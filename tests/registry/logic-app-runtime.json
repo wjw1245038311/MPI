@@ -1,0 +1,18 @@
+{
+  "id": "logic-app-runtime",
+  "title": "应用商店插件宿主：路径安全 / 能力门禁 / 激活异常兜底 / 停用回收 / 滚动日志",
+  "feature": "应用商店（插件宿主）",
+  "kind": "logic",
+  "source": "changelog#3(Unreleased) / src/main/app-runtime.ts",
+  "description": "验证主进程薄宿主的独立行为：服务入口解析限在应用目录内、ESM/CJS 模块归一化、host.spawn 能力门禁、activate 成功/抛错/缺入口/无钩子的兜底、deactivate 回收托管子进程、以及日志滚动保留上限。",
+  "logicTest": "app-runtime",
+  "assertions": [
+    "resolveServiceEntry 拒绝目录外（绝对路径 / .. 穿越）的服务入口",
+    "normalizeServiceModule 兼容 CJS/ESM/default 及空模块",
+    "未声明 process 能力时 host.spawn 被拒绝",
+    "activate 成功→ready；抛错→error 且主进程不崩；缺入口/无 activate→no-op",
+    "deactivate 执行钩子并回收所有托管子进程",
+    "appendAppLog/readAppLog 滚动保留（LOG_TAIL 上限）"
+  ],
+  "passCriteria": "test-app-runtime.mjs 全部 9 项检查通过"
+}

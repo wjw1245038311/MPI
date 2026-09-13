@@ -10,6 +10,7 @@ import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
+import { activateAutostartApps, killAllManagedProcesses } from "./app-store";
 import { startDevReleaseProgressTail } from "./dev-release-progress";
 import { stopAutomations, stopScheduler } from "./automation";
 import { stopMessaging } from "./messaging/service";
@@ -266,6 +267,8 @@ if (!gotLock) {
     // them now). Best effort — leftovers simply wait for the next launch.
     cleanupOldRuntimes();
     registerIpc(getWin);
+    // v2: bring enabled app services back up (never rewrites config).
+    void activateAutostartApps().catch((e) => console.warn("[app-store] autostart failed:", e));
     // Dev only: tail the release pipeline's JSONL progress file (the CLI runs
     // outside this app) so the long-task monitor shows live upload bytes/speed.
     if (IS_DEV_BUILD) startDevReleaseProgressTail();
@@ -287,6 +290,12 @@ app.on("before-quit", (e) => {
   if (quitInFlight) return;
   e.preventDefault();
   isQuitting = true;
+  // Reap app-managed child processes before the (possibly delayed) graceful wait.
+  try {
+    killAllManagedProcesses();
+  } catch {
+    /* ignore */
+  }
   try {
     if (tray) {
       tray.destroy();

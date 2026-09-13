@@ -61,6 +61,8 @@
     "test:tuirace": "node scripts/build-tui-race-bundle.mjs && node scripts/test-tui-race.cjs",
     "test:websearch": "node --experimental-strip-types scripts/test-web-search-config.mjs",
     "test:trustedtools": "node --experimental-strip-types scripts/test-trusted-tools.mjs",
+    "test:appstore": "node --experimental-strip-types scripts/test-app-store.mjs",
+    "test:appruntime": "node --experimental-strip-types scripts/test-app-runtime.mjs",
     "test:test-registry": "node --experimental-strip-types scripts/test-test-registry.mjs",
     "test:searchmark": "node scripts/test-search-mark.mjs"
   },

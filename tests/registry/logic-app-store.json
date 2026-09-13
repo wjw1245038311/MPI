@@ -1,0 +1,19 @@
+{
+  "id": "logic-app-store",
+  "title": "应用商店（平台化）：zip/目录导入安装 + 启用托管 + 指纹回滚",
+  "feature": "应用商店（应用包平台）",
+  "kind": "logic",
+  "source": "changelog#2(Unreleased) / src/main/app-store.ts / src/main/app-store-core.ts",
+  "description": "验证平台化后的应用商店主进程逻辑：清单校验（v1 向后兼容、service/pi/capabilities、路径安全）、{{field}} 模板渲染、computeRestorePlan 指纹回滚，以及 electron stub + 夹具应用下的 目录安装/zip 安装 → enable → 改字段 → disable → uninstall 完整生命周期与 service 托管（自愈状态、扩展接线、autostart、重启）。",
+  "logicTest": "app-store",
+  "assertions": [
+    "夹具应用（临时目录）可从不依赖任何随包清单的目录安装为已安装/禁用",
+    "非法目录、非法清单、未知卸载、路径穿越 zip 均被拒绝且报错清晰",
+    "zip 安装（deflate/stored/单层包裹目录）解压到 userData/apps 并注册",
+    "字段指纹回滚：只还原仍等于应用所写值的字段，用户手改的值保留",
+    "启用写入服务返回的 voice patch；停用回收托管子进程并精确还原配置",
+    "启用后扩展路径接线（指向安装目录），停用即移除",
+    "autostart 重新激活不重写配置 / 不重建快照；restart 重新激活并报 ready"
+  ],
+  "passCriteria": "test-app-store.mjs 全部检查通过"
+}

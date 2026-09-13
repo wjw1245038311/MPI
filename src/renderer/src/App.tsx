@@ -11,6 +11,7 @@ import { ExtUiModal } from "./components/ExtUiModal";
 import { Settings } from "./components/Settings";
 import { SearchModal } from "./components/SearchModal";
 import { PluginsPanel } from "./components/PluginsPanel";
+import { AppStorePanel } from "./components/AppStorePanel";
 import { AutomationPanel } from "./components/AutomationPanel";
 import { TodoPanel } from "./components/TodoPanel";
 import { MessagingPanel } from "./components/MessagingPanel";
@@ -154,6 +155,7 @@ export default function App() {
       <ExtUiModal />
       <SearchModal />
       <PluginsPanel />
+      <AppStorePanel />
       <AutomationPanel />
       <TodoPanel />
       <MessagingPanel />

@@ -5,7 +5,7 @@ import { fileIcon, formatTokens } from "../lib/format";
 import { MPI_FILE_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
-import { Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Sidebar as SidebarIcon } from "./icons";
+import { AppStore, Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Sidebar as SidebarIcon } from "./icons";
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
 
@@ -343,6 +343,12 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               <Plug size={15} />
             </span>
             扩展功能
+          </button>
+          <button className="sb-nav-item" onClick={() => useStore.getState().openAppStore()}>
+            <span className="ico">
+              <AppStore size={15} />
+            </span>
+            应用商店
           </button>
           <button className="sb-nav-item" onClick={() => useStore.getState().openMessaging()}>
             <span className="ico">

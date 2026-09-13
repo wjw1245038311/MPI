@@ -808,3 +808,108 @@ export interface ScenarioHistoryEntry {
   blockedEvidence?: number;
   [key: string]: unknown;
 }
+
+/* ------------------------------------------------------------------ *
+ * 应用商店（App Store，类微信小程序的应用加载平台）
+ * 数据源：导入的 zip/目录 → <userData>/apps/<id>/mpi-app.json；主进程服务见 src/main/app-store.ts，
+ * 纯逻辑（校验/模板渲染/回滚计划）见 src/main/app-store-core.ts
+ * ------------------------------------------------------------------ */
+
+/** Manifest 里的本地化文本（zh/en 至少其一非空）。 */
+export interface AppLocalizedText {
+  zh?: string;
+  en?: string;
+}
+
+/** 应用配置表单字段类型。 */
+export type AppConfigFieldType = "url" | "text" | "password" | "select";
+
+export interface AppConfigFieldOption {
+  value: string;
+  label: AppLocalizedText;
+}
+
+/** 应用清单声明的一个配置表单字段。 */
+export interface AppConfigField {
+  key: string;
+  label: AppLocalizedText;
+  type: AppConfigFieldType;
+  default?: string;
+  placeholder?: AppLocalizedText;
+  hint?: AppLocalizedText;
+  /** type === "select" 时必填。 */
+  options?: AppConfigFieldOption[];
+}
+
+/** 把应用配置值映射到 MPI 语音 STT 设置的模板（{{fieldKey}} 占位）。 */
+export interface VoiceSttTemplate {
+  sttBackend: "openai";
+  [field: string]: string;
+}
+
+/* --- manifest v2：可编程插件包（Phase 2） ---------------------------- */
+
+/** 应用可声明的能力；安装时展示给用户确认（主进程无沙箱，靠知情同意）。 */
+export type AppCapability = "process" | "network" | "fs";
+
+/** 应用服务模块声明（主进程宿主 API + 生命周期 activate/deactivate）。 */
+export interface AppServiceSpec {
+  /** 相对 app 目录的模块入口，如 "service/index.cjs"；必须位于 app 目录内。 */
+  entry: string;
+  /** 应用被启用时（及 MPI 启动时）自动激活；默认 true。 */
+  autostart?: boolean;
+  /** 可选：清单中某个字段作为「启动命令」，服务探测失败时据此拉起本地服务。 */
+  startCommandField?: string;
+}
+
+/** 应用自带的 pi 扩展。 */
+export interface AppPiSpec {
+  /** 相对 app 目录的扩展文件路径；启用时释放到用户扩展目录，停用时移除。 */
+  extensions?: string[];
+}
+
+/** 应用服务的运行状态。 */
+export type AppServiceState = "stopped" | "starting" | "ready" | "error";
+
+/** 服务运行状态（持久化在 registry，并在 UI 展示）。 */
+export interface AppRuntimeStatus {
+  state: AppServiceState;
+  /** 面向用户的说明：就绪详情或错误原因。 */
+  detail?: string;
+  /** ISO 时间戳。 */
+  updatedAt?: string;
+}
+
+/** 解析并校验后的 mpi-app.json 清单。 */
+export interface AppManifest {
+  id: string;
+  name: AppLocalizedText;
+  version: string;
+  category: string;
+  description: AppLocalizedText;
+  /** 详情视图展示的部署/使用指引（纯文本，可含换行）。 */
+  guide?: AppLocalizedText;
+  config: { fields: AppConfigField[] };
+  integrations?: { voiceStt?: VoiceSttTemplate };
+  /** v2：应用自带的主进程服务模块。 */
+  service?: AppServiceSpec;
+  /** v2：应用自带的 pi 扩展。 */
+  pi?: AppPiSpec;
+  /** v2：能力声明（安装确认用）。 */
+  capabilities?: AppCapability[];
+}
+
+/** apps:list 返回的一条：清单 + 安装/启用状态。 */
+export interface AppStoreEntry extends AppManifest {
+  installed: boolean;
+  enabled: boolean;
+  /** v2：服务运行状态（无 service 的应用为 undefined）。 */
+  status?: AppRuntimeStatus;
+}
+
+/** 草稿 STT 连接测试结果（不落盘）。 */
+export interface AppVoiceTestResult {
+  ok: boolean;
+  text?: string;
+  error?: string;
+}

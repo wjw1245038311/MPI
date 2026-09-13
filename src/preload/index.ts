@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import type {
+  AppStoreEntry,
+  AppVoiceTestResult,
   ComposerDraft,
   LogicRunResult,
   McpMarketDetail,
@@ -353,6 +355,27 @@ const api = {
         mime?: string;
         error?: string;
       }>,
+  },
+  apps: {
+    /** Installed entries merged with enable/status state. */
+    list: (): Promise<AppStoreEntry[]> => ipcRenderer.invoke("apps:list"),
+    /** Pick a .zip app package and load it. Returns null when the dialog is cancelled. */
+    installZip: (): Promise<AppStoreEntry | null> => ipcRenderer.invoke("apps:installZip"),
+    /** Pick an unpacked app directory (developer workflow). Null when cancelled. */
+    installDir: (): Promise<AppStoreEntry | null> => ipcRenderer.invoke("apps:installDir"),
+    uninstall: (id: string) => ipcRenderer.invoke("apps:uninstall", id),
+    setEnabled: (id: string, enabled: boolean): Promise<AppStoreEntry> =>
+      ipcRenderer.invoke("apps:setEnabled", { id, enabled }),
+    getConfig: (id: string): Promise<Record<string, string>> => ipcRenderer.invoke("apps:getConfig", id),
+    saveConfig: (id: string, values: Record<string, string>): Promise<Record<string, string>> =>
+      ipcRenderer.invoke("apps:saveConfig", { id, values }),
+    /** Draft STT probe with unsaved form values (no config write). */
+    testVoice: (id: string, values: Record<string, string>): Promise<AppVoiceTestResult> =>
+      ipcRenderer.invoke("apps:testVoice", { id, values }),
+    /** v2: rolling service log lines for an installed app. */
+    logs: (id: string): Promise<string[]> => ipcRenderer.invoke("apps:logs", id),
+    /** v2: restart an enabled app's service (no config rewrite). */
+    restart: (id: string): Promise<AppStoreEntry> => ipcRenderer.invoke("apps:restart", id),
   },
   tui: {
     start: (args: { threadId: string; cwd: string; sessionFile?: string | null }) =>

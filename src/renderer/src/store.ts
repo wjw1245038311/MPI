@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   AppConfig,
   AppRuntime,
+  AppStoreEntry,
   ArchivedThread,
   AutomationTask,
   ComposerDraft,
@@ -1210,6 +1211,19 @@ interface PiStore {
   removeMcpServer: (name: string) => Promise<void>;
   toggleSkill: (path: string, enabled: boolean) => Promise<void>;
   installSkill: (skill: SkillHubSkill) => Promise<boolean>;
+
+  // app store overlay（应用商店：声明式功能包）
+  appsOpen: boolean;
+  appStoreEntries: AppStoreEntry[];
+  appsLoading: boolean;
+  openAppStore: () => void;
+  closeAppStore: () => void;
+  loadAppStore: () => Promise<void>;
+  installAppFromZip: () => Promise<boolean>;
+  installAppFromDir: () => Promise<boolean>;
+  uninstallApp: (id: string) => Promise<void>;
+  setAppEnabled: (id: string, enabled: boolean) => Promise<void>;
+  restartAppService: (id: string) => Promise<void>;
 
   // automation overlay
   automationOpen: boolean;
@@ -3074,6 +3088,95 @@ export const useStore = create<PiStore>()((set, get) => {
     } catch (e: any) {
       get().pushToast("error", `${zh ? "安装技能失败：" : "Skill installation failed: "}${e?.message || e}`);
       return false;
+    }
+  },
+
+  // ---- app store（应用商店）----
+  appsOpen: false,
+  appStoreEntries: [],
+  appsLoading: false,
+  openAppStore: () => {
+    set({ appsOpen: true });
+    get().loadAppStore();
+  },
+  closeAppStore: () => set({ appsOpen: false }),
+  loadAppStore: async () => {
+    // A dev instance started before this feature has an old preload without
+    // the apps API — degrade to an empty list instead of breaking panel load.
+    if (typeof window.pi.apps?.list !== "function") return;
+    set({ appsLoading: true });
+    try {
+      const entries = await window.pi.apps.list();
+      set({ appStoreEntries: entries, appsLoading: false });
+    } catch (e: any) {
+      set({ appsLoading: false });
+      get().pushToast("error", "加载应用商店失败：" + (e?.message || e));
+    }
+  },
+  installAppFromZip: async () => {
+    const zh = get().config?.language === "zh";
+    try {
+      const entry = await window.pi.apps.installZip();
+      if (!entry) return false; // dialog cancelled
+      get().pushToast("success", zh ? `已安装「${entry.name?.zh || entry.id}」` : `Installed “${entry.name?.en || entry.id}”`);
+      await get().loadAppStore();
+      return true;
+    } catch (e: any) {
+      get().pushToast("error", `${zh ? "安装失败：" : "Installation failed: "}${e?.message || e}`);
+      return false;
+    }
+  },
+  installAppFromDir: async () => {
+    const zh = get().config?.language === "zh";
+    try {
+      const entry = await window.pi.apps.installDir();
+      if (!entry) return false; // dialog cancelled
+      get().pushToast("success", zh ? `已安装「${entry.name?.zh || entry.id}」` : `Installed “${entry.name?.en || entry.id}”`);
+      await get().loadAppStore();
+      return true;
+    } catch (e: any) {
+      get().pushToast("error", `${zh ? "安装失败：" : "Installation failed: "}${e?.message || e}`);
+      return false;
+    }
+  },
+  uninstallApp: async (id) => {
+    const zh = get().config?.language === "zh";
+    try {
+      await window.pi.apps.uninstall(id);
+      get().pushToast("info", zh ? "应用已卸载" : "App removed");
+      await get().loadAppStore();
+    } catch (e: any) {
+      get().pushToast("error", `${zh ? "卸载失败：" : "Removal failed: "}${e?.message || e}`);
+    }
+  },
+  setAppEnabled: async (id, enabled) => {
+    const zh = get().config?.language === "zh";
+    try {
+      await window.pi.apps.setEnabled(id, enabled);
+      get().pushToast(
+        "success",
+        enabled
+          ? zh
+            ? "应用已启用，相关设置已写入"
+            : "App enabled — its settings were applied"
+          : zh
+            ? "应用已停用，原设置已还原"
+            : "App disabled — previous settings restored",
+      );
+      await get().loadAppStore();
+    } catch (e: any) {
+      get().pushToast("error", `${zh ? "切换失败：" : "Toggle failed: "}${e?.message || e}`);
+    }
+  },
+  restartAppService: async (id) => {
+    const zh = get().config?.language === "zh";
+    if (typeof window.pi.apps?.restart !== "function") return;
+    try {
+      await window.pi.apps.restart(id);
+      get().pushToast("success", zh ? "服务已重启" : "Service restarted");
+      await get().loadAppStore();
+    } catch (e: any) {
+      get().pushToast("error", `${zh ? "重启失败：" : "Restart failed: "}${e?.message || e}`);
     }
   },
 

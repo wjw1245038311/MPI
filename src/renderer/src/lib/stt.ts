@@ -49,6 +49,10 @@ export function sttTranscribeErrorText(error: string, zh: boolean): string {
       return zh
         ? "缺少服务地址（OpenAI 兼容端点需要 Base URL），请检查 设置 → 对话设置 → 语音系统"
         : "Missing base URL (the OpenAI-compatible backend needs one) — check Settings → Conversation → Voice";
+    case "voice.stt.app-bundled":
+      return zh
+        ? "「服务地址」留空 = 使用应用自带的内置服务：启用应用后会自动启动，无需在此测试。若你填了外部 STT 地址，再点测试。"
+        : "Blank endpoint = use the app's bundled service: it starts automatically when you enable the app, so there is nothing to test here. Fill in an external STT URL first if you want to probe one.";
     case "voice.stt.too-large":
       return zh ? "录音过长，无法识别（上限约 3 分钟）" : "Recording too long to transcribe (~3 minute cap)";
     case "voice.stt.timeout":
