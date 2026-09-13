@@ -2539,6 +2539,18 @@ body.sidebar-resizing * {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+/* Image right-click menu (复制图片) — reuses the project context menu chrome.
+   z-index must beat every overlay (.image-lightbox 180, modals 200–220,
+   .todo-lightbox 1000): a context menu floats above whatever is open. */
+.img-copy-menu {
+  width: 180px;
+  z-index: 1001;
+}
+.img-copy-menu button span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
 .composer-project-pill.open .project-pill-caret {
   transform: rotate(90deg);
 }

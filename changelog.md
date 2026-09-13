@@ -10,6 +10,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：中文设置下启动 MPI，侧栏应显示「应用商店」（而非 App Store）；设置里语言切英文应变为 "App Store"，再切回中文恢复。`npm test` 含 i18n-labels（21 对全覆盖）。
 
+2. **聊天图片支持右键「复制图片」**（此前图片没有任何复制途径）：新增全局右键菜单组件 ImageCopyMenu——会话内任意图片（用户发送的附件图、agent 回复 Markdown 里的图、预览灯箱大图）右键即出「复制图片」；PNG data URL 直接原样写入剪贴板，其它格式（jpeg/webp 等）经 canvas 按原始尺寸光栅化导出 PNG 后写入。成功/失败均有 toast 反馈（跨域图片受浏览器安全限制无法复制时给专门提示）。新增 scripts/test-image-copy.mjs（选择器覆盖 + PNG 快路径解码断言，npm test 自动发现）。
+
+   验证方式：任意会话发一张图 → 右键该图 →「复制图片」→ toast「图片已复制」→ 到微信/Word 等粘贴确认是完整图片；点开预览灯箱后对大图右键同样可复制；Esc 或点别处关闭菜单。
+
 ## v0.6.12（2026-09-13）
 
 1. **local-voice 示例包：启用后在「服务状态」行显示实际 base URL 与模型名（换机重装可直接照抄）**：此前内置服务就绪后只报 `status("ready")` 不带详情，应用商店详情页只能看到「运行中」，不知道服务最终落在哪个端口、用的什么模型——把 zip 拷到新电脑装好后无从核对。现 `service/index.cjs` 两种模式都把实际生效的端点写进状态详情与日志：**内置服务模式**读包内 `model/model.json` 的真实 name（而非配置字段默认值，避免换模型打包后显示与实际不符），就绪后记 `[local-voice] ready — base=http://127.0.0.1:<port>/v1 model=<name>` 并把状态详情置为 `<base> · <model>`；**外部服务模式**同样显示所连端点 + 写入语音设置的模型名。内置模式下 `config.voice.sttModel` 也改为写 model.json 的真实 name（本地服务忽略该字段，仅影响设置页展示与日后改指真实端点时的正确性）。manifest guide 中英各补一句「实际地址/模型显示在服务状态行」；modelName 字段加 hint 说明内置模式以 model.json 为准。

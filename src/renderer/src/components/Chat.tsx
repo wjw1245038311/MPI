@@ -673,7 +673,7 @@ export function Chat() {
       {previewImage && (
         <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" onMouseDown={() => setPreviewImage(null)}>
           <button className="image-lightbox-close" title="关闭" onClick={() => setPreviewImage(null)}>×</button>
-          <img src={previewImage} alt="图片预览" onMouseDown={(e) => e.stopPropagation()} />
+          <img className="image-lightbox-img" src={previewImage} alt="图片预览" onMouseDown={(e) => e.stopPropagation()} />
         </div>
       )}
     </section>
