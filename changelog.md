@@ -4,6 +4,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 Unreleased 内容移入新的版本小节并更新日期。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **修复中文界面下侧栏「应用商店」显示为英文 "App Store"**（v0.6.12 引入）：侧栏导航标签改为 `language === "zh" ? … : …` 条件渲染后，启动瞬间 config 未加载会先渲染英文回退值，DOM 语言桥把它记为该节点的「原文」；中文配置生效后桥按原文翻译，而 i18n.ts 词典漏了「应用商店→App Store」条目导致翻不回来（「扩展功能」「消息接入」有条目所以正常）。现把 Sidebar 全部 11 对缺失的条件标签补进 i18n 词典（含悬停 title/aria-label——运行时切换语言时同样会卡英文）；新增回归测试 scripts/test-i18n-labels.mjs：扫描 Sidebar 所有静态 `language === "zh" ? A : B` 标签并断言每对都有词典条目（npm test 自动发现，防复发）。
+
+   验证方式：中文设置下启动 MPI，侧栏应显示「应用商店」（而非 App Store）；设置里语言切英文应变为 "App Store"，再切回中文恢复。`npm test` 含 i18n-labels（21 对全覆盖）。
+
 ## v0.6.12（2026-09-13）
 
 1. **local-voice 示例包：启用后在「服务状态」行显示实际 base URL 与模型名（换机重装可直接照抄）**：此前内置服务就绪后只报 `status("ready")` 不带详情，应用商店详情页只能看到「运行中」，不知道服务最终落在哪个端口、用的什么模型——把 zip 拷到新电脑装好后无从核对。现 `service/index.cjs` 两种模式都把实际生效的端点写进状态详情与日志：**内置服务模式**读包内 `model/model.json` 的真实 name（而非配置字段默认值，避免换模型打包后显示与实际不符），就绪后记 `[local-voice] ready — base=http://127.0.0.1:<port>/v1 model=<name>` 并把状态详情置为 `<base> · <model>`；**外部服务模式**同样显示所连端点 + 写入语音设置的模型名。内置模式下 `config.voice.sttModel` 也改为写 model.json 的真实 name（本地服务忽略该字段，仅影响设置页展示与日后改指真实端点时的正确性）。manifest guide 中英各补一句「实际地址/模型显示在服务状态行」；modelName 字段加 hint 说明内置模式以 model.json 为准。

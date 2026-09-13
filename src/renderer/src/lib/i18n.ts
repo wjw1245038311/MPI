@@ -23,6 +23,21 @@ const exact: Record<string, string> = {
   "新建任务": "New task",
   "定时任务": "Automations",
   "扩展功能": "Extensions",
+  "应用商店": "App Store",
+  // Sidebar conditional labels (language === "zh" ? zh : en). Every pair MUST
+  // have an entry here: before config loads the fallback renders English and
+  // the DOM bridge records it as the node's original; without a reverse entry
+  // the label stays stuck in English once the real (zh) config arrives.
+  "调整导航栏宽度": "Resize sidebar",
+  "拖动调整导航栏宽度；双击恢复默认": "Drag to resize; double-click to reset",
+  "打开文件夹": "Open folder",
+  "已置顶项目": "Pinned project",
+  "取消置顶项目": "Unpin project",
+  "已置顶会话": "Pinned session",
+  "在资源管理器中打开": "Open in File Explorer",
+  "把当前会话完整复制成一个新会话": "Duplicate the whole session into a new one",
+  "克隆会话": "Clone session",
+  "删除？": "Delete?",
   "消息接入": "Messaging",
   "会话": "Sessions",
   "归档": "Archive",
