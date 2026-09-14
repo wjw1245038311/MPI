@@ -190,6 +190,15 @@ export class RelayClient {
       } catch {
         return; // non-JSON — ignore
       }
+      if (frame.type === "replaced") {
+        // Another connection with the same identity took over this device slot.
+        // Stop reconnecting: retrying would just ping-pong with the other client
+        // (two tabs of the PWA on one phone). Surface it to the UI instead.
+        this.stayAlive = false;
+        this.clearReconnectTimer();
+        this.setState("closed", "REPLACED");
+        return;
+      }
       void this.dispatch(frame);
     };
 

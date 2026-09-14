@@ -170,6 +170,19 @@ async function main() {
     await session.refresh();
     assert.equal(session.getSnapshot().error, null, "post-reconnect traffic still decrypts");
 
+    // --- S8: replaced device — a second connection with the same identity takes over;
+    // the first must stop (no auto-reconnect → no ping-pong loop between two tabs).
+    const client2 = new RelayClient({ url });
+    clients.push(client2);
+    client2.setHelloCreds(identity.deviceId, result.deviceToken);
+    client2.connect();
+    await waitFor(() => client.getState() === "closed", "first client replaced by second connection", 10_000);
+    assert.equal(client.getLastError(), "REPLACED", "replacement surfaced as REPLACED error");
+    // Longer than the base backoff (1s): a buggy reconnect would fire within this window.
+    await sleep(1_500);
+    assert.equal(client.getState(), "closed", "replaced client does not auto-reconnect");
+    assert.equal(client2.getState(), "open", "second connection stays open");
+
     console.log("pwa-home tests passed");
   } finally {
     for (const c of clients) c.close();

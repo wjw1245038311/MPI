@@ -60,6 +60,12 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [hostId, setHostId] = useState<string | null>(null);
   const [connState, setConnState] = useState("idle");
+  const [connErr, setConnErr] = useState<string | null>(null);
+  /** Both client-creation sites share this: track state + last error (REPLACED etc.). */
+  const onClientState = (s: string, err: string | null) => {
+    setConnState(s);
+    setConnErr(err);
+  };
   const [view, setView] = useState<"pairing" | "home">("pairing");
   const [snap, setSnap] = useState<SessionSnapshot | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
@@ -165,7 +171,7 @@ export default function App() {
     sessionRef.current?.detach();
     setSession(null);
     const identity = createDeviceIdentity(seedB64url);
-    const client = new RelayClient({ url: record.relayUrl, onStateChange: (s) => setConnState(s) });
+    const client = new RelayClient({ url: record.relayUrl, onStateChange: onClientState });
     clientRef.current = client;
     setHostId(record.hostId);
     setError(null);
@@ -208,7 +214,7 @@ export default function App() {
     clientRef.current?.close();
     sessionRef.current?.detach();
     setSession(null);
-    const client = new RelayClient({ url: payload.relayUrl, onStateChange: (s) => setConnState(s) });
+    const client = new RelayClient({ url: payload.relayUrl, onStateChange: onClientState });
     clientRef.current = client;
     setError(null);
     try {
@@ -352,6 +358,9 @@ export default function App() {
             </div>
 
             {error && <p className="hint error-text">{error}</p>}
+            {connState === "closed" && connErr === "REPLACED" && (
+              <p className="hint error-text">此设备已在另一个窗口/标签页连接——请关闭另一个，然后刷新本页。</p>
+            )}
             {snap?.error && <p className="hint error-text">数据刷新失败：{snap.error}</p>}
 
             {/* Projects → threads */}
