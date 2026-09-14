@@ -108,3 +108,38 @@ button:disabled { opacity: 0.5; cursor: default; }
 .badge-disconnected { background: rgba(241, 198, 113, 0.15); color: #f1c671; }
 
 .error-text { color: var(--err) !important; margin: 0; font-size: 13px; }
+
+/* --- S5 thread view ---------------------------------------------------------- */
+.thread-view { display: flex; flex-direction: column; gap: 8px; max-height: calc(100dvh - 90px); }
+.thread-head { display: flex; align-items: center; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.back-btn { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; padding: 0; font-size: 16px; flex: none; }
+
+.thread-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 2px; min-height: 120px; }
+.to-bottom { align-self: center; position: sticky; bottom: 6px; background: var(--panel); border: 1px solid var(--border); color: var(--text); font-size: 12px; padding: 5px 12px; border-radius: 999px; }
+
+.message.user { align-self: flex-end; max-width: 85%; background: rgba(122, 162, 247, 0.12); border-radius: 12px; padding: 8px 12px; }
+.message.assistant { align-self: stretch; display: flex; flex-direction: column; gap: 8px; }
+.msg-role { font-size: 11px; color: var(--muted); letter-spacing: 0.4px; }
+
+.msg-text { margin: 0; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+.message.user .msg-text { white-space: pre-wrap; }
+
+.msg-thinking { font-size: 12px; color: var(--muted); border-left: 2px solid var(--border); padding-left: 8px; }
+.msg-thinking summary { cursor: pointer; user-select: none; }
+.msg-thinking pre, .msg-tool pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--muted); background: rgba(0, 0, 0, 0.25); padding: 8px; border-radius: 8px; }
+
+.msg-tool { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 13px; background: rgba(255, 255, 255, 0.02); }
+.msg-tool.running { border-color: rgba(158, 206, 106, 0.4); }
+.msg-tool.error { border-color: rgba(247, 118, 142, 0.5); }
+.msg-tool-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.msg-tool-name { font-weight: 600; color: var(--accent); flex: none; }
+.msg-tool-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); min-width: 0; }
+.msg-tool summary { cursor: pointer; user-select: none; font-size: 12px; color: var(--muted); }
+
+.spinner { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--ok); border-radius: 50%; animation: spin 0.9s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.msg-image { max-width: 100%; border-radius: 8px; }
+.msg-artifacts { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
+.artifact { background: rgba(255, 255, 255, 0.05); border-radius: 6px; padding: 2px 8px; color: var(--muted); }
+.artifact.created { color: var(--ok); }

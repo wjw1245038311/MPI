@@ -8,12 +8,14 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { RemoteThreadState } from "../../shared/protocol";
+import ThreadView from "./ThreadView";
 import { IdbKeyStore } from "./lib/keystore-idb";
 import type { KeyStore, PairingRecord } from "./lib/keystore";
 import { createDeviceIdentity, randomSeedB64url } from "./lib/device-identity";
 import { attachAutoReauth, parsePairingLink, runPairing, type PairingStage } from "./lib/pairing";
 import { RelayClient } from "./lib/relay-client";
 import { HostSession, type SessionSnapshot } from "./lib/session";
+import { ThreadSession, type ThreadView as ThreadViewState } from "./lib/thread-session";
 
 const STAGE_LABELS: Record<string, string> = {
   idle: "未连接",
@@ -59,12 +61,25 @@ export default function App() {
   const [snap, setSnap] = useState<SessionSnapshot | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
 
-  // Mirror the session snapshot into React state.
+  // S5: open thread (conversation view).
+  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const [threadSession, setThreadSession] = useState<ThreadSession | null>(null);
+  const threadSessionRef = useRef<ThreadSession | null>(null);
+  threadSessionRef.current = threadSession;
+  const [threadView, setThreadView] = useState<ThreadViewState | null>(null);
+
+  // Mirror the session snapshots into React state.
   useEffect(() => {
     if (!session) return;
     setSnap(session.getSnapshot());
     return session.subscribe(setSnap);
   }, [session]);
+
+  useEffect(() => {
+    if (!threadSession) return;
+    setThreadView(threadSession.getSnapshot());
+    return threadSession.subscribe(setThreadView);
+  }, [threadSession]);
 
   /** Create (or reuse) the data session for an established client and enter home. */
   const enterHome = (client: RelayClient, record: PairingRecord) => {
@@ -126,6 +141,7 @@ export default function App() {
         hostX25519PubB64u: result.hostX25519PubB64u || record.hostX25519PubB64u,
       });
       void sessionRef.current?.refresh(); // the open-triggered refresh may have raced AUTH_REQUIRED
+      void threadSessionRef.current?.resync().catch(() => {}); // same race for an open conversation
     });
     client.connect();
     enterHome(client, record);
@@ -171,6 +187,7 @@ export default function App() {
       attachAutoReauth(client, payload.hostId, identity, device.name, (r) => {
         if (r.deviceToken) client.setHelloCreds(identity.deviceId, r.deviceToken);
         void sessionRef.current?.refresh();
+        void threadSessionRef.current?.resync().catch(() => {});
       });
       setHostId(payload.hostId);
       enterHome(client, record);
@@ -180,7 +197,35 @@ export default function App() {
     }
   };
 
+  /** Open a conversation (S5). The host's uplink must be connected; the home view
+   * is hidden while a thread is open, so no double-open guard is needed. */
+  const openThread = async (threadId: string) => {
+    const client = clientRef.current;
+    if (!client) return;
+    setOpenThreadId(threadId);
+    try {
+      const ts = new ThreadSession(client, threadId);
+      setThreadSession(ts);
+      await ts.open();
+    } catch (e) {
+      // open() failed — go back to the list and surface the error there.
+      const ts = threadSessionRef.current as ThreadSession | null; // re-read: TS narrowing is stale across awaits
+      ts?.detach();
+      setThreadSession(null);
+      setOpenThreadId(null);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const closeThread = () => {
+    threadSessionRef.current?.detach();
+    setThreadSession(null);
+    setThreadView(null);
+    setOpenThreadId(null);
+  };
+
   const disconnect = () => {
+    threadSessionRef.current?.detach();
     sessionRef.current?.detach();
     clientRef.current?.close();
     setSession(null);
@@ -190,6 +235,9 @@ export default function App() {
     setStage("idle");
     setError(null);
     setExpandedProjectId(null);
+    setOpenThreadId(null);
+    setThreadSession(null);
+    setThreadView(null);
     setView("pairing");
   };
 
@@ -200,7 +248,9 @@ export default function App() {
         <h1>MPI Mobile</h1>
       </header>
       <main className="app-main">
-        {view === "home" && hostId ? (
+        {view === "home" && hostId && openThreadId && threadView ? (
+          <ThreadView view={threadView} onBack={closeThread} />
+        ) : view === "home" && hostId ? (
           <div className="card home-card">
             {/* Host card */}
             <div className="host-row">
@@ -233,14 +283,14 @@ export default function App() {
                     </button>
                     {expanded && (
                       threads.length > 0 ? threads.map((thread) => (
-                        <div key={thread.id} className="thread-row">
+                        <button type="button" key={thread.id} className="thread-row" onClick={() => void openThread(thread.id)}>
                           <span className={`badge badge-${thread.state}`}>{THREAD_STATE_LABELS[thread.state]}</span>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div className="thread-title">{thread.title}</div>
                             {thread.preview && <div className="hint thread-preview">{thread.preview}</div>}
                           </div>
                           <span className="hint">{thread.messageCount} 条 · {relTime(thread.updatedAt)}</span>
-                        </div>
+                        </button>
                       )) : (
                         <div className="hint" style={{ padding: "6px 12px" }}>暂无会话</div>
                       )
