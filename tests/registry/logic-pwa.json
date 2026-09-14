@@ -1,0 +1,17 @@
+{
+  "id": "logic-pwa",
+  "title": "手机版 PWA S2：protocol 共享包等价性 + PWA lib 经真实 relay 与桌面 host 全链路配对/重连",
+  "feature": "手机版（云中继）",
+  "kind": "logic",
+  "source": "docs/MOBILE-DESIGN.md §6 / mobile/shared/protocol.ts / mobile/pwa/src/lib/",
+  "description": "两个脚本：①test-pwa-shared——mobile/shared/protocol.ts（桌面 protocol.ts 的 vendored copy）与桌面源行为等价：常量、makeEnvelope、parseEnvelope 合法/非法输入错误码（含 PAYLOAD_TOO_LARGE）、responseFor/errorFor 逐项 deepEqual，漂移即挂；②test-pwa-pairing——PWA 自己的库代码（RelayClient + noble Ed25519 device-identity + pairing 编排）作为手机，经真实 relay 子进程与真实 RemoteHost+RelayUplink 配对：parsePairingLink 解析 mpi://pair 链接、pair.request→challenge(带 connectionId)→签名 hello（证明 noble SPKI PEM/deviceId 派生与桌面 identity.ts 字节兼容）→pair.pending→批准→pair.accepted(deviceToken)、阶段序列正确；断开后 setHelloCreds+reauthenticate：hello(token)→新 challenge→受信自动批准、token 稳定不变。",
+  "logicTest": "pwa",
+  "assertions": [
+    "shared/protocol.ts 与桌面 protocol.ts 常量/envelope 构造/解析错误码完全一致（含 2MB 上限）",
+    "parsePairingLink：mpi://pair?payload=b64url 与裸 payload 均可解析；空链接/坏 base64/缺字段抛错",
+    "PWA lib 配对链走通：stages=[connecting,waiting-challenge,waiting-approval,approved]，deviceToken≥32 字符",
+    "noble Ed25519 签名被桌面 handleHello 验签通过（SPKI PEM/deviceId 派生字节兼容）",
+    "重连路径：hello(deviceToken)→relay.ok→新 challenge→受信自动批准，token 与首次一致"
+  ],
+  "passCriteria": "test-pwa-shared.mjs + test-pwa-pairing.mjs 全部检查通过（npm test -- pwa）"
+}

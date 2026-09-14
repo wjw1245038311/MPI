@@ -1,0 +1,28 @@
+{
+  "name": "mpi-pwa",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MPI mobile PWA — pairs with a Windows host through the self-hosted cloud relay (docs/MOBILE-DESIGN.md §6)",
+  "engines": {
+    "node": ">=24.14.0 <25"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.8.0",
+    "@noble/hashes": "^1.7.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}
