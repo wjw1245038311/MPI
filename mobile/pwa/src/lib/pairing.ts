@@ -28,6 +28,8 @@ export interface PairingPayload {
   ticket: string;
   expiresAt: number;
   protocol?: number;
+  /** 桌面机器名（多设备列表用来区分主机）；旧版桌面生成的载荷里没有。 */
+  hostName?: string;
 }
 
 export type PairingStage = "connecting" | "waiting-challenge" | "waiting-approval" | "approved" | "error";
@@ -55,12 +57,12 @@ export function parsePairingLink(input: string): PairingPayload {
   if (typeof value.ticket !== "string" || !value.ticket) throw new Error("pairing payload missing ticket");
   return {
     hostId: value.hostId,
-    fingerprint: typeof value.fingerprint === "string" ? value.fingerprint : undefined,
-    hostPublicKeyPem: typeof value.hostPublicKeyPem === "string" ? value.hostPublicKeyPem : undefined,
+    fingerprint: typeof value.fingerprint === "string" ? value.fingerprint : undefined,    hostPublicKeyPem: typeof value.hostPublicKeyPem === "string" ? value.hostPublicKeyPem : undefined,
     relayUrl: typeof value.relayUrl === "string" && value.relayUrl ? value.relayUrl : undefined,
     ticket: value.ticket,
     expiresAt: Number.isSafeInteger(value.expiresAt) ? (value.expiresAt as number) : 0,
     protocol: Number.isSafeInteger(value.protocol) ? (value.protocol as number) : undefined,
+    hostName: typeof value.hostName === "string" && value.hostName ? value.hostName : undefined,
   };
 }
 

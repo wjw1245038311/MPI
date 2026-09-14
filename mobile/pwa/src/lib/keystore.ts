@@ -18,6 +18,10 @@ export interface PairingRecord {
   /** Host X25519 pub (b64url) for E2E key derivation; optional for pre-S3 records. */
   hostX25519PubB64u?: string;
   pairedAt: number;
+  /** 配对载荷里带来的桌面机器名（旧记录可能没有）；多设备列表用它区分主机。 */
+  hostName?: string;
+  /** 最近一次连接时间；多设备列表按它排序、自动重连优先选最近用过的。 */
+  lastSeenAt?: number;
 }
 
 export interface KeyStore {

@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { hostname } from "node:os";
 import WebSocket from "ws";
 import {
   errorFor,
@@ -210,6 +211,8 @@ export class RemoteHost {
     stunUrls: string[];
     /** Cloud-relay URL the PWA should connect to (absent when relay is unconfigured). */
     relayUrl?: string;
+    /** 机器名——手机端多设备列表用它区分主机（手机不可自取）。 */
+    hostName: string;
     ticket: string;
     expiresAt: number;
     protocol: 1;
@@ -230,6 +233,7 @@ export class RemoteHost {
     const relay = this.options.relay;
     return {
       hostId: this.identity.hostId,
+      hostName: hostname(),
       fingerprint: fingerprintFor(this.identity.publicKeyPem),
       hostPublicKeyPem: this.identity.publicKeyPem,
       signalingUrl: this.options.signalingUrl,

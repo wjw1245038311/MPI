@@ -59,6 +59,20 @@ function relTime(ts: number): string {
   return `${Math.round(diff / 86_400_000)} 天前`;
 }
 
+/** hostId 是 30+ 位不透明串，列表里只显示前 6 位。 */
+function shortId(hostId: string): string {
+  return hostId.slice(0, 6);
+}
+
+/** 中继地址只显示主机部分，列表里够用。 */
+function relayHostOf(relayUrl: string): string {
+  try {
+    return new URL(relayUrl).host;
+  } catch {
+    return relayUrl;
+  }
+}
+
 export default function App() {
   const storeRef = useRef<KeyStore>(new IdbKeyStore());
   const clientRef = useRef<RelayClient | null>(null);
@@ -73,6 +87,9 @@ export default function App() {
   const [stage, setStage] = useState<string>("idle");
   const [error, setError] = useState<string | null>(null);
   const [hostId, setHostId] = useState<string | null>(null);
+  /** 已绑定的主机（多设备）。当前主机由 hostId 标记，列表项按最近使用排序。 */
+  const [pairings, setPairings] = useState<PairingRecord[]>([]);
+  const currentPairing = pairings.find((item) => item.hostId === hostId) ?? null;
   const [connState, setConnState] = useState("idle");
   const [connErr, setConnErr] = useState<string | null>(null);
   /** Both client-creation sites share this: track state + last error (REPLACED etc.). */
@@ -172,8 +189,13 @@ export default function App() {
         const device = await storeRef.current.getDevice();
         if (!device) return;
         const pairings = await storeRef.current.listPairings();
-        const target = pairings.find((p) => p.deviceToken);
-        if (!target || cancelled) return;
+        if (cancelled) return;
+        setPairings(pairings);
+        // 多设备：优先重连最近用过的那台（旧记录没有 lastSeenAt 时回退到 pairedAt）。
+        const target = [...pairings]
+          .filter((p) => p.deviceToken)
+          .sort((a, b) => (b.lastSeenAt ?? b.pairedAt) - (a.lastSeenAt ?? a.pairedAt))[0];
+        if (!target) return;
         startSession(target, device.seedB64url, device.name);
       } catch { /* storage unavailable */ }
     })();
@@ -196,6 +218,10 @@ export default function App() {
     clientRef.current = client;
     setHostId(record.hostId);
     setError(null);
+    // 记下“最近用过的设备”，下次自动重连优先它（多设备时不再永远连第一台）。
+    const touched: PairingRecord = { ...record, lastSeenAt: Date.now() };
+    void storeRef.current.savePairing(touched);
+    setPairings((prev) => (prev.some((item) => item.hostId === touched.hostId) ? prev.map((item) => (item.hostId === touched.hostId ? touched : item)) : [...prev, touched]));
     if (!record.deviceToken) return;
     client.setHelloCreds(identity.deviceId, record.deviceToken);
     attachAutoReauth(client, record.hostId, identity, name, (result) => {
@@ -266,8 +292,11 @@ export default function App() {
         deviceToken: result.deviceToken || null,
         hostX25519PubB64u: result.hostX25519PubB64u || undefined,
         pairedAt: Date.now(),
+        hostName: payload.hostName,
+        lastSeenAt: Date.now(),
       };
       await storeRef.current.savePairing(record);
+      setPairings(await storeRef.current.listPairings());
       if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken);
       attachAutoReauth(client, payload.hostId, identity, device.name, (r) => {
         if (r.deviceToken) client.setHelloCreds(identity.deviceId, r.deviceToken);
@@ -384,6 +413,24 @@ export default function App() {
     setView("pairing");
   };
 
+  /** 多设备切换：关掉当前会话与连接，再按选中的 pairing 重连（复用 startSession）。 */
+  const switchHost = (record: PairingRecord) => {
+    if (record.hostId === hostId) return;
+    closeThread();
+    setError(null);
+    void (async () => {
+      const device = await storeRef.current.getDevice();
+      if (device) startSession(record, device.seedB64url, device.name);
+    })();
+  };
+
+  /** 移除一台已绑定设备；删的是当前主机就回配对页。 */
+  const removeHost = async (target: string) => {
+    await storeRef.current.deletePairing(target);
+    setPairings(await storeRef.current.listPairings());
+    if (target === hostId) disconnect();
+  };
+
   return (
     <div className="app">
       <header className="app-header">
@@ -406,7 +453,9 @@ export default function App() {
             <div className="host-row">
               <span className={`dot ${connState === "open" ? "ok" : "err"}`} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600 }}>主机 {hostId}</div>
+                <div style={{ fontWeight: 600 }}>
+                  {currentPairing?.hostName || `主机 ${shortId(hostId)}`}
+                </div>
                 <div className="hint">
                   {snap?.lastFrameAt
                     ? `最后活动 ${relTime(snap.lastFrameAt)}`
@@ -416,6 +465,33 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* 已绑定设备：多主机切换 / 移除 / 添加（阶段 C 会把这块搬进二级抽屉） */}
+            {pairings.length > 0 && (
+              <div className="device-list">
+                {pairings.map((item) => (
+                  <div key={`${item.hostId}-${item.pairedAt}`} className={`device-row${item.hostId === hostId ? " current" : ""}`}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="device-name">{item.hostName || `主机 ${shortId(item.hostId)}`}</div>
+                      <div className="hint">
+                        {relayHostOf(item.relayUrl)}
+                        {item.lastSeenAt ? ` · 最近 ${relTime(item.lastSeenAt)}` : " · 未连接过"}
+                      </div>
+                    </div>
+                    {item.hostId === hostId ? (
+                      <span className="badge">当前</span>
+                    ) : (
+                      <button type="button" className="link-btn" onClick={() => switchHost(item)}>
+                        切换
+                      </button>
+                    )}
+                    <button type="button" className="link-btn" onClick={() => void removeHost(item.hostId)}>
+                      移除
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {error && <p className="hint error-text">{error}</p>}
             {connState === "closed" && connErr === "REPLACED" && (
@@ -455,7 +531,7 @@ export default function App() {
               !snap?.error && <p className="hint">{connState === "open" ? "加载项目列表…" : "等待连接…"}</p>
             )}
 
-            <button onClick={disconnect}>断开 / 切换主机</button>
+            <button onClick={disconnect}>回到配对页（添加设备）</button>
           </div>
         ) : (
           <div className="card">
