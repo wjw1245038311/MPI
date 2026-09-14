@@ -17,6 +17,8 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import WebSocket from "ws";
+import { decryptFrame, deriveAesKey, encryptFrame } from "./e2e-crypto";
+import { x25519SharedSecret } from "./identity";
 import type { RemoteHost, RelayOutbound } from "./host";
 
 const RETRY_BASE_MS = 1_000;
@@ -38,9 +40,15 @@ export interface RelayUplinkOptions {
   hostId: string;
   /** userData dir — device tokens persist in remote-relay-tokens.json. */
   userDataDir: string;
+  /** Host X25519 key pair (identity schema v2) for E2E session derivation. */
+  x25519PrivB64u: string;
+  x25519PubB64u: string;
   getHost: () => RemoteHost | null;
   onStateChange?: (status: RelayUplinkStatus) => void;
 }
+
+/** Handshake envelopes stay plaintext — the PWA needs hostX25519Pub/token in clear. */
+const PLAINTEXT_FRAME_TYPES = new Set(["pair.challenge", "pair.pending", "pair.accepted"]);
 
 export class RelayUplink implements RelayOutbound {
   private ws: WebSocket | null = null;
@@ -50,6 +58,8 @@ export class RelayUplink implements RelayOutbound {
   private stopped = true;
   /** deviceId → relay connection id (relay-<b64url>). */
   private readonly deviceToConnection = new Map<string, string>();
+  /** deviceId → E2E session: key derived at pair.hello, activated once pair.accepted is sent. */
+  private readonly e2eSessions = new Map<string, { key: Buffer; active: boolean }>();
   /** In-memory mirror of the token file. */
   private tokens: Record<string, string> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -105,8 +115,15 @@ export class RelayUplink implements RelayOutbound {
     }
     this.observeOutbound(deviceId, parsed);
     if (!this.isOpen()) return; // dropped while offline — PWA resyncs via thread.resync on reconnect
+    const session = this.e2eSessions.get(deviceId);
+    let outbound: string;
+    if (session?.active && !PLAINTEXT_FRAME_TYPES.has(String(parsed.type))) {
+      outbound = JSON.stringify({ ...encryptFrame(session.key, frame), to: deviceId });
+    } else {
+      outbound = JSON.stringify({ ...parsed, to: deviceId });
+    }
     try {
-      this.ws!.send(JSON.stringify({ ...parsed, to: deviceId }));
+      this.ws!.send(outbound);
     } catch (error) {
       console.error("[relay-uplink] sendToDevice failed:", error);
     }
@@ -137,6 +154,7 @@ export class RelayUplink implements RelayOutbound {
 
   notifyRevoked(deviceId: string): void {
     this.deviceToConnection.delete(deviceId);
+    this.e2eSessions.delete(deviceId);
     const tokens = this.loadTokens();
     if (tokens[deviceId]) {
       delete tokens[deviceId];
@@ -198,6 +216,28 @@ export class RelayUplink implements RelayOutbound {
       const connectionId = from ? this.deviceToConnection.get(from) : undefined;
       if (!connectionId) {
         console.warn(`[relay-uplink] dropping frame from unknown device ${from || "?"}`);
+        return;
+      }
+      // pair.hello carries the device's X25519 public key — derive the session
+      // now (deterministic, so trusted reconnects re-derive the same key).
+      if (type === "pair.hello") this.deriveE2ESession(msg, from);
+      // E2E-encrypted data frame: decrypt before handing to the host.
+      if (msg.e === 1) {
+        const session = this.e2eSessions.get(from);
+        if (!session?.active) {
+          console.warn(`[relay-uplink] dropping encrypted frame from ${from} without an active E2E session`);
+          return;
+        }
+        let plaintext: string;
+        try {
+          plaintext = decryptFrame(session.key, msg as { n: string; c: string });
+        } catch (error) {
+          console.error(`[relay-uplink] E2E decrypt failed for ${from}:`, error);
+          return;
+        }
+        void this.options.getHost()?.handleTransportFrame(connectionId, plaintext).catch((error) => {
+          console.error("[relay-uplink] handleTransportFrame failed:", error);
+        });
         return;
       }
       void this.options.getHost()?.handleTransportFrame(connectionId, raw).catch((error) => {
@@ -266,13 +306,30 @@ export class RelayUplink implements RelayOutbound {
   }
 
   /** pair.accepted frames carry the stable deviceToken — register it with the
-   * relay so `hello` re-auth works (idempotent after a relay restart too). */
+   * relay so `hello` re-auth works (idempotent after a relay restart too).
+   * Also injects hostX25519Pub and activates E2E for subsequent data frames. */
   private observeOutbound(deviceId: string, frame: Record<string, unknown>): void {
     if (frame.type !== "pair.accepted") return;
     const payload = (frame.payload || {}) as Record<string, unknown>;
     const acceptedDevice = typeof payload.deviceId === "string" ? payload.deviceId : deviceId;
+    if (!payload.x25519Pub) payload.x25519Pub = this.options.x25519PubB64u;
     const token = this.deviceToken(acceptedDevice);
     if (token) this.sendControl({ type: "pair.approved", deviceId: acceptedDevice, deviceToken: token });
+    const session = this.e2eSessions.get(acceptedDevice);
+    if (session) session.active = true;
+  }
+
+  /** Derive the per-device AES key from pair.hello's x25519Pub (§4.2). */
+  private deriveE2ESession(msg: Record<string, unknown>, deviceId: string): void {
+    const payload = (msg.payload || {}) as Record<string, unknown>;
+    const theirPub = typeof payload.x25519Pub === "string" ? payload.x25519Pub : "";
+    if (!theirPub) return; // pre-E2E device — stays plaintext
+    try {
+      const shared = x25519SharedSecret(this.options.x25519PrivB64u, theirPub);
+      this.e2eSessions.set(deviceId, { key: deriveAesKey(shared, this.options.hostId, deviceId), active: false });
+    } catch (error) {
+      console.error(`[relay-uplink] E2E session derivation failed for ${deviceId}:`, error);
+    }
   }
 
   // --- retry / heartbeat -----------------------------------------------------------

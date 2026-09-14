@@ -193,6 +193,11 @@ export class RemoteHost {
     };
   }
 
+  /** E2E key material for the relay uplink (main-process only — never expose to renderer). */
+  getRelayCryptoMaterial(): { x25519PrivB64u: string; x25519PubB64u: string } {
+    return { x25519PrivB64u: this.identity.x25519PrivB64u, x25519PubB64u: this.identity.x25519PubB64u };
+  }
+
   createPairingTicket(): {
     hostId: string;
     fingerprint: string;

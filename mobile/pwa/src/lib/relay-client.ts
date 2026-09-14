@@ -11,11 +11,21 @@ export type RelayClientState = "idle" | "connecting" | "open" | "closed";
 
 type FrameListener = (frame: Record<string, unknown>) => void;
 
+/** E2E frame crypto hook — set after pair.accepted delivers the host's X25519 pub. */
+export interface FrameCrypto {
+  /** Plaintext envelope JSON → {e,n,c} object ready to send. */
+  encrypt(plaintextJson: string): Promise<Record<string, unknown>>;
+  /** {e,n,c} frame → plaintext envelope JSON (throws on tamper). */
+  decrypt(frame: Record<string, unknown>): Promise<string>;
+}
+
 export interface RelayClientOptions {
   /** wss://host/ws — the relay endpoint. */
   url: string;
   onFrame?: FrameListener;
   onStateChange?: (state: RelayClientState, lastError: string | null) => void;
+  /** Observes every raw JSON string sent on the wire (tests/debug). */
+  onSend?: (rawJson: string) => void;
 }
 
 const RECONNECT_BASE_MS = 1_000;
@@ -30,6 +40,7 @@ export class RelayClient {
   /** When set, the client keeps itself alive (auto-reconnect + re-hello). */
   private stayAlive = false;
   private helloCreds: { deviceId: string; deviceToken: string } | null = null;
+  private frameCrypto: FrameCrypto | null = null;
   private readonly listeners = new Set<FrameListener>();
 
   constructor(private readonly options: RelayClientOptions) {}
@@ -74,9 +85,35 @@ export class RelayClient {
   }
 
   send(obj: unknown): boolean {
+    return this.sendRaw(JSON.stringify(obj));
+  }
+
+  /** Send a protocol v1 envelope, E2E-encrypted when a session is active.
+   * Control frames (hello/pair.request) always go through plain send(). */
+  async sendData(obj: unknown): Promise<boolean> {
+    const record = obj as Record<string, unknown>;
+    if (this.frameCrypto && record.v === 1) {
+      try {
+        return this.sendRaw(JSON.stringify(await this.frameCrypto.encrypt(JSON.stringify(obj))));
+      } catch (error) {
+        this.lastError = error instanceof Error ? error.message : String(error);
+        return false;
+      }
+    }
+    return this.send(obj);
+  }
+
+  /** Install/clear the E2E session crypto. Inbound {e,n,c} frames are decrypted
+   * and dispatched as their plaintext envelope; without crypto they are dropped. */
+  setFrameCrypto(crypto: FrameCrypto | null): void {
+    this.frameCrypto = crypto;
+  }
+
+  private sendRaw(rawJson: string): boolean {
     if (!this.isOpen()) return false;
     try {
-      this.ws!.send(JSON.stringify(obj));
+      this.ws!.send(rawJson);
+      this.options.onSend?.(rawJson);
       return true;
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
@@ -133,8 +170,7 @@ export class RelayClient {
       } catch {
         return; // non-JSON — ignore
       }
-      this.options.onFrame?.(frame);
-      for (const listener of [...this.listeners]) listener(frame);
+      void this.dispatch(frame);
     };
 
     ws.onerror = () => {
@@ -155,6 +191,29 @@ export class RelayClient {
         if (this.stayAlive) this.openSocket();
       }, delay);
     };
+  }
+
+  /** Decrypt E2E frames (if a session is active), then fan out to listeners. */
+  private async dispatch(frame: Record<string, unknown>): Promise<void> {
+    if (frame.e === 1) {
+      const crypto = this.frameCrypto;
+      if (!crypto) {
+        console.warn("[relay-client] encrypted frame without session crypto — dropped");
+        return;
+      }
+      let plaintext: string;
+      try {
+        plaintext = await crypto.decrypt(frame);
+      } catch (error) {
+        console.error("[relay-client] E2E decrypt failed:", error);
+        return;
+      }
+      const parsed: unknown = JSON.parse(plaintext);
+      if (!parsed || typeof parsed !== "object") return;
+      frame = parsed as Record<string, unknown>;
+    }
+    this.options.onFrame?.(frame);
+    for (const listener of [...this.listeners]) listener(frame);
   }
 
   private clearReconnectTimer(): void {

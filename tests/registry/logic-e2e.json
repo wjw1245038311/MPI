@@ -1,0 +1,17 @@
+{
+  "id": "logic-e2e",
+  "title": "手机版 E2E 加密（S3）：X25519/HKDF/AES-GCM 双端等价 + identity schema v2 升级",
+  "feature": "手机版（云中继）",
+  "kind": "logic",
+  "source": "docs/MOBILE-DESIGN.md §4.1/§4.2 / src/main/remote/e2e-crypto.ts / mobile/pwa/src/lib/e2e-crypto.ts",
+  "description": "test-e2e-crypto.mjs：①X25519 共享密钥 node:crypto vs noble（固定私钥常量，双向+交换律）；②HKDF-SHA256 派生 AES-256-GCM 密钥双端字节一致，且钉死固定向量（PIN_VECTORS=1 可重算）；③AES-GCM 跨实现往返（PWA 加密→host 解密、反向）+ 篡改/错 nonce 检测；④单种子设备 X25519 派生确定性；⑤identity schema v2——旧格式 remote-identity.json 升级加载不丢 Ed25519/hostId，X25519 密钥对补齐且 save/load 往返稳定（safeStorage 保护）。",
+  "logicTest": "e2e-crypto",
+  "assertions": [
+    "固定私钥下 node x25519SharedSecret === noble getSharedSecret（双向）",
+    "HKDF(ikm=shared, salt=\"\", info=\"mpi-mobile-v1|hostId|deviceId\") 双端输出一致且等于钉死向量",
+    "PWA encryptFrame → host decryptFrame === 原文；反向亦然",
+    "篡改密文/nonce 后两端均抛错拒绝",
+    "旧格式身份文件升级：hostId/publicKeyPem 不变，x25519PubB64u/x25519PrivB64u 补齐且往返稳定"
+  ],
+  "passCriteria": "test-e2e-crypto.mjs 全部检查通过（npm test -- e2e-crypto）"
+}

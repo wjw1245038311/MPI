@@ -1,9 +1,15 @@
 /**
- * S2 end-to-end: the PWA's own library code (RelayClient + device-identity +
+ * S2/S3 end-to-end: the PWA's own library code (RelayClient + device-identity +
  * pairing) pairs with a real RemoteHost+RelayUplink through the real relay.
  *
- * Proves, among other things, that noble Ed25519 SPKI PEM / deviceId derivation
- * is byte-compatible with the desktop's identity.ts (the host verifies it).
+ * Proves, among other things:
+ *  - noble Ed25519 SPKI PEM / deviceId derivation is byte-compatible with the
+ *    desktop's identity.ts (the host verifies it);
+ *  - S3 E2E: after pair.accepted both directions carry {e,n,c} ciphertext on the
+ *    wire (spied via WebSocket.prototype.send for the uplink and RelayClient
+ *    onSend for the PWA), while handshake frames stay plaintext; the fake host
+ *    service receives decrypted envelopes and its encrypted response is
+ *    decrypted by the PWA client; reconnect re-derives the same key locally.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -64,6 +70,7 @@ async function main() {
     const { createDeviceIdentity, randomSeedB64url } = await import("../mobile/pwa/src/lib/device-identity.ts");
     const { parsePairingLink, runPairing, reauthenticate } = await import("../mobile/pwa/src/lib/pairing.ts");
     const { RelayClient } = await import("../mobile/pwa/src/lib/relay-client.ts");
+    const { makeEnvelope, responseFor } = await import("../mobile/shared/protocol.ts");
 
     // --- unit: parsePairingLink ------------------------------------------------------
     assert.throws(() => parsePairingLink(""));
@@ -73,15 +80,37 @@ async function main() {
 
     // --- boot host + uplink -----------------------------------------------------------
     const rendererEvents = [];
+    const handledEnvelopes = []; // what the (fake) host service receives — must be plaintext
     remoteHost = new RemoteHost({
       userDataDir: userData,
       signalingUrl: "",
       stunUrls: [],
       sendToRenderer: (channel, payload) => rendererEvents.push([channel, payload]),
-      service: { handle: async () => {}, disconnect: () => {} },
+      service: {
+        handle: async (request, ctx) => {
+          handledEnvelopes.push(request);
+          if (request.type === "projects.list") ctx.send(responseFor(request, { projects: [] }));
+        },
+        disconnect: () => {},
+      },
     });
     remoteHost.start();
-    uplink = new RelayUplink({ relayUrl: url, hostId: remoteHost.getStatus().hostId, userDataDir: userData, getHost: () => remoteHost });
+
+    // Spy the uplink's wire output (ws package prototype — PWA uses native WebSocket,
+    // relay runs in a child process, so only host→relay frames are captured).
+    const WS = (await import("ws")).default;
+    const hostOutboundRaw = [];
+    const origWsSend = WS.prototype.send;
+    WS.prototype.send = function patchedSend(data, ...rest) {
+      try {
+        const obj = JSON.parse(String(data));
+        if (obj && typeof obj === "object" && typeof obj.to === "string") hostOutboundRaw.push(obj);
+      } catch { /* non-JSON — ignore */ }
+      return origWsSend.call(this, data, ...rest);
+    };
+
+    const cryptoMaterial = remoteHost.getRelayCryptoMaterial();
+    uplink = new RelayUplink({ relayUrl: url, hostId: remoteHost.getStatus().hostId, userDataDir: userData, x25519PrivB64u: cryptoMaterial.x25519PrivB64u, x25519PubB64u: cryptoMaterial.x25519PubB64u, getHost: () => remoteHost });
     remoteHost.setRelay(uplink);
     uplink.start();
     await waitFor(() => uplink.getStatus().state === "connected", "uplink connected");
@@ -108,7 +137,8 @@ async function main() {
 
     // --- full pairing through the PWA library ------------------------------------------
     const stages = [];
-    const client = new RelayClient({ url });
+    const pwaOutboundRaw = []; // exact bytes the PWA puts on the wire
+    const client = new RelayClient({ url, onSend: (raw) => pwaOutboundRaw.push(raw) });
     clients.push(client);
     const resultPromise = runPairing(client, payload, identity, "test-pwa", (s) => stages.push(s));
 
@@ -121,6 +151,35 @@ async function main() {
     assert.ok(result.deviceToken.length >= 32, "deviceToken issued");
     assert.deepEqual(stages, ["connecting", "waiting-challenge", "waiting-approval", "approved"]);
 
+    // --- S3: E2E session established ------------------------------------------------------
+    assert.equal(Buffer.from(result.hostX25519PubB64u, "base64url").length, 32, "host X25519 pub delivered (raw 32B)");
+    const acceptedOnWire = hostOutboundRaw.find((f) => f.type === "pair.accepted");
+    assert.ok(acceptedOnWire, "pair.accepted sent plaintext on the wire");
+    assert.equal(Buffer.from(String(acceptedOnWire.payload.x25519Pub), "base64url").length, 32, "pair.accepted carries hostX25519Pub");
+
+    // Encrypted request from the PWA: wire must be {e,n,c} only — no plaintext fields.
+    const reqEnvelope = makeEnvelope("projects.list", "sess-e2e-1", {});
+    // Subscribe for the response BEFORE sending (no frame buffering in RelayClient).
+    const responsePromise = new Promise((resolve) => {
+      const off = client.onFrame((f) => { if (f.type === "projects.list.result") { off(); resolve(f); } });
+    });
+    assert.equal(await client.sendData(reqEnvelope), true, "sendData accepted");
+    const lastPwaWire = JSON.parse(pwaOutboundRaw[pwaOutboundRaw.length - 1]);
+    assert.equal(lastPwaWire.e, 1, "device→host data frame is E2E-encrypted on the wire");
+    assert.ok(typeof lastPwaWire.n === "string" && typeof lastPwaWire.c === "string", "{e,n,c} shape");
+    assert.equal(lastPwaWire.type, undefined, "no plaintext envelope fields leak to the relay");
+
+    await waitFor(() => handledEnvelopes.some((r) => r.type === "projects.list"), "host service receives decrypted projects.list");
+    const seen = handledEnvelopes.find((r) => r.type === "projects.list");
+    assert.equal(seen.requestId, reqEnvelope.requestId, "host decrypted the exact envelope (requestId intact)");
+
+    // Host response comes back encrypted on the wire and is transparently decrypted by the PWA.
+    await waitFor(() => hostOutboundRaw.some((f) => f.e === 1), "host→device encrypted frame on the wire");
+    const encResponseOnWire = hostOutboundRaw.find((f) => f.e === 1);
+    assert.equal(encResponseOnWire.type, undefined, "host response is ciphertext on the wire");
+    const decResponse = await responsePromise;
+    assert.equal(decResponse.requestId, reqEnvelope.requestId, "PWA decrypted the host response (requestId intact)");
+
     // --- reconnect through the PWA library (hello + reauthenticate) ----------------------
     client.close();
     await sleep(150);
@@ -128,7 +187,7 @@ async function main() {
     const restored = createDeviceIdentity(seed);
     assert.equal(restored.deviceId, identity.deviceId);
 
-    const client2 = new RelayClient({ url });
+    const client2 = new RelayClient({ url, onSend: (raw) => pwaOutboundRaw.push(raw) });
     clients.push(client2);
     client2.setHelloCreds(identity.deviceId, result.deviceToken);
     // Subscribe BEFORE connecting so no frame can be missed (same pattern as App.tsx).
@@ -136,7 +195,14 @@ async function main() {
     client2.connect();
     const reResult = await reResultPromise;
     assert.equal(reResult.deviceToken, result.deviceToken); // stable token
+    assert.equal(reResult.hostX25519PubB64u, result.hostX25519PubB64u, "host X25519 pub stable across reconnects");
 
+    // S3.4: the re-auth path re-derived the same AES key locally — encrypted traffic resumes.
+    const before = handledEnvelopes.length;
+    assert.equal(await client2.sendData(makeEnvelope("projects.list", "sess-e2e-2", {})), true);
+    await waitFor(() => handledEnvelopes.length > before, "post-reconnect encrypted frame decrypted by host");
+
+    WS.prototype.send = origWsSend; // restore the prototype patch
     console.log("pwa-pairing tests passed");
   } finally {
     for (const c of clients) c.close();

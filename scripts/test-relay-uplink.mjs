@@ -197,10 +197,13 @@ async function main() {
     });
     remoteHost.start();
 
+    const cryptoMaterial = remoteHost.getRelayCryptoMaterial();
     uplink = new RelayUplink({
       relayUrl: url,
       hostId: remoteHost.getStatus().hostId,
       userDataDir: userData,
+      x25519PrivB64u: cryptoMaterial.x25519PrivB64u,
+      x25519PubB64u: cryptoMaterial.x25519PubB64u,
       getHost: () => remoteHost,
     });
     remoteHost.setRelay(uplink);

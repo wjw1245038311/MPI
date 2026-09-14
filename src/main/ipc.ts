@@ -932,10 +932,13 @@ function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
     return;
   }
   if (!activeRelayUplink) {
+    const cryptoMaterial = remoteHost.getRelayCryptoMaterial();
     activeRelayUplink = new RelayUplink({
       relayUrl: cfg.remoteRelayUrl,
       hostId: remoteHost.getStatus().hostId,
       userDataDir: getConfigDir(),
+      x25519PrivB64u: cryptoMaterial.x25519PrivB64u,
+      x25519PubB64u: cryptoMaterial.x25519PubB64u,
       getHost: () => (activeRemoteHost === remoteHost ? remoteHost : null),
       onStateChange: (status) => { if (sendToRenderer) sendToRenderer("remote:relay-state", status); },
     });

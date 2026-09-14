@@ -61,8 +61,18 @@ export default function App() {
     if (!record.deviceToken) return;
     client.setHelloCreds(identity.deviceId, record.deviceToken);
     client.connect();
-    // After the relay accepts the hello, the host issues a fresh challenge.
-    void reauthenticate(client, record.hostId, identity, name).catch((e: Error) => setError(e.message));
+    // After the relay accepts the hello, the host issues a fresh challenge;
+    // re-auth also (re)installs the E2E session crypto on the client.
+    void reauthenticate(client, record.hostId, identity, name)
+      .then((result) => {
+        if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken);
+        return storeRef.current.savePairing({
+          ...record,
+          deviceToken: result.deviceToken || null,
+          hostX25519PubB64u: result.hostX25519PubB64u || record.hostX25519PubB64u,
+        });
+      })
+      .catch((e: Error) => setError(e.message));
   };
 
   const startPairing = async () => {
@@ -95,6 +105,7 @@ export default function App() {
         relayUrl: payload.relayUrl!,
         deviceId: identity.deviceId,
         deviceToken: result.deviceToken || null,
+        hostX25519PubB64u: result.hostX25519PubB64u || undefined,
         pairedAt: Date.now(),
       });
       if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken);

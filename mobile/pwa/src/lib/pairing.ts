@@ -9,6 +9,14 @@
 // src/lib → pwa → mobile → shared
 import { makeEnvelope } from "../../../shared/protocol";
 import type { DeviceIdentity } from "./device-identity";
+import {
+  deriveAesKeyRaw,
+  decryptFrame as e2eDecrypt,
+  encryptFrame as e2eEncrypt,
+  importAesKey,
+  x25519SharedSecretRaw,
+  type E2EFrame,
+} from "./e2e-crypto";
 import type { RelayClient } from "./relay-client";
 
 export interface PairingPayload {
@@ -99,6 +107,9 @@ async function waitForOpen(client: RelayClient, timeoutMs: number): Promise<void
 
 export interface PairingResult {
   deviceToken: string;
+  /** Host X25519 public key (b64url) — persist it; the session key is re-derived
+   * locally on every reconnect, no renegotiation needed. */
+  hostX25519PubB64u: string;
 }
 
 /** Answer a pair.challenge with a signed pair.hello and wait for pair.accepted. */
@@ -126,13 +137,29 @@ async function answerChallenge(
       publicKeyPem: identity.publicKeyPem,
       signature: identity.signText(signedText),
       ticket,
+      // E2E (S3): the host derives the session key from this on pair.hello.
+      x25519Pub: identity.x25519PubB64u,
     }),
   );
 
   // Trusted devices are accepted immediately; new ones wait for the desktop user.
   const accepted = await awaitFrameOrError(client, (f) => f.type === "pair.accepted", "pair.accepted", acceptedTimeoutMs);
   const ap = (accepted.payload || {}) as Record<string, unknown>;
-  return { deviceToken: typeof ap.deviceToken === "string" ? ap.deviceToken : "" };
+  const deviceToken = typeof ap.deviceToken === "string" ? ap.deviceToken : "";
+  const hostX25519PubB64u = typeof ap.x25519Pub === "string" ? ap.x25519Pub : "";
+
+  // E2E session: X25519 → HKDF-SHA256 → AES-256-GCM (§4.2). Deterministic, so a
+  // reconnect re-auth (fresh pair.accepted) re-installs the same key.
+  if (hostX25519PubB64u) {
+    const shared = x25519SharedSecretRaw(identity.x25519PrivB64u, hostX25519PubB64u);
+    const cryptoKey = await importAesKey(deriveAesKeyRaw(shared, hostId, identity.deviceId));
+    // Adapter between RelayClient.FrameCrypto and the concrete E2EFrame types.
+    client.setFrameCrypto({
+      encrypt: async (plain) => (await e2eEncrypt(cryptoKey, plain)) as unknown as Record<string, unknown>,
+      decrypt: (frame) => e2eDecrypt(cryptoKey, frame as Pick<E2EFrame, "n" | "c">),
+    });
+  }
+  return { deviceToken, hostX25519PubB64u };
 }
 
 /** Run the full pairing handshake. Resolves with the stable deviceToken. */

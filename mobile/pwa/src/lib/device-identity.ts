@@ -7,6 +7,9 @@
  * scripts/test-pwa-pairing.mjs proves it end-to-end against a real host.
  */
 import { ed25519 } from "@noble/curves/ed25519";
+// v1.9.x: X25519 ships inside the ed25519 module (no standalone subpath export).
+import { x25519 } from "@noble/curves/ed25519";
+import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha256";
 
 /** Fixed SPKI DER prefix for Ed25519 (SEQUENCE{SEQUENCE{OID 1.3.101.112}, BITSTRING}). */
@@ -17,8 +20,18 @@ export interface DeviceIdentity {
   deviceId: string;
   /** SPKI PEM of the Ed25519 public key (what the host verifies against). */
   publicKeyPem: string;
+  /** X25519 public key (raw 32B, base64url) for E2E key agreement. */
+  x25519PubB64u: string;
+  /** X25519 private key — deterministically derived from the stored Ed25519 seed,
+   * so exposing it adds no secret beyond what the keystore already holds. */
+  x25519PrivB64u: string;
   /** Sign text → base64url signature (no padding), matching identity.signText. */
   signText(text: string): string;
+}
+
+/** Deterministic X25519 private key from the Ed25519 seed (single-seed device). */
+export function deriveX25519Priv(ed25519Seed: Uint8Array): Uint8Array {
+  return hkdf(sha256, ed25519Seed, new Uint8Array(0), "mpi-device-x25519", 32);
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -31,7 +44,7 @@ export function toBase64Url(bytes: Uint8Array): string {
   return bytesToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function fromBase64Url(value: string): Uint8Array {
+export function fromBase64Url(value: string): Uint8Array {
   const b64 = value.replace(/-/g, "+").replace(/_/g, "/");
   const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
   const binary = atob(padded);
@@ -62,9 +75,12 @@ export function createDeviceIdentity(seedB64url?: string): DeviceIdentity {
   const priv = seedB64url ? fromBase64Url(seedB64url) : ed25519.utils.randomPrivateKey();
   if (priv.length !== 32) throw new Error("invalid Ed25519 seed length");
   const publicKeyPem = ed25519SpkiPem(ed25519.getPublicKey(priv));
+  const xPriv = deriveX25519Priv(priv);
   return {
     deviceId: deviceIdFor(publicKeyPem),
     publicKeyPem,
+    x25519PubB64u: toBase64Url(x25519.getPublicKey(xPriv)),
+    x25519PrivB64u: toBase64Url(xPriv),
     signText: (text) => toBase64Url(ed25519.sign(utf8Bytes(text), priv)),
   };
 }

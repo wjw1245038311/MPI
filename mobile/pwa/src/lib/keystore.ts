@@ -15,6 +15,8 @@ export interface PairingRecord {
   deviceId: string;
   /** Stable token from pair.accepted — enables hello re-auth after reconnects. */
   deviceToken: string | null;
+  /** Host X25519 pub (b64url) for E2E key derivation; optional for pre-S3 records. */
+  hostX25519PubB64u?: string;
   pairedAt: number;
 }
 
