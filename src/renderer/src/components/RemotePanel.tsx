@@ -381,6 +381,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
                 {zh ? `SHA256 ${phoneApp.sha256.slice(0, 16)}…` : `SHA256 ${phoneApp.sha256.slice(0, 16)}…`}
               </div>
             )}
+            <div className="set-hint">
+              {zh
+                ? `也可以直接在手机上打开 Seafile，从 Agent 目录下载 MPI-Android-${phoneApp.version}.apk（中继/GitHub 都可能慢）。`
+                : `Or open Seafile on the phone and grab MPI-Android-${phoneApp.version}.apk from the Agent folder.`}
+            </div>
           </div>
         ) : (
           <div className="set-hint">

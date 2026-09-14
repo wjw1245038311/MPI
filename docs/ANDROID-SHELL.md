@@ -73,6 +73,7 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk   # 或把 APK 
 | --- | --- | --- |
 | 中继（主） | `/download/mpi-android-<v>.apk` | 手机在 Tailscale 内，最快 |
 | GitHub（备选） | `https://github.com/<owner>/<repo>/releases/download/android-v<v>/mpi-android-<v>.apk` | 中继/Tailnet 不可用，且手机能访问 GitHub（仓库公开，无需 token） |
+| **Seafile（最省事）** | `Agent/MPI-Android-<v>.apk`（脚本自动拷贝） | 手机上打开 Seafile 直接下；中继/GitHub 都可能慢或不可达时首选 |
 
 ```bash
 # 1. 构建 + 生成本地产物（版本化 APK + sha256 + 清单，落在 android/publish/）
@@ -110,6 +111,27 @@ https://<relay>/#pair=<base64url payload>
 - 卡片上的 **「扫码后自动批准（无需在桌面点允许）」** 开关（默认开）：该票在 5 分钟有效期内
   直接放行。票本身就是凭据（二维码/链接泄露等价于泄露票据），它由用户刚在面板上主动生成，
   所以省掉桌面端再点一次；关上开关则回到“扫码后需在面板点允许”的旧行为。
+
+## 壳能力：扫码与自更新
+
+两项都在壳（`android/`）里，不依赖 Google Play 服务：
+
+- **壳内扫码**（`ScanActivity`）：CameraX 预览 + ML Kit `barcode-scanning`（bundled 模型，离线可用）。
+  PWA 配对页上的「扫码配对」按钮靠 `window.MpiShell`（`addJavascriptInterface` 注入）探测壳环境；
+  识别到文本后由壳归一化成 `https://<relay>/#pair=<payload>` 交给 WebView —— **复用 PWA 已有的
+  `#pair=` 自动配对路径，原生侧不重写配对逻辑**。权限被拒时回退到「粘贴配对链接」，不影响其它功能。
+- **APK 自更新**（`Updater`）：启动 ~3 秒后读 `/download/mpi-android.json` 比对
+  `BuildConfig.VERSION_NAME`；有新版就在 WebView 上方浮出原生提示条（「发现新版 X · 更新 / ✕」）。
+  点更新 → HttpURLConnection 下载（带进度）→ **sha256 校验**（不一致不安装）→ FileProvider +
+  `ACTION_VIEW` 调起系统安装器。Android 不允许静默安装，首次需用户在系统里允许「安装未知应用」。
+  点 ✕ 会把该版本记进 prefs，同一版不再反复提示。中继不可达时静默跳过（不打扰）。
+- 体积：ML Kit 的 `libbarhopper_v3.so` 每个 ABI 约 5–6MB，已用 `ndk.abiFilters` 只保留
+  `arm64-v8a`（手机）+ `x86_64`（模拟器），APK 从 27.6MB 降到 **16MB**。
+- 联调放行：debug 构建对 `https://127.0.0.1` 跳过证书校验（WebView 与 `Updater` 一致），
+  因为中继证书签的是 tailnet 域名；release 恒 fail-closed。
+
+验证方式：壳内配对页点「扫码配对」→ 拉起相机预览（授予相机权限后）；桌面改版本号重发一版 →
+旧壳启动后出现「发现新版 X」→ 点更新 → 下载并调起系统安装器 → 安装完成；点 ✕ 后同一版不再提示。
 
 ## 模拟器联调（本机自测，无需真机）
 
