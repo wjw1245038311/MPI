@@ -1,0 +1,17 @@
+{
+  "name": "mpi-relay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MPI mobile cloud relay — opaque frame router between Windows hosts and phone PWA (E2E-encrypted payloads)",
+  "engines": {
+    "node": ">=24.14.0 <25"
+  },
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
