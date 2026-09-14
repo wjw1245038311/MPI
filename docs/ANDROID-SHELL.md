@@ -65,6 +65,43 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk   # 或把 APK 
 首次使用：桌面 MPI → 侧栏「手机远程控制（云中继）」→ 生成配对二维码 → 手机壳里粘贴
 `mpi://pair?payload=…` 链接 → 桌面点「允许」。之后打开壳就是上次的会话列表。
 
+## 发布与扫码下载
+
+APK **不放在 GitHub**（本机到 github.com 被墙），而是由中继静态托管——手机本来就在 Tailscale 里，
+顺手就能下，且与 PWA 同源、版本信息可一起托管：
+
+```bash
+# 1. 构建 + 生成发布产物（版本化 APK + sha256 + 清单，落在 android/publish/）
+cd android && JAVA_HOME='E:\MyWorkspace\Software\jdk21' ./gradlew assembleDebug && cd ..
+node scripts/publish-android.mjs
+
+# 2. 拷到中继静态目录（/var/www/mpi-mobile/）
+#    download/mpi-android-<version>.apk
+#    download/mpi-android-<version>.apk.sha256
+#    download/mpi-android.json          ← 桌面端读的就是这份清单
+```
+
+桌面端「手机远程控制」面板的**「手机 App（安卓）」卡片**会读 `/download/mpi-android.json`
+（主进程取，绕过 CORS），显示版本/大小/SHA256，并渲染**下载二维码**——手机相机扫码即可下载安装。
+换版本只需重新上传 APK 与同名 json（覆盖）。
+
+中继静态服务同时处理 `HEAD`（与 `GET` 同头不带体），方便下载工具/浏览器先探尺寸。
+
+## 扫码配对
+
+二维码里不再是 `mpi://pair?payload=…`（系统相机与大多数扫码器只会把它当文本显示），而是：
+
+```
+https://<relay>/#pair=<base64url payload>
+```
+
+- 手机扫码 → 系统浏览器或已安装的安卓壳打开该链接（壳在清单里注册了该域名的 VIEW 过滤器）→
+  PWA 读到 `#pair=` 即**自动开始配对**，配完用 `history.replaceState` 抹掉地址栏里的票据。
+- 桌面端「配对手机」卡片保留了 `mpi://` 链接的文本框，粘贴式配对仍然可用。
+- 卡片上的 **「扫码后自动批准（无需在桌面点允许）」** 开关（默认开）：该票在 5 分钟有效期内
+  直接放行。票本身就是凭据（二维码/链接泄露等价于泄露票据），它由用户刚在面板上主动生成，
+  所以省掉桌面端再点一次；关上开关则回到“扫码后需在面板点允许”的旧行为。
+
 ## 模拟器联调（本机自测，无需真机）
 
 雷电模拟器**没有 Tailscale**，到不了 tailnet 上的中继，所以用回环隧道把它接进去：
@@ -95,5 +132,7 @@ F:/leidian/LDPlayer14/adb.exe shell am start -n com.mpi.remote/.MainActivity \
   `Notification=undefined`），且个人自用只需「打开就能看到」。桌面审批的锁屏通知仍由浏览器
   PWA + WebPush 承担（那条路需要 Google Play 服务，见 `MOBILE-DESIGN.md` §7/§8.1）。
 - **WebRTC 直连 / 原生传输**：已由 WSS 中继取代，壳里不重复实现。
+- **应用内扫码**：不自带相机扫码器——桌面二维码是 https 链接，用系统相机/任意扫码器即可，
+  链接会被浏览器或壳接管。
 - **正式签名与上架**：当前是 debug 自签（同一台机器的 `~/.android/debug.keystore`，可覆盖安装）。
   需要长期分发时再补 release keystore。
