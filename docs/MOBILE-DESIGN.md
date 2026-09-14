@@ -229,8 +229,14 @@ Qoder Mobile 已实现的用户功能（官方文档 + 截图 + H5 bundle 拆解
 | 任务行机器·仓库 + 在线点 | `RemoteThreadSummary` 有 projectId/state；单主机 MVP 无 host 维度 | 多主机场景（v2）引入 environment 概念 |
 | 锁屏审批 | WebPush deep link 直达线程渲染审批卡 | iOS Live Activities v1 不做；Android 富通知按钮随原生壳后置 |
 
-## 7. 推送通知设计
+### 6.5 原生壳（Android APK）
 
+自用形态的安卓端 = **一个全屏 WebView 壳**（`android/`，包名 `com.mpi.remote`），载入这份 PWA 的
+线上构建；配对/E2E/会话流全部沿用 H5，壳只提供全屏窗口与原生兜底 UI。**不做**后台常驻与
+锁屏推送（WebView 无 PushManager，自用场景只需「打开就能看到」）。构建、联调、限制见
+`docs/ANDROID-SHELL.md`。
+
+## 7. 推送通知设计
 - MVP：**WebPush (VAPID)**。PWA 首次配对后 `serviceWorker.register` + `pushManager.subscribe`，
   subscription 经加密通道上报 host（host 存本地 config）；relay 收到 `push.request` 即向对应 sub 发 push。
   通知点击 → deep link `/thread/<id>` 直达线程并触发 resync。
