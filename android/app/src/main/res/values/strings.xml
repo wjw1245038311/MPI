@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MPI</string>
+    <string name="shell_url_hint">中继地址（https://…）</string>
+    <string name="shell_retry">重试</string>
+    <string name="shell_save">保存并加载</string>
+    <string name="shell_load_failed">无法加载中继页面：\n%1$s\n\n请确认手机已连上 Tailscale，且地址正确。</string>
+</resources>
