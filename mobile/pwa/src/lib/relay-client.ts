@@ -42,6 +42,7 @@ export class RelayClient {
   private helloCreds: { deviceId: string; deviceToken: string } | null = null;
   private frameCrypto: FrameCrypto | null = null;
   private readonly listeners = new Set<FrameListener>();
+  private readonly stateListeners = new Set<(state: RelayClientState, lastError: string | null) => void>();
 
   constructor(private readonly options: RelayClientOptions) {}
 
@@ -53,10 +54,17 @@ export class RelayClient {
     return this.lastError;
   }
 
-  /** Subscribe to every inbound frame (control + data). Returns unsubscribe. */
+  /** Subscribe to every inbound frame (control + data). Returns unsubscribe.
+   * NOTE: subscribe before connect() — frames are not buffered for late listeners. */
   onFrame(listener: FrameListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Subscribe to connection state changes (in addition to the constructor option). */
+  onState(listener: (state: RelayClientState, lastError: string | null) => void): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
   }
 
   connect(): void {
@@ -82,6 +90,15 @@ export class RelayClient {
   /** True when the socket is open and can accept sends. */
   isOpen(): boolean {
     return !!this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  /** Test/manual helper: drop the socket as if the network died — auto-reconnect
+   * (and re-hello) still apply, unlike close() which is a permanent shutdown.
+   * (Node's native WebSocket has no terminate(); 1006 is reserved so use 1000.) */
+  simulateDrop(): void {
+    try {
+      this.ws?.close(1000, "simulate drop");
+    } catch { /* already gone */ }
   }
 
   send(obj: unknown): boolean {
@@ -142,7 +159,10 @@ export class RelayClient {
   // --- internals ------------------------------------------------------------------
 
   private openSocket(): void {
-    if (this.state === "connecting" || this.state === "open") return;
+    // Guard on the live socket, not state: after a drop the close handler already
+    // set state to "connecting" while scheduling the retry — a state guard here
+    // would deadlock the reconnect (no socket exists yet).
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     this.setState("connecting", null);
     let ws: WebSocket;
     try {
@@ -228,6 +248,11 @@ export class RelayClient {
     try {
       this.options.onStateChange?.(state, lastError);
     } catch { /* listener must never break the client */ }
+    for (const listener of [...this.stateListeners]) {
+      try {
+        listener(state, lastError);
+      } catch { /* listeners must never break the client */ }
+    }
   }
 }
 

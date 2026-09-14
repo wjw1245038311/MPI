@@ -200,3 +200,29 @@ export async function reauthenticate(
 ): Promise<PairingResult> {
   return answerChallenge(client, hostId, identity, deviceName, "", 30_000);
 }
+
+/**
+ * Keep an established session alive across mid-session socket drops: whenever the
+ * socket opens again (initial connect included), redo the challenge handshake —
+ * which also reinstalls E2E crypto. Attach AFTER setHelloCreds; returns cleanup.
+ */
+export function attachAutoReauth(
+  client: RelayClient,
+  hostId: string,
+  identity: DeviceIdentity,
+  deviceName: string,
+  onReauth?: (result: PairingResult) => void,
+): () => void {
+  let inFlight = false;
+  const off = client.onState((state) => {
+    if (state !== "open" || inFlight) return;
+    inFlight = true;
+    reauthenticate(client, hostId, identity, deviceName)
+      .then((result) => onReauth?.(result))
+      .catch(() => { /* surfaced via UI error state; next open retries */ })
+      .finally(() => {
+        inFlight = false;
+      });
+  });
+  return off;
+}

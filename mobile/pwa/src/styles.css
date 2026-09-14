@@ -85,3 +85,26 @@ button:disabled { opacity: 0.5; cursor: default; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 .dot.ok { background: var(--ok); }
 .dot.err { background: var(--err); }
+
+/* --- S4 home view ---------------------------------------------------------- */
+.home-card { display: flex; flex-direction: column; gap: 10px; }
+.host-row { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+
+.project { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: rgba(255, 255, 255, 0.02); }
+.project-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px; width: 100%;
+  padding: 10px 12px; background: none; border: none; color: var(--text); font-size: 14px;
+  text-align: left; cursor: pointer;
+}
+.project-row:hover { background: rgba(255, 255, 255, 0.04); }
+
+.thread-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.thread-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-preview { max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.badge { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--border); color: var(--muted); }
+.badge-running { background: rgba(158, 206, 106, 0.15); color: var(--ok); }
+.badge-error { background: rgba(247, 118, 142, 0.15); color: var(--err); }
+.badge-disconnected { background: rgba(241, 198, 113, 0.15); color: #f1c671; }
+
+.error-text { color: var(--err) !important; margin: 0; font-size: 13px; }

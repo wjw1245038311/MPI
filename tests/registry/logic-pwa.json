@@ -1,17 +1,19 @@
 {
   "id": "logic-pwa",
-  "title": "手机版 PWA S2：protocol 共享包等价性 + PWA lib 经真实 relay 与桌面 host 全链路配对/重连",
+  "title": "手机版 PWA S2-S4：protocol 共享包等价性 + 配对/E2E 全链路 + 首页 session 层",
   "feature": "手机版（云中继）",
   "kind": "logic",
   "source": "docs/MOBILE-DESIGN.md §6 / mobile/shared/protocol.ts / mobile/pwa/src/lib/",
-  "description": "两个脚本：①test-pwa-shared——mobile/shared/protocol.ts（桌面 protocol.ts 的 vendored copy）与桌面源行为等价：常量、makeEnvelope、parseEnvelope 合法/非法输入错误码（含 PAYLOAD_TOO_LARGE）、responseFor/errorFor 逐项 deepEqual，漂移即挂；②test-pwa-pairing——PWA 自己的库代码（RelayClient + noble Ed25519 device-identity + pairing 编排）作为手机，经真实 relay 子进程与真实 RemoteHost+RelayUplink 配对：parsePairingLink 解析 mpi://pair 链接、pair.request→challenge(带 connectionId)→签名 hello（证明 noble SPKI PEM/deviceId 派生与桌面 identity.ts 字节兼容）→pair.pending→批准→pair.accepted(deviceToken)、阶段序列正确；断开后 setHelloCreds+reauthenticate：hello(token)→新 challenge→受信自动批准、token 稳定不变。",
+  "description": "三个脚本：①test-pwa-shared——mobile/shared/protocol.ts（桌面 protocol.ts 的 vendored copy）与桌面源行为等价：常量、makeEnvelope、parseEnvelope 合法/非法输入错误码（含 PAYLOAD_TOO_LARGE）、responseFor/errorFor 逐项 deepEqual，漂移即挂；②test-pwa-pairing——PWA lib（RelayClient + noble Ed25519/X25519 device-identity + pairing）作为手机经真实 relay ↔ 真实 RemoteHost+RelayUplink：配对链阶段序列、S3 E2E（pair.accepted 带 hostX25519Pub、双向线上帧仅 {e,n,c}、双端解密 requestId 完整、重连本地复算密钥）；③test-pwa-home——HostSession 首页数据层：projects.list/threads.list 缓存与 reqId 关联（乱序响应不错配）、hostOnline/lastFrameAt、running 会话轮询节奏（起/停）、simulateDrop 断线→自动重连+attachAutoReauth 补握手+重拉数据。"},
   "logicTest": "pwa",
   "assertions": [
     "shared/protocol.ts 与桌面 protocol.ts 常量/envelope 构造/解析错误码完全一致（含 2MB 上限）",
     "parsePairingLink：mpi://pair?payload=b64url 与裸 payload 均可解析；空链接/坏 base64/缺字段抛错",
     "PWA lib 配对链走通：stages=[connecting,waiting-challenge,waiting-approval,approved]，deviceToken≥32 字符",
     "noble Ed25519 签名被桌面 handleHello 验签通过（SPKI PEM/deviceId 派生字节兼容）",
-    "重连路径：hello(deviceToken)→relay.ok→新 challenge→受信自动批准，token 与首次一致"
+    "重连路径：hello(deviceToken)→relay.ok→新 challenge→受信自动批准，token 与首次一致",
+    "S3 E2E：pair.accepted 明文带 hostX25519Pub；PWA→host 线上帧仅 {e,n,c}（onSend spy）；host 服务收到解密 envelope；host 响应线上密文且 PWA 透明解密；重连后复算密钥加密流量恢复",
+    "S4 session：projects/threads 缓存正确、乱序响应按 requestId 路由不错配；running 项目周期轮询、全部 idle 后停止；simulateDrop→自动重连+reauth+重拉成功"
   ],
-  "passCriteria": "test-pwa-shared.mjs + test-pwa-pairing.mjs 全部检查通过（npm test -- pwa）"
+  "passCriteria": "test-pwa-shared.mjs + test-pwa-pairing.mjs + test-pwa-home.mjs 全部检查通过（npm test -- pwa）"
 }
