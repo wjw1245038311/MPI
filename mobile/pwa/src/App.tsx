@@ -90,12 +90,19 @@ export default function App() {
   /** 已绑定的主机（多设备）。当前主机由 hostId 标记，列表项按最近使用排序。 */
   const [pairings, setPairings] = useState<PairingRecord[]>([]);
   const currentPairing = pairings.find((item) => item.hostId === hostId) ?? null;
+  /** 飞书式层级：一级抽屉（项目/会话）、二级抽屉（设备）。 */
+  const [drawer, setDrawer] = useState<"none" | "projects" | "devices">("none");
+  const drawerRef = useRef(drawer);
+  drawerRef.current = drawer;
   const [connState, setConnState] = useState("idle");
   const [connErr, setConnErr] = useState<string | null>(null);
   /** Both client-creation sites share this: track state + last error (REPLACED etc.). */
   const onClientState = (s: string, err: string | null) => {
     setConnState(s);
-    setConnErr(err);
+    // 错误要“粘”住：重连重试会把 state 置回 connecting 且 err=null，如果跟着清，
+    // 身份不被认可（4001/AUTH_FAILED）这类永不恢复的错误就会一闪而过。只有真连上才清。
+    if (err) setConnErr(err);
+    else if (s === "open") setConnErr(null);
   };
   const [view, setView] = useState<"pairing" | "home">("pairing");
   const [snap, setSnap] = useState<SessionSnapshot | null>(null);
@@ -376,6 +383,22 @@ export default function App() {
     setOpenThreadId(null);
   };
 
+  /**
+   * 飞书式：进首页即进对话——自动打开最近更新的那个会话（每台主机只自动开一次，
+   * 用户主动关掉后不再弹回来）。
+   */
+  const autoOpenedHost = useRef<string | null>(null);
+  useEffect(() => {
+    if (view !== "home" || !hostId || !snap || openThreadId) return;
+    if (autoOpenedHost.current === hostId) return;
+    const threads = snap.projects.flatMap((project) => snap.threadsByProject[project.id] ?? []);
+    if (!threads.length) return;
+    autoOpenedHost.current = hostId;
+    const latest = [...threads].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    void openThread(latest.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, hostId, snap, openThreadId]);
+
   const respondUi = async (requestId: string, response: Record<string, unknown>) => {
     const actions = threadActionsRef.current;
     if (!actions || uiBusy) return;
@@ -431,11 +454,77 @@ export default function App() {
     if (target === hostId) disconnect();
   };
 
+  /**
+   * 抽屉开合与安卓返回键：开一层就压一条历史，返回键（popstate）先关二级再关一级。
+   * 壳里的返回键最终落到 WebView 的 goBack()，因此天然衔接这套历史栈。
+   */
+  const openDrawer = (level: "projects" | "devices") => {
+    setDrawer(level);
+    // 带真实 hash：WebView 的 canGoBack() 只认真正产生历史项的导航，不带 URL 的
+
+    // pushState 在安卓壳里返回键看不到（实测：壳会直接后台化而关不掉抽屉）。
+    window.history.pushState({ drawer: level }, "", `#${level}`);
+  };
+
+  /** 关掉所有抽屉（回退正确的历史条数，别连着 back 两次——那是异步的）。 */
+  const closeAllDrawers = () => {
+    if (drawer === "devices") window.history.go(-2);
+    else if (drawer === "projects") window.history.back();
+  };
+
+  const closeDrawer = () => {
+    if (drawer === "none") return;
+    window.history.back(); // 统一在 popstate 里收口，避免两条路径状态不一致
+  };
+
+  useEffect(() => {
+    const onPopState = () => setDrawer((current) => (current === "devices" ? "projects" : "none"));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  /**
+   * 安卓壳的返回键握手：壳先问 `window.__mpiBack()`。WebView 的 canGoBack() 不把
+   * pushState 历史算进去（实测按返回键会直接把 App 后台化、抽屉关不掉），所以逐级
+   * 返回由页面自己声明「这一下我处理了没有」。
+   */
+  useEffect(() => {
+    const hooks = window as unknown as { __mpiBack?: () => string };
+    hooks.__mpiBack = () => {
+      if (drawerRef.current === "none") return "pass";
+      window.history.back();
+      return "handled";
+    };
+    return () => {
+      delete hooks.__mpiBack;
+    };
+  }, []);
+
+  /** 头部标题：优先当前会话名，其次主机名（放最后推导——依赖上面的多个 state）。 */
+  const headerTitle = threadView?.summary?.title || currentPairing?.hostName || (hostId ? `主机 ${shortId(hostId)}` : "MPI Mobile");  const headerSubtitle = threadView?.summary
+    ? `${THREAD_STATE_LABELS[threadView.summary.state] ?? ""}${threadView.summary.permission === "full" ? " · 完全" : " · 沙盒"}`
+    : hostId
+      ? connState === "open"
+        ? "在线"
+        : "连接中…"
+      : "";
+
+  /**
+   * 设备身份不再被这台主机认可（桌面端撤销过、或手机端身份被重置）时，relay 会用
+   * 4001/AUTH_FAILED 关掉连接。此时无限重试毫无意义——得明确告诉用户重新配对。
+   */
+  const needsRepair = !!connErr && /AUTH_FAILED|4001/i.test(connErr);
+
   return (
     <div className="app">
       <header className="app-header">
-        <span className="app-logo" aria-hidden="true">M</span>
-        <h1>MPI Mobile</h1>
+        <button type="button" className="avatar-btn" onClick={() => openDrawer("projects")} aria-label="项目与会话">
+          <span className="app-logo" aria-hidden="true">M</span>
+        </button>
+        <div className="header-main">
+          <h1>{headerTitle}</h1>
+          {headerSubtitle && <div className="hint">{headerSubtitle}</div>}
+        </div>
       </header>
       <main className="app-main">
         {view === "home" && hostId && openThreadId && threadView ? (
@@ -448,90 +537,29 @@ export default function App() {
             onBack={closeThread}
           />
         ) : view === "home" && hostId ? (
-          <div className="card home-card">
-            {/* Host card */}
-            <div className="host-row">
-              <span className={`dot ${connState === "open" ? "ok" : "err"}`} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600 }}>
-                  {currentPairing?.hostName || `主机 ${shortId(hostId)}`}
-                </div>
-                <div className="hint">
-                  {snap?.lastFrameAt
-                    ? `最后活动 ${relTime(snap.lastFrameAt)}`
-                    : connState === "open"
-                      ? "在线"
-                      : "离线"}
-                </div>
-              </div>
-            </div>
-
-            {/* 已绑定设备：多主机切换 / 移除 / 添加（阶段 C 会把这块搬进二级抽屉） */}
-            {pairings.length > 0 && (
-              <div className="device-list">
-                {pairings.map((item) => (
-                  <div key={`${item.hostId}-${item.pairedAt}`} className={`device-row${item.hostId === hostId ? " current" : ""}`}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="device-name">{item.hostName || `主机 ${shortId(item.hostId)}`}</div>
-                      <div className="hint">
-                        {relayHostOf(item.relayUrl)}
-                        {item.lastSeenAt ? ` · 最近 ${relTime(item.lastSeenAt)}` : " · 未连接过"}
-                      </div>
-                    </div>
-                    {item.hostId === hostId ? (
-                      <span className="badge">当前</span>
-                    ) : (
-                      <button type="button" className="link-btn" onClick={() => switchHost(item)}>
-                        切换
-                      </button>
-                    )}
-                    <button type="button" className="link-btn" onClick={() => void removeHost(item.hostId)}>
-                      移除
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
+          <div className="chat-empty">
+            <p className="hint">
+              {snap && snap.projects.length === 0
+                ? "这台桌面还没有会话——先在桌面端新建一个。"
+                : connState === "open"
+                  ? "点左上角头像，选一个会话开始。"
+                  : "正在连接桌面端…"}
+            </p>
             {error && <p className="hint error-text">{error}</p>}
             {connState === "closed" && connErr === "REPLACED" && (
               <p className="hint error-text">此设备已在另一个窗口/标签页连接——请关闭另一个，然后刷新本页。</p>
             )}
             {snap?.error && <p className="hint error-text">数据刷新失败：{snap.error}</p>}
-
-            {/* Projects → threads */}
-            {snap && snap.projects.length > 0 ? (
-              snap.projects.map((project) => {
-                const expanded = expandedProjectId === project.id;
-                const threads = snap.threadsByProject[project.id] ?? [];
-                return (
-                  <div key={project.id} className="project">
-                    <button type="button" className="project-row" onClick={() => setExpandedProjectId(expanded ? null : project.id)}>
-                      <span style={{ fontWeight: 600 }}>{project.name}</span>
-                      <span className="hint">{project.threadCount} 会话 · {relTime(project.updatedAt)}</span>
-                    </button>
-                    {expanded && (
-                      threads.length > 0 ? threads.map((thread) => (
-                        <button type="button" key={thread.id} className="thread-row" onClick={() => void openThread(thread.id)}>
-                          <span className={`badge badge-${thread.state}`}>{THREAD_STATE_LABELS[thread.state]}</span>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div className="thread-title">{thread.title}</div>
-                            {thread.preview && <div className="hint thread-preview">{thread.preview}</div>}
-                          </div>
-                          <span className="hint">{thread.messageCount} 条 · {relTime(thread.updatedAt)}</span>
-                        </button>
-                      )) : (
-                        <div className="hint" style={{ padding: "6px 12px" }}>暂无会话</div>
-                      )
-                    )}
-                  </div>
-                );
-              })
-            ) : (
-              !snap?.error && <p className="hint">{connState === "open" ? "加载项目列表…" : "等待连接…"}</p>
+            {needsRepair && (
+              <div className="card">
+                <p className="hint" style={{ marginTop: 0 }}>
+                  这台桌面不认识本设备了（可能已在该桌面端「撤销设备」，或手机端身份被重置）。需要重新配一次对。
+                </p>
+                <button className="btn primary" onClick={disconnect}>
+                  重新配对
+                </button>
+              </div>
             )}
-
-            <button onClick={disconnect}>回到配对页（添加设备）</button>
           </div>
         ) : (
           <div className="card">
@@ -564,6 +592,124 @@ export default function App() {
           </div>
         )}
       </main>
+      {/* 飞书式层级：主页是对话 → 头像开一级抽屉（项目/会话）→ 再往左二级抽屉（设备） */}
+      {drawer !== "none" && <div className="drawer-backdrop" onClick={closeDrawer} />}
+
+      <aside className={`drawer${drawer !== "none" ? " open" : ""}`} aria-hidden={drawer === "none"}>
+        <button type="button" className="drawer-head" onClick={() => openDrawer("devices")}>
+          <span className="app-logo small" aria-hidden="true">M</span>
+          <span className="drawer-head-main">
+            <span className="drawer-head-title">
+              {currentPairing?.hostName || (hostId ? `主机 ${shortId(hostId)}` : "未连接")}
+            </span>
+            <span className="hint">{pairings.length} 台设备 · 点此切换 ›</span>
+          </span>
+        </button>
+
+        {view === "home" && hostId ? (
+          <>
+            {error && <p className="hint error-text">{error}</p>}
+            {connState === "closed" && connErr === "REPLACED" && (
+              <p className="hint error-text">此设备已在另一个窗口/标签页连接——请关闭另一个，然后刷新本页。</p>
+            )}
+            {snap?.error && <p className="hint error-text">数据刷新失败：{snap.error}</p>}
+
+            {snap && snap.projects.length > 0 ? (
+              snap.projects.map((project) => {
+                const expanded = expandedProjectId === project.id;
+                const threads = snap.threadsByProject[project.id] ?? [];
+                return (
+                  <div key={project.id} className="project">
+                    <button type="button" className="project-row" onClick={() => setExpandedProjectId(expanded ? null : project.id)}>
+                      <span style={{ fontWeight: 600 }}>{project.name}</span>
+                      <span className="hint">{project.threadCount} 会话 · {relTime(project.updatedAt)}</span>
+                    </button>
+                    {expanded && (
+                      threads.length > 0 ? threads.map((thread) => (
+                        <button
+                          type="button"
+                          key={thread.id}
+                          className="thread-row"
+                          onClick={() => {
+                            void openThread(thread.id);
+                            closeAllDrawers();
+                          }}
+                        >
+                          <span className={`badge badge-${thread.state}`}>{THREAD_STATE_LABELS[thread.state]}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div className="thread-title">{thread.title}</div>
+                            {thread.preview && <div className="hint thread-preview">{thread.preview}</div>}
+                          </div>
+                          <span className="hint">{thread.messageCount} 条 · {relTime(thread.updatedAt)}</span>
+                        </button>
+                      )) : (
+                        <div className="hint" style={{ padding: "6px 12px" }}>暂无会话</div>
+                      )
+                    )}
+                  </div>
+                );
+              })
+            ) : (
+              !snap?.error && <p className="hint">{connState === "open" ? "加载项目列表…" : "等待连接…"}</p>
+            )}
+          </>
+        ) : (
+          <p className="hint">还没有绑定设备——先扫码或粘贴配对链接。</p>
+        )}
+      </aside>
+
+      <aside className={`drawer drawer-secondary${drawer === "devices" ? " open" : ""}`} aria-hidden={drawer !== "devices"}>
+        <div className="drawer-head plain">
+          <span className="drawer-head-title">设备</span>
+          <span className="hint">{pairings.length} 台</span>
+        </div>
+        {pairings.length > 0 ? (
+          <div className="device-list">
+            {pairings.map((item) => (
+              <div key={`${item.hostId}-${item.pairedAt}`} className={`device-row${item.hostId === hostId ? " current" : ""}`}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="device-name">{item.hostName || `主机 ${shortId(item.hostId)}`}</div>
+                  <div className="hint">
+                    {relayHostOf(item.relayUrl)}
+                    {item.lastSeenAt ? ` · 最近 ${relTime(item.lastSeenAt)}` : " · 未连接过"}
+                  </div>
+                </div>
+                {item.hostId === hostId ? (
+                  <span className="badge">当前</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="link-btn"
+                    onClick={() => {
+                      switchHost(item);
+                      closeAllDrawers();
+                    }}
+                  >
+                    切换
+                  </button>
+                )}
+                <button type="button" className="link-btn" onClick={() => void removeHost(item.hostId)}>
+                  移除
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="hint">还没有绑定设备。</p>
+        )}
+        <button
+          type="button"
+          className="btn primary"
+          style={{ marginTop: 12 }}
+          onClick={() => {
+            closeAllDrawers();
+            disconnect();
+          }}
+        >
+          + 添加设备（回到配对页）
+        </button>
+      </aside>
+
       {DBG_ENABLED && <DbgOverlay client={clientRef.current} threadView={threadView} />}
     </div>
   );

@@ -135,6 +135,97 @@ button:disabled { opacity: 0.5; cursor: default; }
   font-size: 13px;
   cursor: pointer;
 }
+
+/* ---- 飞书式骨架：头像开抽屉、主页即对话 ---- */
+
+.avatar-btn {
+  flex: none;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.header-main {
+  min-width: 0;
+  flex: 1;
+}
+.header-main h1 {
+  font-size: 16px;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-logo.small {
+  width: 30px;
+  height: 30px;
+  font-size: 14px;
+}
+
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 30px 4px;
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 40;
+}
+.drawer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(320px, 86vw);
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 12px calc(18px + env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  transform: translateX(-102%);
+  transition: transform 0.2s ease;
+}
+.drawer.open {
+  transform: none;
+}
+.drawer-secondary {
+  z-index: 42;
+  box-shadow: 8px 0 24px rgba(0, 0, 0, 0.35);
+}
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 4px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.drawer-head.plain {
+  cursor: default;
+  justify-content: space-between;
+}
+.drawer-head-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.drawer-head-title {
+  font-size: 15px;
+  font-weight: 700;
+}
 .badge-running { background: rgba(158, 206, 106, 0.15); color: var(--ok); }
 .badge-error { background: rgba(247, 118, 142, 0.15); color: var(--err); }
 .badge-disconnected { background: rgba(241, 198, 113, 0.15); color: #f1c671; }

@@ -163,7 +163,12 @@ class MainActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (web.canGoBack()) web.goBack() else moveTaskToBack(true)
+                // 先问页面：「这一下返回我处理了吗」（抽屉逐级关闭、会话返回列表…）。
+                // WebView 的 canGoBack() 不把 pushState 历史算进去，所以不能只靠它。
+                web.evaluateJavascript("window.__mpiBack ? window.__mpiBack() : 'pass'") { result ->
+                    if (result?.trim('"') == "handled") return@evaluateJavascript
+                    if (web.canGoBack()) web.goBack() else moveTaskToBack(true)
+                }
             }
         })
     }

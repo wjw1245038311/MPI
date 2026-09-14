@@ -267,16 +267,20 @@ export class RelayClient {
       if (!this.lastError) this.lastError = "relay connection error";
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event?: CloseEvent) => {
       const isCurrent = this.ws === ws;
       if (isCurrent) this.ws = null;
       // Record WHY the socket died — 1006 = network/browser killed it (no close
-      // frame), 4006 = replaced by another connection, 4005 = heartbeat timeout.
-      // REPLACED (set in onmessage) is more specific — don't clobber it.
-      // (Asserted: this file runs under both DOM and Node WebSocket typings.)
-      const closed = ws as unknown as { closeCode?: number; closeReason?: string };
-      if (closed.closeCode !== undefined && closed.closeCode !== 1000 && this.lastError !== "REPLACED") {
-        this.lastError = `closed ${closed.closeCode}${closed.closeReason ? ` "${closed.closeReason}"` : ""}`;
+      // frame), 4001 = auth failed (身份不再被认可), 4005 = heartbeat timeout,
+      // 4006 = replaced by another connection.
+      // ⚠ 关闭码只能从 CloseEvent 取：浏览器 WebSocket 实例上并没有 closeCode/
+      // closeReason 属性（之前读实例属性 → 永远 undefined → 关闭码从未被记录，
+      // 4001 这类「永不恢复」的错误因此只能表现为泛化报错）。
+      // REPLACED（onmessage 里置的）更具体，不要覆盖它。
+      const code = event?.code;
+      const reason = event?.reason;
+      if (code !== undefined && code !== 1000 && this.lastError !== "REPLACED") {
+        this.lastError = `closed ${code}${reason ? ` "${reason}"` : ""}`;
       }
       if (!isCurrent || !this.stayAlive) return;
       // Unexpected drop: back off and reconnect (daemon-style, no retry cap).
