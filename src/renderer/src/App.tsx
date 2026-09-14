@@ -15,7 +15,7 @@ import { AppStorePanel } from "./components/AppStorePanel";
 import { AutomationPanel } from "./components/AutomationPanel";
 import { TodoPanel } from "./components/TodoPanel";
 import { MessagingPanel } from "./components/MessagingPanel";
-import { Folder, Plus } from "./components/icons";
+import { Folder, Plus, Smartphone } from "./components/icons";
 import { ImageCopyMenu } from "./components/ImageCopyMenu";
 import { LanguageBridge } from "./components/LanguageBridge";
 import { RemotePanel } from "./components/RemotePanel";
@@ -167,7 +167,7 @@ export default function App() {
           <div className="set-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
             <section className="set-main" style={{ width: "min(900px, 94vw)" }}>
               <header className="set-head">
-                <h2>{language === "zh" ? "Android 手机远程控制" : "Android remote companion"}</h2>
+                <h2><Smartphone size={16} style={{ verticalAlign: "-3px", marginRight: 8 }} />{language === "zh" ? "Android 手机远程控制" : "Android remote companion"}</h2>
                 <button className="set-iconbtn" onClick={() => setRemoteOpen(false)} aria-label={language === "zh" ? "关闭远程设置" : "Close remote settings"}>×</button>
               </header>
               <div className="set-body">

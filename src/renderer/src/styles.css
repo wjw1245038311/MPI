@@ -5015,6 +5015,21 @@ textarea.modal-input {
   font-size: 13px;
   margin-bottom: 8px;
 }
+/* 卡片头里的图标徽标：小方块 + accent 色，视觉上把标题「钉」在左侧 */
+.set-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.set-card-head .set-card-title {
+  margin-bottom: 0;
+}
 .set-prov-id {
   font-family: var(--mono);
   font-weight: 700;

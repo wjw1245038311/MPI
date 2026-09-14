@@ -340,3 +340,16 @@ export const MessageSquare = (p: P) => (
     <path d="M8 9.5h8M8 13h5" />
   </svg>
 );
+export const QrCode = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3" y="3" width="7" height="7" rx="1.5" />
+    <rect x="14" y="3" width="7" height="7" rx="1.5" />
+    <rect x="3" y="14" width="7" height="7" rx="1.5" />
+    <path d="M14 14h3v3h-3zM20 14v2M20 20h1M14 20h3" />
+  </svg>
+);
+export const Cloud = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M7 18h9.5a3.5 3.5 0 0 0 .4-6.98A5 5 0 0 0 7.6 9.6 3.7 3.7 0 0 0 7 18Z" />
+  </svg>
+);

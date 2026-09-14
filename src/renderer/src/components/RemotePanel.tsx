@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
+import { Bell, Check, Cloud, Download, Plug, QrCode, Smartphone } from "./icons";
 
 const DEFAULT_SIGNALING_URL = "wss://mpi-remote.scholarcn.com/ws";
 
@@ -243,7 +244,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   return (
     <div className="set-remote-stack">
       <div className="set-card">
-        <div className="set-card-title">{zh ? "Android 手机远程控制" : "Android remote companion"}</div>
+        <div className="set-card-head">
+          <span className="set-card-icon"><Smartphone size={14} /></span>
+          <div className="set-card-title">{zh ? "Android 手机远程控制" : "Android remote companion"}</div>
+        </div>
         <div className="set-hint">
           {zh
              ? "使用 WSS 信令和 STUN 直连 WebRTC。信令服务不会接收提示词、代码、会话或文件；TURN/relay 候选会被拒绝。"
@@ -259,7 +263,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       </div>
 
       <div className="set-card">
-        <div className="set-card-title">{zh ? "信令配置" : "Signal settings"}</div>
+        <div className="set-card-head">
+          <span className="set-card-icon"><Plug size={14} /></span>
+          <div className="set-card-title">{zh ? "信令配置" : "Signal settings"}</div>
+        </div>
         <label className="set-addprov-field wide">
            <span>{zh ? "信令地址（WSS）" : "Signal URL (WSS)"}</span>
           <input
@@ -300,7 +307,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       </div>
 
       <div className="set-card">
-        <div className="set-card-title">{zh ? "手机版云中继（PWA）" : "Mobile cloud relay (PWA)"}</div>
+        <div className="set-card-head">
+          <span className="set-card-icon"><Cloud size={14} /></span>
+          <div className="set-card-title">{zh ? "手机版云中继（PWA）" : "Mobile cloud relay (PWA)"}</div>
+        </div>
         <div className="set-hint">
           {zh
             ? "手机 PWA 经自建中继连接本机的 WSS uplink；中继只转发不解析，应用内容 E2E 加密（S3）。托盘驻留 + 常开即守护模式。"
@@ -349,7 +359,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       </div>
 
       <div className="set-card">
-        <div className="set-card-title">{zh ? "手机 App（安卓）" : "Phone app (Android)"}</div>
+        <div className="set-card-head">
+          <span className="set-card-icon"><Download size={14} /></span>
+          <div className="set-card-title">{zh ? "手机 App（安卓）" : "Phone app (Android)"}</div>
+        </div>
         <div className="set-hint">
           {zh
             ? "手机先加入同一个 Tailscale 网络，再用相机/扫码器扫下面的码下载安装（支持覆盖升级）。"
@@ -397,7 +410,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       </div>
 
       <div className="set-card">
-        <div className="set-card-title">{zh ? "配对手机" : "Pair a phone"}</div>
+        <div className="set-card-head">
+          <span className="set-card-icon"><QrCode size={14} /></span>
+          <div className="set-card-title">{zh ? "配对手机" : "Pair a phone"}</div>
+        </div>
         <div className="set-hint">
           {zh
             ? "二维码包含短期票据、主机指纹、协议版本和连接地址，五分钟后失效。手机扫码即配对（需先装好上面的 App，或不装壳直接用浏览器打开）。"
@@ -424,7 +440,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
 
       {!!status?.pendingPairings.length && (
         <div className="set-card">
-          <div className="set-card-title">{zh ? "待批准设备" : "Pending devices"}</div>
+          <div className="set-card-head">
+            <span className="set-card-icon"><Bell size={14} /></span>
+            <div className="set-card-title">{zh ? "待批准设备" : "Pending devices"}</div>
+          </div>
           {status.pendingPairings.map((device) => (
             <div className="set-diag-btns" key={device.connectionId}>
               <span>{device.name} · {device.deviceId}</span>
@@ -441,7 +460,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
 
       {!!status?.devices.length && (
         <div className="set-card">
-          <div className="set-card-title">{zh ? "已信任设备" : "Trusted devices"}</div>
+          <div className="set-card-head">
+            <span className="set-card-icon"><Check size={14} /></span>
+            <div className="set-card-title">{zh ? "已信任设备" : "Trusted devices"}</div>
+          </div>
           {status.devices.map((device) => (
             <div className="set-diag-btns" key={device.deviceId}>
               <span>{device.name} · {device.authenticated ? (zh ? "已连接" : "connected") : (zh ? "离线" : "offline")}</span>
