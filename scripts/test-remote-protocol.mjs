@@ -41,6 +41,16 @@ const androidMain = readFileSync(resolve(root, "android", "app", "src", "main", 
 assert.match(androidMain, /isAllowedHtmlPreviewUri/);
 assert.match(androidMain, /requestDisallowInterceptTouchEvent/);
 assert.match(androidMain, /return !isAllowedHtmlPreviewUri/);
+// The shell is a WebView on the relay's PWA: it must carry a default relay URL
+// and keep its dev-only escapes (WebView debugging, loopback TLS override) behind
+// BuildConfig.DEBUG so a release build cannot proceed past a bad certificate.
+assert.match(androidMain, /DEFAULT_BASE_URL/);
+assert.match(androidMain, /BuildConfig\.DEBUG/);
+assert.match(androidMain, /onReceivedSslError/);
+
+const androidManifest = readFileSync(resolve(root, "android", "app", "src", "main", "AndroidManifest.xml"), "utf8");
+assert.match(androidManifest, /android\.permission\.INTERNET/);
+assert.match(androidManifest, /android:name="\.MainActivity"/);
 
 const source = readFileSync(resolve(root, "src", "main", "remote", "host.ts"), "utf8");
 assert.match(source, /directOnly:\s*true/);
@@ -68,11 +78,11 @@ assert.match(transport, /transportStatus/);
 assert.match(transport, /pi-remote-heartbeat-v1:ping/);
 assert.match(transport, /heartbeat-timeout/);
 
-const android = readFileSync(resolve(root, "android", "app", "src", "main", "java", "com", "mpi", "remote", "WebRtcClient.kt"), "utf8");
-assert.match(android, /startsWith\("stun:/i);
-assert.match(android, /direct-connection-rejected-relay/);
-assert.doesNotMatch(android, /turn:/i);
-assert.match(android, /private var connectionId/);
-assert.match(android, /HEARTBEAT_PING/);
+// The Android companion used to be a native WebRTC client (its own signalling,
+// STUN handling and heartbeat — see the git history of this file). That transport
+// was retired in favour of the WSS relay (docs/MOBILE-DESIGN.md §6.3), so the
+// shell now loads the shared H5 bundle and owns no transport code at all. The
+// assertions above cover what the shell actually does; there is deliberately no
+// WebRtcClient.kt requirement any more.
 
 console.log("remote protocol checks passed");

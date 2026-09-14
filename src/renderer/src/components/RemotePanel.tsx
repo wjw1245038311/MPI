@@ -30,6 +30,11 @@ type RelayStatus = {
   lastError: string | null;
 };
 
+/** 中继托管的手机 App 安装包清单（/download/mpi-android.json）。 */
+type PhoneAppInfo =
+  | { ok: true; version: string; size: number; sha256: string; publishedAt: string; url: string }
+  | { ok: false; error: string };
+
 function base64Url(value: string): string {
   const bytes = new TextEncoder().encode(value);
   let binary = "";
@@ -39,6 +44,30 @@ function base64Url(value: string): string {
 
 function pairingUri(pairing: Pairing): string {
   return `mpi://pair?payload=${base64Url(JSON.stringify(pairing))}`;
+}
+
+/** wss://host:port/ws → https://host:port（手机能直接打开的 HTTP 源）。 */
+function relayOrigin(relayUrl: string): string | null {
+  try {
+    const url = new URL(relayUrl);
+    const scheme = url.protocol === "wss:" ? "https:" : url.protocol === "ws:" ? "http:" : url.protocol;
+    return `${scheme}//${url.host}`;
+  } catch {
+    return null;
+  }
+}
+
+/** 扫码用的配对地址。用 https 链接而不是 mpi://：系统相机与绝大多数扫码器只把
+ *  未知 scheme 当文本显示，而 https 链接可以直接打开——PWA 读到 #pair= 即自动
+ *  开始配对，已装安卓壳则被壳的 VIEW 过滤器接管。无中继时回退到 mpi:// 链接。 */
+function pairingScanUrl(pairing: Pairing, relayHttp: string | null): string {
+  const payload = base64Url(JSON.stringify(pairing));
+  return relayHttp ? `${relayHttp}/#pair=${payload}` : pairingUri(pairing);
+}
+
+function formatSize(bytes: number): string {
+  if (!bytes) return "—";
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
 }
 
 function statusClass(state: string): string {
@@ -63,6 +92,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [qr, setQr] = useState<string | null>(null);
+  /** 扫码后是否免去桌面端再点一次「允许」（票=凭据，默认开）。 */
+  const [autoApprove, setAutoApprove] = useState(true);
+  const [phoneApp, setPhoneApp] = useState<PhoneAppInfo | null>(null);
+  const [appQr, setAppQr] = useState<string | null>(null);
   const [signalingUrl, setSignalingUrl] = useState(DEFAULT_SIGNALING_URL);
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
   const [relayUrl, setRelayUrl] = useState("");
@@ -93,6 +126,40 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     };
   }, []);
 
+  // 手机 App 安装包信息（中继托管的静态清单）——换中继地址后重取。
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const info = (await window.pi.remote.getPhoneApp()) as PhoneAppInfo;
+        if (alive) setPhoneApp(info);
+      } catch {
+        if (alive) setPhoneApp({ ok: false, error: "IPC 不可用" });
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [relayUrl]);
+
+  useEffect(() => {
+    if (!phoneApp?.ok) {
+      setAppQr(null);
+      return;
+    }
+    let alive = true;
+    void QRCode.toDataURL(phoneApp.url, { width: 200, margin: 1, errorCorrectionLevel: "M" })
+      .then((dataUrl) => {
+        if (alive) setAppQr(dataUrl);
+      })
+      .catch(() => {
+        if (alive) setAppQr(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [phoneApp]);
+
   const saveTransport = async () => {
     setBusy(true);
     try {
@@ -106,9 +173,9 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const createPairing = async () => {
     setBusy(true);
     try {
-      const next = (await window.pi.remote.createPairing()) as Pairing;
+      const next = (await window.pi.remote.createPairing(autoApprove)) as Pairing;
       setPairing(next);
-      setQr(await QRCode.toDataURL(pairingUri(next), { width: 260, margin: 1, errorCorrectionLevel: "M" }));
+      setQr(await QRCode.toDataURL(pairingScanUrl(next, relayOrigin(relayUrl)), { width: 260, margin: 1, errorCorrectionLevel: "M" }));
     } finally {
       setBusy(false);
     }
@@ -270,12 +337,43 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       </div>
 
       <div className="set-card">
+        <div className="set-card-title">{zh ? "手机 App（安卓）" : "Phone app (Android)"}</div>
+        <div className="set-hint">
+          {zh
+            ? "手机先加入同一个 Tailscale 网络，再用相机/扫码器扫下面的二维码下载安装（APK 由中继托管，支持覆盖升级）。"
+            : "Join the same Tailscale network, then scan this code with the camera to download the APK from the relay."}
+        </div>
+        {appQr && phoneApp?.ok ? (
+          <div className="set-remote-pairing">
+            <img src={appQr} alt={zh ? "手机 App 下载二维码" : "Phone app download QR code"} width={200} height={200} />
+            <div className="set-hint">
+              {zh
+                ? `版本 ${phoneApp.version} · ${formatSize(phoneApp.size)}${phoneApp.publishedAt ? ` · ${phoneApp.publishedAt.slice(0, 10)}` : ""}`
+                : `Version ${phoneApp.version} · ${formatSize(phoneApp.size)}`}
+            </div>
+            <textarea className="set-input" rows={2} readOnly value={phoneApp.url} />
+            {phoneApp.sha256 && <div className="set-hint">{`SHA256：${phoneApp.sha256.slice(0, 32)}…`}</div>}
+          </div>
+        ) : (
+          <div className="set-hint">
+            {zh
+              ? `暂未从中继取到安装包信息${phoneApp && !phoneApp.ok ? `（${phoneApp.error}）` : ""}——先把 APK 发到中继的 /download/ 目录。`
+              : `No package info from the relay${phoneApp && !phoneApp.ok ? ` (${phoneApp.error})` : ""}.`}
+          </div>
+        )}
+      </div>
+
+      <div className="set-card">
         <div className="set-card-title">{zh ? "配对手机" : "Pair a phone"}</div>
         <div className="set-hint">
           {zh
-            ? "二维码包含短期票据、主机指纹、协议版本和连接地址，五分钟后失效。"
+            ? "二维码包含短期票据、主机指纹、协议版本和连接地址，五分钟后失效。手机扫码即配对（需先装好上面的 App，或不装壳直接用浏览器打开）。"
             : "The QR contains a short-lived ticket, host fingerprint, protocol, and endpoints. It expires after five minutes."}
         </div>
+        <label className="set-check" style={{ marginTop: 10 }} title={zh ? "票在有效期内即代表你刚刚主动发起配对" : "The ticket itself is the credential"}>
+          <input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} />
+          <span>{zh ? "扫码后自动批准（无需在桌面点允许）" : "Auto-approve after scan"}</span>
+        </label>
         <button className="set-btn primary" style={{ marginTop: 12 }} onClick={createPairing} disabled={busy || !signalingUrl.trim()}>
           {zh ? "生成配对二维码" : "Generate pairing QR"}
         </button>

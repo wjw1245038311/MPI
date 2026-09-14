@@ -92,7 +92,10 @@ const STATIC_TYPES = {
  * back to index.html (SPA deep links). Returns true when the request was handled.
  */
 function serveStatic(req, res) {
-  if (!STATIC_DIR || req.method !== "GET") return false;
+  // HEAD shares GET's headers (browsers and download tools probe with it) but
+  // must not carry a body.
+  const headOnly = req.method === "HEAD";
+  if (!STATIC_DIR || (req.method !== "GET" && !headOnly)) return false;
   // Strip the query manually — the WHATWG URL parser would normalize %2e
   // dot-segments away and silently rewrite traversal attempts.
   let pathname;
@@ -114,7 +117,7 @@ function serveStatic(req, res) {
       // index.html must never be cached (asset filenames are content-hashed).
       if (extname(file) === ".html") headers["cache-control"] = "no-cache";
       res.writeHead(200, headers);
-      res.end(buf);
+      res.end(headOnly ? undefined : buf);
     }).catch(() => {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("not found");

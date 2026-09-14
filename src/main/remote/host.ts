@@ -66,6 +66,8 @@ export class RemoteHost {
   private readonly identity: HostIdentity;
   private readonly connections = new Map<string, ConnectionState>();
   private readonly pairingTickets = new Map<string, PairingTicket>();
+  /** 扫码免确认：用户在面板上刚生成的票（二维码本身就是凭据）在有效期内直接放行。 */
+  private readonly autoApproveTickets = new Set<string>();
   private ws: WebSocket | null = null;
   private started = false;
   private signalingEnabled = false;
@@ -200,7 +202,7 @@ export class RemoteHost {
     return { x25519PrivB64u: this.identity.x25519PrivB64u, x25519PubB64u: this.identity.x25519PubB64u };
   }
 
-  createPairingTicket(): {
+  createPairingTicket(options: { autoApprove?: boolean } = {}): {
     hostId: string;
     fingerprint: string;
     hostPublicKeyPem: string;
@@ -216,6 +218,7 @@ export class RemoteHost {
     const ticket = randomBytes(24).toString("base64url");
     const expiresAt = Date.now() + 5 * 60_000;
     this.pairingTickets.set(ticket, { ticket, expiresAt });
+    if (options.autoApprove) this.autoApproveTickets.add(ticket);
     this.scheduleTicketCleanup();
     this.enableSignaling();
     this.pruneTickets();
@@ -653,6 +656,13 @@ export class RemoteHost {
     this.pairingTickets.delete(ticket);
     this.scheduleTicketCleanup();
     this.sendFrame(connection, makeEnvelope("pair.pending", connection.sessionId, { hostId: this.identity.hostId, deviceId, deviceName }));
+    if (this.autoApproveTickets.delete(ticket)) {
+      // 扫码免确认（面板上的开关，默认开）：票是用户刚刚主动生成的，二维码/链接
+      // 本身就是凭据，扫码后直接批准，省掉桌面端再点一次「允许」。
+      const approved = this.approvePairing(connection.connectionId);
+      this.options.sendToRenderer("remote:pairing-auto-approved", { connectionId: connection.connectionId, deviceId, deviceName, approved });
+      return;
+    }
     this.options.sendToRenderer("remote:pairing-request", { connectionId: connection.connectionId, deviceId, deviceName });
   }
 
@@ -689,6 +699,11 @@ export class RemoteHost {
 
   private pruneTickets(): void {
     const now = Date.now();
-    for (const [ticket, value] of this.pairingTickets) if (value.expiresAt <= now) this.pairingTickets.delete(ticket);
+    for (const [ticket, value] of this.pairingTickets) {
+      if (value.expiresAt <= now) {
+        this.pairingTickets.delete(ticket);
+        this.autoApproveTickets.delete(ticket);
+      }
+    }
   }
 }

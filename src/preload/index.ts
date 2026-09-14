@@ -250,7 +250,8 @@ const api = {
   },
   remote: {
     getStatus: () => ipcRenderer.invoke("remote:getStatus"),
-    createPairing: () => ipcRenderer.invoke("remote:createPairing"),
+    createPairing: (autoApprove = false) => ipcRenderer.invoke("remote:createPairing", { autoApprove }),
+    getPhoneApp: () => ipcRenderer.invoke("remote:getPhoneApp"),
     enableSignaling: (manual = false) => ipcRenderer.invoke("remote:enableSignaling", { manual }),
     disableSignaling: () => ipcRenderer.invoke("remote:disableSignaling"),
     approvePairing: (connectionId: string) => ipcRenderer.invoke("remote:approvePairing", connectionId),

@@ -60,6 +60,9 @@ export default function App() {
   sessionRef.current = session;
 
   const [link, setLink] = useState("");
+  /** 扫码自动配对：startPairing 定义在后面，用 ref 让挂载时的 effect 能调到它。 */
+  const startPairingRef = useRef<(source?: string) => Promise<void>>(async () => {});
+  const autoPairHandled = useRef(false);
   const [stage, setStage] = useState<string>("idle");
   const [error, setError] = useState<string | null>(null);
   const [hostId, setHostId] = useState<string | null>(null);
@@ -203,10 +206,29 @@ export default function App() {
     setupWebPush(client, record.relayUrl);
   };
 
-  const startPairing = async () => {
+  // 扫码即配对：桌面二维码现在是 https 链接 https://<relay>/#pair=<payload>（mpi://
+  // 多数扫码器只当文本显示），扫码打开本页即自动开始，省掉手动粘贴。
+  useEffect(() => {
+    if (autoPairHandled.current) return;
+    const fromHash = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("pair");
+    const raw = fromHash ?? new URLSearchParams(window.location.search).get("pair");
+    if (!raw) return;
+    autoPairHandled.current = true;
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch { /* 已经是解码态 */ }
+    const source = decoded.startsWith("mpi://") ? decoded : `mpi://pair?payload=${decoded}`;
+    setLink(source);
+    void startPairingRef.current(source);
+    // 参数用完即抹掉，避免刷新后重复配对；也避免把票据留在地址栏/历史里。
+    window.history.replaceState(null, "", window.location.pathname);
+  }, []);
+
+  const startPairing = async (source?: string) => {
     let payload;
     try {
-      payload = parsePairingLink(link);
+      payload = parsePairingLink(source ?? link);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return;
@@ -253,6 +275,7 @@ export default function App() {
       setStage("error");
     }
   };
+  startPairingRef.current = startPairing;
 
   // S7 deep link: a WebPush notification click lands on /thread/<id> — open it.
   const deepLinkHandled = useRef(false);

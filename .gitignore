@@ -56,3 +56,4 @@ tmp/
 
 # Generated test bundle (npm run test:tuirace)
 scripts/.tui-race-bundle.cjs
+android/publish/

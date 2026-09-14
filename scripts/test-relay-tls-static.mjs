@@ -78,6 +78,12 @@ async function part1Static() {
     assert.match(res.headers.get("content-type"), /^text\/javascript/);
     assert.match(await res.text(), /console\.log/);
 
+    // HEAD shares GET's headers (download tools probe this way) but sends no body.
+    res = await fetch(`${base}/assets/app.js`, { method: "HEAD" });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type"), /^text\/javascript/);
+    assert.equal(await res.text(), "", "HEAD must not carry a body");
+
     // manifest content type
     res = await fetch(`${base}/manifest.webmanifest`);
     assert.equal(res.status, 200);

@@ -1976,9 +1976,47 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     remoteEventHub.publish(threadId, event);
   };
 
+  /** wss://host:port/ws → https://host:port（手机能直接打开的 HTTP 源）。 */
+  function relayHttpOrigin(relayUrl: string): string | null {
+    const trimmed = (relayUrl || "").trim();
+    if (!trimmed) return null;
+    try {
+      const url = new URL(trimmed);
+      const scheme = url.protocol === "wss:" ? "https:" : url.protocol === "ws:" ? "http:" : url.protocol;
+      return `${scheme}//${url.host}`;
+    } catch {
+      return null;
+    }
+  }
+
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());
   ipcMain.handle("remote:getRelayStatus", () => activeRelayUplink?.getStatus() ?? { state: "disabled" as const, relayUrl: getConfig().remoteRelayUrl, lastError: null });
-  ipcMain.handle("remote:createPairing", () => remoteHost.createPairingTicket());
+  ipcMain.handle("remote:createPairing", (_e, args?: { autoApprove?: boolean }) => remoteHost.createPairingTicket({ autoApprove: args?.autoApprove === true }));
+
+  /** 手机 App 安装包信息（relay 静态托管 /download/mpi-android.json）。在主进程取：
+   *  relay 是纯静态服务、不发 CORS 头，渲染层的 fetch 会被浏览器挡掉。 */
+  ipcMain.handle("remote:getPhoneApp", async () => {
+    const origin = relayHttpOrigin(getConfig().remoteRelayUrl);
+    if (!origin) return { ok: false as const, error: "未配置中继地址" };
+    try {
+      const res = await fetch(`${origin}/download/mpi-android.json`, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) return { ok: false as const, error: `中继返回 ${res.status}` };
+      const data = (await res.json()) as Record<string, unknown>;
+      const version = typeof data.version === "string" ? data.version : "";
+      const file = typeof data.file === "string" ? data.file : "";
+      if (!version || !file) return { ok: false as const, error: "清单格式不正确" };
+      return {
+        ok: true as const,
+        version,
+        size: typeof data.size === "number" ? data.size : 0,
+        sha256: typeof data.sha256 === "string" ? data.sha256 : "",
+        publishedAt: typeof data.publishedAt === "string" ? data.publishedAt : "",
+        url: `${origin}/download/${file}`,
+      };
+    } catch (error) {
+      return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
   ipcMain.handle("remote:enableSignaling", (_e, args?: { manual?: boolean }) => {
     const manual = args?.manual === true;
     const enabled = remoteHost.enableSignaling(manual);
