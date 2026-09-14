@@ -258,6 +258,8 @@ const api = {
     revokeDevice: (deviceId: string) => ipcRenderer.invoke("remote:revokeDevice", deviceId),
     getTransportConfig: () => ipcRenderer.invoke("remote:getTransportConfig"),
     setConfig: (patch: { signalingUrl?: string }) => ipcRenderer.invoke("remote:setConfig", patch),
+    getRelayStatus: () => ipcRenderer.invoke("remote:getRelayStatus"),
+    onRelayState: (cb: (p: { state: string; relayUrl: string; lastError: string | null }) => void) => on("remote:relay-state", cb),
     transportOpen: (args: { connectionId: string; sessionId?: string }) => ipcRenderer.invoke("remote:transportOpen", args),
     transportClose: (args: { connectionId: string; reason?: string }) => ipcRenderer.invoke("remote:transportClose", args),
     transportStatus: (args: { connectionId: string; state?: string; candidateType?: string; localCandidateType?: string; remoteCandidateType?: string }) =>

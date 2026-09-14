@@ -11,12 +11,29 @@ import {
 import { deviceIdFor, fingerprintFor, loadOrCreateIdentity, saveIdentity, signText, verifyText, type HostIdentity, type TrustedRemoteDevice } from "./identity";
 import { RemoteService } from "./service";
 
+/**
+ * Transport sink for the mobile cloud relay uplink (docs/MOBILE-DESIGN.md §5).
+ * Implemented by RelayUplink; frames are protocol v1 envelopes as JSON strings.
+ */
+export interface RelayOutbound {
+  /** Send an application envelope to a paired device over the relay. */
+  sendToDevice(deviceId: string, frame: string): void;
+  /** Send a plaintext control frame to the relay (ticket.register / pair.approved / …). */
+  sendControl(frame: Record<string, unknown>): boolean;
+  /** Stable per-device token for relay `hello` re-auth; generated + persisted by the uplink. */
+  deviceToken(deviceId: string): string | null;
+  /** Drop the stored token when a device is revoked. */
+  notifyRevoked?(deviceId: string): void;
+}
+
 export interface RemoteHostOptions {
   userDataDir: string;
   signalingUrl: string;
   stunUrls: string[];
   sendToRenderer: (channel: string, payload: unknown) => void;
   service: RemoteService;
+  /** Optional mobile relay transport; undefined = WebRTC-only mode. */
+  relay?: RelayOutbound | null;
 }
 
 interface PairingTicket {
@@ -32,6 +49,10 @@ interface ConnectionState {
   deviceName?: string;
   publicKeyPem?: string;
   authenticated: boolean;
+  /** True when this connection rides the mobile relay uplink (not WebRTC). */
+  viaRelay?: boolean;
+  /** Device id known before authentication (relay pair.request carries it). */
+  deviceIdHint?: string;
 }
 
 const MAX_SIGNALING_RETRIES = 10;
@@ -60,6 +81,11 @@ export class RemoteHost {
   constructor(private readonly options: RemoteHostOptions) {
     this.identity = loadOrCreateIdentity(options.userDataDir);
     if (!options.signalingUrl) this.signalingState = "disabled";
+  }
+
+  /** Attach/detach the mobile relay transport (S1; see RelayOutbound). */
+  setRelay(relay: RelayOutbound | null): void {
+    this.options.relay = relay;
   }
 
   start(): void {
@@ -187,6 +213,8 @@ export class RemoteHost {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: "ticket", hostId: this.identity.hostId, ticket, expiresAt }));
     }
+    // Mobile relay: register the ticket so pair.request can be routed to us.
+    this.options.relay?.sendControl({ type: "ticket.register", ticket, expiresAt });
     return {
       hostId: this.identity.hostId,
       fingerprint: fingerprintFor(this.identity.publicKeyPem),
@@ -211,16 +239,24 @@ export class RemoteHost {
         this.connections.delete(connection.connectionId);
       }
     }
+    this.options.relay?.notifyRevoked?.(deviceId);
     this.maybeCloseSignaling();
     return true;
   }
 
-  /** Renderer-side WebRTC transport calls this when a data channel opens. */
-  transportOpened(connectionId: string, sessionId?: string): void {
+  /** Renderer-side WebRTC transport calls this when a data channel opens.
+   * The relay uplink passes `relayDeviceId` so frames can be routed back before
+   * authentication (and the PWA learns the connection id used in signatures). */
+  transportOpened(connectionId: string, sessionId?: string, relayDeviceId?: string): void {
     const connection = this.getOrCreateConnection(connectionId, sessionId);
+    if (relayDeviceId) {
+      connection.viaRelay = true;
+      connection.deviceIdHint = relayDeviceId;
+    }
     this.sendFrame(connection, makeEnvelope("pair.challenge", connection.sessionId, {
       hostId: this.identity.hostId,
       challenge: connection.challenge,
+      connectionId: connection.connectionId,
       hostPublicKeyPem: this.identity.publicKeyPem,
       signature: signText(this.identity.privateKeyPem, `mpi-remote-v1|${this.identity.hostId}|${connection.connectionId}|${connection.challenge}`),
       directOnly: true,
@@ -299,13 +335,20 @@ export class RemoteHost {
     if (!existing) this.identity.trustedDevices.push(device);
     saveIdentity(this.options.userDataDir, this.identity);
     connection.authenticated = true;
-    this.sendFrame(connection, makeEnvelope("pair.accepted", connection.sessionId, {
-      hostId: this.identity.hostId,
-      deviceId: connection.deviceId,
-      directOnly: true,
-    }));
+    this.sendFrame(connection, makeEnvelope("pair.accepted", connection.sessionId, this.acceptedPayload(connection)));
     this.scheduleSignalingCleanup();
     return true;
+  }
+
+  /** pair.accepted payload; relay connections additionally carry the stable
+   * deviceToken so the PWA can re-auth with `hello` after reconnects. */
+  private acceptedPayload(connection: ConnectionState): Record<string, unknown> {
+    const payload: Record<string, unknown> = { hostId: this.identity.hostId, deviceId: connection.deviceId, directOnly: true };
+    if (connection.viaRelay && this.options.relay) {
+      const token = this.options.relay.deviceToken(connection.deviceId!);
+      if (token) payload.deviceToken = token;
+    }
+    return payload;
   }
 
   rejectPairing(connectionId: string): boolean {
@@ -587,7 +630,7 @@ export class RemoteHost {
       trusted.lastSeenAt = Date.now();
       saveIdentity(this.options.userDataDir, this.identity);
       connection.authenticated = true;
-      this.sendFrame(connection, makeEnvelope("pair.accepted", connection.sessionId, { hostId: this.identity.hostId, deviceId, directOnly: true }));
+      this.sendFrame(connection, makeEnvelope("pair.accepted", connection.sessionId, this.acceptedPayload(connection)));
       this.scheduleSignalingCleanup();
       return;
     }
@@ -616,7 +659,15 @@ export class RemoteHost {
   }
 
   private sendFrame(connection: ConnectionState, message: RemoteEnvelope): void {
-    this.options.sendToRenderer("remote:outbound", { connectionId: connection.connectionId, frame: JSON.stringify(message) });
+    const frame = JSON.stringify(message);
+    if (connection.viaRelay && this.options.relay) {
+      const deviceId = connection.deviceId || connection.deviceIdHint;
+      if (deviceId) {
+        this.options.relay.sendToDevice(deviceId, frame);
+        return;
+      }
+    }
+    this.options.sendToRenderer("remote:outbound", { connectionId: connection.connectionId, frame });
   }
 
   private connectionsForDevice(deviceId: string): Array<{ connectedAt: number }> {

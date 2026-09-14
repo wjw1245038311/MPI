@@ -12,3 +12,8 @@ export const app = {
 };
 
 export const ipcMain = { handle: () => {} };
+
+/** identity.ts imports this by name; tests run without OS keychain encryption. */
+export const safeStorage = {
+  isEncryptionAvailable: () => false,
+};

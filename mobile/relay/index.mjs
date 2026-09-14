@@ -134,9 +134,15 @@ function handleHostFrame(conn, raw) {
     case "pair.approved": {
       const deviceId = str(frame.deviceId, 128);
       const token = str(frame.deviceToken, 128);
-      const rec = devices.get(deviceId);
-      if (!rec || rec.hostId !== conn.id) return send(conn.ws, { type: "relay.error", code: "UNKNOWN_DEVICE" });
+      let rec = devices.get(deviceId);
+      if (rec && rec.hostId !== conn.id) return send(conn.ws, { type: "relay.error", code: "UNKNOWN_DEVICE" });
       if (!token) return send(conn.ws, { type: "relay.error", code: "INVALID_TOKEN" });
+      if (!rec) {
+        // Token (re-)registration without a live pending pairing — e.g. the
+        // uplink re-announces its stored tokens after a relay restart.
+        rec = { ws: null, hostId: conn.id, token: null, status: "pending", name: deviceId };
+        devices.set(deviceId, rec);
+      }
       rec.token = token;
       rec.status = "approved";
       log(`device ${deviceId} approved on host ${conn.id}`);
@@ -202,6 +208,10 @@ function handleDeviceFrame(conn, raw) {
       conn.role = "device";
       conn.id = deviceId;
       log(`device ${deviceId} hello ok (host ${rec.hostId})`);
+      // Tell the host uplink so it can re-issue a pair.challenge for the
+      // signature handshake (S1 relay-uplink consumes this control frame).
+      const host = hosts.get(rec.hostId);
+      if (isWsOpen(host?.ws)) send(host.ws, { type: "device.online", deviceId });
       return send(conn.ws, { type: "relay.ok", role: "device", hostId: rec.hostId });
     }
 
@@ -235,11 +245,17 @@ function handleDeviceFrame(conn, raw) {
     default: {
       if (conn.role !== "device") return send(conn.ws, { type: "relay.error", code: "NOT_AUTHENTICATED" });
       const rec = devices.get(conn.id);
-      // Pending (not yet approved) sockets may only exchange control frames.
-      if (!rec || rec.status !== "approved") return send(conn.ws, { type: "relay.error", code: "NOT_AUTHENTICATED" });
+      // Pending (not yet approved) sockets may only exchange control frames —
+      // except pair.hello, which IS the pairing handshake. Checking `type`
+      // inspects routing metadata only, never frame content.
+      if (!rec || (rec.status !== "approved" && frame.type !== "pair.hello")) {
+        return send(conn.ws, { type: "relay.error", code: "NOT_AUTHENTICATED" });
+      }
       const host = hosts.get(rec.hostId);
       if (!isWsOpen(host?.ws)) return send(conn.ws, { type: "relay.error", code: "HOST_OFFLINE" });
-      return send(host.ws, frame); // opaque forward to the bound host uplink
+      // Tag the sender (routing metadata only; payload stays opaque). The
+      // host uplink needs it to map the frame onto a connection.
+      return send(host.ws, { from: conn.id, ...frame });
     }
   }
 }

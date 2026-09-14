@@ -175,6 +175,10 @@ export interface AppConfig {
   remoteSignalingEnabled: boolean;
   /** Internal STUN endpoints used for direct WebRTC candidate discovery. TURN is intentionally unsupported. */
   remoteStunUrls: string[];
+  /** Mobile cloud relay WSS endpoint (docs/MOBILE-DESIGN.md). Empty = not configured. */
+  remoteRelayUrl: string;
+  /** Whether the mobile relay uplink should stay connected across restarts. */
+  remoteRelayEnabled: boolean;
   /** Feishu message channel (导航栏 → 消息接入). Absent = off. The app secret
    * stays local to this machine and is never part of backup imports. */
   feishuChannel?: FeishuChannelConfig;
@@ -316,6 +320,8 @@ const DEFAULTS: AppConfig = {
   remoteSignalingUrl: DEFAULT_REMOTE_SIGNALING_URL,
   remoteSignalingEnabled: false,
   remoteStunUrls: [...BUILT_IN_REMOTE_STUN_URLS],
+  remoteRelayUrl: "",
+  remoteRelayEnabled: false,
 };
 
 let cached: AppConfig | null = null;
@@ -401,6 +407,10 @@ export function loadConfig(userDataDir: string): AppConfig {
         remoteSignalingEnabled: typeof parsed.remoteSignalingEnabled === "boolean"
           ? parsed.remoteSignalingEnabled
           : DEFAULTS.remoteSignalingEnabled,
+        remoteRelayUrl: typeof parsed.remoteRelayUrl === "string" ? parsed.remoteRelayUrl.trim() : DEFAULTS.remoteRelayUrl,
+        remoteRelayEnabled: typeof parsed.remoteRelayEnabled === "boolean"
+          ? parsed.remoteRelayEnabled
+          : DEFAULTS.remoteRelayEnabled,
         diffViewMode: parsed.diffViewMode === "blocks" ? "blocks" : DEFAULTS.diffViewMode,
         trashEnabled: typeof parsed.trashEnabled === "boolean" ? parsed.trashEnabled : DEFAULTS.trashEnabled,
         todoAttachmentDir:
@@ -655,6 +665,8 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
     out.remoteSignalingUrl = p.remoteSignalingUrl.trim();
   }
   if (typeof p.remoteSignalingEnabled === "boolean") out.remoteSignalingEnabled = p.remoteSignalingEnabled;
+  if (typeof p.remoteRelayUrl === "string") out.remoteRelayUrl = p.remoteRelayUrl.trim();
+  if (typeof p.remoteRelayEnabled === "boolean") out.remoteRelayEnabled = p.remoteRelayEnabled;
 
   // Voice settings are portable (no machine-specific paths); the API key is a
   // user credential like any other and travels with config backups on purpose.

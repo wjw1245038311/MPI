@@ -30,10 +30,11 @@ RELAY_PORT=8443 RELAY_HOST=0.0.0.0 npm start
 | `push.request` | host→relay | S7 WebPush；S0 回 `PUSH_NOT_CONFIGURED` |
 | `hello` `{deviceId, deviceToken}` | device→relay | 首帧；token 匹配即绑定，替换旧 socket |
 | `pair.request` `{ticket, deviceId, name?}` | device→relay | 首帧；按 ticket 原样转发给对应 host uplink（S1 映射进 RemoteHost.handleHello） |
-| 数据帧（其余一切） | 双向 | device→绑定 host 直接转；host→device 必须带明文 `to: "<deviceId>"`，整对象原样透传 |
+| 数据帧（其余一切） | 双向 | device→绑定 host 加明文 `from: "<deviceId>"` 后透传；host→device 必须带明文 `to: "<deviceId>"`，整对象原样透传。pending（未批准）设备只许控制帧 + `pair.hello`（配对握手本身，按 type 放行，不解析内容） |
 
 relay → 端 的控制回复：`relay.ok` / `relay.error {code}` / `offline {who, hostId|deviceId}` /
-`revoked` / `replaced`。错误码：`INVALID_JSON`、`NO_ROUTE`、`UNKNOWN_DEVICE`、
+`revoked` / `replaced`；hello 成功后 relay 另向绑定 host uplink 发 `device.online {deviceId}`
+（S1 uplink 据此重发 pair.challenge）。错误码：`INVALID_JSON`、`NO_ROUTE`、`UNKNOWN_DEVICE`、
 `DEVICE_OFFLINE`、`HOST_OFFLINE`、`NOT_AUTHENTICATED`、`TICKET_INVALID`、`TICKET_EXPIRED`、
 `INVALID_TICKET`、`INVALID_TOKEN`、`TICKET_TABLE_FULL`、`PAYLOAD_TOO_LARGE`(2MB)。
 

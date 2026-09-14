@@ -4,7 +4,7 @@
   "feature": "手机版（云中继）",
   "kind": "logic",
   "source": "docs/MOBILE-DESIGN.md §12.4 / mobile/relay/index.mjs",
-  "description": "对真实 relay 子进程（临时端口、加速心跳 env）用 Node 内置 WebSocket 驱动假 host/phone 双端，验证 S0 三个检查点：①host/device 注册与路由表 + /healthz 在线计数；②不透明帧双向原样转发（device→绑定 host uplink；host 帧带明文 to:deviceId）、无路由/未知设备报错、对端断开后 offline 事件、被替换的旧 socket 不误报 offline、死 host 上数据帧回 HOST_OFFLINE；③ticket.register/pair.request 骨架：一次性 ticket（重用→TICKET_INVALID）、过期（TICKET_EXPIRED，惰性清理保留错误码区分）、未知 ticket、多主机按 ticket 路由到正确 uplink、hello(deviceToken) 重连认证与旧 socket replaced(4006)。心跳判死采用 ws 标准 ping/terminate 模式（挂起连接场景未做自动化覆盖，代码评审确认）。",
+  "description": "对真实 relay 子进程（临时端口、加速心跳 env）用 Node 内置 WebSocket 驱动假 host/phone 双端，验证 S0 三个检查点：①host/device 注册与路由表 + /healthz 在线计数；②不透明帧双向转发（device→绑定 host uplink 加明文 from:deviceId；host 帧带明文 to:deviceId）、无路由/未知设备报错、对端断开后 offline 事件、被替换的旧 socket 不误报 offline、死 host 上数据帧回 HOST_OFFLINE；③ticket.register/pair.request 骨架：一次性 ticket（重用→TICKET_INVALID）、过期（TICKET_EXPIRED，惰性清理保留错误码区分）、未知 ticket、多主机按 ticket 路由到正确 uplink、hello(deviceToken) 重连认证与旧 socket replaced(4006)、hello 成功后向 host uplink 发 device.online。S1 补充：pending 设备放行 pair.hello（配对握手本身）；pair.approved 支持无 pending 记录的纯 token（重）注册（relay 重启后 uplink 重报）。心跳判死采用 ws 标准 ping/terminate 模式（挂起连接场景未做自动化覆盖，代码评审确认）。",
   "logicTest": "relay-s0",
   "assertions": [
     "/healthz 返回 ok + hosts/devices/paired/tickets 在线计数",

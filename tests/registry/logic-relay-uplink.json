@@ -1,0 +1,22 @@
+{
+  "id": "logic-relay-uplink",
+  "title": "手机版云中继 S1：Windows relay uplink ↔ 真实 relay ↔ 假手机全链路配对/重连/撤销",
+  "feature": "手机版（云中继）",
+  "kind": "logic",
+  "source": "docs/MOBILE-DESIGN.md §5 / src/main/remote/relay-uplink.ts / src/main/remote/host.ts",
+  "description": "electron-stub + 真实 mobile/relay 子进程（临时端口、加速心跳）+ Node 内置 WebSocket 假手机，验证 S1 验收：uplink 连接并注册 hostId；createPairingTicket→ticket.register 到达 relay；完整配对链 pair.request→pair.challenge(带 connectionId)→签名 pair.hello→pair.pending→approvePairing→pair.accepted（携带 deviceToken）且 token 持久化到 userData/remote-relay-tokens.json；hello(deviceToken) 重连：relay device.online→新 challenge→受信密钥自动批准、token 不变；relay 重启后 uplink 指数退避重连并主动重注册 token，第三次 hello 免完整配对直接通过；revokeDevice→relay 踢掉设备 socket（4002）且 token 从文件删除。",
+  "logicTest": "relay-uplink",
+  "assertions": [
+    "uplink 连接后 /healthz hosts=1（host.register 生效）",
+    "pair.challenge payload 带 connectionId（^relay-），手机据此签名",
+    "pending 设备发应用数据帧被 relay 拒 NOT_AUTHENTICATED；pair.hello 本身放行",
+    "pair.pending 到达手机且 renderer 收到 remote:pairing-request",
+    "approvePairing 后 pair.accepted 携带 ≥32 字符 deviceToken，token 文件落盘一致",
+    "设备断开 → host transportClosed（service.disconnect 被调用）",
+    "hello(deviceToken)→relay.ok→新 challenge（值不同）→受信自动批准，pair.accepted token 不变",
+    "SIGKILL relay：uplink 状态离开 connected；同端口重启后自动重连、healthz hosts=1",
+    "relay 重启后第三次 hello 直接成功（token 主动重注册生效），无需重新配对",
+    "revokeDevice→手机收 revoked+close 4002，token 文件条目删除"
+  ],
+  "passCriteria": "test-relay-uplink.mjs 全部检查通过（relay-uplink tests passed）"
+}

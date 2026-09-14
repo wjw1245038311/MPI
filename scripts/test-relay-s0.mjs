@@ -84,12 +84,22 @@ class Peer {
 
   /** Wait for a frame with the given type, skipping others (which are re-queued). */
   async nextType(type, timeoutMs = 3_000) {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      const frame = await this.next(deadline - Date.now());
-      if (frame.type === type) return frame;
-      this.queue.unshift(frame);
+    const idx = this.queue.findIndex((frame) => frame.type === type);
+    if (idx >= 0) return this.queue.splice(idx, 1)[0];
+    // Hold non-matching frames aside so `next` blocks on genuinely new frames
+    // (a non-match at the queue head would otherwise spin the loop forever).
+    const held = this.queue.splice(0);
+    try {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const frame = await this.next(Math.max(1, deadline - Date.now()));
+        if (frame.type === type) return frame;
+        held.push(frame); // keep non-matches in arrival order
+      }
+    } finally {
+      this.queue.unshift(...held.reverse()); // restore original order up front
     }
+    throw new Error(`${this.name}: no ${type} within ${timeoutMs}ms`);
   }
 
   close(code = 1000, reason = "") {
@@ -156,7 +166,7 @@ async function main() {
     const up = envelope("projects.list", "s1", { requestId: "r1" });
     phoneA.send(up);
     f = await host1.next();
-    assert.deepEqual(f, up); // device → host unchanged
+    assert.deepEqual(f, { from: "device-a", ...up }); // device → host + sender tag
 
     const down = envelope("projects.list.result", "s1", { requestId: "r1", payload: { ok: true } }, );
     host1.send({ to: "device-a", ...down });
@@ -210,7 +220,7 @@ async function main() {
     const upE = envelope("projects.list", "s1");
     phoneE.send(upE);
     f = await host2.next();
-    assert.deepEqual(f, upE); // approved device on h2 forwards while the host is alive
+    assert.deepEqual(f, { from: "device-e", ...upE }); // approved device on h2 forwards while the host is alive
 
     // --- S0.3: hello re-auth with stored token ---------------------------------------------
     const phoneF = await connect("phoneF");
@@ -224,10 +234,14 @@ async function main() {
     await sleep(50);
     assert.equal(phoneA.closed?.code, 4006);
 
+    // the relay told the host uplink that device-a is back online (S1 hook)
+    f = await host1.nextType("device.online");
+    assert.deepEqual(f, { type: "device.online", deviceId: "device-a" });
+
     const up2 = envelope("threads.list", "s1", { requestId: "r2" });
     phoneF.send(up2);
     f = await host1.next();
-    assert.deepEqual(f, up2); // re-hello'd socket can forward data
+    assert.deepEqual(f, { from: "device-a", ...up2 }); // re-hello'd socket can forward data
 
     // --- S0.2: offline events on peer death -------------------------------------------------
     phoneF.close(1000, "bye"); // device side goes away

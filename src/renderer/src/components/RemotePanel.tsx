@@ -22,6 +22,12 @@ type RemoteStatus = {
   pendingPairings: Array<{ connectionId: string; deviceId: string; name: string }>;
 };
 
+type RelayStatus = {
+  state: "disabled" | "connecting" | "connected" | "error";
+  relayUrl: string;
+  lastError: string | null;
+};
+
 function base64Url(value: string): string {
   const bytes = new TextEncoder().encode(value);
   let binary = "";
@@ -56,6 +62,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [qr, setQr] = useState<string | null>(null);
   const [signalingUrl, setSignalingUrl] = useState(DEFAULT_SIGNALING_URL);
+  const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
+  const [relayUrl, setRelayUrl] = useState("");
   const [busy, setBusy] = useState(false);
 
   const refresh = async (syncSignalUrl = true) => {
@@ -66,6 +74,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     } catch {
       // The panel can briefly outlive the Electron IPC bridge during reload.
     }
+    try {
+      const relay = (await window.pi.remote.getRelayStatus()) as RelayStatus;
+      setRelayStatus(relay);
+      if (syncSignalUrl) setRelayUrl(relay.relayUrl || "");
+    } catch { /* same reload race */ }
   };
 
   useEffect(() => {
@@ -124,6 +137,26 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     else await enableRemote();
   };
 
+  const saveRelayUrl = async () => {
+    setBusy(true);
+    try {
+      await window.pi.app.setConfig({ remoteRelayUrl: relayUrl.trim() });
+      await refresh(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleRelay = async () => {
+    setBusy(true);
+    try {
+      await window.pi.app.setConfig({ remoteRelayEnabled: relayStatus?.state !== "disabled" ? false : true });
+      await refresh(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const state = status?.signalingState || "disabled";
 
   return (
@@ -179,6 +212,55 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
              aria-label={zh ? "切换信令" : "Toggle Signal"}
             onClick={() => void toggleRemote()}
             disabled={busy || !signalingUrl.trim()}
+          >
+            <span className="set-toggle-knob" />
+          </button>
+        </div>
+      </div>
+
+      <div className="set-card">
+        <div className="set-card-title">{zh ? "手机版云中继（PWA）" : "Mobile cloud relay (PWA)"}</div>
+        <div className="set-hint">
+          {zh
+            ? "手机 PWA 经自建中继连接本机的 WSS uplink；中继只转发不解析，应用内容 E2E 加密（S3）。托盘驻留 + 常开即守护模式。"
+            : "The phone PWA reaches this machine through the self-hosted relay over a persistent WSS uplink; the relay only forwards, content is E2E-encrypted (S3). Tray-resident + always-on = daemon mode."}
+        </div>
+        <div className="set-remote-status" aria-live="polite">
+          <span className="set-diag-k">{zh ? "中继连接状态" : "Relay connection"}</span>
+          <span className={`set-remote-status-value ${statusClass(relayStatus?.state || "disabled")}`}>
+            <span className="set-remote-status-dot" aria-hidden="true" />
+            {statusLabel(relayStatus?.state || "disabled", zh)}
+            {relayStatus?.lastError ? ` · ${relayStatus.lastError}` : ""}
+          </span>
+        </div>
+        <label className="set-addprov-field wide">
+           <span>{zh ? "中继地址（WSS）" : "Relay URL (WSS)"}</span>
+          <input
+            className="set-input"
+            value={relayUrl}
+            onChange={(event) => setRelayUrl(event.target.value)}
+            placeholder="wss://your-relay-host/ws"
+            spellCheck={false}
+          />
+        </label>
+        <button className="set-btn primary" style={{ marginTop: 10 }} onClick={saveRelayUrl} disabled={busy || !relayUrl.trim()}>
+          {zh ? "保存地址" : "Save URL"}
+        </button>
+        <div className="set-remote-toggle-row">
+          <div className="set-remote-toggle-copy">
+            <span className="set-remote-toggle-label">{zh ? "启用中继 uplink" : "Enable relay uplink"}</span>
+            <span className="set-remote-toggle-state">
+              {relayStatus?.state !== "disabled" ? (zh ? "已启用" : "On") : (zh ? "已关闭" : "Off")}
+            </span>
+          </div>
+          <button
+            type="button"
+            className={`set-toggle ${relayStatus?.state !== "disabled" ? "on" : ""}`}
+            role="switch"
+            aria-checked={relayStatus?.state !== "disabled"}
+             aria-label={zh ? "切换中继 uplink" : "Toggle relay uplink"}
+            onClick={() => void toggleRelay()}
+            disabled={busy || !relayUrl.trim()}
           >
             <span className="set-toggle-knob" />
           </button>

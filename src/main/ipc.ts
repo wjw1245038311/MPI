@@ -153,6 +153,7 @@ import { ensureChannelCommandInbox, startChannelCommandInboxWatcher } from "./me
 import { ensureChannelExtension } from "./messaging/channel-extension";
 import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
+import { RelayUplink } from "./remote/relay-uplink";
 import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } from "./remote/services";
 import { RemoteService, type RemoteBackend } from "./remote/service";
 import {
@@ -198,6 +199,7 @@ interface BridgeHandle {
 const bridges = new Map<string, BridgeHandle>();
 let systemNotifications: SystemNotificationCenter | null = null;
 let activeRemoteHost: RemoteHost | null = null;
+let activeRelayUplink: RelayUplink | null = null;
 
 // "扩展自动选模" (Settings → Conversation): keeps pi-web-access's web-search.json in
 // sync with each conversation's current model and auto-answers extension
@@ -916,6 +918,32 @@ export function stopAllBridges(): Promise<void> {
 export function stopRemoteHost(): void {
   activeRemoteHost?.stop();
   activeRemoteHost = null;
+  activeRelayUplink?.stop();
+  activeRelayUplink = null;
+}
+
+/** Start/stop/re-point the mobile relay uplink from config (S1, docs/MOBILE-DESIGN.md §5). */
+function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
+  const cfg = getConfig();
+  const wantOn = !!cfg.remoteRelayEnabled && !!cfg.remoteRelayUrl.trim();
+  if (!wantOn) {
+    activeRelayUplink?.stop();
+    remoteHost.setRelay(null);
+    return;
+  }
+  if (!activeRelayUplink) {
+    activeRelayUplink = new RelayUplink({
+      relayUrl: cfg.remoteRelayUrl,
+      hostId: remoteHost.getStatus().hostId,
+      userDataDir: getConfigDir(),
+      getHost: () => (activeRemoteHost === remoteHost ? remoteHost : null),
+      onStateChange: (status) => { if (sendToRenderer) sendToRenderer("remote:relay-state", status); },
+    });
+    remoteHost.setRelay(activeRelayUplink);
+  } else {
+    activeRelayUplink.configure(cfg.remoteRelayUrl);
+  }
+  if (activeRelayUplink.getStatus().state === "disabled") activeRelayUplink.start();
 }
 
 export function registerIpc(getWin: () => BrowserWindow | null): void {
@@ -1889,6 +1917,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   activeRemoteHost = remoteHost;
   remoteHost.start();
   if (getConfig().remoteSignalingEnabled) remoteHost.enableSignaling(true);
+  applyRelayUplinkConfig(remoteHost);
 
   remotePublish = (channel, payload) => {
     if (!payload || typeof payload !== "object") return;
@@ -1916,6 +1945,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   };
 
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());
+  ipcMain.handle("remote:getRelayStatus", () => activeRelayUplink?.getStatus() ?? { state: "disabled" as const, relayUrl: getConfig().remoteRelayUrl, lastError: null });
   ipcMain.handle("remote:createPairing", () => remoteHost.createPairingTicket());
   ipcMain.handle("remote:enableSignaling", (_e, args?: { manual?: boolean }) => {
     const manual = args?.manual === true;
@@ -1992,6 +2022,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     if (patch && ("remoteSignalingUrl" in patch || "remoteStunUrls" in patch)) {
       remoteHost.configure(next.remoteSignalingUrl || DEFAULT_REMOTE_SIGNALING_URL, [...BUILT_IN_REMOTE_STUN_URLS]);
     }
+    if (patch && ("remoteRelayUrl" in patch || "remoteRelayEnabled" in patch)) applyRelayUplinkConfig(remoteHost);
     if ((next.piCliPath || "") !== (prevCli || "")) {
       resetPiRuntime();
       dropWarmBridge(); // standby was booted from the old runtime
