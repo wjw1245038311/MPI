@@ -9,6 +9,50 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- 自更新提示条：必须排在 WebView 之后（FrameLayout 后画的在上），否则会被网页盖住 -->
+    <LinearLayout
+        android:id="@+id/updateBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="#1B2A23"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/updateText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="#DCE7E1"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/updateAction"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingHorizontal="10dp"
+            android:text="@string/update_action"
+            android:textColor="#9ECE6A"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/updateClose"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingHorizontal="8dp"
+            android:text="✕"
+            android:textColor="#8B90A0"
+            android:textSize="13sp" />
+    </LinearLayout>
+
     <!-- Native fallback when the relay page cannot load: the only place the base
          URL can be edited (there is no settings screen in a one-view shell). -->
     <LinearLayout

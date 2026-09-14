@@ -5,4 +5,13 @@
     <string name="shell_retry">重试</string>
     <string name="shell_save">保存并加载</string>
     <string name="shell_load_failed">无法加载中继页面：\n%1$s\n\n请确认手机已连上 Tailscale，且地址正确。</string>
+    <string name="scan_hint">对准桌面端生成的配对二维码</string>
+    <string name="scan_need_camera">需要相机权限才能扫码。可到系统设置里开启，或用「粘贴配对链接」的方式完成配对。</string>
+    <string name="scan_failed">相机启动失败：%1$s</string>
+    <string name="scan_not_pairing">这不是 MPI 配对码</string>
+    <string name="update_action">更新</string>
+    <string name="update_available">发现新版 %1$s</string>
+    <string name="update_downloading">正在下载 %1$d%%</string>
+    <string name="update_installing">正在安装…</string>
+    <string name="update_failed">更新失败：%1$s</string>
 </resources>

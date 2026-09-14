@@ -24,6 +24,13 @@ import { ensureBrowserPush } from "./lib/webpush";
 /** ?dbg=1 in the URL turns on the on-screen diagnostics overlay (real-device debugging). */
 const DBG_ENABLED = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("dbg");
 
+/** 安卓壳注入的桥（浏览器里不存在）——用来显示「扫码配对」并提供壳版本号。 */
+type ShellBridge = { scanPairQr: () => void; shellVersion?: () => string };
+function shellBridge(): ShellBridge | null {
+  const bridge = (window as unknown as { MpiShell?: ShellBridge }).MpiShell;
+  return bridge && typeof bridge.scanPairQr === "function" ? bridge : null;
+}
+
 const STAGE_LABELS: Record<string, string> = {
   idle: "未连接",
   connecting: "连接中继…",
@@ -452,7 +459,19 @@ export default function App() {
           </div>
         ) : (
           <div className="card">
-            <p style={{ margin: "0 0 10px" }}>粘贴桌面端生成的配对链接（mpi://pair?…）开始配对。</p>
+            <p style={{ margin: "0 0 10px" }}>
+              {shellBridge() ? "扫码或粘贴桌面端生成的配对链接开始配对。" : "粘贴桌面端生成的配对链接（mpi://pair?…）开始配对。"}
+            </p>
+            {shellBridge() && (
+              <button
+                className="btn primary"
+                style={{ marginBottom: 10 }}
+                onClick={() => shellBridge()?.scanPairQr()}
+                disabled={stage === "connecting" || stage === "waiting-challenge" || stage === "waiting-approval"}
+              >
+                扫码配对
+              </button>
+            )}
             <textarea rows={4} value={link} onChange={(e) => setLink(e.target.value)} placeholder="mpi://pair?payload=…" spellCheck={false} />
             <div style={{ marginTop: 10 }}>
               <button onClick={() => void startPairing()} disabled={!link.trim() || stage === "connecting" || stage === "waiting-challenge" || stage === "waiting-approval"}>

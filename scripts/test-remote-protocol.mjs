@@ -51,6 +51,33 @@ assert.match(androidMain, /onReceivedSslError/);
 const androidManifest = readFileSync(resolve(root, "android", "app", "src", "main", "AndroidManifest.xml"), "utf8");
 assert.match(androidManifest, /android\.permission\.INTERNET/);
 assert.match(androidManifest, /android:name="\.MainActivity"/);
+// 壳内扫码与自更新需要的声明（少一个就是功能坏了，不是可选优化）
+assert.match(androidManifest, /android\.permission\.CAMERA/);
+assert.match(androidManifest, /android\.permission\.REQUEST_INSTALL_PACKAGES/);
+assert.match(androidManifest, /android:name="\.ScanActivity"/);
+assert.match(androidManifest, /androidx\.core\.content\.FileProvider/);
+
+const androidScan = readFileSync(resolve(root, "android", "app", "src", "main", "java", "com", "mpi", "remote", "ScanActivity.kt"), "utf8");
+assert.match(androidScan, /BarcodeScanning\.getClient/);
+assert.match(androidScan, /FORMAT_QR_CODE/);
+assert.match(androidScan, /ProcessCameraProvider/);
+
+const androidUpdater = readFileSync(resolve(root, "android", "app", "src", "main", "java", "com", "mpi", "remote", "Updater.kt"), "utf8");
+assert.match(androidUpdater, /download\/mpi-android\.json/);
+assert.match(androidUpdater, /SHA-256/);
+assert.match(androidUpdater, /compareVersions/);
+assert.match(androidUpdater, /FileProvider\.getUriForFile/);
+assert.match(androidUpdater, /application\/vnd\.android\.package-archive/);
+
+// PWA 靠 window.MpiShell 探测「在壳里」——壳里必须真注入这个桥，否则扫码按钮永不出现。
+assert.match(androidMain, /addJavascriptInterface/);
+assert.match(androidMain, /"MpiShell"/);
+assert.match(androidMain, /scanPairQr/);
+const pwaApp = readFileSync(resolve(root, "mobile", "pwa", "src", "App.tsx"), "utf8");
+assert.match(pwaApp, /MpiShell/);
+assert.match(pwaApp, /scanPairQr/);
+// 扫码结果要交给 PWA 的 #pair= 自动配对路径，不要在原生侧重写配对逻辑。
+assert.match(androidMain, /#pair=/);
 
 const source = readFileSync(resolve(root, "src", "main", "remote", "host.ts"), "utf8");
 assert.match(source, /directOnly:\s*true/);

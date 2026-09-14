@@ -1,13 +1,18 @@
 package com.mpi.remote
 
 import android.annotation.SuppressLint
+import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Bundle
+import android.util.Base64
 import android.view.View
+import android.webkit.JavascriptInterface
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -18,8 +23,13 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import org.json.JSONObject
+import java.net.URI
 
 /**
  * MPI phone shell.
@@ -39,6 +49,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var errorPanel: LinearLayout
     private lateinit var errorText: TextView
     private lateinit var urlInput: EditText
+    private lateinit var updateBar: LinearLayout
+    private lateinit var updateText: TextView
+    private var pendingUpdate: UpdateInfo? = null
 
     private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
     private val baseUrl: String get() = prefs.getString(KEY_BASE_URL, DEFAULT_BASE_URL) ?: DEFAULT_BASE_URL
@@ -54,6 +67,18 @@ class MainActivity : AppCompatActivity() {
         urlInput = findViewById(R.id.urlInput)
 
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
+
+        // PWA 靠 window.MpiShell 探测「在壳里」（据此显示扫码按钮），无需新协议。
+        web.addJavascriptInterface(
+            object {
+                @JavascriptInterface
+                fun scanPairQr() = runOnUiThread { startScan() }
+
+                @JavascriptInterface
+                fun shellVersion(): String = BuildConfig.VERSION_NAME
+            },
+            "MpiShell",
+        )
 
         web.settings.apply {
             javaScriptEnabled = true
@@ -121,6 +146,16 @@ class MainActivity : AppCompatActivity() {
             loadBase()
         }
 
+        // 自更新：启动几秒后静默比对中继清单，有新版本才浮出原生提示条。
+        updateBar = findViewById(R.id.updateBar)
+        updateText = findViewById(R.id.updateText)
+        findViewById<Button>(R.id.updateAction).setOnClickListener { startUpdate() }
+        findViewById<Button>(R.id.updateClose).setOnClickListener {
+            pendingUpdate?.let { prefs.edit().putString(KEY_SKIPPED_VERSION, it.version).apply() }
+            updateBar.visibility = View.GONE
+        }
+        web.postDelayed({ checkForUpdate() }, 3000)
+
         // "Open with MPI" on the relay URL re-points the shell (the only way to
         // change servers while the page itself loads fine).
         intent?.data?.let { adoptUrlFromIntent(it) }
@@ -156,12 +191,122 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** @return true when the intent carried a relay URL worth switching to. */
-    private fun adoptUrlFromIntent(uri: Uri): Boolean {
-        if (uri.scheme != "https" && uri.scheme != "http") return false
+    private fun adoptUrlFromIntent(uri: Uri): Boolean {        if (uri.scheme != "https" && uri.scheme != "http") return false
         val next = normalize(uri.toString())
         if (next == baseUrl) return false
         prefs.edit().putString(KEY_BASE_URL, next).apply()
         return true
+    }
+
+    // ---- APK 自更新 ---------------------------------------------------------------
+
+    /** 静默检查：有新版且用户没跳过这一版，才在顶部浮出提示条。 */
+    private fun checkForUpdate() {
+        Thread {
+            val info = Updater.check(baseUrl)
+            android.util.Log.i("MpiShell", "update check: base=$baseUrl result=${info?.version ?: "none"}")
+            runOnUiThread {
+                if (info == null) {
+                    pendingUpdate = null
+                    updateBar.visibility = View.GONE
+                    return@runOnUiThread
+                }
+                if (info.version == prefs.getString(KEY_SKIPPED_VERSION, null)) return@runOnUiThread
+                pendingUpdate = info
+                updateText.text = getString(R.string.update_available, info.version)
+                updateBar.visibility = View.VISIBLE
+            }
+        }.start()
+    }
+
+    private fun startUpdate() {
+        val info = pendingUpdate ?: return
+        updateText.text = getString(R.string.update_downloading, 0)
+        findViewById<Button>(R.id.updateAction).isEnabled = false
+        Thread {
+            try {
+                val apk = Updater.download(this, info) { percent ->
+                    runOnUiThread { updateText.text = getString(R.string.update_downloading, percent) }
+                }
+                runOnUiThread {
+                    updateText.text = getString(R.string.update_installing)
+                    findViewById<Button>(R.id.updateAction).isEnabled = true
+                    Updater.install(this, apk)
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    updateText.text = getString(R.string.update_failed, error.message ?: "download")
+                    findViewById<Button>(R.id.updateAction).isEnabled = true
+                }
+            }
+        }.start()
+    }
+
+    // ---- 壳内扫码 -----------------------------------------------------------------
+
+    private val scanLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val scanned = result.data?.getStringExtra(ScanActivity.EXTRA_TEXT)
+        if (result.resultCode == Activity.RESULT_OK && !scanned.isNullOrBlank()) openScanned(scanned)
+    }
+
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) scanLauncher.launch(Intent(this, ScanActivity::class.java))
+        else Toast.makeText(this, getString(R.string.scan_need_camera), Toast.LENGTH_LONG).show()
+    }
+
+    /** 供 PWA 的「扫码」按钮调用（JS 桥）。 */
+    private fun startScan() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            scanLauncher.launch(Intent(this, ScanActivity::class.java))
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    /** 扫码结果 → 交给 WebView。PWA 已支持 `#pair=` 自动配对，这里只做 URL 归一化。 */
+    private fun openScanned(scanned: String) {
+        val url = pairingUrlFrom(scanned)
+        if (url == null) {
+            Toast.makeText(this, getString(R.string.scan_not_pairing), Toast.LENGTH_LONG).show()
+            return
+        }
+        loadExternal(url)
+    }
+
+    private fun pairingUrlFrom(scanned: String): String? {
+        val value = scanned.trim()
+        if (value.startsWith("https://") || value.startsWith("http://")) return value
+        val match = Regex("^mpi://pair\\?payload=([A-Za-z0-9_-]+)$").find(value) ?: return null
+        val payload = match.groupValues[1]
+        val origin = relayOriginFromPayload(payload) ?: currentOrigin()
+        return "$origin/#pair=$payload"
+    }
+
+    /** payload 里的 relayUrl 形如 wss://host:port/ws——取它的 HTTP 源作为页面来源。 */
+    private fun relayOriginFromPayload(payload: String): String? = try {
+        val json = String(Base64.decode(payload, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP), Charsets.UTF_8)
+        val relay = JSONObject(json).optString("relayUrl")
+        if (relay.isBlank()) {
+            null
+        } else {
+            val uri = URI(relay)
+            val scheme = if (uri.scheme == "wss") "https" else "http"
+            val port = if (uri.port > 0) ":${uri.port}" else ""
+            "$scheme://${uri.host}$port"
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun currentOrigin(): String = Uri.parse(baseUrl).let { "${it.scheme}://${it.authority}" }
+
+    /** 加载一个壳外发起的 URL（配对链接等）：目标源不同则同时换源。 */
+    private fun loadExternal(url: String) {
+        val origin = Uri.parse(url).let { "${it.scheme}://${it.authority}/" }
+        if (origin != baseUrl) prefs.edit().putString(KEY_BASE_URL, origin).apply()
+        errorPanel.visibility = View.GONE
+        urlInput.setText(url)
+        web.loadUrl(url)
     }
 
     /**
@@ -193,5 +338,7 @@ class MainActivity : AppCompatActivity() {
         const val DEFAULT_BASE_URL = "https://aliyun-ecs.tail38d5a.ts.net:9443/"
         private const val PREFS = "mpi-shell"
         private const val KEY_BASE_URL = "baseUrl"
+        /** 用户点「✕」跳过的版本，同一版不再反复提示（出现更新版本时重置）。 */
+        private const val KEY_SKIPPED_VERSION = "skippedUpdateVersion"
     }
 }
