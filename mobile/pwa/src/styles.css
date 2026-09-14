@@ -170,6 +170,20 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .badge { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--control); color: var(--text-dim); }
 
+/* P1：新建会话入口（抽屉顶部）+ 多项目时的内联项目选择 */
+.new-thread-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 9px 12px; border-radius: var(--radius-sm);
+  background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 14px;
+}
+.new-thread-btn:hover:not(:disabled) { background: var(--accent-soft); filter: brightness(0.96); }
+.project-picker { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-muted); }
+.project-picker-row {
+  display: block; width: 100%; padding: 9px 12px; border-top: 1px solid var(--border);
+  background: none; color: var(--text); font-size: 13.5px; text-align: left; cursor: pointer;
+}
+.project-picker-row:first-child { border-top: none; }
+
 /* 多设备列表（阶段 C 会整块搬进二级抽屉） */
 .device-list {
   display: flex;

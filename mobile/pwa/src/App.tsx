@@ -7,7 +7,7 @@
  * E2E-encrypted channel, polling while any thread is running.
  */
 import { useEffect, useRef, useState } from "react";
-import type { RemoteThreadState } from "../../shared/protocol";
+import type { RemoteThreadSnapshot, RemoteThreadState } from "../../shared/protocol";
 import ThreadView from "./ThreadView";
 import { ChevronRight, Phone, Plus, Refresh } from "./components/icons";
 import DbgOverlay from "./DbgOverlay";
@@ -108,6 +108,9 @@ export default function App() {
   const [view, setView] = useState<"pairing" | "home">("pairing");
   const [snap, setSnap] = useState<SessionSnapshot | null>(null);
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
+  // P1：新建会话——thread.create 需要 projectId；多项目时先在抽屉里内联选项目。
+  const [creatingThread, setCreatingThread] = useState(false);
+  const [pickingProject, setPickingProject] = useState(false);
 
   // S5: open thread (conversation view).
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
@@ -400,6 +403,44 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, hostId, snap, openThreadId]);
 
+  /** P1：新建会话。thread.create 需要 projectId；host 返回新会话的 snapshot，
+   *  直接进这个对话（ThreadSession 自己拉数据，不依赖首页缓存）。 */
+  const createThreadIn = async (projectId: string) => {
+    const client = clientRef.current;
+    if (!client || creatingThread) return;
+    setCreatingThread(true);
+    setError(null);
+    try {
+      // 一次性请求：与 setupWebPush 同模式——建 Requester、用完即 detach。
+      const requester = new Requester(client);
+      let snapshot: RemoteThreadSnapshot | null = null;
+      try {
+        const payload = await requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.create", { projectId }, "create session");
+        snapshot = payload?.snapshot ?? null;
+      } finally {
+        requester.detach();
+      }
+      if (!snapshot?.id) throw new Error("主机未返回会话 ID");
+      // 马上要主动打开这个对话——标记已自动开过，用户关掉后不会被「自动开最新」弹回来。
+      autoOpenedHost.current = hostId;
+      setPickingProject(false);
+      closeAllDrawers();
+      void sessionRef.current?.refresh(); // 抽屉列表补上新会话（若正有刷新在跑，下次打开抽屉会再刷）
+      void openThread(snapshot.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreatingThread(false);
+    }
+  };
+
+  const onNewThreadClick = () => {
+    const projects = snap?.projects ?? [];
+    if (!projects.length || creatingThread) return;
+    if (projects.length === 1) void createThreadIn(projects[0].id);
+    else setPickingProject((v) => !v); // 多项目：切换内联项目选择
+  };
+
   const respondUi = async (requestId: string, response: Record<string, unknown>) => {
     const actions = threadActionsRef.current;
     if (!actions || uiBusy) return;
@@ -461,6 +502,8 @@ export default function App() {
    */
   const openDrawer = (level: "projects" | "devices") => {
     setDrawer(level);
+    // 打开项目抽屉顺手刷一次——桌面新建的会话、手机刚建的会话都不会漏在列表里。
+    if (level === "projects") void sessionRef.current?.refresh();
     // 带真实 hash：WebView 的 canGoBack() 只认真正产生历史项的导航，不带 URL 的
 
     // pushState 在安卓壳里返回键看不到（实测：壳会直接后台化而关不掉抽屉）。
@@ -541,9 +584,9 @@ export default function App() {
           <div className="chat-empty">
             <p className="hint">
               {snap && snap.projects.length === 0
-                ? "这台桌面还没有会话——先在桌面端新建一个。"
+                ? "这台桌面还没有项目——先在桌面端建一个项目。"
                 : connState === "open"
-                  ? "点左上角头像，选一个会话开始。"
+                  ? "点左上角头像，选一个会话开始，或直接「新建会话」。"
                   : "正在连接桌面端…"}
             </p>
             {error && <p className="hint error-text">{error}</p>}
@@ -615,6 +658,19 @@ export default function App() {
             )}
             {snap?.error && <p className="hint error-text">数据刷新失败：{snap.error}</p>}
 
+            <button type="button" className="new-thread-btn" onClick={onNewThreadClick} disabled={!snap || creatingThread || snap.projects.length === 0}>
+              <Plus size={15} /> {creatingThread ? "创建中…" : "新建会话"}
+            </button>
+            {pickingProject && !creatingThread && snap && snap.projects.length > 1 && (
+              <div className="project-picker">
+                {snap.projects.map((project) => (
+                  <button key={project.id} type="button" className="project-picker-row" onClick={() => void createThreadIn(project.id)}>
+                    {project.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {snap && snap.projects.length > 0 ? (
               snap.projects.map((project) => {
                 const expanded = expandedProjectId === project.id;
@@ -651,7 +707,7 @@ export default function App() {
                 );
               })
             ) : (
-              !snap?.error && <p className="hint">{connState === "open" ? "加载项目列表…" : "等待连接…"}</p>
+              !snap?.error && <p className="hint">{connState === "open" ? (snap ? "这台桌面还没有项目——先在桌面端建一个。" : "加载项目列表…") : "等待连接…"}</p>
             )}
           </>
         ) : (

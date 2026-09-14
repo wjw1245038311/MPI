@@ -202,7 +202,7 @@ async function part2FullStack() {
       listProjects: async () => [{ id: "p1", name: "Demo", threadCount: 1, updatedAt: Date.now() }],
       listThreads: async () => [makeSnapshot()],
       getThread: async () => makeSnapshot(),
-      createThread: async () => makeSnapshot(),
+      createThread: async (pid, name, perm) => { calls.push(["createThread", pid, name, perm]); return { ...makeSnapshot(), id: "thread-new" }; },
       setPermission: async (id, p) => { calls.push(["setPermission", id, p]); return makeSnapshot(); },
       setModel: async () => makeSnapshot(),
       prompt: async (id, text) => { calls.push(["prompt", id, text]); return {}; },
@@ -316,6 +316,17 @@ async function part2FullStack() {
     await actions.respondUi("ui-2", { confirmed: true });
     assert.deepEqual(calls.at(-1), ["respondUi", T, "ui-2", { confirmed: true }]);
     ts.markUiResponded("ui-2");
+
+    // H. P1 新建会话：home 级 Requester（无 threadId）→ 真实 service thread.create → backend 收到精确入参
+    const { Requester } = await import("../mobile/pwa/src/lib/requester.ts");
+    const homeReq = new Requester(client, { requestTimeoutMs: 3_000 });
+    try {
+      const created = await homeReq.request("thread.create", { projectId: "p1", name: "From phone" }, "create session");
+      assert.equal(created?.snapshot?.id, "thread-new", "host returns the new thread snapshot");
+    } finally {
+      homeReq.detach();
+    }
+    assert.deepEqual(calls.at(-1), ["createThread", "p1", "From phone", "sandbox"]);
 
     detachView();
     console.log("part2 (full stack over relay + E2E): passed");
