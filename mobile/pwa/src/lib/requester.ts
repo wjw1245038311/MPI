@@ -71,12 +71,14 @@ export class Requester {
         reject(new Error(`timed out waiting for ${label} response`));
       }, this.requestTimeoutMs);
       this.pending.set(requestId, { resolve: resolve as (value: unknown) => void, reject, timer });
-      // sendData is async only when E2E crypto is active.
+      // sendData is async only when E2E crypto is active. A false result means
+      // the frame could not go out at all — socket closed OR E2E handshake not
+      // finished yet; either way the next (re)auth cycle retries.
       void Promise.resolve(this.client.sendData(envelope)).then((sent) => {
         if (!sent) {
           clearTimeout(timer);
           this.pending.delete(requestId);
-          reject(new Error(`cannot send ${label} request (socket closed)`));
+          reject(new Error(`cannot send ${label} request (connection not ready)`));
         }
       });
     });

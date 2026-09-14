@@ -112,6 +112,17 @@ async function main() {
     uplink.start();
     await waitFor(() => uplink.getStatus().state === "connected", "uplink connected");
 
+    // --- S8: data frames must never go out plaintext before E2E -----------------------
+    {
+      const bare = new RelayClient({ url });
+      clients.push(bare);
+      assert.equal(
+        await bare.sendData({ v: 1, type: "projects.list", sessionId: "s0" }),
+        false,
+        "sendData fails fast without an E2E session (no plaintext data frames)",
+      );
+    }
+
     // --- pair (same flow as the S2/S3 test) -------------------------------------------
     const seed = randomSeedB64url();
     const identity = createDeviceIdentity(seed);

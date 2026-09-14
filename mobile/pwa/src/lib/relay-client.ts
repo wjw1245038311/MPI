@@ -106,9 +106,16 @@ export class RelayClient {
   }
 
   /** Send a protocol v1 envelope, E2E-encrypted when a session is active.
-   * Control frames (hello/pair.request) always go through plain send(). */
+   * Control frames (hello/pair.request) always go through plain send().
+   * Data frames are NEVER sent plaintext: before the handshake installs the
+   * crypto they would be dropped by the host — fail fast instead so the UI
+   * retries as soon as re-auth completes (a 10s timeout per request is worse). */
   async sendData(obj: unknown): Promise<boolean> {
     const record = obj as Record<string, unknown>;
+    if (record.v === 1 && !this.frameCrypto) {
+      this.lastError = "E2E session not ready";
+      return false;
+    }
     if (this.frameCrypto && record.v === 1) {
       try {
         return this.sendRaw(JSON.stringify(await this.frameCrypto.encrypt(JSON.stringify(obj))));
@@ -209,6 +216,14 @@ export class RelayClient {
     ws.onclose = () => {
       const isCurrent = this.ws === ws;
       if (isCurrent) this.ws = null;
+      // Record WHY the socket died — 1006 = network/browser killed it (no close
+      // frame), 4006 = replaced by another connection, 4005 = heartbeat timeout.
+      // REPLACED (set in onmessage) is more specific — don't clobber it.
+      // (Asserted: this file runs under both DOM and Node WebSocket typings.)
+      const closed = ws as unknown as { closeCode?: number; closeReason?: string };
+      if (closed.closeCode !== undefined && closed.closeCode !== 1000 && this.lastError !== "REPLACED") {
+        this.lastError = `closed ${closed.closeCode}${closed.closeReason ? ` "${closed.closeReason}"` : ""}`;
+      }
       if (!isCurrent || !this.stayAlive) return;
       // Unexpected drop: back off and reconnect (daemon-style, no retry cap).
       this.setState("connecting", this.lastError);
