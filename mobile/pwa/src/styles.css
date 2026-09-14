@@ -176,3 +176,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .approval-diff-body { margin: 0; padding: 8px 10px; overflow-x: auto; white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; max-height: 40dvh; }
 .approval-diff-body .diff-line-add { color: var(--ok); }
 .approval-diff-body .diff-line-del { color: var(--err); }
+
+/* ?dbg=1 diagnostics overlay */
+.dbg-overlay {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 999;
+  background: #0b0f14ee; color: #7ddf8a; font: 10px/1.5 ui-monospace, monospace;
+  padding: 6px 8px; max-height: 38vh; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+}

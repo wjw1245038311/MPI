@@ -49,6 +49,11 @@ export class HostSession {
   private readonly detachState: () => void;
 
   constructor(client: RelayClient, options: HostSessionOptions = {}) {
+    // S8.7 diagnostic: who creates a second HostSession? (real-device hang)
+    try {
+      const hooks = (globalThis as unknown as { __mpi_dbg?: { dbg?: (e: Record<string, unknown>) => void } }).__mpi_dbg;
+      hooks?.dbg?.({ kind: "removed", label: `app@${client.getClientId()}`, requestId: "*", reason: `HostSession CREATED stack=${new Error("hs").stack?.split("\n").slice(2, 5).join(" <- ") ?? "?"}` });
+    } catch { /* diagnostics must never break the app */ }
     this.client = client;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.requester = new Requester(client, {
