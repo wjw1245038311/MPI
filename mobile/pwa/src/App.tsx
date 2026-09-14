@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RemoteThreadState } from "../../shared/protocol";
 import ThreadView from "./ThreadView";
+import { ChevronRight, Phone, Plus, Refresh } from "./components/icons";
 import DbgOverlay from "./DbgOverlay";
 import { IdbKeyStore } from "./lib/keystore-idb";
 import type { KeyStore, PairingRecord } from "./lib/keystore";
@@ -555,8 +556,8 @@ export default function App() {
                 <p className="hint" style={{ marginTop: 0 }}>
                   这台桌面不认识本设备了（可能已在该桌面端「撤销设备」，或手机端身份被重置）。需要重新配一次对。
                 </p>
-                <button className="btn primary" onClick={disconnect}>
-                  重新配对
+                <button className="btn primary btn-with-icon" onClick={disconnect}>
+                  <Refresh size={15} /> 重新配对
                 </button>
               </div>
             )}
@@ -602,7 +603,7 @@ export default function App() {
             <span className="drawer-head-title">
               {currentPairing?.hostName || (hostId ? `主机 ${shortId(hostId)}` : "未连接")}
             </span>
-            <span className="hint">{pairings.length} 台设备 · 点此切换 ›</span>
+            <span className="hint hint-with-icon">{pairings.length} 台设备 · 点此切换 <ChevronRight size={13} /></span>
           </span>
         </button>
 
@@ -667,6 +668,7 @@ export default function App() {
           <div className="device-list">
             {pairings.map((item) => (
               <div key={`${item.hostId}-${item.pairedAt}`} className={`device-row${item.hostId === hostId ? " current" : ""}`}>
+                <span className="row-icon" aria-hidden="true"><Phone size={15} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="device-name">{item.hostName || `主机 ${shortId(item.hostId)}`}</div>
                   <div className="hint">
@@ -706,7 +708,7 @@ export default function App() {
             disconnect();
           }}
         >
-          + 添加设备（回到配对页）
+          <Plus size={15} /> 添加设备（回到配对页）
         </button>
       </aside>
 
