@@ -133,6 +133,26 @@ https://<relay>/#pair=<base64url payload>
 验证方式：壳内配对页点「扫码配对」→ 拉起相机预览（授予相机权限后）；桌面改版本号重发一版 →
 旧壳启动后出现「发现新版 X」→ 点更新 → 下载并调起系统安装器 → 安装完成；点 ✕ 后同一版不再提示。
 
+## 壳契约（PWA ↔ APK，改动前对照）
+
+壳与 PWA 是**两个独立发布的产物**（APK 侧载 / 中继静态托管），两者之间只有以下 JS 桥 + intent
+过滤器。改任何一侧前先对照这张清单：
+
+| # | 契约项 | 方向 | 说明 |
+| --- | --- | --- | --- |
+| 1 | `window.MpiShell.scanPairQr(): void` | 壳注入 → PWA | 拉起 ScanActivity；识别结果归一化成 `https://<relay>/#pair=<payload>` 交给 WebView，复用 PWA 的自动配对路径。PWA 据此在配对页显示「扫码配对」按钮 |
+| 2 | `window.MpiShell.shellVersion(): string` | 壳注入 → PWA | 返回壳版本号（`BuildConfig.VERSION_NAME`），诊断/展示用 |
+| 3 | 环境探测 | PWA → 壳 | PWA 以 `typeof window.MpiShell?.scanPairQr === "function"` 判定「在壳里」，显示壳专属 UI（扫码按钮、推送提示条）。**必须先探测再使用，不得假设存在** |
+| 4 | `window.__mpiBack(): "handled" \| "pass"` | PWA → 壳（返回键握手） | 壳的返回键先执行 `evaluateJavascript("window.__mpiBack ? window.__mpiBack() : 'pass'")`：返回 `"handled"` = 页面已处理（如关抽屉），壳不再动作；否则走 `canGoBack() ? goBack() : moveTaskToBack()`。原因：WebView 的 `canGoBack()` 不把 pushState 历史算进去，没有这个握手按返回键会直接后台化 |
+| 5 | VIEW intent filter | 系统 → 壳 | 清单注册中继域名的 https VIEW；扫码/点开的配对链接已装壳则进壳、否则进浏览器（两者共用 `#pair=` 自动配对路径）。「用 MPI 打开」也走这里换服务器地址 |
+
+**兼容规则：**
+
+- **新增** PWA 依赖的成员：新 APK 与新 PWA **同时发布**；只更新一侧时功能静默降级（PWA 探测式使用保证不崩）。
+- **改现有语义**（如 `__mpiBack` 返回值约定、`#pair=` 载荷格式）：**必须同发新 APK**——旧壳配新 PWA
+  会出现「返回键直接后台化」这类静默故障，且用户不会意识到是版本不匹配。
+- 两侧都不得假设对方存在：PWA 不裸调 `MpiShell`；壳对 `__mpiBack` 缺失按 `pass` 处理（已内置）。
+
 ## 模拟器联调（本机自测，无需真机）
 
 雷电模拟器**没有 Tailscale**，到不了 tailnet 上的中继，所以用回环隧道把它接进去：

@@ -170,6 +170,15 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .badge { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--control); color: var(--text-dim); }
 
+/* P5-3：壳内推送提示条（WebView 无 PushManager，引导去浏览器配对收通知） */
+.push-hint {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; margin-bottom: 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-muted); font-size: 12.5px; color: var(--text-dim); line-height: 1.45;
+}
+.push-hint button { flex: none; }
+
 /* P1：新建会话入口（抽屉顶部）+ 多项目时的内联项目选择 */
 .new-thread-btn {
   display: flex; align-items: center; justify-content: center; gap: 6px;

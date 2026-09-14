@@ -129,6 +129,15 @@ export default function App() {
   const [uiBusy, setUiBusy] = useState(false);
   const [uiError, setUiError] = useState<string | null>(null);
 
+  // P5-3：壳内推送提示（WebView 没有 PushManager）——按 hostId 记住，关过就不再弹。
+  const [pushHintDismissed, setPushHintDismissed] = useState(false);
+  useEffect(() => {
+    if (!hostId) return;
+    try {
+      setPushHintDismissed(localStorage.getItem(`mpi-push-hint:${hostId}`) === "1");
+    } catch { /* storage unavailable */ }
+  }, [hostId]);
+
   // Mirror the session snapshots into React state.
   useEffect(() => {
     if (!session) return;
@@ -570,6 +579,20 @@ export default function App() {
           {headerSubtitle && <div className="hint">{headerSubtitle}</div>}
         </div>
       </header>
+      {view === "home" && hostId && shellBridge() && !pushHintDismissed && (
+        <div className="push-hint">
+          <span>壳里收不到锁屏推送——在浏览器打开同一地址并配对，就能收到「MPI 需要批准」通知。</span>
+          <button
+            type="button"
+            onClick={() => {
+              try { localStorage.setItem(`mpi-push-hint:${hostId}`, "1"); } catch { /* ignore */ }
+              setPushHintDismissed(true);
+            }}
+          >
+            知道了
+          </button>
+        </div>
+      )}
       <main className="app-main">
         {view === "home" && hostId && openThreadId && threadView ? (
           <ThreadView
