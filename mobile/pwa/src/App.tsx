@@ -15,6 +15,7 @@ import { createDeviceIdentity, randomSeedB64url } from "./lib/device-identity";
 import { attachAutoReauth, parsePairingLink, runPairing, type PairingStage } from "./lib/pairing";
 import { RelayClient } from "./lib/relay-client";
 import { HostSession, type SessionSnapshot } from "./lib/session";
+import { ThreadActions } from "./lib/thread-actions";
 import { ThreadSession, type ThreadView as ThreadViewState } from "./lib/thread-session";
 
 const STAGE_LABELS: Record<string, string> = {
@@ -67,6 +68,14 @@ export default function App() {
   const threadSessionRef = useRef<ThreadSession | null>(null);
   threadSessionRef.current = threadSession;
   const [threadView, setThreadView] = useState<ThreadViewState | null>(null);
+
+  // S6: send control for the open thread. The pending approval (pendingUi) lives
+  // in ThreadSession's view so its dedup logic is node-testable without React.
+  const [threadActions, setThreadActions] = useState<ThreadActions | null>(null);
+  const threadActionsRef = useRef<ThreadActions | null>(null);
+  threadActionsRef.current = threadActions;
+  const [uiBusy, setUiBusy] = useState(false);
+  const [uiError, setUiError] = useState<string | null>(null);
 
   // Mirror the session snapshots into React state.
   useEffect(() => {
@@ -207,6 +216,9 @@ export default function App() {
       const ts = new ThreadSession(client, threadId);
       setThreadSession(ts);
       await ts.open();
+      // S6: send control becomes available once the snapshot is in.
+      setUiError(null);
+      setThreadActions(new ThreadActions(client, threadId));
     } catch (e) {
       // open() failed — go back to the list and surface the error there.
       const ts = threadSessionRef.current as ThreadSession | null; // re-read: TS narrowing is stale across awaits
@@ -218,14 +230,37 @@ export default function App() {
   };
 
   const closeThread = () => {
+    threadActionsRef.current?.detach();
     threadSessionRef.current?.detach();
+    setThreadActions(null);
+    setUiError(null);
     setThreadSession(null);
     setThreadView(null);
     setOpenThreadId(null);
   };
 
+  const respondUi = async (requestId: string, response: Record<string, unknown>) => {
+    const actions = threadActionsRef.current;
+    if (!actions || uiBusy) return;
+    setUiBusy(true);
+    setUiError(null);
+    try {
+      await actions.respondUi(requestId, response);
+      // Dedup + card dismissal live in the session (node-testable).
+      threadSessionRef.current?.markUiResponded(requestId);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setUiError(message.startsWith("THREAD_BUSY") ? "该会话正被其他设备操作，无法提交审批。" : `提交失败：${message}`);
+    } finally {
+      setUiBusy(false);
+    }
+  };
+
   const disconnect = () => {
+    threadActionsRef.current?.detach();
     threadSessionRef.current?.detach();
+    setThreadActions(null);
+    setUiError(null);
     sessionRef.current?.detach();
     clientRef.current?.close();
     setSession(null);
@@ -249,7 +284,14 @@ export default function App() {
       </header>
       <main className="app-main">
         {view === "home" && hostId && openThreadId && threadView ? (
-          <ThreadView view={threadView} onBack={closeThread} />
+          <ThreadView
+            view={threadView}
+            actions={threadActions}
+            uiBusy={uiBusy}
+            uiError={uiError}
+            onRespondUi={(id, response) => void respondUi(id, response)}
+            onBack={closeThread}
+          />
         ) : view === "home" && hostId ? (
           <div className="card home-card">
             {/* Host card */}

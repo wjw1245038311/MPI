@@ -143,3 +143,36 @@ button:disabled { opacity: 0.5; cursor: default; }
 .msg-artifacts { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
 .artifact { background: rgba(255, 255, 255, 0.05); border-radius: 6px; padding: 2px 8px; color: var(--muted); }
 .artifact.created { color: var(--ok); }
+
+/* ---- S6: send bar ------------------------------------------------------- */
+.thread-scroll { flex: 1 1 auto; min-height: 80px; }
+.send-bar { display: flex; align-items: flex-end; gap: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+.send-input { flex: 1; resize: none; max-height: 96px; background: rgba(255, 255, 255, 0.04); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 14px; line-height: 1.4; font-family: inherit; }
+.send-input:focus { outline: none; border-color: var(--accent); }
+.send-btn { flex: none; }
+.abort-btn { flex: none; background: rgba(247, 118, 142, 0.12); color: var(--err); border: 1px solid rgba(247, 118, 142, 0.4); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+.perm-chip { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 999px; font-size: 11px; padding: 2px 8px; cursor: pointer; }
+.perm-chip:hover { border-color: var(--accent); color: var(--text); }
+
+/* ---- S6.3: approval card ------------------------------------------------ */
+.approval-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.65); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+.approval-card { width: 100%; max-width: 480px; max-height: 90dvh; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.approval-title { font-weight: 700; font-size: 15px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+.approval-msg { margin: 0; color: var(--muted); font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+.approval-options { display: flex; flex-direction: column; gap: 8px; }
+.approval-options button { text-align: left; background: rgba(255, 255, 255, 0.04); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+.approval-options button:hover:not(:disabled) { border-color: var(--accent); }
+.approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.approval-input { width: 100%; resize: vertical; min-height: 64px; background: rgba(255, 255, 255, 0.04); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: 13px; font-family: inherit; }
+.approval-cancel { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; align-self: center; }
+
+/* §4.5 diff preview */
+.approval-diff { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.approval-diff-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; background: rgba(255, 255, 255, 0.04); font-size: 12px; }
+.approval-diff-head code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.diff-stats { flex: none; font-style: normal; font-size: 12px; }
+.diff-add { color: var(--ok); }
+.diff-del { color: var(--err); }
+.approval-diff-body { margin: 0; padding: 8px 10px; overflow-x: auto; white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; max-height: 40dvh; }
+.approval-diff-body .diff-line-add { color: var(--ok); }
+.approval-diff-body .diff-line-del { color: var(--err); }

@@ -1,0 +1,18 @@
+{
+  "id": "logic-approval-diff",
+  "title": "手机版审批 diff（S6.1）：write/edit 审批 unified diff 计算 + ui.request 白名单",
+  "feature": "手机版（云中继）",
+  "kind": "logic",
+  "source": "docs/MOBILE-DESIGN.md §4.5 / src/main/remote/approval-diff.ts / src/main/ipc.ts remoteUiRequest",
+  "description": "test-approval-diff.mjs：①parseApprovalHeading 解析 en/zh 审批标题（detail 含换行的 pretty JSON、无 detail、非审批请求→null）；②buildApprovalDiff——write 改已有文件 +N -M 统计与 @@/+/-/上下文行正确，edit edits[] 应用到旧内容后 diff，新文件全增，oldText 未命中/通配符路径/裸路径 detail/非 write-edit 工具/无变化/>2000 行尺寸守卫 → undefined；③>50KB hunks 截断且带省略标记、总量 ≤50KB+marker；④sanitizeRemoteUiRequest 白名单含 diff、剥离未知字段。",
+  "logicTest": "approval-diff",
+  "assertions": [
+    "en/zh 审批标题解析出 tool + detail（detail 取第一个 \\n\\n 之后全部）",
+    "write：added=2 removed=1，hunks 含 @@ 头、+CHANGED、-line2、上下文行",
+    "edit：edits[] 应用后 diff 正确；oldText 未命中 → undefined",
+    "新文件全增（尾部空行 LCS 匹配）；通配符/裸路径/非 write-edit/无变化/超尺寸 → undefined",
+    ">50KB hunks 截断带「…（diff 超限截断」标记且总量受控",
+    "sanitizeRemoteUiRequest 保留 diff、剥离未知字段"
+  ],
+  "passCriteria": "test-approval-diff.mjs 全部检查通过（npm run test:approval-diff）"
+}

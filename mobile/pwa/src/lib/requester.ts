@@ -20,6 +20,16 @@ interface Waiter {
   timer: ReturnType<typeof setTimeout>;
 }
 
+export interface RequesterOptions {
+  requestTimeoutMs?: number;
+  onStaleConnection?: () => void;
+  /**
+   * Attached to every envelope. The host's RemoteService reads threadId from the
+   * ENVELOPE (requiredThread), not the payload — per-thread requesters must set this.
+   */
+  threadId?: string;
+}
+
 export class Requester {
   private readonly pending = new Map<string, Waiter>();
   private reqCounter = 0;
@@ -28,7 +38,7 @@ export class Requester {
 
   constructor(
     private readonly client: RequestTransport,
-    options: { requestTimeoutMs?: number; onStaleConnection?: () => void } = {},
+    options: RequesterOptions = {},
   ) {
     const rand = new Uint8Array(8);
     crypto.getRandomValues(rand);
@@ -37,17 +47,21 @@ export class Requester {
     this.sessionId = `pwa-${hex}`;
     this.onStaleConnection = options.onStaleConnection;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
+    this.threadId = options.threadId;
     // Subscribe before any traffic can flow (RelayClient does not buffer frames).
     this.detachFrame = client.onFrame((frame) => this.handleFrame(frame));
   }
 
   private readonly requestTimeoutMs: number;
   private readonly onStaleConnection?: () => void;
+  private readonly threadId?: string;
 
   /** Resolve with the response payload; reject on error envelope / timeout / send failure. */
   request<T>(type: string, payload?: unknown, label = type): Promise<T> {
     const requestId = `req-${++this.reqCounter}-${Math.random().toString(36).slice(2, 8)}`;
-    const envelope = makeEnvelope(type, this.sessionId, payload === undefined ? undefined : (payload as never), { requestId });
+    const extra: { requestId: string; threadId?: string } = { requestId };
+    if (this.threadId) extra.threadId = this.threadId;
+    const envelope = makeEnvelope(type, this.sessionId, payload === undefined ? undefined : (payload as never), extra);
 
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {

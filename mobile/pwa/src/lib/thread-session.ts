@@ -11,7 +11,7 @@
  *   - detects seq gaps and socket drops → thread.resync (live snapshot).
  * Pure logic — node-testable against a real relay + fake host service.
  */
-import type { RemoteFileArtifact, RemoteMessage, RemoteThreadEventPayload, RemoteThreadSnapshot, RemoteThreadSummary } from "../../../shared/protocol";
+import type { RemoteFileArtifact, RemoteMessage, RemoteThreadEventPayload, RemoteThreadSnapshot, RemoteThreadSummary, RemoteUiRequest } from "../../../shared/protocol";
 import type { RelayClient } from "./relay-client";
 import { Requester } from "./requester";
 
@@ -46,6 +46,9 @@ export interface ThreadView {
   streaming: ViewMessage | null; // in-flight assistant message
   running: boolean; // agent turn active (agent_start … settled)
   errorBanner: string | null;
+  /** S6.3: pending ui.request (approval card). Survives resync — the host keeps
+   * the dialog open while the agent is paused, so a reconnect must re-show it. */
+  pendingUi: RemoteUiRequest | null;
 }
 
 export interface ThreadSessionOptions {
@@ -105,6 +108,8 @@ export class ThreadSession {
   private pendingEvents: Array<{ seq: number; payload: RemoteThreadEventPayload }> = [];
   /** Next expected event seq; null until the first post-snapshot event arms it. */
   private expectNext: number | null = null;
+  /** ui.request ids already answered — duplicate pushes must not re-pop the card. */
+  private readonly respondedUiIds = new Set<string>();
   private openCount = 0;
   private closing = false;
   private readonly detachFrame: () => void;
@@ -115,8 +120,10 @@ export class ThreadSession {
     threadId: string,
     options: ThreadSessionOptions = {},
   ) {
-    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null };
-    this.requester = new Requester(client, { requestTimeoutMs: options.requestTimeoutMs, onStaleConnection: options.onStaleConnection });
+    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, pendingUi: null };
+    // threadId goes on the ENVELOPE (host's requiredThread reads it there); the
+    // payload copy below is kept for compatibility with simpler test fakes.
+    this.requester = new Requester(client, { requestTimeoutMs: options.requestTimeoutMs, onStaleConnection: options.onStaleConnection, threadId });
 
     // Subscribe before any traffic can flow (RelayClient does not buffer frames).
     this.detachFrame = client.onFrame((frame) => this.handleFrame(frame));
@@ -159,6 +166,12 @@ export class ThreadSession {
       this.patch({ ready: true, errorBanner: error instanceof Error ? error.message : String(error) });
       throw error;
     }
+  }
+
+  /** Call after ui.respond succeeds — dedupes re-pushes and clears the card. */
+  markUiResponded(requestId: string): void {
+    this.respondedUiIds.add(requestId);
+    if (this.view.pendingUi?.id === requestId) this.patch({ pendingUi: null });
   }
 
   detach(): void {
@@ -212,6 +225,7 @@ export class ThreadSession {
       streaming: null,
       running: snapshot.state === "running",
       errorBanner: null,
+      pendingUi: this.view.pendingUi, // a pending approval survives the resync
     };
     // Re-arm seq tracking: the fresh snapshot makes subsequent events lossless on
     // this socket, so the first live event after it sets the baseline.
@@ -281,8 +295,22 @@ export class ThreadSession {
         this.patch({ errorBanner: `process exited${typeof code === "number" ? ` (code ${code})` : ""}`, running: false });
         break;
       }
+      case "ui.request": {
+        const request = payload.data?.request as RemoteUiRequest | undefined;
+        // Duplicate pushes must not re-pop the card — neither for an id that is
+        // already on screen nor for one that was answered.
+        if (
+          request &&
+          typeof request.id === "string" &&
+          !this.respondedUiIds.has(request.id) &&
+          this.view.pendingUi?.id !== request.id
+        ) {
+          this.patch({ pendingUi: request });
+        }
+        break;
+      }
       default:
-        // ui.request and friends are handled by the approval layer (S6).
+        // Other kinds are ignored by the simplified reducer.
         break;
     }
     if (seq > 0) this.expectNext = seq + 1;

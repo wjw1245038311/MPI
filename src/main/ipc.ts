@@ -151,6 +151,7 @@ import { getWeChatState, initWeChatMessaging, wechatSetConfig } from "./messagin
 import { APPROVAL_GRACE_MS, getChannelThread, isChannelOwnedSession, threadUuidFromSessionFile } from "./messaging/channel-threads";
 import { ensureChannelCommandInbox, startChannelCommandInboxWatcher } from "./messaging/channel-command";
 import { ensureChannelExtension } from "./messaging/channel-extension";
+import { buildApprovalDiff } from "./remote/approval-diff";
 import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
 import { RelayUplink } from "./remote/relay-uplink";
@@ -1281,7 +1282,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     // client show an empty modal titled "setStatus" and blocks the thread.
     // The remote client currently supports only actionable responses.
     if (!(method === "confirm" || method === "select" || method === "input")) return null;
-    const allowed = ["id", "method", "title", "message", "options", "placeholder", "prefill", "notifyType", "timeout"];
+    // diff：§4.5 write/edit 审批的 unified diff（approval-diff.ts 附加）。
+    const allowed = ["id", "method", "title", "message", "options", "placeholder", "prefill", "notifyType", "timeout", "diff"];
     const result: Record<string, unknown> = {};
     for (const key of allowed) {
       if (request[key] === undefined) continue;
@@ -1933,10 +1935,23 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       event = { kind: String(piEvent.type || "agent.event"), data: { event: remoteSafeEventValue(piEvent) as Record<string, unknown> } };
     } else if (channel === "pi:extui") {
       const request = (payload as any).request || {};
-      const safeRequest = remoteUiRequest(request);
-      if (!safeRequest) return;
-      remoteUiRequests.set(String(request.id || ""), { threadId, localId: rawThreadId });
-      event = { kind: "ui.request", data: { request: safeRequest } };
+      // §4.5：write/edit 审批能取到新旧内容时附 unified diff（best-effort，永不阻塞）。
+      // 自包含 async IIFE：remotePublish 保持同步签名；审批期间 agent 挂起不会发出
+      // 后续事件，故 publish 延迟一个微任务+项目扫描不影响帧序。
+      void (async () => {
+        if (!request.diff && typeof request.title === "string" && /^(?:Permission required|权限确认)[:：]/.test(request.title)) {
+          try {
+            const ref = await remoteThread(threadId);
+            const diff = await buildApprovalDiff(ref.cwd, request.title);
+            if (diff) request.diff = diff;
+          } catch { /* best-effort */ }
+        }
+        const safeRequest = remoteUiRequest(request);
+        if (!safeRequest) return;
+        remoteUiRequests.set(String(request.id || ""), { threadId, localId: rawThreadId });
+        remoteEventHub.publish(threadId, { kind: "ui.request", data: { request: safeRequest } });
+      })();
+      return;
     } else if (channel === "pi:exit") {
       event = { kind: "thread.exit", data: { code: (payload as any).code, stderr: remoteSafeString(String((payload as any).stderr || "").slice(-2000)) } };
     } else if (channel === "pi:error") {

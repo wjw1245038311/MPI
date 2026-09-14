@@ -54,8 +54,14 @@ export class RemoteService {
   private readonly claims = new Map<string, Claim>();
   private readonly requests = new Map<string, RemoteEnvelope>();
   private readonly sequences = new Map<string, number>();
+  /** Writer-lease duration; injectable so tests don't wait the real 30s. */
+  private readonly leaseMs: number;
 
-  constructor(private readonly backend: RemoteBackend) {}
+  constructor(backend: RemoteBackend, options: { leaseMs?: number } = {}) {
+    this.backend = backend;
+    this.leaseMs = options.leaseMs ?? 30_000;
+  }
+  private readonly backend: RemoteBackend;
 
   disconnect(connectionId: string): void {
     if (connectionId === "__all__") {
@@ -119,7 +125,7 @@ export class RemoteService {
         if (existing && existing.expiresAt > Date.now() && existing.connectionId !== context.connectionId) {
           throw new RemoteProtocolError("THREAD_BUSY", "Thread is being edited by another device");
         }
-        const expiresAt = Date.now() + 30_000;
+        const expiresAt = Date.now() + this.leaseMs;
         this.claims.set(threadId, { connectionId: context.connectionId, deviceId: context.deviceId, expiresAt });
         return responseFor(request, { threadId, expiresAt, deviceId: context.deviceId });
       }
@@ -198,7 +204,7 @@ export class RemoteService {
       throw new RemoteProtocolError("WRITE_CLAIM_REQUIRED", "Claim the thread before writing");
     }
     if (claim.connectionId !== context.connectionId) throw new RemoteProtocolError("THREAD_BUSY", "Thread is being edited by another device");
-    claim.expiresAt = Date.now() + 30_000;
+    claim.expiresAt = Date.now() + this.leaseMs;
   }
 
   private requiredThread(request: RemoteEnvelope): string {

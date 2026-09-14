@@ -1,10 +1,10 @@
 {
   "id": "logic-pwa",
-  "title": "手机版 PWA S2-S5：protocol 共享包等价性 + 配对/E2E 全链路 + 首页/会话视图数据层",
+  "title": "手机版 PWA S2-S6：protocol 共享包等价性 + 配对/E2E 全链路 + 首页/会话视图数据层 + 发送控制/审批卡",
   "feature": "手机版（云中继）",
   "kind": "logic",
   "source": "docs/MOBILE-DESIGN.md §6 / mobile/shared/protocol.ts / mobile/pwa/src/lib/",
-  "description": "三个脚本：①test-pwa-shared——mobile/shared/protocol.ts（桌面 protocol.ts 的 vendored copy）与桌面源行为等价：常量、makeEnvelope、parseEnvelope 合法/非法输入错误码（含 PAYLOAD_TOO_LARGE）、responseFor/errorFor 逐项 deepEqual，漂移即挂；②test-pwa-pairing——PWA lib（RelayClient + noble Ed25519/X25519 device-identity + pairing）作为手机经真实 relay ↔ 真实 RemoteHost+RelayUplink：配对链阶段序列、S3 E2E（pair.accepted 带 hostX25519Pub、双向线上帧仅 {e,n,c}、双端解密 requestId 完整、重连本地复算密钥）；③test-pwa-home——HostSession 首页数据层：projects.list/threads.list 缓存与 reqId 关联（乱序响应不错配）、hostOnline/lastFrameAt、running 会话轮询节奏（起/停）、simulateDrop 断线→自动重连+attachAutoReauth 补握手+重拉数据；④test-pwa-thread——ThreadSession 会话视图数据层：thread.subscribe 响应带 snapshot、snapshot 前到达的事件缓冲后无损冲刷、流式 reducer（text_delta 累积/toolcall running→done/message_end 落定）、seq gap→thread.resync、中途断线→重连+reauth+resync 无重复。"},
+  "description": "三个脚本：①test-pwa-shared——mobile/shared/protocol.ts（桌面 protocol.ts 的 vendored copy）与桌面源行为等价：常量、makeEnvelope、parseEnvelope 合法/非法输入错误码（含 PAYLOAD_TOO_LARGE）、responseFor/errorFor 逐项 deepEqual，漂移即挂；②test-pwa-pairing——PWA lib（RelayClient + noble Ed25519/X25519 device-identity + pairing）作为手机经真实 relay ↔ 真实 RemoteHost+RelayUplink：配对链阶段序列、S3 E2E（pair.accepted 带 hostX25519Pub、双向线上帧仅 {e,n,c}、双端解密 requestId 完整、重连本地复算密钥）；③test-pwa-home——HostSession 首页数据层：projects.list/threads.list 缓存与 reqId 关联（乱序响应不错配）、hostOnline/lastFrameAt、running 会话轮询节奏（起/停）、simulateDrop 断线→自动重连+attachAutoReauth 补握手+重拉数据；④test-pwa-thread——ThreadSession 会话视图数据层：thread.subscribe 响应带 snapshot、snapshot 前到达的事件缓冲后无损冲刷、流式 reducer（text_delta 累积/toolcall running→done/message_end 落定）、seq gap→thread.resync、中途断线→重连+reauth+resync 无重复；⑤test-pwa-actions——S6 发送控制+审批卡：Part1 进程内单测真实 RemoteService claim 语义（A 持有租约时 B 的 claimWrite/prompt → THREAD_BUSY）与 ThreadActions 重试策略（WRITE_CLAIM_REQUIRED→重取一次并重试；THREAD_BUSY→不自动抢占、原样上抛）；Part2 全链路（relay+E2E+真实 RemoteService，leaseMs=500 可测过期）：prompt/steer/followUp/abort/setPermission 按序到达 backend、租约过期透明重取重试、ui.request（带 §4.5 diff 字段）→pendingUi 卡片且重复推送不重弹、respondUi 送达 {value}/{confirmed} 精确形状、markUiResponded 清除+已答 id 永不重弹。",
   "logicTest": "pwa",
   "assertions": [
     "shared/protocol.ts 与桌面 protocol.ts 常量/envelope 构造/解析错误码完全一致（含 2MB 上限）",
@@ -14,7 +14,11 @@
     "重连路径：hello(deviceToken)→relay.ok→新 challenge→受信自动批准，token 与首次一致",
     "S3 E2E：pair.accepted 明文带 hostX25519Pub；PWA→host 线上帧仅 {e,n,c}（onSend spy）；host 服务收到解密 envelope；host 响应线上密文且 PWA 透明解密；重连后复算密钥加密流量恢复",
     "S4 session：projects/threads 缓存正确、乱序响应按 requestId 路由不错配；running 项目周期轮询、全部 idle 后停止；simulateDrop→自动重连+reauth+重拉成功",
-    "S5 thread：subscribe snapshot + 前置事件缓冲无损冲刷（[user,assistant,user]）；流式 text 累积 'Hello!'、tool 块 bash running=false 带结果；seq gap→resync；断线后状态为干净快照无重复"
+    "S5 thread：subscribe snapshot + 前置事件缓冲无损冲刷（[user,assistant,user]）；流式 text 累积 'Hello!'、tool 块 bash running=false 带结果；seq gap→resync；断线后状态为干净快照无重复",
+    "S6 claims：A claimWrite 成功后 B 的 claimWrite/prompt 均 THREAD_BUSY（真实 RemoteService）",
+    "S6 retry：WRITE_CLAIM_REQUIRED → [claim,prompt,claim,prompt] 精确序列重试一次；THREAD_BUSY → prompt 仅发一次且错误上抛",
+    "S6 full stack：prompt/steer/followUp/abort/setPermission 按序到达 backend（真实 assertWriter 放行）；500ms 租约过期后下一次发送透明重取+重试成功",
+    "S6 approval：ui.request 带 diff 经 relay+E2E 后 pendingUi.diff 完整；重复推送不触发新 view 更新；respondUi → backend 收到 {value:选项}/{confirmed:true}；markUiResponded 后同 id 再推仍无卡片"
   ],
-  "passCriteria": "test-pwa-shared.mjs + test-pwa-pairing.mjs + test-pwa-home.mjs + test-pwa-thread.mjs 全部检查通过（npm test -- pwa）"
+  "passCriteria": "test-pwa-shared.mjs + test-pwa-pairing.mjs + test-pwa-home.mjs + test-pwa-thread.mjs + test-pwa-actions.mjs 全部检查通过（npm test -- pwa）"
 }
