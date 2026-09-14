@@ -234,6 +234,15 @@ Qoder Mobile 已实现的用户功能（官方文档 + 截图 + H5 bundle 拆解
 - MVP：**WebPush (VAPID)**。PWA 首次配对后 `serviceWorker.register` + `pushManager.subscribe`，
   subscription 经加密通道上报 host（host 存本地 config）；relay 收到 `push.request` 即向对应 sub 发 push。
   通知点击 → deep link `/thread/<id>` 直达线程并触发 resync。
+- 实现注意（S8 真机验收后补齐，别重犯）：
+  - 载荷必须走 **RFC 8291 §4 + RFC 8188 §2**（`salt16‖rs4‖idlen1‖keyid65‖ct‖tag`，明文尾部
+    `0x02` 作 padding delimiter，两段式 HKDF 且 stage-1 用 auth secret 作 salt、`WebPush: info`
+    绑定双方公钥）；`Crypto-Key: p256ecdsa=<vapidPub>` + `Authorization: vapid t=<jwt>, k=<pub>`，
+    否则 FCM 直接 403。**不要**用旧草案（`0x02‖nonce‖ct`、单段 HKDF），也不要只跟 web-push 互验
+    VAPID JWT 就算过——载荷自测自解会漏掉不互通。守护线：`scripts/test-webpush.mjs` 里的
+    RFC 8291 §5 官方向量。
+  - 通知点击**不要**用 `WindowClient.navigate()` 做深链（实测不生效）：给已打开的 App 窗口
+    `postMessage` 让 App 走 SPA 深链；没有窗口时才 `openWindow`（冷加载需先等 E2E 握手就绪）。
 - 后续：Android 原生壳 + FCM（锁屏操作按钮）、iOS Live Activities（v1 不做）。
 
 ## 8. 部署与运维
@@ -241,6 +250,22 @@ Qoder Mobile 已实现的用户功能（官方文档 + 截图 + H5 bundle 拆解
 - **Relay**：Node 单进程（~500 行，无外部依赖或仅 ws），托管位置待定（§10）；日志只记连接事件。
 - **PWA**：静态文件，HTTPS 必须（service worker + WebCrypto subtle 前提）。可随 relay 同机 serve 或走 CDN。
 - 监控：relay 暴露 `/healthz`（在线 host/device 计数）即可，v1 不做告警。
+
+### 8.1 当前部署形态（测试阶段，走 Tailscale）
+
+- relay 跑在 **aliyun-ecs**：systemd `mpi-relay` 绑 tailnet IP `100.67.5.31:9443`，TLS 用
+  `tailscale cert aliyun-ecs.tail38d5a.ts.net`（LE，90 天，另有每月续期 cron），
+  `RELAY_STATIC_DIR=/var/www/mpi-mobile` 同机托管 PWA。
+- 入口：PWA `https://aliyun-ecs.tail38d5a.ts.net:9443/`，wss 同址 `/ws`。**仅 tailnet 可达**
+  （公网未开）；手机需在 tailnet 内。
+- ⚠️ **WebPush 出口是硬约束**：大陆机器连不上 `fcm.googleapis.com`（relay 日志表现为
+  `push … error: fetch failed`），而 Chrome/Android 的 WebPush 只能走 FCM、没有替代后端。
+  测试期做法：relay 用 Node ≥24 的 `NODE_USE_ENV_PROXY=1` + `HTTPS_PROXY` 指向工作站在
+  tailnet 上暴露的 xray（`tailscale serve --bg --tcp 10808 tcp://127.0.0.1:10808`），
+  即 ECS → tailnet → 工作站 xray → 境外 → FCM；relay 代码不需要为代理做任何改动。
+  生产更稳的做法是把 relay（或至少推送发送方）直接放在能直连 FCM 的境外机器——但那样
+  host↔relay 的长连接要过墙，需另行评估。
+  验收线：触发一次审批后 relay 日志出现 `push approval → device-…: sent`。
 
 ## 9. MVP 范围与实施 DAG
 
