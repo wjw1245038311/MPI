@@ -33,6 +33,7 @@
     "test:pwa-thread": "node --experimental-transform-types scripts/test-pwa-thread.mjs",
     "test:approval-diff": "node --experimental-strip-types scripts/test-approval-diff.mjs",
     "test:pwa-actions": "node --experimental-transform-types scripts/test-pwa-actions.mjs",
+    "test:webpush": "node --experimental-transform-types scripts/test-webpush.mjs",
     "test:diff": "node --experimental-strip-types scripts/test-diff.mjs",
     "test:compactions": "node --experimental-strip-types scripts/test-compaction-stats.mjs",
     "test:toolargs": "node --experimental-strip-types scripts/test-tool-args.mjs",
@@ -108,7 +109,8 @@
     "remark-rehype": "^11.1.2",
     "typescript": "^5.6.3",
     "unified": "^11.0.5",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "web-push": "^3.6.7"
   },
   "allowScripts": {
     "electron@33.4.11": true,

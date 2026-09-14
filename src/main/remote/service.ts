@@ -6,6 +6,7 @@ import {
   RemoteProtocolError,
   responseFor,
   type RemotePermission,
+  type RemotePushSubscription,
   type RemoteThreadEventPayload,
   type RemoteThreadSnapshot,
 } from "./protocol";
@@ -24,12 +25,23 @@ export interface RemoteBackend {
   fileTree(projectId: string, relativePath?: string): Promise<unknown>;
   filePreview(projectId: string, relativePath: string): Promise<unknown>;
   respondUi(threadId: string, requestId: string, payload: Record<string, unknown>): Promise<unknown>;
+  /** S7 WebPush：store the device's PushSubscription and sync it to the relay. */
+  storePushSubscription(deviceId: string, subscription: RemotePushSubscription): Promise<unknown>;
   subscribeThread(threadId: string, listener: (event: RemoteThreadEventPayload) => void): () => void;
 }
 export interface RemoteClientContext {
   connectionId: string;
   deviceId: string;
   send: (message: RemoteEnvelope) => void;
+}
+
+/** S7 WebPush：basic shape check for a browser PushSubscription (the relay re-validates). */
+export function isPushSubscriptionShape(value: unknown): value is RemotePushSubscription {
+  const sub = value as RemotePushSubscription | undefined;
+  if (!sub || typeof sub !== "object") return false;
+  if (typeof sub.endpoint !== "string" || !/^https?:\/\//.test(sub.endpoint)) return false;
+  if (!sub.keys || typeof sub.keys.p256dh !== "string" || typeof sub.keys.auth !== "string") return false;
+  return true;
 }
 
 function safeErrorMessage(message: string): string {
@@ -191,6 +203,13 @@ export class RemoteService {
         const response = payload.response;
         if (!response || typeof response !== "object" || Array.isArray(response)) throw new RemoteProtocolError("INVALID_REQUEST", "UI response must be an object");
         return responseFor(request, await this.backend.respondUi(threadId, uiRequestId, response as Record<string, unknown>));
+      }
+      case "push.subscribe": {
+        // S7 WebPush: device-scoped (no thread). The subscription is routing
+        // metadata only — the relay re-validates shape before storing.
+        const subscription = payload.subscription;
+        if (!isPushSubscriptionShape(subscription)) throw new RemoteProtocolError("INVALID_REQUEST", "subscription is required");
+        return responseFor(request, await this.backend.storePushSubscription(context.deviceId, subscription));
       }
       default:
         throw new RemoteProtocolError("UNSUPPORTED", `Unsupported remote command: ${request.type}`);

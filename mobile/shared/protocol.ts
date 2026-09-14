@@ -140,6 +140,17 @@ export interface RemoteUiRequest {
   [key: string]: unknown;
 }
 
+/**
+ * S7 WebPush：浏览器 PushSubscription（device→host，经 E2E 加密通道上报；host
+ * 存本地并经 push.subscribe 控制帧同步给 relay）。endpoint/keys 是推送路由元数据，
+ * 不含会话内容。
+ */
+export interface RemotePushSubscription {
+  endpoint: string;
+  expirationTime?: number | null;
+  keys: { p256dh: string; auth: string };
+}
+
 export interface RemoteDeviceInfo {
   deviceId: string;
   name: string;

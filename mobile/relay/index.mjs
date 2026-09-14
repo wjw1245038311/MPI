@@ -10,21 +10,28 @@
  *   - control frames (plaintext JSON) share the socket with data frames and
  *     are distinguished by `type`.
  *
- * S0 scope (§12.4): registration + routing table, opaque forwarding, heartbeat
- * death detection, ticket/pair.request routing skeleton. E2E crypto lands in
- * S1/S3; WebPush (push.request) in S7.
+ * S7 adds WebPush: the host registers each device's PushSubscription
+ * (push.subscribe control frame) and fires push.request metadata; the relay
+ * signs/encrypts with its VAPID key (vapid.mjs, zero-dep node:crypto) and POSTs
+ * to subscription.endpoint. The PWA service worker shows the notification.
  *
  * Frame rules:
- *   host  → relay : control {ticket.register|pair.approved|device.revoke|push.request}
+ *   host  → relay : control {ticket.register|pair.approved|device.revoke|push.subscribe|push.request}
  *                   data    {to:"<deviceId>", ...opaque...}   (whole object forwarded)
  *   device→ relay : first frame {hello | pair.request}; afterwards opaque data
  *                   frames are forwarded to the bound host uplink.
  *
  * Env: RELAY_PORT (default 9001, 0 = ephemeral), RELAY_HOST (default 0.0.0.0),
- *      RELAY_PING_MS (default 20000), RELAY_DEAD_MS (default 60000).
+ *      RELAY_PING_MS (default 20000), RELAY_DEAD_MS (default 60000),
+ *      RELAY_VAPID_KEY_FILE (default <script dir>/data/vapid.json),
+ *      RELAY_VAPID_SUB (JWT `sub` claim, default mailto:relay@mpi.local),
+ *      RELAY_ALLOW_INSECURE_PUSH=1 permits http:// push endpoints (tests only).
  */
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
+import { encryptWebPushPayload, loadOrCreateVapidKey, vapidAuthTag, vapidJwt } from "./vapid.mjs";
 
 const PORT = Number(process.env.RELAY_PORT || 9001);
 const HOST = process.env.RELAY_HOST || "0.0.0.0";
@@ -33,6 +40,67 @@ const PING_MS = Math.max(500, Number(process.env.RELAY_PING_MS || 20_000));
 const DEAD_MS = Math.max(PING_MS * 2, Number(process.env.RELAY_DEAD_MS || 60_000));
 /** protocol v1 PAYLOAD_TOO_LARGE cap (defense in depth; the host enforces it too). */
 const MAX_FRAME_BYTES = 2_000_000;
+
+// --- WebPush (S7) ------------------------------------------------------------------
+/** deviceId -> PushSubscription {endpoint, keys:{p256dh, auth}}. Volatile on
+ * purpose: the host re-reports all subscriptions after a relay restart (same
+ * pattern as device tokens). */
+const pushSubs = new Map();
+const VAPID_KEY_FILE = process.env.RELAY_VAPID_KEY_FILE || join(dirname(fileURLToPath(import.meta.url)), "data", "vapid.json");
+const VAPID_SUB_CLAIM = process.env.RELAY_VAPID_SUB || "mailto:relay@mpi.local";
+let vapidKey = null;
+try {
+  vapidKey = loadOrCreateVapidKey(VAPID_KEY_FILE);
+} catch (error) {
+  console.error("[relay] VAPID key unavailable — push disabled:", error.message);
+}
+const ALLOW_INSECURE_PUSH = process.env.RELAY_ALLOW_INSECURE_PUSH === "1";
+
+function isPushSubscription(sub) {
+  if (!sub || typeof sub !== "object") return false;
+  if (typeof sub.endpoint !== "string" || !/^https?:\/\//.test(sub.endpoint)) return false;
+  if (/^http:/.test(sub.endpoint) && !ALLOW_INSECURE_PUSH) return false; // SSRF guard
+  const keys = sub.keys;
+  if (!keys || typeof keys.p256dh !== "string" || typeof keys.auth !== "string") return false;
+  try {
+    const p256 = Buffer.from(keys.p256dh, "base64url");
+    const auth = Buffer.from(keys.auth, "base64url");
+    if (p256.length !== 65 || p256[0] !== 0x04) return false;
+    if (auth.length !== 16) return false;
+  } catch {
+    return false;
+  }
+  return true;}
+
+/** Sign + encrypt + POST one push. Fire-and-forget from the socket handler.
+ * @returns {Promise<boolean>} delivered? */
+async function deliverWebPush(deviceId, sub, frame) {
+  const payload = JSON.stringify({
+    kind: str(frame.kind, 32) || "approval",
+    title: str(frame.title, 200),
+    body: str(frame.body, 500),
+    deepLink: str(frame.deepLink, 512),
+  });
+  const { body, cryptoKey, authKey } = encryptWebPushPayload(Buffer.from(payload, "utf8"), sub.keys.p256dh);
+  const jwt = vapidJwt({ privPem: vapidKey.privPem, aud: new URL(sub.endpoint).origin, sub: VAPID_SUB_CLAIM });
+  const res = await fetch(sub.endpoint, {
+    method: "POST",
+    headers: {
+      authorization: `WebPush vapid="${jwt}" t="${vapidAuthTag(jwt, authKey)}"`,
+      "crypto-key": cryptoKey,
+      "content-encoding": "aes128gcm",
+      ttl: "30",
+      urgency: "high",
+    },
+    body,
+  });
+  if (res.status === 404 || res.status === 410) {
+    pushSubs.delete(deviceId);
+    log(`push subscription for ${deviceId} is dead (${res.status}) — removed`);
+    return false;
+  }
+  return res.ok;
+}
 
 // --- close codes (application range) -------------------------------------------
 const CLOSE_AUTH_FAILED = 4001;
@@ -163,9 +231,28 @@ function handleHostFrame(conn, raw) {
       return send(conn.ws, { type: "relay.ok", role: "host", removed });
     }
 
-    case "push.request":
-      // S7 (WebPush/VAPID) — not wired in the S0 skeleton.
-      return send(conn.ws, { type: "relay.error", code: "PUSH_NOT_CONFIGURED" });
+    case "push.subscribe": {
+      const deviceId = str(frame.deviceId, 128);
+      if (!deviceId || !isPushSubscription(frame.subscription)) {
+        return send(conn.ws, { type: "relay.error", code: "INVALID_SUBSCRIPTION" });
+      }
+      pushSubs.set(deviceId, frame.subscription);
+      log(`push subscription stored for ${deviceId}`);
+      return send(conn.ws, { type: "relay.ok", role: "host", deviceId });
+    }
+
+    case "push.request": {
+      const deviceId = str(frame.deviceId, 128);
+      if (!deviceId) return send(conn.ws, { type: "relay.error", code: "INVALID_REQUEST" });
+      if (!vapidKey) return send(conn.ws, { type: "relay.error", code: "PUSH_NOT_CONFIGURED" });
+      const sub = pushSubs.get(deviceId);
+      if (!sub) return send(conn.ws, { type: "relay.ok", role: "host", deviceId, delivered: false });
+      // Delivery is async (network POST); the ack only means "accepted".
+      void deliverWebPush(deviceId, sub, frame)
+        .then((delivered) => log(`push ${str(frame.kind, 32) || "?"} → ${deviceId}: ${delivered ? "sent" : "failed"}`))
+        .catch((error) => log(`push to ${deviceId} error:`, error?.message ?? error));
+      return send(conn.ws, { type: "relay.ok", role: "host", deviceId });
+    }
 
     default: {
       // Data frame → must carry plaintext routing target `to` = deviceId.
@@ -266,7 +353,13 @@ const server = http.createServer((req, res) => {
     const onlineDevices = [...devices.values()].filter((d) => isWsOpen(d.ws)).length;
     const paired = [...devices.values()].filter((d) => d.status === "approved").length;
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true, hosts: hosts.size, devices: onlineDevices, paired, tickets: tickets.size, uptimeSec: Math.round(process.uptime()) }));
+    res.end(JSON.stringify({ ok: true, hosts: hosts.size, devices: onlineDevices, paired, tickets: tickets.size, pushSubs: pushSubs.size, uptimeSec: Math.round(process.uptime()) }));
+    return;
+  }
+  // S7: the PWA fetches this to subscribe() with the application server key.
+  if (req.method === "GET" && req.url?.split("?")[0] === "/api/v1/remote/web-push/vapid-public-key") {
+    res.writeHead(vapidKey ? 200 : 503, { "content-type": "application/json" });
+    res.end(JSON.stringify(vapidKey ? { publicKey: vapidKey.pubB64u } : { error: "push not configured" }));
     return;
   }
   res.writeHead(404, { "content-type": "text/plain" });

@@ -1877,6 +1877,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       remoteUiRequests.delete(requestId);
       return { ok: true };
     },
+    storePushSubscription: async (deviceId, subscription) => {
+      // S7 WebPush：持久化 + 同步给 relay（uplink 未配置时静默 no-op）。
+      activeRelayUplink?.storePushSubscription(deviceId, subscription);
+      return { ok: true };
+    },
     subscribeThread: (threadId, listener) => {
       return remoteEventHub.subscribe(threadId, listener);
     },
@@ -1950,6 +1955,15 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         if (!safeRequest) return;
         remoteUiRequests.set(String(request.id || ""), { threadId, localId: rawThreadId });
         remoteEventHub.publish(threadId, { kind: "ui.request", data: { request: safeRequest } });
+        // S7 WebPush：审批通知发给所有已配对设备（relay 无订阅则 no-op）。在线
+        // 设备会同时看到实时审批卡 + 系统通知——v1 接受这点冗余，换取后台/锁屏
+        // 场景的可靠触达。文案按 §12.2 保持通用，不含会话内容。
+        const uplink = activeRelayUplink;
+        if (uplink) {
+          for (const deviceId of uplink.getKnownDeviceIds()) {
+            uplink.sendPush(deviceId, { kind: "approval", title: "MPI 需要批准", body: "有会话等待你的确认。", deepLink: `/thread/${threadId}` });
+          }
+        }
       })();
       return;
     } else if (channel === "pi:exit") {

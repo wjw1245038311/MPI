@@ -1,0 +1,20 @@
+{
+  "id": "logic-webpush",
+  "title": "手机版 WebPush（S7）：VAPID JWT + RFC 8291 aes128gcm 加密 + relay 推送投递全链路",
+  "feature": "手机版（云中继）",
+  "kind": "logic",
+  "source": "docs/MOBILE-DESIGN.md §7 / mobile/relay/vapid.mjs / mobile/relay/index.mjs push.* / src/main/remote/relay-uplink.ts sendPush / scripts/test-webpush.mjs",
+  "description": "test-webpush.mjs：Part1（vapid.mjs 单元）——①VAPID 密钥生成+持久化（同文件二次加载公钥不变）；②JWT header {typ:JWT,alg:ES256}、claims aud/sub/exp、raw r||s ES256 签名可验证；③钉死向量：HKDF-SHA256(ikm=32×0xAB,salt=\"\",info=\"WebPush\") → contentKey/authKey 固定 hex（防常量漂移）；④RFC 8291 payload 结构（version 0x02、nonce≥12B+tag）且用独立推导解密还原明文；⑤固定临时私钥 → Crypto-Key 头稳定；⑥web-push@3.6.7 交叉验证：其 VAPID JWT 同样以 raw r||s 通过 ES256 校验（注：web-push 载荷走旧 draft salt 格式，与 RFC 8291 不字节互通，故只做 JWT 互验）。Part2（全栈）——真 relay 子进程（临时 VAPID 密钥 + RELAY_ALLOW_INSECURE_PUSH=1）→ /api/v1/remote/web-push/vapid-public-key 端点；完整 E2E 配对后 PWA 经加密通道 push.subscribe 上报 → host backend 持久化且 relay healthz pushSubs=1；uplink.sendPush → relay 签 JWT（aud=endpoint origin）+ t 标签 + RFC 8291 加密 POST 到假端点，body 用标准推导解密还原精确 payload {kind,title,body,deepLink}；t 标签 = HMAC-SHA256(authKey,jwt) 截断 16B（重算比对）；410 Gone → relay 删除订阅（pushSubs=0），后续推送不再投递。",
+  "logicTest": "webpush",
+  "assertions": [
+    "VAPID 密钥持久化：同文件二次加载公钥一致",
+    "JWT header/claims 正确，raw r||s ES256 签名可验证；t 标签 = HMAC(authKey, jwt) 截断 16B（重算相等）",
+    "钉死向量 contentKey=524abf…c713 / authKey=d0ca6b…836d（HKDF info=\"WebPush\" salt=\"\"）",
+    "RFC 8291 payload：version 0x02、独立推导解密还原明文；固定临时私钥 → Crypto-Key 头稳定",
+    "web-push VAPID JWT 以同一 raw r||s 方式通过 ES256 校验（交叉验证）",
+    "全栈：vapid-public-key 端点返回 65B 公钥；push.subscribe 经 E2E 通道上报 → host 持久化 + relay pushSubs=1",
+    "sendPush → 假端点收到 POST：JWT aud=endpoint origin、签名对 relay 公钥可验、body 标准推导解密 = {kind,title,body,deepLink}",
+    "410 Gone → relay 删除订阅（pushSubs=0），后续推送不再投递"
+  ],
+  "passCriteria": "test-webpush.mjs Part1+Part2 全部检查通过（npm run test:webpush）；真实浏览器/FCM 互通在 S8 部署后人工验收（设计 §9）"
+}

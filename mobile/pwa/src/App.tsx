@@ -15,8 +15,10 @@ import { createDeviceIdentity, randomSeedB64url } from "./lib/device-identity";
 import { attachAutoReauth, parsePairingLink, runPairing, type PairingStage } from "./lib/pairing";
 import { RelayClient } from "./lib/relay-client";
 import { HostSession, type SessionSnapshot } from "./lib/session";
+import { Requester } from "./lib/requester";
 import { ThreadActions } from "./lib/thread-actions";
 import { ThreadSession, type ThreadView as ThreadViewState } from "./lib/thread-session";
+import { ensureBrowserPush } from "./lib/webpush";
 
 const STAGE_LABELS: Record<string, string> = {
   idle: "未连接",
@@ -90,6 +92,33 @@ export default function App() {
     return threadSession.subscribe(setThreadView);
   }, [threadSession]);
 
+  /** S7 WebPush：订阅 + 经加密通道上报 host（best-effort，失败不影响主流程）。 */
+  const setupWebPush = (client: RelayClient, relayWsUrl: string) => {
+    void (async () => {
+      // startSession calls this before the socket is up — wait for the first open.
+      if (client.getState() !== "open") {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => { detach(); resolve(); }, 10_000);
+          const detach = client.onState((s) => {
+            if (s === "open") {
+              clearTimeout(timer);
+              detach();
+              resolve();
+            }
+          });
+        });
+      }
+      const reporter = new Requester(client);
+      try {
+        await ensureBrowserPush(relayWsUrl, async (subscription) => {
+          await reporter.request("push.subscribe", { subscription }, "push.subscribe");
+        });
+      } catch { /* best-effort */ } finally {
+        reporter.detach();
+      }
+    })();
+  };
+
   /** Create (or reuse) the data session for an established client and enter home. */
   const enterHome = (client: RelayClient, record: PairingRecord) => {
     // Note: use a local — setSession() only lands in sessionRef on the next render.
@@ -154,6 +183,7 @@ export default function App() {
     });
     client.connect();
     enterHome(client, record);
+    setupWebPush(client, record.relayUrl);
   };
 
   const startPairing = async () => {
@@ -200,11 +230,23 @@ export default function App() {
       });
       setHostId(payload.hostId);
       enterHome(client, record);
+      setupWebPush(client, payload.relayUrl!);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStage("error");
     }
   };
+
+  // S7 deep link: a WebPush notification click lands on /thread/<id> — open it.
+  const deepLinkHandled = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandled.current || view !== "home" || !session) return;
+    const m = /^\/thread\/([^/]+)$/.exec(window.location.pathname);
+    if (!m) return;
+    deepLinkHandled.current = true;
+    void openThread(m[1]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, session]);
 
   /** Open a conversation (S5). The host's uplink must be connected; the home view
    * is hidden while a thread is open, so no double-open guard is needed. */

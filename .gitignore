@@ -22,6 +22,8 @@ resources/runtime-manifest.json
 .qa-appdata/
 .qa-browser-data/
 .qa-user-data/
+# Relay runtime state (VAPID private key — never commit)
+mobile/relay/data/
 .tmp-*/
 mpi-gates/
 

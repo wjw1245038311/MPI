@@ -19,6 +19,7 @@ import { join } from "node:path";
 import WebSocket from "ws";
 import { decryptFrame, deriveAesKey, encryptFrame } from "./e2e-crypto";
 import { x25519SharedSecret } from "./identity";
+import type { RemotePushSubscription } from "./protocol";
 import type { RemoteHost, RelayOutbound } from "./host";
 
 const RETRY_BASE_MS = 1_000;
@@ -160,8 +161,28 @@ export class RelayUplink implements RelayOutbound {
       delete tokens[deviceId];
       this.saveTokens(tokens);
     }
+    // S7: drop the push subscription too, so a revoked device stops receiving.
+    this.forgetPushSubscription(deviceId);
     // Ask the relay to drop its route and kick the device socket (4002).
     this.sendControl({ type: "device.revoke", deviceId });
+  }
+
+  /** S7 WebPush：PWA 上报的 PushSubscription（持久化 + 同步给 relay）。 */
+  storePushSubscription(deviceId: string, subscription: RemotePushSubscription): void {
+    const subs = this.loadPushSubscriptions();
+    subs[deviceId] = subscription;
+    this.savePushSubscriptions(subs);
+    if (this.isOpen()) this.sendControl({ type: "push.subscribe", deviceId, subscription });
+  }
+
+  /** S7 WebPush：向某设备发一条推送元数据（relay 负责 VAPID 签名/加密/投递）。 */
+  sendPush(deviceId: string, push: { kind: string; title: string; body?: string; deepLink?: string }): boolean {
+    return this.sendControl({ type: "push.request", deviceId, ...push });
+  }
+
+  /** All paired device ids (token store) — used to fan out approval pushes. */
+  getKnownDeviceIds(): string[] {
+    return Object.keys(this.loadTokens());
   }
 
   // --- connection ---------------------------------------------------------------
@@ -191,6 +212,10 @@ export class RelayUplink implements RelayOutbound {
       // Re-register device tokens so `hello` re-auth works after a relay restart.
       for (const [deviceId, token] of Object.entries(this.loadTokens())) {
         this.sendControl({ type: "pair.approved", deviceId, deviceToken: token });
+      }
+      // S7: the relay's push-subscription table is volatile — re-report all.
+      for (const [deviceId, subscription] of Object.entries(this.loadPushSubscriptions())) {
+        this.sendControl({ type: "push.subscribe", deviceId, subscription });
       }
       this.startHeartbeat(ws);
     });
@@ -407,6 +432,43 @@ export class RelayUplink implements RelayOutbound {
       writeFileSync(this.tokenFile(), JSON.stringify(tokens, null, 2), "utf8");
     } catch (error) {
       console.error("[relay-uplink] failed to persist device tokens:", error);
+    }
+  }
+
+  // --- push subscription store (S7 WebPush) -----------------------------------------
+
+  private pushSubs: Record<string, RemotePushSubscription> | null = null;
+
+  private pushSubFile(): string {
+    return join(this.options.userDataDir, "remote-push-subscriptions.json");
+  }
+
+  private loadPushSubscriptions(): Record<string, RemotePushSubscription> {
+    if (this.pushSubs) return this.pushSubs;
+    try {
+      const parsed = JSON.parse(readFileSync(this.pushSubFile(), "utf8")) as unknown;
+      this.pushSubs = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, RemotePushSubscription>) : {};
+    } catch {
+      this.pushSubs = {};
+    }
+    return this.pushSubs;
+  }
+
+  private savePushSubscriptions(subs: Record<string, RemotePushSubscription>): void {
+    this.pushSubs = subs;
+    try {
+      mkdirSync(this.options.userDataDir, { recursive: true });
+      writeFileSync(this.pushSubFile(), JSON.stringify(subs, null, 2), "utf8");
+    } catch (error) {
+      console.error("[relay-uplink] failed to persist push subscriptions:", error);
+    }
+  }
+
+  private forgetPushSubscription(deviceId: string): void {
+    const subs = this.loadPushSubscriptions();
+    if (subs[deviceId]) {
+      delete subs[deviceId];
+      this.savePushSubscriptions(subs);
     }
   }
 
