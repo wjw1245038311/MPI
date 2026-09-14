@@ -73,23 +73,55 @@ async function waitFor(fn, what, timeoutMs = 10_000) {
   }
 }
 
-/** Independent RFC 8291 decryption — the reference check for any sender output. */
-function decryptWebPushBody(body, cryptoKeyB64u, clientPrivateKey) {
-  if (body[0] !== 0x02) throw new Error(`bad version byte ${body[0]}`);
-  const nonce = body.subarray(1, 13);
-  const ctTag = body.subarray(13);
-  const ephRaw = Buffer.from(cryptoKeyB64u, "base64url");
-  if (ephRaw.length !== 65 || ephRaw[0] !== 0x04) throw new Error("bad Crypto-Key point");
-  const ephPub = crypto.createPublicKey({
-    key: { kty: "EC", crv: "P-256", x: b64url(ephRaw.subarray(1, 33)), y: b64url(ephRaw.subarray(33, 65)) },
+/**
+ * Independent RFC 8291 §4 / RFC 8188 §2 decryption — the reference check for
+ * any sender output. Mirrors the spec rather than the implementation.
+ */
+function decryptWebPushBody(body, clientPrivateKey, clientPubB64u, authB64u) {
+  if (body.length < 21 + 65 + 17) throw new Error("body too short");
+  const salt = body.subarray(0, 16);
+  const rs = body.readUInt32BE(16);
+  if (rs < 18) throw new Error(`bad rs ${rs}`);
+  const idlen = body[20];
+  const senderPub = body.subarray(21, 21 + idlen);
+  if (senderPub.length !== 65 || senderPub[0] !== 0x04) throw new Error("bad keyid point");
+  const ctTag = body.subarray(21 + idlen);
+
+  const clientPub = Buffer.from(clientPubB64u, "base64url");
+  const authSecret = Buffer.from(authB64u, "base64url");
+  const senderPubObj = crypto.createPublicKey({
+    key: { kty: "EC", crv: "P-256", x: b64url(senderPub.subarray(1, 33)), y: b64url(senderPub.subarray(33, 65)) },
     format: "jwk",
   });
-  const shared = crypto.diffieHellman({ privateKey: clientPrivateKey, publicKey: ephPub });
-  const hkdfRaw = crypto.hkdfSync("sha256", shared, Buffer.alloc(0), Buffer.from("WebPush", "ascii"), 32);
-  const hkdfOut = Buffer.isBuffer(hkdfRaw) ? hkdfRaw : Buffer.from(hkdfRaw);
-  const decipher = crypto.createDecipheriv("aes-128-gcm", hkdfOut.subarray(0, 16), nonce);
+  const shared = crypto.diffieHellman({ privateKey: clientPrivateKey, publicKey: senderPubObj });
+
+  const hmac = (key, data) => crypto.createHmac("sha256", key).update(data).digest();
+  const expand = (prk, info, len) => {
+    const chunks = [];
+    let t = Buffer.alloc(0);
+    for (let i = 1; Buffer.concat(chunks).length < len; i++) {
+      t = hmac(prk, Buffer.concat([t, info, Buffer.from([i])]));
+      chunks.push(t);
+    }
+    return Buffer.concat(chunks).subarray(0, len);
+  };
+  const ikm = expand(
+    hmac(authSecret, shared),
+    Buffer.concat([Buffer.from("WebPush: info", "ascii"), Buffer.from([0]), clientPub, senderPub]),
+    32,
+  );
+  const prk = hmac(salt, ikm);
+  const contentKey = expand(prk, Buffer.concat([Buffer.from("Content-Encoding: aes128gcm", "ascii"), Buffer.from([0])]), 16);
+  const nonce = expand(prk, Buffer.concat([Buffer.from("Content-Encoding: nonce", "ascii"), Buffer.from([0])]), 12);
+
+  const decipher = crypto.createDecipheriv("aes-128-gcm", contentKey, nonce);
   decipher.setAuthTag(ctTag.subarray(ctTag.length - 16));
-  return Buffer.concat([decipher.update(ctTag.subarray(0, ctTag.length - 16)), decipher.final()]);
+  const record = Buffer.concat([decipher.update(ctTag.subarray(0, ctTag.length - 16)), decipher.final()]);
+  // Record plaintext = data || 0x02 || zero padding — strip from the delimiter back.
+  let end = record.length;
+  while (end > 0 && record[end - 1] === 0) end--;
+  if (record[end - 1] !== 0x02) throw new Error("missing padding delimiter");
+  return record.subarray(0, end - 1);
 }
 
 function makeClientKeys() {
@@ -106,7 +138,7 @@ function makeClientKeys() {
 // Part 1: relay vapid.mjs units + web-push cross-check.
 // ---------------------------------------------------------------------------
 async function part1Units() {
-  const { loadOrCreateVapidKey, vapidJwt, encryptWebPushPayload, vapidAuthTag, deriveKeyMaterial } = await import("../mobile/relay/vapid.mjs");
+  const { loadOrCreateVapidKey, vapidJwt, encryptWebPushPayload, webPushHeaders } = await import("../mobile/relay/vapid.mjs");
   const webpush = (await import("web-push")).default;
 
   // key generate + persist + reload
@@ -132,27 +164,51 @@ async function part1Units() {
     "VAPID JWT ES256 signature verifies (raw r||s re-wrapped to DER)",
   );
 
-  // pinned key-schedule vector (RFC 8291 §4.2): HKDF-SHA256(ikm=32×0xAB,
-  // salt="", info="WebPush") — pins the constants against silent drift.
+  // RFC 8291 §5 "Encryption Example" — byte-exact proof of spec conformance.
+  // This is the guard that the pre-RFC draft scheme (transmitted nonce, single
+  // HKDF with salt="") can never come back: browsers reject that body outright.
   {
-    const { contentKey, authKey } = deriveKeyMaterial(Buffer.alloc(32, 0xab));
-    assert.equal(contentKey.toString("hex"), "524abf5d052237af577d56ffdac0c713", "pinned content key");
-    assert.equal(authKey.toString("hex"), "d0ca6b4a6c3748a0fa7a7388af52836d", "pinned auth key");
+    const out = encryptWebPushPayload(
+      Buffer.from("When I grow up, I want to be a watermelon", "utf8"),
+      {
+        p256dh: "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+        auth: "BTBZMqHH6r4Tts7J_aSIgg",
+      },
+      { ephPrivB64u: "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw", saltB64u: "DGv6ra1nlYgDCS1FRnbzlw" },
+    );
+    assert.equal(
+      out.senderPubB64u,
+      "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8",
+      "RFC 8291 as_public",
+    );
+    assert.equal(
+      out.body.toString("base64url"),
+      "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN",
+      "RFC 8291 §5 record",
+    );
   }
 
   // payload encryption round-trip via independent derivation + structure checks
   const client = makeClientKeys();
   const plaintext = JSON.stringify({ kind: "approval", title: "MPI 需要批准" });
-  const { body, cryptoKey } = encryptWebPushPayload(Buffer.from(plaintext, "utf8"), client.p256dhB64u);
-  assert.equal(body[0], 0x02, "RFC 8291 version byte");
-  assert.ok(body.length >= 1 + 12 + 16, "version+nonce+tag minimum length");
-  assert.equal(decryptWebPushBody(body, cryptoKey, client.privateKey).toString("utf8"), plaintext);
+  const sub = { p256dh: client.p256dhB64u, auth: client.authB64u };
+  const { body, senderPubB64u } = encryptWebPushPayload(Buffer.from(plaintext, "utf8"), sub);
+  assert.equal(body.readUInt32BE(16), 4096, "rs = 4096");
+  assert.equal(body[20], 65, "idlen = 65");
+  assert.equal(body.subarray(21, 86).toString("base64url"), senderPubB64u, "keyid carries the sender point");
+  assert.equal(decryptWebPushBody(body, client.privateKey, client.p256dhB64u, client.authB64u).toString("utf8"), plaintext);
 
-  // deterministic path: fixed ephemeral key → same Crypto-Key header every time
+  // deterministic path: fixed ephemeral key + salt → identical body every time
   const ephPriv = b64url(crypto.randomBytes(32));
-  const d1 = encryptWebPushPayload(Buffer.from("x", "utf8"), client.p256dhB64u, ephPriv);
-  const d2 = encryptWebPushPayload(Buffer.from("x", "utf8"), client.p256dhB64u, ephPriv);
-  assert.equal(d1.cryptoKey, d2.cryptoKey, "fixed ephemeral key → stable Crypto-Key header");
+  const d1 = encryptWebPushPayload(Buffer.from("x", "utf8"), sub, { ephPrivB64u: ephPriv });
+  const d2 = encryptWebPushPayload(Buffer.from("x", "utf8"), sub, { ephPrivB64u: ephPriv });
+  assert.equal(d1.senderPubB64u, d2.senderPubB64u, "fixed ephemeral key → stable sender point");
+
+  // headers: RFC 8292 VAPID + the Crypto-Key p256ecdsa form FCM requires
+  const headers = webPushHeaders({ jwt, vapidPubB64u: k1.pubB64u });
+  assert.equal(headers.authorization, `vapid t=${jwt}, k=${k1.pubB64u}`);
+  assert.equal(headers["crypto-key"], `p256ecdsa=${k1.pubB64u}`);
+  assert.equal(headers["content-encoding"], "aes128gcm");
 
   // and web-push's VAPID JWT must verify the same way ours does (ES256 raw r||s)
   const vapidKeys = webpush.generateVAPIDKeys();
@@ -174,12 +230,7 @@ async function part1Units() {
   });
   assert.ok(crypto.verify("sha256", Buffer.from(`${th}.${tc}`), theirPub, rawToDerSig(Buffer.from(ts, "base64url"))), "web-push VAPID JWT verifies (raw r||s)");
 
-  // t tag: base64(HMAC-SHA256(authKey, jwt)) truncated to 16 bytes — recompute for OUR push
-  const { authKey } = encryptWebPushPayload(Buffer.from("x", "utf8"), client.p256dhB64u);
-  const expectedT = crypto.createHmac("sha256", authKey).update(Buffer.from(jwt)).digest().subarray(0, 16).toString("base64");
-  assert.equal(vapidAuthTag(jwt, authKey), expectedT);
-
-  console.log("part1 (vapid units + web-push cross-check): passed");
+  console.log("part1 (vapid units + RFC 8291 §5 vector + web-push cross-check): passed");
 }
 
 // ---------------------------------------------------------------------------
@@ -317,9 +368,12 @@ async function part2FullStack() {
     await waitFor(() => hits.length === 1, "fake push endpoint received the delivery");
 
     const hit = hits[0];
-    // Authorization: WebPush vapid="<jwt>" t="<tag>"
-    const authMatch = /vapid="([^"]+)" t="([^"]+)"/.exec(hit.headers.authorization || "");
+    // RFC 8292 VAPID: Authorization: vapid t=<jwt>, k=<public key>
+    const authMatch = /vapid t=([^,]+), k=(\S+)/.exec(hit.headers.authorization || "");
     assert.ok(authMatch, "authorization header shape");
+    assert.equal(hit.headers["crypto-key"], `p256ecdsa=${relayVapidPub}`, "Crypto-Key advertises the VAPID public key");
+    assert.equal(authMatch[2], relayVapidPub, "authorization k = VAPID public key");
+    assert.equal(hit.headers["content-encoding"], "aes128gcm");
     const [jh, jc, js] = authMatch[1].split(".");
     assert.deepEqual(JSON.parse(Buffer.from(jh, "base64url").toString()), { typ: "JWT", alg: "ES256" });
     const jwtClaims = JSON.parse(Buffer.from(jc, "base64url").toString());
@@ -333,16 +387,8 @@ async function part2FullStack() {
     assert.ok(crypto.verify("sha256", Buffer.from(`${jh}.${jc}`), vapidPubObj, rawToDerSig(Buffer.from(js, "base64url"))), "JWT signature verifies against relay VAPID public key");
 
     // body decrypts with the standard derivation → exact payload
-    const decrypted = JSON.parse(decryptWebPushBody(hit.body, hit.headers["crypto-key"], clientKeys.privateKey).toString("utf8"));
+    const decrypted = JSON.parse(decryptWebPushBody(hit.body, clientKeys.privateKey, clientKeys.p256dhB64u, clientKeys.authB64u).toString("utf8"));
     assert.deepEqual(decrypted, { kind: "approval", title: "MPI 需要批准", body: "有会话等待你的确认。", deepLink: `/thread/${T}` });
-
-    // t tag matches HMAC-SHA256(authKey, jwt) truncated to 16 bytes (recompute authKey)
-    const ephRaw = Buffer.from(hit.headers["crypto-key"], "base64url");
-    const ephPubObj = crypto.createPublicKey({ key: { kty: "EC", crv: "P-256", x: b64url(ephRaw.subarray(1, 33)), y: b64url(ephRaw.subarray(33, 65)) }, format: "jwk" });
-    const shared = crypto.diffieHellman({ privateKey: clientKeys.privateKey, publicKey: ephPubObj });
-    const hkdfRaw = crypto.hkdfSync("sha256", shared, Buffer.alloc(0), Buffer.from("WebPush", "ascii"), 32);
-    const authKey = (Buffer.isBuffer(hkdfRaw) ? hkdfRaw : Buffer.from(hkdfRaw)).subarray(16, 32);
-    assert.equal(authMatch[2], crypto.createHmac("sha256", authKey).update(Buffer.from(authMatch[1])).digest().subarray(0, 16).toString("base64"), "t tag is the truncated HMAC of the JWT");
 
     // --- dead subscription: 410 Gone → relay removes it; later pushes no-op ----------
     nextStatus = 410;

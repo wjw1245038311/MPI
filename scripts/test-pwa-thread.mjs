@@ -93,6 +93,12 @@ async function main() {
       sendToRenderer: (channel, payload) => rendererEvents.push([channel, payload]),
       service: {
         handle: async (request, ctx) => {
+          // S8.7 regression: an IDLE thread emits no events at all — the snapshot
+          // response itself must notify view listeners (UI was stuck on loading).
+          if ((request.type === "thread.subscribe" || request.type === "thread.resync") && request.threadId === "t-idle") {
+            ctx.send(responseFor(request, { snapshot: { id: "t-idle", projectId: "p1", title: "Idle thread", preview: "", updatedAt: Date.now(), messageCount: 0, state: "idle", permission: "sandbox", cwdName: "demo", model: null, availableModels: [], skills: [], thinkingLevel: "off", messages: [], nextSeq: 0 } }));
+            return;
+          }
           if (request.type === "thread.subscribe" || request.type === "thread.resync") {
             if (request.type === "thread.resync") resyncCount += 1;
             // Simulate the host's real ordering: listener registered first, snapshot
@@ -212,6 +218,18 @@ async function main() {
       ["user", "assistant"],
       "post-drop state is a clean snapshot — no duplicates from the lost stream tail",
     );
+
+    // --- S8.7 regression: idle thread — snapshot must notify without any events -------
+    {
+      const tsIdle = new ThreadSession(client, "t-idle", { requestTimeoutMs: 3_000 });
+      let notifiedReady = false;
+      const off = tsIdle.subscribe((v) => { if (v.ready) notifiedReady = true; });
+      await tsIdle.open();
+      assert.equal(notifiedReady, true, "idle snapshot notifies view listeners (no events needed)");
+      assert.equal(tsIdle.getSnapshot().ready, true);
+      off();
+      tsIdle.detach();
+    }
 
     console.log("pwa-thread tests passed");
   } finally {

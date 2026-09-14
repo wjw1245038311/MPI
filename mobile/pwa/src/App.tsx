@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RemoteThreadState } from "../../shared/protocol";
 import ThreadView from "./ThreadView";
+import DbgOverlay from "./DbgOverlay";
 import { IdbKeyStore } from "./lib/keystore-idb";
 import type { KeyStore, PairingRecord } from "./lib/keystore";
 import { createDeviceIdentity, randomSeedB64url } from "./lib/device-identity";
@@ -19,6 +20,9 @@ import { Requester } from "./lib/requester";
 import { ThreadActions } from "./lib/thread-actions";
 import { ThreadSession, type ThreadView as ThreadViewState } from "./lib/thread-session";
 import { ensureBrowserPush } from "./lib/webpush";
+
+/** ?dbg=1 in the URL turns on the on-screen diagnostics overlay (real-device debugging). */
+const DBG_ENABLED = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("dbg");
 
 const STAGE_LABELS: Record<string, string> = {
   idle: "未连接",
@@ -72,6 +76,8 @@ export default function App() {
 
   // S5: open thread (conversation view).
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const openThreadIdRef = useRef<string | null>(null);
+  openThreadIdRef.current = openThreadId;
   const [threadSession, setThreadSession] = useState<ThreadSession | null>(null);
   const threadSessionRef = useRef<ThreadSession | null>(null);
   threadSessionRef.current = threadSession;
@@ -127,6 +133,11 @@ export default function App() {
 
   /** Create (or reuse) the data session for an established client and enter home. */
   const enterHome = (client: RelayClient, record: PairingRecord) => {
+    // S8.7 diagnostic: trace every enterHome call + HostSession creation.
+    try {
+      const hooks = (globalThis as unknown as { __mpi_dbg?: { dbg?: (e: Record<string, unknown>) => void } }).__mpi_dbg;
+      hooks?.dbg?.({ kind: "removed", label: `app@${client.getClientId()}`, requestId: "*", reason: `enterHome ref=${sessionRef.current ? "set" : "null"} stack=${new Error("eh").stack?.split("\n").slice(2, 4).join(" <- ") ?? "?"}` });
+    } catch { /* diagnostics must never break the app */ }
     // Note: use a local — setSession() only lands in sessionRef on the next render.
     let s = sessionRef.current;
     if (!s) {
@@ -254,6 +265,24 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, session]);
 
+  // S8: a notification click on an already-open app asks us to open the thread
+  // in place (sw.js posts the deep link). SPA navigation keeps the live E2E
+  // session — no cold-load handshake race. Cold loads (no window open) land on
+  // /thread/<id> and go through the deep-link effect below instead.
+  const openThreadRef = useRef<(threadId: string) => Promise<void>>(async () => {});
+  useEffect(() => {
+    const sw = navigator.serviceWorker;
+    if (!sw) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; url?: string } | null;
+      if (data?.type !== "mpi:deeplink" || typeof data.url !== "string") return;
+      const m = /^\/thread\/([^/?#]+)/.exec(data.url);
+      if (m && openThreadIdRef.current !== m[1]) void openThreadRef.current(m[1]);
+    };
+    sw.addEventListener("message", onMessage);
+    return () => sw.removeEventListener("message", onMessage);
+  }, []);
+
   /** Open a conversation (S5). The host's uplink must be connected; the home view
    * is hidden while a thread is open, so no double-open guard is needed. */
   const openThread = async (threadId: string) => {
@@ -276,6 +305,7 @@ export default function App() {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+  openThreadRef.current = openThread;
 
   const closeThread = () => {
     threadActionsRef.current?.detach();
@@ -416,6 +446,7 @@ export default function App() {
           </div>
         )}
       </main>
+      {DBG_ENABLED && <DbgOverlay client={clientRef.current} threadView={threadView} />}
     </div>
   );
 }

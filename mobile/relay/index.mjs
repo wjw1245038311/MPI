@@ -39,15 +39,18 @@ import https from "node:https";
 import { readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { WebSocketServer, WebSocket } from "ws";
-import { encryptWebPushPayload, loadOrCreateVapidKey, vapidAuthTag, vapidJwt } from "./vapid.mjs";
+import { encryptWebPushPayload, loadOrCreateVapidKey, vapidJwt, webPushHeaders } from "./vapid.mjs";
 
 const PORT = Number(process.env.RELAY_PORT || 9001);
 const HOST = process.env.RELAY_HOST || "0.0.0.0";
 const PING_MS = Math.max(500, Number(process.env.RELAY_PING_MS || 20_000));
 /** A socket that misses DEAD_MS/PING_MS consecutive pings is dead (default ~60s). */
 const DEAD_MS = Math.max(PING_MS * 2, Number(process.env.RELAY_DEAD_MS || 60_000));
-/** protocol v1 PAYLOAD_TOO_LARGE cap (defense in depth; the host enforces it too). */
-const MAX_FRAME_BYTES = 2_000_000;
+/** Transport-level frame cap. Must fit large thread snapshots: real sessions
+ * reach ~8MB of history, and E2E base64 adds ~33% on top (≈11MB frames).
+ * The host still enforces its own 2MB protocol cap on INBOUND device→host
+ * frames (protocol.ts parseEnvelope) — this only relaxes the transport. */
+const MAX_FRAME_BYTES = 32_000_000;
 
 // --- WebPush (S7) ------------------------------------------------------------------
 /** deviceId -> PushSubscription {endpoint, keys:{p256dh, auth}}. Volatile on
@@ -158,17 +161,11 @@ async function deliverWebPush(deviceId, sub, frame) {
     body: str(frame.body, 500),
     deepLink: str(frame.deepLink, 512),
   });
-  const { body, cryptoKey, authKey } = encryptWebPushPayload(Buffer.from(payload, "utf8"), sub.keys.p256dh);
+  const { body } = encryptWebPushPayload(Buffer.from(payload, "utf8"), sub.keys);
   const jwt = vapidJwt({ privPem: vapidKey.privPem, aud: new URL(sub.endpoint).origin, sub: VAPID_SUB_CLAIM });
   const res = await fetch(sub.endpoint, {
     method: "POST",
-    headers: {
-      authorization: `WebPush vapid="${jwt}" t="${vapidAuthTag(jwt, authKey)}"`,
-      "crypto-key": cryptoKey,
-      "content-encoding": "aes128gcm",
-      ttl: "30",
-      urgency: "high",
-    },
+    headers: webPushHeaders({ jwt, vapidPubB64u: vapidKey.pubB64u }),
     body,
   });
   if (res.status === 404 || res.status === 410) {
@@ -228,12 +225,21 @@ function str(value, maxLen) {
 }
 
 // --- lifecycle ---------------------------------------------------------------------
+/** Close-code suffix for `gone` logs — 1006 = network/browser kill, 4003 = frame
+ * too large, 4005 = heartbeat timeout, 4006 = replaced by a newer connection. */
+function closeInfo(conn) {
+  // Captured from the 'close' event args — ws does not populate instance
+  // closeCode/closeReason before emitting (verified empirically).
+  if (!Number.isInteger(conn.closeCode)) return "";
+  return ` (code=${conn.closeCode}${conn.closeReason ? ` "${conn.closeReason}"` : ""})`;
+}
+
 /** Remove a leaving socket from the routing table and notify its peer. */
 function dropSocket(conn) {
   if (conn.role === "host") {
     const current = hosts.get(conn.id);
     if (current && current.ws === conn.ws) hosts.delete(conn.id);
-    log(`host ${conn.id} gone`);
+    log(`host ${conn.id} gone${closeInfo(conn)}`);
     for (const rec of devices.values()) {
       if (rec.hostId === conn.id && isWsOpen(rec.ws)) {
         send(rec.ws, { type: "offline", who: "host", hostId: conn.id });
@@ -241,7 +247,7 @@ function dropSocket(conn) {
     }
   } else if (conn.role === "device") {
     const rec = devices.get(conn.id);
-    log(`device ${conn.id} gone`);
+    log(`device ${conn.id} gone${closeInfo(conn)}`);
     // Only the currently bound socket counts as an offline event; a replaced
     // (stale) socket closing must not notify the host.
     if (rec && rec.ws === conn.ws) {
@@ -337,9 +343,11 @@ function handleHostFrame(conn, raw) {
       if (!to) return send(conn.ws, { type: "relay.error", code: "NO_ROUTE" });
       const rec = devices.get(to);
       if (!rec || !isWsOpen(rec.ws)) {
+        log(`frame ${typeof frame.type === "string" ? frame.type : "<enc>"} ${raw.length}B host→${to} DROPPED (${rec ? "DEVICE_OFFLINE" : "UNKNOWN_DEVICE"})`);
         return send(conn.ws, { type: "relay.error", code: rec ? "DEVICE_OFFLINE" : "UNKNOWN_DEVICE", to });
       }
       // Forward the whole object unchanged (opaque to the relay).
+      log(`frame ${typeof frame.type === "string" ? frame.type : "<enc>"} ${raw.length}B host→${to}`);
       return send(rec.ws, frame);
     }
   }
@@ -367,6 +375,7 @@ function handleDeviceFrame(conn, raw) {
       if (isWsOpen(rec.ws) && rec.ws !== conn.ws) {
         send(rec.ws, { type: "replaced" });
         tryClose(rec.ws, CLOSE_REPLACED, "REPLACED");
+        log(`device ${deviceId} REPLACED previous connection`);
       }
       rec.ws = conn.ws;
       conn.role = "device";
@@ -398,6 +407,7 @@ function handleDeviceFrame(conn, raw) {
       if (existing && isWsOpen(existing.ws) && existing.ws !== conn.ws) {
         send(existing.ws, { type: "replaced" });
         tryClose(existing.ws, CLOSE_REPLACED, "REPLACED");
+        log(`device ${deviceId} REPLACED previous connection (pair.request)`);
       }
       devices.set(deviceId, { ws: conn.ws, hostId: t.hostId, token: null, status: "pending", name: str(frame.name, 80) || deviceId });
       conn.role = "device";
@@ -416,9 +426,13 @@ function handleDeviceFrame(conn, raw) {
         return send(conn.ws, { type: "relay.error", code: "NOT_AUTHENTICATED" });
       }
       const host = hosts.get(rec.hostId);
-      if (!isWsOpen(host?.ws)) return send(conn.ws, { type: "relay.error", code: "HOST_OFFLINE" });
+      if (!isWsOpen(host?.ws)) {
+        log(`frame ${typeof frame.type === "string" ? frame.type : "<enc>"} ${raw.length}B ${conn.id || "?"}→host DROPPED (HOST_OFFLINE)`);
+        return send(conn.ws, { type: "relay.error", code: "HOST_OFFLINE" });
+      }
       // Tag the sender (routing metadata only; payload stays opaque). The
       // host uplink needs it to map the frame onto a connection.
+      log(`frame ${typeof frame.type === "string" ? frame.type : "<enc>"} ${raw.length}B ${conn.id || "?"}→host`);
       return send(host.ws, { from: conn.id, ...frame });
     }
   }
@@ -504,7 +518,11 @@ wss.on("connection", (ws) => {
     else handleDeviceFrame(conn, raw);
   });
 
-  ws.on("close", () => dropSocket(conn));
+  ws.on("close", (code, reason) => {
+    conn.closeCode = code;
+    conn.closeReason = String(reason ?? "");
+    dropSocket(conn);
+  });
   ws.on("error", () => { /* close follows */ });
 });
 

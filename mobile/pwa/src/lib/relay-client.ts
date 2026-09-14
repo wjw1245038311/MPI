@@ -43,8 +43,14 @@ export class RelayClient {
   private frameCrypto: FrameCrypto | null = null;
   private readonly listeners = new Set<FrameListener>();
   private readonly stateListeners = new Set<(state: RelayClientState, lastError: string | null) => void>();
+  /** S8.7: short instance id for the dbg overlay (detects duplicate clients). */
+  private readonly clientId = "c" + Math.random().toString(36).slice(2, 6);
 
   constructor(private readonly options: RelayClientOptions) {}
+
+  getClientId(): string {
+    return this.clientId;
+  }
 
   getState(): RelayClientState {
     return this.state;
@@ -57,8 +63,24 @@ export class RelayClient {
   /** Subscribe to every inbound frame (control + data). Returns unsubscribe.
    * NOTE: subscribe before connect() — frames are not buffered for late listeners. */
   onFrame(listener: FrameListener): () => void {
+    // S8.7 diagnostic: trace listener add/remove (real-device hang). Gated — no
+    // stack allocation unless the ?dbg=1 overlay is registered.
+    const dbgHooksAdd = (globalThis as unknown as { __mpi_dbg?: { dbg?: (e: Record<string, unknown>) => void } }).__mpi_dbg;
+    if (dbgHooksAdd) {
+      try {
+        dbgHooksAdd.dbg?.({ kind: "removed", label: `client@${this.clientId}`, requestId: "*", reason: `onFrame ADD total=${this.listeners.size + 1} stack=${new Error("of").stack?.split("\n").slice(2, 4).join(" <- ") ?? "?"}` });
+      } catch { /* diagnostics must never break the client */ }
+    }
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      const dbgHooksRm = (globalThis as unknown as { __mpi_dbg?: { dbg?: (e: Record<string, unknown>) => void } }).__mpi_dbg;
+      if (dbgHooksRm) {
+        try {
+          dbgHooksRm.dbg?.({ kind: "removed", label: `client@${this.clientId}`, requestId: "*", reason: `onFrame REMOVE total=${Math.max(0, this.listeners.size - 1)} stack=${new Error("of").stack?.split("\n").slice(2, 4).join(" <- ") ?? "?"}` });
+        } catch { /* diagnostics must never break the client */ }
+      }
+      return this.listeners.delete(listener);
+    };
   }
 
   /** Subscribe to connection state changes (in addition to the constructor option). */
@@ -131,6 +153,37 @@ export class RelayClient {
    * and dispatched as their plaintext envelope; without crypto they are dropped. */
   setFrameCrypto(crypto: FrameCrypto | null): void {
     this.frameCrypto = crypto;
+    if (crypto) this.wakeReadyWaiters();
+  }
+
+  private readyWaiters = new Set<() => void>();
+
+  /** Resolves once data frames can flow: socket open AND E2E crypto installed.
+   * Fresh page loads (deep links) race the hello/challenge handshake — callers
+   * that send v1 envelopes must await this first. */
+  whenReady(timeoutMs = 15_000): Promise<void> {
+    if (this.frameCrypto && this.isOpen()) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const wake = () => {
+        if (this.frameCrypto && this.isOpen()) {
+          cleanup();
+          resolve();
+        }
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("timed out waiting for E2E session"));
+      }, timeoutMs);
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.readyWaiters.delete(wake);
+      };
+      this.readyWaiters.add(wake);
+    });
+  }
+
+  private wakeReadyWaiters(): void {
+    for (const wake of [...this.readyWaiters]) wake();
   }
 
   private sendRaw(rawJson: string): boolean {
@@ -185,6 +238,7 @@ export class RelayClient {
       // A stable connection gives the next interruption a fresh retry budget.
       this.retryCount = 0;
       this.setState("open", null);
+      if (this.frameCrypto) this.wakeReadyWaiters();
       if (this.helloCreds) this.hello(this.helloCreds.deviceId, this.helloCreds.deviceToken);
     };
 

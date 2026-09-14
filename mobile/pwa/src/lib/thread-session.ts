@@ -15,6 +15,10 @@ import type { RemoteFileArtifact, RemoteMessage, RemoteThreadEventPayload, Remot
 import type { RelayClient } from "./relay-client";
 import { Requester } from "./requester";
 
+/** Snapshot responses can be multi-MB (large session history); give them a long
+ * transfer window instead of the default 10s request timeout. */
+const SNAPSHOT_TIMEOUT_MS = 60_000;
+
 export interface ViewBlock {
   id?: string; // tool block identity (toolCallId)
   type: "text" | "thinking" | "tool" | "image";
@@ -102,6 +106,7 @@ function mapRemoteMessage(m: RemoteMessage): ViewMessage {
 
 export class ThreadSession {
   private view: ThreadView;
+  private readonly client: RelayClient;
   private readonly requester: Requester;
   private readonly listeners = new Set<Listener>();
   /** Events that arrived before the (re)sync snapshot response — flushed after apply. */
@@ -121,6 +126,7 @@ export class ThreadSession {
     options: ThreadSessionOptions = {},
   ) {
     this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, pendingUi: null };
+    this.client = client;
     // threadId goes on the ENVELOPE (host's requiredThread reads it there); the
     // payload copy below is kept for compatibility with simpler test fakes.
     this.requester = new Requester(client, { requestTimeoutMs: options.requestTimeoutMs, onStaleConnection: options.onStaleConnection, threadId });
@@ -145,9 +151,15 @@ export class ThreadSession {
     return () => this.listeners.delete(listener);
   }
 
-  /** Subscribe to the thread; resolves once the initial snapshot is applied. */
+  /** Subscribe to the thread; resolves once the initial snapshot is applied.
+   * Large sessions (multi-MB history) need a long timeout for the snapshot
+   * transfer — the default 10s would kill perfectly healthy loads. */
   async open(): Promise<void> {
-    const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.subscribe", { threadId: this.view.threadId }, "subscribe");
+    // Deep links land on a fresh page load: wait for the hello/challenge E2E
+    // handshake to finish, otherwise the first subscribe dies with
+    // "connection not ready" and there is no retry (S8 acceptance ③).
+    await this.client.whenReady();
+    const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.subscribe", { threadId: this.view.threadId }, "subscribe", SNAPSHOT_TIMEOUT_MS);
     if (!payload?.snapshot) throw new Error("thread.subscribe returned no snapshot");
     this.applySnapshot(payload.snapshot);
   }
@@ -157,7 +169,7 @@ export class ThreadSession {
     // Buffer incoming events until the fresh snapshot lands.
     this.patch({ ready: false });
     try {
-      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.resync", { threadId: this.view.threadId }, "resync");
+      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.resync", { threadId: this.view.threadId }, "resync", SNAPSHOT_TIMEOUT_MS);
       if (!payload?.snapshot) throw new Error("thread.resync returned no snapshot");
       this.applySnapshot(payload.snapshot);
     } catch (error) {
@@ -175,6 +187,16 @@ export class ThreadSession {
   }
 
   detach(): void {
+    // S8.7: capture WHO detaches a thread session (real-device hang diagnosis).
+    try {
+      const hooks = (globalThis as unknown as { __mpi_dbg?: { dbg?: (e: Record<string, unknown>) => void } }).__mpi_dbg;
+      hooks?.dbg?.({
+        kind: "removed",
+        label: `thread:${this.view.threadId.slice(0, 8)}`,
+        requestId: "*",
+        reason: `ts-detach stack=${new Error("ts-detach").stack?.split("\n").slice(2, 5).join(" <- ") ?? "?"}`,
+      });
+    } catch { /* diagnostics must never break the app */ }
     this.closing = true;
     this.requester.detach();
     this.detachFrame();
@@ -217,8 +239,11 @@ export class ThreadSession {
       state: snapshot.state,
       permission: snapshot.permission,
     };
-    this.view = {
-      threadId: this.view.threadId,
+    // S8.7 fix: MUST notify listeners — a direct view assignment leaves React's
+    // mirrored state stale (UI stuck on "loading") whenever no buffered/live
+    // event follows to trigger patch(). Idle threads never emit events, so the
+    // snapshot itself has to be the notification.
+    this.patch({
       ready: true,
       summary,
       messages: snapshot.messages.map(mapRemoteMessage),
@@ -226,7 +251,7 @@ export class ThreadSession {
       running: snapshot.state === "running",
       errorBanner: null,
       pendingUi: this.view.pendingUi, // a pending approval survives the resync
-    };
+    });
     // Re-arm seq tracking: the fresh snapshot makes subsequent events lossless on
     // this socket, so the first live event after it sets the baseline.
     this.expectNext = null;

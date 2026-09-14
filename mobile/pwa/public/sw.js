@@ -26,8 +26,11 @@ self.addEventListener("notificationclick", (event) => {
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
       for (const win of windows) {
         if (new URL(win.url).origin === target.origin) {
-          // Bring the existing app to front and let it handle the deep link.
-          return win.focus().then(() => win.navigate(target.href));
+          // An open app handles the deep link itself (SPA navigation): it keeps the
+          // live E2E session, whereas WindowClient.navigate() would force a cold
+          // load that races the hello/challenge handshake.
+          win.postMessage({ type: "mpi:deeplink", url: target.pathname + target.search });
+          return win.focus();
         }
       }
       return self.clients.openWindow(target.pathname + target.search);
