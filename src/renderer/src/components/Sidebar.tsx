@@ -5,7 +5,7 @@ import { fileIcon, formatTokens } from "../lib/format";
 import { MPI_FILE_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
-import { AppStore, Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Sidebar as SidebarIcon } from "./icons";
+import { AppStore, Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Smartphone, Sidebar as SidebarIcon } from "./icons";
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
 
@@ -557,8 +557,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
         )}
       </div>
 
-      {/* 设置/帮助已随顶部标题栏去重移除；手机远程控制入口暂缓（待办 P1-10，见
-          improvement-suggestions.md）——onOpenRemote/remoteOpen props 保留，恢复时加回按钮即可。 */}
+      {/* 设置/帮助已随顶部标题栏去重移除；手机远程控制入口（P1-10，S8 恢复）。 */}
       <div className="sb-foot">
         <div
           className="usage-inline"
@@ -580,6 +579,14 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             <b>{formatTokens(usageData?.tokens)}</b>
           </span>
         </div>
+        <button
+          className={`sb-foot-remote ${remoteOpen ? "on" : ""}`}
+          title={language === "zh" ? "手机远程控制（云中继）" : "Phone remote control (cloud relay)"}
+          aria-label={language === "zh" ? "打开手机远程控制配置" : "Open phone remote control settings"}
+          onClick={onOpenRemote}
+        >
+          <Smartphone size={15} />
+        </button>
       </div>
       {projectMenu && (
         <div

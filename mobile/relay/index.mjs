@@ -26,10 +26,18 @@
  *      RELAY_VAPID_KEY_FILE (default <script dir>/data/vapid.json),
  *      RELAY_VAPID_SUB (JWT `sub` claim, default mailto:relay@mpi.local),
  *      RELAY_ALLOW_INSECURE_PUSH=1 permits http:// push endpoints (tests only).
+ *
+ * S8 deployment mode (all optional; off by default so tests stay plain HTTP):
+ *   RELAY_TLS_CERT / RELAY_TLS_KEY — PEM paths; serve wss:// + https instead of ws://.
+ *   RELAY_STATIC_DIR — directory with the built PWA; unknown GET paths fall back to
+ *     index.html (SPA deep links like /thread/<id>). Path traversal is rejected.
  */
-import { dirname, join } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
+import https from "node:https";
+import { readFileSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { WebSocketServer, WebSocket } from "ws";
 import { encryptWebPushPayload, loadOrCreateVapidKey, vapidAuthTag, vapidJwt } from "./vapid.mjs";
 
@@ -55,6 +63,75 @@ try {
   console.error("[relay] VAPID key unavailable — push disabled:", error.message);
 }
 const ALLOW_INSECURE_PUSH = process.env.RELAY_ALLOW_INSECURE_PUSH === "1";
+
+// --- S8 deployment mode: optional TLS termination + PWA static hosting --------------
+let tlsOptions = null;
+if (process.env.RELAY_TLS_CERT && process.env.RELAY_TLS_KEY) {
+  try {
+    tlsOptions = { cert: readFileSync(process.env.RELAY_TLS_CERT), key: readFileSync(process.env.RELAY_TLS_KEY) };
+  } catch (error) {
+    console.error("[relay] TLS material unavailable — falling back to plain HTTP:", error.message);
+  }
+}
+const STATIC_DIR = process.env.RELAY_STATIC_DIR || "";
+const STATIC_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".json": "application/json",
+  ".webmanifest": "application/manifest+json",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+};
+
+/** Serve RELAY_STATIC_DIR for GETs that no API route claimed. Unknown paths fall
+ * back to index.html (SPA deep links). Returns true when the request was handled.
+ */
+function serveStatic(req, res) {
+  if (!STATIC_DIR || req.method !== "GET") return false;
+  // Strip the query manually — the WHATWG URL parser would normalize %2e
+  // dot-segments away and silently rewrite traversal attempts.
+  let pathname;
+  try {
+    pathname = decodeURIComponent((req.url || "/").split("?")[0]);
+  } catch {
+    return false;
+  }
+  const root = resolve(STATIC_DIR);
+  const filePath = resolve(join(root, pathname));
+  if (filePath !== root && !filePath.startsWith(root + sep)) {
+    res.writeHead(403, { "content-type": "text/plain" });
+    res.end("forbidden");
+    return true;
+  }
+  const sendFile = (file) => {
+    readFile(file).then((buf) => {
+      const headers = { "content-type": STATIC_TYPES[extname(file)] || "application/octet-stream" };
+      // index.html must never be cached (asset filenames are content-hashed).
+      if (extname(file) === ".html") headers["cache-control"] = "no-cache";
+      res.writeHead(200, headers);
+      res.end(buf);
+    }).catch(() => {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
+    });
+  };
+  stat(filePath).then((st) => {
+    if (st.isDirectory()) sendFile(join(filePath, "index.html"));
+    else sendFile(filePath);
+  }).catch(() => {
+    // SPA fallback only for extension-less routes (/thread/<id>); missing
+    // assets get a real 404 so the console shows what actually failed.
+    if (extname(pathname)) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
+    } else {
+      sendFile(join(root, "index.html"));
+    }
+  });
+  return true;
+}
 
 function isPushSubscription(sub) {
   if (!sub || typeof sub !== "object") return false;
@@ -348,7 +425,7 @@ function handleDeviceFrame(conn, raw) {
 }
 
 // --- server -----------------------------------------------------------------------------
-const server = http.createServer((req, res) => {
+function onRequest(req, res) {
   if (req.method === "GET" && req.url?.split("?")[0] === "/healthz") {
     const onlineDevices = [...devices.values()].filter((d) => isWsOpen(d.ws)).length;
     const paired = [...devices.values()].filter((d) => d.status === "approved").length;
@@ -362,9 +439,12 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(vapidKey ? { publicKey: vapidKey.pubB64u } : { error: "push not configured" }));
     return;
   }
+  if (serveStatic(req, res)) return;
   res.writeHead(404, { "content-type": "text/plain" });
   res.end("not found");
-});
+}
+
+const server = tlsOptions ? https.createServer(tlsOptions, onRequest) : http.createServer(onRequest);
 
 const wss = new WebSocketServer({ noServer: true });
 
@@ -444,7 +524,8 @@ const heartbeat = setInterval(() => {
 
 server.listen(PORT, HOST, () => {
   const actual = server.address()?.port ?? PORT;
-  log(`ready ws://${HOST}:${actual}/ws (ping ${PING_MS}ms, dead ~${DEAD_MS}ms)`);
+  const scheme = tlsOptions ? "wss" : "ws";
+  log(`ready ${scheme}://${HOST}:${actual}/ws (ping ${PING_MS}ms, dead ~${DEAD_MS}ms${STATIC_DIR ? ", static: " + STATIC_DIR : ""})`);
 });
 
 for (const sig of ["SIGINT", "SIGTERM"]) {

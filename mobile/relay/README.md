@@ -17,6 +17,22 @@ RELAY_PORT=8443 RELAY_HOST=0.0.0.0 npm start
 环境变量：`RELAY_PORT`（默认 9001，0=临时端口）、`RELAY_HOST`、
 `RELAY_PING_MS`（默认 20000）、`RELAY_DEAD_MS`（默认 60000）。
 
+S8 部署模式（均可选，缺省关闭——测试保持 plain HTTP/ws）：
+
+- `RELAY_TLS_CERT` / `RELAY_TLS_KEY` — PEM 路径；同时设置时服务切到
+  `wss://` + `https`（Tailscale 证书或 Let's Encrypt 均可）。证书缺失/不可读
+  时回退 plain HTTP 并打日志。
+- `RELAY_STATIC_DIR` — 构建好的 PWA 目录；GET 请求按静态文件服务，无扩展名
+  路由（如 `/thread/<id>`）回退 `index.html`（SPA deep link），缺失资源返回真
+  404，路径穿越 → 403。API 路由（`/healthz`、VAPID 端点）优先于静态。
+
+```bash
+# aliyun-ecs 上的 systemd 服务形态（绑 Tailscale IP，仅 tailnet 可达）
+RELAY_PORT=9443 RELAY_HOST=<tailscale-ip> \
+RELAY_TLS_CERT=/opt/mpi-relay/certs/cert.pem RELAY_TLS_KEY=/opt/mpi-relay/certs/key.pem \
+RELAY_STATIC_DIR=/var/www/mpi-mobile node index.mjs
+```
+
 ## 帧协议（S0 明文骨架）
 
 同一 WSS socket 上按 `type` 区分控制帧与应用数据帧。

@@ -1,0 +1,17 @@
+{
+  "id": "logic-relay-tls-static",
+  "title": "relay S8 部署模式：TLS 终结 + PWA 静态托管（RELAY_TLS_* / RELAY_STATIC_DIR）",
+  "feature": "手机版（云中继）",
+  "kind": "logic",
+  "source": "docs/MOBILE-DESIGN.md §12.4 S8 / mobile/relay/index.mjs serveStatic + tlsOptions / scripts/test-relay-tls-static.mjs",
+  "description": "test-relay-tls-static.mjs（纯 node，无 TS）：Part1（静态托管，plain HTTP）——RELAY_STATIC_DIR 下 GET / → index.html（text/html + cache-control: no-cache）、/assets/app.js → text/javascript、manifest.webmanifest → application/manifest+json；扩展名路由 /thread/<id> → SPA 回退 index.html；缺失资源文件（带扩展名）→ 真 404 而非 SPA 回退；路径穿越（原始 %2e%2e 字节，raw http.get 发送——undici/WHATWG URL 解析会先规范化掉点段）→ 403 且不泄漏 static dir 外文件；API 路由（/healthz）优先于静态。Part2（TLS）——RELAY_TLS_CERT/KEY（内嵌自签证书 CN=localhost，有效期至 2036）切换 https/wss：https healthz ok:true、GET / → index.html（node https.get rejectUnauthorized:false）、wss:// 完整握手 host.register → relay.ok role:host。⚠️踩坑：serveStatic 若用 new URL(req.url) 取路径，WHATWG 解析器会把 %2e 点段规范化掉使 403 分支成死代码——必须手动 split('?') 保留原始路径再 decodeURIComponent。",
+  "logicTest": "relay-tls-static",
+  "assertions": [
+    "/ → index.html（text/html、no-cache）；/assets/app.js → text/javascript；manifest → application/manifest+json",
+    "扩展名路由 /thread/<id> → SPA 回退 index.html；缺失资源文件 → 404（非 SPA 回退）",
+    "原始 %2e%2e 路径穿越 → 403，不泄漏 static dir 外文件",
+    "/healthz 等 API 路由优先于静态托管",
+    "TLS 模式：https healthz + GET / 正常；wss:// 握手 host.register → relay.ok"
+  ],
+  "passCriteria": "test-relay-tls-static.mjs Part1+Part2 全部检查通过（npm run test:relay-tls-static）"
+}
