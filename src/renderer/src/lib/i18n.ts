@@ -29,6 +29,8 @@ const exact: Record<string, string> = {
   // the DOM bridge records it as the node's original; without a reverse entry
   // the label stays stuck in English once the real (zh) config arrives.
   "调整导航栏宽度": "Resize sidebar",
+  "手机远程控制（云中继）": "Phone remote control (cloud relay)",
+  "打开手机远程控制配置": "Open phone remote control settings",
   "拖动调整导航栏宽度；双击恢复默认": "Drag to resize; double-click to reset",
   "打开文件夹": "Open folder",
   "已置顶项目": "Pinned project",
