@@ -20,6 +20,8 @@ export interface RelayOutbound {
   sendToDevice(deviceId: string, frame: string): void;
   /** Send a plaintext control frame to the relay (ticket.register / pair.approved / …). */
   sendControl(frame: Record<string, unknown>): boolean;
+  /** Configured relay URL for pairing links; empty when unset. */
+  relayUrl?(): string;
   /** Stable per-device token for relay `hello` re-auth; generated + persisted by the uplink. */
   deviceToken(deviceId: string): string | null;
   /** Drop the stored token when a device is revoked. */
@@ -204,6 +206,8 @@ export class RemoteHost {
     hostPublicKeyPem: string;
     signalingUrl: string;
     stunUrls: string[];
+    /** Cloud-relay URL the PWA should connect to (absent when relay is unconfigured). */
+    relayUrl?: string;
     ticket: string;
     expiresAt: number;
     protocol: 1;
@@ -220,12 +224,14 @@ export class RemoteHost {
     }
     // Mobile relay: register the ticket so pair.request can be routed to us.
     this.options.relay?.sendControl({ type: "ticket.register", ticket, expiresAt });
+    const relay = this.options.relay;
     return {
       hostId: this.identity.hostId,
       fingerprint: fingerprintFor(this.identity.publicKeyPem),
       hostPublicKeyPem: this.identity.publicKeyPem,
       signalingUrl: this.options.signalingUrl,
       stunUrls: [...this.options.stunUrls],
+      ...(relay?.relayUrl && relay.relayUrl() ? { relayUrl: relay.relayUrl() } : {}),
       ticket,
       expiresAt,
       protocol: 1,

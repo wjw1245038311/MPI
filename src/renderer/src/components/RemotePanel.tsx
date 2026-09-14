@@ -9,6 +9,8 @@ type Pairing = {
   hostPublicKeyPem: string;
   signalingUrl: string;
   stunUrls: string[];
+  /** Cloud-relay URL (present when the relay is configured) — the PWA connects here. */
+  relayUrl?: string;
   ticket: string;
   expiresAt: number;
   protocol: number;

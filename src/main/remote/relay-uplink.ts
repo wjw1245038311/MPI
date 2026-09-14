@@ -93,6 +93,12 @@ export class RelayUplink implements RelayOutbound {
   }
 
   /** Re-point the uplink at a new relay URL (config change). No-op when unchanged. */
+  /** RelayOutbound: the configured URL — embedded in pairing links so the PWA
+   * knows which relay to connect to. */
+  relayUrl(): string {
+    return this.options.relayUrl;
+  }
+
   configure(relayUrl: string): void {
     if (relayUrl === this.options.relayUrl) return;
     this.options.relayUrl = relayUrl;
