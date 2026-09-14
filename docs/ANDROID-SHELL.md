@@ -67,24 +67,33 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk   # 或把 APK 
 
 ## 发布与扫码下载
 
-APK **不放在 GitHub**（本机到 github.com 被墙），而是由中继静态托管——手机本来就在 Tailscale 里，
-顺手就能下，且与 PWA 同源、版本信息可一起托管：
+中继不一定一直开着，GitHub 也可能连不上，所以**两个下载源都发**，面板同时给出两张二维码：
+
+| 源 | 地址 | 适用 |
+| --- | --- | --- |
+| 中继（主） | `/download/mpi-android-<v>.apk` | 手机在 Tailscale 内，最快 |
+| GitHub（备选） | `https://github.com/<owner>/<repo>/releases/download/android-v<v>/mpi-android-<v>.apk` | 中继/Tailnet 不可用，且手机能访问 GitHub（仓库公开，无需 token） |
 
 ```bash
-# 1. 构建 + 生成发布产物（版本化 APK + sha256 + 清单，落在 android/publish/）
+# 1. 构建 + 生成本地产物（版本化 APK + sha256 + 清单，落在 android/publish/）
 cd android && JAVA_HOME='E:\MyWorkspace\Software\jdk21' ./gradlew assembleDebug && cd ..
-node scripts/publish-android.mjs
+node scripts/publish-android.mjs                 # 只出本地产物
+# 本机直连 api.github.com 被墙时带代理：
+NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:10808 node scripts/publish-android.mjs --github
 
-# 2. 拷到中继静态目录（/var/www/mpi-mobile/）
-#    download/mpi-android-<version>.apk
-#    download/mpi-android-<version>.apk.sha256
-#    download/mpi-android.json          ← 桌面端读的就是这份清单
+# 2. 把产物拷到中继静态目录（/var/www/mpi-mobile/download/）
+#    mpi-android-<v>.apk、.sha256、mpi-android.json（桌面端读的就是这份清单）
 ```
 
-桌面端「手机远程控制」面板的**「手机 App（安卓）」卡片**会读 `/download/mpi-android.json`
-（主进程取，绕过 CORS），显示版本/大小/SHA256，并渲染**下载二维码**——手机相机扫码即可下载安装。
-换版本只需重新上传 APK 与同名 json（覆盖）。
+⚠️ **安卓的 GitHub Release 必须标成 pre-release**（脚本已内置，已存在的也会被 PATCH 回去）。
+原因：桌面端自更新用 electron-updater，在 `allowPrerelease=false` 时会先取 GitHub 的
+`/releases/latest` 定标签，再去该标签下找 `latest.yml`。若安卓发布成了“最新稳定版”，更新检查
+会去找 `android-v*/latest.yml` 而 404 报错。标为预发布后 `/releases/latest` 仍指向 `v<桌面版本>`，
+而按 tag 的直链下载不受影响。
 
+桌面端「手机远程控制」面板的**「手机 App（安卓）」卡片**读 `/download/mpi-android.json`
+（主进程取，绕过 CORS；取不到则回退到 `userData/mpi-android.json` 缓存并标注「中继暂不可达」），
+显示版本/大小，并渲染两张二维码——**界面上不显示地址**（地址在图片的悬停提示里）。
 中继静态服务同时处理 `HEAD`（与 `GET` 同头不带体），方便下载工具/浏览器先探尺寸。
 
 ## 扫码配对

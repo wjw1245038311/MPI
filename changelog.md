@@ -25,7 +25,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 3. **扫码下载与扫码配对**：桌面「手机远程控制」面板现在两张码就能上手，不再需要传文件、粘长链接。
 
-   - **扫码下载**：APK 由自建中继静态托管（不走 GitHub——本机到 github.com 被墙），面板新增「手机 App（安卓）」卡片，读中继的 `/download/mpi-android.json` 显示版本/大小/SHA256 并渲染下载二维码，手机相机扫码即可下载安装。发布用 `node scripts/publish-android.mjs` 生成产物（版本化 APK + sha256 + 清单），拷到中继 `/var/www/mpi-mobile/download/` 即可。中继静态服务现同时处理 `HEAD`（同头不带体）。
+   - **扫码下载**：APK 双源发布——主源是自建中继静态托管（手机在 Tailscale 内最快），备选源是 GitHub Release（tag `android-v<version>`，仓库公开、手机能访问 GitHub 即可）。面板「手机 App（安卓）」卡片同时给出两张二维码（**界面上不显示地址**，地址在悬停提示里），读中继清单拿版本/大小，中继不可达时回退到 `userData` 缓存清单并标注「中继暂不可达」。发布用 `node scripts/publish-android.mjs [--github]`。⚠ 安卓 Release 必须标为 pre-release——桌面端自更新取 GitHub `/releases/latest` 定位 `latest.yml`，正式版会把它劫持导致更新检查 404。中继静态服务现同时处理 `HEAD`（同头不带体）。
    - **扫码配对**：配对二维码从 `mpi://pair?payload=…` 换成 `https://<relay>/#pair=<payload>`——系统相机与常见扫码器只把未知 scheme 当文本，https 链接才能直接打开；PWA 读到 `#pair=` 即自动开始配对（配完抹掉地址栏参数），已装安卓壳则被壳的 VIEW 过滤器接管。粘贴 `mpi://` 链接的旧方式仍保留。
    - **扫码免确认**：面板新增「扫码后自动批准（无需在桌面点允许）」开关（默认开）——票在 5 分钟有效期内直接放行。票本身就是凭据且由用户刚主动生成，省掉桌面端再点一次；关闭则回到旧行为。
 

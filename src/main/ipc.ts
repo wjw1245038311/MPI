@@ -1994,27 +1994,56 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("remote:createPairing", (_e, args?: { autoApprove?: boolean }) => remoteHost.createPairingTicket({ autoApprove: args?.autoApprove === true }));
 
   /** 手机 App 安装包信息（relay 静态托管 /download/mpi-android.json）。在主进程取：
-   *  relay 是纯静态服务、不发 CORS 头，渲染层的 fetch 会被浏览器挡掉。 */
+   *  relay 是纯静态服务、不发 CORS 头，渲染层的 fetch 会被浏览器挡掉。
+   *  另外把清单缓到 userData：中继/tailnet 挂掉时，面板仍能给出 GitHub 备选下载源。 */
   ipcMain.handle("remote:getPhoneApp", async () => {
     const origin = relayHttpOrigin(getConfig().remoteRelayUrl);
-    if (!origin) return { ok: false as const, error: "未配置中继地址" };
+    const cacheFile = join(app.getPath("userData"), "mpi-android.json");
+    const fromCache = (error: string) => {
+      try {
+        const cached = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, unknown>;
+        const version = typeof cached.version === "string" ? cached.version : "";
+        const file = typeof cached.file === "string" ? cached.file : "";
+        if (!version || !file) throw new Error("cache incomplete");
+        return {
+          ok: true as const,
+          stale: true,
+          error,
+          version,
+          size: typeof cached.size === "number" ? cached.size : 0,
+          sha256: typeof cached.sha256 === "string" ? cached.sha256 : "",
+          publishedAt: typeof cached.publishedAt === "string" ? cached.publishedAt : "",
+          url: origin ? `${origin}/download/${file}` : "",
+          github: typeof cached.github === "string" ? cached.github : "",
+        };
+      } catch {
+        return { ok: false as const, error };
+      }
+    };
+    if (!origin) return fromCache("未配置中继地址");
     try {
       const res = await fetch(`${origin}/download/mpi-android.json`, { signal: AbortSignal.timeout(5000) });
-      if (!res.ok) return { ok: false as const, error: `中继返回 ${res.status}` };
+      if (!res.ok) return fromCache(`中继返回 ${res.status}`);
       const data = (await res.json()) as Record<string, unknown>;
       const version = typeof data.version === "string" ? data.version : "";
       const file = typeof data.file === "string" ? data.file : "";
-      if (!version || !file) return { ok: false as const, error: "清单格式不正确" };
+      if (!version || !file) return fromCache("清单格式不正确");
+      try {
+        writeFileSync(cacheFile, JSON.stringify(data, null, 2));
+      } catch { /* 缓存只是锦上添花 */ }
       return {
         ok: true as const,
+        stale: false,
+        error: null,
         version,
         size: typeof data.size === "number" ? data.size : 0,
         sha256: typeof data.sha256 === "string" ? data.sha256 : "",
         publishedAt: typeof data.publishedAt === "string" ? data.publishedAt : "",
         url: `${origin}/download/${file}`,
+        github: typeof data.github === "string" ? data.github : "",
       };
     } catch (error) {
-      return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
+      return fromCache(error instanceof Error ? error.message : String(error));
     }
   });
   ipcMain.handle("remote:enableSignaling", (_e, args?: { manual?: boolean }) => {

@@ -5808,6 +5808,26 @@ textarea.modal-input {
   flex-direction: column;
   gap: 12px;
 }
+/* Phone-app download codes: two side-by-side QR images (relay + GitHub fallback),
+   no URL text — the address lives in the img title only. */
+.set-app-qrs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+.set-app-qr {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.set-app-qr img {
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px;
+}
+
 .set-remote-pairing {
   display: flex;
   flex-direction: column;

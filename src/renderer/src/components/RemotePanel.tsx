@@ -30,9 +30,20 @@ type RelayStatus = {
   lastError: string | null;
 };
 
-/** 中继托管的手机 App 安装包清单（/download/mpi-android.json）。 */
+/** 中继托管的手机 App 安装包清单（/download/mpi-android.json）；中继不可达时
+ *  主进程会回退到缓存副本（stale=true）并只提供 GitHub 备选源。 */
 type PhoneAppInfo =
-  | { ok: true; version: string; size: number; sha256: string; publishedAt: string; url: string }
+  | {
+      ok: true;
+      stale: boolean;
+      error: string | null;
+      version: string;
+      size: number;
+      sha256: string;
+      publishedAt: string;
+      url: string;
+      github: string;
+    }
   | { ok: false; error: string };
 
 function base64Url(value: string): string {
@@ -95,7 +106,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   /** 扫码后是否免去桌面端再点一次「允许」（票=凭据，默认开）。 */
   const [autoApprove, setAutoApprove] = useState(true);
   const [phoneApp, setPhoneApp] = useState<PhoneAppInfo | null>(null);
-  const [appQr, setAppQr] = useState<string | null>(null);
+  /** 两张下载码：中继（主）+ GitHub（备选）。地址只放进 <img title>，不占版面。 */
+  const [appQrs, setAppQrs] = useState<{ relay: string | null; github: string | null }>({ relay: null, github: null });
   const [signalingUrl, setSignalingUrl] = useState(DEFAULT_SIGNALING_URL);
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
   const [relayUrl, setRelayUrl] = useState("");
@@ -143,18 +155,18 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   }, [relayUrl]);
 
   useEffect(() => {
-    if (!phoneApp?.ok) {
-      setAppQr(null);
-      return;
-    }
     let alive = true;
-    void QRCode.toDataURL(phoneApp.url, { width: 200, margin: 1, errorCorrectionLevel: "M" })
-      .then((dataUrl) => {
-        if (alive) setAppQr(dataUrl);
-      })
-      .catch(() => {
-        if (alive) setAppQr(null);
-      });
+    const make = async (text?: string) =>
+      text ? QRCode.toDataURL(text, { width: 172, margin: 1, errorCorrectionLevel: "M" }).catch(() => null) : null;
+    void (async () => {
+      if (!phoneApp?.ok) {
+        if (alive) setAppQrs({ relay: null, github: null });
+        return;
+      }
+      const relay = phoneApp.stale ? null : await make(phoneApp.url);
+      const github = await make(phoneApp.github || undefined);
+      if (alive) setAppQrs({ relay, github });
+    })();
     return () => {
       alive = false;
     };
@@ -340,25 +352,41 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         <div className="set-card-title">{zh ? "手机 App（安卓）" : "Phone app (Android)"}</div>
         <div className="set-hint">
           {zh
-            ? "手机先加入同一个 Tailscale 网络，再用相机/扫码器扫下面的二维码下载安装（APK 由中继托管，支持覆盖升级）。"
-            : "Join the same Tailscale network, then scan this code with the camera to download the APK from the relay."}
+            ? "手机先加入同一个 Tailscale 网络，再用相机/扫码器扫下面的码下载安装（支持覆盖升级）。"
+            : "Join the same Tailscale network, then scan one of these with the camera to install the APK."}
         </div>
-        {appQr && phoneApp?.ok ? (
+        {phoneApp?.ok ? (
           <div className="set-remote-pairing">
-            <img src={appQr} alt={zh ? "手机 App 下载二维码" : "Phone app download QR code"} width={200} height={200} />
+            <div className="set-app-qrs">
+              {appQrs.relay && !phoneApp.stale && (
+                <div className="set-app-qr">
+                  <img src={appQrs.relay} alt={zh ? "从中继下载手机 App" : "Download the app from the relay"} width={172} height={172} title={phoneApp.url} />
+                  <div className="set-hint">{zh ? "中继（推荐）" : "Relay (preferred)"}</div>
+                </div>
+              )}
+              {appQrs.github && (
+                <div className="set-app-qr">
+                  <img src={appQrs.github} alt={zh ? "从 GitHub 下载手机 App" : "Download the app from GitHub"} width={172} height={172} title={phoneApp.github} />
+                  <div className="set-hint">{zh ? "GitHub（备选）" : "GitHub (fallback)"}</div>
+                </div>
+              )}
+            </div>
             <div className="set-hint">
               {zh
-                ? `版本 ${phoneApp.version} · ${formatSize(phoneApp.size)}${phoneApp.publishedAt ? ` · ${phoneApp.publishedAt.slice(0, 10)}` : ""}`
-                : `Version ${phoneApp.version} · ${formatSize(phoneApp.size)}`}
+                ? `版本 ${phoneApp.version} · ${formatSize(phoneApp.size)}${phoneApp.stale ? " · 中继暂不可达，用备选源" : ""}`
+                : `Version ${phoneApp.version} · ${formatSize(phoneApp.size)}${phoneApp.stale ? " · relay unreachable, use the fallback" : ""}`}
             </div>
-            <textarea className="set-input" rows={2} readOnly value={phoneApp.url} />
-            {phoneApp.sha256 && <div className="set-hint">{`SHA256：${phoneApp.sha256.slice(0, 32)}…`}</div>}
+            {phoneApp.sha256 && (
+              <div className="set-hint" title={phoneApp.sha256}>
+                {zh ? `SHA256 ${phoneApp.sha256.slice(0, 16)}…` : `SHA256 ${phoneApp.sha256.slice(0, 16)}…`}
+              </div>
+            )}
           </div>
         ) : (
           <div className="set-hint">
             {zh
-              ? `暂未从中继取到安装包信息${phoneApp && !phoneApp.ok ? `（${phoneApp.error}）` : ""}——先把 APK 发到中继的 /download/ 目录。`
-              : `No package info from the relay${phoneApp && !phoneApp.ok ? ` (${phoneApp.error})` : ""}.`}
+              ? `暂未取到安装包信息${phoneApp && !phoneApp.ok ? `（${phoneApp.error}）` : ""}——先把 APK 发到中继的 /download/ 目录。`
+              : `No package info${phoneApp && !phoneApp.ok ? ` (${phoneApp.error})` : ""}.`}
           </div>
         )}
       </div>
