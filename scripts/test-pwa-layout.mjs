@@ -62,10 +62,19 @@ has(".app-main", "flex-direction", /column/);
 has(".thread-view", "flex", /(^|\s)1(\s|$)/);
 has(".thread-view", "min-height", /^0/);
 
+// 消息区定位容器：同样要能伸缩 + min-height:0（它在链上，少一环就断）。
+has(".thread-scroll-wrap", "flex", /(^|\s)1(\s|$)/);
+has(".thread-scroll-wrap", "min-height", /^0/);
+has(".thread-scroll-wrap", "position", /^relative/);
+
 // 消息区：唯一可滚动区域，必须能伸缩且 min-height:0（否则内容把它撑开，滚不动）。
 has(".thread-scroll", "flex", /(^|\s)1(\s|$)/);
 has(".thread-scroll", "min-height", /^0/);
 has(".thread-scroll", "overflow-y", /auto/);
+
+// 「回到底部」必须悬浮（absolute），不能是占位的 flex item——真机反馈：
+// sticky 的按钮会占掉消息区底部一行，且贴在半空很难看。
+has(".to-bottom", "position", /^absolute/);
 
 // 工具条与输入框不许被压缩（曾经 chip 下半截被裁）。
 has(".thread-toolbar", "flex", /^none/);
@@ -78,6 +87,7 @@ const threadIdx = appTsx.indexOf("<ThreadView", mainIdx); // useState<ThreadView
 assert.ok(threadIdx > mainIdx, "ThreadView 必须在 .app-main 内部");
 assert.ok(/app\$\{[^}]*\} \? " thread-open"/.test(appTsx) || appTsx.includes("thread-open"), "缺少 thread-open 类名切换");
 assert.ok(threadTsx.includes('className="thread-scroll"'), "ThreadView 缺少 .thread-scroll 容器");
+assert.ok(threadTsx.includes('className="thread-scroll-wrap"'), "ThreadView 缺少 .thread-scroll-wrap（回到底部按钮的定位容器）");
 assert.ok(threadTsx.includes('className={`composer'), "ThreadView 缺少 composer");
 
 console.log("ok 1 - pwa 布局契约：高度链（app→app-main→thread-view→thread-scroll）+ 不可压缩区");

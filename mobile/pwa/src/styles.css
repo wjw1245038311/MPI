@@ -356,7 +356,22 @@ button:disabled { opacity: 0.5; cursor: default; }
 .back-btn { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; padding: 0; font-size: 16px; flex: none; }
 
 .thread-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 2px; min-height: 120px; }
-.to-bottom { align-self: center; position: sticky; bottom: 8px; width: 34px; height: 34px; display: grid; place-items: center; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 50%; box-shadow: var(--shadow-md); cursor: pointer; }
+/* 消息区定位容器：只有它伸缩，滚动交给内层 .thread-scroll。 */
+.thread-scroll-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+/* 「回到底部」：悬浮在消息区之上（absolute，不进布局），不用 sticky——
+   sticky 的 flex item 会占掉消息区底部一行高度，且贴着消息末尾很丑。 */
+.to-bottom {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 10px;
+  width: 32px; height: 32px; display: grid; place-items: center;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: 50%; box-shadow: var(--shadow-md); cursor: pointer; padding: 0;
+  opacity: 0.92; transition: opacity 0.15s ease, color 0.15s ease;
+  animation: to-bottom-in 0.16s ease-out;
+}
+.to-bottom:hover { opacity: 1; color: var(--accent); }
+.to-bottom svg { width: 16px; height: 16px; }
+@keyframes to-bottom-in { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 0.92; transform: translate(-50%, 0); } }
 
 .message.user { align-self: flex-end; max-width: 85%; background: var(--user-bubble); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
 .message.assistant { align-self: stretch; display: flex; flex-direction: column; gap: 8px; }

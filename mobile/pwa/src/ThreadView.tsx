@@ -848,18 +848,21 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
         <p className="hint">加载会话…</p>
       ) : (
         <>
-          <div className="thread-scroll" ref={scrollRef} onScroll={handleScroll}>
-            {view.messages.map((message) => (
-              <Message key={message.id} message={message} onCopied={(ok) => setToast(ok ? "已复制" : "复制失败")} />
-            ))}
-            {view.streaming && <Message message={view.streaming} />}
-            {running && !view.streaming && <p className="hint">正在工作…</p>}
+          {/* 定位容器：消息区自己负责滚动，「回到底部」按钮悬浮在它之上，不占高度。 */}
+          <div className="thread-scroll-wrap">
+            <div className="thread-scroll" ref={scrollRef} onScroll={handleScroll}>
+              {view.messages.map((message) => (
+                <Message key={message.id} message={message} onCopied={(ok) => setToast(ok ? "已复制" : "复制失败")} />
+              ))}
+              {view.streaming && <Message message={view.streaming} />}
+              {running && !view.streaming && <p className="hint">正在工作…</p>}
+            </div>
+            {!atBottom && view.messages.length > 0 && (
+              <button type="button" className="to-bottom" onClick={scrollToBottom} aria-label="回到底部">
+                <IconDown />
+              </button>
+            )}
           </div>
-          {!atBottom && (
-            <button type="button" className="to-bottom" onClick={scrollToBottom} aria-label="回到底部">
-              <IconDown />
-            </button>
-          )}
 
           {/* 错误提示贴着输入框——这里才是手指所在的位置。 */}
           {(sendError || view.errorBanner) && (

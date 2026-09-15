@@ -228,6 +228,16 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    测试：全量 71 passed / 3 skipped / 0 failed。PWA index-C4G26bm2.js + index-9Jczn95o.css 已部署（纯 CSS/前端，刷新即可）。
 
+31. **「回到底部」改为悬浮按钮（不再占消息区高度）**：
+
+   真机反馈：箭头丑，而且它占了对话框的空间。原因是它作为 `.thread-scroll` 的 flex item 用 `position: sticky` 定位——**sticky 仍参与布局**，等于在消息列表末尾常驻一行。
+
+   - 消息区包一层定位容器 `.thread-scroll-wrap`（`position:relative`，并接管 flex 伸缩），按钮移到其中做 `position:absolute`：`bottom:10px` 居中。
+   - 观感：32px 圆钮、细描边图标（16px）、`--surface` 底 + 阴影、`--text-dim` 图标、hover 变强调色，带 0.16s 淡入上浮；消息为空或已在底部时不显示（原本就有该条件）。
+   - 布局契约同步加固：`test-pwa-layout` 增加 `.thread-scroll-wrap`（flex/min-height/position:relative）、`.to-bottom { position: absolute }` 与 ThreadView 里 wrap 存在的断言——**防止这个按钮再退回占位的 flex item**。
+
+   验证（390×844，40 条消息）：有按钮 / 无按钮 两种 DOM 下 `scrollH` 均为 3455、`clientH` 均为 611（**按钮零占位**）；按钮 `position:absolute`、水平居中偏移 0、位于输入框上方。全量 71 passed / 3 skipped / 0 failed（另注：`app-store`、`pwa-thread` 出现过单跑必过、全量偶发的 flake，见待办）。PWA index-CohAqL7g.js 已部署。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。
