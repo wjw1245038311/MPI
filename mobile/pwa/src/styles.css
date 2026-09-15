@@ -367,6 +367,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* 折成一行：隐藏原生三角，状态点 + 名称 + 参数摘要。 */
 .msg-tool > summary.msg-tool-head { list-style: none; cursor: pointer; user-select: none; }
 .msg-tool > summary.msg-tool-head::-webkit-details-marker { display: none; }
+/* 折叠的同类工具明细（外层已折叠，这里只做缩进区分） */
+.msg-tool-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--border); }
 .msg-tool-state { flex: none; display: inline-flex; width: 14px; justify-content: center; color: var(--ok); font-size: 12px; }
 .msg-tool.error .msg-tool-state { color: var(--err); }
 .msg-tool-name { font-weight: 600; color: var(--accent); flex: none; }

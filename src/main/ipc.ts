@@ -355,6 +355,32 @@ async function unlinkSessionWithRetry(file: string): Promise<void> {
   throw lastError || new Error("Could not delete thread session file");
 }
 
+/**
+ * 工具参数 → 单行摘要（手机端折叠行用）。
+ *
+ * 场景：手机端此前只收到 {name, running, result}，折叠行永远只显示「✓ bash」，
+ * 用户完全看不出这个工具干了什么。优先取最有信息量的字段（命令/路径/模式…），
+ * 否则退化为 JSON，一律压成一行并截断。
+ */
+function toolArgsSummary(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") return undefined;
+  const record = args as Record<string, unknown>;
+  const preferred = ["command", "path", "file_path", "filePath", "pattern", "query", "url", "name"];
+  for (const key of preferred) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      const text = value.trim().replace(/\s+/g, " ");
+      return text.length > 200 ? `${text.slice(0, 197)}…` : text;
+    }
+  }
+  try {
+    const text = JSON.stringify(args);
+    return text.length > 200 ? `${text.slice(0, 197)}…` : text;
+  } catch {
+    return undefined;
+  }
+}
+
 function processAttachments(attachments: Attachment[] | undefined, text: string): { text: string; images: unknown[] } {
   const images: unknown[] = [];
   let extra = "";
@@ -1443,6 +1469,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
             name: String(block.name || "tool"),
             running: result == null,
             result: result?.text || undefined,
+            args: toolArgsSummary(block.arguments),
           };
         }
         if (block?.type === "image" && typeof block.data === "string" && block.data.length <= 400_000 && imageBudget >= block.data.length) {

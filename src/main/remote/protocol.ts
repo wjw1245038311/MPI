@@ -89,6 +89,9 @@ export interface RemoteMessage {
     name?: string;
     running?: boolean;
     result?: string;
+    /** Tool call arguments, compacted to one line (host-side). Phones show this
+     * in the collapsed row — without it a tool row reads as a bare "✓ bash". */
+    args?: string;
     data?: string;
     mimeType?: string;
   }>;

@@ -12,6 +12,7 @@ import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./li
 import { compressImageFile, type CompressedImage } from "./lib/image-attach";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
+import { groupToolBlocks, type ToolGroup } from "./lib/tool-groups";
 
 /** 主机侧上限（见 src/main/remote/service.ts MAX_REMOTE_FILES / MAX_REMOTE_FILE_DATA）。 */
 const MAX_FILES = 3;
@@ -209,6 +210,50 @@ interface ApprovalDiffView {
   hunks: string;
 }
 
+/** 工具块明细：参数摘要（若有）与结果（若有），展开后可见。 */
+function ToolDetail({ block }: { block: ViewBlock }) {
+  return (
+    <>
+      {block.argsText ? <pre className="msg-tool-full">{block.argsText}</pre> : null}
+      {block.text ? <pre>{block.text}</pre> : null}
+    </>
+  );
+}
+
+function ToolRow({ block }: { block: ViewBlock }) {
+  return (
+    <details className={`msg-tool ${block.running ? "running" : ""} ${block.isError ? "error" : ""}`}>
+      <summary className="msg-tool-head">
+        <span className="msg-tool-state">
+          {block.running ? <span className="spinner" aria-label="运行中" /> : block.isError ? "✗" : <IconCheck />}
+        </span>
+        <span className="msg-tool-name">{block.name || "tool"}</span>
+        {block.argsText && <code className="msg-tool-args">{block.argsText}</code>}
+      </summary>
+      <ToolDetail block={block} />
+    </details>
+  );
+}
+
+/** 折叠的同类工具行：`✓ bash ×12`，展开后逐条列明细。 */
+function ToolGroupRow({ group }: { group: ToolGroup }) {
+  const errors = group.blocks.filter((b) => b.isError).length;
+  return (
+    <details className={`msg-tool ${errors ? "error" : ""}`}>
+      <summary className="msg-tool-head">
+        <span className="msg-tool-state">{errors ? "✗" : <IconCheck />}</span>
+        <span className="msg-tool-name">{group.name}</span>
+        <code className="msg-tool-args">×{group.blocks.length}{errors ? ` · ${errors} 个出错` : ""}</code>
+      </summary>
+      <div className="msg-tool-list">
+        {group.blocks.map((block, i) => (
+          <ToolRow key={i} block={block} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function Block({ block }: { block: ViewBlock }) {
   if (block.type === "thinking") {
     return (
@@ -219,20 +264,7 @@ function Block({ block }: { block: ViewBlock }) {
     );
   }
   if (block.type === "tool") {
-    // 折成一行：名称 + 参数摘要 + 状态点；点开才展开参数全文与结果。
-    return (
-      <details className={`msg-tool ${block.running ? "running" : ""} ${block.isError ? "error" : ""}`}>
-        <summary className="msg-tool-head">
-          <span className="msg-tool-state">
-            {block.running ? <span className="spinner" aria-label="运行中" /> : block.isError ? "✗" : <IconCheck />}
-          </span>
-          <span className="msg-tool-name">{block.name || "tool"}</span>
-          {block.argsText && <code className="msg-tool-args">{block.argsText}</code>}
-        </summary>
-        {block.argsText && <pre className="msg-tool-full">{block.argsText}</pre>}
-        {block.text ? <pre>{block.text}</pre> : null}
-      </details>
-    );
+    return <ToolRow block={block} />;
   }
   if (block.type === "image") {
     return block.data ? <img className="msg-image" src={block.data} alt={block.mimeType || "image"} /> : null;
@@ -305,9 +337,13 @@ function Message({ message, onCopied }: { message: ViewMessage; onCopied?: (ok: 
           MPI{message.stopReason === "error" ? " · 出错" : ""}
         </div>
       )}
-      {message.blocks.map((block, i) => (
-        <Block key={i} block={block} />
-      ))}
+      {groupToolBlocks(message.blocks).map((item, i) =>
+        item.kind === "toolGroup" ? (
+          <ToolGroupRow key={`g${i}`} group={item.group} />
+        ) : (
+          <Block key={`b${i}`} block={item.block} />
+        ),
+      )}
       {!isUser && message.artifacts && message.artifacts.length > 0 && (
         <div className="msg-artifacts">
           {message.artifacts.map((a) => (

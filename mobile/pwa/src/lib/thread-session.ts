@@ -99,10 +99,12 @@ function mapRemoteMessage(m: RemoteMessage): ViewMessage {
     role: m.role === "user" ? "user" : "assistant",
     blocks: (m.blocks || []).map((b) => ({
       type: b.type === "image" ? ("image" as const) : b.type === "tool" ? ("tool" as const) : b.type === "thinking" ? ("thinking" as const) : ("text" as const),
-      text: b.text,
+      // 工具块的正文是 result（曾经写成 b.text → 展开后什么都没有），
+      // 其余块用 text。
+      text: b.type === "tool" ? b.result : b.text,
       name: b.name,
       running: b.running,
-      argsText: undefined,
+      argsText: b.args,
       data: b.data,
       mimeType: b.mimeType,
     })),

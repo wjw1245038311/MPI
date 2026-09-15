@@ -280,4 +280,46 @@ const { ThreadActions } = await import("../mobile/pwa/src/lib/thread-actions.ts"
   console.log("ok 7 - markdown-lite: 围栏分段/未闭合流式/语言标签映射");
 }
 
+// ---- 8. tool-groups：同类工具合并 + 无信息行丢弃 --------------------------
+{
+  const { groupToolBlocks, hasToolInfo, TOOL_GROUP_MIN } = await import("../mobile/pwa/src/lib/tool-groups.ts");
+  const tool = (name, args, result, extra = {}) => ({ type: "tool", name, argsText: args, text: result, ...extra });
+
+  // 连续 12 个 bash（都有 command）→ 合并成一组
+  const many = Array.from({ length: 12 }, (_, i) => tool("bash", `echo ${i}`, `out ${i}`));
+  const grouped = groupToolBlocks(many);
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].kind, "toolGroup");
+  assert.equal(grouped[0].group.name, "bash");
+  assert.equal(grouped[0].group.blocks.length, 12);
+
+  // 少于阈值不合并
+  assert.equal(groupToolBlocks(many.slice(0, TOOL_GROUP_MIN - 1)).length, TOOL_GROUP_MIN - 1);
+  assert.equal(groupToolBlocks(many.slice(0, TOOL_GROUP_MIN))[0].kind, "toolGroup");
+
+  // 不同名交替 → 不合并（保持独立）
+  const mixed = [tool("bash", "a", "1"), tool("edit", "b", "2"), tool("bash", "c", "3")];
+  assert.equal(groupToolBlocks(mixed).every((i) => i.kind === "block"), true, "同名但不连续不合并");
+
+  // 运行中的工具不参与合并（spinner 必须可见）
+  const running = [tool("bash", "a", undefined, { running: true }), tool("bash", "b", "x"), tool("bash", "c", "y")];
+  assert.equal(groupToolBlocks(running)[0].kind, "block");
+
+  // 无信息行被丢弃（旧主机不传 args / 无结果）
+  const empty = [tool("bash", undefined, undefined), tool("bash", undefined, undefined), tool("bash", undefined, undefined)];
+  assert.equal(groupToolBlocks(empty).length, 0, "没有参数也没有结果的工具行直接不渲染");
+  assert.equal(hasToolInfo(tool("bash", undefined, undefined)), false);
+  assert.equal(hasToolInfo(tool("bash", "", "   ")), false, "空白不算信息");
+  // 但运行中/出错的空行要保留（状态信号）
+  assert.equal(groupToolBlocks([tool("bash", undefined, undefined, { running: true })]).length, 1);
+  assert.equal(groupToolBlocks([tool("bash", undefined, undefined, { isError: true })]).length, 1);
+
+  // 文本块不受影响，顺序保持
+  const withText = [{ type: "text", text: "hi" }, ...many, { type: "text", text: "bye" }];
+  const items = groupToolBlocks(withText);
+  assert.deepEqual(items.map((i) => i.kind), ["block", "toolGroup", "block"]);
+
+  console.log("ok 8 - tool-groups: 同类合并 / 运行中不合并 / 无信息行丢弃");
+}
+
 console.log("pwa composer tests passed");

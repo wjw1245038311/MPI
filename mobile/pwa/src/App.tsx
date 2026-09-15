@@ -172,6 +172,8 @@ export default function App() {
   const threadSessionRef = useRef<ThreadSession | null>(null);
   threadSessionRef.current = threadSession;
   const [threadView, setThreadView] = useState<ThreadViewState | null>(null);
+  /** 返回键握手用：closeThread 在后面定义，用 ref 打破引用顺序。 */
+  const closeThreadRef = useRef<(() => void) | null>(null);
 
   // S6: send control for the open thread. The pending approval (pendingUi) lives
   // in ThreadSession's view so its dedup logic is node-testable without React.
@@ -453,6 +455,7 @@ export default function App() {
     setThreadView(null);
     setOpenThreadId(null);
   };
+  closeThreadRef.current = closeThread;
 
   /**
    * 飞书式：进首页即进对话——自动打开最近更新的那个会话（每台主机只自动开一次，
@@ -602,9 +605,16 @@ export default function App() {
   useEffect(() => {
     const hooks = window as unknown as { __mpiBack?: () => string };
     hooks.__mpiBack = () => {
-      if (drawerRef.current === "none") return "pass";
-      window.history.back();
-      return "handled";
+      if (drawerRef.current !== "none") {
+        window.history.back();
+        return "handled";
+      }
+      // 会话打开时，系统返回键 = 退出会话回列表（没有箭头按钮后这是主要返回路径）。
+      if (openThreadIdRef.current) {
+        closeThreadRef.current?.();
+        return "handled";
+      }
+      return "pass";
     };
     return () => {
       delete hooks.__mpiBack;
@@ -642,11 +652,11 @@ export default function App() {
         <button
           type="button"
           className="avatar-btn"
-          // 会话里这个按钮就是「返回列表」——原来工具栏里那个 ← 与其重复，已删除。
-          onClick={() => (view === "home" && openThreadId ? closeThread() : openDrawer("projects"))}
-          aria-label={view === "home" && openThreadId ? "返回会话列表" : "项目与会话"}
+          // 头像恒为头像（不开箭头）：返回靠系统返回键 + 抽屉切换会话。
+          onClick={() => openDrawer("projects")}
+          aria-label="项目与会话"
         >
-          <span className="app-logo" aria-hidden="true">{view === "home" && openThreadId ? "←" : "M"}</span>
+          <span className="app-logo" aria-hidden="true">M</span>
         </button>
         <div className="header-main">
           <h1>{headerTitle}</h1>
@@ -684,9 +694,9 @@ export default function App() {
             <p className="hint">
               {snap && snap.projects.length === 0
                 ? "这台桌面还没有项目——先在桌面端建一个项目。"
-                : connState === "open"
-                  ? "点左上角头像，选一个会话开始，或直接「新建会话」。"
-                  : "正在连接桌面端…"}
+                : connState !== "open"
+                  ? "正在连接桌面端…"
+                  : ""}
             </p>
             {error && <p className="hint error-text">{error}</p>}
             {connState === "closed" && connErr === "REPLACED" && (
