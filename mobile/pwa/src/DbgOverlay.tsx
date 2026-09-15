@@ -26,13 +26,18 @@ export default function DbgOverlay({ client, threadView }: { client: RelayClient
 
   // Shell-side event log (load/scan/update) — pulled every 2s while the overlay is up.
   const [shellDiag, setShellDiag] = useState<ShellDiag | null>(null);
+  /** 壳内原生录音最近一次启动结果（0.2.6+）。 */
+  const [nativeRec, setNativeRec] = useState<string>("-");
   useEffect(() => {
-    const bridge = (window as unknown as { MpiShell?: { scanDiagnostics?: () => string } }).MpiShell;
+    const bridge = (window as unknown as {
+      MpiShell?: { scanDiagnostics?: () => string; recorderDiagnostics?: () => string };
+    }).MpiShell;
     if (!bridge?.scanDiagnostics) return;
     let alive = true;
     const pull = () => {
       try {
         setShellDiag(JSON.parse(bridge.scanDiagnostics!()));
+        if (bridge.recorderDiagnostics) setNativeRec(bridge.recorderDiagnostics());
       } catch { /* 壳返回异常时保持上次值 */ }
     };
     pull();
@@ -95,7 +100,7 @@ export default function DbgOverlay({ client, threadView }: { client: RelayClient
       {threadView ? <> | thread ready={String(threadView.ready)} msgs={threadView.messages.length} banner={threadView.errorBanner ?? "-"}</> : null}
       {/* 媒体能力取证：语音输入排障用（UA 含 Chrome/WebView 版本；secureContext=false 时 getUserMedia 必挂） */}
       <div style={{ marginTop: 4 }}>
-        <b>MEDIA</b> secure={String(window.isSecureContext)} gUM={typeof navigator.mediaDevices?.getUserMedia} AC={typeof window.AudioContext} mic={lastMicDiagnostic}
+        <b>MEDIA</b> secure={String(window.isSecureContext)} gUM={typeof navigator.mediaDevices?.getUserMedia} AC={typeof window.AudioContext} mic={lastMicDiagnostic} native={nativeRec}
       </div>
       <div style={{ color: "#9aa0a6", fontSize: 10 }}>{navigator.userAgent}</div>
       {shellDiag && (

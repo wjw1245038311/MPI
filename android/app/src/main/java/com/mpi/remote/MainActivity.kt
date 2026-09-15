@@ -88,6 +88,35 @@ class MainActivity : AppCompatActivity() {
                 /** ?dbg=1 诊断浮层读回：壳侧最近事件（load/scan/update），真机黑屏时定位用。 */
                 @JavascriptInterface
                 fun scanDiagnostics(): String = ShellLog.snapshot(BuildConfig.VERSION_NAME, baseUrl)
+
+                /**
+                 * 原生录音（PWA 语音输入在壳里的后端）——绕开 WebView 的音频栈，
+                 * 见 NativeRecorder 的类注释。返回 "ok" 或 "err:<原因>"。
+                 */
+                @JavascriptInterface
+                fun startRecording(): String {
+                    if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
+                        != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        runOnUiThread { audioPermission.launch(Manifest.permission.RECORD_AUDIO) }
+                        return "err:permission"
+                    }
+                    return NativeRecorder.start()
+                }
+
+                /** 停止录音。返回 JSON：{ok,audioB64,sampleRate} 或 {error}。 */
+                @JavascriptInterface
+                fun stopRecording(): String = NativeRecorder.stop()
+
+                @JavascriptInterface
+                fun cancelRecording(): String {
+                    NativeRecorder.cancel()
+                    return "ok"
+                }
+
+                /** 原生录音最近一次启动结果（?dbg=1 取证）。 */
+                @JavascriptInterface
+                fun recorderDiagnostics(): String = NativeRecorder.lastResult
             },
             "MpiShell",
         )

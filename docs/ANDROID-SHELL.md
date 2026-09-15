@@ -149,6 +149,10 @@ https://<relay>/#pair=<base64url payload>
 | 4 | `window.__mpiBack(): "handled" \| "pass"` | PWA → 壳（返回键握手） | 壳的返回键先执行 `evaluateJavascript("window.__mpiBack ? window.__mpiBack() : 'pass'")`：返回 `"handled"` = 页面已处理（如关抽屉），壳不再动作；否则走 `canGoBack() ? goBack() : moveTaskToBack()`。原因：WebView 的 `canGoBack()` 不把 pushState 历史算进去，没有这个握手按返回键会直接后台化 |
 | 5 | VIEW intent filter | 系统 → 壳 | 清单注册中继域名的 https VIEW；扫码/点开的配对链接已装壳则进壳、否则进浏览器（两者共用 `#pair=` 自动配对路径）。「用 MPI 打开」也走这里换服务器地址 |
 | 6 | `window.MpiShell.scanDiagnostics(): string` | 壳注入 → PWA（0.2.3+） | 返回 JSON `{shellVersion, baseUrl, events}`——壳侧最近 ≤20 条 load/scan/update 事件（行格式 `<epochMillis> <文本>`，同时写 logcat tag `MpiShell` + SharedPreferences）。PWA `?dbg=1` 浮层每 2s 拉取展示；旧壳无此成员时 PWA 探测式跳过 |
+| 7 | `window.MpiShell.startRecording(): string` | 壳注入 → PWA（0.2.6+） | 启动**原生录音**（Kotlin AudioRecord 16k/单声道/PCM16，音频源 VOICE_RECOGNITION→MIC→DEFAULT 逐级回退）。返回 `"ok"` 或 `"err:<原因>"`；无 RECORD_AUDIO 权限时拉起系统授权框并返回 `"err:permission"`。**PWA 探测到该成员时优先于 getUserMedia**（见 contract #10） |
+| 8 | `window.MpiShell.stopRecording(): string` | 壳注入 → PWA（0.2.6+） | 停止并返回 JSON `{ok:true,audioB64,sampleRate}` 或 `{error}`。audioB64 = 44 字节 RIFF/WAVE 头 + PCM16，与 PWA `encodeWavPcm16` 输出逐字节同构；< 0.5s 返回 `{"error":"录音太短"}` |
+| 9 | `window.MpiShell.cancelRecording(): string` | 壳注入 → PWA（0.2.6+） | 放弃本次录音并释放麦克风（用户点「取消」）。永远返回 `"ok"`；壳/桥不可用时 PWA 静默吞掉异常 |
+| 10 | `window.MpiShell.recorderDiagnostics(): string` | 壳注入 → PWA（0.2.6+） | 原生录音最近一次启动结果（`ok src=6` / `err:notInitialized src=6` …），`?dbg=1` 浮层 MEDIA 行的 `native=` 字段 |
 
 **兼容规则：**
 
@@ -156,6 +160,21 @@ https://<relay>/#pair=<base64url payload>
 - **改现有语义**（如 `__mpiBack` 返回值约定、`#pair=` 载荷格式）：**必须同发新 APK**——旧壳配新 PWA
   会出现「返回键直接后台化」这类静默故障，且用户不会意识到是版本不匹配。
 - 两侧都不得假设对方存在：PWA 不裸调 `MpiShell`；壳对 `__mpiBack` 缺失按 `pass` 处理（已内置）。
+
+## 语音输入：两条采集后端（重要）
+
+PWA 录音后端按环境自动选择，**接口一致**（同样的 16k 单声道 WAV base64）：
+
+| 环境 | 后端 | 说明 |
+| --- | --- | --- |
+| 壳 0.2.6+ | 原生 `AudioRecord`（`NativeRecorder.kt`） | 走普通 App 录音通路，不受 WebView 实现/厂商 ROM 策略影响 |
+| 壳 ≤0.2.5、浏览器 | `getUserMedia` + ScriptProcessor | 逐步放宽约束（默认 DSP → 关 DSP → 单声道 → 显式 deviceId） |
+
+实测：**荣耀 Magic5 / MagicOS 的 WebView 开不了音频设备**——三组约束（默认 / 关闭 AEC·NS·AGC /
+单声道）全部报 `NotReadableError "Could not start audio source"`，授权成功后依旧如此，且
+`enumerateDevices()` 不返回输入设备。故 0.2.6 起壳内一律走原生录音；`getUserMedia` 只在浏览器
+里使用（浏览器无此问题）。遇到「点 mic 没反应」先看 `?dbg=1` 的 MEDIA 行：
+`gUM=function` 与 `secure=true` 正常说明安全上下文无问题，`mic=` / `native=` 才是采集结果。
 
 ## 模拟器联调（本机自测，无需真机）
 

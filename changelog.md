@@ -102,6 +102,15 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：壳里重开页面 → 点 mic → 若成功则 MEDIA 行 mic=xx ok（看出哪级约束生效）；若仍失败，错误文本会列出全部被拒的约束名 + DOMException 名。测试：PWA tsc + build。
 
+20. **壳 0.2.6：原生录音取代 WebView 采集（真机实测荣耀 Magic5）**：
+   - 真机数据：`（已尝试 6 次：default:NotReadableError ×2, no-dsp:NotReadableError ×2, mono-raw:NotReadableError ×2）`——三组约束全被 HAL 拒开，且 `enumerateDevices()` 不返回输入设备，判定为 MagicOS WebView 音频栈不可用（非权限、非占用）。
+   - 新增 `NativeRecorder.kt`：Android `AudioRecord`（16k / 单声道 / PCM16），音频源 `VOICE_RECOGNITION → MIC → DEFAULT` 逐级回退（创建设备失败、未初始化、startRecording 异常各阶段单独报错）；读线程把 PCM 收集进内存，stop 时补 44 字节 RIFF/WAVE 头并 base64 返回，与 PWA `encodeWavPcm16` 逐字节同构。
+   - 壳 JS 桥新增四个成员（见 docs/ANDROID-SHELL.md 壳契约 #7–#10）：`startRecording() / stopRecording() / cancelRecording() / recorderDiagnostics()`；`startRecording` 在无运行时权限时拉起系统授权框并返回 `err:permission`。
+   - PWA `voice-input.ts` 探测 `MpiShell.startRecording` 存在则优先原生（浏览器仍走 getUserMedia），`VoiceRecorder` 对外接口不变（start/stop/cancel/elapsedSeconds），上层零改动。
+   - 清单补 `MODIFY_AUDIO_SETTINGS`（Chromium 音频通路需要，安装即授）+ `<uses-feature microphone required=false>`。
+
+   验证方式：装 0.2.6 → 点 mic 直接开始计时（不再经过 WebView 音频栈）→ 说话 → 完成 → 草稿出现文本；失败时错误文本会带上原生侧的具体阶段（如 `err:notInitialized src=6`），`?dbg=1` 的 MEDIA 行显示 `native=ok src=6`。测试：PWA tsc + build、gradle assembleDebug、全量 npm test 68/3。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

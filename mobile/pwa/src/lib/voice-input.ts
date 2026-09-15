@@ -17,6 +17,25 @@ const MAX_SECONDS = 120;
 export let lastMicDiagnostic = "-";
 
 /**
+ * 壳（Android App）暴露的原生录音桥，见 android/.../NativeRecorder.kt。
+ *
+ * 为什么需要它：部分国产 ROM 的 WebView 音频采集栈开不了设备，getUserMedia 恒报
+ * NotReadableError "Could not start audio source"（实测荣耀 Magic5 / MagicOS，
+ * 所有约束组合均被 HAL 拒绝）。壳内优先走原生 AudioRecord，浏览器里仍走
+ * getUserMedia——两条路产出同样的 16k 单声道 WAV。
+ */
+interface NativeRecordBridge {
+  startRecording?: () => string;
+  stopRecording?: () => string;
+  cancelRecording?: () => string;
+}
+
+function nativeRecordBridge(): NativeRecordBridge | null {
+  const shell = (window as unknown as { MpiShell?: NativeRecordBridge }).MpiShell;
+  return shell?.startRecording ? shell : null;
+}
+
+/**
  * Progressive constraint sets for opening the microphone.
  *
  * `{audio: true}` asks the engine for its default processing (AEC / NS / AGC).
@@ -140,9 +159,11 @@ export class VoiceRecorder {
   private chunks: Float32Array[] = [];
   private totalFrames = 0;
   private startedAt = 0;
+  /** 走的是壳内原生录音（而非 getUserMedia）。 */
+  private nativeActive = false;
 
   get isRecording(): boolean {
-    return this.ctx !== null;
+    return this.ctx !== null || this.nativeActive;
   }
 
   /** Elapsed recording seconds (for the UI timer). */
@@ -153,6 +174,17 @@ export class VoiceRecorder {
 
   async start(): Promise<void> {
     if (this.isRecording) return;
+    const bridge = nativeRecordBridge();
+    if (bridge) {
+      const result = bridge.startRecording!();
+      if (result === "err:permission") throw new Error("需要麦克风权限，请在系统弹窗中允许后重试");
+      if (result !== "ok") throw new Error(`原生录音启动失败：${result}`);
+      this.nativeActive = true;
+      this.startedAt = Date.now();
+      lastMicDiagnostic = "native ok";
+      this.scheduleAutoStop();
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("此环境不支持录音");
     const { stream } = await openMicrophone();
     this.stream = stream;
@@ -184,8 +216,11 @@ export class VoiceRecorder {
     // ScriptProcessor must be connected to the destination to fire on some engines.
     processor.connect(ctx.destination);
     this.startedAt = Date.now();
+    this.scheduleAutoStop();
+  }
 
-    // Auto-stop at MAX_SECONDS (the frame budget is finite).
+  /** Auto-stop at MAX_SECONDS (the frame budget is finite). */
+  private scheduleAutoStop(): void {
     window.setTimeout(() => {
       if (this.isRecording && this.elapsedSeconds() >= MAX_SECONDS) void this.stop().catch(() => undefined);
     }, (MAX_SECONDS + 1) * 1000);
@@ -193,6 +228,20 @@ export class VoiceRecorder {
 
   /** Stop and return the recording as base64 WAV (16 kHz mono PCM16). */
   async stop(): Promise<{ audioB64: string; sampleRate: number }> {
+    if (this.nativeActive) {
+      this.nativeActive = false;
+      this.startedAt = 0;
+      const raw = nativeRecordBridge()?.stopRecording?.() ?? "";
+      let parsed: { ok?: boolean; audioB64?: string; sampleRate?: number; error?: string };
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new Error("原生录音返回异常");
+      }
+      if (parsed.error) throw new Error(parsed.error);
+      if (!parsed.audioB64) throw new Error("录音太短");
+      return { audioB64: parsed.audioB64, sampleRate: parsed.sampleRate ?? VOICE_SAMPLE_RATE };
+    }
     const ctx = this.ctx;
     if (!ctx) throw new Error("未在录音");
     this.cleanup();
@@ -212,6 +261,16 @@ export class VoiceRecorder {
 
   /** Abort without producing a result (user cancelled). */
   cancel(): void {
+    if (this.nativeActive) {
+      this.nativeActive = false;
+      this.startedAt = 0;
+      try {
+        nativeRecordBridge()?.cancelRecording?.();
+      } catch {
+        // 壳已销毁/桥不可用——原生侧会随 Activity 一起释放
+      }
+      return;
+    }
     const ctx = this.ctx;
     this.cleanup();
     if (ctx) void ctx.close().catch(() => undefined);
