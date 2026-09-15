@@ -85,6 +85,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：手机装 0.2.4 → composer 新样式；+ 选图发送后消息气泡显示缩略图（换 VL 模型后可看图）；mic 录音说完点完成，草稿出现识别文本。测试：test-pwa-composer 新增 4 组（WAV 编码/base64/压缩质量循环/帧形状）、pwa-shared 协议清单同步 stt.transcribe、typecheck + 全量 npm test 67/0。
 
+17. **手机语音与桌面 mic 统一走同一套 STT（local-voice :8800）**：此前手机 PWA 语音硬编码转发 voice-stack 网关的 raw-WAV 端点（:8093），桌面 composer mic 走应用商店 local-voice 组件的 OpenAI 兼容服务（:8800 SenseVoiceSmall）——两套 ASR 并存。现在新增纯核心模块 `stt-relay.ts`：手机 stt.transcribe 帧优先用**与桌面 mic 相同的语音配置**（Settings→对话设置→语音系统，即 local-voice 写入的 :8800），multipart 上传；主目标不可达时自动回退网关 :8093 raw-WAV 端点——local-voice 应用禁用、网关宕机两种故障场景手机语音都不死。`config.sttUrl` 语义改为 OpenAI 兼容 /v1 覆盖地址（缺省=跟随桌面配置）。
+
+   验证方式：重启 MPI 后手机 mic→说话→完成，识别走 :8800（main 日志 `[remote] stt.transcribe ok via openai:http://127.0.0.1:8800/v1`）。测试：test-stt-relay 新增 8 组（目标解析 4 + multipart 形状/回退顺序/全挂聚合错误/空载荷）、typecheck + 全量 npm test 68/0。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。
