@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { RelayClient } from "./lib/relay-client";
 import type { ThreadView as ThreadViewState } from "./lib/thread-session";
 import { lastMicDiagnostic } from "./lib/voice-input";
+import { currentBundleName } from "./lib/update-watch";
 
 interface FrameRec { text: string; warn?: boolean; at: string }
 
@@ -102,6 +103,7 @@ export default function DbgOverlay({ client, threadView }: { client: RelayClient
       <div style={{ marginTop: 4 }}>
         <b>MEDIA</b> secure={String(window.isSecureContext)} gUM={typeof navigator.mediaDevices?.getUserMedia} AC={typeof window.AudioContext} mic={lastMicDiagnostic} native={nativeRec}
       </div>
+      <div style={{ color: "#9aa0a6" }}>bundle={currentBundleName() ?? "dev"}</div>
       <div style={{ color: "#9aa0a6", fontSize: 10 }}>{navigator.userAgent}</div>
       {shellDiag && (
         <>

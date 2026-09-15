@@ -386,6 +386,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .icon-btn.mic.live { color: var(--err); background: rgba(247, 118, 142, 0.14); animation: voice-pulse 1.2s ease-in-out infinite; }
 @keyframes voice-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.9); } }
 .composer-error { margin: 6px 0 0; }
+/* 新版本提示（WebView 不重载导致的旧页面问题，见 lib/update-watch.ts） */
+.update-pill { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 130; background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 7px 14px; font-size: 12.5px; box-shadow: var(--shadow-md); cursor: pointer; animation: voice-pulse 1.6s ease-in-out infinite; }
+
 .toast { position: fixed; left: 50%; bottom: 104px; transform: translateX(-50%); background: rgba(20, 22, 18, 0.88); color: #fff; font-size: 12.5px; padding: 7px 14px; border-radius: 999px; z-index: 120; pointer-events: none; }
 
 /* ---- 会话顶部配置栏（权限 / 模型） ------------------------------------- */

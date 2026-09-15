@@ -137,6 +137,16 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：手机改模型/模式/权限 → 桌面 pill 1 秒内跟着变并弹提示；桌面改 → 手机 chip 实时变（无需重开）。测试：新增 `test-thread-config-sync`（补丁语义/模式解析/强制只读钉死/目录顺序）4 组；`test-pwa-thread` 增加 snapshot 模式字段 + `config_changed` 实时应用断言；`test-pwa-composer` 第 5 组扩展到 setModel/setMode 帧；全量 69 passed/3 skipped/0 failed。
 
+23. **手机端「有新版本 · 点击刷新」提示**（真机实测：中继已部署新 UI，手机一直看到旧界面）：
+
+   根因不是部署：Android 上按返回键只是把壳退到后台，从多任务重新打开**不会重新加载 WebView**——页面里的 JS 一直是旧的，而且没有任何提示（中继日志显示该页面一直在正常收发帧，只是跑着旧 bundle）。调试过程已核对：中继 `/var/www/mpi-mobile` 与本地构建 md5 逐字节一致，`index.html` 在中继侧是 no-cache，所以问题只在客户端不重载。
+
+   - 新增 `mobile/pwa/src/lib/update-watch.ts`：对比**正在运行的 bundle 文件名**（`import.meta.url`）与**服务端 index.html 现在引用的文件名**（vite 产物名带内容哈希，名字不同即内容不同，无需额外版本接口）。
+   - `App.tsx` 新增 `UpdatePill`：启动 8s 后查一次、之后每 5 分钟一次、**回到前台时立即查**（正是「切后台很久再回来」的场景），发现新版本就浮出「有新版本 · 点击刷新」，点击 `location.reload()`。
+   - `?dbg=1` 浮层新增 `bundle=index-xxxx.js` 行——以后排查「界面是旧的」可直接看手机跑的是哪个 bundle。
+
+   验证方式：部署新 bundle 后，仍在运行旧页面（未刷新）的手机应在 5 分钟内（或切回前台时）浮出提示条，点击即换到新 UI。测试：`test-pwa-composer` 新增第 6 组（bundle 名解析 + 新旧判定，含「运行 index-DUb0pTa0 / 服务端已是 index-2LMAQt9S」这一现场用例）。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

@@ -205,4 +205,33 @@ const { ThreadActions } = await import("../mobile/pwa/src/lib/thread-actions.ts"
   console.log("ok 5 - thread-actions: setModel/setMode 走写租约（含清除模式）");
 }
 
+// ---- 6. 新版本检测（WebView 不重载导致的旧页面问题） ---------------------------
+{
+  const { bundleNameFromUrl, parseBundleName } = await import("../mobile/pwa/src/lib/update-watch.ts");
+
+  // 真实形态：中继根路径下的 hashed 产物
+  assert.equal(bundleNameFromUrl("https://relay:9443/assets/index-IogLhVdz.js"), "index-IogLhVdz.js");
+  assert.equal(bundleNameFromUrl("http://127.0.0.1:6173/src/main.tsx"), null, "vite dev 无 hashed 名 → null");
+  assert.equal(bundleNameFromUrl("https://relay:9443/assets/other-abc.js"), null, "非 index-* 产物不误判");
+
+  const served = '<!doctype html><html><head><script type="module" crossorigin src="/assets/index-2LMAQt9S.js"></script></head></html>';
+  assert.equal(parseBundleName(served), "index-2LMAQt9S.js");
+  assert.equal(parseBundleName("<html>no bundle</html>"), null);
+
+  // 判定语义：当前名 ≠ 服务端名 → 需要刷新（用例直接对应 2026-09-15 的现场：
+  // 运行 index-DUb0pTa0、服务端已是 index-2LMAQt9S）
+  assert.equal(
+    bundleNameFromUrl("https://relay/assets/index-DUb0pTa0.js") !== parseBundleName(served),
+    true,
+    "旧 bundle 运行中 → 提示刷新",
+  );
+  assert.equal(
+    bundleNameFromUrl("https://relay/assets/index-2LMAQt9S.js") !== parseBundleName(served),
+    false,
+    "已是最新 → 不提示",
+  );
+
+  console.log("ok 6 - update-watch: bundle 名解析 + 新旧判定");
+}
+
 console.log("pwa composer tests passed");

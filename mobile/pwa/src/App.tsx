@@ -21,9 +21,54 @@ import { Requester } from "./lib/requester";
 import { ThreadActions } from "./lib/thread-actions";
 import { ThreadSession, type ThreadView as ThreadViewState } from "./lib/thread-session";
 import { ensureBrowserPush } from "./lib/webpush";
+import { currentBundleName, isUpdateAvailable } from "./lib/update-watch";
 
 /** ?dbg=1 in the URL turns on the on-screen diagnostics overlay (real-device debugging). */
 const DBG_ENABLED = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("dbg");
+
+/**
+ * 「有新版本 · 点击刷新」浮条。
+ *
+ * 手机壳里的 WebView 会一直活着（返回只是退到后台、从多任务重开也不重载），
+ * 所以新部署的 bundle 可能长时间不被加载。这里定期（及回到前台时）对比服务端
+ * index.html 引用的 bundle 名与当前运行的名，不同就提示用户手动刷新。
+ */
+function UpdatePill() {
+  const [stale, setStale] = useState(false);
+  const [bundle, setBundle] = useState<string | null>(null);
+  useEffect(() => {
+    setBundle(currentBundleName());
+    let alive = true;
+    const check = async () => {
+      if (await isUpdateAvailable()) if (alive) setStale(true);
+    };
+    // 启动稍后查一次（不抢首屏与配对的带宽），之后每 5 分钟一次。
+    const first = window.setTimeout(() => void check(), 8_000);
+    const timer = window.setInterval(() => void check(), 5 * 60_000);
+    // 回到前台立即查——正是「切后台放了很久再回来」的场景。
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      window.clearTimeout(first);
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+  if (!stale) return null;
+  return (
+    <button
+      type="button"
+      className="update-pill"
+      title={bundle ? `当前 ${bundle}` : undefined}
+      onClick={() => window.location.reload()}
+    >
+      有新版本 · 点击刷新
+    </button>
+  );
+}
 // 临时诊断标记：确认手机端加载的是哪一版构建（扫码排查用，稳定后移除）。
 const BUILD_TAG = "260915c";
 
@@ -577,6 +622,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <UpdatePill />
       <header className="app-header">
         <button type="button" className="avatar-btn" onClick={() => openDrawer("projects")} aria-label="项目与会话">
           <span className="app-logo" aria-hidden="true">M</span>
