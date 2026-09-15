@@ -210,6 +210,24 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：手机刷新 → 一串 bash 只占一行且显示条数（点开能看到每条命令与结果）；左上角是头像；返回键从会话退回列表；首页不再有引导文字。测试：`test-pwa-composer` 新增第 8 组（合并阈值/运行中不合并/无信息行丢弃/顺序保持），全量 70 passed/3 skipped/0 failed；390×844 真机视口核对。
 
+30. **修手机端「输入框消失 + 对话拉不动」（承重 CSS 规则丢失）**：
+
+   真机症状：会话里输入框整条不见，消息区也划不动。根因是 `<main class="app-main">`（App 与 ThreadView 之间的包装层）**在 CSS 里根本没有规则**——它是 `height:auto` 的 flex item，默认 `min-height:auto` 不会收缩，于是高度链在此断掉：`.thread-view`/`.thread-scroll` 的 `flex:1 1 auto` 无从生效（父级高度=内容高度），消息区没有内部滚动；而 `.app.thread-open` 的 `overflow:hidden` 把超出的部分（正是输入框）整条裁掉。
+
+   之前能滚动是靠 `.card { max-height: calc(100dvh - 90px) }` 那条硬编码补丁撑着的——上一版为「压缩会话界面」删掉它时，漏补了 `.app-main` 的规则（典型的"删掉了一条在承重的规则"）。
+
+   - 新增 `.app-main { flex:1 1 auto; min-height:0; display:flex; flex-direction:column }`，并在注释里标注为**承重规则**（写明缺失时的真机表现）。
+   - 顺带：`.app.thread-open .push-hint { display:none }`——推送提示条会占掉一块高度，在 `overflow:hidden` 下等于挤压消息区。
+   - 新增 `scripts/test-pwa-layout.mjs`（L1，静态契约）：钉死高度链每一环（`.app`→`.app-main`→`.thread-view`→`.thread-scroll` 必须声明 flex 伸缩 + `min-height:0`）、不可压缩区（工具条/输入框 `flex:none`）、以及 App.tsx 里 ThreadView 必须位于 `.app-main` 内。这类"静默删掉承重规则"的事故靠人眼审 CSS 抓不住，只能靠契约。
+   - 同时修正了**验证 harness 的结构偏差**：之前手写的 harness 把 `.thread-view` 直接挂在 `.app` 下，恰好绕过了 `.app-main` 这层，所以没能测出问题；现已对齐真实 DOM，并给 headless probe 加了 `cssApplied` 断言（此前一次 probe 因 CSS 路径写错导致整页无样式，差点读成"布局坏了"）。
+
+   验证数据（390×844，40 条消息）：
+   - 修前（`.app-main` 无规则）→ `sendBottom:4104`、`sendFullyVisible:false`、`pageScrolls:false`、`scrollsInternally:false`（复现真机症状）
+   - 修后 → `sendBottom:823`（屏内）、`scrollsInternally:true`（scrollH 3884 / clientH 603）、`pageScrolls:false`、`pageScrollTop:0`
+   - 列表页回归检查：24 个项目时 `pageScrolls:true`、`canScrollTo:364`（整页可滚，未受影响）
+
+   测试：全量 71 passed / 3 skipped / 0 failed。PWA index-C4G26bm2.js + index-9Jczn95o.css 已部署（纯 CSS/前端，刷新即可）。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

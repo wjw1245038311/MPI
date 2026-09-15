@@ -334,7 +334,16 @@ button:disabled { opacity: 0.5; cursor: default; }
     顶部多一行就把底部按钮挤出可视区。） */
 /* 会话视图：把整页高度钉死（不是 min-height），消息区内部滚动。
    否则长对话会把 .app 撑高 → 输入框被顶到屏幕外（用户："标题和输入框不能共存"）。 */
+/* ⚠️ 承重规则：.app-main 是 .app 与 .thread-view 之间的包装层。没有这条，
+   flex 链在这里断掉——main 高度=内容高度，消息区拿不到确定高度（没有内部滚动），
+   而 .app.thread-open 的 overflow:hidden 会把输入框整条裁掉。
+   （2026-09-15 真机事故：上一版删掉 .card 的硬编码 max-height 补丁时漏了这层。） */
+.app-main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
 .app.thread-open { height: 100dvh; overflow: hidden; }
+
+/* 会话视图里不显示推送提示条：它会占掉一块高度，在 overflow:hidden 下等于挤压消息区。 */
+.app.thread-open .push-hint { display: none; }
 
 .thread-view { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-height: 0; }
 

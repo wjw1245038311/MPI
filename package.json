@@ -34,6 +34,7 @@
     "test:approval-diff": "node --experimental-strip-types scripts/test-approval-diff.mjs",
     "test:pwa-actions": "node --experimental-transform-types scripts/test-pwa-actions.mjs",
     "test:pwa-composer": "node --experimental-transform-types scripts/test-pwa-composer.mjs",
+    "test:pwa-layout": "node scripts/test-pwa-layout.mjs",
     "test:remote-files": "node --experimental-transform-types scripts/test-remote-files.mjs",
     "test:webpush": "node --experimental-transform-types scripts/test-webpush.mjs",
     "test:relay-tls-static": "node scripts/test-relay-tls-static.mjs",
