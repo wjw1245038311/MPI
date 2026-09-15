@@ -121,6 +121,16 @@ export class ThreadActions {
   }
 
   /**
+   * Apply a task-mode preset (permission + thinking + behaviour content live
+   * host-side). An empty modeId clears the mode. The host broadcasts the
+   * resulting config to every client, so the phone's chips update from that
+   * event rather than from this response.
+   */
+  setMode(modeId: string): Promise<{ snapshot?: unknown }> {
+    return this.writeRequest("thread.setMode", { modeId }, "setMode");
+  }
+
+  /**
    * Answer a ui.request (approval card). Response shapes mirror the desktop
    * ExtUiModal: select → {value}, confirm → {confirmed}, input → {value},
    * cancel → {cancelled:true}. Writer-gated on the host like every write.

@@ -122,6 +122,21 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：手机打开会话 → 顶部出现「沙盒 / 模型名」两枚 chip，点开可选（切模型后徽标立即更新）；点 mic 直接进入红框录音态（无计时、波形图标、✕ 取消），再点波形即转文字入草稿；切到另一个会话再回来草稿仍在；工具调用只占一行。测试：`test-pwa-composer` 新增第 5 组（setModel 先 claim 再发帧 + 租约复用不重复 claim）、PWA tsc + build、全量 npm test 68/3。视觉核对：CDP 按 390×844 真机视口截图（含录音态与两个抽屉）。
 
+22. **会话配置双向同步 + 手机端任务模式**（桌面/手机同会话的权限、模型、模式、思考等级实时一致）：
+
+   问题：同一会话的配置有三个变更源——桌面 UI、手机、agent 自己（模式切换审批/自动切模）。此前每次只同步一侧：手机改权限只推手机（桌面 pill 停在旧值，2026-09-15 修过一次）、模型变更**两侧都没有事件**、任务模式手机端根本不存在。
+
+   - **单一广播口** `publishThreadConfigChange(target, patch, origin)`（ipc.ts）：手机走 `remoteEventHub`、桌面 renderer 走 `pi:thread-config-changed`，两条通道由一处绑定，新增配置项不会再出现「只推一侧」。接入 4 个桌面 IPC（setPermission/setModel/setThinking/setTaskMode）、3 个 remote 路径（setPermission/setModel/**setMode**）、agent 模式切换与 autopilot 自动切模。`origin` 区分变更来源，桌面只对 `remote` 弹提示（自己/agent 触发的已有各自提示）。
+   - **模式目录上移到共享层** `src/shared/task-mode-catalog.ts`：内置模式的参数与指令正文原先只存在于渲染进程内存（config.taskModes 里往往只有历史遗留 id——实测本机是 short/long/cautious），主进程无从得知「迭代模式」是什么。现在 main 与 renderer 引用同一份定义，renderer 侧 `lib/task-modes.ts` 退化为 re-export。
+   - **新协议** `thread.setMode`（空 modeId = 清除回基线）；snapshot 增加 `taskMode` + `availableModes`（只带展示元数据，行为指令不出主机）；事件 `config_changed`（开放 kind，旧客户端忽略）。两份 protocol 同步更新，`test-pwa-shared` 深度比较把关。
+   - **host 侧 remote setMode**：查目录 → 应用权限（`enforce=readonly` 钉死只读）→ 写 `<userData>/taskmodes/<uuid>.json`（`@agent/` 说明书路径在此解析）→ 写 `config.threadTaskModes[uuid]` → 切换思考等级 → 广播。未知模式抛 `MODE_UNAVAILABLE`，不静默回退。
+   - **手机端**：顶部配置栏新增模式 chip（闪电图标）+ 底部抽屉（基线/各模式，行内显示参数摘要如「只读 · 中思考」）；新增 `setMode` action（写租约）；`config_changed` 事件把权限/模型/模式实时刷进 chip。
+   - **桌面端**：监听 `pi:thread-config-changed`，同步该会话的 pill/徽标，手机来源时 toast「手机端修改了该会话：权限→…、模型→…」。
+
+   已知取舍：remote 协议权限仍是两档（sandbox|full），所以只读/严格模式在手机权限 chip 上显示为「沙盒」——真实档位在模式 chip 的参数摘要里可见（协议不扩大以保持旧客户端兼容）。
+
+   验证方式：手机改模型/模式/权限 → 桌面 pill 1 秒内跟着变并弹提示；桌面改 → 手机 chip 实时变（无需重开）。测试：新增 `test-thread-config-sync`（补丁语义/模式解析/强制只读钉死/目录顺序）4 组；`test-pwa-thread` 增加 snapshot 模式字段 + `config_changed` 实时应用断言；`test-pwa-composer` 第 5 组扩展到 setModel/setMode 帧；全量 69 passed/3 skipped/0 failed。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

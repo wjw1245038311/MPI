@@ -8,6 +8,7 @@ export const REMOTE_REQUEST_TYPES = [
   "thread.claimWrite",
   "thread.setPermission",
   "thread.setModel",
+  "thread.setMode",
   "thread.subscribe",
   "thread.resync",
   "thread.prompt",
@@ -98,8 +99,25 @@ export interface RemoteThreadSnapshot extends RemoteThreadSummary {
   availableModels: RemoteModelOption[];
   skills: RemoteSkill[];
   thinkingLevel: string;
+  /** Applied task mode id (null = baseline / no behavioural mode). */
+  taskMode?: string | null;
+  /** Task-mode presets the host will accept in `thread.setMode`. */
+  availableModes?: RemoteTaskModeOption[];
   messages: RemoteMessage[];
   nextSeq: number;
+}
+
+/** A task-mode preset as seen from the phone: display metadata + the parameter
+ * summary, never the full behavioural instructions (the host owns those). */
+export interface RemoteTaskModeOption {
+  id: string;
+  name: string;
+  /** One-line parameter summary, e.g. "沙盒 · 低思考". */
+  summary?: string;
+  permission?: string;
+  thinking?: string;
+  /** Hard read-only floor (research/review) — the phone shows it as such. */
+  enforce?: "readonly";
 }
 
 /** A model option intentionally contains only display metadata. It never

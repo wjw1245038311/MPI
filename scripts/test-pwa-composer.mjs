@@ -187,7 +187,22 @@ const { ThreadActions } = await import("../mobile/pwa/src/lib/thread-actions.ts"
   assert.deepEqual(sent[0].payload, { provider: "lmstudio", modelId: "qwen3.6-27b" });
   await p2;
 
-  console.log("ok 5 - thread-actions: setModel claims the write lease and sends provider/modelId");
+  // setMode：同样走写租约，modeId 为空串 = 清除模式
+  sent.length = 0;
+  const p3 = actions.setMode("iterate");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(sent.length, 1, "lease reuse: setMode 不再 claim");
+  assert.equal(sent[0].type, "thread.setMode");
+  assert.deepEqual(sent[0].payload, { modeId: "iterate" });
+  await p3;
+
+  sent.length = 0;
+  const p4 = actions.setMode("");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(sent[0].payload, { modeId: "" }, "空 modeId = 清除模式（仍会发帧）");
+  await p4;
+
+  console.log("ok 5 - thread-actions: setModel/setMode 走写租约（含清除模式）");
 }
 
 console.log("pwa composer tests passed");

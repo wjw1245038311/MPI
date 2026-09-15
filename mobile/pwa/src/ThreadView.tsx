@@ -73,6 +73,15 @@ function IconModel() {
   );
 }
 
+/** 配置栏用：任务模式（闪电）。 */
+function IconSpark() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13 3 5 14h5l-1 7 8-11h-5l1-7z" />
+    </svg>
+  );
+}
+
 function IconCheck() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
@@ -349,8 +358,8 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
-  // 顶部配置抽屉（权限/模型）与瞬时提示。
-  const [sheet, setSheet] = useState<null | "permission" | "model">(null);
+  // 顶部配置抽屉（权限/模式/模型）与瞬时提示。
+  const [sheet, setSheet] = useState<null | "permission" | "mode" | "model">(null);
   const [toast, setToast] = useState<string | null>(null);
   const [modelBusy, setModelBusy] = useState(false);
 
@@ -577,6 +586,36 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     }
   };
 
+  /** 选模式：host 应用（权限+思考+行为内容）并广播 config_changed，chip 随之更新。 */
+  const chooseMode = async (modeId: string) => {
+    if (!actions || modelBusy) return;
+    setModelBusy(true);
+    setSendError(null);
+    try {
+      await actions.setMode(modeId);
+      setSheet(null);
+      setToast("模式已切换");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSendError(
+        message.startsWith("THREAD_BUSY")
+          ? "该会话正被其他设备操作，无法切换模式。"
+          : message.startsWith("MODE_UNAVAILABLE")
+            ? "主机上已没有这个模式（可能刚被删除）。"
+            : `模式切换失败：${message}`,
+      );
+    } finally {
+      setModelBusy(false);
+    }
+  };
+
+  const modeLabel = (() => {
+    const current = view.taskMode;
+    if (!current) return "基线";
+    const option = view.availableModes.find((m) => m.id === current);
+    return option?.name || current;
+  })();
+
   const modelLabel = (() => {
     const current = view.model;
     if (!current) return "默认模型";
@@ -607,6 +646,10 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
           >
             <IconLock />
             {view.summary.permission === "sandbox" ? "沙盒" : "完整权限"}
+          </button>
+          <button type="button" className="cfg-chip" onClick={() => setSheet("mode")} disabled={modelBusy}>
+            <IconSpark />
+            {modeLabel}
           </button>
           <button type="button" className="cfg-chip" onClick={() => setSheet("model")} disabled={modelBusy}>
             <IconModel />
@@ -727,7 +770,48 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
         <div className="sheet-backdrop" onClick={() => setSheet(null)}>
           <div className="sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
             <div className="sheet-grip" />
-            {sheet === "permission" ? (
+            {sheet === "mode" ? (
+              <>
+                <div className="sheet-title">任务模式</div>
+                <p className="sheet-note">模式同时决定权限与思考等级，并可能注入行为指令（如迭代/调研）。</p>
+                {view.availableModes.length === 0 ? (
+                  <p className="sheet-note">主机未上报可选模式列表。</p>
+                ) : (
+                  <div className="sheet-list">
+                    <button
+                      type="button"
+                      className={`sheet-item ${view.taskMode ? "" : "on"}`}
+                      disabled={modelBusy}
+                      onClick={() => void chooseMode("")}
+                    >
+                      <span className="sheet-item-main">
+                        基线
+                        <em className="sheet-tag">不注入</em>
+                      </span>
+                      {view.taskMode ? null : <IconCheck />}
+                    </button>
+                    {view.availableModes.map((option) => {
+                      const active = view.taskMode === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          className={`sheet-item ${active ? "on" : ""}`}
+                          disabled={modelBusy}
+                          onClick={() => void chooseMode(option.id)}
+                        >
+                          <span className="sheet-item-main">
+                            {option.name}
+                            {option.summary && <em className="sheet-tag">{option.summary}</em>}
+                          </span>
+                          {active && <IconCheck />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            ) : sheet === "permission" ? (
               <>
                 <div className="sheet-title">权限级别</div>
                 <p className="sheet-note">沙盒：写文件/执行命令前需要你批准；完整：不再逐条询问。</p>
@@ -750,8 +834,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
               </>
             ) : (
               <>
-                <div className="sheet-title">选择模型</div>
-                {view.availableModels.length === 0 ? (
+                <div className="sheet-title">选择模型</div>                {view.availableModels.length === 0 ? (
                   <p className="sheet-note">主机未上报可选模型列表。</p>
                 ) : (
                   <div className="sheet-list">

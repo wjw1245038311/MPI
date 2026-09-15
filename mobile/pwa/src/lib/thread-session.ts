@@ -11,7 +11,7 @@
  *   - detects seq gaps and socket drops → thread.resync (live snapshot).
  * Pure logic — node-testable against a real relay + fake host service.
  */
-import type { RemoteFileArtifact, RemoteMessage, RemoteModelOption, RemoteThreadEventPayload, RemoteThreadSnapshot, RemoteThreadSummary, RemoteUiRequest } from "../../../shared/protocol";
+import type { RemoteFileArtifact, RemoteMessage, RemoteModelOption, RemotePermission, RemoteTaskModeOption, RemoteThreadEventPayload, RemoteThreadSnapshot, RemoteThreadSummary, RemoteUiRequest } from "../../../shared/protocol";
 import type { RelayClient } from "./relay-client";
 import { Requester } from "./requester";
 
@@ -54,6 +54,10 @@ export interface ThreadView {
   model: { provider: string; id: string } | null;
   /** Models the host will accept in thread.setModel (display metadata only). */
   availableModels: RemoteModelOption[];
+  /** Applied task-mode id (null = baseline). */
+  taskMode: string | null;
+  /** Task-mode presets the host accepts in thread.setMode. */
+  availableModes: RemoteTaskModeOption[];
   /** S6.3: pending ui.request (approval card). Survives resync — the host keeps
    * the dialog open while the agent is paused, so a reconnect must re-show it. */
   pendingUi: RemoteUiRequest | null;
@@ -129,7 +133,7 @@ export class ThreadSession {
     threadId: string,
     options: ThreadSessionOptions = {},
   ) {
-    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], pendingUi: null };
+    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], taskMode: null, availableModes: [], pendingUi: null };
     this.client = client;
     // threadId goes on the ENVELOPE (host's requiredThread reads it there); the
     // payload copy below is kept for compatibility with simpler test fakes.
@@ -256,6 +260,8 @@ export class ThreadSession {
       errorBanner: null,
       model: snapshot.model ?? null,
       availableModels: snapshot.availableModels ?? [],
+      taskMode: snapshot.taskMode ?? null,
+      availableModes: snapshot.availableModes ?? [],
       pendingUi: this.view.pendingUi, // a pending approval survives the resync
     });
     // Re-arm seq tracking: the fresh snapshot makes subsequent events lossless on
@@ -332,6 +338,25 @@ export class ThreadSession {
         if (this.view.summary && (perm === "sandbox" || perm === "full")) {
           this.patch({ summary: { ...this.view.summary, permission: perm } });
         }
+        break;
+      }
+      case "config_changed": {
+        // 会话配置同步（main 广播）：桌面端/agent 改的权限、模型、任务模式、思考
+        // 等级都要反映到手机上，否则 chip 会停在旧值到下次 resync。
+        const data = (payload.data || {}) as {
+          permission?: RemotePermission;
+          model?: { provider: string; id: string } | null;
+          taskMode?: string | null;
+          thinkingLevel?: string;
+          origin?: string;
+        };
+        const patch: Partial<ThreadView> = {};
+        if (data.permission && this.view.summary && this.view.summary.permission !== data.permission) {
+          patch.summary = { ...this.view.summary, permission: data.permission };
+        }
+        if (data.model !== undefined) patch.model = data.model ?? null;
+        if (data.taskMode !== undefined) patch.taskMode = data.taskMode ?? null;
+        if (Object.keys(patch).length) this.patch(patch);
         break;
       }
       case "ui.request": {

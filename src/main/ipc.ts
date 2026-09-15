@@ -176,10 +176,13 @@ import {
   type RemotePermission,
   type RemoteProject,
   type RemoteSkill,
+  type RemoteTaskModeOption,
   type RemoteThreadEventPayload,
   type RemoteThreadSnapshot,
   type RemoteThreadState,
 } from "./remote/protocol";
+import { buildConfigPatch, planModeApplication, resolveModeById, type ConfigChangeOrigin, type ThreadConfigPatch } from "./thread-config";
+import { normalizeTaskModes, taskModeName, taskModeSummary } from "../shared/task-mode-catalog";
 
 
 
@@ -670,6 +673,24 @@ let warmFailures = 0;
 let warmEnabled = false;
 let sendToRenderer: ((ch: string, p: unknown) => void) | null = null;
 
+/** 会话配置广播口（在 registerIpc 里挂上）——给模块级的 applyAgentModeSwitch / autopilot 用。 */
+let publishThreadConfigChangeHook:
+  | ((
+      target: { remoteThreadId?: string | null; sessionFile?: string | null },
+      patch: ThreadConfigPatch,
+      origin: ConfigChangeOrigin,
+    ) => void)
+  | null = null;
+
+/** sessionFile → 手机侧 threadId（在 registerIpc 里挂上，带 remoteLocalToId 映射）。 */
+let remoteIdForSessionHook: ((sessionFile: string) => string | null) | null = null;
+
+/** 本地 threadId → 广播目标；临时 id（opening-* / boot:*）没有稳定会话可通知。 */
+function configTargetFor(localId: string): { remoteThreadId?: string | null; sessionFile?: string | null } {
+  const sessionFile = localId.endsWith(".jsonl") ? localId : null;
+  return { remoteThreadId: sessionFile ? (remoteIdForSessionHook?.(sessionFile) ?? null) : null, sessionFile };
+}
+
 // ---- Agent-initiated permission switch (mpi_request_mode_switch) ----------
 // The extension renders the confirmation card; main performs the actual live
 // switch when the user approves. Pending requests are keyed by extui request id.
@@ -721,6 +742,12 @@ function applyAgentModeSwitch(threadId: string, to: PermissionLevel): boolean {
     updateConfig({ threadTaskModes: modes });
   }
   sendToRenderer?.("pi:modeSwitched", { threadId, permission: to, taskMode: null });
+  // 手机侧同步：agent 自己申请切换成功，手机的权限/模式 chip 也得跟上。
+  publishThreadConfigChangeHook?.(
+    configTargetFor(threadId),
+    { permission: to, taskMode: null },
+    "agent",
+  );
   return true;
 }
 
@@ -741,6 +768,12 @@ const autopilot = new ModelAutopilot({
     const h = bridges.get(threadId);
     if (!h) throw new Error("Thread not open: " + threadId);
     await h.bridge.setModel(provider, modelId);
+    // 自动切模型也要同步到手机（否则手机的模型 chip 会停在旧值到下次 resync）。
+    publishThreadConfigChangeHook?.(
+      configTargetFor(threadId),
+      { model: { provider, id: modelId } },
+      "agent",
+    );
   },
   notify: (p) => sendToRenderer?.("pi:autoModel", p),
 });
@@ -1009,6 +1042,62 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   const remoteDrafts = new Map<string, { cwd: string; projectId: string; name?: string; permission: PermissionLevel; sessionFile?: string; localId?: string }>();
   const remoteLocalToId = new Map<string, string>();
   const remoteEventHub = new RemoteEventHub();
+
+  /**
+   * 会话配置变更的统一广播口（permission / model / taskMode / thinkingLevel）。
+   *
+   * 手机走 remoteEventHub，桌面 renderer 走 IPC —— 两条通道必须绑在一起：
+   * 2026-09-15 的「手机改成沙盒、桌面 pill 还显示完整」就是只推了一侧。
+   * 新增配置项时只改这一处（以及 pi:thread-config-changed 的消费端）。
+   */
+  const publishThreadConfigChange = (
+    target: { remoteThreadId?: string | null; sessionFile?: string | null },
+    patch: ThreadConfigPatch,
+    origin: ConfigChangeOrigin,
+  ) => {
+    const built = buildConfigPatch(patch);
+    if (!built) return;
+    if (target.remoteThreadId) {
+      // 手机协议只懂两档权限（sandbox|full）；桌面渲染器要真实档位（含只读/严格）。
+      const wire = { ...built };
+      if (wire.permission) wire.permission = toRemotePermission(wire.permission) as ThreadConfigPatch["permission"];
+      remoteEventHub.publish(target.remoteThreadId, { kind: "config_changed", data: { ...wire, origin } });
+    }
+    send("pi:thread-config-changed", {
+      remoteThreadId: target.remoteThreadId ?? undefined,
+      sessionFile: target.sessionFile ?? undefined,
+      patch: built,
+      origin,
+    });
+  };
+
+  // applyAgentModeSwitch / autopilot 是模块级函数，拿不到上面的闭包 —— 与
+  // sendToRenderer 同样的做法：注册时把广播口挂到模块变量上。
+  publishThreadConfigChangeHook = publishThreadConfigChange;
+  remoteIdForSessionHook = (sessionFile) => remoteIdForSession(sessionFile);
+
+  /** sessionFile → 手机侧 threadId（与 publishRemotePermissionChanged 同一套映射）。 */
+  const remoteIdForSession = (sessionFile?: string | null): string | null => {
+    if (!sessionFile) return null;
+    const mapped =
+      remoteLocalToId.get(sessionFile) ||
+      (sessionFile.includes("\\") || sessionFile.includes("/") ? remoteThreadId(sessionFile) : "");
+    return mapped || null;
+  };
+
+  /** 手机端的任务模式列表：与桌面下拉同源（normalizeTaskModes），只带展示元数据。 */
+  const remoteModeOptions = (): RemoteTaskModeOption[] => {
+    const cfg = getConfig();
+    const language: "zh" | "en" = cfg.language === "en" ? "en" : "zh";
+    return normalizeTaskModes(cfg.taskModes, language).map((mode) => ({
+      id: mode.id,
+      name: taskModeName(mode, language),
+      summary: taskModeSummary(mode, language),
+      ...(mode.permission ? { permission: mode.permission } : {}),
+      ...(mode.thinking ? { thinking: mode.thinking } : {}),
+      ...(mode.enforce ? { enforce: mode.enforce } : {}),
+    }));
+  };
   const remoteUiRequests = new Map<string, { threadId: string; localId: string }>();
   let remoteProjectsCache: { expiresAt: number; value: ProjectSummary[] } | null = null;
   let remoteProjectsLoad: Promise<ProjectSummary[]> | null = null;
@@ -1572,6 +1661,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         availableModels: configuredModels,
         skills: [],
         thinkingLevel: "off",
+        taskMode: null,
+        availableModes: remoteModeOptions(),
         messages: [],
         nextSeq: 0,
       };
@@ -1593,6 +1684,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         availableModels: remoteModelOptions([...modelArray(gathered.models), ...configuredModels]),
         skills: remoteSkills(gathered.commands, ref.cwd),
         thinkingLevel: gathered.thinkingLevel || "off",
+        taskMode: gathered.taskMode ?? null,
+        availableModes: remoteModeOptions(),
         messages,
         nextSeq: 0,
       };
@@ -1614,6 +1707,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       availableModels: configuredModels,
       skills: [],
       thinkingLevel: history.thinkingLevel || "off",
+      taskMode: ref.sessionFile ? (getConfig().threadTaskModes || {})[threadUuidFromSessionFile(ref.sessionFile) ?? ""] ?? null : null,
+      availableModes: remoteModeOptions(),
       messages,
       nextSeq: 0,
     };
@@ -1641,14 +1736,6 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
   }
 
-  /** 权限变更推给已配对设备（PWA 头部实时同步）。kind 是开放字符串，旧客户端忽略未知 kind。 */
-  const publishRemotePermissionChanged = (sessionFile: string | undefined, level: PermissionLevel) => {
-    if (!sessionFile) return;
-    const threadId = remoteLocalToId.get(sessionFile) || (sessionFile.includes("\\") || sessionFile.includes("/") ? remoteThreadId(sessionFile) : "");
-    if (!threadId) return; // draft / 未知会话——没有稳定 id 可通知
-    remoteEventHub.publish(threadId, { kind: "permission_changed", data: { permission: toRemotePermission(level) } });
-  };
-
   async function ensureRemoteBridge(ref: { id: string; cwd: string; sessionFile?: string; name?: string; permission?: PermissionLevel; localId?: string }): Promise<BridgeHandle> {
     const permission = ref.sessionFile ? resolvePermission(ref.sessionFile, ref.permission) : (ref.permission || "sandbox");
     const existingId = ref.localId || ref.sessionFile;
@@ -1657,8 +1744,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       if (existing.permission !== permission) {
         existing.permission = permission;
         writeGateMode(existing.gateModeFile, permission);
-        publishRemotePermissionChanged(ref.sessionFile, permission);
-        send("pi:permission-changed", { sessionFile: ref.sessionFile ?? undefined, permission });
+        publishThreadConfigChange(
+          { remoteThreadId: remoteIdForSession(ref.sessionFile), sessionFile: ref.sessionFile },
+          { permission },
+          "remote",
+        );
       }
       return existing;
     }
@@ -1871,12 +1961,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         handle.permission = permission;
         writeGateMode(handle.gateModeFile, permission);
       }
-      publishRemotePermissionChanged(ref.sessionFile, permission);
-      // The desktop renderer did NOT originate this change — sync its pill live,
-      // otherwise it keeps showing the stale level while the gate already runs
-      // with the new one (2026-09-15: phone flipped a thread to sandbox and the
-      // desktop pill still said "full" until the next approval dialog exposed it).
-      send("pi:permission-changed", { sessionFile: ref.sessionFile ?? undefined, permission });
+      publishThreadConfigChange(
+        { remoteThreadId: remoteIdForSession(ref.sessionFile) ?? threadId, sessionFile: ref.sessionFile },
+        { permission },
+        "remote",
+      );
       return remoteSnapshot(threadId, { live: true });
     },
     setModel: async (threadId, provider, modelId) => {
@@ -1896,6 +1985,96 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       const allowed = models.some((model) => model.provider === provider && model.id === modelId);
       if (!allowed) throw new RemoteProtocolError("MODEL_UNAVAILABLE", "That model is not available on the MPI host");
       await handle.bridge.setModel(provider, modelId);
+      return remoteSnapshot(threadId, { live: true });
+    },
+    setMode: async (threadId, modeId) => {
+      const ref = await remoteThread(threadId);
+      const cfg = getConfig();
+      const language: "zh" | "en" = cfg.language === "en" ? "en" : "zh";
+      const id = typeof modeId === "string" ? modeId.trim() : "";
+      const mode = id ? resolveModeById(cfg.taskModes, id, language) : null;
+      if (id && !mode) throw new RemoteProtocolError("MODE_UNAVAILABLE", "That task mode is not available on the MPI host");
+
+      // 模式 id 必须归属一个会话 UUID：状态文件与 config.threadTaskModes 都按
+      // UUID 索引（与 mpi-taskmode 扩展的推导保持一致）。
+      const key = ref.sessionFile
+        ? threadUuidFromSessionFile(ref.sessionFile) || /^boot:(.+)$/.exec(ref.sessionFile)?.[1] || null
+        : null;
+      const handle = ref.sessionFile || ref.localId ? await ensureRemoteBridge(ref) : null;
+      const liveId = handle?.getId() ?? ref.sessionFile ?? ref.localId ?? null;
+      const uuid = key ?? (liveId ? threadUuidFromSessionFile(liveId) : null);
+
+      if (!uuid) throw new RemoteProtocolError("NOT_FOUND", "Thread has no session yet — send a message first");
+
+      const plan = mode ? planModeApplication(mode) : null;
+
+      // 1) 权限：模式带权限就应用（enforce=readonly 已在 plan 里钉死）
+      const permission = plan?.permission;
+      if (permission) {
+        if (ref.sessionFile) {
+          const perms = getConfig().threadPermissions;
+          updateConfig({ threadPermissions: { ...perms, [ref.sessionFile]: permission } });
+        }
+        const draft = remoteDrafts.get(threadId);
+        if (draft) draft.permission = permission;
+        if (handle) {
+          handle.permission = permission;
+          writeGateMode(handle.gateModeFile, permission);
+        }
+      }
+
+      // 2) 行为状态文件（指令/说明书/强制只读）；空内容 = 删除文件
+      const dir = join(getConfigDir(), "taskmodes");
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, `${uuid}.json`);
+      const state = plan?.state ?? null;
+      if (!state) {
+        try {
+          unlinkSync(file);
+        } catch {
+          /* 本来就不存在 */
+        }
+      } else {
+        const rawSpec = state.specFile;
+        const specFile = rawSpec.startsWith("@agent/")
+          ? join(getAgentDir(), rawSpec.slice("@agent/".length))
+          : isAbsolute(rawSpec)
+            ? rawSpec
+            : "";
+        writeFileSync(
+          file,
+          JSON.stringify({ instructions: state.instructions, specFile, ...(state.enforce ? { enforce: state.enforce } : {}) }),
+          "utf8",
+        );
+      }
+
+      // 3) config.threadTaskModes[uuid]（重启/重开后的恢复依据，也进 snapshot）
+      const modes = { ...(getConfig().threadTaskModes || {}) };
+      if (id) modes[uuid] = id;
+      else delete modes[uuid];
+      updateConfig({ threadTaskModes: modes });
+
+      // 4) 思考等级（模型不属模式）
+      let thinkingLevel: string | undefined;
+      if (plan?.thinking && handle) {
+        try {
+          await handle.bridge.setThinkingLevel(plan.thinking);
+          const st: any = await handle.bridge.getState();
+          thinkingLevel = st?.thinkingLevel ?? plan.thinking;
+        } catch {
+          thinkingLevel = plan.thinking; // 旧 runtime 不支持时仍广播预期值
+        }
+      }
+
+      publishThreadConfigChange(
+        { remoteThreadId: remoteIdForSession(ref.sessionFile) ?? threadId, sessionFile: ref.sessionFile },
+        {
+          taskMode: id || null,
+          ...(permission ? { permission } : {}),
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+        },
+        "remote",
+      );
       return remoteSnapshot(threadId, { live: true });
     },
     prompt: (threadId, text, images) => threadService.prompt(threadId, text, images),
@@ -3019,7 +3198,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       h.permission = args.permission;
       writeGateMode(h.gateModeFile, args.permission);
     }
-    publishRemotePermissionChanged(args.threadId.endsWith(".jsonl") ? args.threadId : undefined, args.permission);
+    publishThreadConfigChange(
+      configTargetFor(args.threadId),
+      { permission: args.permission },
+      "desktop",
+    );
     return { ok: true };
   });
 
@@ -3071,6 +3254,13 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       if (modeId) modes[key] = modeId;
       else delete modes[key];
       updateConfig({ threadTaskModes: modes });
+      // 手机侧同步：模式变更会带动权限/思考，但这里只广播模式 id；权限/思考
+      // 的变更由各自的 handler 广播（与桌面 applyTaskMode 的调用顺序一致）。
+      publishThreadConfigChange(
+        configTargetFor(id),
+        { taskMode: modeId || null },
+        "desktop",
+      );
       return { ok: true };
     },
   );
@@ -3284,6 +3474,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     // narrower thinkingLevelMap. Return the effective value so the renderer's
     // badge stays in sync with the live session instead of showing stale max.
     const state: any = await h.bridge.getState();
+    // 手机侧同步：模型（以及可能被夹紧的思考等级）。
+    publishThreadConfigChange(
+      configTargetFor(args.threadId),
+      { model: { provider: args.provider, id: args.modelId }, ...(state?.thinkingLevel ? { thinkingLevel: state.thinkingLevel } : {}) },
+      "desktop",
+    );
     return { model, thinkingLevel: state?.thinkingLevel ?? null };
   });
 
@@ -3298,6 +3494,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     if (!h) throw new Error("Thread not open");
     await h.bridge.setThinkingLevel(args.level);
     const state: any = await h.bridge.getState();
+    publishThreadConfigChange(
+      configTargetFor(args.threadId),
+      { thinkingLevel: state?.thinkingLevel ?? args.level },
+      "desktop",
+    );
     return { thinkingLevel: state?.thinkingLevel ?? args.level };
   });
 

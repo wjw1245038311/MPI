@@ -82,6 +82,8 @@ async function main() {
       id: THREAD_ID, projectId: "p1", title: "Test thread", preview: "old answer", updatedAt: Date.now(),
       messageCount: snapshotMessages.length, state, permission: "sandbox",
       cwdName: "demo", model: null, availableModels: [], skills: [], thinkingLevel: "off",
+      taskMode: "iterate",
+      availableModes: [{ id: "iterate", name: "迭代", summary: "完整权限 · 低思考" }, { id: "balanced", name: "均衡", summary: "沙盒 · 低思考" }],
       messages: snapshotMessages, nextSeq: 100,
     });
 
@@ -121,6 +123,20 @@ async function main() {
               send("agent_settled", {});
             }
             return;
+          }
+          if (request.type === "thread.poke-config") {
+            // 会话配置同步：模拟 host 收到手机的 setMode/setModel 后的广播。
+            ctx.send(makeEnvelope("thread.event", request.sessionId, {
+              kind: "config_changed",
+              data: {
+                permission: "full",
+                model: { provider: "lmstudio", id: "qwen3.6-27b" },
+                taskMode: null,
+                thinkingLevel: "high",
+                origin: "remote",
+              },
+            }, { threadId: THREAD_ID, seq: ++seqCounter }));
+            return responseFor(request, { ok: true });
           }
           if (request.type === "thread.poke") {
             // Test hook: emit one live event; with gapArmed the seq jumps by two.
@@ -193,6 +209,24 @@ async function main() {
     assert.equal(toolBlock.name, "bash");
     assert.equal(toolBlock.running, false, "tool block finalized by tool_execution_end");
     assert.ok((toolBlock.text || "").includes("file.txt"), "tool result captured");
+
+    // --- snapshot carries task mode + mode catalog -----------------------------------
+    assert.equal(view.taskMode, "iterate", "snapshot taskMode lands in the view");
+    assert.deepEqual(
+      view.availableModes.map((m) => m.id),
+      ["iterate", "balanced"],
+      "snapshot availableModes lands in the view",
+    );
+
+    // --- S9: config_changed event (desktop/agent-side change) syncs the chips --------
+    await client.sendData(makeEnvelope("thread.poke-config", "test-session", {}));
+    await waitFor(
+      () => {
+        const v = ts.getSnapshot();
+        return v.summary?.permission === "full" && v.model?.id === "qwen3.6-27b" && v.taskMode === null;
+      },
+      "config_changed updates permission + model + taskMode live",
+    );
 
     // --- seq gap → resync -----------------------------------------------------------------
     const beforeGap = resyncCount;

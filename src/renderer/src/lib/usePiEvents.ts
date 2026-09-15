@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useStore } from "../store";
+import { normalizeTaskModes, taskModeName } from "./task-modes";
 
 /**
  * Subscribes to the main-process push channels exactly once at the app root.
@@ -144,22 +145,31 @@ export function usePiEvents() {
           );
         })
       : () => undefined;
-    // Remote (phone) permission change: main already flipped the gate + config —
-    // sync this thread's pill and tell the user, so a phone-side flip is never
-    // invisible on desktop again (2026-09-15 desync: pill said full, gate ran sandbox).
-    const u13 = typeof window.pi.on.permissionChanged === "function"
-      ? window.pi.on.permissionChanged((p) => {
-          if (!p.sessionFile) return;
+    // 会话配置同步（permission/model/taskMode/thinkingLevel）：main 是唯一变更点，
+    // 无论手机还是模式切换/自动切模发起，都在这里把桌面 UI 拉到一致。
+    // 2026-09-15 的 desync（pill 显示 full、gate 已跑 sandbox）就是只同步了手机一侧；
+    // 现在两条通道由 main 的 publishThreadConfigChange 绑定。
+    const u13 = typeof window.pi.on.threadConfigChanged === "function"
+      ? window.pi.on.threadConfigChanged((p) => {
           const st = useStore.getState();
-          const id = Object.keys(st.threads).find(
-            (tid) => ((st.threads[tid].sessionFile || tid) as string | undefined)?.toLowerCase() === p.sessionFile!.toLowerCase(),
-          );
-          if (!id) return; // thread not open locally — nothing to sync
-          useStore.setState((s) => {
-            const t = s.threads[id];
-            if (!t || t.permission === p.permission) return s;
-            return { threads: { ...s.threads, [id]: { ...t, permission: p.permission } } };
-          });
+          const id = p.sessionFile
+            ? Object.keys(st.threads).find(
+                (tid) => ((st.threads[tid].sessionFile || tid) as string | undefined)?.toLowerCase() === p.sessionFile!.toLowerCase(),
+              )
+            : p.remoteThreadId && st.threads[p.remoteThreadId]
+              ? p.remoteThreadId
+              : undefined;
+          if (!id) return; // thread not open locally — the next open reads a fresh snapshot
+          const t = st.threads[id];
+          if (!t) return;
+          const next: Record<string, unknown> = {};
+          if (p.patch.permission && t.permission !== p.patch.permission) next.permission = p.patch.permission;
+          if (p.patch.model !== undefined) next.model = p.patch.model ?? undefined;
+          if (p.patch.taskMode !== undefined) next.taskMode = p.patch.taskMode ?? undefined;
+          if (p.patch.thinkingLevel && t.thinking !== p.patch.thinkingLevel) next.thinking = p.patch.thinkingLevel;
+          if (!Object.keys(next).length) return;
+          useStore.setState((s) => ({ threads: { ...s.threads, [id]: { ...s.threads[id], ...next } } }));
+          if (p.origin !== "remote") return; // 自己/agent 触发的变更已有各自的提示
           const zh = st.config?.language === "zh";
           const names: Record<string, string> = {
             readonly: zh ? "只读" : "Read-only",
@@ -167,11 +177,21 @@ export function usePiEvents() {
             sandbox: zh ? "沙盒" : "Sandbox",
             full: zh ? "完全权限" : "Full access",
           };
+          const parts: string[] = [];
+          if (next.permission) parts.push(zh ? `权限→${names[next.permission as string] ?? next.permission}` : `permission→${names[next.permission as string] ?? next.permission}`);
+          if ("model" in next) {
+            const m = next.model as { id?: string } | undefined;
+            parts.push(zh ? `模型→${m?.id ?? "默认"}` : `model→${m?.id ?? "default"}`);
+          }
+          if ("taskMode" in next) {
+            const modeId = next.taskMode as string | undefined;
+            const mode = normalizeTaskModes(st.config?.taskModes, zh ? "zh" : "en").find((m) => m.id === modeId);
+            parts.push(zh ? `模式→${mode ? taskModeName(mode, "zh") : "基线"}` : `mode→${mode ? taskModeName(mode, "en") : "baseline"}`);
+          }
+          if (next.thinking) parts.push(zh ? `思考→${next.thinking}` : `thinking→${next.thinking}`);
           st.pushToast(
             "info",
-            zh
-              ? `手机端把该会话权限改成了「${names[p.permission] ?? p.permission}」`
-              : `The phone changed this thread's permission to “${names[p.permission] ?? p.permission}”`,
+            zh ? `手机端修改了该会话：${parts.join("、")}` : `The phone changed this thread: ${parts.join(", ")}`,
           );
         })
       : () => undefined;

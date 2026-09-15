@@ -186,9 +186,13 @@ Vite + React + TS（与 MPI renderer 同栈；protocol 类型经小型共享包�
    （状态徽章 running/idle/error/disconnected、updatedAt、messageCount，对齐 `RemoteThreadSummary`）。
 3. **会话视图**：消息流渲染 text/thinking/tool 块（含 running 态与 artifacts），实时事件订阅；
    socket 恢复后按 lastSeq `thread.resync`。
-   - **顶部配置栏**（0.6.16+）：标题下方一排 chip —— 权限（沙盒/完整）、当前模型；点击弹底部抽屉选择。
-     模型列表来自 snapshot 的 `availableModels`，切换走 `thread.setModel`（写租约；host 不推
-     `model_changed`，成功后就地更新徽标，resync 以 host 为准）。任务模式仍需新协议，暂不上手机。
+   - **顶部配置栏**（0.6.16+）：标题下方一排 chip —— 权限（沙盒/完整）、任务模式、当前模型；点击弹底部抽屉选择。
+     模型列表来自 snapshot 的 `availableModels`，模式列表来自 `availableModes`（与桌面同源：
+     `src/shared/task-mode-catalog.ts`）。切换走 `thread.setModel` / `thread.setMode`（写租约）。
+   - **配置双向同步**（0.6.16+）：main 是唯一变更点，`publishThreadConfigChange` 一把广播——
+     手机走 remoteEventHub（`config_changed` 事件），桌面走 `pi:thread-config-changed`。所以手机改
+     模型/模式/权限桌面 pill 会跟着变（反向同理），不再出现「某侧停在旧值」。remote 权限仍是两档
+     （sandbox|full），只读/严格模式在手机侧表现为沙盒；真实档位见模式 chip 的参数摘要。
    - **输入条**：prompt/steer/followUp + abort；录音走壳内原生 AudioRecord（见 ANDROID-SHELL.md），
      浏览器回退 getUserMedia。录音时**不改变布局**：边框变红 + 图标换波形脉冲，再点结束并转写，左键
      ✕ 取消；错误提示固定在输入框正上方；草稿按会话存 localStorage；工具卡片默认折成一行。

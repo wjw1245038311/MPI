@@ -18,6 +18,9 @@ export interface RemoteBackend {
   createThread(projectId: string, name?: string, permission?: RemotePermission): Promise<RemoteThreadSnapshot>;
   setPermission(threadId: string, permission: RemotePermission): Promise<RemoteThreadSnapshot>;
   setModel(threadId: string, provider: string, modelId: string): Promise<RemoteThreadSnapshot>;
+  /** Apply a task-mode preset (bundles permission + thinking + behaviour).
+   * Empty modeId clears the mode (back to baseline). */
+  setMode(threadId: string, modeId: string): Promise<RemoteThreadSnapshot>;
   prompt(threadId: string, text: string, images?: RemoteImageInput[]): Promise<unknown>;
   steer(threadId: string, text: string, images?: RemoteImageInput[]): Promise<unknown>;
   followUp(threadId: string, text: string, images?: RemoteImageInput[]): Promise<unknown>;
@@ -157,6 +160,15 @@ export class RemoteService {
         const modelId = this.requiredShortString(payload, "modelId");
         return responseFor(request, {
           snapshot: await this.backend.setModel(threadId, provider, modelId),
+        });
+      }
+      case "thread.setMode": {
+        const threadId = this.requiredThread(request);
+        this.assertWriter(threadId, context);
+        // modeId 允许是空串（= 清除模式，回到基线行为）。
+        const modeId = typeof payload.modeId === "string" ? payload.modeId.slice(0, 80) : "";
+        return responseFor(request, {
+          snapshot: await this.backend.setMode(threadId, modeId),
         });
       }
       case "thread.subscribe": {

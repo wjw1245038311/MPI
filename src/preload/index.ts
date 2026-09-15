@@ -441,6 +441,21 @@ const api = {
     modeSwitched: (cb: (p: { threadId: string; permission: PermissionLevel; taskMode: null }) => void) => on("pi:modeSwitched", cb),
     /** Remote (phone) flipped a thread's permission — main already updated the gate. */
     permissionChanged: (cb: (p: { sessionFile?: string; permission: PermissionLevel }) => void) => on("pi:permission-changed", cb),
+    /**
+     * 会话配置变更（权限/模型/模式/思考等级）—— 任一侧改完，main 都会广播：
+     * 手机走 remoteEventHub，桌面走这里。origin=remote 表示手机改的（需要提示）。
+     */
+    threadConfigChanged: (cb: (p: {
+      remoteThreadId?: string;
+      sessionFile?: string;
+      patch: {
+        permission?: PermissionLevel;
+        model?: { provider: string; id: string } | null;
+        taskMode?: string | null;
+        thinkingLevel?: string;
+      };
+      origin: "desktop" | "remote" | "agent";
+    }) => void) => on("pi:thread-config-changed", cb),
     automation: (cb: (p: { type: "start" | "done"; taskId: string; name: string; ok?: boolean; error?: string }) => void) =>
       on("pi:automation", cb),
     messaging: (cb: (p: {
