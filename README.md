@@ -86,6 +86,8 @@ npm run pack              # Create an unpacked directory build
 
 Build output is written to `release/`. `npm run dist` creates the Electron installer with the runtime archive embedded inside it; the generated archive in `release/` is retained for QA and does not need to be uploaded separately. The repository pins Pi runtime `0.84.1` in `package.json`, and the packaging script verifies that version before creating the archive. To package from a specific local installation, set `PI_PACKAGE_DIR` to its package directory.
 
+Remotes: `origin` is the primary GitLab repository; `github` is a public mirror — push both when publishing (`git push origin <branch> && git push github <branch>`).
+
 ## Configuration and data
 
 MPI shares Pi's agent configuration under `~/.pi/agent`, including model, provider, authentication, and extension settings. The desktop application's own settings are stored in Electron's user data directory.
