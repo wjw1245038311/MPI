@@ -84,12 +84,27 @@ export class ThreadActions {
    * (running) / followUp (queued after run). Images are base64 payloads in the
    * host's RemoteImageInput shape — the pi bridge forwards them to the model.
    */
-  send(text: string, mode: SendMode, images?: { data: string; mimeType: string }[], files?: { name: string; mimeType?: string; data: string }[]): Promise<unknown> {
+  /**
+   * Send text (optionally with image/file attachments): prompt (idle) / steer
+   * (running) / followUp (queued after run).
+   *
+   * 图片的线上形状是 `{type:"image", data, mimeType}`（见 RemoteImageInput）；
+   * 本地压缩产物只有 `{data, mimeType}`，所以在这里统一补上 type——曾经漏补，
+   * 手机端发图恒报 `images[0].type must be image`。
+   */
+  send(
+    text: string,
+    mode: SendMode,
+    images?: { type?: "image"; data: string; mimeType: string }[],
+    files?: { name: string; mimeType?: string; data: string }[],
+  ): Promise<unknown> {
     const trimmed = text.trim();
     if (!trimmed && !(images && images.length) && !(files && files.length)) throw new Error("empty message");
     return this.writeRequest(`thread.${mode}`, {
       text: trimmed,
-      ...(images && images.length ? { images } : {}),
+      ...(images && images.length
+        ? { images: images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })) }
+        : {}),
       ...(files && files.length ? { files } : {}),
     }, mode);
   }

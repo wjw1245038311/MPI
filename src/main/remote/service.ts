@@ -309,7 +309,11 @@ export class RemoteService {
         throw new RemoteProtocolError("INVALID_REQUEST", `images[${index}] is invalid`);
       }
       const image = item as Record<string, unknown>;
-      if (image.type !== "image") throw new RemoteProtocolError("INVALID_REQUEST", `images[${index}].type must be image`);
+      // 宽容旧客户端：曾经有版本只发 {data, mimeType}（漏 type），手机端发图恒失败。
+      // 显式传了错值仍拒绝（不猜）。
+      if (image.type !== undefined && image.type !== "image") {
+        throw new RemoteProtocolError("INVALID_REQUEST", `images[${index}].type must be image`);
+      }
       const data = image.data;
       const mimeType = image.mimeType;
       if (typeof data !== "string" || data.length === 0 || data.length > MAX_REMOTE_IMAGE_DATA || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {

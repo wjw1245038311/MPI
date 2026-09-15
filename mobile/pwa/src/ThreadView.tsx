@@ -5,12 +5,13 @@
  * S6 adds the send bar (prompt/steer + abort + sandbox/full toggle) and the
  * full-screen approval card (ui.request → ui.respond, §4.5 diff preview).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { RemotePermission, RemoteThreadState, RemoteUiRequest } from "../../shared/protocol";
 import type { ThreadActions } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
 import { compressImageFile, type CompressedImage } from "./lib/image-attach";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
+import { languageLabel, parseSegments } from "./lib/markdown-lite";
 
 /** 主机侧上限（见 src/main/remote/service.ts MAX_REMOTE_FILES / MAX_REMOTE_FILE_DATA）。 */
 const MAX_FILES = 3;
@@ -115,6 +116,74 @@ function IconCheck() {
   );
 }
 
+/** 消息操作 / 代码块用的拷贝图标。 */
+function IconCopy() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+    </svg>
+  );
+}
+
+/** 回到底部的圆形按钮（Qoder 风格）。 */
+function IconDown() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 5v14M6 13l6 6 6-6" />
+    </svg>
+  );
+}
+
+/** 代码块：语言标签 + 复制（Qoder 风格）；流式中未闭合也照常渲染。 */
+function CodeBlock({ code, lang }: { code: string; lang?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="code-block">
+      <div className="code-head">
+        <span className="code-lang">{languageLabel(lang)}</span>
+        <button
+          type="button"
+          className="code-copy"
+          onClick={() => {
+            const body = code.replace(/\n$/, "");
+            const done = () => {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1500);
+            };
+            if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(body).then(done, done);
+            else done();
+          }}
+          aria-label="复制代码"
+        >
+          <IconCopy /> {copied ? "已复制" : "复制"}
+        </button>
+      </div>
+      <pre className="code-body">
+        <code>{code.replace(/\n$/, "")}</code>
+      </pre>
+    </div>
+  );
+}
+
+/** 正文：按代码围栏切段，其余仍以纯文本渲染（保留换行与缩进）。 */
+function MessageText({ text }: { text: string }) {
+  const segments = useMemo(() => parseSegments(text), [text]);
+  return (
+    <>
+      {segments.map((segment, i) =>
+        segment.type === "code" ? (
+          <CodeBlock key={`c${i}`} code={segment.text} lang={segment.lang} />
+        ) : (
+          <p key={`t${i}`} className="msg-text">
+            {segment.text}
+          </p>
+        ),
+      )}
+    </>
+  );
+}
+
 /** 录音中的麦克风图标（波形）：图标本身就说明「正在采音」。 */
 function IconWave() {
   return (
@@ -168,7 +237,7 @@ function Block({ block }: { block: ViewBlock }) {
   if (block.type === "image") {
     return block.data ? <img className="msg-image" src={block.data} alt={block.mimeType || "image"} /> : null;
   }
-  return <p className="msg-text">{block.text}</p>;
+  return <MessageText text={block.text ?? ""} />;
 }
 
 /** 草稿按会话存放（切走再回来、下拉刷新都不丢）。 */
@@ -246,6 +315,25 @@ function Message({ message, onCopied }: { message: ViewMessage; onCopied?: (ok: 
               {a.action === "created" ? "+" : "~"} {a.name}
             </span>
           ))}
+        </div>
+      )}
+      {/* 操作行：可见的复制入口（长按复制不够好发现） */}
+      {!isUser && messageText(message) && (
+        <div className="msg-actions">
+          <button
+            type="button"
+            className="msg-action"
+            onClick={() => {
+              const text = messageText(message);
+              const done = () => onCopied?.(true);
+              const fail = () => onCopied?.(false);
+              if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(text).then(done, fail);
+              else fail();
+            }}
+            aria-label="复制本条"
+          >
+            <IconCopy /> 复制
+          </button>
         </div>
       )}
     </div>
@@ -692,13 +780,8 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
   return (
     <div className="thread-view">
-      {/* 工具栏：返回 + 状态 + 会话级配置（权限/模式/模型）。
-          原先这里还有一行重复的会话标题——顶部 header 已经显示同一个标题，删掉省一行。 */}
+      {/* 工具栏：会话级配置（权限/模式/模型）。返回改用顶部头像按钮，状态/权限文字已去重。 */}
       <div className="thread-toolbar">
-        <button type="button" className="back-btn" onClick={onBack} aria-label="返回项目列表">←</button>
-        {view.summary && STATE_LABELS[view.summary.state] !== STATE_LABELS.idle && view.summary.state !== "draft" && (
-          <span className={`badge badge-${view.summary.state}`}>{STATE_LABELS[view.summary.state]}</span>
-        )}
         {view.summary && (
           <>
             <button
@@ -717,6 +800,10 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
               <IconModel />
               {modelBusy ? "切换中…" : modelLabel}
             </button>
+            {/* 运行中/出错时才显示状态——平时“空闲”没有信息量 */}
+            {view.summary.state !== "idle" && view.summary.state !== "draft" && (
+              <span className={`badge badge-${view.summary.state}`}>{STATE_LABELS[view.summary.state]}</span>
+            )}
           </>
         )}
       </div>
@@ -733,7 +820,9 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
             {running && !view.streaming && <p className="hint">正在工作…</p>}
           </div>
           {!atBottom && (
-            <button type="button" className="to-bottom" onClick={scrollToBottom}>↓ 最新消息</button>
+            <button type="button" className="to-bottom" onClick={scrollToBottom} aria-label="回到底部">
+              <IconDown />
+            </button>
           )}
 
           {/* 错误提示贴着输入框——这里才是手指所在的位置。 */}

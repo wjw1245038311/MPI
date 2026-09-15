@@ -78,14 +78,15 @@ html, body {
 .app-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 2px 2px 8px;
+  gap: 8px;
+  /* 右侧留出壳的 ⋮ 浮层（0.2.7+ 常驻右上角），配合 .header-spacer 保证标题真正居中 */
+  padding: 2px 4px 8px;
 }
 
 .app-logo {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--accent);
@@ -239,7 +240,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .header-main {
   min-width: 0;
   flex: 1;
+  text-align: center;
 }
+/* 与左侧头像等宽的占位，让居中标题真的居中（右侧被壳的 ⋮ 占用） */
+.header-spacer { width: 40px; flex: none; }
 .header-main h1 {
   font-size: 16px;
   margin: 0;
@@ -328,10 +332,14 @@ button:disabled { opacity: 0.5; cursor: default; }
    flex:1 + min-height:0 = 吃掉 header 之外的剩余高度；绝不外溢把输入框顶出屏幕。
    （2026-09-15 真机「按钮被遮挡」：原来硬编码 max-height: calc(100dvh - 90px)，
     顶部多一行就把底部按钮挤出可视区。） */
+/* 会话视图：把整页高度钉死（不是 min-height），消息区内部滚动。
+   否则长对话会把 .app 撑高 → 输入框被顶到屏幕外（用户："标题和输入框不能共存"）。 */
+.app.thread-open { height: 100dvh; overflow: hidden; }
+
 .thread-view { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-height: 0; }
 
 /* 工具栏：返回 + 状态 + 权限/模式/模型 chip —— 紧贴顶部标题下方的一条，可横向滚动。 */
-.thread-toolbar { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 0 0; }
+.thread-toolbar { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 0 0; flex: none; }
 .thread-toolbar::-webkit-scrollbar { display: none; }
 .thread-toolbar .back-btn { width: 30px; height: 30px; font-size: 15px; }
 .thread-toolbar .badge { flex: none; }
@@ -339,7 +347,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .back-btn { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; padding: 0; font-size: 16px; flex: none; }
 
 .thread-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 2px; min-height: 120px; }
-.to-bottom { align-self: center; position: sticky; bottom: 6px; background: var(--panel); border: 1px solid var(--border); color: var(--text); font-size: 12px; padding: 5px 12px; border-radius: 999px; }
+.to-bottom { align-self: center; position: sticky; bottom: 8px; width: 34px; height: 34px; display: grid; place-items: center; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 50%; box-shadow: var(--shadow-md); cursor: pointer; }
 
 .message.user { align-self: flex-end; max-width: 85%; background: var(--user-bubble); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
 .message.assistant { align-self: stretch; display: flex; flex-direction: column; gap: 8px; }
@@ -374,8 +382,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .artifact.created { color: var(--ok); }
 
 /* ---- Composer (Qoder-style card, 2026-09-15) ---------------------------- */
-.thread-scroll { flex: 1 1 auto; min-height: 0; }
-.composer { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-md); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.thread-scroll { flex: 1 1 auto; min-height: 0; }  /* 只让消息区伸缩 */
+.composer { flex: none; position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-md); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
 .composer-input { width: 100%; resize: none; max-height: 132px; overflow-y: auto; background: transparent; color: var(--text); border: none; padding: 4px 2px; font-size: 15px; line-height: 1.45; font-family: inherit; }
 .composer-input:focus { outline: none; }
 .composer-row { display: flex; align-items: center; gap: 4px; position: relative; }
@@ -404,6 +412,19 @@ button:disabled { opacity: 0.5; cursor: default; }
 .update-pill { position: fixed; bottom: calc(76px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 130; background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 7px 14px; font-size: 12.5px; box-shadow: var(--shadow-md); cursor: pointer; animation: voice-pulse 1.6s ease-in-out infinite; }
 
 .toast { position: fixed; left: 50%; bottom: 104px; transform: translateX(-50%); background: rgba(20, 22, 18, 0.88); color: #fff; font-size: 12.5px; padding: 7px 14px; border-radius: 999px; z-index: 120; pointer-events: none; }
+
+/* ---- 代码块（Qoder 风格：语言标签 + 复制） ----------------------------- */
+.code-block { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--code-bg); margin: 6px 0; }
+.code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 10px; background: rgba(127, 127, 127, 0.07); border-bottom: 1px solid var(--border); }
+.code-lang { font-size: 11px; color: var(--text-dim); font-weight: 600; }
+.code-copy { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; color: var(--text-dim); font-size: 11px; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
+.code-copy:active { background: var(--control); color: var(--text); }
+.code-body { margin: 0; padding: 8px 10px; overflow-x: auto; font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre; }
+
+/* ---- 消息操作行 --------------------------------------------------------- */
+.msg-actions { display: flex; gap: 8px; margin-top: 2px; }
+.msg-action { display: inline-flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px; font-size: 11px; padding: 3px 10px; cursor: pointer; }
+.msg-action:active { border-color: var(--accent); color: var(--text); }
 
 /* ---- 会话顶部配置栏（权限 / 模型） ------------------------------------- */
 .config-bar { display: flex; gap: 6px; padding: 6px 0 0; overflow-x: auto; scrollbar-width: none; }

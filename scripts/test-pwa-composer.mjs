@@ -111,7 +111,8 @@ const { ThreadActions } = await import("../mobile/pwa/src/lib/thread-actions.ts"
   assert.equal(sent.length, 2, "claimWrite + prompt");
   assert.equal(sent[0].type, "thread.claimWrite");
   assert.equal(sent[1].type, "thread.prompt");
-  assert.deepEqual(sent[1].payload, { text: "看图说话", images: [{ data: "QUJD", mimeType: "image/jpeg" }] });
+  // send() 会把本地压缩产物补成线上形状 {type:"image",…}（否则主机报 images[0].type must be image）
+  assert.deepEqual(sent[1].payload, { text: "看图说话", images: [{ type: "image", data: "QUJD", mimeType: "image/jpeg" }] });
   await p1;
 
   // images-only message (empty text) is allowed
@@ -119,7 +120,7 @@ const { ThreadActions } = await import("../mobile/pwa/src/lib/thread-actions.ts"
   const p2 = actions.send("   ", "prompt", [{ data: "REVG", mimeType: "image/jpeg" }]);
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(sent[0].type, "thread.prompt");
-  assert.deepEqual(sent[0].payload, { text: "", images: [{ data: "REVG", mimeType: "image/jpeg" }] });
+  assert.deepEqual(sent[0].payload, { text: "", images: [{ type: "image", data: "REVG", mimeType: "image/jpeg" }] });
   await p2;
 
   // no images → payload must NOT carry an images key (host treats undefined as none)
@@ -232,6 +233,51 @@ const { ThreadActions } = await import("../mobile/pwa/src/lib/thread-actions.ts"
   );
 
   console.log("ok 6 - update-watch: bundle 名解析 + 新旧判定");
+}
+
+// ---- 7. markdown-lite：代码围栏分段（含流式未闭合） -------------------------
+{
+  const { parseSegments, languageLabel } = await import("../mobile/pwa/src/lib/markdown-lite.ts");
+  const NL = String.fromCharCode(10); // 避免测试源码里出现转义序列
+  const join = (lines) => lines.join(NL);
+
+  // 没有围栏 → 原样一段，不做加工
+  const plain = parseSegments(join(["就是一段普通文本", "第二行"]));
+  assert.equal(plain.length, 1);
+  assert.equal(plain[0].type, "text");
+  assert.equal(plain[0].text, join(["就是一段普通文本", "第二行"]));
+
+  // 文本 + 代码 + 文本
+  const mixed = parseSegments(
+    join(["说明：", "```python", "import akshare as ak", "df = ak.x()", "```", "用的是东财 API。"]),
+  );
+  assert.deepEqual(mixed.map((x) => x.type), ["text", "code", "text"]);
+  assert.equal(mixed[1].lang, "python");
+  assert.equal(mixed[1].closed, true);
+  assert.ok(mixed[1].text.includes("akshare"), "代码内容完整保留");
+  assert.ok(mixed[2].text.includes("东财"), "围栏后的说明仍是文本");
+
+  // 流式未闭合：后半段继续当代码，closed=false（闭合后重排不会闪回正文）
+  const streaming = parseSegments(join(["```js", "const x = 1;", "const y = 2;"]));
+  assert.equal(streaming.length, 1);
+  assert.equal(streaming[0].type, "code");
+  assert.equal(streaming[0].closed, false);
+  assert.equal(streaming[0].lang, "js");
+
+  // 无语言标记的围栏
+  const noLang = parseSegments(join(["```", "plain", "```"]));
+  assert.equal(noLang[0].type, "code");
+  assert.equal(noLang[0].lang, "");
+
+  // 语言标签映射（Qoder 风格展示名）
+  assert.equal(languageLabel("py"), "Python");
+  assert.equal(languageLabel("bash"), "Shell");
+  assert.equal(languageLabel("yml"), "YAML");
+  assert.equal(languageLabel(""), "代码");
+  assert.equal(languageLabel("brainfuck"), "Brainfuck", "未知语言首字母大写");
+  assert.equal(languageLabel("toml"), "TOML", "已知别名走映射");
+
+  console.log("ok 7 - markdown-lite: 围栏分段/未闭合流式/语言标签映射");
 }
 
 console.log("pwa composer tests passed");

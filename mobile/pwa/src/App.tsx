@@ -612,8 +612,14 @@ export default function App() {
   }, []);
 
   /** 头部标题：优先当前会话名，其次主机名（放最后推导——依赖上面的多个 state）。 */
-  const headerTitle = threadView?.summary?.title || currentPairing?.hostName || (hostId ? `主机 ${shortId(hostId)}` : "MPI Mobile");  const headerSubtitle = threadView?.summary
-    ? `${THREAD_STATE_LABELS[threadView.summary.state] ?? ""}${threadView.summary.permission === "full" ? " · 完全" : " · 沙盒"}`
+  // 会话视图：标题只留会话名（状态/权限已在工具栏 chip 里，重复显示纯属噪声）。
+  const headerTitle =
+    threadView?.summary?.title ||
+    currentPairing?.hostName ||
+    (hostId ? `主机 ${shortId(hostId)}` : "MPI Mobile");
+  const headerSubtitle = threadView?.summary
+    ? // 副标题用项目名（Qoder 的「环境」位）；状态/权限已在 chip 里，不重复。
+      (snap?.projects.find((p) => p.id === threadView.summary?.projectId)?.name ?? "")
     : hostId
       ? connState === "open"
         ? "在线"
@@ -627,16 +633,27 @@ export default function App() {
   const needsRepair = !!connErr && /AUTH_FAILED|4001/i.test(connErr);
 
   return (
-    <div className="app">
+    /* thread-open：会话视图必须是**确定高度**（100dvh）且不整体滚动，
+       否则长对话会把输入框顶到屏幕外（"标题和输入框不能共存"）。
+       列表页仍用 min-height + 整页滚动。 */
+    <div className={`app${view === "home" && openThreadId ? " thread-open" : ""}`}>
       <UpdatePill />
       <header className="app-header">
-        <button type="button" className="avatar-btn" onClick={() => openDrawer("projects")} aria-label="项目与会话">
-          <span className="app-logo" aria-hidden="true">M</span>
+        <button
+          type="button"
+          className="avatar-btn"
+          // 会话里这个按钮就是「返回列表」——原来工具栏里那个 ← 与其重复，已删除。
+          onClick={() => (view === "home" && openThreadId ? closeThread() : openDrawer("projects"))}
+          aria-label={view === "home" && openThreadId ? "返回会话列表" : "项目与会话"}
+        >
+          <span className="app-logo" aria-hidden="true">{view === "home" && openThreadId ? "←" : "M"}</span>
         </button>
         <div className="header-main">
           <h1>{headerTitle}</h1>
           {headerSubtitle && <div className="hint">{headerSubtitle}</div>}
         </div>
+        {/* 占位：右侧被壳的 ⋮ 占用，补上等宽元素标题才能真居中 */}
+        <span className="header-spacer" aria-hidden="true" />
       </header>
       {view === "home" && hostId && shellBridge() && !pushHintDismissed && (
         <div className="push-hint">

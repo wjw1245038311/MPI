@@ -91,6 +91,22 @@ const b64 = (text) => Buffer.from(text, "utf8").toString("base64");
   out = await send({ text: "   " });
   assert.equal(out?.error?.code, "INVALID_REQUEST", "全空消息被拒");
 
+  // 图片：线上形状必须是 {type:"image",data,mimeType}；漏 type 的旧客户端仍要兼容
+  // （2026-09-15 真机：手机发图恒报 images[0].type must be image）
+  calls.length = 0;
+  out = await send({ text: "看图", images: [{ type: "image", data: b64("img"), mimeType: "image/jpeg" }] });
+  assert.equal(out.error, undefined, "标准形状通过");
+  assert.deepEqual(calls[0][3], [{ type: "image", data: b64("img"), mimeType: "image/jpeg" }]);
+
+  out = await send({ text: "看图", images: [{ data: b64("img"), mimeType: "image/jpeg" }] });
+  assert.equal(out.error, undefined, "漏 type 的旧客户端仍兼容（按图片 mime 视作 image）");
+
+  out = await send({ text: "看图", images: [{ type: "file", data: b64("img"), mimeType: "image/jpeg" }] });
+  assert.equal(out?.error?.code, "INVALID_REQUEST", "显式传错 type 必须拒绝");
+
+  out = await send({ text: "看图", images: [{ type: "image", data: b64("img"), mimeType: "application/pdf" }] });
+  assert.equal(out?.error?.code, "INVALID_REQUEST", "非图片 mime 必须拒绝");
+
   console.log("ok 1-3 - remote files: 校验（张数/名字/base64/体积）+ files-only 合法 + 原样透传");
 }
 
