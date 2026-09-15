@@ -8,8 +8,18 @@
  */
 import type { RemoteMessage } from "./protocol";
 
-/** 手机端单次历史的最大条数。 */
-export const MAX_REMOTE_HISTORY = 400;
+/**
+ * 原始 pi 条目上限（含 toolResult / 中间 assistant 消息）。
+ *
+ * ⚠️ 这不是"用户能看到多少"——一个回合里 agent 可能产生上百条 toolResult，
+ * 它们会被 remoteMessages() 折叠进同一个 assistant 回合。2026-09-16 真机取证：
+ * total=400 原始条目 → rendered=17 条会话消息，用户「往上拉两三页就不行」。
+ * 所以这里要放宽（只为控制解析成本），能拉多远由 MAX_RENDERED_MESSAGES 决定。
+ */
+export const MAX_REMOTE_RAW_MESSAGES = 6000;
+
+/** 下发到手机的会话条目上限——**这个才是"能往上拉多远"**。 */
+export const MAX_RENDERED_MESSAGES = 300;
 
 /** 单次历史响应的净字节预算（正文 + 图片估算）；超了从最旧的开始丢。 */
 export const REMOTE_HISTORY_BYTE_BUDGET = 6_000_000;
@@ -22,6 +32,11 @@ export function remoteMessageSize(message: RemoteMessage): number {
   }
   size += message.text?.length || 0;
   return size;
+}
+
+/** 条数上限：从最新往回保留 MAX_RENDERED_MESSAGES 条会话条目。 */
+export function capRenderedHistory(messages: RemoteMessage[]): RemoteMessage[] {
+  return messages.length > MAX_RENDERED_MESSAGES ? messages.slice(-MAX_RENDERED_MESSAGES) : messages;
 }
 
 /** 从最旧的开始丢，直到总量进预算（**至少保留最后一条**——空历史比超预算更糟）。 */

@@ -235,3 +235,33 @@ F:/leidian/LDPlayer14/adb.exe shell am start -n com.mpi.remote/.MainActivity \
   链接会被浏览器或壳接管。
 - **正式签名与上架**：当前是 debug 自签（同一台机器的 `~/.android/debug.keystore`，可覆盖安装）。
   需要长期分发时再补 release keystore。
+
+## 主机侧改动怎么生效（手机端远程重启）
+
+改 `src/main/**` 之后**必须重启 MPI** 才生效；而 `electron-vite dev` 的 watcher 在本机
+实测并不总会重建 `out/`，所以正确姿势是「重新构建 + 重启」：
+
+```bash
+bash scripts/restart-dev.sh          # 构建 → 结束旧实例 → detached 启动 → 校验
+bash scripts/restart-dev.sh --dry-run   # 只报告要动哪些进程
+bash scripts/restart-dev.sh --no-build  # 只重启
+```
+
+手机端自己没有 shell，所以实际用法是：**在手机聊天里让 agent 跑这个脚本**。
+
+两个坑（都已经在脚本里处理）：
+
+1. **必须 detached 启动**（`scripts/dev-launch.mjs`，用 `detached + unref`）。在 bash 里
+   `nohup npm run dev &` 拉起的进程仍属于调用方的进程组，调用方（例如远程 agent 的工具
+   调用）一被中断，整棵树被回收——表现就是「脚本关掉了 MPI 却没拉起来」，用户看到
+   「MPI 自己定时关了」。
+2. **先构建、后杀进程**。构建失败/脚本被中断时最坏只是「没重启」，而不是「把正在跑的
+   实例关了」。
+
+安全边界：只结束本仓库的 MPI Dev（主进程匹配 `<repo>
+ode_modules\electron\dist\electron.exe .`，
+子进程匹配 `--user-data-dir=...\MPI Dev`），其它 Electron 应用与残留测试进程一律不动。
+
+历史长度的取证也很简单：`%APPDATA%/MPI Dev/logs/mpi-diag.log` 里的
+`remote-history total=<原始条目> rendered=<会话条目> sent=<实际下发> bytes=<字节>`
+以及 `ctx-usage push ...`（上下文用量广播）。

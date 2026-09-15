@@ -38,6 +38,10 @@ export interface RemoteBackend {
   /** Transcribe a phone voice memo (base64 WAV) via the local STT endpoint. */
   sttTranscribe(audioB64: string, sampleRate: number): Promise<{ text: string }>;
   subscribeThread(threadId: string, listener: (event: RemoteThreadEventPayload) => void): () => void;
+  /** 后台预热会话（手机打开会话时调用）：让主机在后台建立/复用 pi 桥，
+   * 就绪后由主机推送 context_usage。**绝不能 await**——冷启动桥可能超过手机端
+   * 请求超时（subscribe 注释里记过这个坑）。 */
+  warmThread?(threadId: string): Promise<void>;
 }
 export interface RemoteClientContext {
   connectionId: string;
@@ -201,7 +205,11 @@ export class RemoteService {
         // Opening a thread is deliberately history-first. Starting a cold Pi
         // bridge here can take several seconds and can exceed the mobile
         // request timeout. A later resync uses the live bridge when needed.
-        return responseFor(request, { snapshot: await this.backend.getThread(threadId) });
+        const snapshot = await this.backend.getThread(threadId);
+        // 但历史快照拿不到上下文用量（那是桥里的 pi 状态）。于是不阻塞响应地预热：
+        // 桥就绪后主机推 context_usage，手机端的用量 chip 就有数了（此前一直是「—」）。
+        void this.backend.warmThread?.(threadId).catch(() => {});
+        return responseFor(request, { snapshot });
       }
       case "thread.prompt":
       case "thread.steer":

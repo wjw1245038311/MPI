@@ -57,3 +57,6 @@ tmp/
 # Generated test bundle (npm run test:tuirace)
 scripts/.tui-race-bundle.cjs
 android/publish/
+
+# 本地进程/重启日志（scripts/restart-dev.sh 输出）
+logs/

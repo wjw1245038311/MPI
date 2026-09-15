@@ -7,7 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { appendDiagLog } from "./diag-log";
-import { MAX_REMOTE_HISTORY, trimRemoteHistory } from "./remote/history-limit";
+import { capRenderedHistory, MAX_REMOTE_RAW_MESSAGES, remoteMessageSize, trimRemoteHistory } from "./remote/history-limit";
 import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
 import { listTests, readScenarioHistory, readScenarioResult, runLogicTest, runScenarioCase } from "./test-runner";
 import { getDevReleaseLogWindow, openChangelogWindow, openDevReleaseLogWindow } from "./standalone-windows";
@@ -1129,13 +1129,23 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   const publishThreadContextUsage = async (localId: string): Promise<void> => {
     try {
       const usage = await threadContextUsage(localId, compactionEstimates.get(localId) ?? null);
-      if (!usage) return;
+      if (!usage) {
+        appendDiagLog(`ctx-usage skip local=${localId.slice(-20)} reason=no-stats`);
+        return;
+      }
       const sessionFile = localId.endsWith(".jsonl") ? localId : null;
       const remoteThreadId = sessionFile ? remoteIdForSessionHook?.(sessionFile) : null;
-      if (!remoteThreadId) return;
+      if (!remoteThreadId) {
+        appendDiagLog(`ctx-usage skip local=${localId.slice(-20)} reason=no-remote-id has-usage=1`);
+        return;
+      }
+      appendDiagLog(
+        `ctx-usage push remote=${remoteThreadId.slice(0, 12)} tokens=${usage.tokens ?? "null"} window=${usage.contextWindow} pct=${usage.percent ?? "null"} est=${usage.estimatedTokens ?? "-"}`,
+      );
       remoteEventHub.publish(remoteThreadId, { kind: "context_usage", data: { ...usage } });
-    } catch {
+    } catch (error) {
       // 手机上少一个数字不值得打断回合——静默失败，下次事件再试。
+      appendDiagLog(`ctx-usage error local=${localId.slice(-20)} ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -1479,9 +1489,10 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     // mobile renderer.
     let imageBudget = 400_000;
     // 手机端「往上拉不动」的根因就是这里的 -80：更早的消息根本没下发。
-    // 放宽到 400 条，再用字节预算兜底（超大历史时从最旧开始丢），
-    // 保证单帧远低于 relay 的 MAX_FRAME_BYTES(32MB) 与手机解码能力。
-    const source = (messages || []).slice(-MAX_REMOTE_HISTORY);
+    // 注意 source 是**原始 pi 条目**（含 toolResult），与用户看到的会话条目不是
+    // 一回事（2026-09-16 取证：400 原始条目 → 17 条会话消息）。这里只控制解析
+    // 成本，「能拉多远」由 capRenderedHistory + 字节预算决定。
+    const source = (messages || []).slice(-MAX_REMOTE_RAW_MESSAGES);
     const artifactsByMessage = remoteArtifactsByMessage(source, cwd);
     type RemoteBlock = NonNullable<RemoteMessage["blocks"]>[number];
     const toolResults = new Map<string, { text: string; isError: boolean }>();
@@ -1631,7 +1642,13 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       });
     });
     flushAssistantRound();
-    return trimRemoteHistory(output);
+    const trimmed = trimRemoteHistory(capRenderedHistory(output));
+    // 取证：手机端「往上拉不动」到底是主机只发了这么多，还是界面没渲染。
+    // diag 日志里看 remote-history 行的 sent/total/bytes 即可判定。
+    appendDiagLog(
+      `remote-history total=${source.length} rendered=${output.length} sent=${trimmed.length} bytes=${trimmed.reduce((sum, m) => sum + remoteMessageSize(m), 0)}`,
+    );
+    return trimmed;
   }
 
   async function remoteVisibleProjects(): Promise<ProjectSummary[]> {
@@ -1815,6 +1832,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       thinkingLevel: history.thinkingLevel || "off",
       taskMode: ref.sessionFile ? (getConfig().threadTaskModes || {})[threadUuidFromSessionFile(ref.sessionFile) ?? ""] ?? null : null,
       availableModes: remoteModeOptions(),
+      // 已打开的桥能直接给出真实用量（不额外冷启动）；没开则为 null，
+      // 手机端先显示「—」，随后由 warmThread 推的 context_usage 补上。
+      contextUsage: await (async () => {
+        const open = ref.localId ? bridges.get(ref.localId) : undefined;
+        return open ? threadContextUsage(open.getId(), compactionEstimates.get(open.getId()) ?? null) : null;
+      })(),
       messages,
       nextSeq: 0,
     };
@@ -2241,6 +2264,13 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     },
     subscribeThread: (threadId, listener) => {
       return remoteEventHub.subscribe(threadId, listener);
+    },
+    warmThread: async (threadId) => {
+      const ref = await remoteThread(threadId);
+      if (!ref.sessionFile) return; // 草稿会话没有 pi 状态可读
+      appendDiagLog(`ctx-usage warm remote=${threadId.slice(0, 12)}`);
+      const handle = await ensureRemoteBridge(ref);
+      publishThreadContextUsageHook?.(handle.getId());
     },
   };
 
