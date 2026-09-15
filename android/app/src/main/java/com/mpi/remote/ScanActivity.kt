@@ -87,8 +87,11 @@ class ScanActivity : AppCompatActivity() {
         providerFuture.addListener({
             val provider = providerFuture.get()
             val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+            // 目标分辨率拉高：默认分析帧可能只有 640×480，密集二维码（version≥15）
+            // 在这种分辨率下模块像素不足、识别失败。CameraX 会取不超过目标的最近尺寸。
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetResolution(1920, 1080)
                 .build()
                 .also { it.setAnalyzer(analysisExecutor!!, ::analyze) }
             try {
@@ -112,6 +115,7 @@ class ScanActivity : AppCompatActivity() {
                 val value = barcodes.firstNotNullOfOrNull { it.rawValue ?: it.displayValue }
                 if (value != null && !handled) {
                     handled = true
+                    android.widget.Toast.makeText(this@ScanActivity, "已识别配对码，正在打开…", android.widget.Toast.LENGTH_SHORT).show()
                     setResult(Activity.RESULT_OK, Intent().putExtra(EXTRA_TEXT, value))
                     finish()
                 }

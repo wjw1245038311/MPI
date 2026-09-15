@@ -12,6 +12,8 @@ type Pairing = {
   stunUrls: string[];
   /** Cloud-relay URL (present when the relay is configured) — the PWA connects here. */
   relayUrl?: string;
+  /** 机器名（多设备列表区分主机用）。 */
+  hostName?: string;
   ticket: string;
   expiresAt: number;
   protocol: number;
@@ -71,9 +73,23 @@ function relayOrigin(relayUrl: string): string | null {
 
 /** 扫码用的配对地址。用 https 链接而不是 mpi://：系统相机与绝大多数扫码器只把
  *  未知 scheme 当文本显示，而 https 链接可以直接打开——PWA 读到 #pair= 即自动
- *  开始配对，已装安卓壳则被壳的 VIEW 过滤器接管。无中继时回退到 mpi:// 链接。 */
+ *  开始配对，已装安卓壳则被壳的 VIEW 过滤器接管。无中继时回退到 mpi:// 链接。
+ *
+ * ⚠ payload 只放配对必需字段：完整对象（含 hostPublicKeyPem PEM/fingerprint/
+ * signalingUrl/stunUrls）序列化后 ~650 字符 → QR version≈25（97×97 模块），
+ * 手机扫码器在笔记本屏幕距离上基本识别不了（真机 bug）。精简后 ~270 字符 →
+ * version 5-6，任何距离都能扫。PWA 的 parsePairingLink 对这些字段本就全部可选
+ * （relay 流程的主机 E2E 公钥由 pair.accepted 下发，不从二维码取）。 */
 function pairingScanUrl(pairing: Pairing, relayHttp: string | null): string {
-  const payload = base64Url(JSON.stringify(pairing));
+  const minimal = {
+    hostId: pairing.hostId,
+    ticket: pairing.ticket,
+    expiresAt: pairing.expiresAt,
+    protocol: pairing.protocol,
+    ...(pairing.relayUrl ? { relayUrl: pairing.relayUrl } : {}),
+    ...(pairing.hostName ? { hostName: pairing.hostName } : {}),
+  };
+  const payload = base64Url(JSON.stringify(minimal));
   return relayHttp ? `${relayHttp}/#pair=${payload}` : pairingUri(pairing);
 }
 
