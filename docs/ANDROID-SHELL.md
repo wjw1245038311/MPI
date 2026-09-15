@@ -154,6 +154,7 @@ https://<relay>/#pair=<base64url payload>
 | 9 | `window.MpiShell.cancelRecording(): string` | 壳注入 → PWA（0.2.6+） | 放弃本次录音并释放麦克风（用户点「取消」）。永远返回 `"ok"`；壳/桥不可用时 PWA 静默吞掉异常 |
 | 10 | `window.MpiShell.recorderDiagnostics(): string` | 壳注入 → PWA（0.2.6+） | 原生录音最近一次启动结果（`ok src=6` / `err:notInitialized src=6` …），`?dbg=1` 浮层 MEDIA 行的 `native=` 字段 |
 | 11 | `window.__mpi_build: string` | PWA → 壳（0.2.7+） | PWA 启动时写入当前 bundle 文件名（`index-XXXX.js`，无哈希的开发态为空串）。壳回前台时读它与中继 `index.html` 引用的名字对比，不同就自动 `reload()`——WebView 长期驻留（按返回只是退到后台，从多任务重开也不重载）会让人一直看到旧页面（2026-09-15 实测）。旧 PWA 无此全局时壳跳过检查，不报错 |
+| 12 | `<input type=file>`（拍照/相册/文件） | PWA → 壳（0.2.9+） | 页面里的文件输入靠壳实现：Android WebView **默认不实现文件选择**，不覆写 `onShowFileChooser` 时点击完全静默。壳 0.2.9+ 用 `FileChooserParams.createIntent()`（系统选择器，自动带 accept/多选）或 `ACTION_IMAGE_CAPTURE`（`capture` 属性，输出写 FileProvider 的 `cacheDir/capture`）→ 结果经 `registerForActivityResult` 回给页面。**PWA 新增任何文件类输入都不需要改壳**（同一入口），但换服务器/改 FileProvider 路径时要同步改 `file_paths.xml` |
 
 **兼容规则：**
 
@@ -161,6 +162,17 @@ https://<relay>/#pair=<base64url payload>
 - **改现有语义**（如 `__mpiBack` 返回值约定、`#pair=` 载荷格式）：**必须同发新 APK**——旧壳配新 PWA
   会出现「返回键直接后台化」这类静默故障，且用户不会意识到是版本不匹配。
 - 两侧都不得假设对方存在：PWA 不裸调 `MpiShell`；壳对 `__mpiBack` 缺失按 `pass` 处理（已内置）。
+
+## 手机端文件附件（0.2.9+）
+
+手机发送的文件**不是**直传模型，而是先落到主机磁盘再交给 agent：
+
+1. PWA 把文件读成 base64（≤6MB/件，≤3 件）→ `thread.prompt|steer|followUp` 的 `files` 字段；
+2. 主机 `RemoteService.optionalFiles()` 校验（张数≤3、单件≤8MB base64、合计≤16MB、名字≤180 字、base64 字符集）；
+3. `stageRemoteFiles()` → `stageClipboardFile()` 写入 `<userData>/temp/mpi-clipboard/<uuid>-<name>`（与桌面「粘贴文件」同目录）；
+4. 再过桌面的 `processAttachments()`：图片直接作为模型图片输入；文本小文件（≤500KB）**内联**进提示；二进制/大文件写成 `<file name=… path=… note="attached" />` 引用，由 agent 用读写工具自己处理。
+
+因此手机发 PDF/日志/压缩包都能用，且行为与桌面拖文件完全一致。
 
 ## 壳菜单与页面自更新（0.2.7+）
 
