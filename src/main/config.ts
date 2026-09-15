@@ -196,6 +196,11 @@ export interface AppConfig {
    * Settings → Conversation → 语音系统. See src/main/voice.ts for STT backends and
    * src/renderer/src/lib/tts.ts for the speechSynthesis-based TTS engine. */
   voice?: VoiceConfig;
+  /** Mobile (PWA) voice-input endpoint: raw-WAV POST target on this machine.
+   * Defaults to the voice-stack gateway's localhost STT service
+   * (http://127.0.0.1:8093/v1/audio/transcriptions). Override only if you run
+   * the gateway elsewhere or want a different ASR backend. */
+  sttUrl?: string;
 }
 
 /** Speech-to-text backend used by the composer mic button.

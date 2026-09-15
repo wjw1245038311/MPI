@@ -27,6 +27,8 @@ export interface RemoteBackend {
   respondUi(threadId: string, requestId: string, payload: Record<string, unknown>): Promise<unknown>;
   /** S7 WebPush：store the device's PushSubscription and sync it to the relay. */
   storePushSubscription(deviceId: string, subscription: RemotePushSubscription): Promise<unknown>;
+  /** Transcribe a phone voice memo (base64 WAV) via the local STT endpoint. */
+  sttTranscribe(audioB64: string, sampleRate: number): Promise<{ text: string }>;
   subscribeThread(threadId: string, listener: (event: RemoteThreadEventPayload) => void): () => void;
 }
 export interface RemoteClientContext {
@@ -178,8 +180,12 @@ export class RemoteService {
       case "thread.followUp": {
         const threadId = this.requiredThread(request);
         this.assertWriter(threadId, context);
-        const text = this.requiredString(payload, "text");
+        // Image-only messages are legal (phone composer): empty text is fine
+        // as long as at least one image rides along.
+        const rawText = typeof payload.text === "string" ? payload.text.trim() : "";
         const images = this.optionalImages(payload);
+        if (!rawText && !images?.length) throw new RemoteProtocolError("INVALID_REQUEST", "text or images is required");
+        const text = rawText;
         const result = request.type === "thread.prompt"
           ? await this.backend.prompt(threadId, text, images)
           : request.type === "thread.steer"
@@ -210,6 +216,17 @@ export class RemoteService {
         const subscription = payload.subscription;
         if (!isPushSubscriptionShape(subscription)) throw new RemoteProtocolError("INVALID_REQUEST", "subscription is required");
         return responseFor(request, await this.backend.storePushSubscription(context.deviceId, subscription));
+      }
+      case "stt.transcribe": {
+        // Device-scoped read-only op: no threadId, no write lease. The PWA
+        // encodes a 16 kHz mono PCM16 WAV in-browser; the host forwards it to
+        // the voice-stack gateway's localhost STT endpoint.
+        const audioB64 = payload.audioB64;
+        if (typeof audioB64 !== "string" || !audioB64.length || audioB64.length > 8 * 1024 * 1024) {
+          throw new RemoteProtocolError("INVALID_REQUEST", "audioB64 must be a base64 string of at most 8 MB");
+        }
+        const sampleRate = typeof payload.sampleRate === "number" && Number.isFinite(payload.sampleRate) ? payload.sampleRate : 16000;
+        return responseFor(request, await this.backend.sttTranscribe(audioB64, sampleRate));
       }
       default:
         throw new RemoteProtocolError("UNSUPPORTED", `Unsupported remote command: ${request.type}`);

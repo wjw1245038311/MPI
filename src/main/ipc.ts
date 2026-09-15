@@ -1917,6 +1917,31 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       activeRelayUplink?.storePushSubscription(deviceId, subscription);
       return { ok: true };
     },
+    sttTranscribe: async (audioB64: string, sampleRate: number) => {
+      // Phone voice memo → local STT endpoint (voice-stack gateway by default).
+      // The PWA already encodes 16 kHz mono PCM16 WAV; the gateway resamples if
+      // needed. sampleRate is logged only — the WAV header carries the truth.
+      const url = getConfig().sttUrl || "http://127.0.0.1:8093/v1/audio/transcriptions";
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "audio/wav" },
+          body: Buffer.from(audioB64, "base64"),
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new RemoteProtocolError("STT_UNAVAILABLE", `语音服务不可达（${url}）：${detail}`);
+      }
+      if (!res.ok) {
+        let detail = "";
+        try { detail = JSON.stringify(await res.json()); } catch { /* non-JSON error body */ }
+        throw new RemoteProtocolError("STT_FAILED", `语音服务返回 ${res.status} ${detail}`.trim());
+      }
+      const data = (await res.json().catch(() => ({}))) as { text?: string };
+      return { text: typeof data.text === "string" ? data.text : "" };
+    },
     subscribeThread: (threadId, listener) => {
       return remoteEventHub.subscribe(threadId, listener);
     },

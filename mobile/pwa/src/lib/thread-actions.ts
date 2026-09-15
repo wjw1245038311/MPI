@@ -79,11 +79,26 @@ export class ThreadActions {
     }
   }
 
-  /** Send text: prompt (idle) / steer (running) / followUp (queued after run). */
-  send(text: string, mode: SendMode): Promise<unknown> {
+  /**
+   * Send text (optionally with image attachments): prompt (idle) / steer
+   * (running) / followUp (queued after run). Images are base64 payloads in the
+   * host's RemoteImageInput shape — the pi bridge forwards them to the model.
+   */
+  send(text: string, mode: SendMode, images?: { data: string; mimeType: string }[]): Promise<unknown> {
     const trimmed = text.trim();
-    if (!trimmed) throw new Error("empty message");
-    return this.writeRequest(`thread.${mode}`, { text: trimmed }, mode);
+    if (!trimmed && !(images && images.length)) throw new Error("empty message");
+    return this.writeRequest(`thread.${mode}`, {
+      text: trimmed,
+      ...(images && images.length ? { images } : {}),
+    }, mode);
+  }
+
+  /**
+   * Transcribe a recorded voice memo (base64 WAV, 16 kHz mono PCM16) via the
+   * host's STT relay → voice-stack gateway. Read-only: no write lease needed.
+   */
+  transcribe(audioB64: string, sampleRate: number): Promise<{ text: string }> {
+    return this.requester.request("stt.transcribe", { audioB64, sampleRate }, "transcribe", 30_000);
   }
 
   abort(): Promise<unknown> {

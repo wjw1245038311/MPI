@@ -9,6 +9,42 @@ import { useEffect, useRef, useState } from "react";
 import type { RemotePermission, RemoteThreadState, RemoteUiRequest } from "../../shared/protocol";
 import type { ThreadActions } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
+import { compressImageFile, type CompressedImage } from "./lib/image-attach";
+import { VoiceRecorder } from "./lib/voice-input";
+
+/** Minimal inline icons for the composer (no icon dependency in the PWA). */
+function IconPlus() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+function IconMic() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+    </svg>
+  );
+}
+
+function IconSend() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
+  );
+}
+
+function IconStop() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
 
 const STATE_LABELS: Record<RemoteThreadState, string> = {
   draft: "草稿",
@@ -213,6 +249,18 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
 
+  // T2 image attachments (max 3 — host's MAX_REMOTE_IMAGES).
+  const [attachments, setAttachments] = useState<CompressedImage[]>([]);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const albumInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+
+  // T5 voice input.
+  const recorderRef = useRef<VoiceRecorder | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recSeconds, setRecSeconds] = useState(0);
+  const [transcribing, setTranscribing] = useState(false);
+
   // Auto-scroll while the user is pinned to the bottom.
   useEffect(() => {
     if (!atBottom) return;
@@ -240,12 +288,14 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const running = view.running || view.summary?.state === "running";
 
   const doSend = async () => {
-    if (!actions || !draft.trim() || sending) return;
+    if (!actions || sending) return;
+    if (!draft.trim() && !attachments.length) return;
     setSending(true);
     setSendError(null);
     try {
-      await actions.send(draft, running ? "steer" : "prompt");
+      await actions.send(draft, running ? "steer" : "prompt", attachments.length ? attachments : undefined);
       setDraft("");
+      setAttachments([]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setSendError(message.startsWith("THREAD_BUSY") ? "该会话正被其他设备操作，请稍后再试。" : `发送失败：${message}`);
@@ -264,6 +314,99 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       setSendError(message.startsWith("THREAD_BUSY") ? "该会话正被其他设备操作，无法停止。" : `停止失败：${message}`);
     }
   };
+
+  // ---- T2: image attachments -------------------------------------------------
+
+  const pickImages = (source: "camera" | "album") => {
+    setAttachMenuOpen(false);
+    if (attachments.length >= 3) return;
+    const input = source === "camera" ? cameraInputRef.current : albumInputRef.current;
+    if (!input) return;
+    // Reset so picking the same file again still fires change.
+    input.value = "";
+    void input.click();
+  };
+
+  const onFilesPicked = async (files: FileList | null) => {
+    if (!files || !files.length) return;
+    const room = 3 - attachments.length;
+    const list = Array.from(files).slice(0, Math.max(0, room));
+    for (const file of list) {
+      try {
+        const image = await compressImageFile(file);
+        setAttachments((prev) => (prev.length >= 3 ? prev : [...prev, image]));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setSendError(`图片处理失败：${message}`);
+      }
+    }
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // ---- T5: voice input -------------------------------------------------------
+
+  useEffect(() => {
+    if (!recording) return;
+    const timer = window.setInterval(() => {
+      const rec = recorderRef.current;
+      setRecSeconds(rec ? rec.elapsedSeconds() : 0);
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [recording]);
+
+  // Release the mic if the view unmounts mid-recording.
+  useEffect(() => () => recorderRef.current?.cancel(), []);
+
+  const startVoice = async () => {
+    if (recording || transcribing) return;
+    setSendError(null);
+    try {
+      const rec = new VoiceRecorder();
+      await rec.start();
+      recorderRef.current = rec;
+      setRecSeconds(0);
+      setRecording(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSendError(`无法开始录音：${message}`);
+    }
+  };
+
+  const stopVoice = async () => {
+    const rec = recorderRef.current;
+    if (!rec || !recording) return;
+    setRecording(false);
+    setTranscribing(true);
+    setSendError(null);
+    try {
+      const { audioB64, sampleRate } = await rec.stop();
+      recorderRef.current = null;
+      if (!actions) throw new Error("连接未就绪");
+      const result = await actions.transcribe(audioB64, sampleRate);
+      const text = (result.text || "").trim();
+      if (!text) {
+        setSendError("没有识别到语音内容");
+        return;
+      }
+      setDraft((prev) => (prev ? `${prev} ${text}` : text));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSendError(`语音识别失败：${message}`);
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  const cancelVoice = () => {
+    recorderRef.current?.cancel();
+    recorderRef.current = null;
+    setRecording(false);
+  };
+
+  const fmtSeconds = (total: number) => `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 
   const togglePermission = async () => {
     if (!actions || !view.summary) return;
@@ -312,29 +455,88 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
             <button type="button" className="to-bottom" onClick={scrollToBottom}>↓ 最新消息</button>
           )}
 
-          {/* S6.2 send bar: idle → prompt, running → steer + abort */}
-          <div className="send-bar">
-            {running && (
-              <button type="button" className="abort-btn" onClick={doAbort} disabled={sending}>
-                停止
-              </button>
+          {/* Composer (Qoder-style card, 2026-09-15): + attachments / mic / round send-stop */}
+          <div className="composer">
+            {attachments.length > 0 && (
+              <div className="attach-row">
+                {attachments.map((attachment, i) => (
+                  <span key={i} className="attach-chip">
+                    <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="附件预览" />
+                    <button type="button" className="attach-x" onClick={() => removeAttachment(i)} aria-label="移除图片">×</button>
+                  </span>
+                ))}
+              </div>
             )}
-            <textarea
-              className="send-input"
-              value={draft}
-              placeholder={running ? "引导当前任务…" : "发送消息…"}
-              rows={1}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void doSend();
-                }
-              }}
-            />
-            <button type="button" className="send-btn primary" onClick={() => void doSend()} disabled={sending || !draft.trim()}>
-              {running ? "引导" : "发送"}
-            </button>
+
+            {recording ? (
+              <div className="voice-row">
+                <span className={`voice-dot ${transcribing ? "busy" : "live"}`} />
+                <span className="voice-timer">{transcribing ? "识别中…" : `正在录音 ${fmtSeconds(recSeconds)}`}</span>
+                <button type="button" className="voice-cancel" onClick={cancelVoice} disabled={transcribing}>取消</button>
+                <button type="button" className="voice-done" onClick={() => void stopVoice()} disabled={transcribing}>完成</button>
+              </div>
+            ) : (
+              <>
+                <textarea
+                  className="composer-input"
+                  value={draft}
+                  placeholder={running ? "引导当前任务…" : "描述你的任务…"}
+                  rows={1}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void doSend();
+                    }
+                  }}
+                />
+                <div className="composer-row">
+                  <button
+                    type="button"
+                    className={`icon-btn ${attachMenuOpen ? "active" : ""}`}
+                    onClick={() => setAttachMenuOpen((open) => !open)}
+                    disabled={attachments.length >= 3 || sending}
+                    aria-label="添加图片"
+                  >
+                    <IconPlus />
+                  </button>
+                  {attachMenuOpen && (
+                    <div className="attach-menu">
+                      <button type="button" onClick={() => pickImages("camera")}>📷 拍照</button>
+                      <button type="button" onClick={() => pickImages("album")}>🖼️ 相册</button>
+                    </div>
+                  )}
+                  <span className="composer-spacer" />
+                  <button
+                    type="button"
+                    className={`icon-btn ${transcribing ? "busy" : ""}`}
+                    onClick={() => void startVoice()}
+                    disabled={transcribing || sending}
+                    aria-label="语音输入"
+                  >
+                    {transcribing ? <span className="spinner" /> : <IconMic />}
+                  </button>
+                  {running && (
+                    <button type="button" className="send-btn stop" onClick={() => void doAbort()} disabled={sending} aria-label="停止">
+                      <IconStop />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={`send-btn primary ${running ? "steer" : ""}`}
+                    onClick={() => void doSend()}
+                    disabled={sending || (!draft.trim() && !attachments.length)}
+                    aria-label={running ? "引导发送" : "发送"}
+                  >
+                    <IconSend />
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Hidden pickers: album (multi) + camera (single, rear). */}
+            <input ref={albumInputRef} type="file" accept="image/*" multiple hidden onChange={(e) => void onFilesPicked(e.target.files)} />
+            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => void onFilesPicked(e.target.files)} />
           </div>
         </>
       )}

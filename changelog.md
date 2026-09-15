@@ -77,6 +77,14 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：手机点某会话的权限徽标 → 桌面 1 秒内该会话 pill 同步变化 + info toast；随后在该会话跑命令按新权限执行（full 不弹审批 / sandbox 下只读命令直接过）。测试：test-permission-gate 新增 cd 链用例、typecheck + 全量 npm test。
 
+16. **PWA composer 改造（Qoder 风）+ 图片发送 + 语音输入**：
+   - **UI**：旧 send-bar（textarea+文字按钮）换成 Qoder 风格圆角卡片——透明 textarea「描述你的任务…」、左下 `+` 附件钮（拍照/相册菜单）、右下 mic 图标 + 黑色圆形发送钮；运行中变 [停止圈][引导圈]，录音态整行切换为红点脉冲 + 计时 + 取消/完成。无头 Chromium 三状态截图验收。
+   - **图片**：`+` → 拍照/相册（≤3 张），前端 canvas 压缩 ≤1280px JPEG（质量循环降到 raw ≤280KB，base64 < host 单图 400K 上限），预览 chip 可删；prompt/steer 帧带 `images[]`（后端链路本就完整：RemoteService→bridge→pi RPC，真实 pi 进程验证空文本+图片被接受且 image block 持久化进会话 JSONL、快照回传渲染）。**注意：当前全栈无视觉模型，图片能发但模型「看不见」——需在 LM Studio 加载 VL 模型（如 Qwen2.5-VL-7B）后才真正生效。**
+   - **语音**：mic → AudioContext(16kHz) 采集 + 浏览器内编码 PCM16 WAV → `stt.transcribe` 帧（设备级、免写租约）→ host 转发本机 voice-stack 网关新增的 `POST /v1/audio/transcriptions`（sherpa-onnx 中英 ASR，复用实时管线同一识别器；绑 127.0.0.1:8093 零暴露，config.sttUrl 可覆盖）→ 文本入草稿。实测 zh_16k.wav 3.8s 返回正确中文。
+   - **壳 0.2.4**：AndroidManifest 补 `RECORD_AUDIO`（此前 WebView 内 getUserMedia 必失败），versionCode 5→6。
+
+   验证方式：手机装 0.2.4 → composer 新样式；+ 选图发送后消息气泡显示缩略图（换 VL 模型后可看图）；mic 录音说完点完成，草稿出现识别文本。测试：test-pwa-composer 新增 4 组（WAV 编码/base64/压缩质量循环/帧形状）、pwa-shared 协议清单同步 stt.transcribe、typecheck + 全量 npm test 67/0。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

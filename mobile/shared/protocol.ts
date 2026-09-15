@@ -21,6 +21,8 @@ export const REMOTE_REQUEST_TYPES = [
   "thread.steer",
   "thread.followUp",
   "thread.abort",
+  // Device-scoped (no threadId / write lease): phone voice memo → host STT relay.
+  "stt.transcribe",
   "file.tree",
   "file.preview",
   "ui.respond",
