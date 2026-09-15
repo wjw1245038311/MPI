@@ -92,6 +92,11 @@ export default function DbgOverlay({ client, threadView }: { client: RelayClient
         ? <>cid={client.getClientId()} state={client.getState()} err={client.getLastError() ?? "-"}</>
         : <span style={{ color: "#ff9f43" }}>client 未就绪（页面已渲染、中继连接未建立）</span>}
       {threadView ? <> | thread ready={String(threadView.ready)} msgs={threadView.messages.length} banner={threadView.errorBanner ?? "-"}</> : null}
+      {/* 媒体能力取证：语音输入排障用（UA 含 Chrome/WebView 版本；secureContext=false 时 getUserMedia 必挂） */}
+      <div style={{ marginTop: 4 }}>
+        <b>MEDIA</b> secure={String(window.isSecureContext)} gUM={typeof navigator.mediaDevices?.getUserMedia} AC={typeof window.AudioContext}
+      </div>
+      <div style={{ color: "#9aa0a6", fontSize: 10 }}>{navigator.userAgent}</div>
       {shellDiag && (
         <>
           <div style={{ marginTop: 4 }}>

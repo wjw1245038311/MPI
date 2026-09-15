@@ -362,13 +362,17 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const startVoice = async () => {
     if (recording || transcribing) return;
     setSendError(null);
+    let rec: VoiceRecorder | null = null;
     try {
-      const rec = new VoiceRecorder();
+      rec = new VoiceRecorder();
       await rec.start();
       recorderRef.current = rec;
       setRecSeconds(0);
       setRecording(true);
     } catch (error) {
+      // Release anything partially acquired — a leaked stream keeps the device
+      // busy and makes every retry fail with "Could not start audio source".
+      rec?.cancel();
       const message = error instanceof Error ? error.message : String(error);
       setSendError(`无法开始录音：${message}`);
     }
