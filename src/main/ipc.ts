@@ -102,6 +102,8 @@ import {
   stripChoicePrefix,
 } from "./choice-logic.ts";
 import { ensureTaskModeExtension } from "./taskmode-extension";
+import { ensureShellEnvExtension } from "./shellenv-extension";
+import { prepareShellForSpawn } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
 import { registerTuiIpc } from "./tui";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
@@ -404,6 +406,11 @@ function createHandle(
   // Channel session bridge gating — see the extensions list below.
   const isChannelSession = isChannelOwnedSession(sessionFile);
   const gateModeFile = createGateModeFile(getConfigDir(), permission);
+  // Resolve which shell backs the bash tool BEFORE spawning, and make pi's own
+  // settings agree with it (shell-bootstrap writes shellPath when the shell was
+  // found outside pi's search path). The same value feeds the model's
+  // environment block via MPI_SHELL_INFO, so prompt and runtime cannot drift.
+  const shell = prepareShellForSpawn(join(getAgentDir(), "settings.json"), cwd);
   let turnStarted = false;
   let promptForNotification = name || "";
   let completedReply: { text: string } | null = null;
@@ -445,6 +452,9 @@ function createHandle(
     extensions: [
       ensureGateExtension(getConfigDir()),
       ensureTodoExtension(getConfigDir()),
+      // Shell-environment bridge: tells the model which shell its commands run
+      // in (paired with the --exclude-tools powershell passed to this spawn).
+      ensureShellEnvExtension(getConfigDir()),
       // 方案选择 bridge: mpi_ask_choice renders clickable option cards in the
       // chat (existing extension-UI select). Interactive threads only —
       // automation spawns its own list without it, so unattended runs never
@@ -470,6 +480,8 @@ function createHandle(
     // User profile text (Settings → User Profile) is appended to this run's
     // system prompt; read at spawn time so edits apply from new sessions on.
     appendSystemPrompt: getConfig().userProfile?.trim() || undefined,
+    shellInfo: shell.info,
+    toolFlags: shell.toolFlags,
     gateModeFile,
     onEvent: (e) => {
       const event: any = e;

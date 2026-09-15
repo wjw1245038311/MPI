@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { ensureRuntimePackage, getActiveRuntimeRoot, getRuntimePackageManifest, runtimePathsForRoot } from "./runtime-package";
+import type { ShellInfoPayload } from "./shell-bootstrap";
 
 /**
  * PiBridge
@@ -305,6 +306,14 @@ export interface PiBridgeOptions {
   /** Free-form user profile text (Settings → User Profile) appended to pi's
    * system prompt for this run via --append-system-prompt. Empty = no flag. */
   appendSystemPrompt?: string;
+  /** Resolved shell for this spawn (shell-bootstrap.prepareShellForSpawn) —
+   * handed to mpi-shelenv-ext via MPI_SHELL_INFO so the model is told which
+   * shell its commands actually run in. */
+  shellInfo?: ShellInfoPayload;
+  /** Tool visibility flags keeping exactly one shell available: `--exclude-tools
+   * powershell` for a bash session. Never `--tools` (that is a strict allowlist
+   * covering extension tools too and would disable MPI's own bridges). */
+  toolFlags?: { tools?: string[]; excludeTools?: string[] };
   /** Per-thread gate mode file exposed to the gate extension as
    * MPI_GATE_MODE_FILE so sandbox/full can be toggled without a restart. */
   gateModeFile?: string;
@@ -369,8 +378,12 @@ export class PiBridge {
     for (const skill of this.opts.skills || []) args.push("--skill", skill);
     const appendPrompt = (this.opts.appendSystemPrompt || "").trim();
     if (appendPrompt) args.push("--append-system-prompt", appendPrompt);
+    const toolFlags = this.opts.toolFlags;
+    if (toolFlags?.tools?.length) args.push("--tools", toolFlags.tools.join(","));
+    if (toolFlags?.excludeTools?.length) args.push("--exclude-tools", toolFlags.excludeTools.join(","));
 
     const env: NodeJS.ProcessEnv = { ...process.env };
+    if (this.opts.shellInfo) env.MPI_SHELL_INFO = JSON.stringify(this.opts.shellInfo);
     if (this.opts.gateModeFile) env.MPI_GATE_MODE_FILE = this.opts.gateModeFile;
     if (this.opts.todoPaths) {
       env.MPI_TODO_FILE = this.opts.todoPaths.file;

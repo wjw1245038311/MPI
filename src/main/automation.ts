@@ -8,6 +8,10 @@ import {
 import { PiBridge } from "./pi-bridge";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile } from "./permission-gate";
 import { ensureTodoExtension } from "./todo-extension";
+import { ensureShellEnvExtension } from "./shellenv-extension";
+import { prepareShellForSpawn } from "./shell-bootstrap";
+import { getAgentDir } from "./session-store";
+import { join } from "node:path";
 import { ensureInboxDir, todosFilePath } from "./todo-store";
 
 /**
@@ -230,6 +234,9 @@ async function execute(task: AutomationTask): Promise<void> {
         finish(() => resolve());
         return;
       }
+      // Same shell resolution as interactive threads: unattended runs are
+      // exactly where a `No bash shell found` failure is hardest to notice.
+      const shell = prepareShellForSpawn(join(getAgentDir(), "settings.json"), task.cwd);
       bridge = new PiBridge({
         cwd: task.cwd,
         piCliPath: getConfig().piCliPath,
@@ -237,9 +244,12 @@ async function execute(task: AutomationTask): Promise<void> {
         // are never chat-channel sessions, so the mpi_channel_* bridge is not
         // loaded (desktop/automation sessions don't pay for its tools).
         appendSystemPrompt: getConfig().userProfile?.trim() || undefined,
+        shellInfo: shell.info,
+        toolFlags: shell.toolFlags,
         extensions: [
           ensureGateExtension(getConfigDir()),
           ensureTodoExtension(getConfigDir()),
+          ensureShellEnvExtension(getConfigDir()),
         ],
         // Live paths so a customized todo data location is honored.
         todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },

@@ -74,7 +74,9 @@
     "test:appstore": "node --experimental-strip-types scripts/test-app-store.mjs",
     "test:appruntime": "node --experimental-strip-types scripts/test-app-runtime.mjs",
     "test:test-registry": "node --experimental-strip-types scripts/test-test-registry.mjs",
-    "test:searchmark": "node scripts/test-search-mark.mjs"
+    "test:searchmark": "node scripts/test-search-mark.mjs",
+    "test:shellev": "node --experimental-strip-types scripts/test-shell-env-ext.mjs",
+    "test:shellresolver": "node --experimental-strip-types scripts/test-shell-resolver.mjs"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.73.3",
