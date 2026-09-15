@@ -44,6 +44,18 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：见上一条卡片的⚠分支；对照 `docs/SHELL-ENVIRONMENT.md`。测试：`npm test -- shell`（resolver / env-ext / bootstrap / spawn / e2e 共 5 个）。
 
+9. **修复定时任务误报「需要人工交互」**：无人值守运行原来把除 notify 外的一切扩展 UI 请求都当需人应答的对话框——而 pi-mcp-adapter 只要 mcp.json 配了 ≥1 个 server（哪怕 lazy、从未连接）就在会话初始化时发 `setStatus("mcp", …)`，导致配了 MCP 的机器上每个定时任务每次运行都误报失败（「定时任务需要人工交互（setStatus）」）。现在只有真正需要用户输入的四个对话框方法 select/confirm/input/editor 记为交互；notify/setStatus/setWidget/setTitle/set_editor_text 等纯展示 / fire-and-forget 方法照常应答、不让 run 失败（与渲染层 store.ts 的排队规则一致）。
+
+   验证方式：在 mcp.json 配了至少一个 MCP server 的机器上建任意定时任务 → 运行一次后 lastStatus 为成功而非「需要人工交互」；`npm test -- extuimethods`（8 组，含 pi-mcp-adapter setStatus 回归场景）。
+
+10. **修复残留对话框遮罩挡住输入**：扩展的 input/editor 对话框挂起期间若 pi 进程退出或会话被关闭，该线程的队列条目原来不清理——ExtUiModal 的全屏遮罩（`inset:0` 半透明黑）会一直留在屏幕上，表现为「输入框置灰、打不了字」。现在 `handleExit` / `closeThread` 都会清掉对应线程的 extuiQueue 条目。
+
+   验证方式：单测覆盖两条路径（`npm test -- extuiqueue`，3 组）；实际使用中若出现对话框后关闭会话或 pi 退出，不再残留全屏遮罩。
+
+11. **现场诊断日志（定位间歇性输入框置灰）**：渲染层现在把低频事件——扩展 UI 队列变化 / 每会话 streaming 起止 / 窗口 focus-blur 与可见性——以 JSON 行写入 `userData/logs/mpi-diag.log`（超 1MB 自动轮转，写失败绝不影响应用）。若「输入框置灰」再次出现，这份日志可区分两种成因：残留对话框遮罩（队列条目在）还是渲染进程卡死（该时段所有事件都断流）。
+
+   验证方式：MPI 运行一段时间后 `userData/logs/mpi-diag.log` 存在且含 window-focus / streaming 等行；文件体积稳定在 ~1MB 内。测试：`npm test -- diaglog`。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

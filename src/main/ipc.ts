@@ -6,6 +6,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
+import { appendDiagLog } from "./diag-log";
 import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
 import { listTests, readScenarioHistory, readScenarioResult, runLogicTest, runScenarioCase } from "./test-runner";
 import { getDevReleaseLogWindow, openChangelogWindow, openDevReleaseLogWindow } from "./standalone-windows";
@@ -978,6 +979,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   setTransferBroadcaster((list) => send("pi:transfers", list));
   ipcMain.handle("transfers:snapshot", () => getTransfers());
   ipcMain.handle("transfers:cancel", (_e, id: string) => cancelActiveTransfer(typeof id === "string" ? id : ""));
+
+  // Field diagnostics (renderer → file): low-frequency JSON lines for hunting
+  // intermittent UI issues (see src/renderer/src/lib/diag-watch.ts).
+  ipcMain.handle("diag:log", (_e, line: unknown) => {
+    if (typeof line === "string" && line.length > 0 && line.length < 4096) appendDiagLog(line);
+  });
 
   // P1-12: sync the autopilot with persisted pool/policy, then run recovery
   // probes at most once per configured interval while auto threads are open.

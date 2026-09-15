@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore } from "./store";
 import { usePiEvents } from "./lib/usePiEvents";
+import { startDiagWatch } from "./lib/diag-watch";
 import { unlockAudio } from "./lib/sound";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
@@ -89,6 +90,10 @@ export default function App() {
   // Prime the WebAudio context on the first user gesture so the completion
   // chime can play later without a fresh gesture requirement.
   useEffect(() => unlockAudio(), []);
+
+  // Field diagnostics (ext-ui queue / streaming flips / window focus) →
+  // userData/logs/mpi-diag.log; see lib/diag-watch.ts for what it captures.
+  useEffect(() => startDiagWatch(), []);
 
   // Dock-back for popped-out previews while the panel is CLOSED: Preview's own
   // zone-check listener only exists while it is mounted, so a release over the

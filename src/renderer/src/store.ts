@@ -2126,7 +2126,15 @@ export const useStore = create<PiStore>()((set, get) => {
       let activeThreadId = s.activeThreadId;
       if (activeThreadId === id) activeThreadId = openThreadIds[openThreadIds.length - 1] || null;
       const activeProjectCwd = activeThreadId ? threads[activeThreadId]?.cwd || null : null;
-      return { openThreadIds, threads, activeThreadId, activeProjectCwd };
+      return {
+        openThreadIds,
+        threads,
+        activeThreadId,
+        activeProjectCwd,
+        // The thread is gone — its pending dialogs can never be answered; drop
+        // them so a full-screen ExtUiModal backdrop doesn't stay up.
+        extuiQueue: s.extuiQueue.filter((q) => q.threadId !== id),
+      };
     });
   },
 
@@ -2888,7 +2896,12 @@ export const useStore = create<PiStore>()((set, get) => {
     set((s) => {
       const t = s.threads[threadId];
       if (!t) return s;
-      return { threads: { ...s.threads, [threadId]: { ...t, isStreaming: false, streaming: null, error: `pi exited (code ${info.code})` } } };
+      return {
+        threads: { ...s.threads, [threadId]: { ...t, isStreaming: false, streaming: null, error: `pi exited (code ${info.code})` } },
+        // The pi process is gone — any of its pending dialogs can never be
+        // answered; drop them so a full-screen ExtUiModal backdrop doesn't stay up.
+        extuiQueue: s.extuiQueue.filter((q) => q.threadId !== threadId),
+      };
     });
     const tail = (info.stderr || "").trim().split(/\r?\n/).slice(-3).join(" | ");
     get().pushToast("error", `pi process exited (${info.code})${tail ? ": " + tail : ""}`);

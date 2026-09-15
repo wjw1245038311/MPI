@@ -1,10 +1,6 @@
 import { getConfig, getConfigDir, reloadConfig, updateConfig, type AutomationTask, type TaskSchedule } from "./config";
-import {
-  autoAnswerModelSelect,
-  createWebSearchFlow,
-  isLikelyModelSelect,
-  type WebSearchFlow,
-} from "./web-search-config";
+import { autoAnswerModelSelect, createWebSearchFlow, type WebSearchFlow } from "./web-search-config";
+import { createAutomationExtUiHandler } from "./automation-ext-ui";
 import { PiBridge } from "./pi-bridge";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile } from "./permission-gate";
 import { ensureTodoExtension } from "./todo-extension";
@@ -212,7 +208,13 @@ async function execute(task: AutomationTask): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       let done = false;
       let lastAssistantMessage: AssistantMessageSummary | null = null;
-      let cancelledUiMethod: string | null = null;
+      const extUi = createAutomationExtUiHandler({
+        respondExtUi: (id, payload) => {
+          bridge?.respondExtUi(id, payload);
+        },
+        autoPickModel: getConfig().extAutoPickModel !== false,
+        answerModelSelect: (r) => autoAnswerModelSelect(bridge!, r),
+      });
       const finish = (fn: () => void) => {
         if (done) return;
         done = true;
@@ -270,8 +272,9 @@ async function execute(task: AutomationTask): Promise<void> {
           if (e?.type !== "agent_settled") return;
 
           finish(() => {
-            if (cancelledUiMethod) {
-              reject(new Error(`定时任务需要人工交互（${cancelledUiMethod}），无人值守运行已停止`));
+            const cancelled = extUi.cancelledMethod();
+            if (cancelled) {
+              reject(new Error(`定时任务需要人工交互（${cancelled}），无人值守运行已停止`));
               return;
             }
             const failure = getAssistantFailure(lastAssistantMessage);
@@ -279,27 +282,7 @@ async function execute(task: AutomationTask): Promise<void> {
             else resolve();
           });
         },
-        onExtUi: (r: any) => {
-          const cancelUi = (req: any) => {
-            // Unattended runs cannot answer dialogs. Cancel it immediately and
-            // surface a failure after the agent settles instead of reporting a
-            // misleading success.
-            const method = textValue(req?.method) || "extension UI";
-            if (method !== "notify" && !cancelledUiMethod) cancelledUiMethod = method;
-            bridge?.respondExtUi(req.id, { cancelled: true });
-          };
-          // Model-picker dialogs are answered with the run's current model so
-          // web searches don't fail headless; everything else still cancels.
-          if (getConfig().extAutoPickModel !== false && isLikelyModelSelect(r)) {
-            void autoAnswerModelSelect(bridge!, r)
-              .then((answered) => {
-                if (!answered) cancelUi(r);
-              })
-              .catch(() => cancelUi(r));
-            return;
-          }
-          cancelUi(r);
-        },
+        onExtUi: (r: any) => extUi.handle(r),
         onExit: (info) => finish(() => reject(new Error(formatProcessExit(info)))),
         onError: (err) => finish(() => reject(err)),
       });

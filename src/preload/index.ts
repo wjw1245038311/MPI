@@ -415,6 +415,11 @@ const api = {
     maximize: () => ipcRenderer.invoke("window:maximize"),
     close: () => ipcRenderer.invoke("window:close"),
   },
+  diag: {
+    // Field diagnostics: one JSON line per call, appended to
+    // userData/logs/mpi-diag.log by the main process (see src/main/diag-log.ts).
+    log: (line: string) => ipcRenderer.invoke("diag:log", line),
+  },
   on: {
     event: (cb: (p: { threadId: string; event: any }) => void) => on("pi:event", cb),
     extui: (cb: (p: { threadId: string; request: any }) => void) => on("pi:extui", cb),
