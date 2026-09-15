@@ -120,6 +120,9 @@ https://<relay>/#pair=<base64url payload>
   PWA 配对页上的「扫码配对」按钮靠 `window.MpiShell`（`addJavascriptInterface` 注入）探测壳环境；
   识别到文本后由壳归一化成 `https://<relay>/#pair=<payload>` 交给 WebView —— **复用 PWA 已有的
   `#pair=` 自动配对路径，原生侧不重写配对逻辑**。权限被拒时回退到「粘贴配对链接」，不影响其它功能。
+  ⚠ PWA 必须监听 `hashchange`：壳内扫码时 WebView 已在本页，loadUrl 只改 hash → same-document
+  导航**不重载页面**；若 PWA 只在挂载时读一次 `#pair=` 就会静默无反应（2026-09 真机 bug）。
+  未识别到二维码返回壳时弹 toast，不留静默失败。
 - **APK 自更新**（`Updater`）：启动 ~3 秒后读 `/download/mpi-android.json` 比对
   `BuildConfig.VERSION_NAME`；有新版就在 WebView 上方浮出原生提示条（「发现新版 X · 更新 / ✕」）。
   点更新 → HttpURLConnection 下载（带进度）→ **sha256 校验**（不一致不安装）→ FileProvider +
@@ -140,7 +143,7 @@ https://<relay>/#pair=<base64url payload>
 
 | # | 契约项 | 方向 | 说明 |
 | --- | --- | --- | --- |
-| 1 | `window.MpiShell.scanPairQr(): void` | 壳注入 → PWA | 拉起 ScanActivity；识别结果归一化成 `https://<relay>/#pair=<payload>` 交给 WebView，复用 PWA 的自动配对路径。PWA 据此在配对页显示「扫码配对」按钮 |
+| 1 | `window.MpiShell.scanPairQr(): void` | 壳注入 → PWA | 拉起 ScanActivity；识别结果归一化成 `https://<relay>/#pair=<payload>` 交给 WebView（loadUrl，可能仅 hash 变化）。**PWA 侧必须监听 hashchange 处理 `#pair=`**（same-document 导航不重载页面）；未识别到二维码时壳弹 toast。PWA 据此在配对页显示「扫码配对」按钮 |
 | 2 | `window.MpiShell.shellVersion(): string` | 壳注入 → PWA | 返回壳版本号（`BuildConfig.VERSION_NAME`），诊断/展示用 |
 | 3 | 环境探测 | PWA → 壳 | PWA 以 `typeof window.MpiShell?.scanPairQr === "function"` 判定「在壳里」，显示壳专属 UI（扫码按钮、推送提示条）。**必须先探测再使用，不得假设存在** |
 | 4 | `window.__mpiBack(): "handled" \| "pass"` | PWA → 壳（返回键握手） | 壳的返回键先执行 `evaluateJavascript("window.__mpiBack ? window.__mpiBack() : 'pass'")`：返回 `"handled"` = 页面已处理（如关抽屉），壳不再动作；否则走 `canGoBack() ? goBack() : moveTaskToBack()`。原因：WebView 的 `canGoBack()` 不把 pushState 历史算进去，没有这个握手按返回键会直接后台化 |

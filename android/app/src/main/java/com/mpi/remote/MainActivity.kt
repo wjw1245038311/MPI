@@ -251,7 +251,12 @@ class MainActivity : AppCompatActivity() {
 
     private val scanLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val scanned = result.data?.getStringExtra(ScanActivity.EXTRA_TEXT)
-        if (result.resultCode == Activity.RESULT_OK && !scanned.isNullOrBlank()) openScanned(scanned)
+        if (result.resultCode == Activity.RESULT_OK && !scanned.isNullOrBlank()) {
+            openScanned(scanned)
+        } else {
+            // 没识别到就明确告知，别让用户以为「扫了但没反应」。
+            Toast.makeText(this, getString(R.string.scan_no_result), Toast.LENGTH_LONG).show()
+        }
     }
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->

@@ -9,6 +9,7 @@
     <string name="scan_need_camera">需要相机权限才能扫码。可到系统设置里开启，或用「粘贴配对链接」的方式完成配对。</string>
     <string name="scan_failed">相机启动失败：%1$s</string>
     <string name="scan_not_pairing">这不是 MPI 配对码</string>
+    <string name="scan_no_result">未识别到二维码，请重试（确保二维码完整、亮度足够）</string>
     <string name="update_action">更新</string>
     <string name="update_available">发现新版 %1$s</string>
     <string name="update_downloading">正在下载 %1$d%%</string>
