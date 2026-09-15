@@ -24,6 +24,8 @@ import { ensureBrowserPush } from "./lib/webpush";
 
 /** ?dbg=1 in the URL turns on the on-screen diagnostics overlay (real-device debugging). */
 const DBG_ENABLED = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("dbg");
+// 临时诊断标记：确认手机端加载的是哪一版构建（扫码排查用，稳定后移除）。
+const BUILD_TAG = "260915c";
 
 /** 安卓壳注入的桥（浏览器里不存在）——用来显示「扫码配对」并提供壳版本号。 */
 type ShellBridge = { scanPairQr: () => void; shellVersion?: () => string };
@@ -661,6 +663,8 @@ export default function App() {
                 {error && <span style={{ color: "var(--err)" }}> · {error}</span>}
               </div>
             )}
+            {/* 临时诊断：确认手机加载的是哪一版构建（扫码排查用，稳定后移除） */}
+            <p className="hint" style={{ marginTop: 10, marginBottom: 0 }}>build {BUILD_TAG}</p>
           </div>
         )}
       </main>

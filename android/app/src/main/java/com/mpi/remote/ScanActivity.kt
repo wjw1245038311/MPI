@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Size
 import android.util.TypedValue
 import android.view.Gravity
 import android.widget.FrameLayout
@@ -91,7 +92,7 @@ class ScanActivity : AppCompatActivity() {
             // 在这种分辨率下模块像素不足、识别失败。CameraX 会取不超过目标的最近尺寸。
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setTargetResolution(1920, 1080)
+                .setTargetResolution(Size(1920, 1080))
                 .build()
                 .also { it.setAnalyzer(analysisExecutor!!, ::analyze) }
             try {
