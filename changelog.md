@@ -60,6 +60,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：设置 → 定时任务 → 新建/编辑任务 → 「模型」选一个 Provider + 模型保存 → 任务行出现 🤖 模型名徽标（悬停可见 provider/modelId）；点 ▶ 立即运行后查看该会话实际使用的模型即所选值；把该模型从 models.json 删掉再跑一次 → lastStatus=error，错误信息含 `Model not found: <provider>/<model>`。测试：`npm test -- automodel`（4 组：resolveTaskModel + config 存取往返）。
 
+13. **清理 mobile 残留：移除从未部署的公网 signaling 端点**（用户拍板：移动端仅局域网个人使用，无公网信令需求）。改名期写入默认值的 `wss://mpi-remote.scholarcn.com/ws` 实际指向 scholarcn.com 的 web 源站（302），远程配对一直不可用——现在 `DEFAULT_REMOTE_SIGNALING_URL` 清空（legacy WebRTC 路径本就无 UI 入口、默认禁用），旧配置里存的死 URL 在启动时自动归一为 ""；删除从未部署过的 CF worker 项目目录 `cloudflare-signaling/`。移动端实际可用路径不变：自托管 relay（`mobile/relay/`，局域网内手机直连桌面）。
+
+   验证方式：全新配置 loadConfig → remoteSignalingUrl === ""；旧配置存 `wss://mpi-remote.scholarcn.com/ws` → 加载后变 ""；手动配置的其它 ws(s):// URL（如本地 signaling server）不受影响。测试：全量 npm test。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

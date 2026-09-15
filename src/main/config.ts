@@ -264,7 +264,14 @@ export interface PendingDataMigration {
   };
 }
 
-export const DEFAULT_REMOTE_SIGNALING_URL = "wss://mpi-remote.scholarcn.com/ws";
+/** Legacy WebRTC signaling endpoint. Empty by default: the public endpoint from
+ * the rename era (mpi-remote.scholarcn.com) was never deployed — mobile usage is
+ * LAN-only with a self-hosted relay, so the legacy path stays disabled unless a
+ * user explicitly configures their own ws(s):// URL (e.g. a local signaling server). */
+export const DEFAULT_REMOTE_SIGNALING_URL = "";
+/** The rename-era public endpoint that was never deployed; saved copies of it are
+ * normalized to "" at load time so installs don't point at a dead URL. */
+export const LEGACY_PUBLIC_SIGNALING_URL = "wss://mpi-remote.scholarcn.com/ws";
 
 /** Fixed transport bootstrap endpoints. These are intentionally not user-editable. */
 export const BUILT_IN_REMOTE_STUN_URLS = [
@@ -411,14 +418,16 @@ export function loadConfig(userDataDir: string): AppConfig {
       // user pin, so discard them once when adopting explicit pin semantics;
       // users can re-pin the projects they actually want to keep at the top.
       const legacyProjectPins = parsed.projectPinSchemaVersion !== 1;
+      // The rename-era public signaling endpoint was never deployed (mobile usage
+      // is LAN-only) — treat saved copies of it as unset instead of a dead URL.
+      const rawSignalingUrl = typeof parsed.remoteSignalingUrl === "string" ? parsed.remoteSignalingUrl.trim() : "";
+      const signalingUrl = rawSignalingUrl === LEGACY_PUBLIC_SIGNALING_URL ? "" : rawSignalingUrl || DEFAULTS.remoteSignalingUrl;
       cached = {
         ...DEFAULTS,
         ...parsed,
         pinnedProjects: legacyProjectPins ? [] : (parsed.pinnedProjects || []),
         projectPinSchemaVersion: 1,
-        remoteSignalingUrl: typeof parsed.remoteSignalingUrl === "string" && parsed.remoteSignalingUrl.trim()
-          ? parsed.remoteSignalingUrl.trim()
-          : DEFAULTS.remoteSignalingUrl,
+        remoteSignalingUrl: signalingUrl,
         remoteSignalingEnabled: typeof parsed.remoteSignalingEnabled === "boolean"
           ? parsed.remoteSignalingEnabled
           : DEFAULTS.remoteSignalingEnabled,

@@ -352,3 +352,14 @@ S1 Windows relay-uplink transport（host 注册/重连/帧转发进 RemoteServic
 - 每阶段开工前先列检查点清单；连续两次修正无进展或计划前提被证伪 → 立即停下上报，不硬撑。
 - S1 之前不改 `src/main/remote/{protocol,identity,host,service}.ts`（S1 按 §5 只新增 relay-uplink.ts + host.ts/config.ts/RemotePanel.tsx 小改）。
 - RemotePanel 入口恢复（P1-10）在 S8，不要提前动 Sidebar。
+
+## 13. 运维现状（2026-09-15）
+
+- **公网 signaling 端点不部署**：改名期的 `mpi-remote.scholarcn.com` + CF worker `mpi-signaling`
+  从未上线（用户拍板：移动端仅局域网个人使用，无公网信令需求）。代码默认值已清空
+  （`DEFAULT_REMOTE_SIGNALING_URL = ""`），旧配置里存的死 URL 在 loadConfig 时自动归一为 ""；
+  `cloudflare-signaling/` worker 项目目录已删除（git 历史可找回）。
+- **移动端实际路径**：自托管 relay（`mobile/relay/index.mjs`，RELAY_PORT 默认 9001）+ PWA，
+  手机与桌面同局域网/tailnet 内直连；配对二维码携带 `https://<relay>/#pair=<payload>`。
+- **legacy WebRTC 路径**（`src/main/remote/host.ts` + `signaling/server.mjs`）：按 §12.1 保留代码、
+  不暴露 UI 入口，默认禁用；如需局域网内用旧协议配对，可本地跑 `signaling/server.mjs` 并手动配置 URL。
