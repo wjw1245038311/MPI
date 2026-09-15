@@ -1657,6 +1657,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         existing.permission = permission;
         writeGateMode(existing.gateModeFile, permission);
         publishRemotePermissionChanged(ref.sessionFile, permission);
+        send("pi:permission-changed", { sessionFile: ref.sessionFile ?? undefined, permission });
       }
       return existing;
     }
@@ -1870,6 +1871,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         writeGateMode(handle.gateModeFile, permission);
       }
       publishRemotePermissionChanged(ref.sessionFile, permission);
+      // The desktop renderer did NOT originate this change — sync its pill live,
+      // otherwise it keeps showing the stale level while the gate already runs
+      // with the new one (2026-09-15: phone flipped a thread to sandbox and the
+      // desktop pill still said "full" until the next approval dialog exposed it).
+      send("pi:permission-changed", { sessionFile: ref.sessionFile ?? undefined, permission });
       return remoteSnapshot(threadId, { live: true });
     },
     setModel: async (threadId, provider, modelId) => {

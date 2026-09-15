@@ -144,6 +144,37 @@ export function usePiEvents() {
           );
         })
       : () => undefined;
+    // Remote (phone) permission change: main already flipped the gate + config —
+    // sync this thread's pill and tell the user, so a phone-side flip is never
+    // invisible on desktop again (2026-09-15 desync: pill said full, gate ran sandbox).
+    const u13 = typeof window.pi.on.permissionChanged === "function"
+      ? window.pi.on.permissionChanged((p) => {
+          if (!p.sessionFile) return;
+          const st = useStore.getState();
+          const id = Object.keys(st.threads).find(
+            (tid) => ((st.threads[tid].sessionFile || tid) as string | undefined)?.toLowerCase() === p.sessionFile!.toLowerCase(),
+          );
+          if (!id) return; // thread not open locally — nothing to sync
+          useStore.setState((s) => {
+            const t = s.threads[id];
+            if (!t || t.permission === p.permission) return s;
+            return { threads: { ...s.threads, [id]: { ...t, permission: p.permission } } };
+          });
+          const zh = st.config?.language === "zh";
+          const names: Record<string, string> = {
+            readonly: zh ? "只读" : "Read-only",
+            strict: zh ? "严格" : "Strict",
+            sandbox: zh ? "沙盒" : "Sandbox",
+            full: zh ? "完全权限" : "Full access",
+          };
+          st.pushToast(
+            "info",
+            zh
+              ? `手机端把该会话权限改成了「${names[p.permission] ?? p.permission}」`
+              : `The phone changed this thread's permission to “${names[p.permission] ?? p.permission}”`,
+          );
+        })
+      : () => undefined;
     const u6 = window.pi.on.projectsChanged(() => {
       void useStore.getState().refreshProjects();
     });
@@ -165,6 +196,7 @@ export function usePiEvents() {
       u10();
       u11();
       u12();
+      u13();
     };
   }, [handleEvent, handleExtUi, handleExit, handleError]);
 }

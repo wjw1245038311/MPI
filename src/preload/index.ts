@@ -439,6 +439,8 @@ const api = {
     // Agent-initiated permission switch approved (mpi_request_mode_switch):
     // main already flipped the gate + cleared the enforced task mode.
     modeSwitched: (cb: (p: { threadId: string; permission: PermissionLevel; taskMode: null }) => void) => on("pi:modeSwitched", cb),
+    /** Remote (phone) flipped a thread's permission — main already updated the gate. */
+    permissionChanged: (cb: (p: { sessionFile?: string; permission: PermissionLevel }) => void) => on("pi:permission-changed", cb),
     automation: (cb: (p: { type: "start" | "done"; taskId: string; name: string; ok?: boolean; error?: string }) => void) =>
       on("pi:automation", cb),
     messaging: (cb: (p: {

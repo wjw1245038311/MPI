@@ -71,6 +71,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：手机装 0.2.3 → 打开壳应见「正在连接中继…」；网络不通时停留该提示而非纯黑屏；扫码 8s 未识别弹 toast；壳内访问 `https://<relay>/?dbg=1` 可见 SHELL v0.2.3 + baseUrl + 事件时间线。测试：PWA tsc+vite build、5 组 pwa node 测试通过；无头 Chromium 验证 ?dbg=1 浮层在无 client 时渲染。
 
+15. **修复手机端改权限不同步桌面（「权限被暗改」）**：在 PWA 会话头部点权限徽标切换时，main 更新了 config + gate mode file，但只把 `permission_changed` 推给手机自己——**桌面 renderer 收不到任何通知** → pill 停在旧值（如 full），实际执行已按 sandbox 走；下一条无法确认只读的命令突然弹审批，看起来就像「权限被暗改了只是没显示」。现场取证：config.threadPermissions 与 gate mode file 均为 sandbox（mtime = 手机操作时刻），桌面 pill 却显示完全权限。现在 main 在远程改权限的两条路径（remote setPermission、ensureRemoteBridge 既有 handle）都同时发 `pi:permission-changed` 给桌面 renderer，pill 实时同步并弹 toast「手机端把该会话权限改成了『沙盒』」——变更不再静默。
+
+   顺带修复触发本次弹窗的第二个因素：`cd`/`pushd` 不在只读白名单，沙盒下 `cd <dir>; wc …; grep … | head` 这类纯只读链会因 cd 段无法分类而弹审批——已加入 READ_ONLY_SEGMENTS（仅导航、无持久状态；链中其它段仍逐段判定）。
+
+   验证方式：手机点某会话的权限徽标 → 桌面 1 秒内该会话 pill 同步变化 + info toast；随后在该会话跑命令按新权限执行（full 不弹审批 / sandbox 下只读命令直接过）。测试：test-permission-gate 新增 cd 链用例、typecheck + 全量 npm test。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

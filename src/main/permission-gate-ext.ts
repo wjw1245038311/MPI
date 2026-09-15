@@ -119,6 +119,11 @@ const SAFE_PROJECT_NPM_TASK = /^(?:build|check|compile|dev|format|generate|lint|
 const SAFE_NON_MUTATING_SEGMENT = /^(?:echo|printf|true|false|clear|cls|date|time)(?:\s+[^;&|<>]*)?$/i;
 
 const READ_ONLY_SEGMENTS: RegExp[] = [
+  // cd/pushd only move the shell's working directory within this invocation —
+  // no persistent state. Without them, the ubiquitous `cd <dir>; <read-only>`
+  // pattern (models use it constantly) fails classification and prompts under
+  // sandbox even though every real operation is read-only.
+  /^(?:cd|pushd)(?:\s+[^;&|<>]*)?$/i,
   /^(?:pwd|get-location|whoami|hostname)(?:\s+[^;&|<>]*)?$/i,
   /^(?:ls|dir|get-childitem|gci)(?:\s+[^;&|<>]*)?$/i,
   /^(?:cat|get-content|gc|type)(?:\s+[^;&|<>]*)?$/i,
