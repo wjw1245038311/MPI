@@ -26,12 +26,6 @@ import { currentBundleName, isUpdateAvailable } from "./lib/update-watch";
 /** ?dbg=1 in the URL turns on the on-screen diagnostics overlay (real-device debugging). */
 const DBG_ENABLED = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("dbg");
 
-/** 顶部展示用的短构建号：index-CH9ax1CO.js → CH9ax1CO。 */
-function shortBundle(): string {
-  const name = currentBundleName();
-  return name ? name.replace(/^index-/, "").replace(/\.js$/, "") : "dev";
-}
-
 // 壳（0.2.7+）回前台时靠这个值判断页面是否已过期 → 与中继的 index.html 对比，
 // 不同就自动 reload。契约见 docs/ANDROID-SHELL.md #11。
 if (typeof window !== "undefined") {
@@ -642,9 +636,6 @@ export default function App() {
         <div className="header-main">
           <h1>{headerTitle}</h1>
           {headerSubtitle && <div className="hint">{headerSubtitle}</div>}
-          {/* 构建号自证：任何页面都能看出手机实际跑的是哪个 bundle、来自哪个源。
-              没有这行 / 哈希不是最新 = 页面是旧版（或加载的不是这个中继）。 */}
-          <div className="build-stamp">build {shortBundle()} · {window.location.host}</div>
         </div>
       </header>
       {view === "home" && hostId && shellBridge() && !pushHintDismissed && (

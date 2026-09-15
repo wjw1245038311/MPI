@@ -691,38 +691,35 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   })();
 
   return (
-    <div className="card thread-view">
-      <div className="thread-head">
+    <div className="thread-view">
+      {/* 工具栏：返回 + 状态 + 会话级配置（权限/模式/模型）。
+          原先这里还有一行重复的会话标题——顶部 header 已经显示同一个标题，删掉省一行。 */}
+      <div className="thread-toolbar">
         <button type="button" className="back-btn" onClick={onBack} aria-label="返回项目列表">←</button>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="thread-title">{view.summary?.title || "会话"}</div>
-          {view.summary && (
-            <span className={`badge badge-${view.summary.state}`}>{STATE_LABELS[view.summary.state]}</span>
-          )}
-        </div>
+        {view.summary && STATE_LABELS[view.summary.state] !== STATE_LABELS.idle && view.summary.state !== "draft" && (
+          <span className={`badge badge-${view.summary.state}`}>{STATE_LABELS[view.summary.state]}</span>
+        )}
+        {view.summary && (
+          <>
+            <button
+              type="button"
+              className={`cfg-chip ${view.summary.permission === "sandbox" ? "sandbox" : "full"}`}
+              onClick={() => setSheet("permission")}
+            >
+              <IconLock />
+              {view.summary.permission === "sandbox" ? "沙盒" : "完整权限"}
+            </button>
+            <button type="button" className="cfg-chip" onClick={() => setSheet("mode")} disabled={modelBusy}>
+              <IconSpark />
+              {modeLabel}
+            </button>
+            <button type="button" className="cfg-chip" onClick={() => setSheet("model")} disabled={modelBusy}>
+              <IconModel />
+              {modelBusy ? "切换中…" : modelLabel}
+            </button>
+          </>
+        )}
       </div>
-
-      {/* 配置栏：会话级设置（权限 / 模型）放顶部，点开底部抽屉选择。 */}
-      {view.summary && (
-        <div className="config-bar">
-          <button
-            type="button"
-            className={`cfg-chip ${view.summary.permission === "sandbox" ? "sandbox" : "full"}`}
-            onClick={() => setSheet("permission")}
-          >
-            <IconLock />
-            {view.summary.permission === "sandbox" ? "沙盒" : "完整权限"}
-          </button>
-          <button type="button" className="cfg-chip" onClick={() => setSheet("mode")} disabled={modelBusy}>
-            <IconSpark />
-            {modeLabel}
-          </button>
-          <button type="button" className="cfg-chip" onClick={() => setSheet("model")} disabled={modelBusy}>
-            <IconModel />
-            {modelBusy ? "切换中…" : modelLabel}
-          </button>
-        </div>
-      )}
 
       {!view.ready ? (
         <p className="hint">加载会话…</p>

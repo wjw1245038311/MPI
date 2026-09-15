@@ -79,7 +79,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 2px 14px;
+  padding: 2px 2px 8px;
 }
 
 .app-logo {
@@ -94,7 +94,7 @@ html, body {
   place-items: center;
 }
 
-.app-header h1 { font-size: 18px; margin: 0; }
+.app-header h1 { font-size: 17px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .card {
   background: var(--panel);
@@ -324,10 +324,17 @@ button:disabled { opacity: 0.5; cursor: default; }
 .error-text { color: var(--err) !important; margin: 0; font-size: 13px; }
 
 /* --- S5 thread view ---------------------------------------------------------- */
-/* flex:1 + min-height:0 = 卡片吃掉 header 之外的剩余高度；绝不外溢把输入框顶出屏幕。
+/* 会话视图：无卡片外框（用户要求去边框，同时省掉一层内边距）。
+   flex:1 + min-height:0 = 吃掉 header 之外的剩余高度；绝不外溢把输入框顶出屏幕。
    （2026-09-15 真机「按钮被遮挡」：原来硬编码 max-height: calc(100dvh - 90px)，
-    顶部多一行构建号就把底部按钮挤出可视区。） */
-.thread-view { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 0; }
+    顶部多一行就把底部按钮挤出可视区。） */
+.thread-view { display: flex; flex-direction: column; gap: 6px; flex: 1 1 auto; min-height: 0; }
+
+/* 工具栏：返回 + 状态 + 权限/模式/模型 chip —— 紧贴顶部标题下方的一条，可横向滚动。 */
+.thread-toolbar { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 0 0; }
+.thread-toolbar::-webkit-scrollbar { display: none; }
+.thread-toolbar .back-btn { width: 30px; height: 30px; font-size: 15px; }
+.thread-toolbar .badge { flex: none; }
 .thread-head { display: flex; align-items: center; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
 .back-btn { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; padding: 0; font-size: 16px; flex: none; }
 
@@ -393,9 +400,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .icon-btn.mic.live { color: var(--err); background: rgba(247, 118, 142, 0.14); animation: voice-pulse 1.2s ease-in-out infinite; }
 @keyframes voice-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.9); } }
 .composer-error { margin: 6px 0 0; }
-/* 构建号（顶部常驻，自证页面新旧；见 lib/update-watch.ts） */
-.build-stamp { margin-top: 2px; font-size: 9.5px; line-height: 1.3; color: var(--text-faint); font-family: var(--mono); word-break: break-all; }
-
 /* 新版本提示（见 lib/update-watch.ts）——放底部：顶部是标题与配置栏，不能被浮层压住 */
 .update-pill { position: fixed; bottom: calc(76px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 130; background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 7px 14px; font-size: 12.5px; box-shadow: var(--shadow-md); cursor: pointer; animation: voice-pulse 1.6s ease-in-out infinite; }
 
