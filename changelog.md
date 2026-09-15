@@ -95,6 +95,13 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：装 0.2.5 → 首次点 mic 弹系统录音授权框 → 允许后红点脉冲开始计时；失败时 composer 下方出现红色错误文本且不再一闪而过。测试：PWA tsc + build、gradle assembleDebug、全量 npm test。
 
+19. **手机录音失败排障：约束逐级回退 + 媒体能力取证**（真机 0.2.5 授权后仍报 NotReadableError "Could not start audio source"）：
+   - `voice-input.ts` 新增 `openMicrophone()`：默认约束（AEC/NS/AGC）→ 关闭全部 DSP → 单声道裸采集 → enumerateDevices 显式指定 deviceId，共 4 级每级重试 1 次（NotReadableError 多为瞬时 HAL 拒开）；NotAllowed/Security/NotFound 立即终止不浪费重试。失败错误带上尝试记录（`（已尝试 N 次：default:NotReadableError,...）`），一眼看出哪一级被拒。
+   - `?dbg=1` 浮层新增 MEDIA 行：isSecureContext / getUserMedia 可用性 / AudioContext / 麦克风最近一次打开结果 + UA 全文（区分壳 WebView 与浏览器、Chromium 版本、证书是否受信）。
+   - startVoice 失败时 `rec.cancel()` 释放半途获取的 stream——泄漏会让设备一直占住、后续每次重试都报同样错误。
+
+   验证方式：壳里重开页面 → 点 mic → 若成功则 MEDIA 行 mic=xx ok（看出哪级约束生效）；若仍失败，错误文本会列出全部被拒的约束名 + DOMException 名。测试：PWA tsc + build。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

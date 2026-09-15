@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RelayClient } from "./lib/relay-client";
 import type { ThreadView as ThreadViewState } from "./lib/thread-session";
+import { lastMicDiagnostic } from "./lib/voice-input";
 
 interface FrameRec { text: string; warn?: boolean; at: string }
 
@@ -94,7 +95,7 @@ export default function DbgOverlay({ client, threadView }: { client: RelayClient
       {threadView ? <> | thread ready={String(threadView.ready)} msgs={threadView.messages.length} banner={threadView.errorBanner ?? "-"}</> : null}
       {/* 媒体能力取证：语音输入排障用（UA 含 Chrome/WebView 版本；secureContext=false 时 getUserMedia 必挂） */}
       <div style={{ marginTop: 4 }}>
-        <b>MEDIA</b> secure={String(window.isSecureContext)} gUM={typeof navigator.mediaDevices?.getUserMedia} AC={typeof window.AudioContext}
+        <b>MEDIA</b> secure={String(window.isSecureContext)} gUM={typeof navigator.mediaDevices?.getUserMedia} AC={typeof window.AudioContext} mic={lastMicDiagnostic}
       </div>
       <div style={{ color: "#9aa0a6", fontSize: 10 }}>{navigator.userAgent}</div>
       {shellDiag && (

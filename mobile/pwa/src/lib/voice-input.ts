@@ -13,6 +13,81 @@ export const VOICE_SAMPLE_RATE = 16000;
 /** Hard cap: ~2 minutes of 16k mono PCM16 ≈ 3.8 MB raw / ~5.1 MB base64. */
 const MAX_SECONDS = 120;
 
+/** Last microphone-open diagnostic (which constraint set worked / what was tried). */
+export let lastMicDiagnostic = "-";
+
+/**
+ * Progressive constraint sets for opening the microphone.
+ *
+ * `{audio: true}` asks the engine for its default processing (AEC / NS / AGC).
+ * Several Android ROMs ship a broken hardware-effect HAL where that default
+ * open fails with NotReadableError "Could not start audio source" — while a
+ * plain, unprocessed capture opens fine. So we degrade from most-processed to
+ * raw, then to an explicitly chosen input device, before giving up.
+ */
+const CAPTURE_ATTEMPTS: Array<{ label: string; constraints: MediaStreamConstraints }> = [
+  { label: "default", constraints: { audio: true } },
+  { label: "no-dsp", constraints: { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } } },
+  { label: "mono-raw", constraints: { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } } },
+];
+
+/**
+ * Open the microphone, trying progressively simpler constraints.
+ *
+ * NotReadableError (device busy / HAL refused) is retried once per constraint
+ * set — transient failures are common on Android. Permission errors abort
+ * immediately: no constraint set can fix those.
+ */
+async function openMicrophone(): Promise<{ stream: MediaStream; used: string }> {
+  const attempts = [...CAPTURE_ATTEMPTS];
+  // Some ROMs fail to pick a default input device — enumerate and name one.
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const mic = devices.find((d) => d.kind === "audioinput" && d.deviceId);
+    if (mic) {
+      attempts.push({
+        label: `deviceId:${mic.deviceId.slice(0, 6)}`,
+        constraints: {
+          audio: {
+            deviceId: { exact: mic.deviceId },
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          },
+        },
+      });
+    }
+  } catch {
+    // enumerateDevices unavailable — skip this stage
+  }
+
+  let firstError: unknown = null;
+  const tried: string[] = [];
+  for (const attempt of attempts) {
+    for (let retry = 0; retry < 2; retry++) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(attempt.constraints);
+        lastMicDiagnostic = `${attempt.label}${retry ? "+retry" : ""} ok`;
+        return { stream, used: attempt.label };
+      } catch (error) {
+        const name = error instanceof DOMException ? error.name : "Error";
+        if (!firstError) firstError = error;
+        tried.push(`${attempt.label}:${name}`);
+        // Permission/security failures are terminal — retrying cannot help.
+        if (name === "NotAllowedError" || name === "SecurityError" || name === "NotFoundError") {
+          lastMicDiagnostic = tried.join(",");
+          throw error;
+        }
+        if (name !== "NotReadableError") break; // other errors: next constraint set
+        await new Promise((r) => window.setTimeout(r, 300));
+      }
+    }
+  }
+  lastMicDiagnostic = tried.join(",");
+  const base = firstError instanceof Error ? firstError.message : String(firstError);
+  throw new Error(`${base}（已尝试 ${tried.length} 次：${tried.join(",")}）`);
+}
+
 function floatToPcm16(floats: Float32Array): Int16Array {
   const out = new Int16Array(floats.length);
   for (let i = 0; i < floats.length; i++) {
@@ -79,7 +154,7 @@ export class VoiceRecorder {
   async start(): Promise<void> {
     if (this.isRecording) return;
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("此环境不支持录音");
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const { stream } = await openMicrophone();
     this.stream = stream;
     // Request 16 kHz directly — Chrome/WebView honor it, so no resampling needed.
     const Ctor: typeof AudioContext = window.AudioContext || (window as any).webkitAudioContext;
