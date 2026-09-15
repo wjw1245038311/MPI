@@ -28,6 +28,18 @@ export interface ShellInfoPayload {
   os: string;
 }
 
+/** Read-only shell view for the Settings panel (no write-back). */
+export interface ShellDiagnosticsView {
+  kind: ResolvedShell["kind"];
+  path: string;
+  version: string | null;
+  source: string;
+  needsInstall: boolean;
+  configuredPath: string | null;
+  configuredPathStale: boolean;
+  os: string;
+}
+
 export interface ShellState {
   shell: ResolvedShell;
   /** True when no usable bash exists — the UI offers to install Git for Windows. */
@@ -70,6 +82,36 @@ export function getShellState(settingsPath: string, options: { deps?: ResolveShe
   };
   if (!options.deps) cache = { key, at: Date.now(), state };
   return state;
+}
+
+/**
+ * Re-probe the shell after the user installed (or uninstalled) Git, for the
+ * Settings → 系统 → 「重新检测」 button.
+ *
+ * Adopts the result via ensureShellPathConfigured and re-resolves afterwards so
+ * the returned view reports the path that was just written — otherwise the UI
+ * would keep showing "not configured" right after fixing it.
+ */
+export function recheckShell(settingsPath: string, deps?: ResolveShellOptions["deps"]): ShellDiagnosticsView {
+  resetShellState();
+  const before = getShellState(settingsPath, { deps });
+  if (!ensureShellPathConfigured(settingsPath, before)) return shellDiagnostics(before);
+  resetShellState();
+  return shellDiagnostics(getShellState(settingsPath, { deps }));
+}
+
+/** Read-only view for the Settings panel — reports without writing shellPath. */
+export function shellDiagnostics(state: ShellState): ShellDiagnosticsView {
+  return {
+    kind: state.shell.kind,
+    path: state.shell.path,
+    version: state.shell.version ?? null,
+    source: state.shell.source,
+    needsInstall: state.needsInstall,
+    configuredPath: state.configuredPath,
+    configuredPathStale: state.configuredPathStale,
+    os: state.os,
+  };
 }
 
 /** Drop the cached state (settings changed, Git installed, …). */

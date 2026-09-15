@@ -103,7 +103,7 @@ import {
 } from "./choice-logic.ts";
 import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
-import { prepareShellForSpawn } from "./shell-bootstrap";
+import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
 import { registerTuiIpc } from "./tui";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
@@ -2797,6 +2797,21 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("settings:getThinking", () => readThinking());
   ipcMain.handle("settings:saveThinking", (_e, patch: Record<string, unknown>) => writeThinking(patch as any));
   ipcMain.handle("settings:getDiagnostics", () => getDiagnostics());
+  /**
+   * Re-probe the shell after the user installed (or uninstalled) Git, and adopt
+   * it into pi's settings so the next session actually uses it. Re-resolves
+   * after the write so the returned state reports the adopted path.
+   */
+  ipcMain.handle("settings:recheckShell", () => recheckShell(getSettingsPath()));
+  /** Git for Windows download page — the only install route MPI offers. */
+  ipcMain.handle("settings:openGitDownload", async () => {
+    try {
+      await shell.openExternal("https://git-scm.com/downloads/win");
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
   ipcMain.handle("settings:openPath", async (_e, abs: string) => {
     try {
       const err = await shell.openPath(abs);

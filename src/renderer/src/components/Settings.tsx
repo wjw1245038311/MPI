@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useStore } from "../store";
-import type { ApiType, AppConfig, Diagnostics, ModelDef, ModelsFile, PermissionLevel, ProviderDef, ThinkingDefaults } from "../lib/types";
+import type { ApiType, AppConfig, Diagnostics, ModelDef, ModelsFile, PermissionLevel, ProviderDef, ShellDiagnostics, ThinkingDefaults } from "../lib/types";
 import { formatBytes } from "../lib/format";
 import { sttTranscribeErrorText } from "../lib/stt";
 import { speakMessage, ttsVoices } from "../lib/tts";
@@ -1343,6 +1343,10 @@ export function Settings() {
   const [saving, setSaving] = useState<null | "models" | "thinking" | "profile" | "permissions" | "data" | "system" | "conversation">(null);
   const [flash, setFlash] = useState<null | "models" | "thinking" | "profile" | "permissions" | "data" | "system" | "conversation">(null);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
+  // Shell runtime card: seeded from diagnostics, replaceable by an explicit
+  // re-check (which is what adopts a just-installed Git into settings.json).
+  const [shellInfo, setShellInfo] = useState<ShellDiagnostics | null>(null);
+  const [shellBusy, setShellBusy] = useState(false);
   const [paths, setPaths] = useState<{ agentDir: string; models: string; settings: string; auth: string } | null>(null);
   const [adding, setAdding] = useState(false);
   const [newProvider, setNewProvider] = useState<NewProviderDraft>(emptyNewProvider);
@@ -1607,6 +1611,7 @@ export function Settings() {
         setThinking(think || {});
         setInitialThinking(JSON.stringify(think || {}));
         setDiag(d);
+        setShellInfo(d.shell ?? null);
         setPaths(p);
       } catch (e: any) {
         pushToast("error", "读取配置失败：" + (e?.message || e));
@@ -3491,6 +3496,64 @@ export function Settings() {
                     <div className="set-diag-v">{diag?.cli || "—"}</div>
                     <div className="set-diag-k">pi 版本</div>
                     <div className="set-diag-v">{diag?.piVersion || "—"}</div>
+                  </div>
+                </div>
+
+                <div className="set-card">
+                  <div className="set-card-title">{language === "zh" ? "Shell 运行时" : "Shell runtime"}</div>
+                  {shellInfo?.needsInstall && (
+                    <div className="set-diag-err">
+                      ⚠
+                      {language === "zh"
+                        ? " 未检测到可用的 bash（Git Bash）：命令会回退到 PowerShell 执行。装上 Git for Windows 后点「重新检测」即可自动接管。"
+                        : " No usable bash (Git Bash) found — commands fall back to PowerShell. Install Git for Windows, then click Re-check."}
+                    </div>
+                  )}
+                  <div className="set-diag-grid">
+                    <div className="set-diag-k">shell</div>
+                    <div className="set-diag-v">
+                      {shellInfo ? (shellInfo.kind === "bash" ? "Git Bash (POSIX bash)" : "PowerShell") : "—"}
+                    </div>
+                    <div className="set-diag-k">{language === "zh" ? "路径" : "path"}</div>
+                    <div className="set-diag-v">{shellInfo?.path || "—"}</div>
+                    <div className="set-diag-k">{language === "zh" ? "版本" : "version"}</div>
+                    <div className="set-diag-v">{shellInfo?.version || "—"}</div>
+                    <div className="set-diag-k">{language === "zh" ? "来源" : "source"}</div>
+                    <div className="set-diag-v">{shellInfo?.source || "—"}</div>
+                  </div>
+                  {shellInfo?.configuredPathStale && (
+                    <div className="set-hint" style={{ marginTop: 8 }}>
+                      {language === "zh"
+                        ? "settings.json 里的 shellPath 已失效，点「重新检测」会写回当前可用的路径。"
+                        : "The shellPath in settings.json no longer exists; Re-check writes back the usable path."}
+                    </div>
+                  )}
+                  <div className="set-diag-btns">
+                    <button
+                      className="set-btn ghost"
+                      disabled={shellBusy}
+                      onClick={async () => {
+                        setShellBusy(true);
+                        try {
+                          const s = await window.pi.settings.recheckShell();
+                          setShellInfo(s);
+                        } finally {
+                          setShellBusy(false);
+                        }
+                      }}
+                    >
+                      {shellBusy ? <span className="spinner" /> : language === "zh" ? "重新检测" : "Re-check"}
+                    </button>
+                    {shellInfo?.needsInstall && (
+                      <button className="set-btn" onClick={() => void window.pi.settings.openGitDownload()}>
+                        {language === "zh" ? "下载 Git for Windows" : "Get Git for Windows"}
+                      </button>
+                    )}
+                  </div>
+                  <div className="set-hint" style={{ marginTop: 8 }}>
+                    {language === "zh"
+                      ? "这是每次会话中命令实际运行的 shell，会话启动时会写入模型的系统提示，因此模型不会再自行改用 PowerShell（嵌套 shell 会带来编码乱码、引号吞噬与逐条审批）。"
+                      : "This is the shell commands actually run in. It is written into the model's system prompt each session, so the model stops reaching for PowerShell (nested shells cause encoding mojibake, quote swallowing and an approval prompt per command)."}
                   </div>
                 </div>
 

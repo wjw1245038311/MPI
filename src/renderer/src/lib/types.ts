@@ -629,7 +629,28 @@ export interface Diagnostics {
   runtimeKind: "override" | "userData" | "bundled" | "system" | "unknown";
   /** True when the runtime is managed by the app (bundled or app-updated). */
   bundled: boolean;
+  /** Resolved shell behind the bash tool (see main/shell-resolver.ts). */
+  shell: ShellDiagnostics;
   error: string | null;
+}
+
+/** Which shell backs pi's command execution, and whether it is usable. */
+export interface ShellDiagnostics {
+  /** "bash" = Git Bash is usable; "powershell" = fallback in effect. */
+  kind: "bash" | "powershell";
+  /** Absolute path handed to the model's environment block. */
+  path: string;
+  version: string | null;
+  /** How the path was found: settings / registry-git / program-files / path / fallback-*. */
+  source: string;
+  /** True when no usable bash exists — the Settings panel offers to install one. */
+  needsInstall: boolean;
+  /** shellPath from pi's settings.json, when it points at a real file. */
+  configuredPath: string | null;
+  /** shellPath was set but no longer exists. */
+  configuredPathStale: boolean;
+  /** e.g. "Windows 10 (10.0.19045) x64". */
+  os: string;
 }
 
 export type ApiType = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";

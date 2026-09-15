@@ -7,6 +7,7 @@ import { getAgentDir, getSessionsDir } from "./session-store";
 import { isAppManagedRuntime, resolvePiRuntime, runtimeKind } from "./pi-bridge";
 import { toPiRuntimeProvider, toPiRuntimeProviders, toSettingsProviders } from "./model-url-compat";
 import type { Diagnostics, ModelsFile, ProviderDef, ThinkingDefaults } from "../renderer/src/lib/types";
+import { getShellState, shellDiagnostics } from "./shell-bootstrap";
 
 /**
  * Safe read/write access to pi's `models.json` and the thinking-related slice
@@ -347,6 +348,9 @@ export async function getDiagnostics(): Promise<Diagnostics> {
     modelsExists: existsSync(modelsPath),
     runtimeKind: "unknown",
     bundled: false,
+    // Resolved shell (read-only here: the write-back happens at spawn time and
+    // on an explicit re-check, not while the user is just looking at Settings).
+    shell: shellDiagnostics(getShellState(settingsPath)),
     error: null,
   };
   try {

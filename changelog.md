@@ -36,6 +36,14 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：dev Ctrl+R 后重新生成二维码 → 旧壳即可扫出配对；或启动旧壳 → 「发现新版 0.2.2」提示条 → 自更新安装（顺带真机验 P4-2）。
 
+7. **Shell 环境层：模型不再自己改用 PowerShell**：pi 的系统提示里原本没有 OS/shell 声明，Windows 上模型会在 bash 工具里手写 `powershell -NoProfile -Command "Get-CimInstance …"`（本机实测近 25 个会话 46 处）——嵌套 shell 带来 GB2312 乱码、PS 5.1 无 `&&`、引号吞噬，并在 MPI 里每条命令都触发一次审批卡。现在每次会话启动会解析真实 shell 并把 `<environment_context>` + Shell policy 写进系统提示，明确告诉模型命令跑在哪个 shell、该用哪种写法。同时补上 pi 自己缺失的探测路径（Git for Windows 注册表 `InstallPath`，覆盖非默认安装目录）并剔除 `C:\Windows\System32\bash.exe`（WSL）与 `WindowsApps\bash.exe`（Store 别名）这两个劫持项。解析到的路径会自动写回 `settings.json` 的 `shellPath`，避免「提示词说 Git Bash、pi 却报 No bash shell found」的不一致。
+
+   验证方式：设置 → 系统 → 新增的「Shell 运行时」卡片应显示 Git Bash + 路径 + 版本 + 来源；随便新建会话问一句命令类问题，展开系统提示可见 `<environment_context>` 与「禁止调用 powershell」的 Shell policy，且会话里不再出现 `powershell -Command …`。若所在机器没有 bash：卡片出现⚠提示且命令自动改走 PowerShell 工具（不会逐条报错），装上 Git for Windows 后点「重新检测」即自动接管。
+
+8. **无 bash 的机器不再失效**：解析不到 Git Bash 时不再让每条命令报 `No bash shell found`，而是自动切换到 pi 的 PowerShell 工具（`setActiveTools`，保留 `mpi_ask_choice`/`mpi_todo_*` 等扩展工具）并换成 PowerShell 版 policy（`-LiteralPath`、禁 `iex`/`-EncodedCommand`、禁跨 shell 拼接破坏性命令）。`--exclude-tools powershell` 用于 bash 会话；**刻意不用 `--tools`**（它是覆盖扩展工具的严格白名单，会连带禁用 MPI 自己的桥接工具）。
+
+   验证方式：见上一条卡片的⚠分支；对照 `docs/SHELL-ENVIRONMENT.md`。测试：`npm test -- shell`（resolver / env-ext / bootstrap / spawn / e2e 共 5 个）。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

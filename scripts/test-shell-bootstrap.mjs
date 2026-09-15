@@ -150,6 +150,41 @@ try {
   assert.equal(bs.readShellPathFromSettings(settingsPath), GIT_BASH);
   ok("readShellPathFromSettings 读取写回值");
 
+  // --- 8. Settings 「重新检测」: no bash → report, never write ----------------
+  freshSettings({ defaultProvider: "p" });
+  {
+    const view = bs.recheckShell(settingsPath, noBashDeps);
+    assert.equal(view.kind, "powershell");
+    assert.equal(view.needsInstall, true);
+    assert.equal(view.configuredPath, null);
+    assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).shellPath, undefined, "must not pin PowerShell");
+    ok("重新检测（无 bash）：报告需要安装，不写 shellPath");
+  }
+
+  // --- 9. after the user installs Git, re-check adopts it -------------------
+  {
+    const before = JSON.parse(readFileSync(settingsPath, "utf8"));
+    const view = bs.recheckShell(settingsPath, bashDeps);
+    assert.equal(view.kind, "bash", "Git 装好后重新检测必须看到 bash");
+    assert.equal(view.needsInstall, false);
+    assert.equal(view.path, GIT_BASH);
+    // The view must report the path it just wrote, not a stale "not configured".
+    assert.equal(view.configuredPath, GIT_BASH);
+    const written = JSON.parse(readFileSync(settingsPath, "utf8"));
+    assert.equal(written.shellPath, GIT_BASH);
+    assert.equal(written.defaultProvider, before.defaultProvider, "other keys preserved");
+    ok("装完 Git 后「重新检测」自动接管并写回 shellPath（返回已采纳状态）");
+  }
+
+  // --- 10. re-checking again is a no-op ------------------------------------
+  {
+    const bytes = readFileSync(settingsPath);
+    const view = bs.recheckShell(settingsPath, bashDeps);
+    assert.equal(view.configuredPath, GIT_BASH);
+    assert.deepEqual(readFileSync(settingsPath), bytes, "a second re-check must not rewrite the file");
+    ok("重复「重新检测」幂等（文件不变）");
+  }
+
   console.log(`\ntest-shell-bootstrap: ${passed} 组断言全部通过`);
 } finally {
   rmSync(root, { recursive: true, force: true });
