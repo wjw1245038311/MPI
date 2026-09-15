@@ -63,17 +63,17 @@ export class ThreadActions {
   }
 
   /** Run a writer-gated request with the claim/re-claim-once pattern. */
-  private async writeRequest<T>(type: string, payload: Record<string, unknown>, label: string): Promise<T> {
+  private async writeRequest<T>(type: string, payload: Record<string, unknown>, label: string, timeoutMs?: number): Promise<T> {
     try {
       await this.ensureClaim();
-      const result = await this.requester.request<T>(type, payload, label);
+      const result = await this.requester.request<T>(type, payload, label, timeoutMs);
       this.claimedAt = Date.now(); // host's assertWriter slid the lease on success
       return result;
     } catch (error) {
       if (!isProtocolError(error, "WRITE_CLAIM_REQUIRED")) throw error;
       // Our own lease expired or was dropped by a reconnect — re-claim once and retry.
       await this.ensureClaim(true);
-      const result = await this.requester.request<T>(type, payload, label);
+      const result = await this.requester.request<T>(type, payload, label, timeoutMs);
       this.claimedAt = Date.now();
       return result;
     }
@@ -144,6 +144,17 @@ export class ThreadActions {
    */
   setMode(modeId: string): Promise<{ snapshot?: unknown }> {
     return this.writeRequest("thread.setMode", { modeId }, "setMode");
+  }
+
+  /**
+   * 压缩上下文（pi RPC compact，与桌面端按钮同一实现）。
+   *
+   * 这一步要读整个会话再调一次 LLM，秒级到十几秒都可能，因此请求超时放宽到 3 分钟；
+   * 界面的"压缩中"状态由 compaction_start/end 事件驱动，用量由随后主机推送的
+   * context_usage 事件刷新——不依赖这个响应的返回时机。
+   */
+  compact(instructions?: string): Promise<unknown> {
+    return this.writeRequest("thread.compact", instructions ? { instructions } : {}, "compact", 180_000);
   }
 
   /**

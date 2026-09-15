@@ -455,6 +455,25 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* ---- 会话顶部配置栏（权限 / 模型） ------------------------------------- */
 .config-bar { display: flex; gap: 6px; padding: 6px 0 0; overflow-x: auto; scrollbar-width: none; }
 .config-bar::-webkit-scrollbar { display: none; }
+/* 上下文用量 chip：阈值配色与桌面端 ring 一致（绿/黄/橙/红）。 */
+.cfg-chip.ctx { font-variant-numeric: tabular-nums; }
+.cfg-chip.ctx.low { color: var(--ok, #2e7d52); border-color: color-mix(in srgb, var(--ok, #2e7d52) 32%, var(--border)); }
+.cfg-chip.ctx.warn { color: #8a6d1f; border-color: color-mix(in srgb, #d6a419 40%, var(--border)); background: color-mix(in srgb, #d6a419 12%, var(--surface-muted)); }
+.cfg-chip.ctx.mid { color: #a5531b; border-color: color-mix(in srgb, #e07b39 44%, var(--border)); background: color-mix(in srgb, #e07b39 14%, var(--surface-muted)); }
+.cfg-chip.ctx.hi { color: #b3261e; border-color: color-mix(in srgb, #d93025 48%, var(--border)); background: color-mix(in srgb, #d93025 14%, var(--surface-muted)); }
+
+/* 用量面板：进度条 + 数字（手机上就靠这一处判断要不要压缩）。 */
+.ctx-bar { height: 8px; border-radius: 999px; background: var(--control); overflow: hidden; margin: 4px 0 8px; }
+.ctx-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.2s ease; }
+.ctx-bar.warn > span { background: #d6a419; }
+.ctx-bar.mid > span { background: #e07b39; }
+.ctx-bar.hi > span { background: #d93025; }
+.ctx-numbers { display: flex; align-items: baseline; justify-content: space-between; font-size: 12.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.ctx-pct { font-size: 15px; font-weight: 700; color: var(--text); }
+.ctx-pct.warn { color: #8a6d1f; }
+.ctx-pct.mid { color: #a5531b; }
+.ctx-pct.hi { color: #b3261e; }
+
 .cfg-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--surface-muted); border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px; font-size: 11.5px; padding: 4px 10px; cursor: pointer; }
 .cfg-chip:disabled { opacity: 0.6; }
 .cfg-chip:active { border-color: var(--accent); color: var(--text); }

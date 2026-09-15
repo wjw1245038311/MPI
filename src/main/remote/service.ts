@@ -22,6 +22,10 @@ export interface RemoteBackend {
   /** Apply a task-mode preset (bundles permission + thinking + behaviour).
    * Empty modeId clears the mode (back to baseline). */
   setMode(threadId: string, modeId: string): Promise<RemoteThreadSnapshot>;
+  /** Compact the thread's context (pi RPC `compact`). Long-running: the phone
+   * shows a spinner from compaction_start/end events, and the refreshed
+   * context usage arrives as a `context_usage` event. */
+  compact(threadId: string, instructions?: string): Promise<unknown>;
   prompt(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
   steer(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
   followUp(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
@@ -176,6 +180,12 @@ export class RemoteService {
         return responseFor(request, {
           snapshot: await this.backend.setMode(threadId, modeId),
         });
+      }
+      case "thread.compact": {
+        const threadId = this.requiredThread(request);
+        this.assertWriter(threadId, context);
+        const instructions = typeof payload.instructions === "string" ? payload.instructions.slice(0, 2_000) : undefined;
+        return responseFor(request, { compacted: await this.backend.compact(threadId, instructions) });
       }
       case "thread.subscribe": {
         const threadId = this.requiredThread(request);

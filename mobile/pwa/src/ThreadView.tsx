@@ -13,6 +13,7 @@ import { compressImageFile, type CompressedImage } from "./lib/image-attach";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
 import { groupToolBlocks, type ToolGroup } from "./lib/tool-groups";
+import { formatTokens, readContextUsage } from "./lib/context-usage";
 
 /** 主机侧上限（见 src/main/remote/service.ts MAX_REMOTE_FILES / MAX_REMOTE_FILE_DATA）。 */
 const MAX_FILES = 3;
@@ -87,6 +88,15 @@ function IconLock() {
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
       <rect x="4" y="10" width="16" height="10" rx="2" />
       <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
+}
+
+function IconGauge() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+      <path d="M4 17a8 8 0 1 1 16 0" />
+      <path d="M12 17l4-5" />
     </svg>
   );
 }
@@ -508,7 +518,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   // 顶部配置抽屉（权限/模式/模型）与瞬时提示。
-  const [sheet, setSheet] = useState<null | "permission" | "mode" | "model">(null);
+  const [sheet, setSheet] = useState<null | "permission" | "mode" | "model" | "ctx">(null);
   const [toast, setToast] = useState<string | null>(null);
   const [modelBusy, setModelBusy] = useState(false);
 
@@ -776,6 +786,35 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     }
   };
 
+  /**
+   * 压缩上下文（桌面端 Composer 里的同名按钮）。
+   * 界面状态由 compaction_start/end 事件驱动，用量由主机随后推送的 context_usage
+   * 刷新——所以这里不等请求返回就先让按钮转圈，失败时再兜底报错。
+   */
+  const doCompact = async () => {
+    if (!actions || view.compacting) return;
+    setSendError(null);
+    try {
+      await actions.compact();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSendError(
+        message.startsWith("THREAD_BUSY")
+          ? "该会话正被其他设备操作，无法压缩。"
+          : message.startsWith("WRITE_CLAIM_REQUIRED")
+            ? "另一个设备正在操作该会话，压缩未执行。"
+            : `压缩失败：${message}`,
+      );
+    }
+  };
+
+  /** 压缩结束 → 给一次明确反馈（用量数字随后由 context_usage 刷新）。 */
+  const wasCompactingRef = useRef(false);
+  useEffect(() => {
+    if (wasCompactingRef.current && !view.compacting) setToast("上下文已压缩");
+    wasCompactingRef.current = view.compacting;
+  }, [view.compacting]);
+
   /** 选模式：host 应用（权限+思考+行为内容）并广播 config_changed，chip 随之更新。 */
   const chooseMode = async (modeId: string) => {
     if (!actions || modelBusy) return;
@@ -814,6 +853,10 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     return short.length > 18 ? `${short.slice(0, 17)}…` : short;
   })();
 
+  // 上下文用量：口径统一在 lib/context-usage.ts（与桌面端 ring 一致，含压缩后估算回退）。
+  const ctx = readContextUsage(view.contextUsage);
+  const ctxLabel = ctx.hasValue ? `${Math.round(ctx.percent)}%` : "—";
+
   return (
     <div className="thread-view">
       {/* 工具栏：会话级配置（权限/模式/模型）。返回改用顶部头像按钮，状态/权限文字已去重。 */}
@@ -835,6 +878,16 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
             <button type="button" className="cfg-chip" onClick={() => setSheet("model")} disabled={modelBusy}>
               <IconModel />
               {modelBusy ? "切换中…" : modelLabel}
+            </button>
+            {/* 上下文用量：手机端原来完全看不到，而这个数字决定要不要压缩。 */}
+            <button
+              type="button"
+              className={`cfg-chip ctx ${ctx.hasValue ? ctx.band : ""}`}
+              onClick={() => setSheet("ctx")}
+              aria-label="上下文用量"
+            >
+              <IconGauge />
+              {ctxLabel}
             </button>
             {/* 运行中/出错时才显示状态——平时“空闲”没有信息量 */}
             {view.summary.state !== "idle" && view.summary.state !== "draft" && (
@@ -1010,6 +1063,44 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                     })}
                   </div>
                 )}
+              </>
+            ) : sheet === "ctx" ? (
+              <>
+                <div className="sheet-title">上下文用量</div>
+                {ctx.hasValue ? (
+                  <>
+                    <div className={`ctx-bar ${ctx.band}`}>
+                      <span style={{ width: `${Math.max(2, ctx.percent)}%` }} />
+                    </div>
+                    <div className="ctx-numbers">
+                      <span>
+                        {formatTokens(ctx.used)} / {formatTokens(ctx.total)} tokens
+                      </span>
+                      <span className={`ctx-pct ${ctx.band}`}>{ctx.percent.toFixed(1)}%</span>
+                    </div>
+                    {ctx.isEstimate && <p className="sheet-note">压缩后的估算值——下次回复后更新为实际值。</p>}
+                  </>
+                ) : (
+                  <p className="sheet-note">主机还没上报这个会话的上下文用量（模型未知或会话太新）。</p>
+                )}
+                <p className="sheet-note">
+                  ≥60% 就该压缩：把早期对话总结成摘要，腾出窗口又不丢关键信息。
+                  {view.compacting ? "（正在压缩…）" : ""}
+                </p>
+                <button
+                  type="button"
+                  className="sheet-item"
+                  disabled={!actions || view.compacting || view.running}
+                  onClick={() => void doCompact()}
+                >
+                  <span className="sheet-item-main">
+                    {view.compacting ? "压缩中…" : "压缩上下文"}
+                    <em className="sheet-tag">
+                      {view.running ? "回合进行中" : view.compacting ? "请稍候" : "压缩后自动刷新用量"}
+                    </em>
+                  </span>
+                  {view.compacting ? <span className="spinner" /> : null}
+                </button>
               </>
             ) : sheet === "permission" ? (
               <>

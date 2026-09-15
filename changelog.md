@@ -238,6 +238,20 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证（390×844，40 条消息）：有按钮 / 无按钮 两种 DOM 下 `scrollH` 均为 3455、`clientH` 均为 611（**按钮零占位**）；按钮 `position:absolute`、水平居中偏移 0、位于输入框上方。全量 71 passed / 3 skipped / 0 failed（另注：`app-store`、`pwa-thread` 出现过单跑必过、全量偶发的 flake，见待办）。PWA index-CohAqL7g.js 已部署。
 
+32. **手机端：上下文用量可见 + 支持压缩；放宽历史下发条数（往上拉不动）**：
+
+   - **历史只有 80 条**：`remoteMessages()` 里写死 `slice(-80)`，这就是「对话往上拉不动」的真因——更早的消息根本没下发。抽成 `src/main/remote/history-limit.ts`（纯逻辑）：上限提到 **400 条**，再加 **6MB 字节预算**兜底（多轮长工具输出/图片时从最旧的开始丢，最后一条永远保留），保证单帧远低于 relay 的 `MAX_FRAME_BYTES(32MB)` 与手机解码能力。
+   - **上下文用量上手机**（此前手机端完全看不到，而这数字决定要不要压缩）：
+     - 协议新增 `RemoteContextUsage`（tokens/contextWindow/percent/estimatedTokens）+ 快照字段 `contextUsage`；主机读的正是桌面端同一个 `get_session_stats().contextUsage`。
+     - 主机在 `agent_settled`（回合结束）与 `compaction_end` 两个时机通过 `remoteEventHub` 推 `context_usage` 事件——用量只在这两刻变化，手机端不需要像桌面那样 15s 轮询（走 relay 轮询太贵）。压缩结束同时记下 `estimatedTokensAfter`：pi 在压缩后、下次回复前会把 `tokens` 报成 null，手机端据此回退（与桌面 store 的 `contextEstimate` 同源）。
+     - PWA：工具栏新增用量 chip（`◔ 78%`，阈值带 ≤60 绿 / 60-74 黄 / 75-89 橙 / ≥90 红，与桌面 ring 一致），点开抽屉显示进度条 + `78k / 100k tokens` + 建议文案。
+   - **压缩**：协议新增请求 `thread.compact`（两份协议顺序同步，pwa-shared 把关），主机 `bridge.compact()`（与桌面按钮同一实现）；服务端按写操作处理——**需要写租约**，别的设备持租约时返回 `THREAD_BUSY`。手机端按钮在压缩中/回合进行中禁用，状态由 `compaction_start/end` 事件驱动，请求超时放宽到 3 分钟（压缩要读整个会话再调一次 LLM），完成时 toast「上下文已压缩」，用量由随后的 `context_usage` 刷新。
+   - 口径统一抽到 `mobile/pwa/src/lib/context-usage.ts`（`readContextUsage`/`contextBand`/`formatTokens`），测试直接打真实模块而不是在测试里再抄一份。
+
+   测试：`test-thread-config-sync` 新增第 5 组（compact 的写租约/THREAD_BUSY、百分比与估算回退、阈值带、数字缩写、历史条数与字节预算裁剪），全量 71 passed / 3 skipped / 0 failed。PWA index-C2s8UMY7.js 已部署。
+
+   ⚠️ 快照字段、事件与 compact 后端都是**主机侧**改动：**手机端用量 chip 在 MPI 重启前会显示「—」**（历史条数与压缩按钮同理），重启后即生效。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

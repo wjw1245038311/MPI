@@ -11,7 +11,8 @@
  *   - detects seq gaps and socket drops → thread.resync (live snapshot).
  * Pure logic — node-testable against a real relay + fake host service.
  */
-import type { RemoteFileArtifact, RemoteMessage, RemoteModelOption, RemotePermission, RemoteTaskModeOption, RemoteThreadEventPayload, RemoteThreadSnapshot, RemoteThreadSummary, RemoteUiRequest } from "../../../shared/protocol";
+import type {
+  RemoteContextUsage, RemoteFileArtifact, RemoteMessage, RemoteModelOption, RemotePermission, RemoteTaskModeOption, RemoteThreadEventPayload, RemoteThreadSnapshot, RemoteThreadSummary, RemoteUiRequest } from "../../../shared/protocol";
 import type { RelayClient } from "./relay-client";
 import { Requester } from "./requester";
 
@@ -58,6 +59,10 @@ export interface ThreadView {
   taskMode: string | null;
   /** Task-mode presets the host accepts in thread.setMode. */
   availableModes: RemoteTaskModeOption[];
+  /** 上下文用量（与桌面端 ring 同源：主机 get_session_stats） */
+  contextUsage: RemoteContextUsage | null;
+  /** 压缩进行中（compaction_start…end）。手机端压缩按钮据此转圈。 */
+  compacting: boolean;
   /** S6.3: pending ui.request (approval card). Survives resync — the host keeps
    * the dialog open while the agent is paused, so a reconnect must re-show it. */
   pendingUi: RemoteUiRequest | null;
@@ -135,7 +140,7 @@ export class ThreadSession {
     threadId: string,
     options: ThreadSessionOptions = {},
   ) {
-    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], taskMode: null, availableModes: [], pendingUi: null };
+    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], taskMode: null, availableModes: [], contextUsage: null, compacting: false, pendingUi: null };
     this.client = client;
     // threadId goes on the ENVELOPE (host's requiredThread reads it there); the
     // payload copy below is kept for compatibility with simpler test fakes.
@@ -264,6 +269,10 @@ export class ThreadSession {
       availableModels: snapshot.availableModels ?? [],
       taskMode: snapshot.taskMode ?? null,
       availableModes: snapshot.availableModes ?? [],
+      contextUsage: snapshot.contextUsage ?? null,
+      // 快照到达即认为压缩不在进行中：真在压缩的话后续 compaction_end 会再纠正，
+      // 而漏掉一个 end 事件会让按钮永远转圈。
+      compacting: false,
       pendingUi: this.view.pendingUi, // a pending approval survives the resync
     });
     // Re-arm seq tracking: the fresh snapshot makes subsequent events lossless on
@@ -342,6 +351,27 @@ export class ThreadSession {
         }
         break;
       }
+      case "context_usage": {
+        // 主机在回合结束/压缩结束推送的最新用量（与桌面 ring 同一份数据）。
+        const data = (payload.data || {}) as Partial<RemoteContextUsage>;
+        if (typeof data.contextWindow === "number") {
+          this.patch({
+            contextUsage: {
+              tokens: typeof data.tokens === "number" ? data.tokens : null,
+              contextWindow: data.contextWindow,
+              percent: typeof data.percent === "number" ? data.percent : null,
+              estimatedTokens: typeof data.estimatedTokens === "number" ? data.estimatedTokens : null,
+            },
+          });
+        }
+        break;
+      }
+      case "compaction_start":
+        this.patch({ compacting: true });
+        break;
+      case "compaction_end":
+        this.patch({ compacting: false });
+        break;
       case "config_changed": {
         // 会话配置同步（main 广播）：桌面端/agent 改的权限、模型、任务模式、思考
         // 等级都要反映到手机上，否则 chip 会停在旧值到下次 resync。

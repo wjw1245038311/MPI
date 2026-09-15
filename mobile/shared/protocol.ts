@@ -16,6 +16,7 @@ export const REMOTE_REQUEST_TYPES = [
   "thread.setPermission",
   "thread.setModel",
   "thread.setMode",
+  "thread.compact",
   "thread.subscribe",
   "thread.resync",
   "thread.prompt",
@@ -125,8 +126,24 @@ export interface RemoteThreadSnapshot extends RemoteThreadSummary {
   taskMode?: string | null;
   /** Task-mode presets the host will accept in `thread.setMode`. */
   availableModes?: RemoteTaskModeOption[];
+  /** Context-window usage (mirrors the desktop ring). `tokens` is null right
+   * after a compaction until the next LLM response; `estimatedTokens` then
+   * carries the post-compaction estimate. */
+  contextUsage?: RemoteContextUsage | null;
   messages: RemoteMessage[];
   nextSeq: number;
+}
+
+/** Context-window usage as reported by pi's `get_session_stats`. */
+export interface RemoteContextUsage {
+  /** Used tokens (null = pi refuses to guess after a compaction). */
+  tokens: number | null;
+  /** Total window size; 0 when the model is unknown. */
+  contextWindow: number;
+  /** Raw float percent from pi (null when tokens are unknown). */
+  percent: number | null;
+  /** Post-compaction estimate, when the host has one. */
+  estimatedTokens?: number | null;
 }
 
 /** A task-mode preset as seen from the phone: display metadata + the parameter

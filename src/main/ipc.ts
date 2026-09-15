@@ -7,6 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { appendDiagLog } from "./diag-log";
+import { MAX_REMOTE_HISTORY, trimRemoteHistory } from "./remote/history-limit";
 import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
 import { listTests, readScenarioHistory, readScenarioResult, runLogicTest, runScenarioCase } from "./test-runner";
 import { getDevReleaseLogWindow, openChangelogWindow, openDevReleaseLogWindow } from "./standalone-windows";
@@ -179,6 +180,7 @@ import {
   type RemoteSkill,
   type RemoteTaskModeOption,
   type RemoteThreadEventPayload,
+  type RemoteContextUsage,
   type RemoteThreadSnapshot,
   type RemoteThreadState,
 } from "./remote/protocol";
@@ -539,7 +541,15 @@ function createHandle(
 
       send("pi:event", { threadId: id, event });
 
+      // 上下文用量同步：压缩结束时先记下 pi 的估算值（此后 tokens 会短暂为 null），
+      // 再在两个"用量发生变化"的时机把最新用量推给手机。
+      if (event?.type === "compaction_end") {
+        const estimated = (event as any)?.result?.estimatedTokensAfter;
+        if (typeof estimated === "number" && Number.isFinite(estimated)) compactionEstimates.set(id, Math.trunc(estimated));
+        publishThreadContextUsageHook?.(id);
+      }
       if (event?.type === "agent_settled") {
+        publishThreadContextUsageHook?.(id);
         const shouldNotify = turnStarted;
         const reply = completedReply;
         const prompt = promptForNotification;
@@ -711,6 +721,17 @@ let publishThreadConfigChangeHook:
 
 /** sessionFile → 手机侧 threadId（在 registerIpc 里挂上，带 remoteLocalToId 映射）。 */
 let remoteIdForSessionHook: ((sessionFile: string) => string | null) | null = null;
+
+/**
+ * 压缩后估算值（local threadId → estimatedTokensAfter），模块级：per-thread 的
+ * onEvent 处理器在 registerIpc 之外，与上面的 broadcast hook 同一套路。
+ * pi 在压缩后、下次 LLM 回复前会把 contextUsage.tokens 报成 null——桌面端
+ * store.contextEstimate 就是同一个回退值，手机端必须同样处理，否则显示 0。
+ */
+const compactionEstimates = new Map<string, number>();
+
+/** 上下文用量广播口（在 registerIpc 里挂上；手机端 chip/压缩状态源）。 */
+let publishThreadContextUsageHook: ((localId: string) => void) | null = null;
 
 /** 本地 threadId → 广播目标；临时 id（opening-* / boot:*）没有稳定会话可通知。 */
 function configTargetFor(localId: string): { remoteThreadId?: string | null; sessionFile?: string | null } {
@@ -1098,9 +1119,32 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     });
   };
 
+  /**
+   * 上下文用量广播（手机侧 chip/面板 + 压缩按钮的状态源）。
+   *
+   * 为什么用事件而不是让手机轮询：桌面端是 15s 轮询（自己读 get_session_stats），
+   * 手机走 relay 轮询太贵；用量只在「回合结束」和「压缩结束」两个时刻变化，
+   * 由主机在这两处推一次即可，且与 config_changed 共用 remoteEventHub 通道。
+   */
+  const publishThreadContextUsage = async (localId: string): Promise<void> => {
+    try {
+      const usage = await threadContextUsage(localId, compactionEstimates.get(localId) ?? null);
+      if (!usage) return;
+      const sessionFile = localId.endsWith(".jsonl") ? localId : null;
+      const remoteThreadId = sessionFile ? remoteIdForSessionHook?.(sessionFile) : null;
+      if (!remoteThreadId) return;
+      remoteEventHub.publish(remoteThreadId, { kind: "context_usage", data: { ...usage } });
+    } catch {
+      // 手机上少一个数字不值得打断回合——静默失败，下次事件再试。
+    }
+  };
+
   // applyAgentModeSwitch / autopilot 是模块级函数，拿不到上面的闭包 —— 与
   // sendToRenderer 同样的做法：注册时把广播口挂到模块变量上。
   publishThreadConfigChangeHook = publishThreadConfigChange;
+  publishThreadContextUsageHook = (localId) => {
+    void publishThreadContextUsage(localId);
+  };
   remoteIdForSessionHook = (sessionFile) => remoteIdForSession(sessionFile);
 
   /** sessionFile → 手机侧 threadId（与 publishRemotePermissionChanged 同一套映射）。 */
@@ -1434,7 +1478,10 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     // while text blocks preserve the actual thinking/tool/reply order in the
     // mobile renderer.
     let imageBudget = 400_000;
-    const source = (messages || []).slice(-80);
+    // 手机端「往上拉不动」的根因就是这里的 -80：更早的消息根本没下发。
+    // 放宽到 400 条，再用字节预算兜底（超大历史时从最旧开始丢），
+    // 保证单帧远低于 relay 的 MAX_FRAME_BYTES(32MB) 与手机解码能力。
+    const source = (messages || []).slice(-MAX_REMOTE_HISTORY);
     const artifactsByMessage = remoteArtifactsByMessage(source, cwd);
     type RemoteBlock = NonNullable<RemoteMessage["blocks"]>[number];
     const toolResults = new Map<string, { text: string; isError: boolean }>();
@@ -1584,7 +1631,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       });
     });
     flushAssistantRound();
-    return output;
+    return trimRemoteHistory(output);
   }
 
   async function remoteVisibleProjects(): Promise<ProjectSummary[]> {
@@ -1662,6 +1709,35 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // local modes down to the safe side so mixed-version pairs stay compatible.
   const toRemotePermission = (level: PermissionLevel): RemotePermission => (level === "full" ? "full" : "sandbox");
 
+  /**
+   * pi 的 get_session_stats() → 手机协议形状。桌面端读的是同一个 contextUsage，
+   * 所以阈值配色/估算回退在两端一致（≤60 绿 / 60-74 黄 / 75-89 橙 / ≥90 红）。
+   */
+  function remoteContextUsage(stats: unknown, estimated?: number | null): RemoteContextUsage | null {
+    const usage = (stats as { contextUsage?: any } | null | undefined)?.contextUsage;
+    if (!usage || typeof usage !== "object") return null;
+    const tokens = typeof usage.tokens === "number" && Number.isFinite(usage.tokens) ? Math.trunc(usage.tokens) : null;
+    const contextWindow = typeof usage.contextWindow === "number" && Number.isFinite(usage.contextWindow) ? Math.trunc(usage.contextWindow) : 0;
+    const percent = typeof usage.percent === "number" && Number.isFinite(usage.percent) ? usage.percent : null;
+    return {
+      tokens,
+      contextWindow,
+      percent,
+      ...(typeof estimated === "number" ? { estimatedTokens: Math.trunc(estimated) } : {}),
+    };
+  }
+
+  /** 取某会话的上下文用量（桥不在或 pi 报错时返回 null，手机显示「—」）。 */
+  async function threadContextUsage(localId: string, estimated?: number | null): Promise<RemoteContextUsage | null> {
+    const h = bridges.get(localId);
+    if (!h) return null;
+    try {
+      return remoteContextUsage(await h.bridge.getSessionStats(), estimated);
+    } catch {
+      return null;
+    }
+  }
+
   async function remoteSnapshot(threadId: string, options: { live?: boolean } = {}): Promise<RemoteThreadSnapshot> {
     const ref = await remoteThread(threadId);
     const configuredModels = configuredRemoteModelOptions();
@@ -1691,6 +1767,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         thinkingLevel: "off",
         taskMode: null,
         availableModes: remoteModeOptions(),
+        contextUsage: null,
         messages: [],
         nextSeq: 0,
       };
@@ -1714,6 +1791,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         thinkingLevel: gathered.thinkingLevel || "off",
         taskMode: gathered.taskMode ?? null,
         availableModes: remoteModeOptions(),
+        contextUsage: await threadContextUsage(live.getId(), compactionEstimates.get(live.getId()) ?? null),
         messages,
         nextSeq: 0,
       };
@@ -2125,6 +2203,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     steer: (threadId, text, images, files) => threadService.steer(threadId, text, images, files),
     followUp: (threadId, text, images, files) => threadService.followUp(threadId, text, images, files),
     abort: (threadId) => threadService.abort(threadId),
+    compact: async (threadId, instructions) => {
+      const ref = await remoteThread(threadId);
+      const handle = await ensureRemoteBridge(ref);
+      // 压缩要读整个会话并调用 LLM，给手机端留足时间（与桌面按钮同一实现）。
+      return handle.bridge.compact(instructions);
+    },
     fileTree: (projectId, relativePath) => filePreviewService.tree(projectId, relativePath),
     filePreview: (projectId, relativePath) => filePreviewService.preview(projectId, relativePath),
     respondUi: async (threadId, requestId, payload) => {
