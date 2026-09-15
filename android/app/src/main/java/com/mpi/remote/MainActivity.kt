@@ -22,6 +22,7 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -60,6 +61,19 @@ class MainActivity : AppCompatActivity() {
 
     /** WebView getUserMedia 请求挂起中（等运行时 RECORD_AUDIO 授权结果）。 */
     private var pendingAudioRequest: android.webkit.PermissionRequest? = null
+
+    /** 回前台自动检查页面构建号的节流时间戳（毫秒）。 */
+    private var lastPageCheckAt = 0L
+
+    /**
+     * WebView 文件选择器（拍照 / 相册 / 文件）挂起中的回调与相机输出 URI。
+     *
+     * Android WebView **默认不实现文件选择**：不覆写 `onShowFileChooser` 时，
+     * 页面里的 `<input type=file>`（含 `capture` 拍照）点了完全没反应
+     * ——2026-09-15 真机实测「拍照/发送图片是坏的」就是它。
+     */
+    private var fileChooserCallback: android.webkit.ValueCallback<Array<Uri>>? = null
+    private var pendingCameraUri: Uri? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -206,9 +220,71 @@ class MainActivity : AppCompatActivity() {
                     audioPermission.launch(Manifest.permission.RECORD_AUDIO)
                 }
             }
+
+            /**
+             * 文件选择（拍照 / 相册 / 任意文件）。不覆写时页面 `<input type=file>`
+             * 毫无反应——这是 WebView 的默认行为，不是页面问题。
+             * 用 `FileChooserParams.createIntent()` 拿系统选择器（自动带多选与
+             * accept 类型）；`isCaptureEnabled`（capture 属性，API 30+）则拉起相机。
+             */
+            override fun onShowFileChooser(
+                view: WebView?,
+                callback: android.webkit.ValueCallback<Array<Uri>>?,
+                params: android.webkit.WebChromeClient.FileChooserParams?,
+            ): Boolean {
+                fileChooserCallback?.onReceiveValue(null)
+                fileChooserCallback = callback
+                val accepts = params?.acceptTypes?.joinToString(",") ?: ""
+                val wantsCamera = params?.isCaptureEnabled == true || accepts.contains("capture")
+                return try {
+                    val intent = if (wantsCamera) cameraIntent() else params?.createIntent()
+                    if (intent == null) {
+                        fileChooserCallback = null
+                        return false
+                    }
+                    fileChooserLauncher.launch(intent)
+                    true
+                } catch (t: Throwable) {
+                    ShellLog.log("fileChooser fail ${t.javaClass.simpleName}:${t.message}")
+                    fileChooserCallback?.onReceiveValue(null)
+                    fileChooserCallback = null
+                    false
+                }
+            }
         }
 
         findViewById<Button>(R.id.btnRetry).setOnClickListener { loadBase() }
+
+        // 壳菜单：WebView 没有地址栏/刷新入口，页面若是旧版或地址存错就无从自救。
+        findViewById<TextView>(R.id.shellMenu).setOnClickListener { anchor ->
+            val popup = PopupMenu(this, anchor)
+            popup.menu.add(0, MENU_RELOAD, 0, getString(R.string.shell_menu_reload))
+            popup.menu.add(0, MENU_SERVER, 1, getString(R.string.shell_menu_server))
+            popup.menu.add(0, MENU_DIAG, 2, getString(R.string.shell_menu_diag))
+            popup.setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    MENU_RELOAD -> {
+                        ShellLog.log("menuReload $baseUrl")
+                        Toast.makeText(this, getString(R.string.shell_reloading), Toast.LENGTH_SHORT).show()
+                        web.reload()
+                        true
+                    }
+                    MENU_SERVER -> {
+                        // 复用错误面板：它是壳里唯一能编辑地址的 UI。
+                        urlInput.setText(baseUrl)
+                        errorText.text = getString(R.string.shell_menu_server)
+                        errorPanel.visibility = View.VISIBLE
+                        true
+                    }
+                    MENU_DIAG -> {
+                        showDiagnostics()
+                        true
+                    }
+                    else -> false
+                }
+            }
+            popup.show()
+        }
         findViewById<Button>(R.id.btnSave).setOnClickListener {
             val typed = urlInput.text.toString().trim()
             if (typed.isNotEmpty()) prefs.edit().putString(KEY_BASE_URL, normalize(typed)).apply()
@@ -252,6 +328,63 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         web.onResume()
+        maybeReloadStalePage()
+    }
+
+    /**
+     * 回前台时检查中继上的 bundle 是否已变（间隔 ≥60s）。
+     *
+     * WebView 会长期驻留——按返回只是退到后台、从多任务重开也不重载，于是可能
+     * 一直跑旧页面（2026-09-15 实测）。页面构建号由 PWA 写入 `window.__mpi_build`
+     * （壳契约 #11）；中继侧 `index.html` 是 no-cache，取到的一定是最新引用。
+     */
+    private fun maybeReloadStalePage() {
+        val now = System.currentTimeMillis()
+        if (now - lastPageCheckAt < 60_000) return
+        lastPageCheckAt = now
+        Thread {
+            val served = Updater.pageBuild(baseUrl) ?: return@Thread
+            runOnUiThread {
+                web.evaluateJavascript("window.__mpi_build || ''") { raw ->
+                    val loaded = raw?.trim('"')?.removePrefix("index-")?.removeSuffix(".js") ?: ""
+                    val next = served.removePrefix("index-").removeSuffix(".js")
+                    if (loaded.isBlank() || loaded == next) return@evaluateJavascript
+                    ShellLog.log("stalePage reload served=$served loaded=$loaded")
+                    Toast.makeText(this, getString(R.string.shell_page_updated), Toast.LENGTH_SHORT).show()
+                    web.reload()
+                }
+            }
+        }.start()
+    }
+
+    /** 壳诊断：地址 / 壳版本 / 页面构建号 / 最近壳事件——“界面是旧的”这类问题一屏定位。 */
+    private fun showDiagnostics() {
+        web.evaluateJavascript("window.__mpi_build || '(未知)'") { raw ->
+            val pageBuild = raw?.trim('"') ?: "?"
+            val events = ShellLog.recent(8).joinToString("\n")
+            android.app.AlertDialog.Builder(this)
+                .setTitle(R.string.shell_diag_title)
+                .setMessage(
+                    "壳版本: ${BuildConfig.VERSION_NAME}\n" +
+                        "地址: $baseUrl\n" +
+                        "页面构建: $pageBuild\n\n" +
+                        events,
+                )
+                .setPositiveButton("好的", null)
+                .show()
+        }
+    }
+
+    /** 相机 intent：输出写进 FileProvider 暴露的 cacheDir/capture。 */
+    private fun cameraIntent(): Intent {
+        val directory = java.io.File(cacheDir, "capture").apply { mkdirs() }
+        val file = java.io.File(directory, "shot-${System.currentTimeMillis()}.jpg")
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        pendingCameraUri = uri
+        return Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
     }
 
     override fun onPause() {
@@ -340,6 +473,29 @@ class MainActivity : AppCompatActivity() {
         ShellLog.log("micPermission runtime=${if (granted) "ok" else "denied"}")
         pendingAudioRequest?.let { if (granted) it.grant(it.resources) else it.deny() }
         pendingAudioRequest = null
+    }
+
+    /** WebView 文件选择结果 → 回给页面的 FileChooser 回调（URI 数组）。 */
+    private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val callback = fileChooserCallback
+        fileChooserCallback = null
+        val cameraUri = pendingCameraUri
+        pendingCameraUri = null
+        if (callback == null) return@registerForActivityResult
+        if (result.resultCode != Activity.RESULT_OK) {
+            callback.onReceiveValue(null) // 用户取消
+            return@registerForActivityResult
+        }
+        val data = result.data
+        val clip = data?.clipData
+        val uris = when {
+            clip != null -> (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
+            data?.data != null -> listOf(data.data!!)
+            cameraUri != null -> listOf(cameraUri)
+            else -> emptyList()
+        }
+        ShellLog.log("fileChooser result n=${uris.size}${if (cameraUri != null) " camera" else ""}")
+        callback.onReceiveValue(uris.toTypedArray().ifEmpty { null })
     }
 
     /** 供 PWA 的「扫码」按钮调用（JS 桥）。 */

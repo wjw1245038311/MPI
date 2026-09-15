@@ -171,6 +171,7 @@ import {
 import {
   RemoteProtocolError,
   type RemoteFileArtifact,
+  type RemoteFileInput,
   type RemoteMessage,
   type RemoteModelOption,
   type RemotePermission,
@@ -1817,6 +1818,18 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     },
   );
 
+  /**
+   * 手机端文件附件 → 落盘 → 桌面同款 Attachment[]。
+   *
+   * 落盘目录与桌面「粘贴文件」一致（<userData>/temp/mpi-clipboard），这样
+   * processAttachments 的内联/引用规则、以及 agent 读文件的能力完全复用，
+   * 不需要为手机端另开一条通路。
+   */
+  const stageRemoteFiles = (files?: RemoteFileInput[]): { abs: string; name: string }[] =>
+    (files ?? []).map((file) =>
+      stageClipboardFile({ name: file.name, mimeType: file.mimeType, data: file.data }),
+    );
+
   const threadService = new ThreadService(
     (threadId) => remoteSnapshot(threadId),
     async (projectId, name, permission = "sandbox") => {
@@ -1870,10 +1883,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         throw error;
       }
     },
-    async (threadId, text, images) => {
+    async (threadId, text, images, files) => {
       const ref = await remoteThread(threadId);
       const bridge = await ensureRemoteBridge(ref);
-      await bridge.bridge.prompt(text, images);
+      // 文件先落盘，再按桌面同款规则内联/引用（图片仍直传模型）。
+      const staged = processAttachments(stageRemoteFiles(files), text);
+      await bridge.bridge.prompt(staged.text, [...(images ?? []), ...staged.images]);
       const state: any = await bridge.bridge.getState();
       if (state?.sessionFile) {
         const draft = remoteDrafts.get(threadId);
@@ -1892,14 +1907,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       invalidateRemoteProjects();
       return { ok: true };
     },
-    async (threadId, text, images) => {
+    async (threadId, text, images, files) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
-      await bridge.bridge.steer(text, images);
+      const staged = processAttachments(stageRemoteFiles(files), text);
+      await bridge.bridge.steer(staged.text, [...(images ?? []), ...staged.images]);
       return { ok: true };
     },
-    async (threadId, text, images) => {
+    async (threadId, text, images, files) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
-      await bridge.bridge.followUp(text, images);
+      const staged = processAttachments(stageRemoteFiles(files), text);
+      await bridge.bridge.followUp(staged.text, [...(images ?? []), ...staged.images]);
       return { ok: true };
     },
     async (threadId) => {
@@ -2077,9 +2094,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       );
       return remoteSnapshot(threadId, { live: true });
     },
-    prompt: (threadId, text, images) => threadService.prompt(threadId, text, images),
-    steer: (threadId, text, images) => threadService.steer(threadId, text, images),
-    followUp: (threadId, text, images) => threadService.followUp(threadId, text, images),
+    prompt: (threadId, text, images, files) => threadService.prompt(threadId, text, images, files),
+    steer: (threadId, text, images, files) => threadService.steer(threadId, text, images, files),
+    followUp: (threadId, text, images, files) => threadService.followUp(threadId, text, images, files),
     abort: (threadId) => threadService.abort(threadId),
     fileTree: (projectId, relativePath) => filePreviewService.tree(projectId, relativePath),
     filePreview: (projectId, relativePath) => filePreviewService.preview(projectId, relativePath),

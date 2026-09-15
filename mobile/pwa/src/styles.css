@@ -71,7 +71,9 @@ html, body {
 
 #root { min-height: 100dvh; }
 
-.app { max-width: 640px; margin: 0 auto; padding: 12px 14px calc(20px + env(safe-area-inset-bottom)); }
+.app { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; min-height: 100dvh;
+  /* 顶部留出状态栏/挖孔（壳是全屏 Activity），底部留出手势条 */
+  padding: calc(12px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom)); }
 
 .app-header {
   display: flex;
@@ -322,7 +324,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .error-text { color: var(--err) !important; margin: 0; font-size: 13px; }
 
 /* --- S5 thread view ---------------------------------------------------------- */
-.thread-view { display: flex; flex-direction: column; gap: 8px; max-height: calc(100dvh - 90px); }
+/* flex:1 + min-height:0 = 卡片吃掉 header 之外的剩余高度；绝不外溢把输入框顶出屏幕。
+   （2026-09-15 真机「按钮被遮挡」：原来硬编码 max-height: calc(100dvh - 90px)，
+    顶部多一行构建号就把底部按钮挤出可视区。） */
+.thread-view { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 0; }
 .thread-head { display: flex; align-items: center; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
 .back-btn { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; padding: 0; font-size: 16px; flex: none; }
 
@@ -362,7 +367,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .artifact.created { color: var(--ok); }
 
 /* ---- Composer (Qoder-style card, 2026-09-15) ---------------------------- */
-.thread-scroll { flex: 1 1 auto; min-height: 80px; }
+.thread-scroll { flex: 1 1 auto; min-height: 0; }
 .composer { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-md); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
 .composer-input { width: 100%; resize: none; max-height: 132px; overflow-y: auto; background: transparent; color: var(--text); border: none; padding: 4px 2px; font-size: 15px; line-height: 1.45; font-family: inherit; }
 .composer-input:focus { outline: none; }
@@ -377,6 +382,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .attach-row { display: flex; gap: 8px; padding: 2px 2px 4px; overflow-x: auto; }
 .attach-chip { position: relative; flex: none; width: 56px; height: 56px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
 .attach-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-chip.file { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; background: var(--surface-muted); color: var(--text-dim); }
+.attach-chip.file .file-name { font-size: 9px; line-height: 1.1; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attach-x { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
 .attach-menu { position: absolute; bottom: calc(100% + 8px); left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-md); display: flex; flex-direction: column; min-width: 130px; z-index: 20; overflow: hidden; }
 .attach-menu button { background: none; border: none; padding: 10px 14px; font-size: 13px; color: var(--text); text-align: left; cursor: pointer; white-space: nowrap; }

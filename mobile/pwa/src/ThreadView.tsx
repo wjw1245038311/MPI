@@ -10,7 +10,22 @@ import type { RemotePermission, RemoteThreadState, RemoteUiRequest } from "../..
 import type { ThreadActions } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
 import { compressImageFile, type CompressedImage } from "./lib/image-attach";
-import { VoiceRecorder } from "./lib/voice-input";
+import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
+
+/** 主机侧上限（见 src/main/remote/service.ts MAX_REMOTE_FILES / MAX_REMOTE_FILE_DATA）。 */
+const MAX_FILES = 3;
+const MAX_FILE_BYTES = 6_000_000;
+
+/** 一个待发送的文件附件（base64）。 */
+interface PickedFile {
+  name: string;
+  mimeType: string;
+  data: string;
+  size: number;
+}
+
+const formatSize = (bytes: number): string =>
+  bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)}MB` : `${Math.max(1, Math.round(bytes / 1024))}KB`;
 
 /** Minimal inline icons for the composer (no icon dependency in the PWA). */
 function IconPlus() {
@@ -42,6 +57,16 @@ function IconStop() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
       <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
+
+/** 附件里的文件图标（无图标库，手写最小 SVG）。 */
+function IconFile() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
     </svg>
   );
 }
@@ -363,11 +388,14 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const [toast, setToast] = useState<string | null>(null);
   const [modelBusy, setModelBusy] = useState(false);
 
-  // T2 image attachments (max 3 — host's MAX_REMOTE_IMAGES).
+  // T2 image attachments (max 3 — host's MAX_REMOTE_IMAGES) + T7 file attachments
+  // (max 3 — host's MAX_REMOTE_FILES).
   const [attachments, setAttachments] = useState<CompressedImage[]>([]);
+  const [files, setFiles] = useState<PickedFile[]>([]);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const albumInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // T5 voice input.
   const recorderRef = useRef<VoiceRecorder | null>(null);
@@ -445,13 +473,19 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
   const doSend = async () => {
     if (!actions || sending) return;
-    if (!draft.trim() && !attachments.length) return;
+    if (!draft.trim() && !attachments.length && !files.length) return;
     setSending(true);
     setSendError(null);
     try {
-      await actions.send(draft, running ? "steer" : "prompt", attachments.length ? attachments : undefined);
+      await actions.send(
+        draft,
+        running ? "steer" : "prompt",
+        attachments.length ? attachments : undefined,
+        files.length ? files.map((f) => ({ name: f.name, mimeType: f.mimeType, data: f.data })) : undefined,
+      );
       setDraft("");
       setAttachments([]);
+      setFiles([]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setSendError(message.startsWith("THREAD_BUSY") ? "该会话正被其他设备操作，请稍后再试。" : `发送失败：${message}`);
@@ -483,23 +517,55 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     void input.click();
   };
 
-  const onFilesPicked = async (files: FileList | null) => {
-    if (!files || !files.length) return;
-    const room = 3 - attachments.length;
-    const list = Array.from(files).slice(0, Math.max(0, room));
-    for (const file of list) {
+  /** 任意文件（PDF/日志/压缩包…）：原样 base64 上传，主机落盘后交给 agent 自己读。 */
+  const pickFiles = () => {
+    setAttachMenuOpen(false);
+    if (files.length >= MAX_FILES) return;
+    const input = fileInputRef.current;
+    if (!input) return;
+    input.value = "";
+    void input.click();
+  };
+
+  const onFilesPicked = async (list: FileList | null) => {
+    if (!list || !list.length) return;
+    for (const file of Array.from(list)) {
+      // 图片走压缩通道（模型直接看图）；其余原样上传。
+      if (file.type.startsWith("image/")) {
+        if (attachments.length >= 3) continue;
+        try {
+          const image = await compressImageFile(file);
+          setAttachments((prev) => (prev.length >= 3 ? prev : [...prev, image]));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setSendError(`图片处理失败：${message}`);
+        }
+        continue;
+      }
+      if (file.size > MAX_FILE_BYTES) {
+        setSendError(`文件过大：${file.name}（上限 ${Math.round(MAX_FILE_BYTES / 1_000_000)}MB）`);
+        continue;
+      }
       try {
-        const image = await compressImageFile(file);
-        setAttachments((prev) => (prev.length >= 3 ? prev : [...prev, image]));
+        const data = arrayBufferToBase64(await file.arrayBuffer());
+        setFiles((prev) =>
+          prev.length >= MAX_FILES
+            ? prev
+            : [...prev, { name: file.name || "file", mimeType: file.type || "application/octet-stream", data, size: file.size }],
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setSendError(`图片处理失败：${message}`);
+        setSendError(`文件读取失败：${message}`);
       }
     }
   };
 
   const removeAttachment = (index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const removeFile = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   // ---- T5: voice input -------------------------------------------------------
@@ -680,12 +746,19 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
           {/* Composer：常驻按钮（附件/录音/停止/发送）。录音不改布局，只改按钮态。 */}
           <div className={`composer ${recording ? "recording" : ""}`}>
-            {attachments.length > 0 && (
+            {(attachments.length > 0 || files.length > 0) && (
               <div className="attach-row">
                 {attachments.map((attachment, i) => (
                   <span key={i} className="attach-chip">
                     <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="附件预览" />
                     <button type="button" className="attach-x" onClick={() => removeAttachment(i)} aria-label="移除图片">×</button>
+                  </span>
+                ))}
+                {files.map((file, i) => (
+                  <span key={`f${i}`} className="attach-chip file" title={`${file.name} · ${formatSize(file.size)}`}>
+                    <IconFile />
+                    <span className="file-name">{file.name}</span>
+                    <button type="button" className="attach-x" onClick={() => removeFile(i)} aria-label="移除文件">×</button>
                   </span>
                 ))}
               </div>
@@ -718,8 +791,8 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                   type="button"
                   className={`icon-btn ${attachMenuOpen ? "active" : ""}`}
                   onClick={() => setAttachMenuOpen((open) => !open)}
-                  disabled={attachments.length >= 3 || sending}
-                  aria-label="添加图片"
+                  disabled={(attachments.length >= 3 && files.length >= MAX_FILES) || sending}
+                  aria-label="添加附件"
                 >
                   <IconPlus />
                 </button>
@@ -728,6 +801,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                 <div className="attach-menu">
                   <button type="button" onClick={() => pickImages("camera")}>📷 拍照</button>
                   <button type="button" onClick={() => pickImages("album")}>🖼️ 相册</button>
+                  <button type="button" onClick={() => pickFiles()}>📎 文件</button>
                 </div>
               )}
               <span className="composer-spacer" />
@@ -750,7 +824,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                   type="button"
                   className={`send-btn primary ${running ? "steer" : ""}`}
                   onClick={() => void doSend()}
-                  disabled={sending || (!draft.trim() && !attachments.length)}
+                  disabled={sending || (!draft.trim() && !attachments.length && !files.length)}
                   aria-label={running ? "引导发送" : "发送"}
                 >
                   <IconSend />
@@ -758,9 +832,10 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
               )}
             </div>
 
-            {/* Hidden pickers: album (multi) + camera (single, rear). */}
+            {/* Hidden pickers: album (multi) + camera (single, rear) + 任意文件。 */}
             <input ref={albumInputRef} type="file" accept="image/*" multiple hidden onChange={(e) => void onFilesPicked(e.target.files)} />
             <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => void onFilesPicked(e.target.files)} />
+            <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => void onFilesPicked(e.target.files)} />
           </div>
         </>
       )}

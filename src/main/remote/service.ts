@@ -2,6 +2,7 @@ import {
   errorFor,
   makeEnvelope,
   type RemoteEnvelope,
+  type RemoteFileInput,
   type RemoteImageInput,
   RemoteProtocolError,
   responseFor,
@@ -21,9 +22,9 @@ export interface RemoteBackend {
   /** Apply a task-mode preset (bundles permission + thinking + behaviour).
    * Empty modeId clears the mode (back to baseline). */
   setMode(threadId: string, modeId: string): Promise<RemoteThreadSnapshot>;
-  prompt(threadId: string, text: string, images?: RemoteImageInput[]): Promise<unknown>;
-  steer(threadId: string, text: string, images?: RemoteImageInput[]): Promise<unknown>;
-  followUp(threadId: string, text: string, images?: RemoteImageInput[]): Promise<unknown>;
+  prompt(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
+  steer(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
+  followUp(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
   abort(threadId: string): Promise<unknown>;
   fileTree(projectId: string, relativePath?: string): Promise<unknown>;
   filePreview(projectId: string, relativePath: string): Promise<unknown>;
@@ -63,6 +64,11 @@ interface Claim {
 
 const REMOTE_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const MAX_REMOTE_IMAGES = 3;
+/** 文件附件：最多 3 个，单个 base64 ≤ 8MB（约 6MB 原文件），合计 ≤ 16MB。 */
+const MAX_REMOTE_FILES = 3;
+const MAX_REMOTE_FILE_DATA = 8_000_000;
+const MAX_REMOTE_FILE_DATA_TOTAL = 16_000_000;
+const REMOTE_FILE_NAME_MAX = 180;
 const MAX_REMOTE_IMAGE_DATA = 1_200_000;
 const MAX_REMOTE_IMAGE_DATA_TOTAL = 1_500_000;
 
@@ -196,13 +202,16 @@ export class RemoteService {
         // as long as at least one image rides along.
         const rawText = typeof payload.text === "string" ? payload.text.trim() : "";
         const images = this.optionalImages(payload);
-        if (!rawText && !images?.length) throw new RemoteProtocolError("INVALID_REQUEST", "text or images is required");
+        const files = this.optionalFiles(payload);
+        if (!rawText && !images?.length && !files?.length) {
+          throw new RemoteProtocolError("INVALID_REQUEST", "text, images or files is required");
+        }
         const text = rawText;
         const result = request.type === "thread.prompt"
-          ? await this.backend.prompt(threadId, text, images)
+          ? await this.backend.prompt(threadId, text, images, files)
           : request.type === "thread.steer"
-            ? await this.backend.steer(threadId, text, images)
-            : await this.backend.followUp(threadId, text, images);
+            ? await this.backend.steer(threadId, text, images, files)
+            : await this.backend.followUp(threadId, text, images, files);
         return responseFor(request, result);
       }
       case "thread.abort": {
@@ -312,6 +321,37 @@ export class RemoteService {
       total += data.length;
       if (total > MAX_REMOTE_IMAGE_DATA_TOTAL) throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", "Image attachments are too large");
       return { type: "image", data, mimeType };
+    });
+  }
+
+  /**
+   * 文件附件校验：张数/体积/名字长度/名字字符/附件类型都卡死，避免手机端传坏数据
+   * 到主进程（落盘前必须可信）。
+   */
+  private optionalFiles(payload: Record<string, unknown>): RemoteFileInput[] | undefined {
+    const value = payload.files;
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.length > MAX_REMOTE_FILES) {
+      throw new RemoteProtocolError("INVALID_REQUEST", `files must contain at most ${MAX_REMOTE_FILES} items`);
+    }
+    let total = 0;
+    return value.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new RemoteProtocolError("INVALID_REQUEST", `files[${index}] is invalid`);
+      }
+      const file = item as Record<string, unknown>;
+      const name = typeof file.name === "string" ? file.name.trim() : "";
+      if (!name || name.length > REMOTE_FILE_NAME_MAX) {
+        throw new RemoteProtocolError("INVALID_REQUEST", `files[${index}].name is invalid`);
+      }
+      const data = file.data;
+      if (typeof data !== "string" || data.length === 0 || data.length > MAX_REMOTE_FILE_DATA || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
+        throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", `files[${index}] has invalid or oversized base64 data`);
+      }
+      const mimeType = typeof file.mimeType === "string" ? file.mimeType.slice(0, 120) : undefined;
+      total += data.length;
+      if (total > MAX_REMOTE_FILE_DATA_TOTAL) throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", "File attachments are too large");
+      return { name, ...(mimeType ? { mimeType } : {}), data };
     });
   }
 

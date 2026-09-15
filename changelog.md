@@ -167,6 +167,17 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：中继存在更新版本时打开壳 → 顶部提示条出现，**网页标题与三枚 chip 仍完整可见**（不再被压住）；点关闭后网页恢复全高。已在 `⋮ → 诊断信息` 里可核对页面构建号。
 
+26. **壳 0.2.9：WebView 文件选择器（拍照/相册/文件）+ 补齐 0.2.7 漏掉的 ⋮ 菜单与自动重载**；**手机端文件附件**：
+
+   真机反馈三件事：拍照/发图没反应、不支持发文件、界面被遮挡。
+
+   - **拍照/相册点了没反应** = Android WebView **默认不实现文件选择**——不覆写 `onShowFileChooser` 时 `<input type=file>`（含 `capture` 拍照）完全静默。壳 0.2.9 补上：`FileChooserParams.createIntent()` 走系统选择器（自动带多选与 accept 类型），`isCaptureEnabled` 时用 `ACTION_IMAGE_CAPTURE` + FileProvider（`cacheDir/capture`，`file_paths.xml` 新增该目录）产出照片 URI，结果经 `fileChooserLauncher` 回给页面。
+   - **手机端文件附件**：协议新增 `RemoteFileInput`（name/mimeType/base64）与 `thread.prompt|steer|followUp` 的 `files` 字段；主机侧 `stageRemoteFiles()` 复用桌面「粘贴文件」的落盘通道（`stageClipboardFile` → `<userData>/temp/mpi-clipboard`），再走同一套 `processAttachments()`——图片仍直传模型，文本小文件内联进提示，二进制/大文件以 `<file path=… />` 引用交给 agent 自己读。`RemoteService.optionalFiles()` 卡死张数（≤3）、单件（≤8MB base64）、合计（≤16MB）、名字长度与 base64 字符集；「只有文件没有文字」合法（与图片同理）。PWA 附件菜单新增「📎 文件」，可与图片混发（各 3 个上限）。
+   - **修正 0.2.7 的交付缺口**：那次批量改动 `MainActivity` 的编辑整体失败（多块编辑原子回滚），实际只落了 `MENU_*` 常量——**0.2.7/0.2.8 里的 `⋮` 菜单按钮没有绑定事件、也没有回前台自动重载**。0.2.9 补齐并逐项 grep 验证：`shellMenu` 弹窗（刷新页面 / 服务器地址… / 诊断信息）、`maybeReloadStalePage()`（回前台对比 `window.__mpi_build` 与中继 index.html，不同即 reload，60s 节流）、`showDiagnostics()`。
+   - **遮挡**：`.thread-view` 原来硬编码 `max-height: calc(100dvh - 90px)`，顶部多一行（构建号）就会把卡片底部挤出可视区 → 输入框/发送键被裁掉。改为 flex 布局（`.app` 撑满 100dvh + `min-height:0`，卡片吃掉剩余高度），并给 `.app` 加上 `env(safe-area-inset-top/bottom)` 留出状态栏与手势条。
+
+   验证方式：装 0.2.9 → `＋` → 拍照/相册/文件都能弹出系统选择器；选 PDF 发送后主机把文件落到 `<userData>/temp/mpi-clipboard/` 并在消息里出现 `<file path=…>`（文本小文件则内联）；`⋮` 菜单可用；顶部三枚 chip 与底部发送键完整可见。测试：新增 `test-remote-files`（校验 + files-only 合法 + 透传 + PWA 帧形状，2 组），全量 70 passed/3 skipped/0 failed。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

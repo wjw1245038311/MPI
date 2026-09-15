@@ -84,12 +84,13 @@ export class ThreadActions {
    * (running) / followUp (queued after run). Images are base64 payloads in the
    * host's RemoteImageInput shape — the pi bridge forwards them to the model.
    */
-  send(text: string, mode: SendMode, images?: { data: string; mimeType: string }[]): Promise<unknown> {
+  send(text: string, mode: SendMode, images?: { data: string; mimeType: string }[], files?: { name: string; mimeType?: string; data: string }[]): Promise<unknown> {
     const trimmed = text.trim();
-    if (!trimmed && !(images && images.length)) throw new Error("empty message");
+    if (!trimmed && !(images && images.length) && !(files && files.length)) throw new Error("empty message");
     return this.writeRequest(`thread.${mode}`, {
       text: trimmed,
       ...(images && images.length ? { images } : {}),
+      ...(files && files.length ? { files } : {}),
     }, mode);
   }
 

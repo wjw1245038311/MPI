@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 只暴露自更新下载目录（cacheDir/updates），别的路径不给系统安装器 -->
+<!-- 只暴露必要的两个目录：自更新下载（交给系统安装器）与相机拍照输出。 -->
 <paths>
     <cache-path
         name="updates"
         path="updates/" />
+    <!-- WebView 文件选择器：ACTION_IMAGE_CAPTURE 的输出 URI 必须能写 -->
+    <cache-path
+        name="capture"
+        path="capture/" />
 </paths>

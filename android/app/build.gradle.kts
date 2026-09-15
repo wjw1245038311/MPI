@@ -11,8 +11,8 @@ android {
         applicationId = "com.mpi.remote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 10
-        versionName = "0.2.8"
+        versionCode = 11
+        versionName = "0.2.9"
 
         // ML Kit 条码的 native 库（libbarhopper_v3.so）每个 ABI 约 5–6MB，四个 ABI 就是 20MB+。
         // 只留手机（arm64-v8a）与模拟器（x86_64）——个人自用，不做全 ABI 分发包。

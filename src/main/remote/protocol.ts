@@ -33,6 +33,20 @@ export interface RemoteImageInput {
   mimeType: string;
 }
 
+/**
+ * 手机端发送的任意文件附件（base64）。
+ *
+ * 与图片不同：图片作为模型的图片输入直传，文件则先由主机落盘
+ * （stageClipboardFile，与桌面粘贴文件同一目录），再按桌面的
+ * processAttachments 规则处理——文本类小文件内联进提示，二进制/大文件以
+ * <file path=… /> 引用交给 agent 自己读。
+ */
+export interface RemoteFileInput {
+  name: string;
+  mimeType?: string;
+  data: string;
+}
+
 export type RemoteEnvelope<T = unknown> = {
   v: typeof REMOTE_PROTOCOL_VERSION;
   type: string;
