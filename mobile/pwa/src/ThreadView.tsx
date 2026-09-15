@@ -268,10 +268,9 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     if (el) el.scrollTop = el.scrollHeight;
   }, [view.messages, view.streaming, atBottom]);
 
-  // Clear transient send errors when a new turn starts flowing.
-  useEffect(() => {
-    if (sendError && !view.running) setSendError(null);
-  }, [view.running, sendError]);
+  // NOTE: no auto-clear of sendError here — an earlier version cleared it while
+  // NOT running, which made mic/STT failures invisible (set → instantly wiped).
+  // Errors now persist until the next user action (each handler clears on start).
 
   const handleScroll = () => {
     const el = scrollRef.current;

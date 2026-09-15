@@ -58,6 +58,9 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var loadingOverlay: android.view.View
 
+    /** WebView getUserMedia 请求挂起中（等运行时 RECORD_AUDIO 授权结果）。 */
+    private var pendingAudioRequest: android.webkit.PermissionRequest? = null
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,6 +99,7 @@ class MainActivity : AppCompatActivity() {
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
+
         web.setBackgroundColor(Color.parseColor("#12141A"))
 
         // The PWA owns every scroll gesture inside its panes; a parent that
@@ -150,6 +154,27 @@ class MainActivity : AppCompatActivity() {
                     loadingOverlay.visibility = View.GONE
                     errorPanel.visibility = View.VISIBLE
                     errorText.text = getString(R.string.shell_load_failed, "TLS：${error.primaryError}")
+                }
+            }
+        }
+
+        // composer 语音输入：WebView 默认拒绝所有 getUserMedia，必须显式授权。
+        // 流程：页面请求 AUDIO_CAPTURE → 查运行时权限 → 已授直接 grant；
+        // 未授先弹系统框（RECORD_AUDIO），结果回来再 grant/deny 挂起的请求。
+        web.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onPermissionRequest(request: android.webkit.PermissionRequest) {
+                if (!request.resources.contains(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)) {
+                    request.deny()
+                    return
+                }
+                ShellLog.log("micPermission requested")
+                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
+                    == PackageManager.PERMISSION_GRANTED
+                ) {
+                    request.grant(request.resources)
+                } else {
+                    pendingAudioRequest = request
+                    audioPermission.launch(Manifest.permission.RECORD_AUDIO)
                 }
             }
         }
@@ -279,6 +304,13 @@ class MainActivity : AppCompatActivity() {
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) scanLauncher.launch(Intent(this, ScanActivity::class.java))
         else Toast.makeText(this, getString(R.string.scan_need_camera), Toast.LENGTH_LONG).show()
+    }
+
+    /** 运行时录音授权结果 → 结算挂起的 WebView getUserMedia 请求。 */
+    private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        ShellLog.log("micPermission runtime=${if (granted) "ok" else "denied"}")
+        pendingAudioRequest?.let { if (granted) it.grant(it.resources) else it.deny() }
+        pendingAudioRequest = null
     }
 
     /** 供 PWA 的「扫码」按钮调用（JS 桥）。 */

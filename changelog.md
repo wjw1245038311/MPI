@@ -89,6 +89,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：重启 MPI 后手机 mic→说话→完成，识别走 :8800（main 日志 `[remote] stt.transcribe ok via openai:http://127.0.0.1:8800/v1`）。测试：test-stt-relay 新增 8 组（目标解析 4 + multipart 形状/回退顺序/全挂聚合错误/空载荷）、typecheck + 全量 npm test 68/0。
 
+18. **修复手机语音「点 mic 没反应」的两个静默失败**：
+   - **PWA 错误提示被立即清除**：ThreadView 里一个 effect 注释写的是「新 turn 开始时清 sendError」，条件却写成 `!view.running`（没运行时立即清）——mic/STT 失败的 toast set 完就被抹掉，用户看到的就是「点 mic 说话没反应」。已删除该自动清除；错误现在保留到下一次操作（各入口本来就有显式清除）。
+   - **壳 WebView 拒绝 getUserMedia**：Android WebView 默认拒绝所有媒体权限请求，0.2.4 只加了 manifest 的 RECORD_AUDIO 却没给 WebView 授权钩子 → 录音永远 SecurityError。壳 0.2.5（versionCode 7）加 WebChromeClient.onPermissionRequest：页面请求 AUDIO_CAPTURE → 查运行时权限 → 已授直接 grant，未授弹系统框、结果回来再结算挂起请求（ShellLog 记 micPermission 事件）。注意 API 坑：授权钩子在 WebChromeClient.onPermissionRequest（不是 WebView.setPermissionRequestListener），常量在 PermissionRequest.RESOURCE_AUDIO_CAPTURE。
+
+   验证方式：装 0.2.5 → 首次点 mic 弹系统录音授权框 → 允许后红点脉冲开始计时；失败时 composer 下方出现红色错误文本且不再一闪而过。测试：PWA tsc + build、gradle assembleDebug、全量 npm test。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。
