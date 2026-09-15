@@ -340,13 +340,18 @@ button:disabled { opacity: 0.5; cursor: default; }
 .msg-thinking summary { cursor: pointer; user-select: none; }
 .msg-thinking pre, .msg-tool pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--muted); background: var(--code-bg); padding: 8px; border-radius: var(--radius-sm); }
 
-.msg-tool { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; background: var(--surface-muted); }
+.msg-tool { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; font-size: 13px; background: var(--surface-muted); }
 .msg-tool.running { border-color: rgba(158, 206, 106, 0.4); }
 .msg-tool.error { border-color: rgba(247, 118, 142, 0.5); }
 .msg-tool-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 折成一行：隐藏原生三角，状态点 + 名称 + 参数摘要。 */
+.msg-tool > summary.msg-tool-head { list-style: none; cursor: pointer; user-select: none; }
+.msg-tool > summary.msg-tool-head::-webkit-details-marker { display: none; }
+.msg-tool-state { flex: none; display: inline-flex; width: 14px; justify-content: center; color: var(--ok); font-size: 12px; }
+.msg-tool.error .msg-tool-state { color: var(--err); }
 .msg-tool-name { font-weight: 600; color: var(--accent); flex: none; }
 .msg-tool-args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); min-width: 0; }
-.msg-tool summary { cursor: pointer; user-select: none; font-size: 12px; color: var(--muted); }
+.msg-tool-full { margin: 6px 0 0; padding: 6px 8px; background: var(--code-bg); border-radius: 8px; font-size: 11.5px; white-space: pre-wrap; word-break: break-all; }
 
 .spinner { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--ok); border-radius: 50%; animation: spin 0.9s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -359,7 +364,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* ---- Composer (Qoder-style card, 2026-09-15) ---------------------------- */
 .thread-scroll { flex: 1 1 auto; min-height: 80px; }
 .composer { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-md); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
-.composer-input { width: 100%; resize: none; max-height: 96px; background: transparent; color: var(--text); border: none; padding: 4px 2px; font-size: 15px; line-height: 1.45; font-family: inherit; }
+.composer-input { width: 100%; resize: none; max-height: 132px; overflow-y: auto; background: transparent; color: var(--text); border: none; padding: 4px 2px; font-size: 15px; line-height: 1.45; font-family: inherit; }
 .composer-input:focus { outline: none; }
 .composer-row { display: flex; align-items: center; gap: 4px; position: relative; }
 .icon-btn { flex: none; width: 32px; height: 32px; border-radius: 50%; border: none; background: transparent; color: var(--text-dim); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
@@ -376,17 +381,34 @@ button:disabled { opacity: 0.5; cursor: default; }
 .attach-menu { position: absolute; bottom: calc(100% + 8px); left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-md); display: flex; flex-direction: column; min-width: 130px; z-index: 20; overflow: hidden; }
 .attach-menu button { background: none; border: none; padding: 10px 14px; font-size: 13px; color: var(--text); text-align: left; cursor: pointer; white-space: nowrap; }
 .attach-menu button:hover, .attach-menu button:active { background: var(--control); }
-.voice-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; font-size: 14px; color: var(--text-dim); }
-.voice-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); animation: voice-pulse 1.2s ease-in-out infinite; flex: none; }
-.voice-dot.busy { background: var(--accent); animation: spin 1s linear infinite; border-radius: 2px; }
-@keyframes voice-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
-.voice-timer { font-variant-numeric: tabular-nums; flex: 1; }
-.voice-cancel { flex: none; background: none; border: none; color: var(--text-dim); font-size: 13px; padding: 7px 10px; cursor: pointer; }
-.voice-cancel:disabled { opacity: 0.5; }
-.voice-done { flex: none; background: var(--send); color: var(--send-fg); border: none; border-radius: 999px; padding: 7px 16px; font-size: 13px; cursor: pointer; }
-.voice-done:disabled { opacity: 0.5; }
-.perm-chip { background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 999px; font-size: 11px; padding: 2px 8px; cursor: pointer; }
-.perm-chip:hover { border-color: var(--accent); color: var(--text); }
+/* 录音态：不改布局，只改按钮与边框（去掉了原来的计时行）。 */
+.composer.recording { border-color: var(--err); }
+.icon-btn.mic.live { color: var(--err); background: rgba(247, 118, 142, 0.14); animation: voice-pulse 1.2s ease-in-out infinite; }
+@keyframes voice-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.9); } }
+.composer-error { margin: 6px 0 0; }
+.toast { position: fixed; left: 50%; bottom: 104px; transform: translateX(-50%); background: rgba(20, 22, 18, 0.88); color: #fff; font-size: 12.5px; padding: 7px 14px; border-radius: 999px; z-index: 120; pointer-events: none; }
+
+/* ---- 会话顶部配置栏（权限 / 模型） ------------------------------------- */
+.config-bar { display: flex; gap: 6px; padding: 6px 0 0; overflow-x: auto; scrollbar-width: none; }
+.config-bar::-webkit-scrollbar { display: none; }
+.cfg-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--surface-muted); border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px; font-size: 11.5px; padding: 4px 10px; cursor: pointer; }
+.cfg-chip:disabled { opacity: 0.6; }
+.cfg-chip:active { border-color: var(--accent); color: var(--text); }
+
+/* ---- 底部抽屉（会话级配置） ------------------------------------------- */
+.sheet-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: flex-end; z-index: 110; }
+.sheet { width: 100%; max-height: 72dvh; overflow-y: auto; background: var(--panel); border-radius: 16px 16px 0 0; padding: 8px 12px calc(16px + env(safe-area-inset-bottom)); box-shadow: var(--shadow-md); animation: sheet-up 0.18s ease-out; }
+@keyframes sheet-up { from { transform: translateY(14px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+.sheet-grip { width: 36px; height: 4px; border-radius: 999px; background: var(--border-strong); margin: 4px auto 10px; }
+.sheet-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.sheet-note { margin: 0 0 8px; font-size: 12px; color: var(--text-dim); }
+.sheet-list { display: flex; flex-direction: column; gap: 2px; max-height: 54dvh; overflow-y: auto; }
+.sheet-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; background: none; border: none; color: var(--text); font-size: 14px; padding: 12px 10px; border-radius: 10px; cursor: pointer; }
+.sheet-item:active { background: var(--control); }
+.sheet-item.on { color: var(--accent); }
+.sheet-item:disabled { opacity: 0.6; }
+.sheet-item-main { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-tag { flex: none; font-style: normal; font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--control); color: var(--text-dim); }
 
 /* ---- S6.3: approval card ------------------------------------------------ */
 .approval-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.65); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }

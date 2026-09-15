@@ -11,7 +11,7 @@
  *   - detects seq gaps and socket drops → thread.resync (live snapshot).
  * Pure logic — node-testable against a real relay + fake host service.
  */
-import type { RemoteFileArtifact, RemoteMessage, RemoteThreadEventPayload, RemoteThreadSnapshot, RemoteThreadSummary, RemoteUiRequest } from "../../../shared/protocol";
+import type { RemoteFileArtifact, RemoteMessage, RemoteModelOption, RemoteThreadEventPayload, RemoteThreadSnapshot, RemoteThreadSummary, RemoteUiRequest } from "../../../shared/protocol";
 import type { RelayClient } from "./relay-client";
 import { Requester } from "./requester";
 
@@ -50,6 +50,10 @@ export interface ThreadView {
   streaming: ViewMessage | null; // in-flight assistant message
   running: boolean; // agent turn active (agent_start … settled)
   errorBanner: string | null;
+  /** Active model of this thread (display only — host owns the real setting). */
+  model: { provider: string; id: string } | null;
+  /** Models the host will accept in thread.setModel (display metadata only). */
+  availableModels: RemoteModelOption[];
   /** S6.3: pending ui.request (approval card). Survives resync — the host keeps
    * the dialog open while the agent is paused, so a reconnect must re-show it. */
   pendingUi: RemoteUiRequest | null;
@@ -125,7 +129,7 @@ export class ThreadSession {
     threadId: string,
     options: ThreadSessionOptions = {},
   ) {
-    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, pendingUi: null };
+    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], pendingUi: null };
     this.client = client;
     // threadId goes on the ENVELOPE (host's requiredThread reads it there); the
     // payload copy below is kept for compatibility with simpler test fakes.
@@ -250,6 +254,8 @@ export class ThreadSession {
       streaming: null,
       running: snapshot.state === "running",
       errorBanner: null,
+      model: snapshot.model ?? null,
+      availableModels: snapshot.availableModels ?? [],
       pendingUi: this.view.pendingUi, // a pending approval survives the resync
     });
     // Re-arm seq tracking: the fresh snapshot makes subsequent events lossless on

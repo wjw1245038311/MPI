@@ -150,4 +150,44 @@ const { ThreadActions } = await import("../mobile/pwa/src/lib/thread-actions.ts"
   console.log("ok 4 - thread-actions: images in prompt/steer frames + lease-free transcribe");
 }
 
+// ---- 5. ThreadActions.setModel (会话顶部配置栏) ----------------------------------
+{
+  const sent = [];
+  let frameListener = null;
+  const transport = {
+    sendData(obj) {
+      sent.push(obj);
+      setTimeout(() => frameListener?.({ type: "x.result", requestId: obj.requestId, payload: { ok: true } }), 0);
+      return true;
+    },
+    onFrame(listener) {
+      frameListener = listener;
+      return () => (frameListener = null);
+    },
+    isOpen: () => true,
+  };
+  const actions = new ThreadActions(transport, "thread-1", { leaseMs: 30_000 });
+
+  // 写操作：必须先 claimWrite（否则 host 回 WRITE_CLAIM_REQUIRED）
+  sent.length = 0;
+  const p = actions.setModel("lmstudio", "qwen3.8-27b");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(sent.length, 2, "claimWrite + setModel");
+  assert.equal(sent[0].type, "thread.claimWrite");
+  assert.equal(sent[1].type, "thread.setModel");
+  assert.deepEqual(sent[1].payload, { provider: "lmstudio", modelId: "qwen3.8-27b" });
+  await p;
+
+  // 已持有租约时不再重复 claim
+  sent.length = 0;
+  const p2 = actions.setModel("lmstudio", "qwen3.6-27b");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(sent.length, 1, "lease reuse: no second claimWrite");
+  assert.equal(sent[0].type, "thread.setModel");
+  assert.deepEqual(sent[0].payload, { provider: "lmstudio", modelId: "qwen3.6-27b" });
+  await p2;
+
+  console.log("ok 5 - thread-actions: setModel claims the write lease and sends provider/modelId");
+}
+
 console.log("pwa composer tests passed");

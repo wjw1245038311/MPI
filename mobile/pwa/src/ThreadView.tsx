@@ -46,6 +46,50 @@ function IconStop() {
   );
 }
 
+function IconX() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+
+/** 配置栏用：权限（锁）与模型（方框）。 */
+function IconLock() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+      <rect x="4" y="10" width="16" height="10" rx="2" />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
+}
+
+function IconModel() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+      <rect x="4" y="4" width="16" height="16" rx="3" />
+      <path d="M9 15V9l3 3 3-3v6" />
+    </svg>
+  );
+}
+
+function IconCheck() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+/** 录音中的麦克风图标（波形）：图标本身就说明「正在采音」。 */
+function IconWave() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+      <path d="M5 10v4M9.5 6v12M14.5 8v8M19 11v2" />
+    </svg>
+  );
+}
+
 const STATE_LABELS: Record<RemoteThreadState, string> = {
   draft: "草稿",
   idle: "空闲",
@@ -72,20 +116,19 @@ function Block({ block }: { block: ViewBlock }) {
     );
   }
   if (block.type === "tool") {
+    // 折成一行：名称 + 参数摘要 + 状态点；点开才展开参数全文与结果。
     return (
-      <div className={`msg-tool ${block.running ? "running" : ""} ${block.isError ? "error" : ""}`}>
-        <div className="msg-tool-head">
+      <details className={`msg-tool ${block.running ? "running" : ""} ${block.isError ? "error" : ""}`}>
+        <summary className="msg-tool-head">
+          <span className="msg-tool-state">
+            {block.running ? <span className="spinner" aria-label="运行中" /> : block.isError ? "✗" : <IconCheck />}
+          </span>
           <span className="msg-tool-name">{block.name || "tool"}</span>
           {block.argsText && <code className="msg-tool-args">{block.argsText}</code>}
-          {block.running && <span className="spinner" aria-label="运行中" />}
-        </div>
-        {block.text ? (
-          <details open={block.isError}>
-            <summary>结果</summary>
-            <pre>{block.text}</pre>
-          </details>
-        ) : null}
-      </div>
+        </summary>
+        {block.argsText && <pre className="msg-tool-full">{block.argsText}</pre>}
+        {block.text ? <pre>{block.text}</pre> : null}
+      </details>
     );
   }
   if (block.type === "image") {
@@ -94,10 +137,66 @@ function Block({ block }: { block: ViewBlock }) {
   return <p className="msg-text">{block.text}</p>;
 }
 
-function Message({ message }: { message: ViewMessage }) {
+/** 草稿按会话存放（切走再回来、下拉刷新都不丢）。 */
+function draftKey(threadId: string): string {
+  return `mpi-draft-${threadId}`;
+}
+
+function readDraft(threadId: string): string {
+  try {
+    return window.localStorage.getItem(draftKey(threadId)) ?? "";
+  } catch {
+    return ""; // 隐私模式/配额不可用——草稿退化为内存态
+  }
+}
+
+/** 可复制的纯文本：消息里所有 text 块（不含思考/工具）。 */
+function messageText(message: ViewMessage): string {
+  return message.blocks
+    .filter((b) => b.type === "text" && b.text)
+    .map((b) => b.text)
+    .join("\n")
+    .trim();
+}
+
+function Message({ message, onCopied }: { message: ViewMessage; onCopied?: (ok: boolean) => void }) {
   const isUser = message.role === "user";
+  // 长按复制（600ms）：手机上选中文本很难，复制整条消息反而常用。
+  const pressTimer = useRef<number | null>(null);
+  const cancelPress = () => {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+  };
+  const beginPress = () => {
+    if (!onCopied) return;
+    const text = messageText(message);
+    if (!text) return;
+    cancelPress();
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = null;
+      const done = () => onCopied(true);
+      const fail = () => onCopied(false);
+      if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(text).then(done, fail);
+      else fail();
+    }, 600);
+  };
   return (
-    <div className={`message ${isUser ? "user" : "assistant"}`}>
+    <div
+      className={`message ${isUser ? "user" : "assistant"}`}
+      onTouchStart={beginPress}
+      onTouchEnd={cancelPress}
+      onTouchMove={cancelPress}
+      onContextMenu={(e) => {
+        // 桌面/长按菜单：同样走复制，避免弹出没有复制项的菜单。
+        if (!onCopied) return;
+        const text = messageText(message);
+        if (!text) return;
+        e.preventDefault();
+        void navigator.clipboard?.writeText(text).then(() => onCopied(true), () => onCopied(false));
+      }}
+    >
       {!isUser && message.blocks.length > 0 && (
         <div className="msg-role">
           MPI{message.stopReason === "error" ? " · 出错" : ""}
@@ -244,10 +343,16 @@ export interface ThreadViewProps {
 export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack }: ThreadViewProps) {
   const pendingUi = view.pendingUi;
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [atBottom, setAtBottom] = useState(true);
+  // 草稿按会话保存（localStorage）：切走再回来、下拉刷新都不丢。
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // 顶部配置抽屉（权限/模型）与瞬时提示。
+  const [sheet, setSheet] = useState<null | "permission" | "model">(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [modelBusy, setModelBusy] = useState(false);
 
   // T2 image attachments (max 3 — host's MAX_REMOTE_IMAGES).
   const [attachments, setAttachments] = useState<CompressedImage[]>([]);
@@ -258,8 +363,51 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   // T5 voice input.
   const recorderRef = useRef<VoiceRecorder | null>(null);
   const [recording, setRecording] = useState(false);
-  const [recSeconds, setRecSeconds] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
+
+  // 切会话：载入该会话的草稿 + 把顶层配置回收到当前快照值。
+  const threadIdRef = useRef(view.threadId);
+  useEffect(() => {
+    if (threadIdRef.current === view.threadId) return;
+    threadIdRef.current = view.threadId;
+    setDraft(readDraft(view.threadId));
+    setSendError(null);
+    setAttachments([]);
+    setSheet(null);
+  }, [view.threadId]);
+
+  // 首次挂载：读回本会话草稿。
+  useEffect(() => {
+    setDraft(readDraft(threadIdRef.current));
+  }, []);
+
+  // 草稿落盘（按会话键）+ 输入框自动增高（1–6 行，CSS 里也限了 max-height）。
+  // 切会话那一帧里 draft 还是上一会话的值，先跳过（否则会把旧草稿写到新会话键上）。
+  const persistKeyRef = useRef(view.threadId);
+  useEffect(() => {
+    if (persistKeyRef.current !== view.threadId) {
+      persistKeyRef.current = view.threadId;
+    } else {
+      try {
+        if (draft) window.localStorage.setItem(draftKey(view.threadId), draft);
+        else window.localStorage.removeItem(draftKey(view.threadId));
+      } catch {
+        // 隐私模式/配额满——草稿退化为内存态，不影响发送
+      }
+    }
+    const el = inputRef.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+    }
+  }, [draft, view.threadId]);
+
+  // 瞬时提示自动消失。
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   // Auto-scroll while the user is pinned to the bottom.
   useEffect(() => {
@@ -347,15 +495,6 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
   // ---- T5: voice input -------------------------------------------------------
 
-  useEffect(() => {
-    if (!recording) return;
-    const timer = window.setInterval(() => {
-      const rec = recorderRef.current;
-      setRecSeconds(rec ? rec.elapsedSeconds() : 0);
-    }, 500);
-    return () => window.clearInterval(timer);
-  }, [recording]);
-
   // Release the mic if the view unmounts mid-recording.
   useEffect(() => () => recorderRef.current?.cancel(), []);
 
@@ -367,7 +506,6 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       rec = new VoiceRecorder();
       await rec.start();
       recorderRef.current = rec;
-      setRecSeconds(0);
       setRecording(true);
     } catch (error) {
       // Release anything partially acquired — a leaked stream keeps the device
@@ -409,12 +547,11 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     setRecording(false);
   };
 
-  const fmtSeconds = (total: number) => `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
-
   const togglePermission = async () => {
     if (!actions || !view.summary) return;
     const next: RemotePermission = view.summary.permission === "sandbox" ? "full" : "sandbox";
     setSendError(null);
+    setSheet(null);
     try {
       await actions.setPermission(next); // snapshot update flows back via ThreadSession events
     } catch (error) {
@@ -423,6 +560,31 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     }
   };
 
+  /** 选模型：host 校验并返回新快照；无 model_changed 事件，所以本地先更新徽标。 */
+  const chooseModel = async (provider: string, modelId: string) => {
+    if (!actions || modelBusy) return;
+    setModelBusy(true);
+    setSendError(null);
+    try {
+      await actions.setModel(provider, modelId);
+      setSheet(null);
+      setToast("模型已切换");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSendError(message.startsWith("THREAD_BUSY") ? "该会话正被其他设备操作，无法切换模型。" : `模型切换失败：${message}`);
+    } finally {
+      setModelBusy(false);
+    }
+  };
+
+  const modelLabel = (() => {
+    const current = view.model;
+    if (!current) return "默认模型";
+    const option = view.availableModels.find((m) => m.provider === current.provider && m.id === current.id);
+    const short = (option?.name || option?.id || current.id).split("/").pop() || current.id;
+    return short.length > 18 ? `${short.slice(0, 17)}…` : short;
+  })();
+
   return (
     <div className="card thread-view">
       <div className="thread-head">
@@ -430,18 +592,28 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="thread-title">{view.summary?.title || "会话"}</div>
           {view.summary && (
-            <>
-              <span className={`badge badge-${view.summary.state}`}>{STATE_LABELS[view.summary.state]}</span>{" "}
-              <button type="button" className="perm-chip" onClick={togglePermission} title="切换权限级别">
-                {view.summary.permission === "sandbox" ? "沙盒" : "完整"}
-              </button>
-            </>
+            <span className={`badge badge-${view.summary.state}`}>{STATE_LABELS[view.summary.state]}</span>
           )}
         </div>
       </div>
 
-      {view.errorBanner && <p className="hint error-text">{view.errorBanner}</p>}
-      {sendError && <p className="hint error-text">{sendError}</p>}
+      {/* 配置栏：会话级设置（权限 / 模型）放顶部，点开底部抽屉选择。 */}
+      {view.summary && (
+        <div className="config-bar">
+          <button
+            type="button"
+            className={`cfg-chip ${view.summary.permission === "sandbox" ? "sandbox" : "full"}`}
+            onClick={() => setSheet("permission")}
+          >
+            <IconLock />
+            {view.summary.permission === "sandbox" ? "沙盒" : "完整权限"}
+          </button>
+          <button type="button" className="cfg-chip" onClick={() => setSheet("model")} disabled={modelBusy}>
+            <IconModel />
+            {modelBusy ? "切换中…" : modelLabel}
+          </button>
+        </div>
+      )}
 
       {!view.ready ? (
         <p className="hint">加载会话…</p>
@@ -449,7 +621,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
         <>
           <div className="thread-scroll" ref={scrollRef} onScroll={handleScroll}>
             {view.messages.map((message) => (
-              <Message key={message.id} message={message} />
+              <Message key={message.id} message={message} onCopied={(ok) => setToast(ok ? "已复制" : "复制失败")} />
             ))}
             {view.streaming && <Message message={view.streaming} />}
             {running && !view.streaming && <p className="hint">正在工作…</p>}
@@ -458,8 +630,13 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
             <button type="button" className="to-bottom" onClick={scrollToBottom}>↓ 最新消息</button>
           )}
 
-          {/* Composer (Qoder-style card, 2026-09-15): + attachments / mic / round send-stop */}
-          <div className="composer">
+          {/* 错误提示贴着输入框——这里才是手指所在的位置。 */}
+          {(sendError || view.errorBanner) && (
+            <p className="hint error-text composer-error">{sendError || view.errorBanner}</p>
+          )}
+
+          {/* Composer：常驻按钮（附件/录音/停止/发送）。录音不改布局，只改按钮态。 */}
+          <div className={`composer ${recording ? "recording" : ""}`}>
             {attachments.length > 0 && (
               <div className="attach-row">
                 {attachments.map((attachment, i) => (
@@ -471,71 +648,72 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
               </div>
             )}
 
-            {recording ? (
-              <div className="voice-row">
-                <span className={`voice-dot ${transcribing ? "busy" : "live"}`} />
-                <span className="voice-timer">{transcribing ? "识别中…" : `正在录音 ${fmtSeconds(recSeconds)}`}</span>
-                <button type="button" className="voice-cancel" onClick={cancelVoice} disabled={transcribing}>取消</button>
-                <button type="button" className="voice-done" onClick={() => void stopVoice()} disabled={transcribing}>完成</button>
-              </div>
-            ) : (
-              <>
-                <textarea
-                  className="composer-input"
-                  value={draft}
-                  placeholder={running ? "引导当前任务…" : "描述你的任务…"}
-                  rows={1}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void doSend();
-                    }
-                  }}
-                />
-                <div className="composer-row">
-                  <button
-                    type="button"
-                    className={`icon-btn ${attachMenuOpen ? "active" : ""}`}
-                    onClick={() => setAttachMenuOpen((open) => !open)}
-                    disabled={attachments.length >= 3 || sending}
-                    aria-label="添加图片"
-                  >
-                    <IconPlus />
-                  </button>
-                  {attachMenuOpen && (
-                    <div className="attach-menu">
-                      <button type="button" onClick={() => pickImages("camera")}>📷 拍照</button>
-                      <button type="button" onClick={() => pickImages("album")}>🖼️ 相册</button>
-                    </div>
-                  )}
-                  <span className="composer-spacer" />
-                  <button
-                    type="button"
-                    className={`icon-btn ${transcribing ? "busy" : ""}`}
-                    onClick={() => void startVoice()}
-                    disabled={transcribing || sending}
-                    aria-label="语音输入"
-                  >
-                    {transcribing ? <span className="spinner" /> : <IconMic />}
-                  </button>
-                  {running && (
-                    <button type="button" className="send-btn stop" onClick={() => void doAbort()} disabled={sending} aria-label="停止">
-                      <IconStop />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className={`send-btn primary ${running ? "steer" : ""}`}
-                    onClick={() => void doSend()}
-                    disabled={sending || (!draft.trim() && !attachments.length)}
-                    aria-label={running ? "引导发送" : "发送"}
-                  >
-                    <IconSend />
-                  </button>
+            <textarea
+              ref={inputRef}
+              className="composer-input"
+              value={draft}
+              placeholder={
+                recording ? "正在录音…点麦克风结束并转文字" : running ? "引导当前任务…" : "描述你的任务…"
+              }
+              rows={1}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void doSend();
+                }
+              }}
+            />
+            <div className="composer-row">
+              {recording ? (
+                // 录音中：左取消、右结束（微信式：同一位置再点一下即完成）
+                <button type="button" className="icon-btn" onClick={cancelVoice} disabled={transcribing} aria-label="取消录音">
+                  <IconX />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={`icon-btn ${attachMenuOpen ? "active" : ""}`}
+                  onClick={() => setAttachMenuOpen((open) => !open)}
+                  disabled={attachments.length >= 3 || sending}
+                  aria-label="添加图片"
+                >
+                  <IconPlus />
+                </button>
+              )}
+              {attachMenuOpen && !recording && (
+                <div className="attach-menu">
+                  <button type="button" onClick={() => pickImages("camera")}>📷 拍照</button>
+                  <button type="button" onClick={() => pickImages("album")}>🖼️ 相册</button>
                 </div>
-              </>
-            )}
+              )}
+              <span className="composer-spacer" />
+              <button
+                type="button"
+                className={`icon-btn mic ${recording ? "live" : ""} ${transcribing ? "busy" : ""}`}
+                onClick={() => (recording ? void stopVoice() : void startVoice())}
+                disabled={transcribing || sending}
+                aria-label={recording ? "结束录音并转文字" : "语音输入"}
+              >
+                {transcribing ? <span className="spinner" /> : recording ? <IconWave /> : <IconMic />}
+              </button>
+              {running && !recording && (
+                <button type="button" className="send-btn stop" onClick={() => void doAbort()} disabled={sending} aria-label="停止">
+                  <IconStop />
+                </button>
+              )}
+              {!recording && (
+                <button
+                  type="button"
+                  className={`send-btn primary ${running ? "steer" : ""}`}
+                  onClick={() => void doSend()}
+                  disabled={sending || (!draft.trim() && !attachments.length)}
+                  aria-label={running ? "引导发送" : "发送"}
+                >
+                  <IconSend />
+                </button>
+              )}
+            </div>
 
             {/* Hidden pickers: album (multi) + camera (single, rear). */}
             <input ref={albumInputRef} type="file" accept="image/*" multiple hidden onChange={(e) => void onFilesPicked(e.target.files)} />
@@ -543,6 +721,67 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
           </div>
         </>
       )}
+
+      {/* 底部抽屉：权限 / 模型（会话级配置只在这里改，不占消息区）。 */}
+      {sheet && (
+        <div className="sheet-backdrop" onClick={() => setSheet(null)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="sheet-grip" />
+            {sheet === "permission" ? (
+              <>
+                <div className="sheet-title">权限级别</div>
+                <p className="sheet-note">沙盒：写文件/执行命令前需要你批准；完整：不再逐条询问。</p>
+                <button
+                  type="button"
+                  className={`sheet-item ${view.summary?.permission === "sandbox" ? "on" : ""}`}
+                  onClick={() => void togglePermission()}
+                >
+                  <span>沙盒（逐条批准）</span>
+                  {view.summary?.permission === "sandbox" && <IconCheck />}
+                </button>
+                <button
+                  type="button"
+                  className={`sheet-item ${view.summary?.permission === "full" ? "on" : ""}`}
+                  onClick={() => void togglePermission()}
+                >
+                  <span>完整权限（不询问）</span>
+                  {view.summary?.permission === "full" && <IconCheck />}
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="sheet-title">选择模型</div>
+                {view.availableModels.length === 0 ? (
+                  <p className="sheet-note">主机未上报可选模型列表。</p>
+                ) : (
+                  <div className="sheet-list">
+                    {view.availableModels.map((option) => {
+                      const active = view.model?.provider === option.provider && view.model?.id === option.id;
+                      return (
+                        <button
+                          key={`${option.provider}/${option.id}`}
+                          type="button"
+                          className={`sheet-item ${active ? "on" : ""}`}
+                          disabled={modelBusy}
+                          onClick={() => void chooseModel(option.provider, option.id)}
+                        >
+                          <span className="sheet-item-main">
+                            {option.name || option.id}
+                            {option.reasoning && <em className="sheet-tag">思考</em>}
+                          </span>
+                          {active && <IconCheck />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {toast && <div className="toast">{toast}</div>}
 
       {/* S6.3 approval card (full-screen, above everything) */}
       {view.pendingUi && <ApprovalCard request={view.pendingUi} busy={uiBusy} error={uiError} onRespond={onRespondUi} />}

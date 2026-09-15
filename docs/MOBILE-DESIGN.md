@@ -185,9 +185,15 @@ Vite + React + TS（与 MPI renderer 同栈；protocol 类型经小型共享包�
 2. **首页**：主机卡片（在线/离线、lastSeen）→ 项目列表 → 会话列表
    （状态徽章 running/idle/error/disconnected、updatedAt、messageCount，对齐 `RemoteThreadSummary`）。
 3. **会话视图**：消息流渲染 text/thinking/tool 块（含 running 态与 artifacts），实时事件订阅；
-   socket 恢复后按 lastSeq `thread.resync`。输入条：prompt/steer/followUp + abort + sandbox/full 切换
-   （写操作前 claimWrite，租约过期自动重取）。权限变更由 host 推 `permission_changed`
-   `{kind:"permission_changed", data:{permission}}`（二值 sandbox|full）事件，头部徽标实时同步；
+   socket 恢复后按 lastSeq `thread.resync`。
+   - **顶部配置栏**（0.6.16+）：标题下方一排 chip —— 权限（沙盒/完整）、当前模型；点击弹底部抽屉选择。
+     模型列表来自 snapshot 的 `availableModels`，切换走 `thread.setModel`（写租约；host 不推
+     `model_changed`，成功后就地更新徽标，resync 以 host 为准）。任务模式仍需新协议，暂不上手机。
+   - **输入条**：prompt/steer/followUp + abort；录音走壳内原生 AudioRecord（见 ANDROID-SHELL.md），
+     浏览器回退 getUserMedia。录音时**不改变布局**：边框变红 + 图标换波形脉冲，再点结束并转写，左键
+     ✕ 取消；错误提示固定在输入框正上方；草稿按会话存 localStorage；工具卡片默认折成一行。
+   权限变更由 host 推 `permission_changed`
+   `{kind:"permission_changed", data:{permission}}`（二值 sandbox|full）事件，顶部 chip 实时同步；
    kind 为开放字符串，旧客户端忽略未知 kind。
 4. **审批卡片**：收到 ui.request（confirm/select/input）→ 全屏卡片 → `ui.respond`；
    select 类直接渲染 options 列表——主机端权限门已内置多档授权

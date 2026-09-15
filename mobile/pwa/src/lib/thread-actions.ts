@@ -111,6 +111,16 @@ export class ThreadActions {
   }
 
   /**
+   * Switch the thread's model (host validates the provider/model pair and
+   * rejects unknown ones). No model_changed event exists host-side, so the
+   * caller applies the returned snapshot locally — the next resync restores
+   * the host's truth either way.
+   */
+  setModel(provider: string, modelId: string): Promise<{ snapshot?: { model?: { provider: string; id: string } | null } }> {
+    return this.writeRequest("thread.setModel", { provider, modelId }, "setModel");
+  }
+
+  /**
    * Answer a ui.request (approval card). Response shapes mirror the desktop
    * ExtUiModal: select → {value}, confirm → {confirmed}, input → {value},
    * cancel → {cancelled:true}. Writer-gated on the host like every write.
