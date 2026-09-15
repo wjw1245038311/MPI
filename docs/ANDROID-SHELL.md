@@ -148,6 +148,7 @@ https://<relay>/#pair=<base64url payload>
 | 3 | 环境探测 | PWA → 壳 | PWA 以 `typeof window.MpiShell?.scanPairQr === "function"` 判定「在壳里」，显示壳专属 UI（扫码按钮、推送提示条）。**必须先探测再使用，不得假设存在** |
 | 4 | `window.__mpiBack(): "handled" \| "pass"` | PWA → 壳（返回键握手） | 壳的返回键先执行 `evaluateJavascript("window.__mpiBack ? window.__mpiBack() : 'pass'")`：返回 `"handled"` = 页面已处理（如关抽屉），壳不再动作；否则走 `canGoBack() ? goBack() : moveTaskToBack()`。原因：WebView 的 `canGoBack()` 不把 pushState 历史算进去，没有这个握手按返回键会直接后台化 |
 | 5 | VIEW intent filter | 系统 → 壳 | 清单注册中继域名的 https VIEW；扫码/点开的配对链接已装壳则进壳、否则进浏览器（两者共用 `#pair=` 自动配对路径）。「用 MPI 打开」也走这里换服务器地址 |
+| 6 | `window.MpiShell.scanDiagnostics(): string` | 壳注入 → PWA（0.2.3+） | 返回 JSON `{shellVersion, baseUrl, events}`——壳侧最近 ≤20 条 load/scan/update 事件（行格式 `<epochMillis> <文本>`，同时写 logcat tag `MpiShell` + SharedPreferences）。PWA `?dbg=1` 浮层每 2s 拉取展示；旧壳无此成员时 PWA 探测式跳过 |
 
 **兼容规则：**
 

@@ -64,6 +64,13 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：全新配置 loadConfig → remoteSignalingUrl === ""；旧配置存 `wss://mpi-remote.scholarcn.com/ws` → 加载后变 ""；手动配置的其它 ws(s):// URL（如本地 signaling server）不受影响。测试：全量 npm test。
 
+14. **壳 0.2.3：黑屏可诊断 + 扫码实时反馈**（排查「新 APK 打开没显示」时发现壳无任何加载/失败反馈——中继不可达时就是纯黑屏零提示）。已排除代码因素：部署的 PWA bundle 经无头 Chromium 实测浏览器/壳两种模式均正常渲染、nginx MIME/缓存配置正确、APK dex 含全部新代码；最可能根因是手机当时不在 Tailscale（中继仅监听 tailnet `100.67.5.31:9443`）。本版把「无反馈」变成「有状态」：
+   - **加载指示器**：启动后显示「正在连接中继…（长时间未打开请检查 Tailscale/地址）」，直到首帧渲染或错误面板出现；same-document 导航（扫码只改 hash）不误触发。
+   - **扫码实时反馈**：8s / 23s 未识别到二维码弹提示 toast（不留静默路径）；相机初始化失败不再崩溃、明确显示原因。
+   - **取证层**：壳侧 load/scan/update 事件写 logcat（tag `MpiShell`）+ SharedPreferences（最近 20 条，重启不丢），新增 `MpiShell.scanDiagnostics()` JS 桥（契约 #6）；PWA `?dbg=1` 浮层每 2s 拉取展示，且**无中继连接时也渲染**（黑屏场景正是需要它的时候）。
+
+   验证方式：手机装 0.2.3 → 打开壳应见「正在连接中继…」；网络不通时停留该提示而非纯黑屏；扫码 8s 未识别弹 toast；壳内访问 `https://<relay>/?dbg=1` 可见 SHELL v0.2.3 + baseUrl + 事件时间线。测试：PWA tsc+vite build、5 组 pwa node 测试通过；无头 Chromium 验证 ?dbg=1 浮层在无 client 时渲染。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

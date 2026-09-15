@@ -4,10 +4,45 @@ import type { ThreadView as ThreadViewState } from "./lib/thread-session";
 
 interface FrameRec { text: string; warn?: boolean; at: string }
 
-/** On-screen diagnostics for real-device debugging — enabled with ?dbg=1 in the URL. */
+/** 壳侧取证快照（MpiShell.scanDiagnostics，0.2.3+）：黑屏/扫码无反应时定位用。
+ * events 行格式 = "<epochMillis> <事件文本>"。 */
+interface ShellDiag {
+  shellVersion: string;
+  baseUrl: string;
+  events: string[];
+}
+
+const fmtShellLine = (line: string): string => {
+  const m = line.match(/^(\d{13}) (.*)$/);
+  return m ? `${new Date(Number(m[1])).toISOString().slice(11, 23)} ${m[2]}` : line;
+};
+
+/** On-screen diagnostics for real-device debugging — enabled with ?dbg=1 in the URL.
+ * Renders even before a relay client exists (that is exactly when it is needed). */
 export default function DbgOverlay({ client, threadView }: { client: RelayClient | null; threadView: ThreadViewState | null }) {
   const [frames, setFrames] = useState<FrameRec[]>([]);
   const logRef = useRef<{ list: FrameRec[] }>({ list: [] });
+
+  // Shell-side event log (load/scan/update) — pulled every 2s while the overlay is up.
+  const [shellDiag, setShellDiag] = useState<ShellDiag | null>(null);
+  useEffect(() => {
+    const bridge = (window as unknown as { MpiShell?: { scanDiagnostics?: () => string } }).MpiShell;
+    if (!bridge?.scanDiagnostics) return;
+    let alive = true;
+    const pull = () => {
+      try {
+        setShellDiag(JSON.parse(bridge.scanDiagnostics!()));
+      } catch { /* 壳返回异常时保持上次值 */ }
+    };
+    pull();
+    const t = setInterval(() => {
+      if (alive) pull();
+    }, 2000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
 
   // Shared frame log (Requester correlation hooks + inbound frames push here).
   useEffect(() => {
@@ -50,11 +85,23 @@ export default function DbgOverlay({ client, threadView }: { client: RelayClient
     return () => clearInterval(t);
   }, []);
 
-  if (!client) return null;
   return (
     <div className="dbg-overlay">
-      <b>DBG</b> cid={client.getClientId()} state={client.getState()} err={client.getLastError() ?? "-"}
+      <b>DBG</b>{" "}
+      {client
+        ? <>cid={client.getClientId()} state={client.getState()} err={client.getLastError() ?? "-"}</>
+        : <span style={{ color: "#ff9f43" }}>client 未就绪（页面已渲染、中继连接未建立）</span>}
       {threadView ? <> | thread ready={String(threadView.ready)} msgs={threadView.messages.length} banner={threadView.errorBanner ?? "-"}</> : null}
+      {shellDiag && (
+        <>
+          <div style={{ marginTop: 4 }}>
+            <b>SHELL</b> v{shellDiag.shellVersion} base={shellDiag.baseUrl}
+          </div>
+          {(shellDiag.events || []).slice(-8).map((line, i) => (
+            <div key={`sh-${i}`} style={{ color: "#7ec8ff" }}>{fmtShellLine(line)}</div>
+          ))}
+        </>
+      )}
       {frames.map((f, i) => (
         <div key={`${f.at}-${i}`} style={f.warn ? { color: "#ff9f43" } : undefined}>{f.at} {f.text}</div>
       ))}

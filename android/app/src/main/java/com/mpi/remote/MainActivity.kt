@@ -56,12 +56,17 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
     private val baseUrl: String get() = prefs.getString(KEY_BASE_URL, DEFAULT_BASE_URL) ?: DEFAULT_BASE_URL
 
+    private lateinit var loadingOverlay: android.view.View
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        ShellLog.init(this)
+        ShellLog.log("onCreate base=$baseUrl")
 
         web = findViewById(R.id.web)
+        loadingOverlay = findViewById(R.id.loadingOverlay)
         errorPanel = findViewById(R.id.errorPanel)
         errorText = findViewById(R.id.errorText)
         urlInput = findViewById(R.id.urlInput)
@@ -76,6 +81,10 @@ class MainActivity : AppCompatActivity() {
 
                 @JavascriptInterface
                 fun shellVersion(): String = BuildConfig.VERSION_NAME
+
+                /** ?dbg=1 诊断浮层读回：壳侧最近事件（load/scan/update），真机黑屏时定位用。 */
+                @JavascriptInterface
+                fun scanDiagnostics(): String = ShellLog.snapshot(BuildConfig.VERSION_NAME, baseUrl)
             },
             "MpiShell",
         )
@@ -114,12 +123,16 @@ class MainActivity : AppCompatActivity() {
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (request.isForMainFrame) {
+                    ShellLog.log("netError [${error.description}] ${request.url}")
+                    loadingOverlay.visibility = View.GONE
                     errorPanel.visibility = View.VISIBLE
                     errorText.text = getString(R.string.shell_load_failed, "${error.description}\n${request.url}")
                 }
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                ShellLog.log("pageFinished $url")
+                loadingOverlay.visibility = View.GONE
                 errorPanel.visibility = View.GONE
             }
 
@@ -129,10 +142,12 @@ class MainActivity : AppCompatActivity() {
              * 127.0.0.1). Release builds always fail closed.
              */
             override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                ShellLog.log("sslError [${error.primaryError}] ${view.url}")
                 if (BuildConfig.DEBUG && view.url?.startsWith("https://127.0.0.1") == true) {
                     handler.proceed()
                 } else {
                     handler.cancel()
+                    loadingOverlay.visibility = View.GONE
                     errorPanel.visibility = View.VISIBLE
                     errorText.text = getString(R.string.shell_load_failed, "TLS：${error.primaryError}")
                 }
@@ -252,9 +267,11 @@ class MainActivity : AppCompatActivity() {
     private val scanLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val scanned = result.data?.getStringExtra(ScanActivity.EXTRA_TEXT)
         if (result.resultCode == Activity.RESULT_OK && !scanned.isNullOrBlank()) {
+            ShellLog.log("scanResult ok raw=${scanned.take(80)}")
             openScanned(scanned)
         } else {
             // 没识别到就明确告知，别让用户以为「扫了但没反应」。
+            ShellLog.log("scanResult none")
             Toast.makeText(this, getString(R.string.scan_no_result), Toast.LENGTH_LONG).show()
         }
     }
@@ -266,6 +283,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 供 PWA 的「扫码」按钮调用（JS 桥）。 */
     private fun startScan() {
+        ShellLog.log("scanStart")
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             scanLauncher.launch(Intent(this, ScanActivity::class.java))
         } else {
@@ -277,6 +295,7 @@ class MainActivity : AppCompatActivity() {
     private fun openScanned(scanned: String) {
         val url = pairingUrlFrom(scanned)
         if (url == null) {
+            ShellLog.log("scanResult notPairing raw=${scanned.take(80)}")
             Toast.makeText(this, getString(R.string.scan_not_pairing), Toast.LENGTH_LONG).show()
             return
         }
@@ -314,9 +333,20 @@ class MainActivity : AppCompatActivity() {
     private fun loadExternal(url: String) {
         val origin = Uri.parse(url).let { "${it.scheme}://${it.authority}/" }
         if (origin != baseUrl) prefs.edit().putString(KEY_BASE_URL, origin).apply()
+        ShellLog.log("loadUrl(external) $url")
         errorPanel.visibility = View.GONE
         urlInput.setText(url)
+        // same-document 导航（只改 hash）不触发 onPageFinished——显示 overlay 会永远盖住页面。
+        if (!isSameDocument(web.url, url)) loadingOverlay.visibility = View.VISIBLE
         web.loadUrl(url)
+    }
+
+    /** scheme/host/port/path/query 都相同、仅 fragment 不同 → same-document。 */
+    private fun isSameDocument(current: String?, target: String): Boolean {
+        val a = current?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: return false
+        val b = Uri.parse(target)
+        return a.scheme == b.scheme && a.host == b.host && a.port == b.port &&
+            a.path == b.path && a.query == b.query
     }
 
     /**
@@ -338,8 +368,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadBase() {
         val url = baseUrl
+        ShellLog.log("loadUrl $url")
         urlInput.setText(url)
         errorPanel.visibility = View.GONE
+        loadingOverlay.visibility = View.VISIBLE
         web.loadUrl(url)
     }
 

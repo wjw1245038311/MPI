@@ -53,6 +53,24 @@
             android:textSize="13sp" />
     </LinearLayout>
 
+    <!-- 加载指示：启动后一直显示，直到首帧渲染完成（onPageFinished）或错误面板出现。
+         没有它时「中继不可达」表现为纯黑屏零反馈——用户只会说“打开没反应”。 -->
+    <LinearLayout
+        android:id="@+id/loadingOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#12141A"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/shell_loading"
+            android:textColor="#8B90A0"
+            android:textSize="15sp" />
+    </LinearLayout>
+
     <!-- Native fallback when the relay page cannot load: the only place the base
          URL can be edited (there is no settings screen in a one-view shell). -->
     <LinearLayout

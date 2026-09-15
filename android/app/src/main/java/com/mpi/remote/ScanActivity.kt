@@ -40,6 +40,10 @@ class ScanActivity : AppCompatActivity() {
     private var scanner: BarcodeScanner? = null
     /** 识别到一条就停：相机帧是连续的，不加锁会重复回调。 */
     private var handled = false
+    // 「扫了没反应」的实时反馈：首帧后 8s / 23s 还没识别到就提醒一次（不留静默路径）。
+    private var firstFrameAt = 0L
+    private var nudges = 0
+    private val nudgeThresholds = longArrayOf(8_000, 23_000)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,7 +90,14 @@ class ScanActivity : AppCompatActivity() {
     private fun startCamera() {
         val providerFuture = ProcessCameraProvider.getInstance(this)
         providerFuture.addListener({
-            val provider = providerFuture.get()
+            val provider = try {
+                providerFuture.get()
+            } catch (error: Exception) {
+                // 相机被占用/初始化失败：以前这里直接抛到主线程崩溃，现在明确提示。
+                ShellLog.log("cameraError ${error.message}")
+                hint.text = getString(R.string.scan_failed, error.message ?: "camera")
+                return@addListener
+            }
             val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
             // 目标分辨率拉高：默认分析帧可能只有 640×480，密集二维码（version≥15）
             // 在这种分辨率下模块像素不足、识别失败。CameraX 会取不超过目标的最近尺寸。
@@ -109,6 +120,15 @@ class ScanActivity : AppCompatActivity() {
         if (media == null || handled) {
             proxy.close()
             return
+        }
+        if (firstFrameAt == 0L) firstFrameAt = System.currentTimeMillis()
+        if (!handled && nudges < nudgeThresholds.size) {
+            val elapsed = System.currentTimeMillis() - firstFrameAt
+            if (elapsed >= nudgeThresholds[nudges]) {
+                nudges++
+                ShellLog.log("scanNudge ${elapsed}ms")
+                android.widget.Toast.makeText(this, getString(R.string.scan_nudge), android.widget.Toast.LENGTH_LONG).show()
+            }
         }
         val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
         scanner?.process(image)
