@@ -258,8 +258,7 @@ bash scripts/restart-dev.sh --no-build  # 只重启
 2. **先构建、后杀进程**。构建失败/脚本被中断时最坏只是「没重启」，而不是「把正在跑的
    实例关了」。
 
-安全边界：只结束本仓库的 MPI Dev（主进程匹配 `<repo>
-ode_modules\electron\dist\electron.exe .`，
+安全边界：只结束本仓库的 MPI Dev（主进程匹配 `<repo>` + 反斜杠 node_modules + electron/dist/electron.exe .，
 子进程匹配 `--user-data-dir=...\MPI Dev`），其它 Electron 应用与残留测试进程一律不动。
 
 历史长度的取证也很简单：`%APPDATA%/MPI Dev/logs/mpi-diag.log` 里的
