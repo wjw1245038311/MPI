@@ -8083,6 +8083,22 @@ mark.hl {
   color: var(--text-dim);
   margin-bottom: 10px;
 }
+/* Task-level model picker (optional provider + model pair). */
+.auto-model-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.auto-model-row .set-select {
+  flex: 1;
+  min-width: 0;
+}
+.auto-model-badge {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .auto-days {
   display: flex;
   gap: 6px;

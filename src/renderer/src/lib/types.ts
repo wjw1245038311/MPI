@@ -202,6 +202,10 @@ export interface AutomationTask {
   schedule: TaskSchedule;
   enabled: boolean;
   permission: PermissionLevel;
+  /** Optional explicit model for unattended runs; omitted = pi's default.
+   * Both halves are required together (see resolveTaskModel in main/config.ts). */
+  provider?: string;
+  modelId?: string;
   lastRunAt?: number;
   lastRunSlot?: string;
   lastStatus?: "ok" | "error";

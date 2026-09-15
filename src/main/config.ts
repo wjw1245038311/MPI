@@ -294,10 +294,25 @@ export interface AutomationTask {
   enabled: boolean;
   /** Sandbox is the safe default; full must be selected explicitly. */
   permission: "sandbox" | "full";
+  /** Optional explicit model for unattended runs (provider + modelId pair);
+   * omitted/empty = pi's default model. Both halves are required together —
+   * a lone value is dropped at load time and resolveTaskModel returns null. */
+  provider?: string;
+  modelId?: string;
   lastRunAt?: number;
   lastRunSlot?: string;
   lastStatus?: "ok" | "error";
   lastError?: string;
+}
+
+/** The task's explicit model choice, or null when it should follow pi's default. */
+export function resolveTaskModel(task: { provider?: unknown; modelId?: unknown }): {
+  provider: string;
+  modelId: string;
+} | null {
+  const provider = typeof task.provider === "string" ? task.provider.trim() : "";
+  const modelId = typeof task.modelId === "string" ? task.modelId.trim() : "";
+  return provider && modelId ? { provider, modelId } : null;
 }
 
 const DEFAULTS: AppConfig = {
@@ -446,10 +461,19 @@ export function loadConfig(userDataDir: string): AppConfig {
         // the built-in list so this transport setting cannot be changed via
         // persisted data or a generic config update.
         remoteStunUrls: [...BUILT_IN_REMOTE_STUN_URLS],
-        automationTasks: (parsed.automationTasks || []).map((task) => ({
-          ...task,
-          permission: task.permission === "full" ? "full" : "sandbox",
-        })),
+        automationTasks: (parsed.automationTasks || []).map((raw) => {
+          const task = { ...raw, permission: raw.permission === "full" ? ("full" as const) : ("sandbox" as const) };
+          const model = resolveTaskModel(task);
+          if (model) {
+            task.provider = model.provider;
+            task.modelId = model.modelId;
+          } else {
+            // A lone provider or modelId is meaningless — drop both.
+            delete task.provider;
+            delete task.modelId;
+          }
+          return task;
+        }),
         feishuChannel: sanitizeFeishuChannel(parsed.feishuChannel),
         wechatChannel: sanitizeWeChatChannel(parsed.wechatChannel),
         voice: sanitizeVoice(parsed.voice),

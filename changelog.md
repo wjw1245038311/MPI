@@ -56,6 +56,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：MPI 运行一段时间后 `userData/logs/mpi-diag.log` 存在且含 window-focus / streaming 等行；文件体积稳定在 ~1MB 内。测试：`npm test -- diaglog`。
 
+12. **定时任务可指定 provider/模型**（thinkbook16p 优化建议①）：定时任务表单新增可选「模型」设置——Provider + 模型两级下拉（数据来自 models.json，留空 = 跟随 pi 默认模型）。运行时在会话启动后、发 prompt 前调 `setModel`；所选模型后来被删除时 run 失败并报明确错误（**不静默回退默认**——无人值守用错模型跑出的结果比没有结果更糟）。任务列表对钉了模型的任务显示 🤖 模型徽标；旧任务无此字段，行为不变。
+
+   验证方式：设置 → 定时任务 → 新建/编辑任务 → 「模型」选一个 Provider + 模型保存 → 任务行出现 🤖 模型名徽标（悬停可见 provider/modelId）；点 ▶ 立即运行后查看该会话实际使用的模型即所选值；把该模型从 models.json 删掉再跑一次 → lastStatus=error，错误信息含 `Model not found: <provider>/<model>`。测试：`npm test -- automodel`（4 组：resolveTaskModel + config 存取往返）。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

@@ -79,7 +79,8 @@
     "test:shellresolver": "node --experimental-strip-types scripts/test-shell-resolver.mjs",
     "test:extuimethods": "node --experimental-strip-types scripts/test-ext-ui-methods.mjs",
     "test:extuiqueue": "node --experimental-strip-types scripts/test-extui-queue-cleanup.mjs",
-    "test:diaglog": "node --experimental-strip-types scripts/test-diag-log.mjs"
+    "test:diaglog": "node --experimental-strip-types scripts/test-diag-log.mjs",
+    "test:automodel": "node --experimental-strip-types scripts/test-automation-model.mjs"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.73.3",

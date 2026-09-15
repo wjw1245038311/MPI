@@ -1,4 +1,4 @@
-import { getConfig, getConfigDir, reloadConfig, updateConfig, type AutomationTask, type TaskSchedule } from "./config";
+import { getConfig, getConfigDir, reloadConfig, resolveTaskModel, updateConfig, type AutomationTask, type TaskSchedule } from "./config";
 import { autoAnswerModelSelect, createWebSearchFlow, type WebSearchFlow } from "./web-search-config";
 import { createAutomationExtUiHandler } from "./automation-ext-ui";
 import { PiBridge } from "./pi-bridge";
@@ -294,9 +294,19 @@ async function execute(task: AutomationTask): Promise<void> {
       }
       taskBridges.add(bridge);
 
+      const model = resolveTaskModel(task);
       bridge
         .start()
-        .then(() => bridge!.prompt(task.prompt))
+        .then(async () => {
+          if (model) {
+            // Explicit task-level model choice. If the model no longer exists,
+            // fail with a clear error instead of silently falling back to pi's
+            // default — an unattended result produced by the wrong model is
+            // worse than no result at all.
+            await bridge!.setModel(model.provider, model.modelId);
+          }
+          return bridge!.prompt(task.prompt);
+        })
         .catch((e) => finish(() => reject(e)));
     });
     if (taskStillExists(task.id)) {

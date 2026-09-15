@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import type { AutomationTask, ScheduleFrequency, TaskSchedule } from "../lib/types";
+import type { AutomationTask, ModelsFile, ScheduleFrequency, TaskSchedule } from "../lib/types";
 import { Close, Plus, Clock, Folder, Play } from "./icons";
 
 const DAY_NAMES = {
@@ -54,6 +54,22 @@ export function AutomationPanel() {
   const language = useStore((s) => s.config?.language || "en");
 
   const [draft, setDraft] = useState<AutomationTask | null>(null);
+  // Configured providers/models for the optional task-level model picker.
+  const [models, setModels] = useState<ModelsFile | null>(null);
+
+  useEffect(() => {
+    if (!draft) return;
+    let alive = true;
+    window.pi.settings
+      .getModels()
+      .then((m: ModelsFile) => {
+        if (alive) setModels(m);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [draft]);
 
   if (!open) return null;
 
@@ -123,6 +139,11 @@ export function AutomationPanel() {
                     <span className={`auto-freq ${t.permission === "full" ? "plugins-off" : ""}`}>
                       {t.permission === "full" ? (language === "zh" ? "完全权限" : "Full access") : language === "zh" ? "沙盒" : "Sandbox"}
                     </span>
+                    {t.provider && t.modelId && (
+                      <span className="auto-freq auto-model-badge" title={`${t.provider}/${t.modelId}`}>
+                        🤖 {t.modelId}
+                      </span>
+                    )}
                     {t.lastStatus === "error" && <span className="plugins-off" title={t.lastError}>上次失败</span>}
                   </div>
                   <div className="plugins-row-sub" title={t.cwd}>
@@ -188,6 +209,45 @@ export function AutomationPanel() {
                     onChange={(e) => patch({ prompt: e.target.value })}
                   />
                   <div className="set-hint">触发时在该文件夹新建一个 pi 会话执行，完成后保存为可查看的会话。</div>
+                </div>
+              </div>
+
+              <div className="set-row wide">
+                <label className="set-label">{language === "zh" ? "模型（可选）" : "Model (optional)"}</label>
+                <div className="set-control">
+                  <div className="auto-model-row">
+                    <select
+                      className="set-select"
+                      value={draft.provider || ""}
+                      onChange={(e) => patch({ provider: e.target.value || undefined, modelId: undefined })}
+                    >
+                      <option value="">{language === "zh" ? "跟随默认模型" : "Follow default model"}</option>
+                      {Object.keys(models?.providers || {})
+                        .sort()
+                        .map((p) => (
+                          <option key={p} value={p}>{p}</option>
+                        ))}
+                    </select>
+                    <select
+                      className="set-select"
+                      disabled={!draft.provider}
+                      value={draft.modelId || ""}
+                      onChange={(e) => patch({ modelId: e.target.value || undefined })}
+                    >
+                      <option value="">{language === "zh" ? "选择模型…" : "Choose a model…"}</option>
+                      {(models?.providers[draft.provider || ""]?.models || [])
+                        .slice()
+                        .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
+                        .map((m) => (
+                          <option key={m.id} value={m.id}>{m.name || m.id}</option>
+                        ))}
+                    </select>
+                  </div>
+                  <div className="set-hint">
+                    {language === "zh"
+                      ? "留空则使用 pi 的默认模型。所选模型后来被删除时，任务会运行失败并提示（不会静默换模型）。"
+                      : "Leave empty to use pi's default model. If the chosen model is removed later, runs fail with a clear error (no silent fallback)."}
+                  </div>
                 </div>
               </div>
 
