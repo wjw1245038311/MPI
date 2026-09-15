@@ -7,8 +7,8 @@
 
 - 分支 `feat/mobile-relay`（已推送 origin，**未合 main**）。最近提交：`68dfd58`（权限实时同步）、
   `ac885c3`（P5-3/P5-6）、`ee12813`（P1 新建会话）、`1116e14`（S1 面板图标头）；再前是 `4f81b15 release: v0.6.15`。
-- ⚠ **待部署**：PWA 新构建（含 P1/P5-3/权限同步）与带 github 字段的 APK 清单都还没上中继，
-  需要 ECS root 密码 SFTP（命令见 §2 末尾）。
+- ✅ **已部署**（2026-09-15）：PWA 新构建（index-CQEg0IcI.js / index-CmLGSc0R.css，含 P1/P5-3/权限同步）
+  与带 github 字段的 APK 清单已上中继并验证（manifest grep github ✓、index.html 引用新哈希 ✓、JS 200 ✓）。
 - 已交付并验收：手机云中继（配对/会话流/发消息/审批卡/WebPush/通知深链）、安卓壳（壳内扫码 + APK 自更新 +
   三通道下载）、手机端多设备、飞书式信息架构（对话即主页 / 头像抽屉 / 二级设备抽屉 / 返回键逐级）、
   视觉令牌与图标对齐桌面端并跟随系统明暗。
@@ -88,9 +88,9 @@
 
 ## 2. 建议执行顺序
 
-已完成：~~P3-S1~~、~~P1~~、~~P2-GitHub侧~~、~~P5-3~~、~~P5-6文档~~、权限实时同步（`68dfd58`）。剩余：
+已完成：~~P3-S1~~、~~P1~~、~~P2-GitHub侧~~、~~P5-3~~、~~P5-6文档~~、权限实时同步（`68dfd58`）、**部署上中继**。剩余：
 
-1. **部署**（需 ECS root 密码，一条命令）：
+1. ~~**部署**~~ ✅ 已完成（2026-09-15，SFTP 4 文件 + curl 验证）。⚠ 权限实时同步还需**重启桌面实例**（main 进程改动，Ctrl+R 不够）；手机浏览器若缓存旧 index.html 则关掉标签页重开。
    ```bash
    cd /e/MyWorkspace/Code/MPI && MSYS_NO_PATHCONV=1 ECS_PWD="<ecs root 密码>" node "$TEMP/ecs-ssh/upload.mjs" \
      "E:/MyWorkspace/Code/MPI/mobile/pwa/dist/index.html" "/var/www/mpi-mobile/index.html" \
