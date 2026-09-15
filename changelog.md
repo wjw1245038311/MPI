@@ -147,6 +147,17 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：部署新 bundle 后，仍在运行旧页面（未刷新）的手机应在 5 分钟内（或切回前台时）浮出提示条，点击即换到新 UI。测试：`test-pwa-composer` 新增第 6 组（bundle 名解析 + 新旧判定，含「运行 index-DUb0pTa0 / 服务端已是 index-2LMAQt9S」这一现场用例）。
 
+24. **壳 0.2.7：右上角 `⋮` 菜单 + 回前台自动重载页面**（真机「重装了还是旧界面」排障产物）：
+
+   承接 #23：Android 壳的 WebView 会长期驻留——按返回只是退到后台、从多任务重开也不会重新加载，页面可能长期停在旧 bundle，而壳里既看不到地址也没有刷新入口，用户无从自救（中继侧已核对：文件与本地构建 md5 一致、`index.html` 是 no-cache、旧包 404 —— 问题只在客户端）。
+
+   - **右上角 `⋮`（半透明）** → 刷新页面 / 服务器地址…（复用错误面板的地址输入框）/ 诊断信息。诊断弹窗一次给出 **地址 · 壳版本 · 页面构建号 · 最近壳事件**，「界面是旧的」这类问题一屏定位。
+   - **回前台自动重载**：`window.__mpi_build`（PWA 写入当前 bundle 名，壳契约 #11）对比中继 `GET /index.html` 引用的名字，不同则 toast + `reload()`；60s 节流、失败静默。
+   - `MainActivity` 新增 `maybeReloadStalePage()`；`Updater.pageBuild(baseUrl)` 复用既有 HttpURLConnection 通道（带 `Cache-Control: no-cache`）；`ShellLog.recent(n)` 供诊断弹窗。
+   - PWA 配合：顶部常驻 `build <hash> · <host>` 小字（任何页面可见，含未配对的配对页）+ `window.__mpi_build` 暴露。
+
+   验证方式：装 0.2.7 → 顶部出现 `build <hash> · <host>`；中继部署新 bundle 后把 App 切后台再回来，应自动重载并 toast「页面已更新到新版本」；`⋮` → 诊断信息可核对页面构建号。测试：PWA tsc+build、gradle assembleDebug、全量 npm test。
+
 ## v0.6.15（2026-09-15）
 
 1. **手机远程控制（云中继）**：扫码配对后可在手机上查看桌面正在跑的会话（实时流式）、发消息/引导、就地批准权限请求，锁屏/后台也能收到「MPI 需要批准」系统通知，点通知直达对应会话。

@@ -153,6 +153,7 @@ https://<relay>/#pair=<base64url payload>
 | 8 | `window.MpiShell.stopRecording(): string` | 壳注入 → PWA（0.2.6+） | 停止并返回 JSON `{ok:true,audioB64,sampleRate}` 或 `{error}`。audioB64 = 44 字节 RIFF/WAVE 头 + PCM16，与 PWA `encodeWavPcm16` 输出逐字节同构；< 0.5s 返回 `{"error":"录音太短"}` |
 | 9 | `window.MpiShell.cancelRecording(): string` | 壳注入 → PWA（0.2.6+） | 放弃本次录音并释放麦克风（用户点「取消」）。永远返回 `"ok"`；壳/桥不可用时 PWA 静默吞掉异常 |
 | 10 | `window.MpiShell.recorderDiagnostics(): string` | 壳注入 → PWA（0.2.6+） | 原生录音最近一次启动结果（`ok src=6` / `err:notInitialized src=6` …），`?dbg=1` 浮层 MEDIA 行的 `native=` 字段 |
+| 11 | `window.__mpi_build: string` | PWA → 壳（0.2.7+） | PWA 启动时写入当前 bundle 文件名（`index-XXXX.js`，无哈希的开发态为空串）。壳回前台时读它与中继 `index.html` 引用的名字对比，不同就自动 `reload()`——WebView 长期驻留（按返回只是退到后台，从多任务重开也不重载）会让人一直看到旧页面（2026-09-15 实测）。旧 PWA 无此全局时壳跳过检查，不报错 |
 
 **兼容规则：**
 
@@ -160,6 +161,18 @@ https://<relay>/#pair=<base64url payload>
 - **改现有语义**（如 `__mpiBack` 返回值约定、`#pair=` 载荷格式）：**必须同发新 APK**——旧壳配新 PWA
   会出现「返回键直接后台化」这类静默故障，且用户不会意识到是版本不匹配。
 - 两侧都不得假设对方存在：PWA 不裸调 `MpiShell`；壳对 `__mpiBack` 缺失按 `pass` 处理（已内置）。
+
+## 壳菜单与页面自更新（0.2.7+）
+
+WebView 壳没有地址栏，页面若是旧版或地址存错就无从自救，所以：
+
+- **右上角 `⋮`（半透明，不挡正文）** → 刷新页面 / 服务器地址…（复用错误面板的输入框）/ 诊断信息
+  （弹窗直接给出 地址·壳版本·**页面构建号**·最近壳事件）。「界面是旧的」这类问题一屏可定位。
+- **回前台自动重载**：读 `window.__mpi_build`（PWA 写的当前 bundle 名）与中继
+  `GET /index.html`（`Cache-Control: no-cache`）里引用的名字对比，不同就 toast + `reload()`；
+  60s 节流，失败静默。
+- PWA 侧另有「有新版本 · 点击刷新」浮条（`lib/update-watch.ts`）+ 顶部常驻 `build <hash> · <host>`
+  小字，浏览器里同样有效。
 
 ## 语音输入：两条采集后端（重要）
 

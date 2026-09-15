@@ -39,6 +39,21 @@ object ShellLog {
         } catch (_: Exception) { /* 取证不能影响主流程 */ }
     }
 
+    /** 最近的 n 条事件（已格式化时间戳），壳菜单的诊断弹窗用。 */
+    @Synchronized
+    fun recent(count: Int): List<String> {
+        val slice = buffer.toList().takeLast(count)
+        return slice.map { line ->
+            val index = line.indexOf(' ')
+            if (index <= 0) line
+            else {
+                val ms = line.substring(0, index).toLongOrNull()
+                val time = ms?.let { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(it)) } ?: "?"
+                "$time ${line.substring(index + 1)}"
+            }
+        }
+    }
+
     /** MpiShell.scanDiagnostics() 的 JSON 快照：{shellVersion, baseUrl, events}。 */
     @Synchronized
     fun snapshot(version: String, baseUrl: String): String = JSONObject()

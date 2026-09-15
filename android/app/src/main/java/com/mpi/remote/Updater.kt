@@ -124,6 +124,17 @@ object Updater {
         }
     }
 
+    /** 读 PWA 页面里的构建号：解析 index.html 引用的 `assets/index-<hash>.js`。 */
+    fun pageBuild(baseUrl: String): String? {
+        val url = baseUrl.trimEnd('/') + "/index.html?ts=" + System.currentTimeMillis()
+        val html = try {
+            fetchText(url, mapOf("Cache-Control" to "no-cache"))
+        } catch (_: Exception) {
+            return null
+        }
+        return Regex("assets/(index-[A-Za-z0-9_-]+\\.js)").find(html)?.groupValues?.get(1)
+    }
+
     private fun fetchText(url: String, headers: Map<String, String>): String {
         val connection = open(url).apply {
             connectTimeout = 8000

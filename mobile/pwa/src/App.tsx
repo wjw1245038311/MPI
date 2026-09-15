@@ -32,6 +32,12 @@ function shortBundle(): string {
   return name ? name.replace(/^index-/, "").replace(/\.js$/, "") : "dev";
 }
 
+// 壳（0.2.7+）回前台时靠这个值判断页面是否已过期 → 与中继的 index.html 对比，
+// 不同就自动 reload。契约见 docs/ANDROID-SHELL.md #11。
+if (typeof window !== "undefined") {
+  (window as unknown as { __mpi_build?: string }).__mpi_build = currentBundleName() ?? "";
+}
+
 /**
  * 「有新版本 · 点击刷新」浮条。
  *

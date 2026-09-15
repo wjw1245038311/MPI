@@ -441,6 +441,9 @@ class MainActivity : AppCompatActivity() {
         const val DEFAULT_BASE_URL = "https://aliyun-ecs.tail38d5a.ts.net:9443/"
         private const val PREFS = "mpi-shell"
         private const val KEY_BASE_URL = "baseUrl"
+        private const val MENU_RELOAD = 1
+        private const val MENU_SERVER = 2
+        private const val MENU_DIAG = 3
         /** 用户点「✕」跳过的版本，同一版不再反复提示（出现更新版本时重置）。 */
         private const val KEY_SKIPPED_VERSION = "skippedUpdateVersion"
     }

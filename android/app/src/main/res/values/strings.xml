@@ -17,4 +17,12 @@
     <string name="update_downloading">正在下载 %1$d%%</string>
     <string name="update_installing">正在安装…</string>
     <string name="update_failed">更新失败：%1$s</string>
+    <string name="shell_menu_glyph">⋮</string>
+    <string name="shell_menu_open">壳菜单</string>
+    <string name="shell_menu_reload">刷新页面</string>
+    <string name="shell_menu_server">服务器地址…</string>
+    <string name="shell_menu_diag">诊断信息</string>
+    <string name="shell_diag_title">壳诊断</string>
+    <string name="shell_page_updated">页面已更新到新版本</string>
+    <string name="shell_reloading">正在刷新页面…</string>
 </resources>
