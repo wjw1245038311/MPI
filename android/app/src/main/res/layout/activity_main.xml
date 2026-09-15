@@ -1,36 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- 根容器用 LinearLayout：自更新提示条必须**占位**而不是浮在 WebView 上——
+     曾经的 layout_gravity="top" 覆盖会盖住网页标题/配置栏，用户只会以为「界面是旧的」。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#12141A">
+    android:background="#12141A"
+    android:orientation="vertical">
 
-    <WebView
-        android:id="@+id/web"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <!-- 壳菜单入口：WebView 没有地址栏/刷新按钮，页面若是旧版或地址存错就无从自救。
-         常驻右上角（半透明，不挡正文），点开有「刷新页面 / 服务器地址 / 诊断」。 -->
-    <TextView
-        android:id="@+id/shellMenu"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|end"
-        android:layout_margin="6dp"
-        android:alpha="0.35"
-        android:background="#00000000"
-        android:paddingHorizontal="10dp"
-        android:paddingVertical="4dp"
-        android:text="@string/shell_menu_glyph"
-        android:textColor="#E6E8EE"
-        android:textSize="18sp" />
-
-    <!-- 自更新提示条：必须排在 WebView 之后（FrameLayout 后画的在上），否则会被网页盖住 -->
+    <!-- 自更新提示条：占位式（把 WebView 压下去），绝不覆盖网页内容 -->
     <LinearLayout
         android:id="@+id/updateBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="top"
         android:background="#1B2A23"
         android:gravity="center_vertical"
         android:orientation="horizontal"
@@ -68,6 +49,34 @@
             android:textColor="#8B90A0"
             android:textSize="13sp" />
     </LinearLayout>
+
+    <!-- 网页区：占满剩余高度，内部只有小型浮层（⋮ 菜单 / 加载 / 错误） -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+    <WebView
+        android:id="@+id/web"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- 壳菜单入口：WebView 没有地址栏/刷新按钮，页面若是旧版或地址存错就无从自救。
+         常驻右上角（半透明，不挡正文），点开有「刷新页面 / 服务器地址 / 诊断」。 -->
+    <TextView
+        android:id="@+id/shellMenu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="6dp"
+        android:alpha="0.35"
+        android:background="#00000000"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="4dp"
+        android:text="@string/shell_menu_glyph"
+        android:textColor="#E6E8EE"
+        android:textSize="18sp" />
+
 
     <!-- 加载指示：启动后一直显示，直到首帧渲染完成（onPageFinished）或错误面板出现。
          没有它时「中继不可达」表现为纯黑屏零反馈——用户只会说“打开没反应”。 -->
@@ -141,3 +150,4 @@
         </LinearLayout>
     </LinearLayout>
 </FrameLayout>
+</LinearLayout>
