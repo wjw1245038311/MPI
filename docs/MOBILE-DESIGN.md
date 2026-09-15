@@ -186,7 +186,9 @@ Vite + React + TS（与 MPI renderer 同栈；protocol 类型经小型共享包�
    （状态徽章 running/idle/error/disconnected、updatedAt、messageCount，对齐 `RemoteThreadSummary`）。
 3. **会话视图**：消息流渲染 text/thinking/tool 块（含 running 态与 artifacts），实时事件订阅；
    socket 恢复后按 lastSeq `thread.resync`。输入条：prompt/steer/followUp + abort + sandbox/full 切换
-   （写操作前 claimWrite，租约过期自动重取）。
+   （写操作前 claimWrite，租约过期自动重取）。权限变更由 host 推 `permission_changed`
+   `{kind:"permission_changed", data:{permission}}`（二值 sandbox|full）事件，头部徽标实时同步；
+   kind 为开放字符串，旧客户端忽略未知 kind。
 4. **审批卡片**：收到 ui.request（confirm/select/input）→ 全屏卡片 → `ui.respond`；
    select 类直接渲染 options 列表——主机端权限门已内置多档授权
    （仅本次/本会话精确/前缀/工具/始终允许跨会话/拒绝，见 `permission-gate-ext.ts requestApproval`），

@@ -1621,6 +1621,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
   }
 
+  /** 权限变更推给已配对设备（PWA 头部实时同步）。kind 是开放字符串，旧客户端忽略未知 kind。 */
+  const publishRemotePermissionChanged = (sessionFile: string | undefined, level: PermissionLevel) => {
+    if (!sessionFile) return;
+    const threadId = remoteLocalToId.get(sessionFile) || (sessionFile.includes("\\") || sessionFile.includes("/") ? remoteThreadId(sessionFile) : "");
+    if (!threadId) return; // draft / 未知会话——没有稳定 id 可通知
+    remoteEventHub.publish(threadId, { kind: "permission_changed", data: { permission: toRemotePermission(level) } });
+  };
+
   async function ensureRemoteBridge(ref: { id: string; cwd: string; sessionFile?: string; name?: string; permission?: PermissionLevel; localId?: string }): Promise<BridgeHandle> {
     const permission = ref.sessionFile ? resolvePermission(ref.sessionFile, ref.permission) : (ref.permission || "sandbox");
     const existingId = ref.localId || ref.sessionFile;
@@ -1629,6 +1637,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       if (existing.permission !== permission) {
         existing.permission = permission;
         writeGateMode(existing.gateModeFile, permission);
+        publishRemotePermissionChanged(ref.sessionFile, permission);
       }
       return existing;
     }
@@ -1841,6 +1850,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         handle.permission = permission;
         writeGateMode(handle.gateModeFile, permission);
       }
+      publishRemotePermissionChanged(ref.sessionFile, permission);
       return remoteSnapshot(threadId, { live: true });
     },
     setModel: async (threadId, provider, modelId) => {
@@ -2954,6 +2964,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       h.permission = args.permission;
       writeGateMode(h.gateModeFile, args.permission);
     }
+    publishRemotePermissionChanged(args.threadId.endsWith(".jsonl") ? args.threadId : undefined, args.permission);
     return { ok: true };
   });
 

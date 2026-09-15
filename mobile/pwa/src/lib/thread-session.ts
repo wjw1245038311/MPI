@@ -320,6 +320,14 @@ export class ThreadSession {
         this.patch({ errorBanner: `process exited${typeof code === "number" ? ` (code ${code})` : ""}`, running: false });
         break;
       }
+      case "permission_changed": {
+        // 桌面端改了权限（或远程 setPermission）——头部徽标实时同步。二值协议：sandbox|full。
+        const perm = payload.data?.permission;
+        if (this.view.summary && (perm === "sandbox" || perm === "full")) {
+          this.patch({ summary: { ...this.view.summary, permission: perm } });
+        }
+        break;
+      }
       case "ui.request": {
         const request = payload.data?.request as RemoteUiRequest | undefined;
         // Duplicate pushes must not re-pop the card — neither for an id that is

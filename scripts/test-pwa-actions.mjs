@@ -328,6 +328,10 @@ async function part2FullStack() {
     }
     assert.deepEqual(calls.at(-1), ["createThread", "p1", "From phone", "sandbox"]);
 
+    // I. permission_changed 事件 → ThreadSession 头部实时同步（桌面改权限后手机不再显示旧值）
+    threadListener({ kind: "permission_changed", data: { permission: "full" } });
+    await waitFor(() => ts.getSnapshot().summary?.permission === "full", "permission change reaches the phone view");
+
     detachView();
     console.log("part2 (full stack over relay + E2E): passed");
   } finally {
