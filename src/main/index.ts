@@ -190,33 +190,22 @@ function createWindow(): void {
     return { action: "deny" };
   });
 
-  // Electron does not provide a page context menu automatically. Offer the
-  // standard editing actions for inputs and Copy/Select All for selectable
-  // transcript text so paragraph selections behave like a normal desktop app.
+  // Electron does not provide a page context menu automatically. Only editable
+  // fields (inputs/textareas/contenteditable) get the standard edit menu — most
+  // of the UI is user-select:none, so Copy/Select All elsewhere are meaningless.
+  // Ctrl+C still copies real text selections in selectable areas.
   mainWindow.webContents.on("context-menu", (_event, params) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!params.isEditable) return;
     const wc = mainWindow.webContents;
     const zh = getConfig().language === "zh";
-    const hasSelection = params.selectionText.length > 0;
-    const template: Electron.MenuItemConstructorOptions[] = [];
-
-    if (params.isEditable) {
-      template.push(
-        { label: zh ? "剪切" : "Cut", enabled: params.editFlags.canCut, click: () => wc.cut() },
-        { label: zh ? "复制" : "Copy", enabled: params.editFlags.canCopy, click: () => wc.copy() },
-        { label: zh ? "粘贴" : "Paste", enabled: params.editFlags.canPaste, click: () => wc.paste() },
-        { type: "separator" },
-        { label: zh ? "全选" : "Select all", enabled: params.editFlags.canSelectAll, click: () => wc.selectAll() },
-      );
-    } else {
-      template.push(
-        { label: zh ? "复制" : "Copy", enabled: hasSelection && params.editFlags.canCopy, click: () => wc.copy() },
-        { type: "separator" },
-        { label: zh ? "全选" : "Select all", enabled: params.editFlags.canSelectAll, click: () => wc.selectAll() },
-      );
-    }
-
-    Menu.buildFromTemplate(template).popup({ window: mainWindow });
+    Menu.buildFromTemplate([
+      { label: zh ? "剪切" : "Cut", enabled: params.editFlags.canCut, click: () => wc.cut() },
+      { label: zh ? "复制" : "Copy", enabled: params.editFlags.canCopy, click: () => wc.copy() },
+      { label: zh ? "粘贴" : "Paste", enabled: params.editFlags.canPaste, click: () => wc.paste() },
+      { type: "separator" },
+      { label: zh ? "全选" : "Select all", enabled: params.editFlags.canSelectAll, click: () => wc.selectAll() },
+    ]).popup({ window: mainWindow });
   });
 
   // Devtools toggle (F12 / Ctrl+Shift+I) — frameless windows have no default shortcut.
