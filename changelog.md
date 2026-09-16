@@ -22,6 +22,18 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    测试：`npm run test:pdfnative`（本地 http 服务 + 隐藏窗口截图冒烟，完整模拟 dev 模式含同款 CSP meta：http 源页面 → iframe mpipdf:// → 内置查看器渲染；若未来 Electron 升级移除/拦截会失败提醒改走 canvas 兜底）；`npm run test:docx`（JSZip 现场生成最小合法 .docx → browser build + Node 入口双键调用都断言文本还原，反向断言单键被拒；OLE2 魔数/旧扩展名用例）；`npm run test:pdf`（canvas 兜底路径：手写最小 PDF fixture → readPreview kind/pdfUrl/base64 + legacy 构建解析页数/文本 + **带 trailer /ID 的回归用例**——正是 toHex 崩溃路径）。验证方式：左侧文件树点开 .pdf → 原生工具条、默认适应宽度；点开真 .docx → 正文正常渲染；旧格式 .doc/.ppt（或改后缀的）→ 明确提示另存为。
 
+5. **文件图标换 Windows 资源管理器风格**：原来跨平台渲染不一致的 emoji 图标（📄🟦⚛️…）换成自绘 SVG——白页+折角+淡灰文本线，左下角彩色圆角徽标（Word W 蓝 / PPT P 橙 / Excel X 绿 / PDF 红章；代码 `</>`、React 原子、CSS #、HTML 地球等图形徽标），文件夹经典黄色。文件树/预览 tab 条/独立窗口标题三处统一；macOS Finder 填充风与 SF Symbols 线性风保留在组件里可一行切换（`FileTypeIcon` 的 `variant`）。
+
+   验证方式：Ctrl+R → 左侧文件树图标全部变为白页彩徽标样式，文件夹黄色；明暗主题下都清晰。纯渲染层改动。
+
+6. **预览 tab 右键菜单 VS Code 化 + 关闭其他/全部关闭**：原菜单每项带浏览器默认按钮圆角框（未重置 UA border/background），现改扁平行+主题色 hover+分组分隔线；新增「关闭其他」（仅一个标签页时置灰）与「全部关闭」，store 加 `closeOtherPreviewTabs`/`closeAllPreviewTabs`。措辞按 VS Code：在独立窗口打开 / ─── / 关闭、关闭其他、全部关闭（英文 Close / Close Others / Close All）。
+
+   验证方式：Ctrl+R → 预览 tab 右键：菜单为扁平行无圆角框；开两个以上标签页时「关闭其他」可点，只留当前页；「全部关闭」清空所有预览标签。纯渲染层改动。
+
+7. **右键编辑菜单只在输入框弹出**：之前 UI 任意位置右键都会弹「复制/全选」，但界面大面积 `user-select: none`、点了没意义——现改为仅可编辑控件（输入框/文本域/contenteditable）右键才弹剪切/复制/粘贴/全选；可选中区域（如预览正文）的真实选区仍可用 Ctrl+C 复制。
+
+   验证方式：**需完整重启 dev**（main 进程改动，Ctrl+R 不生效）→ 在聊天区/文件树等空白处右键 → 不再弹菜单；点进输入框右键 → 剪切/复制/粘贴/全选正常出现且禁用态正确。
+
 ## v0.6.16（2026-09-16）
 
 > 配套版本：手机端 PWA `index-D68qsuUW.js`（已部署到中继，刷新即生效）；安卓壳 APK **0.2.9**（本轮无壳改动，不用重装）。
