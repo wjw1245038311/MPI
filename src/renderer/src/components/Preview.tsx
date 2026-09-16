@@ -11,7 +11,7 @@ import { useOutsideClose } from "../lib/useOutsideClose";
 import { translateUiText } from "../lib/i18n";
 // Type-only: erased at build time, no bundle impact (the runtime import is
 // lazy inside PdfPreview/ensurePdfWorker).
-import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import { Close, Contract, Copy, Edit, Expand, Folder, Minus, Plus, Refresh, SelectArrow } from "./icons";
 
 Object.entries(CODE_LANGUAGES).forEach(([name, grammar]) => hljs.registerLanguage(name, grammar as any));
@@ -691,7 +691,7 @@ export function PreviewBody({
     case "pptx":
       return <PptxPreview base64={payload.base64} language={language} />;
     case "pdf":
-      return <PdfPreview base64={payload.base64 || ""} language={language} />;
+      return <PdfPreview base64={payload.base64 || ""} pdfUrl={payload.pdfUrl} language={language} />;
     case "toobig":
       return <div className="pv-unsupported">{language === "zh" ? "文件过大，无法预览。" : "This file is too large to preview."}</div>;
     case "missing":
@@ -1009,7 +1009,12 @@ function DocxPreview({ base64 }: { base64: string }) {
   return <div className="pv-docx" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-// ---- PDF preview (pdfjs-dist, lazy chunk) ----------------------------------
+// ---- PDF preview -----------------------------------------------------------
+// Primary path: Electron ships Chromium's built-in PDF viewer (PDFium), so a
+// plain <iframe src="file://..."> renders natively — zero JS, native toolbar
+// (zoom / fit-to-width / print), and it defaults to fit-to-width. The canvas
+// renderer below is kept only as a fallback for older main instances that
+// don't provide pdfUrl.
 // IMPORTANT: use the LEGACY build. pdfjs-dist 6.3.x's standard build calls
 // Uint8Array.prototype.toHex() in its fingerprints getter (hit on every load),
 // but only the legacy build ships that polyfill — the standard build crashes
@@ -1037,7 +1042,28 @@ function ensurePdfWorker(): Promise<void> {
   return pdfWorkerReady;
 }
 
-function PdfPreview({ base64, language }: { base64: string; language: string }) {
+function PdfPreview({
+  base64,
+  pdfUrl,
+  language,
+}: {
+  base64: string;
+  pdfUrl?: string;
+  language: string;
+}) {
+  if (pdfUrl) return <NativePdfFrame url={pdfUrl} />;
+  return <CanvasPdfPreview base64={base64} language={language} />;
+}
+
+function NativePdfFrame({ url }: { url: string }) {
+  return (
+    <div className="pv-pdf-native">
+      <iframe src={url} title="PDF" />
+    </div>
+  );
+}
+
+function CanvasPdfPreview({ base64, language }: { base64: string; language: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [zoom, setZoom] = useState(1); // multiplier on top of fit-to-width
@@ -1053,6 +1079,9 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
   const docRef = useRef<PDFDocumentProxy | null>(null);
   const genRef = useRef(0);
+  // Last in-flight render task. pdfjs v6 forbids two concurrent renders on
+  // one canvas; a superseded pass is cancelled before the new one starts.
+  const renderTaskRef = useRef<RenderTask | null>(null);
 
   // Load the document once per file. getDocument may transfer the buffer to
   // the worker, so it is decoded fresh here and never reused.
@@ -1128,6 +1157,16 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
     );
     renderedWidthRef.current = containerWidth;
     const gen = ++genRef.current;
+    // A superseded pass may still hold an in-flight render on one of the
+    // canvases below. cancel() releases the canvas synchronously (pdfjs v6).
+    if (renderTaskRef.current) {
+      try {
+        renderTaskRef.current.cancel();
+      } catch {
+        /* already settled */
+      }
+      renderTaskRef.current = null;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -1135,6 +1174,9 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
         for (let i = 1; i <= doc.numPages; i++) {
           if (cancelled || gen !== genRef.current) return;
           const page = await doc.getPage(i);
+          // Re-check after the await: a newer pass may have started while we
+          // were suspended and already owns these canvases.
+          if (cancelled || gen !== genRef.current) return;
           const fitScale = containerWidth / page.getViewport({ scale: 1 }).width;
           const viewport = page.getViewport({ scale: fitScale * zoom });
           const canvas = canvasRefs.current.get(i);
@@ -1143,18 +1185,35 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
           canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
           canvas.style.width = `${Math.floor(viewport.width)}px`;
           // v6 render API: pass the canvas element (canvasContext is legacy).
-          await page.render({
+          const task = page.render({
             canvas,
             viewport,
             transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
-          }).promise;
+          });
+          renderTaskRef.current = task;
+          try {
+            await task.promise;
+          } finally {
+            if (renderTaskRef.current === task) renderTaskRef.current = null;
+          }
         }
       } catch (e: any) {
+        // RenderingCancelledException from a superseded pass is expected —
+        // the gen check above keeps it out of the error UI.
         if (!cancelled && gen === genRef.current) setErr(e?.message || "pdf render failed");
       }
     })();
     return () => {
       cancelled = true;
+      const t = renderTaskRef.current;
+      if (t) {
+        try {
+          t.cancel();
+        } catch {
+          /* already settled */
+        }
+        renderTaskRef.current = null;
+      }
     };
   }, [pageCount, zoom, fitTick]);
 

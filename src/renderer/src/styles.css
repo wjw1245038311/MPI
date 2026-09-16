@@ -4157,6 +4157,21 @@ body.preview-resizing * {
   box-shadow: 0 1px 5px rgba(0, 0, 0, .28);
   flex: none;
 }
+/* Native Chromium PDF viewer (iframe): fills the body edge-to-edge. */
+.pv-pdf-native {
+  height: 100%;
+}
+.pv-pdf-native iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--preview-bg);
+}
+.preview-body:has(> .pv-pdf-native) {
+  overflow: hidden;
+  padding: 0;
+}
 .pv-xlsx .sheet-tabs {
   display: flex;
   gap: 4px;
