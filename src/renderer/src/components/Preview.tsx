@@ -101,6 +101,8 @@ export function Preview() {
   const expanded = useStore((s) => s.previewExpanded);
   const openPreview = useStore((s) => s.openPreview);
   const closePreviewTab = useStore((s) => s.closePreviewTab);
+  const closeOtherPreviewTabs = useStore((s) => s.closeOtherPreviewTabs);
+  const closeAllPreviewTabs = useStore((s) => s.closeAllPreviewTabs);
   const setActivePreview = useStore((s) => s.setActivePreview);
   const reorderPreviews = useStore((s) => s.reorderPreviews);
   const toggleExpanded = useStore((s) => s.togglePreviewExpanded);
@@ -604,6 +606,7 @@ export function Preview() {
           >
             {language === "zh" ? "在独立窗口打开" : "Open in separate window"}
           </button>
+          <div className="ptm-sep" />
           <button
             role="menuitem"
             onClick={() => {
@@ -611,7 +614,26 @@ export function Preview() {
               setTabMenu(null);
             }}
           >
-            {language === "zh" ? "关闭标签页" : "Close tab"}
+            {language === "zh" ? "关闭" : "Close"}
+          </button>
+          <button
+            role="menuitem"
+            disabled={tabs.length <= 1}
+            onClick={() => {
+              closeOtherPreviewTabs(tabMenu.id);
+              setTabMenu(null);
+            }}
+          >
+            {language === "zh" ? "关闭其他" : "Close Others"}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              closeAllPreviewTabs();
+              setTabMenu(null);
+            }}
+          >
+            {language === "zh" ? "全部关闭" : "Close All"}
           </button>
         </div>
       )}

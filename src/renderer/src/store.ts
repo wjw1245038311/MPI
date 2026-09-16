@@ -1174,6 +1174,9 @@ interface PiStore {
   openPreview: (abs: string, projectRoot?: string) => Promise<void>;
   loadPreviewTab: (id: string) => Promise<void>;
   closePreviewTab: (id: string) => void;
+  /** Keep only the given tab and make it active. */
+  closeOtherPreviewTabs: (id: string) => void;
+  closeAllPreviewTabs: () => void;
   setActivePreview: (id: string) => void;
   reorderPreviews: (dragId: string, overId: string, pos: "before" | "after") => void;
   /** Hide the panel again; open tabs are kept for next time. */
@@ -2837,6 +2840,14 @@ export const useStore = create<PiStore>()((set, get) => {
       }
       return { previewTabs: tabs, activePreviewId: active };
     }),
+
+  closeOtherPreviewTabs: (id) =>
+    set((s) => ({
+      previewTabs: s.previewTabs.filter((t) => t.id === id),
+      activePreviewId: id,
+    })),
+
+  closeAllPreviewTabs: () => set({ previewTabs: [], activePreviewId: null }),
 
   setActivePreview: (id) => {
     if (get().previewTabs.some((t) => t.id === id)) set({ activePreviewId: id });
