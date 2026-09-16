@@ -22,6 +22,7 @@ export type PreviewPayload = {
     | "docx"
     | "xlsx"
     | "pptx"
+    | "pdf"
     | "unsupported"
     | "toobig"
     | "missing";
@@ -101,9 +102,8 @@ const IMAGE_EXTS: Record<string, string> = {
   ".ico": "image/x-icon",
   ".svg": "image/svg+xml",
 };
-// NOTE: PDF preview is intentionally not supported in this build (pdfjs-dist
-// omitted to keep the bundle small). .pdf falls through to "unsupported".
 const DOCX_EXTS = new Set([".docx"]);
+const PDF_EXTS = new Set([".pdf"]);
 const XLSX_EXTS = new Set([".xlsx", ".xls"]);
 const PPTX_EXTS = new Set([".pptx"]);
 
@@ -172,6 +172,17 @@ export function readPreview(absPath: string): PreviewPayload {
       ...base,
       kind: "pptx",
       mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      base64: readFileSync(absPath).toString("base64"),
+    };
+  }
+
+  // pdf -> base64 for renderer-side rendering (pdfjs-dist, lazy chunk)
+  if (PDF_EXTS.has(ext)) {
+    if (st.size > BIN_MAX) return { ...base, kind: "toobig" };
+    return {
+      ...base,
+      kind: "pdf",
+      mime: "application/pdf",
       base64: readFileSync(absPath).toString("base64"),
     };
   }

@@ -18,6 +18,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：往项目里拷一个新文件 → 左侧文件页签先看不到 → 右键该文件夹选「刷新此文件夹」→ 新文件出现；或在空白处右键「刷新文件列表」同样生效。测试：typecheck/build（原生菜单无单测，靠本条人工验证）。
 
+4. **PDF 预览 + docx 预览修复**：①修复 .docx 预览全量失败——mammoth 的 Node 入口不认 `arrayBuffer` 参数（Vite 打包的就是该入口），所有 Word 文档都报 "Could not find file in options"，改传 `{buffer: Uint8Array}`；②新增 PDF 内嵌预览：pdfjs-dist 懒加载（~2MB chunk 只在打开 PDF 时才载入），canvas 逐页渲染在预览面板里，工具条支持缩小/放大/适应宽度（默认适应宽度、按 devicePixelRatio 高清渲染）；worker 走 Blob module worker（`?raw` 内联源码），file:// 下无资源路径问题。加密 PDF 会给出明确提示。
+
+   测试：`npm run test:docx`（JSZip 现场生成最小合法 .docx → 走 DocxPreview 同款调用路径断言文本还原 + 反向断言旧参数形状被拒）；`npm run test:pdf`（手写最小 PDF fixture → main 侧 readPreview kind/base64 断言 + pdfjs legacy 构建解析出页数与文本）。验证方式：左侧文件树点开任意 .docx → 正文正常渲染（之前是报错）；点开 .pdf → 逐页显示，工具条 −/+/适应宽度可用。
+
 ## v0.6.16（2026-09-16）
 
 > 配套版本：手机端 PWA `index-D68qsuUW.js`（已部署到中继，刷新即生效）；安卓壳 APK **0.2.9**（本轮无壳改动，不用重装）。

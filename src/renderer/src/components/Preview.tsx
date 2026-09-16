@@ -9,6 +9,9 @@ import { MPI_FILE_MIME } from "../lib/file-drag";
 import type { PreviewTab } from "../lib/types";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import { translateUiText } from "../lib/i18n";
+// Type-only: erased at build time, no bundle impact (the runtime import is
+// lazy inside PdfPreview/ensurePdfWorker).
+import type { PDFDocumentProxy } from "pdfjs-dist";
 import { Close, Contract, Copy, Edit, Expand, Folder, Minus, Plus, Refresh, SelectArrow } from "./icons";
 
 Object.entries(CODE_LANGUAGES).forEach(([name, grammar]) => hljs.registerLanguage(name, grammar as any));
@@ -620,6 +623,7 @@ function previewKindLabel(payload: any): string {
   if (payload.kind === "docx") return "WORD";
   if (payload.kind === "xlsx") return "EXCEL";
   if (payload.kind === "pptx") return "POWERPOINT";
+  if (payload.kind === "pdf") return "PDF";
   if (payload.kind === "markdown") return "MARKDOWN";
   if (payload.kind === "image") return "IMAGE";
   return (payload.lang || payload.ext?.slice(1) || "FILE").toUpperCase();
@@ -652,8 +656,8 @@ export function PreviewBody({
         {language === "zh" ? "从左侧文件树选择文件进行预览。" : "Select a file from the sidebar to preview it."}
         <br />
         {language === "zh"
-          ? "支持代码、Markdown、HTML、图片、Word、Excel 和 PowerPoint。"
-          : "Supports code, Markdown, HTML, images, Word, Excel, and PowerPoint."}
+          ? "支持代码、Markdown、HTML、图片、Word、Excel、PowerPoint 和 PDF。"
+          : "Supports code, Markdown, HTML, images, Word, Excel, PowerPoint, and PDF."}
       </div>
     );
   }
@@ -686,6 +690,8 @@ export function PreviewBody({
       return <XlsxPreview base64={payload.base64} text={payload.text} />;
     case "pptx":
       return <PptxPreview base64={payload.base64} language={language} />;
+    case "pdf":
+      return <PdfPreview base64={payload.base64 || ""} language={language} />;
     case "toobig":
       return <div className="pv-unsupported">{language === "zh" ? "文件过大，无法预览。" : "This file is too large to preview."}</div>;
     case "missing":
@@ -997,6 +1003,151 @@ function DocxPreview({ base64 }: { base64: string }) {
   if (err) return <div className="pv-unsupported">{err}</div>;
   if (html == null) return <div className="pv-loading"><span className="spinner" /></div>;
   return <div className="pv-docx" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+// ---- PDF preview (pdfjs-dist, lazy chunk) ----------------------------------
+// The worker source is inlined as a string (?raw) and run from a Blob URL as a
+// module Worker: no asset path to resolve under file://, and pdf.worker.min.mjs
+// is self-contained ESM. One workerPort per renderer process.
+let pdfWorkerReady: Promise<void> | null = null;
+function ensurePdfWorker(): Promise<void> {
+  if (!pdfWorkerReady) {
+    pdfWorkerReady = (async () => {
+      const [pdfjsLib, workerRaw] = await Promise.all([
+        import("pdfjs-dist"),
+        import("pdfjs-dist/build/pdf.worker.min.mjs?raw"),
+      ]);
+      if (!pdfjsLib.GlobalWorkerOptions.workerPort) {
+        pdfjsLib.GlobalWorkerOptions.workerPort = new Worker(
+          URL.createObjectURL(new Blob([workerRaw.default], { type: "text/javascript" })),
+          { type: "module" },
+        );
+      }
+    })();
+  }
+  return pdfWorkerReady;
+}
+
+function PdfPreview({ base64, language }: { base64: string; language: string }) {
+  const [err, setErr] = useState<string | null>(null);
+  const [pageCount, setPageCount] = useState(0);
+  const [zoom, setZoom] = useState(1); // multiplier on top of fit-to-width
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
+  const docRef = useRef<PDFDocumentProxy | null>(null);
+  const genRef = useRef(0);
+
+  // Load the document once per file. getDocument may transfer the buffer to
+  // the worker, so it is decoded fresh here and never reused.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setErr(null);
+        setPageCount(0);
+        await ensurePdfWorker();
+        const pdfjsLib = await import("pdfjs-dist");
+        const buf = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+        const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+        if (cancelled) {
+          // v6: disposal goes through the loading task, not the proxy.
+          doc.loadingTask.destroy().catch(() => {});
+          return;
+        }
+        void docRef.current?.loadingTask.destroy().catch(() => {});
+        docRef.current = doc;
+        setZoom(1);
+        setPageCount(doc.numPages);
+      } catch (e: any) {
+        if (!cancelled) {
+          setErr(
+            e?.name === "PasswordException" && language === "zh"
+              ? "该 PDF 已加密，无法预览。"
+              : e?.message || "pdf load failed",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [base64, language]);
+
+  // Render every page whenever the document or zoom changes. Fit-to-width is
+  // the base scale; zoom multiplies it. A generation counter drops stale loops.
+  useEffect(() => {
+    const doc = docRef.current;
+    if (!doc || !pageCount) return;
+    const gen = ++genRef.current;
+    let cancelled = false;
+    (async () => {
+      try {
+        const containerWidth = Math.max(containerRef.current?.clientWidth || 800, 320);
+        const dpr = window.devicePixelRatio || 1;
+        for (let i = 1; i <= doc.numPages; i++) {
+          if (cancelled || gen !== genRef.current) return;
+          const page = await doc.getPage(i);
+          const fitScale = containerWidth / page.getViewport({ scale: 1 }).width;
+          const viewport = page.getViewport({ scale: fitScale * zoom });
+          const canvas = canvasRefs.current.get(i);
+          if (!canvas) continue;
+          canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
+          canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
+          canvas.style.width = `${Math.floor(viewport.width)}px`;
+          // v6 render API: pass the canvas element (canvasContext is legacy).
+          await page.render({
+            canvas,
+            viewport,
+            transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+          }).promise;
+        }
+      } catch (e: any) {
+        if (!cancelled && gen === genRef.current) setErr(e?.message || "pdf render failed");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pageCount, zoom]);
+
+  // Destroy the document on unmount (frees worker-side resources).
+  useEffect(
+    () => () => {
+      void docRef.current?.loadingTask.destroy().catch(() => {});
+      docRef.current = null;
+    },
+    [],
+  );
+
+  if (err) return <div className="pv-unsupported">{err}</div>;
+  if (!pageCount) return <div className="pv-loading"><span className="spinner" /></div>;
+  const zoomOut = () => setZoom((z) => Math.max(0.5, Number((z / 1.25).toFixed(3))));
+  const zoomIn = () => setZoom((z) => Math.min(4, Number((z * 1.25).toFixed(3))));
+  return (
+    <div className="pv-pdf">
+      <div className="pv-pdf-toolbar">
+        <button className="iconbtn" onClick={zoomOut} title={language === "zh" ? "缩小" : "Zoom out"}>−</button>
+        <span className="pv-pdf-zoom">{Math.round(zoom * 100)}%</span>
+        <button className="iconbtn" onClick={zoomIn} title={language === "zh" ? "放大" : "Zoom in"}>+</button>
+        {zoom !== 1 && (
+          <button className="pv-pdf-fit" onClick={() => setZoom(1)}>
+            {language === "zh" ? "适应宽度" : "Fit width"}
+          </button>
+        )}
+      </div>
+      <div className="pv-pdf-pages" ref={containerRef}>
+        {Array.from({ length: pageCount }, (_, i) => i + 1).map((n) => (
+          <canvas
+            key={n}
+            ref={(el) => {
+              if (el) canvasRefs.current.set(n, el);
+              else canvasRefs.current.delete(n);
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function XlsxPreview({ base64, text }: { base64?: string; text?: string }) {
