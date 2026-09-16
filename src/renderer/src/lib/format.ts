@@ -50,21 +50,6 @@ export function formatTokens(n: number | null | undefined): string {
   return String(n);
 }
 
-const FILE_ICON: Record<string, string> = {
-  ".pptx": "📙", ".ppt": "📙",
-  ".ts": "🟦", ".tsx": "⚛️", ".js": "🟨", ".jsx": "⚛️", ".json": "🧾",
-  ".md": "📝", ".markdown": "📝", ".html": "🌐", ".htm": "🌐", ".css": "🎨",
-  ".scss": "🎨", ".py": "🐍", ".go": "🐹", ".rs": "🦀", ".java": "☕",
-  ".pdf": "📕", ".docx": "📘", ".doc": "📘", ".xlsx": "📗", ".xls": "📗", ".csv": "📊",
-  ".png": "🖼️", ".jpg": "🖼️", ".jpeg": "🖼️", ".gif": "🖼️", ".webp": "🖼️", ".svg": "🖼️",
-  ".yaml": "⚙️", ".yml": "⚙️", ".toml": "⚙️", ".sh": "🐚", ".bash": "🐚",
-};
-
-export function fileIcon(ext: string, isDir: boolean): string {
-  if (isDir) return "📁";
-  return FILE_ICON[ext.toLowerCase()] || "📄";
-}
-
 export function basename(p: string): string {
   const s = p.replace(/\\/g, "/");
   return s.split("/").filter(Boolean).pop() || p;

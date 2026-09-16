@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { PreviewPayload } from "../lib/types";
-import { basename, fileIcon, formatBytes } from "../lib/format";
+import { basename, formatBytes } from "../lib/format";
+import { FileTypeIcon } from "./FileTypeIcon";
 import { Close, Refresh } from "./icons";
 import { PreviewBody } from "./Preview";
 
@@ -91,7 +92,7 @@ export function StandalonePreview({ path }: { path: string }) {
       {/* Custom caption (the window is frameless): drag anywhere on this row to
           move the window; release over the main window to dock back. */}
       <div className="standalone-caption" onMouseDown={onCaptionMouseDown}>
-        <span className="preview-tab-ico">{fileIcon(ext, false)}</span>
+        <span className="preview-tab-ico"><FileTypeIcon ext={ext} size={14} /></span>
         <span className="standalone-caption-title" title={path}>
           {basename(path)}
         </span>

@@ -579,8 +579,26 @@ body.sidebar-resizing * {
 }
 .ft-row .ft-ico {
   width: 16px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
+/* Modern file-type icons (FileTypeIcon.tsx) — color-coded per category. */
+.ficon { flex: none; display: block; }
+.ficon--dir { color: #fbbf24; }
+.ficon--code { color: #60a5fa; }
+.ficon--react { color: #2dd4bf; }
+.ficon--config { color: #eab308; }
+.ficon--text { color: #94a3b8; }
+.ficon--html { color: #a78bfa; }
+.ficon--css { color: #38bdf8; }
+.ficon--pdf { color: #f87171; }
+.ficon--doc { color: #818cf8; }
+.ficon--sheet { color: #34d399; }
+.ficon--slide { color: #fb923c; }
+.ficon--image { color: #f472b6; }
+.ficon--archive { color: #a8a29e; }
+.ficon--file { color: #9ca3af; }
 .ft-row .ft-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1998,6 +2016,8 @@ body.sidebar-resizing * {
 }
 .preview-tab-ico {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
   font-size: 12px;
   line-height: 1;
 }

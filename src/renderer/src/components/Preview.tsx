@@ -4,7 +4,8 @@ import hljs from "highlight.js/lib/core";
 import { useStore } from "../store";
 import { Markdown } from "../lib/markdown";
 import { CODE_LANGUAGE_ALIASES, CODE_LANGUAGES } from "../lib/code-languages";
-import { basename, fileIcon, formatBytes } from "../lib/format";
+import { basename, formatBytes } from "../lib/format";
+import { FileTypeIcon } from "./FileTypeIcon";
 import { MPI_FILE_MIME } from "../lib/file-drag";
 import type { PreviewTab } from "../lib/types";
 import { useOutsideClose } from "../lib/useOutsideClose";
@@ -457,7 +458,7 @@ export function Preview() {
                 }}
                 {...tabDndHandlers(tab.id)}
               >
-                <span className="preview-tab-ico">{fileIcon(tabExt(tab), false)}</span>
+                <span className="preview-tab-ico"><FileTypeIcon ext={tabExt(tab)} size={13} /></span>
                 {tab.loading && !tab.payload ? <span className="spinner preview-tab-spinner" /> : null}
                 <span className="preview-tab-name">{tabName}</span>
                 <button

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { localizeAutomationThreadTitle, useStore } from "../store";
-import { fileIcon, formatTokens } from "../lib/format";
+import { formatTokens } from "../lib/format";
+import { FileTypeIcon } from "./FileTypeIcon";
 import { MPI_FILE_MIME, MPI_SESSION_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
@@ -847,7 +848,7 @@ function FileRow({ cwd, node, depth }: { cwd: string; node: FileNode; depth: num
             <ChevronRight size={11} />
           </span>
         ) : (
-          <span className="ft-ico">{fileIcon(node.ext, false)}</span>
+          <span className="ft-ico"><FileTypeIcon ext={node.ext} size={14} /></span>
         )}
         <span className="ft-name">{node.name}</span>
       </div>
