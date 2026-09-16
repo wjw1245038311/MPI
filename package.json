@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
     "test": "node scripts/run-all-tests.mjs",
     "test:drafts": "node --experimental-strip-types scripts/test-draft-store.mjs",
+    "test:docx": "node scripts/test-docx.mjs",
     "test:feedback": "node --experimental-strip-types scripts/test-feedback.mjs",
     "test:sessiondrag": "node --experimental-strip-types scripts/test-session-drag.mjs",
     "test:todos": "node --experimental-strip-types scripts/test-todo-store.mjs",

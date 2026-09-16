@@ -982,7 +982,11 @@ function DocxPreview({ base64 }: { base64: string }) {
       try {
         const mammoth = await import("mammoth");
         const buf = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-        const res = await mammoth.default.convertToHtml({ arrayBuffer: buf.buffer as ArrayBuffer });
+        // Vite bundles mammoth's Node entry, whose openZip only accepts
+        // {path}/{buffer} — the browser-build-only `arrayBuffer` key made every
+        // docx fail with "Could not find file in options". JSZip (mammoth's
+        // zip layer) takes a Uint8Array fine.
+        const res = await mammoth.default.convertToHtml({ buffer: buf as unknown as Buffer });
         if (!cancelled) setHtml(res.value);
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || "docx parse failed");
