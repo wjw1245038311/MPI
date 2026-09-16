@@ -1041,9 +1041,14 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
   const [err, setErr] = useState<string | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [zoom, setZoom] = useState(1); // multiplier on top of fit-to-width
-  // Available content width (clientWidth minus padding). Tracked via a
-  // ResizeObserver so pages re-fit when the preview panel is resized.
-  const [fitWidth, setFitWidth] = useState(0);
+  // Bumped whenever the page container resizes (ResizeObserver / window resize).
+  // The width itself is re-measured fresh in the render effect — never cached,
+  // so a stale measurement can't leave pages mis-fitted.
+  const [fitTick, setFitTick] = useState(0);
+  // Width actually used by the last render pass — the RO compares against this
+  // (not its own first reading) so the initial observe callback doesn't cause
+  // a redundant second full re-render.
+  const renderedWidthRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
   const docRef = useRef<PDFDocumentProxy | null>(null);
@@ -1085,37 +1090,47 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
     };
   }, [base64, language]);
 
-  // Track the container's content width (padding excluded — clientWidth
-  // includes it, which made every page ~20px too wide and caused a horizontal
-  // scrollbar). Only update on real changes to avoid render loops.
+  // Re-fit trigger: observe the page container (padding excluded — clientWidth
+  // includes it, which would make every page ~20px too wide) plus window
+  // resizes as a backup. Only bumps on real size changes to avoid loops.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const measure = () => {
+    const bumpIfChanged = () => {
       const cs = getComputedStyle(el);
       const w = Math.max(
         el.clientWidth - parseFloat(cs.paddingLeft || "0") - parseFloat(cs.paddingRight || "0"),
         320,
       );
-      setFitWidth((prev) => (Math.abs(prev - w) > 1 ? w : prev));
+      if (Math.abs(w - renderedWidthRef.current) > 1) setFitTick((t) => t + 1);
     };
-    measure();
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserver(bumpIfChanged);
     ro.observe(el);
-    return () => ro.disconnect();
+    window.addEventListener("resize", bumpIfChanged);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", bumpIfChanged);
+    };
   }, [pageCount]);
 
-  // Render every page whenever the document, zoom, or available width changes.
-  // Fit-to-width is the base scale; zoom multiplies it. A generation counter
-  // drops stale loops.
+  // Render every page whenever the document, zoom, or container size changes.
+  // Fit-to-width is the base scale (measured fresh each pass); zoom multiplies
+  // it. A generation counter drops stale loops.
   useEffect(() => {
     const doc = docRef.current;
-    if (!doc || !pageCount || !fitWidth) return;
+    if (!doc || !pageCount) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const cs = getComputedStyle(el);
+    const containerWidth = Math.max(
+      el.clientWidth - parseFloat(cs.paddingLeft || "0") - parseFloat(cs.paddingRight || "0"),
+      320,
+    );
+    renderedWidthRef.current = containerWidth;
     const gen = ++genRef.current;
     let cancelled = false;
     (async () => {
       try {
-        const containerWidth = fitWidth;
         const dpr = window.devicePixelRatio || 1;
         for (let i = 1; i <= doc.numPages; i++) {
           if (cancelled || gen !== genRef.current) return;
@@ -1141,7 +1156,7 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
     return () => {
       cancelled = true;
     };
-  }, [pageCount, zoom, fitWidth]);
+  }, [pageCount, zoom, fitTick]);
 
   // Destroy the document on unmount (frees worker-side resources).
   useEffect(
