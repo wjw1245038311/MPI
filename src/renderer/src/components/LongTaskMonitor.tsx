@@ -7,19 +7,23 @@ import { useOutsideClose } from "../lib/useOutsideClose";
 import { Download, Stop, Terminal } from "./icons";
 
 /**
- * Global monitor for long-running operations, styled after the composer's
+ * Monitor for long-running operations, styled after the composer's
  * context-usage ring: a small 30px button (bottom-left, above every overlay)
  * that appears once an operation has been running longer than SHOW_AFTER_MS.
  * Clicking it opens a popover with live progress — no floating card covers
- * any UI while idle or while tasks run.
+ * any UI while idle or while tasks run. Mounted inside the composer, so each
+ * conversation shows its own monitor.
  *
  * Two sources:
  * 1. Agent tool calls (bash/shell/exec/…): read from the store's per-thread
- *    `toolRuns`; pi streams partial output via `tool_execution_update`, so we
- *    tail what the command is doing. Intervention = abort the thread turn.
+ *    `toolRuns` — **only for the currently active thread**, so a long task in
+ *    one dialog never lights up every other dialog. pi streams partial output
+ *    via `tool_execution_update`, so we tail what the command is doing.
+ *    Intervention = abort the thread turn.
  * 2. MPI shell transfers (extension install, Pi core / app update downloads):
  *    pushed from main via `window.pi.transfers` with byte/speed detail and a
- *    real cancel where supported.
+ *    real cancel where supported. These are app-level (not tied to any
+ *    conversation), so they stay global.
  */
 
 const SHOW_AFTER_MS = 10_000;
@@ -48,23 +52,25 @@ function extractCommand(run: ToolRun): string | undefined {
 
 function collectAgentTasks(): AgentTask[] {
   const s = useStore.getState();
+  // Only the conversation currently on screen — each dialog shows its own
+  // tasks. Runs on every store change (incl. LLM token events and thread
+  // switches): keep it allocation-free.
+  const threadKey = s.activeThreadId;
+  if (!threadKey) return [];
+  const t = s.threads[threadKey];
+  if (!t?.toolRuns) return [];
   const out: AgentTask[] = [];
-  // Runs on every store change (incl. LLM token events): keep it allocation-free.
-  for (const threadKey in s.threads) {
-    const t = s.threads[threadKey];
-    if (!t || !t.toolRuns) continue;
-    for (const runId in t.toolRuns) {
-      const run = t.toolRuns[runId];
-      if (!run.running) continue;
-      out.push({
-        key: threadKey + "::" + runId,
-        threadKey,
-        name: run.name,
-        command: extractCommand(run),
-        startedAt: run.startedAt ?? Date.now(),
-        partialText: run.partialText,
-      });
-    }
+  for (const runId in t.toolRuns) {
+    const run = t.toolRuns[runId];
+    if (!run.running) continue;
+    out.push({
+      key: threadKey + "::" + runId,
+      threadKey,
+      name: run.name,
+      command: extractCommand(run),
+      startedAt: run.startedAt ?? Date.now(),
+      partialText: run.partialText,
+    });
   }
   out.sort((a, b) => a.startedAt - b.startedAt);
   return out;
