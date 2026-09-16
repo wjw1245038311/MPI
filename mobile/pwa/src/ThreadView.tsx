@@ -329,7 +329,7 @@ function Message({ message, onCopied }: { message: ViewMessage; onCopied?: (ok: 
   };
   return (
     <div
-      className={`message ${isUser ? "user" : "assistant"}`}
+      className={`message ${isUser ? "user" : "assistant"}${message.pending ? " pending" : ""}`}
       onTouchStart={beginPress}
       onTouchEnd={cancelPress}
       onTouchMove={cancelPress}
@@ -506,9 +506,12 @@ export interface ThreadViewProps {
   uiError?: string | null;
   onRespondUi: (requestId: string, response: Record<string, unknown>) => void;
   onBack: () => void;
+  /** 乐观回显：本地立刻上屏用户消息，返回本地占位 id（用于失败回滚）。 */
+  onEcho?: (input: { text: string; images?: { data: string; mimeType: string }[]; fileCount?: number }) => string;
+  onEchoDrop?: (id: string) => void;
 }
 
-export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack }: ThreadViewProps) {
+export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop }: ThreadViewProps) {
   const pendingUi = view.pendingUi;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -607,21 +610,35 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
   const doSend = async () => {
     if (!actions || sending) return;
-    if (!draft.trim() && !attachments.length && !files.length) return;
-    setSending(true);
+    const text = draft;
+    const images = attachments;
+    const picked = files;
+    if (!text.trim() && !images.length && !picked.length) return;
     setSendError(null);
+
+    // 乐观回显：先上屏 + 清空输入框，再走网络。
+    // （真机反馈：等主机 ACK 才清空，点完要卡五六秒才有动静；这段往返里包含主机
+    //   建桥/冷启动 pi 的时间，与本机体验无关。）
+    const echoId = onEcho?.({ text, images: images.length ? images : undefined, fileCount: picked.length }) || "";
+    setDraft("");
+    setAttachments([]);
+    setFiles([]);
+    setSending(true);
+    setAtBottom(true); // 回显的消息要立刻可见（自动滚底 effect 会跟着 messages 变化跑）
     try {
       await actions.send(
-        draft,
+        text,
         running ? "steer" : "prompt",
-        attachments.length ? attachments : undefined,
-        files.length ? files.map((f) => ({ name: f.name, mimeType: f.mimeType, data: f.data })) : undefined,
+        images.length ? images : undefined,
+        picked.length ? picked.map((f) => ({ name: f.name, mimeType: f.mimeType, data: f.data })) : undefined,
       );
-      setDraft("");
-      setAttachments([]);
-      setFiles([]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // 发送失败：撤掉占位气泡并把内容还回输入框，别让用户丢字。
+      if (echoId) onEchoDrop?.(echoId);
+      setDraft(text);
+      setAttachments(images);
+      setFiles(picked);
       setSendError(message.startsWith("THREAD_BUSY") ? "该会话正被其他设备操作，请稍后再试。" : `发送失败：${message}`);
     } finally {
       setSending(false);

@@ -322,4 +322,83 @@ const { ThreadActions } = await import("../mobile/pwa/src/lib/thread-actions.ts"
   console.log("ok 8 - tool-groups: 同类合并 / 运行中不合并 / 无信息行丢弃");
 }
 
+// ---- 9. 乐观回显：点发送立刻上屏、主机回执转正、失败可回滚 ----------------
+{
+  const { ThreadSession } = await import("../mobile/pwa/src/lib/thread-session.ts");
+
+  // 最小 fake RelayClient（ThreadSession 只用 onFrame/onState + Requester 的 request）
+  // Requester 是"发帧 + 等响应帧"，所以 fake 用它自己的 onFrame 通道自动应答。
+  const makeClient = (snapshot) => {
+    const frameListeners = new Set();
+    const stateListeners = new Set();
+    const emitFrame = (frame) => { for (const fn of [...frameListeners]) fn(frame); };
+    return {
+      onFrame: (fn) => { frameListeners.add(fn); return () => frameListeners.delete(fn); },
+      onState: (fn) => { stateListeners.add(fn); return () => stateListeners.delete(fn); },
+      isOpen: () => true,
+      getClientId: () => "fake",
+      whenReady: async () => {},
+      sendData: (envelope) => {
+        // 主机应答：subscribe/resync 给快照，其余回 ok
+        const isSnapshot = envelope.type === "thread.subscribe" || envelope.type === "thread.resync";
+        queueMicrotask(() =>
+          emitFrame({
+            type: `${envelope.type}.result`,
+            sessionId: envelope.sessionId,
+            requestId: envelope.requestId,
+            payload: isSnapshot ? { snapshot } : { ok: true },
+          }),
+        );
+        return true;
+      },
+      emitEvent: (payload, seq) => emitFrame({ type: "thread.event", threadId: "t1", seq, payload }),
+    };
+  };
+
+  const snapshot = {
+    id: "t1", projectId: "p1", title: "T", preview: "", updatedAt: 1, messageCount: 0, state: "idle",
+    permission: "sandbox", cwdName: "p", model: null, availableModels: [], skills: [], thinkingLevel: "off",
+    taskMode: null, availableModes: [], contextUsage: null, messages: [], nextSeq: 0,
+  };
+
+  const client = makeClient(snapshot);
+  const ts = new ThreadSession(client, "t1", { requestTimeoutMs: 1_000 });
+  await ts.open();
+  assert.equal(ts.getSnapshot().messages.length, 0, "快照为空");
+
+  // 点发送：本地立刻上屏（pending），不等主机
+  const echoId = ts.echoUser({ text: "帮我查下 relay", images: [{ data: "AAAA", mimeType: "image/jpeg" }], fileCount: 2 });
+  let view = ts.getSnapshot();
+  assert.equal(view.messages.length, 1, "乐观回显立刻可见");
+  assert.equal(view.messages[0].pending, true, "标记为待回执");
+  assert.deepEqual(view.messages[0].blocks.map((b) => b.type), ["image", "text", "text"], "图片/正文/附件占位都在");
+  assert.equal(view.messages[0].blocks[1].text, "帮我查下 relay");
+
+  // 主机回执（message_start user，同文本）→ 占位转正，**不能重复两条**
+  client.emitEvent({ kind: "message_start", data: { event: { type: "message_start", message: { role: "user", content: "帮我查下 relay" } } } }, 1);
+  view = ts.getSnapshot();
+  assert.equal(view.messages.length, 1, "回执后不能变成两条（曾经会重复）");
+  assert.equal(view.messages[0].pending, false, "占位已转正");
+  assert.equal(view.messages[0].id, echoId, "保留原位（不跳位、不闪）");
+
+  // 主机回执不匹配（比如另一台设备发的）→ 正常新增
+  client.emitEvent({ kind: "message_start", data: { event: { type: "message_start", message: { role: "user", content: "别的设备发的" } } } }, 2);
+  assert.equal(ts.getSnapshot().messages.length, 2, "不匹配的回执照常新增");
+
+  // 发送失败 → 撤掉占位，不留幽灵消息
+  const failId = ts.echoUser({ text: "这条会失败" });
+  assert.equal(ts.getSnapshot().messages.length, 3);
+  ts.dropEcho(failId);
+  view = ts.getSnapshot();
+  assert.equal(view.messages.length, 2, "失败回滚后占位消失");
+  assert.equal(view.messages.some((m) => m.blocks.some((b) => b.text === "这条会失败")), false);
+
+  // 快照到达（resync）→ 残余占位被权威历史取代
+  ts.echoUser({ text: "还没回执就 resync" });
+  await ts.resync();
+  assert.equal(ts.getSnapshot().messages.filter((m) => m.pending).length, 0, "resync 后不留残余占位");
+
+  console.log("ok 9 - optimistic echo: 立刻上屏 / 回执转正不重复 / 失败回滚 / resync 清理");
+}
+
 console.log("pwa composer tests passed");

@@ -2012,11 +2012,18 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       }
     },
     async (threadId, text, images, files) => {
+      // 手机端「点发送卡五六秒」的取证点：建桥（冷启动 pi）与真正投递分两段计时。
+      const t0 = Date.now();
       const ref = await remoteThread(threadId);
       const bridge = await ensureRemoteBridge(ref);
+      const tBridge = Date.now();
       // 文件先落盘，再按桌面同款规则内联/引用（图片仍直传模型）。
       const staged = processAttachments(stageRemoteFiles(files), text);
       await bridge.bridge.prompt(staged.text, [...(images ?? []), ...staged.images]);
+      const tSent = Date.now();
+      if (tSent - t0 > 500) {
+        appendDiagLog(`prompt slow total=${tSent - t0}ms bridge=${tBridge - t0}ms send=${tSent - tBridge}ms bytes=${(text || "").length}`);
+      }
       const state: any = await bridge.bridge.getState();
       if (state?.sessionFile) {
         const draft = remoteDrafts.get(threadId);

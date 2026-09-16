@@ -35,6 +35,8 @@ export interface ViewBlock {
 export interface ViewMessage {
   id: string;
   role: "user" | "assistant";
+  /** 乐观回显：本机刚发、主机还没回执的本地占位消息（见 echoUser）。 */
+  pending?: boolean;
   blocks: ViewBlock[];
   artifacts?: RemoteFileArtifact[];
   stopReason?: string;
@@ -132,6 +134,8 @@ export class ThreadSession {
   private readonly respondedUiIds = new Set<string>();
   private openCount = 0;
   private closing = false;
+  /** 乐观回显计数（local-<n>）。 */
+  private echoSeq = 0;
   private readonly detachFrame: () => void;
   private readonly detachState: () => void;
 
@@ -261,6 +265,7 @@ export class ThreadSession {
     this.patch({
       ready: true,
       summary,
+      // 快照是权威历史：残余的乐观占位一律丢弃（主机此时一定已经有了这条消息）。
       messages: snapshot.messages.map(mapRemoteMessage),
       streaming: null,
       running: snapshot.state === "running",
@@ -295,7 +300,15 @@ export class ThreadSession {
         if (!m) break;
         if (m.role === "user") {
           const text = textOfContent(m.content);
-          if (text) this.pushMessage({ id: `u-${seq}-${this.view.messages.length}`, role: "user", blocks: [{ type: "text", text }] });
+          if (text) {
+            // 本地乐观回显先转正（否则同一条消息会上屏两次）。
+            const echo = [...this.view.messages].reverse().find((message) => message.pending && message.role === "user" && message.blocks.some((b) => b.type === "text" && b.text === text));
+            if (echo) {
+              this.patch({ messages: this.view.messages.map((message) => (message.id === echo.id ? { ...message, pending: false } : message)) });
+            } else {
+              this.pushMessage({ id: `u-${seq}-${this.view.messages.length}`, role: "user", blocks: [{ type: "text", text }] });
+            }
+          }
         } else if (!this.view.streaming) {
           this.patch({ streaming: { id: `a-${seq}`, role: "assistant", blocks: [] } });
         }
@@ -443,6 +456,29 @@ export class ThreadSession {
       messages: this.view.messages.map(apply),
       streaming: this.view.streaming ? apply(this.view.streaming) : null,
     });
+  }
+
+  /**
+   * 乐观回显：点发送后立刻把用户消息上屏，**不等主机回执**。
+   *
+   * 真机反馈「点发送要卡五六秒才发出去」：原实现是 `await send()` 成功后才清空输入框，
+   * 而这条往返里包含主机建桥/冷启动 pi 的时间。现在本地先上屏（pending），
+   * 主机真正收到后 message_start(user) 会把它「转正」，snapshot 到达时清掉残余占位。
+   */
+  echoUser(input: { text: string; images?: { data: string; mimeType: string }[]; fileCount?: number }): string {
+    const id = `local-${++this.echoSeq}`;
+    const blocks: ViewBlock[] = [
+      ...(input.images || []).map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })),
+      ...(input.text ? [{ type: "text" as const, text: input.text }] : []),
+      ...(input.fileCount ? [{ type: "text" as const, text: `📎 ${input.fileCount} 个文件` }] : []),
+    ];
+    this.pushMessage({ id, role: "user", blocks, pending: true });
+    return id;
+  }
+
+  /** 发送失败（主机没接住）——撤掉占位气泡，避免留下幽灵消息。 */
+  dropEcho(id: string): void {
+    this.patch({ messages: this.view.messages.filter((message) => message.id !== id) });
   }
 
   private pushMessage(message: ViewMessage): void {

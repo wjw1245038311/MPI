@@ -373,6 +373,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .to-bottom svg { width: 16px; height: 16px; }
 @keyframes to-bottom-in { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 0.92; transform: translate(-50%, 0); } }
 
+/* 乐观回显中（主机还没回执）：淡一点，回执到达即转实——用户能看出"已发出，在等主机"。 */
+.message.pending { opacity: 0.55; transition: opacity 0.18s ease; }
+
 .message.user { align-self: flex-end; max-width: 85%; background: var(--user-bubble); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
 .message.assistant { align-self: stretch; display: flex; flex-direction: column; gap: 8px; }
 .msg-role { font-size: 11px; color: var(--muted); letter-spacing: 0.4px; }

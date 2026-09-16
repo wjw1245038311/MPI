@@ -688,6 +688,9 @@ export default function App() {
             uiError={uiError}
             onRespondUi={(id, response) => void respondUi(id, response)}
             onBack={closeThread}
+            // 乐观回显：点发送立刻上屏（不等主机往返，真机反馈过 5-6s 延迟）
+            onEcho={(input) => threadSessionRef.current?.echoUser(input) ?? ""}
+            onEchoDrop={(id) => threadSessionRef.current?.dropEcho(id)}
           />
         ) : view === "home" && hostId ? (
           <div className="chat-empty">
