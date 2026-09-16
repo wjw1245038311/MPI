@@ -4,11 +4,10 @@ import { formatTokens, modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { BUILTIN_BALANCED_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
 import { useOutsideClose } from "../lib/useOutsideClose";
-import type { ComposerDraft, FileMatch, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage, TaskModeDef } from "../lib/types";
-import { MPI_FILE_MIME } from "../lib/file-drag";
+import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage, TaskModeDef } from "../lib/types";
+import { MPI_FILE_MIME, MPI_SESSION_MIME, parseSessionDragPayload } from "../lib/file-drag";
 import { SttError, startRecording, sttRecordErrorText, sttTranscribeErrorText, type RecordingHandle } from "../lib/stt";
 import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh, Settings, Mic, Info } from "./icons";
-import { sessionMentionItems, type MentionSessionItem } from "../lib/mention";
 import { LongTaskMonitor } from "./LongTaskMonitor";
 import { TaskModesModal } from "./TaskModesModal";
 import { TaskModeDetailModal } from "./TaskModeDetailModal";
@@ -205,15 +204,6 @@ export function Composer({ threadId }: { threadId: string }) {
   const dragDepthRef = useRef(0);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
-  // "@" mention trigger: debounced project search results (null while the
-  // first query is in flight) + menu state mirroring the slash menu. The
-  // 对话 group needs no IPC — it filters local session data synchronously.
-  const [mentionIndex, setMentionIndex] = useState(0);
-  const [mentionDismissed, setMentionDismissed] = useState(false);
-  const [mentionResults, setMentionResults] = useState<FileMatch[] | null>(null);
-  // Generation counter: a superseded search response must never clobber the
-  // results of a newer query (dsh input-trigger pattern).
-  const mentionGenRef = useRef(0);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const tmRef = useRef<HTMLDivElement>(null);
   const permRef = useRef<HTMLDivElement>(null);
@@ -434,16 +424,25 @@ export function Composer({ threadId }: { threadId: string }) {
     });
   };
 
-  /** True when the drag payload is a file (in-app sidebar drag or OS files). */
+  /** True when the drag payload is a file, a session reference (sidebar
+   * thread row), or OS files. */
   const isFileDrag = (e: React.DragEvent) => {
     const types = Array.from(e.dataTransfer.types || []);
-    return types.includes(MPI_FILE_MIME) || types.includes("Files");
+    return types.includes(MPI_FILE_MIME) || types.includes(MPI_SESSION_MIME) || types.includes("Files");
   };
 
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     dragDepthRef.current = 0;
     setFileDragOver(false);
+    // In-app drags carry payloads, not File objects. A session reference
+    // (dragged from a sidebar thread row) becomes an attachment whose .jsonl
+    // path the agent reads with its file tools.
+    const sessionPayload = parseSessionDragPayload(e.dataTransfer.getData(MPI_SESSION_MIME));
+    if (sessionPayload) {
+      patchDraft({ files: [...files, ...(!files.some((f) => f.abs === sessionPayload.file) ? [{ abs: sessionPayload.file, name: sessionPayload.title }] : [])] });
+      return;
+    }
     // In-app drag from the sidebar file tree carries a path, not a File object.
     const internalPath = e.dataTransfer.getData(MPI_FILE_MIME);
     if (internalPath) {
@@ -667,42 +666,27 @@ export function Composer({ threadId }: { threadId: string }) {
     // submit / slash-menu navigation — otherwise Chinese/Japanese typing would
     // send the draft or accept a command mid-word.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-    // One trigger menu at a time: the active token starts with either / or @.
-    const mentionCount = mentionAll.length;
-    if (slashMenuOpen || mentionMenuOpen) {
-      const count = slashMenuOpen ? slashItems.length : mentionCount;
-      // The mention menu can be open while its first search is still in flight
-      // (count 0): navigation and pick are no-ops, Escape still dismisses.
-      if (count > 0) {
-        const bump = (delta: number, setIndex: (fn: (i: number) => number) => void) =>
-          setIndex((index) => (index + delta + count) % count);
-        if (e.key === "ArrowDown") {
-          e.preventDefault();
-          bump(1, slashMenuOpen ? setSlashIndex : setMentionIndex);
-          return;
-        }
-        if (e.key === "ArrowUp") {
-          e.preventDefault();
-          bump(-1, slashMenuOpen ? setSlashIndex : setMentionIndex);
-          return;
-        }
+    if (slashMenuOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashIndex((index) => (index + 1) % slashItems.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashIndex((index) => (index - 1 + slashItems.length) % slashItems.length);
+        return;
       }
       // Shift+Enter must still insert a newline even with the menu open; the
-      // inserted line break ends the trailing token so the menu closes on its own.
-      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && count > 0) {
+      // inserted line break ends the trailing "/token" so the menu closes on its own.
+      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && slashItems.length > 0) {
         e.preventDefault();
-        if (slashMenuOpen) chooseSlashCommand(slashItems[slashIndex] || slashItems[0]);
-        else {
-          const item = mentionAll[Math.min(mentionIndex, mentionCount - 1)];
-          if (item.kind === "session") chooseMentionSession(item);
-          else chooseMentionFile(item.node);
-        }
+        chooseSlashCommand(slashItems[slashIndex] || slashItems[0]);
         return;
       }
       if (e.key === "Escape") {
         e.preventDefault();
         setSlashDismissed(true);
-        setMentionDismissed(true);
         return;
       }
     }
@@ -793,71 +777,14 @@ export function Composer({ threadId }: { threadId: string }) {
   }, [commands, commandQuery, builtinCommands]);
   const slashMenuOpen = !!slashMatch && !slashDismissed && slashItems.length > 0;
 
-  // ---- "@file" mention trigger -------------------------------------------
-  // Same trailing-token rule as the slash menu: only a token that STARTS with
-  // @ counts, so e-mail addresses ("user@host") never open the file menu.
-  const mentionMatch = cwd ? text.match(/(?:^|\s)@([^\s]*)$/) : null;
-  const mentionQuery = (mentionMatch?.[1] || "").toLowerCase();
-
   useEffect(() => {
     setSlashIndex(0);
-    setMentionIndex(0);
-  }, [slashQuery, mentionQuery]);
-
-  // Debounced project-wide search for the 文件 group. A bare "@" fires with no
-  // delay (top-level listing is cheap) so the menu feels instant; typed
-  // queries wait out the debounce. Stale responses are dropped by generation.
-  useEffect(() => {
-    if (!mentionMatch) return;
-    const gen = ++mentionGenRef.current;
-    const timer = setTimeout(async () => {
-      try {
-        const res: unknown = await window.pi.app.searchFiles(cwd, mentionQuery);
-        if (gen === mentionGenRef.current) setMentionResults(Array.isArray(res) ? (res as FileMatch[]) : []);
-      } catch {
-        if (gen === mentionGenRef.current) setMentionResults([]);
-      }
-    }, mentionQuery ? 120 : 0);
-    return () => clearTimeout(timer);
-  }, [mentionQuery, cwd]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const mentionMenuOpen = !!mentionMatch && !mentionDismissed;
-
-  // 对话 group: recent sessions from local project data (no IPC), so these
-  // rows appear the instant @ is typed while file search is still in flight.
-  const mentionSessions = useMemo(
-    () => sessionMentionItems(projects, mentionQuery, sessionFile),
-    [projects, mentionQuery, sessionFile],
-  );
-  const mentionFiles = mentionResults ?? [];
-  // One flat discriminated list drives keyboard navigation across both groups.
-  type MentionRow = MentionSessionItem | { kind: "file"; node: FileMatch };
-  const mentionAll: MentionRow[] = [
-    ...mentionSessions,
-    ...mentionFiles.map((node) => ({ kind: "file" as const, node })),
-  ];
+  }, [slashQuery]);
 
   const chooseSlashCommand = (command: any) => {
     // Replace only the current slash token and keep any prompt text before it.
     patchDraft({ text: text.replace(/\/[^\s]*$/, `/${command.name} `) });
     setSlashDismissed(true);
-    requestAnimationFrame(() => taRef.current?.focus());
-  };
-
-  const chooseMentionSession = (item: MentionSessionItem) => {
-    // Insert the session's .jsonl path verbatim — the agent reads it with its
-    // file tools; no special syntax, rides an ordinary prompt.
-    patchDraft({ text: text.replace(/@[^\s]*$/, `${item.file} `) });
-    setMentionDismissed(true);
-    requestAnimationFrame(() => taRef.current?.focus());
-  };
-
-  const chooseMentionFile = (node: FileMatch) => {
-    // Insert the project-relative path (dirs get a trailing slash so the model
-    // can tell them apart); it rides an ordinary prompt, no special syntax.
-    const insert = node.isDir ? `${node.rel}/` : node.rel;
-    patchDraft({ text: text.replace(/@[^\s]*$/, `${insert} `) });
-    setMentionDismissed(true);
     requestAnimationFrame(() => taRef.current?.focus());
   };
 
@@ -1001,74 +928,6 @@ export function Composer({ threadId }: { threadId: string }) {
             </div>
           </div>
         )}
-        {mentionMenuOpen && (
-          <div className="mention-menu" role="listbox" aria-label={language === "zh" ? "@ 引用" : "@ references"}>
-            <div className="mention-menu-head">
-              {language === "zh"
-                ? `@ 引用${mentionMatch?.[1] ? ` · ${mentionMatch[1]}` : ""}`
-                : `@ reference${mentionMatch?.[1] ? ` · ${mentionMatch[1]}` : ""}`}
-            </div>
-            <div className="mention-menu-list">
-              {mentionSessions.length > 0 && (
-                <>
-                  <div className="mention-group-head">{language === "zh" ? "对话" : "Sessions"}</div>
-                  {mentionSessions.map((item, index) => (
-                    <button
-                      key={item.file}
-                      className={`mention-menu-item ${index === mentionIndex ? "active" : ""}`}
-                      role="option"
-                      aria-selected={index === mentionIndex}
-                      onMouseEnter={() => setMentionIndex(index)}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => chooseMentionSession(item)}
-                    >
-                      <span className="mention-session-title" title={item.title}>
-                        {item.title}
-                      </span>
-                      <span className="mention-file-kind">{item.projectName}</span>
-                    </button>
-                  ))}
-                </>
-              )}
-              <div className="mention-group-head">{language === "zh" ? "文件" : "Files"}</div>
-              {mentionResults === null && (
-                <div className="mention-menu-empty">{language === "zh" ? "搜索中…" : "Searching…"}</div>
-              )}
-              {mentionResults !== null && mentionResults.length === 0 && (
-                <div className="mention-menu-empty">
-                  {language === "zh"
-                    ? `没有匹配 “${mentionMatch?.[1] || ""}” 的文件`
-                    : `No files matching “${mentionMatch?.[1] || ""}”`}
-                </div>
-              )}
-              {(mentionResults || []).map((node, j) => {
-                const index = mentionSessions.length + j;
-                return (
-                  <button
-                    key={node.rel}
-                    className={`mention-menu-item ${index === mentionIndex ? "active" : ""}`}
-                    role="option"
-                    aria-selected={index === mentionIndex}
-                    onMouseEnter={() => setMentionIndex(index)}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => chooseMentionFile(node)}
-                  >
-                    <span className="mention-file-path" title={node.rel}>
-                      {node.rel}
-                    </span>
-                    <span className={`mention-file-kind ${node.isDir ? "dir" : ""}`}>
-                      {node.isDir
-                        ? language === "zh"
-                          ? "目录"
-                          : "Dir"
-                        : node.ext.replace(/^\./, "") || (language === "zh" ? "文件" : "File")}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
         {(images.length > 0 || files.length > 0) && (
           <div className="composer-attachments">
             {images.map((im) => (
@@ -1082,9 +941,10 @@ export function Composer({ threadId }: { threadId: string }) {
             ))}
             {files.map((f) => (
               <div key={f.abs} className="attach-chip">
-                <span>📎</span>
+                {/* .jsonl = a dragged session reference (sidebar thread row). */}
+                <span>{f.abs.toLowerCase().endsWith(".jsonl") ? "💬" : "📎"}</span>
                 <span className="nm" title={f.abs}>
-                  {f.name}
+                  {f.name || f.abs.split(/[\\/]/).pop()}
                 </span>
                 <button className="rm" onClick={() => patchDraft({ files: files.filter((x) => x.abs !== f.abs) })}>
                   ×
@@ -1165,15 +1025,12 @@ export function Composer({ threadId }: { threadId: string }) {
                  ? "输入插话…回车存为待处理后续（完成后发送），Alt+回车立即插入，Shift+回车换行"
                 : "Type a message… Enter queues a follow-up; Alt+Enter steers immediately; Shift+Enter for newline"
               : language === "zh"
-                ? "@ 引用文件或对话  ·  / 命令  ·  Shift+回车换行"
+                ? "随心输入  ·  Shift+回车换行  ·  粘贴图片或文件"
                 : "Type a message · Shift+Enter for newline · Paste images or files"}
             value={text}
             onChange={(e) => {
               patchDraft({ text: e.target.value });
-              // Any keystroke re-arms the trigger menus (Escape only dismisses
-              // until the next edit; picks rewrite via patchDraft, no change).
               setSlashDismissed(false);
-              setMentionDismissed(false);
             }}
             onKeyDown={onKeyDown}
             onPaste={onPaste}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { localizeAutomationThreadTitle, useStore } from "../store";
 import { fileIcon, formatTokens } from "../lib/format";
-import { MPI_FILE_MIME } from "../lib/file-drag";
+import { MPI_FILE_MIME, MPI_SESSION_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
 import { AppStore, Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Smartphone, Sidebar as SidebarIcon } from "./icons";
@@ -241,16 +241,22 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
 
   // HTML5 drag & drop for reordering the pinned zone. `list` is the displayed
   // order (pinned first); see resolveDrop() for the cross-zone semantics.
+  // Thread rows additionally carry a session-reference payload so they can be
+  // dropped onto the composer as an attachment (the agent reads the .jsonl).
   const dndHandlers = (
     kind: "project" | "thread",
     list: Array<{ id: string; pinned?: boolean }>,
     id: string,
+    sessionRef?: { file: string; title: string },
   ) => ({
     draggable: true,
     onDragStart: (event: ReactDragEvent) => {
       event.dataTransfer.effectAllowed = "move";
       // Some browsers refuse to start a drag without payload data.
       event.dataTransfer.setData("text/plain", id);
+      if (sessionRef) {
+        event.dataTransfer.setData(MPI_SESSION_MIME, JSON.stringify(sessionRef));
+      }
       setDragItem({ kind, id });
     },
     onDragEnd: () => {
@@ -468,7 +474,12 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                                 y: Math.min(event.clientY, window.innerHeight - 70),
                               });
                             }}
-                            {...dndHandlers("thread", p.threads.map((x) => ({ id: x.file, pinned: x.pinned })), t.file)}
+                            {...dndHandlers(
+                              "thread",
+                              p.threads.map((x) => ({ id: x.file, pinned: x.pinned })),
+                              t.file,
+                              { file: t.file, title },
+                            )}
                             onKeyDown={(event) => {
                               if (event.target !== event.currentTarget) return;
                               if (event.key === "Enter" || event.key === " ") {
@@ -476,7 +487,11 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                                 openThread();
                               }
                             }}
-                            title={title}
+                            title={
+                              language === "zh"
+                                ? `${title}（拖到输入框可引用此会话）`
+                                : `${title} (drag to the composer to reference this session)`
+                            }
                           >
                             <div className="thread-title">
                               {running && <span className="thread-running" />}

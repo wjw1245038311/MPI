@@ -63,7 +63,6 @@ const api = {
       opts?: { filters?: { name: string; extensions: string[] }[] },
     ) => ipcRenderer.invoke("app:showOpenDialog", kind, opts),
     getFileTree: (cwd: string, rel?: string) => ipcRenderer.invoke("app:getFileTree", cwd, rel),
-    searchFiles: (cwd: string, query?: string) => ipcRenderer.invoke("app:searchFiles", cwd, query),
     getFeedback: () => ipcRenderer.invoke("app:getFeedback"),
     setFeedback: (args: { entryId: string; rating: 1 | -1; note?: string | null }) =>
       ipcRenderer.invoke("app:setFeedback", args),

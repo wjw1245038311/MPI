@@ -56,7 +56,7 @@ import {
 import { cancelTransfer as cancelActiveTransfer, getTransfers, setTransferBroadcaster } from "./transfer-monitor";
 import { mimeForName } from "./todo-attachment-protocol";
 import type { ComposerDraft } from "../renderer/src/lib/types";
-import { listDir, searchProjectFiles } from "./fs-service";
+import { listDir } from "./fs-service";
 import { getFeedback, setFeedback, deleteFeedback } from "./feedback-store";
 import { createHtmlPreviewUrl } from "./html-preview-protocol";
 import {
@@ -384,6 +384,9 @@ function toolArgsSummary(args: unknown): string | undefined {
   }
 }
 
+/** Escape attribute values for the <file> envelope (session titles may contain quotes). */
+const attr = (s: string) => s.replace(/"/g, "&quot;");
+
 function processAttachments(attachments: Attachment[] | undefined, text: string): { text: string; images: unknown[] } {
   const images: unknown[] = [];
   let extra = "";
@@ -396,17 +399,23 @@ function processAttachments(attachments: Attachment[] | undefined, text: string)
           images.push({ type: "image", data: buf.toString("base64"), mimeType: IMG_MIME[ext] });
           continue;
         }
+        if (ext === ".jsonl") {
+          // Session transcript reference (dragged from the sidebar): never
+          // inline — let the agent read it selectively with its file tools.
+          extra += `\n\n<file name="${attr(a.name)}" path="${attr(a.abs)}" note="conversation transcript; read selectively with file tools" />`;
+          continue;
+        }
         if (TEXT_ATTACH_EXTS.has(ext) || ext === "") {
           const st = statSync(a.abs);
           if (st.size <= 500_000) {
             const content = readFileSync(a.abs, "utf8");
-            extra += `\n\n<file name="${a.name}" path="${a.abs}">\n${content}\n</file>`;
+            extra += `\n\n<file name="${attr(a.name)}" path="${attr(a.abs)}">\n${content}\n</file>`;
             continue;
           }
         }
-        extra += `\n\n<file name="${a.name}" path="${a.abs}" note="attached (binary or large; not inlined)" />`;
+        extra += `\n\n<file name="${attr(a.name)}" path="${attr(a.abs)}" note="attached (binary or large; not inlined)" />`;
       } catch (e: any) {
-        extra += `\n\n<file name="${a.name}" path="${a.abs}" error="${e?.message || "read failed"}" />`;
+        extra += `\n\n<file name="${attr(a.name)}" path="${attr(a.abs)}" error="${attr(e?.message || "read failed")}" />`;
       }
     }
   }
@@ -3038,12 +3047,6 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
 
   // ---- files / preview ----------------------------------------------------
   ipcMain.handle("app:getFileTree", (_e, cwd: string, rel?: string) => listDir(cwd, rel));
-  // Composer "@" mention menu: project-wide file search (ranked).
-  ipcMain.handle(
-    "app:searchFiles",
-    (_e, cwd: string, query?: string, limit?: number) =>
-      searchProjectFiles(cwd, typeof query === "string" ? query : "", Math.min(Math.max(limit || 50, 1), 200)),
-  );
 
   // ---- message feedback (sidecar; never enters the model context) ---------
   ipcMain.handle("app:getFeedback", () => getFeedback());
