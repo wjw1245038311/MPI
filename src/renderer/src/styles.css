@@ -4172,6 +4172,11 @@ body.preview-resizing * {
   overflow: hidden;
   padding: 0;
 }
+/* body has user-select:none globally — re-enable it for text-based previews. */
+.pv-xlsx {
+  user-select: text;
+  -webkit-user-select: text;
+}
 .pv-xlsx .sheet-tabs {
   display: flex;
   gap: 4px;
@@ -4220,6 +4225,8 @@ body.preview-resizing * {
   flex-direction: column;
   gap: 14px;
   padding-bottom: 20px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .pv-pptx-summary {
   position: sticky;
