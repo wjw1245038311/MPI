@@ -795,7 +795,16 @@ function FileTreeView({ cwd }: { cwd: string | null }) {
   const root = fileTree[treeKey(cwd, "")];
   if (!root?.loaded) return <div className="ft-empty">加载中…</div>;
   return (
-    <div className="filetree">
+    // Right-click on empty space (rows stopPropagation themselves): native
+    // menu with 刷新文件列表 — the tree only auto-refreshes after agent turns.
+    <div
+      className="filetree"
+      onContextMenu={(event) => {
+        if (event.target !== event.currentTarget) return;
+        event.preventDefault();
+        void window.pi.app.showTreeMenu(cwd);
+      }}
+    >
       {root.nodes.map((n) => (
         <FileRow key={n.rel} cwd={cwd} node={n} depth={0} />
       ))}
@@ -821,7 +830,8 @@ function FileRow({ cwd, node, depth }: { cwd: string; node: FileNode; depth: num
         onContextMenu={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          void window.pi.app.showFileContextMenu(node.abs);
+          // ctx lets the main-side menu add 刷新此文件夹 for directories.
+          void window.pi.app.showFileContextMenu(node.abs, { cwd, rel: node.rel });
         }}
         title={node.abs}
         draggable={!node.isDir}

@@ -80,7 +80,10 @@ const api = {
     readPreview: (absPath: string, projectRoot?: string) => ipcRenderer.invoke("app:readPreview", absPath, projectRoot),
     savePreviewHtml: (args: { absPath: string; projectRoot?: string; html: string }) =>
       ipcRenderer.invoke("app:savePreviewHtml", args),
-    showFileContextMenu: (absPath: string) => ipcRenderer.invoke("app:showFileContextMenu", absPath),
+    showFileContextMenu: (absPath: string, ctx?: { cwd?: string; rel?: string }) =>
+      ipcRenderer.invoke("app:showFileContextMenu", absPath, ctx),
+    // Right-click on empty space in the file tree → native menu with 刷新文件列表.
+    showTreeMenu: (cwd: string) => ipcRenderer.invoke("app:showTreeMenu", cwd),
     updatePi: () => ipcRenderer.invoke("app:updatePi"),
     checkAppUpdate: () => ipcRenderer.invoke("app:checkAppUpdate"),
     downloadAppUpdate: () => ipcRenderer.invoke("app:downloadAppUpdate"),
@@ -498,6 +501,8 @@ const api = {
       description?: string;
     }) => void) => on("pi:wechatRegistration", cb),
     todoChanged: (cb: () => void) => on("pi:todo-changed", cb),
+    // Manual file-tree refresh (folder row / empty-space context menu).
+    treeRefresh: (cb: (p: { cwd: string; rel: string }) => void) => on("fs:tree-refresh", cb),
     projectsChanged: (cb: (p: { cwd?: string; sessionFile?: string }) => void) => on("pi:projects-changed", cb),
     appUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:appUpdate", cb),
     coreUpdate: (cb: (p: { stage: string; message: string; pct?: number }) => void) => on("pi:coreUpdate", cb),

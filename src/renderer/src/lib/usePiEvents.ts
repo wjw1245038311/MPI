@@ -203,6 +203,12 @@ export function usePiEvents() {
     const u9 = typeof window.pi.on.todoChanged === "function"
       ? window.pi.on.todoChanged(() => void useStore.getState().loadTodos())
       : () => undefined;
+    // Manual file-tree refresh from the folder / empty-space context menus.
+    const u14 = typeof window.pi.on.treeRefresh === "function"
+      ? window.pi.on.treeRefresh((p) => {
+          if (p?.cwd) void useStore.getState().refreshFileTree(p.cwd, p.rel || "");
+        })
+      : () => undefined;
     return () => {
       u1();
       u2();
@@ -217,6 +223,7 @@ export function usePiEvents() {
       u11();
       u12();
       u13();
+      u14();
     };
   }, [handleEvent, handleExtUi, handleExit, handleError]);
 }

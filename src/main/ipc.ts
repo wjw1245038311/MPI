@@ -3080,10 +3080,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("app:savePreviewHtml", (_e, args: { absPath?: string; projectRoot?: string; html?: string }) => {
     return writePreviewHtml(args?.absPath || "", args?.projectRoot, args?.html || "");
   });
-  ipcMain.handle("app:showFileContextMenu", (event, absPath: string) => {
+  ipcMain.handle("app:showFileContextMenu", (event, absPath: string, ctx?: { cwd?: string; rel?: string }) => {
     if (!absPath || !existsSync(absPath)) return { ok: false, error: "File not found" };
     const language = getConfig().language;
-    const menu = Menu.buildFromTemplate([
+    let isDir = false;
+    try {
+      isDir = statSync(absPath).isDirectory();
+    } catch {
+      /* existsSync passed; treat as file */
+    }
+    const items: Electron.MenuItemConstructorOptions[] = [
       {
         label: language === "zh" ? "在资源管理器中显示" : "Show in File Explorer",
         click: () => shell.showItemInFolder(absPath),
@@ -3091,6 +3097,31 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       {
         label: language === "zh" ? "使用默认应用打开" : "Open with Default App",
         click: () => void shell.openPath(absPath),
+      },
+    ];
+    // The file tree caches listings (lazy, per folder) and only auto-refreshes
+    // after an agent turn settles — files copied in manually stay invisible.
+    // Directories get a manual refresh; the renderer reloads that key.
+    if (isDir && ctx?.cwd) {
+      items.push({ type: "separator" });
+      items.push({
+        label: language === "zh" ? "刷新此文件夹" : "Refresh this folder",
+        click: () => getWin()?.webContents.send("fs:tree-refresh", { cwd: ctx.cwd, rel: ctx.rel || "" }),
+      });
+    }
+    const menu = Menu.buildFromTemplate(items);
+    menu.popup({ window: BrowserWindow.fromWebContents(event.sender) || undefined });
+    return { ok: true };
+  });
+
+  // Right-click on empty space in the file tree: refresh root + every loaded
+  // subfolder of that project (the renderer decides which keys to reload).
+  ipcMain.handle("app:showTreeMenu", (event, cwd: string) => {
+    const language = getConfig().language;
+    const menu = Menu.buildFromTemplate([
+      {
+        label: language === "zh" ? "刷新文件列表" : "Refresh file list",
+        click: () => getWin()?.webContents.send("fs:tree-refresh", { cwd, rel: "" }),
       },
     ]);
     menu.popup({ window: BrowserWindow.fromWebContents(event.sender) || undefined });

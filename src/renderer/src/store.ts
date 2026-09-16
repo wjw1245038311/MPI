@@ -1166,6 +1166,9 @@ interface PiStore {
   togglePreview: () => void;
   togglePreviewExpanded: () => void;
   loadFileTree: (cwd: string, rel?: string) => Promise<void>;
+  /** Manual refresh from the file-tree context menus. With `rel`: reload just
+   * that folder; without: root + every loaded subfolder of the project. */
+  refreshFileTree: (cwd: string, rel?: string) => Promise<void>;
   toggleFolder: (cwd: string, rel: string) => void;
   /** Open a file in the preview panel: activates an existing tab or creates one. */
   openPreview: (abs: string, projectRoot?: string) => Promise<void>;
@@ -2767,6 +2770,21 @@ export const useStore = create<PiStore>()((set, get) => {
     }
     set((s) => ({ fileTree: { ...s.fileTree, [key]: { nodes: [], loaded: false, expanded: true } } }));
     get().loadFileTree(cwd, rel);
+  },
+
+  refreshFileTree: async (cwd, rel) => {
+    if (rel) {
+      await get().loadFileTree(cwd, rel);
+      return;
+    }
+    // Empty-space menu: reload the root plus every loaded subfolder of this
+    // project so a single click picks up all manual file changes.
+    const st = get();
+    const prefix = `${cwd}::`;
+    for (const key of Object.keys(st.fileTree)) {
+      if (!key.startsWith(prefix) || !st.fileTree[key]?.loaded) continue;
+      void get().loadFileTree(cwd, key.slice(prefix.length));
+    }
   },
 
   loadPreviewTab: async (id) => {
