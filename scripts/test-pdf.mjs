@@ -60,6 +60,39 @@ try {
   const text = textContent.items.map((item) => item.str).join(" ");
   assert.match(text, /Hello MPI pdf test/);
 
+  // Regression for the user's crash ("toHex is not a function"): real PDFs
+  // carry a trailer /ID array, which routes fingerprints through
+  // stringToBytes(...).toHex(). The legacy build polyfills Uint8Array.toHex;
+  // assert both load AND the fingerprints getter itself.
+  const pdfWithId = [
+    "%PDF-1.4",
+    "1 0 obj",
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "endobj",
+    "2 0 obj",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "endobj",
+    "3 0 obj",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    "endobj",
+    `4 0 obj`,
+    `<< /Length ${streamContent.length} >>`,
+    "stream",
+    streamContent,
+    "endstream",
+    "endobj",
+    "5 0 obj",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "endobj",
+    "trailer",
+    "<< /Size 6 /Root 1 0 R /ID [<4d3a2b1c0d9e8f7a><4d3a2b1c0d9e8f7b>] >>",
+    "%%EOF",
+  ].join("\n");
+  const doc2 = await pdfjs.getDocument({ data: new Uint8Array(Buffer.from(pdfWithId)) }).promise;
+  assert.equal(doc2.numPages, 1);
+  const [fpOriginal] = doc2.fingerprints; // throws "toHex is not a function" on the broken standard build
+  assert.match(fpOriginal, /^[0-9a-f]{32}$/);
+
   console.log("pdf pipeline: all assertions passed");
 } finally {
   rmSync(dir, { recursive: true, force: true });

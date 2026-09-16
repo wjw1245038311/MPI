@@ -988,11 +988,15 @@ function DocxPreview({ base64 }: { base64: string }) {
       try {
         const mammoth = await import("mammoth");
         const buf = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-        // Vite bundles mammoth's Node entry, whose openZip only accepts
-        // {path}/{buffer} — the browser-build-only `arrayBuffer` key made every
-        // docx fail with "Could not find file in options". JSZip (mammoth's
-        // zip layer) takes a Uint8Array fine.
-        const res = await mammoth.default.convertToHtml({ buffer: buf as unknown as Buffer });
+        // Pass BOTH input keys: mammoth's package.json `browser` field makes
+        // Vite bundle browser/unzip.js (accepts only {arrayBuffer}), while the
+        // Node entry lib/unzip.js accepts only {path}/{buffer}. Each build
+        // reads its own key and ignores the other, so supplying both works in
+        // every bundling configuration.
+        const res = await mammoth.default.convertToHtml({
+          arrayBuffer: buf.buffer as ArrayBuffer,
+          buffer: buf as unknown as Buffer,
+        } as { arrayBuffer: ArrayBuffer; buffer: Buffer });
         if (!cancelled) setHtml(res.value);
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || "docx parse failed");
@@ -1006,16 +1010,21 @@ function DocxPreview({ base64 }: { base64: string }) {
 }
 
 // ---- PDF preview (pdfjs-dist, lazy chunk) ----------------------------------
+// IMPORTANT: use the LEGACY build. pdfjs-dist 6.3.x's standard build calls
+// Uint8Array.prototype.toHex() in its fingerprints getter (hit on every load),
+// but only the legacy build ships that polyfill — the standard build crashes
+// with "toHex is not a function" for any real PDF.
 // The worker source is inlined as a string (?raw) and run from a Blob URL as a
 // module Worker: no asset path to resolve under file://, and pdf.worker.min.mjs
 // is self-contained ESM. One workerPort per renderer process.
+// (Literal specifiers below — Vite needs them for code splitting.)
 let pdfWorkerReady: Promise<void> | null = null;
 function ensurePdfWorker(): Promise<void> {
   if (!pdfWorkerReady) {
     pdfWorkerReady = (async () => {
       const [pdfjsLib, workerRaw] = await Promise.all([
-        import("pdfjs-dist"),
-        import("pdfjs-dist/build/pdf.worker.min.mjs?raw"),
+        import("pdfjs-dist/legacy/build/pdf.mjs"),
+        import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?raw"),
       ]);
       if (!pdfjsLib.GlobalWorkerOptions.workerPort) {
         pdfjsLib.GlobalWorkerOptions.workerPort = new Worker(
@@ -1046,7 +1055,7 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
         setErr(null);
         setPageCount(0);
         await ensurePdfWorker();
-        const pdfjsLib = await import("pdfjs-dist");
+        const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
         const buf = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
         const doc = await pdfjsLib.getDocument({ data: buf }).promise;
         if (cancelled) {

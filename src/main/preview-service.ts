@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import XLSX from "xlsx";
 
@@ -104,6 +104,24 @@ const IMAGE_EXTS: Record<string, string> = {
 };
 const DOCX_EXTS = new Set([".docx"]);
 const PDF_EXTS = new Set([".pdf"]);
+// Word 97-2003 / PowerPoint 97-2003: OLE2 compound files, no JS parser.
+const LEGACY_OFFICE_EXTS = new Set([".doc", ".ppt"]);
+
+/** True when the file starts with the OLE2 compound-document magic bytes —
+ *  i.e. a .docx/.pptx that is actually an old-format file (renamed or not). */
+function isOle2Compound(absPath: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = openSync(absPath, "r");
+    const head = Buffer.alloc(4);
+    if (readSync(fd, head, 0, 4, 0) < 4) return false;
+    return head[0] === 0xd0 && head[1] === 0xcf && head[2] === 0x11 && head[3] === 0xe0;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
 const XLSX_EXTS = new Set([".xlsx", ".xls"]);
 const PPTX_EXTS = new Set([".pptx"]);
 
@@ -148,6 +166,16 @@ export function readPreview(absPath: string): PreviewPayload {
   // docx / xlsx -> base64 for renderer-side parsing
   if (DOCX_EXTS.has(ext)) {
     if (st.size > BIN_MAX) return { ...base, kind: "toobig" };
+    if (isOle2Compound(absPath)) {
+      // A .docx that is really an old Word file — mammoth would fail with a
+      // cryptic zip error; say what it actually is.
+      return {
+        ...base,
+        kind: "unsupported",
+        message:
+          "This file is actually in the legacy Office format (.doc/.ppt, OLE2). Please re-save it as .docx/.pptx and try again.",
+      };
+    }
     return {
       ...base,
       kind: "docx",
@@ -168,11 +196,30 @@ export function readPreview(absPath: string): PreviewPayload {
   }
   if (PPTX_EXTS.has(ext)) {
     if (st.size > BIN_MAX) return { ...base, kind: "toobig" };
+    if (isOle2Compound(absPath)) {
+      return {
+        ...base,
+        kind: "unsupported",
+        message:
+          "This file is actually in the legacy Office format (.doc/.ppt, OLE2). Please re-save it as .docx/.pptx and try again.",
+      };
+    }
     return {
       ...base,
       kind: "pptx",
       mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       base64: readFileSync(absPath).toString("base64"),
+    };
+  }
+
+  // Explicit legacy Office formats: clear guidance instead of the generic
+  // "binary file" fallback.
+  if (LEGACY_OFFICE_EXTS.has(ext)) {
+    return {
+      ...base,
+      kind: "unsupported",
+      message:
+        "Legacy Word/PowerPoint format (.doc/.ppt) is not supported for preview. Please re-save as .docx/.pptx.",
     };
   }
 

@@ -503,6 +503,10 @@ const englishExact: Record<string, string> = {
   "This is a folder": "这是一个文件夹",
   "Binary file": "二进制文件",
   "No preview available for this file type": "暂不支持预览此文件类型",
+  "This file is actually in the legacy Office format (.doc/.ppt, OLE2). Please re-save it as .docx/.pptx and try again.":
+    "该文件实际是旧版 Office 格式（.doc/.ppt），请另存为 .docx/.pptx 后再试。",
+  "Legacy Word/PowerPoint format (.doc/.ppt) is not supported for preview. Please re-save as .docx/.pptx.":
+    "暂不支持旧版 Word/PowerPoint 格式（.doc/.ppt）预览，请另存为 .docx/.pptx。",
   "Excel preview could not be parsed on the MPI host": "MPI 无法解析此 Excel 预览",
   "docx parse failed": "DOCX 解析失败",
   "xlsx parse failed": "XLSX 解析失败",
