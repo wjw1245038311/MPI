@@ -56,7 +56,8 @@ import {
 import { cancelTransfer as cancelActiveTransfer, getTransfers, setTransferBroadcaster } from "./transfer-monitor";
 import { mimeForName } from "./todo-attachment-protocol";
 import type { ComposerDraft } from "../renderer/src/lib/types";
-import { listDir } from "./fs-service";
+import { listDir, searchProjectFiles } from "./fs-service";
+import { getFeedback, setFeedback, deleteFeedback } from "./feedback-store";
 import { createHtmlPreviewUrl } from "./html-preview-protocol";
 import {
   getAuthPath,
@@ -3037,6 +3038,26 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
 
   // ---- files / preview ----------------------------------------------------
   ipcMain.handle("app:getFileTree", (_e, cwd: string, rel?: string) => listDir(cwd, rel));
+  // Composer "@" mention menu: project-wide file search (ranked).
+  ipcMain.handle(
+    "app:searchFiles",
+    (_e, cwd: string, query?: string, limit?: number) =>
+      searchProjectFiles(cwd, typeof query === "string" ? query : "", Math.min(Math.max(limit || 50, 1), 200)),
+  );
+
+  // ---- message feedback (sidecar; never enters the model context) ---------
+  ipcMain.handle("app:getFeedback", () => getFeedback());
+  ipcMain.handle(
+    "app:setFeedback",
+    (_e, args: { entryId: string; rating: 1 | -1; note?: string | null }) => {
+      if (!args?.entryId || (args.rating !== 1 && args.rating !== -1)) return null;
+      return setFeedback(args.entryId, args.rating, "note" in args ? args.note : undefined);
+    },
+  );
+  ipcMain.handle("app:deleteFeedback", (_e, entryId: string) => {
+    if (typeof entryId === "string" && entryId) deleteFeedback(entryId);
+    return true;
+  });
   ipcMain.handle("app:fileExists", (_e, absPath: string) => {
     try {
       return !!absPath && statSync(absPath).isFile();

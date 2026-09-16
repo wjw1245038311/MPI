@@ -1118,15 +1118,10 @@ function MessageGroupInner({
               <button title={language === "zh" ? "复制" : "Copy"} onClick={() => navigator.clipboard?.writeText(plainOfGroup(group))}>
                 <Copy size={12} />
               </button>
-              <button title={language === "zh" ? "有帮助" : "Good"}>
-                <ThumbUp size={12} />
-              </button>
-              <button title={language === "zh" ? "没帮助" : "Bad"}>
-                <ThumbDown size={12} />
-              </button>
             </span>
           </div>
         )}
+        {!streaming && last.branchEntryId && <MessageFeedback entryId={last.branchEntryId} />}
       </div>
     </div>
   );
@@ -1200,6 +1195,96 @@ function TtsButton({ messageId, text }: { messageId: string; text: string }) {
       {speaking === "on" ? <Stop size={12} /> : <Volume size={12} />}
       <span className="tts-label">{speaking === "on" ? (zh ? "停止" : "Stop") : zh ? "朗读" : "Read"}</span>
     </button>
+  );
+}
+
+/**
+ * 👍/👎 feedback for a finalized assistant reply (+ optional note). Keyed by
+ * the stable pi session entry id (ULID) so ratings survive restarts; stored
+ * as a sidecar in main and NEVER enters the model context. Re-clicking the
+ * active rating retracts it (dsh parity); switching sides keeps the note.
+ */
+function MessageFeedback({ entryId }: { entryId: string }) {
+  const fb = useStore((s) => s.feedback[entryId]);
+  const rateMessage = useStore((s) => s.rateMessage);
+  const language = useStore((s) => s.config?.language || "en");
+  const zh = language === "zh";
+  const [editing, setEditing] = useState(false);
+  const [noteText, setNoteText] = useState("");
+
+  const openEditor = () => {
+    setNoteText(fb?.note ?? "");
+    setEditing(true);
+  };
+  const saveNote = () => {
+    // A note without a rating is dropped — the pencil only exists once rated.
+    if (fb) void rateMessage(entryId, fb.rating, noteText);
+    setEditing(false);
+  };
+
+  return (
+    <div className={`msg-feedback${fb?.note || editing ? " has-note" : ""}${editing ? " editing" : ""}`}>
+      <span className="msg-feedback-actions">
+        <button
+          className={fb?.rating === 1 ? "on" : ""}
+          title={
+            fb?.rating === 1
+              ? zh ? "取消「有帮助」" : "Retract helpful rating"
+              : zh ? "标记为有帮助" : "Mark as helpful"
+          }
+          onClick={() => void rateMessage(entryId, fb?.rating === 1 ? null : 1)}
+        >
+          <ThumbUp size={12} />
+        </button>
+        <button
+          className={fb?.rating === -1 ? "on" : ""}
+          title={
+            fb?.rating === -1
+              ? zh ? "取消「没帮助」" : "Retract not-helpful rating"
+              : zh ? "标记为没帮助" : "Mark as not helpful"
+          }
+          onClick={() => void rateMessage(entryId, fb?.rating === -1 ? null : -1)}
+        >
+          <ThumbDown size={12} />
+        </button>
+        {fb && (
+          <button
+            title={editing ? (zh ? "取消备注" : "Cancel note") : zh ? "添加/修改备注" : "Add / edit note"}
+            onClick={() => (editing ? setEditing(false) : openEditor())}
+          >
+            <Edit size={12} />
+          </button>
+        )}
+      </span>
+      {fb?.note && !editing && (
+        <div className="msg-feedback-note" title={zh ? "点击修改备注" : "Click to edit the note"} onClick={openEditor}>
+          {fb.note}
+        </div>
+      )}
+      {editing && fb && (
+        <div className="msg-feedback-editor">
+          <input
+            autoFocus
+            value={noteText}
+            maxLength={500}
+            placeholder={zh ? "备注（可选，Enter 保存，Esc 取消）" : "Note (optional — Enter saves, Esc cancels)"}
+            onChange={(e) => setNoteText(e.target.value)}
+            onKeyDown={(e) => {
+              // IME composition owns the keys (Chinese/Japanese input).
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                saveNote();
+              } else if (e.key === "Escape") {
+                setEditing(false);
+              }
+            }}
+          />
+          <button onClick={saveNote}>{zh ? "保存" : "Save"}</button>
+          <button className="fb-cancel" onClick={() => setEditing(false)}>{zh ? "取消" : "Cancel"}</button>
+        </div>
+      )}
+    </div>
   );
 }
 

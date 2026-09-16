@@ -1080,6 +1080,9 @@ interface PiStore {
   /** Unsent composer content per draft key (see draftKeyFor), persisted by
    * the main process with LRU eviction so restarts do not lose input. */
   drafts: Record<string, ComposerDraft>;
+  /** 👍/👎 feedback for assistant replies, keyed by stable pi session entry id
+   * (ULID). Sidecar data — never enters the model context or any prompt. */
+  feedback: Record<string, { rating: 1 | -1; note?: string; at: number }>;
 
   // files / preview (browser-style tabs)
   fileTree: Record<string, FileTreeEntry>;
@@ -1280,6 +1283,9 @@ interface PiStore {
   changeDraftThreadFolder: (threadId: string, cwd: string) => Promise<void>;
   setDraft: (key: string, draft: ComposerDraft) => void;
   clearDraft: (key: string) => void;
+  /** Rate an assistant reply. rating null retracts; note undefined keeps the
+   * existing note, a string replaces it (empty clears). */
+  rateMessage: (entryId: string, rating: 1 | -1 | null, note?: string) => Promise<void>;
 
   // edit menu
   editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => Promise<void>;
@@ -1546,6 +1552,7 @@ export const useStore = create<PiStore>()((set, get) => {
   // bridge must be reopened from disk before the next GUI interaction.
   tuiDirty: {},
   drafts: {},
+  feedback: {},
   fileTree: {},
   previewTabs: [],
   activePreviewId: null,
@@ -1612,6 +1619,16 @@ export const useStore = create<PiStore>()((set, get) => {
       // Merge (state wins) so a draft typed before this load resolved is never
       // clobbered by the disk snapshot.
       set((s) => ({ drafts: { ...(draftsResult.value || {}), ...s.drafts } }));
+    }
+
+    // Message feedback sidecar. A dev instance started before the module has
+    // an old preload without this API — skip silently, buttons guard too.
+    if (typeof window.pi.app.getFeedback === "function") {
+      try {
+        set({ feedback: (await window.pi.app.getFeedback()) || {} });
+      } catch {
+        /* non-fatal */
+      }
     }
 
     // Todos (待办任务). A dev instance started before the module has an old
@@ -3606,6 +3623,34 @@ export const useStore = create<PiStore>()((set, get) => {
       return { drafts };
     });
     window.pi.drafts.delete(key).catch(() => {});
+  },
+
+  rateMessage: async (entryId, rating, note) => {
+    if (!entryId || typeof window.pi.app.setFeedback !== "function") return;
+    const prev = useStore.getState().feedback[entryId];
+    // Optimistic update; the sidecar write is fire-and-forget (it never
+    // affects the conversation).
+    if (rating === null) {
+      set((s) => {
+        if (!prev) return s;
+        const feedback = { ...s.feedback };
+        delete feedback[entryId];
+        return { feedback };
+      });
+      window.pi.app.deleteFeedback(entryId).catch(() => {});
+    } else {
+      set((s) => ({
+        feedback: {
+          ...s.feedback,
+          [entryId]: {
+            rating,
+            note: note === undefined ? prev?.note : note.trim() || undefined,
+            at: Date.now(),
+          },
+        },
+      }));
+      window.pi.app.setFeedback({ entryId, rating, ...(note !== undefined ? { note } : {}) }).catch(() => {});
+    }
   },
 
   // ---- edit menu ----

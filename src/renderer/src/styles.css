@@ -1860,6 +1860,70 @@ body.sidebar-resizing * {
   background: rgba(0, 0, 0, 0.06);
   color: var(--text);
 }
+/* ---- message feedback (👍/👎 + note) ------------------------------------ */
+.msg-feedback { margin-top: 2px; }
+.msg-feedback-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.msg:hover .msg-feedback-actions,
+.msg-feedback.has-note .msg-feedback-actions,
+.msg-feedback.editing .msg-feedback-actions { opacity: 1; }
+.msg-feedback button {
+  background: transparent;
+  border: none;
+  color: var(--text-faint);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.msg-feedback button:hover { background: rgba(0, 0, 0, 0.06); color: var(--text); }
+.msg-feedback button.on { color: var(--accent); background: var(--accent-soft); }
+.msg-feedback-note {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  cursor: pointer;
+  text-decoration: underline dotted rgba(0, 0, 0, 0.25);
+  text-underline-offset: 2px;
+  max-width: 640px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-feedback-note:hover { color: var(--text-dim); }
+.msg-feedback-editor {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 5px;
+}
+.msg-feedback-editor input {
+  flex: 1;
+  min-width: 0;
+  max-width: 480px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
+.msg-feedback-editor input:focus { border-color: var(--accent); }
+.msg-feedback-editor button {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.msg-feedback-editor button:hover { background: rgba(0, 0, 0, 0.05); }
 .streaming-dot {
   display: inline-block;
   width: 7px;
@@ -2483,6 +2547,85 @@ body.sidebar-resizing * {
   font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* ---- "@file" mention menu (mirrors the slash menu) ----------------------- */
+.mention-menu {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  max-height: min(420px, 52vh);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: 0 16px 42px rgba(25, 28, 23, .18);
+}
+.mention-menu-head {
+  padding: 9px 11px 7px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.mention-menu-list {
+  max-height: min(380px, 47vh);
+  overflow-y: auto;
+  padding: 6px;
+}
+.mention-menu-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+.mention-menu-item:hover,
+.mention-menu-item.active { background: var(--accent-soft); }
+.mention-group-head {
+  padding: 6px 9px 3px;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.mention-session-title {
+  overflow: hidden;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-file-path {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-file-kind {
+  flex: none;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+.mention-file-kind.dir { color: var(--accent); }
+.mention-menu-empty {
+  padding: 10px 9px;
+  color: var(--text-faint);
+  font-size: 12px;
 }
 .composer-project-row {
   position: relative;

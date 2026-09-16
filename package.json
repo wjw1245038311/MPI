@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
     "test": "node scripts/run-all-tests.mjs",
     "test:drafts": "node --experimental-strip-types scripts/test-draft-store.mjs",
+    "test:filesearch": "node --experimental-strip-types scripts/test-filesearch.mjs",
     "test:todos": "node --experimental-strip-types scripts/test-todo-store.mjs",
     "test:quickadd": "node --experimental-strip-types scripts/test-quick-add-date.mjs",
     "test:config": "node --experimental-strip-types scripts/test-config-inherit.mjs",

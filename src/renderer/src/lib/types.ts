@@ -237,6 +237,16 @@ export interface ViewAttachment {
   error?: string;
 }
 
+/** Ranked project file hit from the main-process search (composer "@" menu). */
+export interface FileMatch {
+  name: string;
+  /** Path relative to the project cwd, forward slashes. */
+  rel: string;
+  abs: string;
+  isDir: boolean;
+  ext: string;
+}
+
 export interface ViewMessage {
   /** stable key */
   key: string;
