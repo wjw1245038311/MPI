@@ -8,6 +8,7 @@ import { runPendingDataMigrations } from "./data-migration";
 import { flushTodos, ingestInbox } from "./todo-store";
 import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
+import { registerPdfViewerProtocol, registerPdfViewerScheme } from "./pdf-viewer-protocol";
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
 import { activateAutostartApps, killAllManagedProcesses } from "./app-store";
@@ -32,6 +33,7 @@ if (IS_DEV_BUILD) app.setPath("userData", join(app.getPath("appData"), "MPI Dev"
 if (process.platform === "win32") app.setAppUserModelId(APP_USER_MODEL_ID);
 
 registerHtmlPreviewScheme();
+registerPdfViewerScheme();
 registerTodoAttachmentScheme();
 
 // Keep the legacy resources/bundled lookup available for older developer
@@ -261,6 +263,7 @@ if (!gotLock) {
       console.error("[migration] failed:", e?.message || String(e));
     }
     registerHtmlPreviewProtocol();
+    registerPdfViewerProtocol();
     registerTodoAttachmentProtocol();
     // Remove runtime trees superseded by an in-app core update (they may have
     // been locked by pi child processes during the previous run; nothing holds

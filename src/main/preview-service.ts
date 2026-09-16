@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
 import XLSX from "xlsx";
+import { pdfViewerUrl } from "./pdf-viewer-url";
 
 /**
  * Reads a file and returns a renderer-friendly preview payload. Heavy parsing
@@ -34,7 +34,7 @@ export type PreviewPayload = {
   truncated?: boolean;
   message?: string;
   previewUrl?: string;
-  /** file:// URL for the native Chromium PDF viewer (Electron ships it). */
+  /** mpipdf:// URL for the native Chromium PDF viewer (Electron ships it). */
   pdfUrl?: string;
 };
 
@@ -235,7 +235,7 @@ export function readPreview(absPath: string): PreviewPayload {
       ...base,
       kind: "pdf",
       mime: "application/pdf",
-      pdfUrl: pathToFileURL(absPath).href,
+      pdfUrl: pdfViewerUrl(absPath),
       base64: readFileSync(absPath).toString("base64"),
     };
   }
