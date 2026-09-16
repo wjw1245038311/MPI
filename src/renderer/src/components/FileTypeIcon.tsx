@@ -88,6 +88,114 @@ function FinderGlyph({ cat, size }: { cat: Cat; size: number }) {
   );
 }
 
+/** Windows Explorer style: white page + folded corner + colored app badge (letter/glyph) bottom-left. */
+type WinBadge = { color?: string; label?: string; fontSize?: number; glyph?: ReactNode };
+const WIN_BADGES: Record<Cat, WinBadge> = {
+  dir: {}, // yellow folder, handled separately
+  code: {
+    color: "#4C6EF5",
+    glyph: <path d="m7.1 15-1.9 2 1.9 2M10.4 15l1.9 2-1.9 2" strokeWidth={1.5} />,
+  },
+  react: {
+    color: "#1098AD",
+    glyph: (
+      <>
+        <circle cx="7.75" cy="16.75" r="1" fill="#fff" stroke="none" />
+        <ellipse cx="7.75" cy="16.75" rx="3.4" ry="1.5" strokeWidth={1.2} />
+      </>
+    ),
+  },
+  config: {
+    color: "#F59F00",
+    glyph: <path d="M8.7 14c-1.1 0-1.4.6-1.4 1.6v.8c0 .8-.3 1.2-1.2 1.3.9.1 1.2.5 1.2 1.3v.8c0 1 .3 1.6 1.4 1.6" strokeWidth={1.5} />,
+  },
+  text: {}, // plain page with faint lines, no badge
+  html: {
+    color: "#6F42C1",
+    glyph: (
+      <>
+        <circle cx="7.75" cy="16.75" r="3.1" strokeWidth={1.2} />
+        <path d="M4.7 16.75h6.1M7.75 13.7c1 .9 1.5 2.1 1.5 3s-.5 2.1-1.5 3c-1-.9-1.5-2.1-1.5-3s.5-2.1 1.5-3z" strokeWidth={1.2} />
+      </>
+    ),
+  },
+  css: { color: "#1CA7EC", label: "#", fontSize: 6.4 },
+  pdf: { color: "#E5484D", label: "PDF", fontSize: 3.9 },
+  doc: { color: "#2B7CD3", label: "W" },
+  sheet: { color: "#21A366", label: "X" },
+  slide: { color: "#E8590C", label: "P" },
+  image: {
+    color: "#4C9AFF",
+    glyph: (
+      <>
+        <circle cx="6.3" cy="14.7" r=".9" fill="#fff" stroke="none" />
+        <path d="m5 18.6 2-2.1 1.4 1.4 1.7-1.7 1.9 2" strokeWidth={1.3} />
+      </>
+    ),
+  },
+  archive: {
+    color: "#8E8E93",
+    glyph: (
+      <>
+        <rect x="5" y="14.4" width="5.5" height="4.7" rx="1" strokeWidth={1.2} />
+        <path d="M5 16.4h5.5" strokeWidth={1.2} />
+      </>
+    ),
+  },
+  file: {}, // plain page, no badge
+};
+
+function WindowsGlyph({ cat, size }: { cat: Cat; size: number }) {
+  if (cat === "dir") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" className="ficon ficon--windows" aria-hidden>
+        <path
+          d="M3 7a2 2 0 0 1 2-2h4.2l1.8 2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+          fill="#FFD34F"
+          stroke="rgba(0,0,0,.18)"
+          strokeWidth="1"
+        />
+      </svg>
+    );
+  }
+  const badge = WIN_BADGES[cat];
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="ficon ficon--windows" aria-hidden>
+      <path
+        d="M6.5 3h7L19 8.5V19a2 2 0 0 1-2 2H6.5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+        fill="#fff"
+        stroke="rgba(0,0,0,.2)"
+        strokeWidth="1"
+      />
+      <path d="M13.5 3v4a1.5 1.5 0 0 0 1.5 1.5h4z" fill="#E9EBEF" stroke="rgba(0,0,0,.2)" strokeWidth="1" />
+      <path d="M8.5 9.5h7M8.5 12h6" stroke="#D3D7DE" strokeWidth="1" strokeLinecap="round" fill="none" />
+      {badge.color && (
+        <>
+          <rect x="3" y="12" width="9.5" height="9.5" rx="2" fill={badge.color} stroke="#fff" strokeWidth="0.8" />
+          {badge.label ? (
+            <text
+              x="7.75"
+              y="16.9"
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontFamily="Segoe UI, Arial, sans-serif"
+              fontWeight={700}
+              fontSize={badge.fontSize || 6.8}
+              fill="#fff"
+            >
+              {badge.label}
+            </text>
+          ) : (
+            <g stroke="#fff" fill="none" strokeLinecap="round" strokeLinejoin="round">
+              {badge.glyph}
+            </g>
+          )}
+        </>
+      )}
+    </svg>
+  );
+}
+
 const FILE_OUTLINE = (
   <>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
@@ -168,15 +276,16 @@ export function FileTypeIcon({
   ext,
   isDir = false,
   size = 14,
-  variant = "finder",
+  variant = "windows",
 }: {
   ext?: string;
   isDir?: boolean;
   size?: number;
-  /** line = SF-Symbols-style strokes; finder = macOS Finder filled documents. */
-  variant?: "line" | "finder";
+  /** windows = Explorer app-badge docs; finder = macOS Finder filled documents; line = SF-Symbols strokes. */
+  variant?: "line" | "finder" | "windows";
 }) {
   const cat: Cat = isDir ? "dir" : EXT_CAT[(ext || "").toLowerCase()] || "file";
+  if (variant === "windows") return <WindowsGlyph cat={cat} size={size} />;
   if (variant === "finder") return <FinderGlyph cat={cat} size={size} />;
   return (
     <svg
