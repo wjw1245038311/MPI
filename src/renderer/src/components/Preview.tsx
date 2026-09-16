@@ -1041,6 +1041,9 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
   const [err, setErr] = useState<string | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [zoom, setZoom] = useState(1); // multiplier on top of fit-to-width
+  // Available content width (clientWidth minus padding). Tracked via a
+  // ResizeObserver so pages re-fit when the preview panel is resized.
+  const [fitWidth, setFitWidth] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
   const docRef = useRef<PDFDocumentProxy | null>(null);
@@ -1082,16 +1085,37 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
     };
   }, [base64, language]);
 
-  // Render every page whenever the document or zoom changes. Fit-to-width is
-  // the base scale; zoom multiplies it. A generation counter drops stale loops.
+  // Track the container's content width (padding excluded — clientWidth
+  // includes it, which made every page ~20px too wide and caused a horizontal
+  // scrollbar). Only update on real changes to avoid render loops.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const cs = getComputedStyle(el);
+      const w = Math.max(
+        el.clientWidth - parseFloat(cs.paddingLeft || "0") - parseFloat(cs.paddingRight || "0"),
+        320,
+      );
+      setFitWidth((prev) => (Math.abs(prev - w) > 1 ? w : prev));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [pageCount]);
+
+  // Render every page whenever the document, zoom, or available width changes.
+  // Fit-to-width is the base scale; zoom multiplies it. A generation counter
+  // drops stale loops.
   useEffect(() => {
     const doc = docRef.current;
-    if (!doc || !pageCount) return;
+    if (!doc || !pageCount || !fitWidth) return;
     const gen = ++genRef.current;
     let cancelled = false;
     (async () => {
       try {
-        const containerWidth = Math.max(containerRef.current?.clientWidth || 800, 320);
+        const containerWidth = fitWidth;
         const dpr = window.devicePixelRatio || 1;
         for (let i = 1; i <= doc.numPages; i++) {
           if (cancelled || gen !== genRef.current) return;
@@ -1117,7 +1141,7 @@ function PdfPreview({ base64, language }: { base64: string; language: string }) 
     return () => {
       cancelled = true;
     };
-  }, [pageCount, zoom]);
+  }, [pageCount, zoom, fitWidth]);
 
   // Destroy the document on unmount (frees worker-side resources).
   useEffect(
