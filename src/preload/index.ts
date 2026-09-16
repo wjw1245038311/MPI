@@ -7,6 +7,7 @@ import type {
   McpMarketDetail,
   McpMarketPage,
   McpServerInfo,
+  PromptAttachment,
   NpmPackage,
   PermissionLevel,
   RegistryScan,
@@ -283,11 +284,11 @@ const api = {
     loadHistory: (args: { cwd: string; sessionFile: string }) => ipcRenderer.invoke("thread:loadHistory", args),
     close: (threadId: string) => ipcRenderer.invoke("thread:close", threadId),
     delete: (args: { file: string; title?: string; cwd?: string }) => ipcRenderer.invoke("thread:delete", args),
-    prompt: (args: { threadId: string; text: string; images?: unknown[]; attachments?: { abs: string; name: string }[] }) =>
+    prompt: (args: { threadId: string; text: string; images?: unknown[]; attachments?: PromptAttachment[] }) =>
       ipcRenderer.invoke("thread:prompt", args),
-    steer: (args: { threadId: string; text: string; images?: unknown[]; attachments?: { abs: string; name: string }[] }) =>
+    steer: (args: { threadId: string; text: string; images?: unknown[]; attachments?: PromptAttachment[] }) =>
       ipcRenderer.invoke("thread:steer", args),
-    followUp: (args: { threadId: string; text: string; images?: unknown[]; attachments?: { abs: string; name: string }[] }) =>
+    followUp: (args: { threadId: string; text: string; images?: unknown[]; attachments?: PromptAttachment[] }) =>
       ipcRenderer.invoke("thread:followUp", args),
     abort: (threadId: string) => ipcRenderer.invoke("thread:abort", threadId),
     compact: (args: { threadId: string; instructions?: string }) => ipcRenderer.invoke("thread:compact", args),

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { draftKeyFor, useStore } from "../store";
+import { draftKeyFor, quoteToAttachment, useStore } from "../store";
 import { formatTokens, modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { BUILTIN_BALANCED_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
 import { useOutsideClose } from "../lib/useOutsideClose";
-import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage, TaskModeDef } from "../lib/types";
+import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage, PendingQuote, PromptAttachment, TaskModeDef } from "../lib/types";
 import { MPI_FILE_MIME, MPI_SESSION_MIME, parseSessionDragPayload } from "../lib/file-drag";
 import { SttError, startRecording, sttRecordErrorText, sttTranscribeErrorText, type RecordingHandle } from "../lib/stt";
 import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh, Settings, Mic, Info } from "./icons";
@@ -17,6 +17,7 @@ const pid = () => `p${_pid++}`;
 /** Stable empties so a draft-less thread does not allocate per render. */
 const EMPTY_DRAFT: ComposerDraft = { text: "", images: [], files: [], htmlReferences: [] };
 const EMPTY_REFS: HtmlElementReference[] = [];
+const EMPTY_QUOTES: PendingQuote[] = [];
 /** Ring geometry for the context-usage button (SVG viewBox 20×20). */
 const RING_R = 7.5;
 const RING_C = 2 * Math.PI * RING_R;
@@ -168,6 +169,7 @@ export function Composer({ threadId }: { threadId: string }) {
   const images = draft?.images ?? EMPTY_DRAFT.images;
   const files = draft?.files ?? EMPTY_DRAFT.files;
   const htmlReferences = draft?.htmlReferences ?? EMPTY_REFS;
+  const quotes = draft?.quotes ?? EMPTY_QUOTES;
 
   /** Merge a partial update into this thread's current draft (fresh read, so
    * rapid updates never clobber each other). */
@@ -393,6 +395,26 @@ export function Composer({ threadId }: { threadId: string }) {
     return () => window.removeEventListener("mpi-html-element-reference", onElementReference);
   }, [threadId, draftKey]);
 
+  // Right-click → 引用到输入框 (Chat's MessageQuoteMenu dispatches this).
+  // The quote chip lands in THIS thread's draft; duplicates are skipped.
+  useEffect(() => {
+    const onQuote = (event: Event) => {
+      const detail = (event as CustomEvent<{ quote?: PendingQuote }>).detail;
+      const q = detail?.quote;
+      if (!q || typeof q.text !== "string" || !q.text.trim() || !draftKey) return;
+      const current = useStore.getState().drafts[draftKey];
+      const existing = current?.quotes ?? [];
+      if (existing.some((x) => x.text === q.text && x.entryId === q.entryId)) {
+        requestAnimationFrame(() => taRef.current?.focus());
+        return;
+      }
+      patchDraft({ quotes: [...existing, { ...q, id: pid() }] });
+      requestAnimationFrame(() => taRef.current?.focus());
+    };
+    window.addEventListener("mpi-quote-to-composer", onQuote);
+    return () => window.removeEventListener("mpi-quote-to-composer", onQuote);
+  }, [threadId, draftKey]);
+
   const autoGrow = () => {
     const ta = taRef.current;
     if (!ta) return;
@@ -606,11 +628,18 @@ export function Composer({ threadId }: { threadId: string }) {
     await addAttachments(files);
   };
 
+  /** Files + quotes in the attachment form pi receives (quotes carry their
+   * location in this conversation instead of a file path). */
+  const draftAttachments = (): PromptAttachment[] => [
+    ...files.map((f): PromptAttachment => ({ abs: f.abs, name: f.name })),
+    ...quotes.map(quoteToAttachment),
+  ];
+
   const send = async (mode?: "steer" | "followUp") => {
     const t = promptTextWithHtmlReferences(text, htmlReferences);
-    if (!t && !images.length && !files.length) return;
+    if (!t && !images.length && !files.length && !quotes.length) return;
     const imgs = images.map((im) => ({ data: im.base64, mimeType: im.mimeType }));
-    const atts = files.map((f) => ({ abs: f.abs, name: f.name }));
+    const atts = draftAttachments();
     clearDraft(draftKey || "");
     setExpandedHtmlReferences({});
     await sendPrompt(threadId, t, imgs.length ? imgs : undefined, atts.length ? atts : undefined, mode);
@@ -621,11 +650,11 @@ export function Composer({ threadId }: { threadId: string }) {
   // user re-edits it or promotes it to steering first.
   const queuePending = () => {
     const t = text.trim();
-    if (!t && !htmlReferences.length && !images.length && !files.length) return;
+    if (!t && !htmlReferences.length && !images.length && !files.length && !quotes.length) return;
     if (pending) {
       // A follow-up is already staged; queue this one straight into pi.
       const imgs = images.map((im) => ({ data: im.base64, mimeType: im.mimeType }));
-      const atts = files.map((f) => ({ abs: f.abs, name: f.name }));
+      const atts = draftAttachments();
       const prompt = promptTextWithHtmlReferences(text, htmlReferences);
       clearDraft(draftKey || "");
       setExpandedHtmlReferences({});
@@ -637,6 +666,7 @@ export function Composer({ threadId }: { threadId: string }) {
       images,
       files,
       htmlReferences: htmlReferences.length ? htmlReferences : undefined,
+      quotes: quotes.length ? quotes : undefined,
     });
     clearDraft(draftKey || "");
     setExpandedHtmlReferences({});
@@ -650,6 +680,7 @@ export function Composer({ threadId }: { threadId: string }) {
         images: pending.images,
         files: pending.files,
         htmlReferences: pending.htmlReferences || [],
+        quotes: pending.quotes || [],
       });
     }
     setExpandedHtmlReferences({});
@@ -928,7 +959,7 @@ export function Composer({ threadId }: { threadId: string }) {
             </div>
           </div>
         )}
-        {(images.length > 0 || files.length > 0) && (
+        {(images.length > 0 || files.length > 0 || quotes.length > 0) && (
           <div className="composer-attachments">
             {images.map((im) => (
               <div key={im.id} className="attach-chip">
@@ -951,6 +982,20 @@ export function Composer({ threadId }: { threadId: string }) {
                 </button>
               </div>
             ))}
+            {quotes.map((q) => (
+              <div key={q.id} className="attach-chip quote" title={q.text}>
+                <span>❝</span>
+                <span className="nm">{q.text.replace(/\s+/g, " ").slice(0, 48)}</span>
+                <button
+                  className="rm"
+                  aria-label={language === "zh" ? "移除引用" : "Remove quote"}
+                  title={language === "zh" ? "移除引用" : "Remove quote"}
+                  onClick={() => patchDraft({ quotes: quotes.filter((x) => x.id !== q.id) })}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
@@ -965,7 +1010,7 @@ export function Composer({ threadId }: { threadId: string }) {
               <div className="pf-text">
                 {pending.text || (pending.htmlReferences?.length
                   ? `${pending.htmlReferences.length} 个 HTML 元素`
-                  : `${pending.images.length + pending.files.length} 个附件`)}
+                  : `${pending.images.length + pending.files.length + (pending.quotes?.length || 0)} 个附件`)}
               </div>
             </div>
             <div className="pf-actions">

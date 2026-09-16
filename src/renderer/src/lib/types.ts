@@ -235,6 +235,35 @@ export interface ViewAttachment {
   path?: string;
   note?: string;
   error?: string;
+  /** "quote" marks a conversation quote (right-click → 引用); rendered as a
+   * non-clickable chip, never opened in the preview panel. */
+  kind?: "file" | "quote";
+}
+
+/** Quote metadata carried by a prompt attachment: the selected text plus its
+ * location inside this conversation (session entry id + transcript path), so
+ * the model can point back at where it was said — not just see pasted text. */
+export interface QuoteMeta {
+  /** The selected text itself (already trimmed). */
+  text: string;
+  /** Stable pi session entry id of the source message, when known. */
+  entryId?: string;
+  role?: "user" | "assistant";
+  /** Absolute path to the .jsonl transcript holding the quoted passage. */
+  sessionFile?: string;
+}
+
+/** A pending quote in the composer (right-click → 引用到输入框). */
+export interface PendingQuote extends QuoteMeta {
+  id: string;
+}
+
+/** An attachment handed to pi via prompt/steer/followUp. File attachments
+ * carry abs+name; conversation quotes carry `quote` instead of a real path. */
+export interface PromptAttachment {
+  abs: string;
+  name: string;
+  quote?: QuoteMeta;
 }
 
 export interface ViewMessage {
@@ -300,6 +329,7 @@ export interface PendingFollowUp {
   images: PendingImage[];
   files: PendingFile[];
   htmlReferences?: HtmlElementReference[];
+  quotes?: PendingQuote[];
 }
 
 /** Unsent composer content, persisted per thread so a restart/crash does not
@@ -309,6 +339,7 @@ export interface ComposerDraft {
   images: PendingImage[];
   files: PendingFile[];
   htmlReferences?: HtmlElementReference[];
+  quotes?: PendingQuote[];
 }
 
 /** A session moved to the app trash (restorable until purged). */

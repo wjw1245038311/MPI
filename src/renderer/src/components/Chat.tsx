@@ -971,30 +971,42 @@ function MessageGroupInner({
               </div>
             )}
             {m.attachments && m.attachments.length > 0 && (
-              <div className="msg-user-files" aria-label={language === "zh" ? "文件附件" : "File attachments"}>
-                {m.attachments.map((attachment, index) => (
-                  <button
-                    type="button"
-                    className="msg-user-file"
-                    key={`${attachment.name}-${index}`}
-                    disabled={!attachment.path}
-                    title={attachment.path ? language === "zh" ? "在 MPI 中查看附件" : "View attachment in MPI" : attachment.name}
-                    aria-label={attachment.path ? `${language === "zh" ? "查看附件" : "View attachment"}: ${attachment.name}` : attachment.name}
-                    onClick={() => void openAttachment(attachment)}
-                  >
-                    <span className="msg-user-file-icon" aria-hidden="true">
-                      <Files size={15} />
-                    </span>
-                    <span className="msg-user-file-copy">
-                      <span className="msg-user-file-name">{attachment.name}</span>
-                      <span className={`msg-user-file-meta${attachment.error ? " error" : ""}`}>
-                        {attachment.error
-                          ? language === "zh" ? "附件读取失败" : "Attachment unavailable"
-                          : language === "zh" ? "文件附件" : "File attachment"}
+              <div className="msg-user-files" aria-label={language === "zh" ? "文件附件与引用" : "File attachments and quotes"}>
+                {m.attachments.map((attachment, index) =>
+                  attachment.kind === "quote" ? (
+                    // Conversation quote (right-click → 引用): a non-clickable
+                    // chip; the model-facing envelope carries its location.
+                    <div key={`quote-${index}`} className="msg-user-quote" title={attachment.note || attachment.name}>
+                      <span className="msg-user-quote-icon" aria-hidden="true">❝</span>
+                      <span className="msg-user-quote-text">
+                        {language === "zh" ? "引用：" : "quote: "}
+                        {attachment.note || "…"}
                       </span>
-                    </span>
-                  </button>
-                ))}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="msg-user-file"
+                      key={`${attachment.name}-${index}`}
+                      disabled={!attachment.path}
+                      title={attachment.path ? language === "zh" ? "在 MPI 中查看附件" : "View attachment in MPI" : attachment.name}
+                      aria-label={attachment.path ? `${language === "zh" ? "查看附件" : "View attachment"}: ${attachment.name}` : attachment.name}
+                      onClick={() => void openAttachment(attachment)}
+                    >
+                      <span className="msg-user-file-icon" aria-hidden="true">
+                        <Files size={15} />
+                      </span>
+                      <span className="msg-user-file-copy">
+                        <span className="msg-user-file-name">{attachment.name}</span>
+                        <span className={`msg-user-file-meta${attachment.error ? " error" : ""}`}>
+                          {attachment.error
+                            ? language === "zh" ? "附件读取失败" : "Attachment unavailable"
+                            : language === "zh" ? "文件附件" : "File attachment"}
+                        </span>
+                      </span>
+                    </button>
+                  ),
+                )}
               </div>
             )}
           </div>

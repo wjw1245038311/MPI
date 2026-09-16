@@ -18,6 +18,7 @@ import { TodoPanel } from "./components/TodoPanel";
 import { MessagingPanel } from "./components/MessagingPanel";
 import { Folder, Plus, Smartphone } from "./components/icons";
 import { ImageCopyMenu } from "./components/ImageCopyMenu";
+import { MessageQuoteMenu } from "./components/MessageQuoteMenu";
 import { LanguageBridge } from "./components/LanguageBridge";
 import { RemotePanel } from "./components/RemotePanel";
 import appIconUrl from "../../../resources/icon.png";
@@ -126,6 +127,7 @@ export default function App() {
     <div className="app">
       <LanguageBridge />
       <ImageCopyMenu />
+      <MessageQuoteMenu />
       <TitleBar />
       <div className={`body ${previewExpanded ? "preview-expanded" : ""}`}>
         <Sidebar onOpenRemote={() => setRemoteOpen(true)} remoteOpen={remoteOpen} />

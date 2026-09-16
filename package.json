@@ -26,6 +26,7 @@
     "test:feedback": "node --experimental-strip-types scripts/test-feedback.mjs",
     "test:sessiondrag": "node --experimental-strip-types scripts/test-session-drag.mjs",
     "test:todos": "node --experimental-strip-types scripts/test-todo-store.mjs",
+    "test:quote": "node --experimental-strip-types scripts/test-quote.mjs",
     "test:quickadd": "node --experimental-strip-types scripts/test-quick-add-date.mjs",
     "test:config": "node --experimental-strip-types scripts/test-config-inherit.mjs",
     "test:markdown": "node --experimental-strip-types scripts/test-markdown-autolink.mjs",

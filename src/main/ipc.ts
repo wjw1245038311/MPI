@@ -109,6 +109,8 @@ import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
 import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
+import { buildQuoteEnvelope } from "./quote-envelope";
+import type { QuoteMeta } from "../renderer/src/lib/types";
 import { registerTuiIpc } from "./tui";
 import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
 import {
@@ -258,6 +260,9 @@ const TEXT_ATTACH_EXTS = new Set([
 interface Attachment {
   abs: string;
   name: string;
+  /** Conversation quote (right-click → 引用): inlined as a <quote> block that
+   * points back at the passage's location in this session. */
+  quote?: QuoteMeta;
 }
 
 const CLIPBOARD_FILE_MAX_BYTES = 50_000_000;
@@ -392,6 +397,12 @@ function processAttachments(attachments: Attachment[] | undefined, text: string)
   let extra = "";
   if (attachments && attachments.length) {
     for (const a of attachments) {
+      if (a.quote && String(a.quote.text || "").trim()) {
+        // Conversation quote: inline the selected text together with its
+        // location in this session (entry id + transcript path).
+        extra += `\n\n${buildQuoteEnvelope(a.quote)}`;
+        continue;
+      }
       const ext = extname(a.name || a.abs).toLowerCase();
       try {
         if (ext in IMG_MIME) {

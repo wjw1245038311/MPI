@@ -1243,6 +1243,33 @@ body.sidebar-resizing * {
 .msg-user-file-meta.error {
   color: #a34b3b;
 }
+/* Conversation quote chip in a user bubble (right-click → 引用). Not
+   interactive — the model-facing envelope carries the passage's location. */
+.msg-user-quote {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 420px;
+  padding: 7px 9px;
+  border: 1px solid rgba(79, 91, 77, .18);
+  border-left: 3px solid var(--accent);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .42);
+}
+.msg-user-quote-icon {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1.2;
+}
+.msg-user-quote-text {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .image-lightbox {
   position: fixed;
   inset: 0;
@@ -2672,6 +2699,17 @@ body.sidebar-resizing * {
   align-items: center;
   gap: 7px;
 }
+/* Message right-click menu (引用到输入框 / 添加为待办) — same chrome as the
+   image copy menu; z-index must beat every overlay for the same reason. */
+.msg-quote-menu {
+  width: 210px;
+  z-index: 1001;
+}
+.msg-quote-menu button span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
 .composer-project-pill.open .project-pill-caret {
   transform: rotate(90deg);
 }
@@ -2789,6 +2827,11 @@ body.sidebar-resizing * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Conversation quote chip (right-click → 引用到输入框). */
+.attach-chip.quote {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 /* ---------- pending follow-up card (staged while streaming) ---------- */
@@ -8855,6 +8898,17 @@ mark.hl {
 }
 :root[data-theme="dark"] .msg-user-file-meta.error {
   color: #ffaaa8;
+}
+:root[data-theme="dark"] .msg-user-quote {
+  border-color: #3b5b48;
+  border-left-color: var(--accent);
+  background: #1d2c27;
+}
+:root[data-theme="dark"] .msg-user-quote-icon {
+  color: #92e1ad;
+}
+:root[data-theme="dark"] .msg-user-quote-text {
+  color: #b8c4be;
 }
 :root[data-theme="dark"] .pending-fu {
   border-color: #385d48;

@@ -14,7 +14,9 @@ import type {
   WeChatMessagingState,
   ModelInfo,
   PendingFollowUp,
+  PendingQuote,
   PermissionLevel,
+  PromptAttachment,
   PluginPackage,
   PreviewTab,
   ProjectSummary,
@@ -49,15 +51,17 @@ export interface ParsedUserMessage {
 }
 
 /**
- * File attachments are supplied to Pi as an internal text envelope because
- * the runtime accepts images but not local file paths. Keep that envelope out
- * of the user bubble and turn it into the attachment metadata the renderer
- * can display beside the user's text.
+ * File attachments and conversation quotes are supplied to Pi as internal
+ * text envelopes because the runtime accepts images but not local file paths.
+ * Keep those envelopes out of the user bubble and turn them into the
+ * attachment metadata the renderer can display beside the user's text.
  */
 export function parseUserMessage(text: string): ParsedUserMessage {
   const normalized = (text || "").replace(/\r\n/g, "\n");
   const attachments: ViewAttachment[] = [];
-  const fileBlock = /<file\b([^>]*?)\/>|<file\b([^>]*)>([\s\S]*?)<\/file>/gi;
+  // <file …/> | <file …>…</file> | <quote …>…</quote> — the quote block is
+  // emitted by buildQuoteEnvelope() (src/main/quote-envelope.ts).
+  const envelopeBlock = /<file\b([^>]*?)\/>|<file\b([^>]*)>([\s\S]*?)<\/file>|<quote\b([^>]*)>([\s\S]*?)<\/quote>/gi;
   const readAttribute = (attrs: string, name: string): string | undefined => {
     const match = attrs.match(new RegExp(`(?:^|\\s)${name}="([^"]*)"`, "i"));
     return match?.[1];
@@ -66,23 +70,38 @@ export function parseUserMessage(text: string): ParsedUserMessage {
   let visible = "";
   let cursor = 0;
   let match: RegExpExecArray | null;
-  while ((match = fileBlock.exec(normalized))) {
-    const attrs = match[1] || match[2] || "";
-    const name = readAttribute(attrs, "name");
-    // Do not consume arbitrary user-authored <file> markup without the
-    // attribute emitted by processAttachments().
-    if (!name) continue;
+  while ((match = envelopeBlock.exec(normalized))) {
+    if (match[3] !== undefined || match[4] === undefined) {
+      // A <file> block (self-closing or with body).
+      const attrs = match[1] || match[2] || "";
+      const name = readAttribute(attrs, "name");
+      // Do not consume arbitrary user-authored <file> markup without the
+      // attribute emitted by processAttachments().
+      if (!name) continue;
 
-    visible += normalized.slice(cursor, match.index);
-    cursor = fileBlock.lastIndex;
-    const attachment: ViewAttachment = { name };
-    const path = readAttribute(attrs, "path");
-    const note = readAttribute(attrs, "note");
-    const error = readAttribute(attrs, "error");
-    if (path) attachment.path = path;
-    if (note) attachment.note = note;
-    if (error) attachment.error = error;
-    attachments.push(attachment);
+      visible += normalized.slice(cursor, match.index);
+      cursor = envelopeBlock.lastIndex;
+      const attachment: ViewAttachment = { name };
+      const path = readAttribute(attrs, "path");
+      const note = readAttribute(attrs, "note");
+      const error = readAttribute(attrs, "error");
+      if (path) attachment.path = path;
+      if (note) attachment.note = note;
+      if (error) attachment.error = error;
+      attachments.push(attachment);
+    } else {
+      // A <quote> block: the body is the quoted passage itself.
+      const attrs = match[4] || "";
+      const body = String(match[5] || "").trim();
+      if (!body) continue;
+
+      visible += normalized.slice(cursor, match.index);
+      cursor = envelopeBlock.lastIndex;
+      const attachment: ViewAttachment = { name: "引用", kind: "quote", note: body };
+      const transcript = readAttribute(attrs, "transcript");
+      if (transcript) attachment.path = transcript;
+      attachments.push(attachment);
+    }
   }
 
   if (!attachments.length) return { text: normalized, attachments };
@@ -675,12 +694,21 @@ function historyToView(
   return { views: attachBranchEntryIds(views, branchMessages), toolRuns };
 }
 
+/** Convert pending quotes into the attachment form pi receives. */
+export function quoteToAttachment(q: PendingQuote): PromptAttachment {
+  const { id: _id, ...meta } = q;
+  return { abs: "", name: "引用", quote: meta };
+}
+
 function pendingToArgs(p: PendingFollowUp): {
   imgs?: { data: string; mimeType: string }[];
-  atts?: { abs: string; name: string }[];
+  atts?: PromptAttachment[];
 } {
   const imgs = p.images.map((im) => ({ data: im.base64, mimeType: im.mimeType }));
-  const atts = p.files.map((f) => ({ abs: f.abs, name: f.name }));
+  const atts: PromptAttachment[] = [
+    ...p.files.map((f): PromptAttachment => ({ abs: f.abs, name: f.name })),
+    ...(p.quotes || []).map(quoteToAttachment),
+  ];
   return { imgs: imgs.length ? imgs : undefined, atts: atts.length ? atts : undefined };
 }
 
@@ -1137,7 +1165,7 @@ interface PiStore {
   /** Send a user prompt. Resolves with the thread's final id (a brand-new
    * task starts under a temp id that is remapped on connect), or null when
    * nothing was sent / the connection failed. */
-  sendPrompt: (threadId: string, text: string, images?: { data: string; mimeType: string }[], attachments?: { abs: string; name: string }[], mode?: "steer" | "followUp") => Promise<string | null>;
+  sendPrompt: (threadId: string, text: string, images?: { data: string; mimeType: string }[], attachments?: PromptAttachment[], mode?: "steer" | "followUp") => Promise<string | null>;
   /** Open a release-review conversation titled with the next version number
    * and send the review prompt into it (the agent waits for explicit user
    * confirmation before running scripts/dev-release.mjs). */
@@ -1318,7 +1346,8 @@ export function isDraftEmpty(draft: ComposerDraft | undefined | null): boolean {
     !draft.text.trim() &&
     draft.images.length === 0 &&
     draft.files.length === 0 &&
-    !(draft.htmlReferences || []).length
+    !(draft.htmlReferences || []).length &&
+    !(draft.quotes || []).length
   );
 }
 
@@ -2260,7 +2289,10 @@ export const useStore = create<PiStore>()((set, get) => {
           base64: im.data,
           mimeType: im.mimeType,
         })),
-        files: attachments || [],
+        files: (attachments || []).filter((a) => !a.quote).map((f) => ({ abs: f.abs, name: f.name })),
+        quotes: (attachments || [])
+          .filter((a): a is PromptAttachment & { quote: NonNullable<PromptAttachment["quote"]> } => !!a.quote)
+          .map((a) => ({ id: uid(), ...a.quote! })),
       });
     };
 
@@ -2292,7 +2324,13 @@ export const useStore = create<PiStore>()((set, get) => {
       role: "user",
       text: trimmed,
       images: (images || []).map((im) => ({ dataUrl: `data:${im.mimeType};base64,${im.data}`, mimeType: im.mimeType })),
-      attachments: (attachments || []).map((file) => ({ name: file.name, path: file.abs })),
+      // Quote attachments render as 💬 chips beside the bubble; their note
+      // carries the quoted passage itself.
+      attachments: (attachments || []).map((file) =>
+        file.quote
+          ? { name: "引用", kind: "quote" as const, note: file.quote.text.slice(0, 4000), path: file.quote.sessionFile }
+          : { name: file.name, path: file.abs },
+      ),
       timestamp: Date.now(),
       sendKind: wasStreaming ? (mode === "followUp" ? "followUp" : "steer") : undefined,
     };

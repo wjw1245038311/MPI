@@ -1,7 +1,7 @@
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "./config";
-import type { ComposerDraft } from "../renderer/src/lib/types";
+import type { ComposerDraft, PendingQuote } from "../renderer/src/lib/types";
 
 /**
  * Persistent composer drafts (unsent input per thread).
@@ -43,6 +43,9 @@ function ensureLoaded(): Map<string, ComposerDraft> {
           images: Array.isArray(d.images) ? (d.images as ComposerDraft["images"]) : [],
           files: Array.isArray(d.files) ? (d.files as ComposerDraft["files"]) : [],
           htmlReferences: Array.isArray(d.htmlReferences) ? (d.htmlReferences as ComposerDraft["htmlReferences"]) : undefined,
+          quotes: Array.isArray(d.quotes)
+            ? (d.quotes as PendingQuote[]).filter((q) => q && typeof q.text === "string")
+            : undefined,
         });
       }
     }

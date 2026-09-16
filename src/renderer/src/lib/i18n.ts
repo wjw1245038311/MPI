@@ -104,6 +104,10 @@ const exact: Record<string, string> = {
   "全部项目": "All projects",
   "目标项目": "Target project",
   "添加待办，回车创建（支持：明天 / 周五 / 9月30日 / 14:30）": "Add a todo and press Enter (supports: tomorrow / Friday / Sep 30 / 14:30)",
+  // Message right-click menu (引用到输入框 / 添加为待办) — conditional labels.
+  "引用到输入框": "Quote to composer",
+  "添加为待办": "Add as todo",
+  "移除引用": "Remove quote",
   "全部": "All",
   "今天": "Today",
   "明天": "Tomorrow",
@@ -383,6 +387,7 @@ const exact: Record<string, string> = {
 const prefixes: Array<[string, string]> = [
   // todo panel (longer prefix first so it wins over the bare form)
   ["由智能体添加 · ", "Added by agent · "],
+  ["已添加待办：", "Added todo: "],
   ["加载待办任务失败：", "Failed to load todos: "],
   ["添加待办失败：", "Failed to add todo: "],
   ["保存待办失败：", "Failed to save todo: "],
@@ -627,7 +632,7 @@ export function translateUiText(value: string, language: Language): string {
 
 const originals = new WeakMap<Node, string>();
 const attrOriginals = new WeakMap<Element, Map<string, string>>();
-const PROTECTED_TEXT_SELECTOR = ".md,.toast,.msg-user-text,.thinking-body,.tool-output,.tool-name,.tool-summary,.modal-title,.modal-msg,.extui-card-message,.extui-card-title,.extui-card-options,.pname,.tt-text,.chat-head-title,.chat-head-folder-path,.project-menu-option,.thread-preview,.project-context-name,.archived-project-name,.archived-thread-name,.archived-thread-path,.msg-artifact-name,.msg-artifact-path,.ft-name,.plugins-row-name,.plugins-row-sub,.auto-prompt,.skills-hub-card-name,.skills-hub-card-source,.skills-hub-description,.skills-hub-install-command,.skills-hub-file,.skills-hub-markdown,.preview-title,.set-prov-id,.search-item-title,.search-item-snippet,.search-item-proj,.todo-title,.todo-note,.todo-proj-name,.todo-opt,.todo-att-name";
+const PROTECTED_TEXT_SELECTOR = ".md,.toast,.msg-user-text,.thinking-body,.tool-output,.tool-name,.tool-summary,.modal-title,.modal-msg,.extui-card-message,.extui-card-title,.extui-card-options,.pname,.tt-text,.chat-head-title,.chat-head-folder-path,.project-menu-option,.thread-preview,.project-context-name,.archived-project-name,.archived-thread-name,.archived-thread-path,.msg-artifact-name,.msg-artifact-path,.ft-name,.plugins-row-name,.plugins-row-sub,.auto-prompt,.skills-hub-card-name,.skills-hub-card-source,.skills-hub-description,.skills-hub-install-command,.skills-hub-file,.skills-hub-markdown,.preview-title,.set-prov-id,.search-item-title,.search-item-snippet,.search-item-proj,.todo-title,.todo-note,.todo-proj-name,.todo-opt,.todo-att-name,.msg-user-quote-text,.attach-chip .nm";
 
 function isProtectedText(element: Element | null): boolean {
   return !!element?.closest(PROTECTED_TEXT_SELECTOR);
