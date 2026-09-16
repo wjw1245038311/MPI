@@ -93,7 +93,10 @@ try {
       // Serve the iframe page over http — exactly like electron-vite dev mode.
       server = http.createServer((_req, res) => {
         res.writeHead(200, { "Content-Type": "text/html" });
-        res.end(`<!doctype html><html><body style="margin:0"><iframe src="${pdfUrl}" width="420" height="560"></iframe></body></html>`);
+        // Mirror the CSP from src/renderer/index.html — frame-src must list
+        // mpipdf: or the iframe is blocked and renders blank.
+        const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: todoatt:; font-src 'self' data:; connect-src 'self' data: blob:; frame-src 'self' pi-preview: mpipdf: data: blob:; media-src 'self' blob:";
+        res.end(`<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${csp}"></head><body style="margin:0"><iframe src="${pdfUrl}" width="420" height="560"></iframe></body></html>`);
       });
       await new Promise((r) => server.listen(0, "127.0.0.1", r));
       const port = server.address().port;
