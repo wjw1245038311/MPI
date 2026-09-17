@@ -7,6 +7,7 @@ import type {
   McpMarketDetail,
   McpMarketPage,
   McpServerInfo,
+  ObservedToolInfo,
   PromptAttachment,
   NpmPackage,
   PermissionLevel,
@@ -135,6 +136,10 @@ const api = {
     getAll: (): Promise<Record<string, ComposerDraft>> => ipcRenderer.invoke("drafts:getAll"),
     set: (key: string, draft: ComposerDraft) => ipcRenderer.invoke("drafts:set", key, draft),
     delete: (key: string) => ipcRenderer.invoke("drafts:delete", key),
+  },
+  observedTools: {
+    /** Tool names seen in this profile's sessions — feeds the trusted-tools picker. */
+    list: (): Promise<ObservedToolInfo[]> => ipcRenderer.invoke("tools:listObserved"),
   },
   dataMigration: {
     status: (): Promise<{

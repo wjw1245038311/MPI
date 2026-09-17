@@ -352,6 +352,15 @@ export interface TrashEntry {
   sizeBytes: number;
 }
 
+/** A tool name observed in this profile's sessions (trusted-tools picker data). */
+export interface ObservedToolInfo {
+  name: string;
+  /** Epoch ms of the first live observation (null when only backfilled). */
+  firstSeen: number | null;
+  lastSeen: number | null;
+  count: number;
+}
+
 /** A file attached to a todo (screenshot, document, ...). The binary lives in
  * <userData>/todo-attachments/<file>; only this metadata is stored in todos.json.
  * Images render as thumbnails; other files open with the system app. */

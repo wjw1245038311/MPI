@@ -11,6 +11,7 @@ import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-p
 import { registerPdfViewerProtocol, registerPdfViewerScheme } from "./pdf-viewer-protocol";
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
+import { ensureBackfilled as backfillObservedTools } from "./observed-tools";
 import { activateAutostartApps, killAllManagedProcesses } from "./app-store";
 import { startDevReleaseProgressTail } from "./dev-release-progress";
 import { stopAutomations, stopScheduler } from "./automation";
@@ -259,6 +260,10 @@ if (!gotLock) {
     // them now). Best effort — leftovers simply wait for the next launch.
     cleanupOldRuntimes();
     registerIpc(getWin);
+    // One-time backfill of the observed-tools registry from historical session
+    // files so the trusted-tools picker is populated on first open. Background,
+    // byte-budgeted, best effort.
+    void backfillObservedTools().catch((e) => console.warn("[observed-tools] backfill failed:", e));
     // v2: bring enabled app services back up (never rewrites config).
     void activateAutostartApps().catch((e) => console.warn("[app-store] autostart failed:", e));
     // Dev only: tail the release pipeline's JSONL progress file (the CLI runs

@@ -7416,6 +7416,29 @@ mark.hl {
 .skill-row-toggle {
   display: inline-flex;
 }
+/* Trusted-tools picker (Settings → Permissions) reuses the extension-package
+   panel's row language (.plugins-search / .skill-chips / .skill-row). */
+.trust-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.trust-picker-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+.skill-row.static {
+  cursor: default;
+}
+.skill-row.static:hover {
+  background: transparent;
+}
+.trust-picker-badge {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
 .skills-mine-detail {
   flex: 1;
   min-width: 0;

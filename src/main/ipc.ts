@@ -58,6 +58,7 @@ import { mimeForName } from "./todo-attachment-protocol";
 import type { ComposerDraft } from "../renderer/src/lib/types";
 import { listDir } from "./fs-service";
 import { getFeedback, setFeedback, deleteFeedback } from "./feedback-store";
+import { listObservedTools, recordToolCall } from "./observed-tools";
 import { createHtmlPreviewUrl } from "./html-preview-protocol";
 import {
   getAuthPath,
@@ -559,6 +560,12 @@ function createHandle(
 
       // P1-12: passive latency/health signals — no-op for non-auto threads.
       autopilot.onAgentEvent(id, event);
+
+      // Trusted-tools picker data source: observe every tool execution (the
+      // Settings list is built from names actually used in this profile).
+      if (event?.type === "tool_execution_start" && typeof event.toolName === "string") {
+        recordToolCall(event.toolName);
+      }
 
       send("pi:event", { threadId: id, event });
 
@@ -2676,6 +2683,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   });
   ipcMain.handle("drafts:delete", (_e, key: string) => deleteDraft(key));
 
+  // ---- observed tools (trusted-tools picker data source) -------------------
+  ipcMain.handle("tools:listObserved", () => listObservedTools());
+
   // ---- todos (待办任务) ----------------------------------------------------
   const notifyTodosChanged = () => {
     try {
@@ -3079,6 +3089,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       return false;
     }
   });
+
   ipcMain.handle("app:readPreview", (_e, absPath: string, projectRoot?: string) => {
     const payload = readPreview(absPath);
     return payload.kind === "html"

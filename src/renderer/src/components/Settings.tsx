@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useStore } from "../store";
-import type { ApiType, AppConfig, Diagnostics, ModelDef, ModelsFile, PermissionLevel, ProviderDef, ShellDiagnostics, ThinkingDefaults } from "../lib/types";
+import type { ApiType, AppConfig, Diagnostics, ModelDef, ModelsFile, ObservedToolInfo, PermissionLevel, ProviderDef, ShellDiagnostics, ThinkingDefaults } from "../lib/types";
 import { formatBytes } from "../lib/format";
 import { sttTranscribeErrorText } from "../lib/stt";
 import { speakMessage, ttsVoices } from "../lib/tts";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { translateUiText } from "../lib/i18n";
-import { COMMON_EXTENSION_TOOLS, isTrustableToolName, isTrustedTool, toggleTrustedTool } from "../lib/trusted-tools";
+import { COMMON_EXTENSION_TOOLS, isTrustableToolName, toggleTrustedTool } from "../lib/trusted-tools";
+import { classifyToolName } from "@repo-root/src/shared/tool-trust-meta";
 import { EDGE_VOICES, defaultEdgeVoice } from "../lib/edge-voices";
 import { Archive, Check, ChevronRight, Close, Edit, Plus, Refresh, Folder, Search, Trash } from "./icons";
 import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
@@ -188,6 +189,18 @@ function JsonField({
       {!valid && <div className="set-json-err">JSON 语法错误，保存前请修正</div>}
     </div>
   );
+}
+
+/** Trusted-tools picker filter tabs (Settings → Permissions). */
+type ToolTrustFilter = "all" | "trusted" | "untrusted";
+
+interface TrustPickerRow {
+  name: string;
+  trusted: boolean;
+  /** Toggling trust makes sense here (trustable, or already trusted to remove). */
+  actionable: boolean;
+  subtitle?: string;
+  badge?: string;
 }
 
 const MAP_UNSET = "__unset__";
@@ -1339,6 +1352,72 @@ export function Settings() {
     if (permDraft.trustedTools.includes(name)) return;
     setTrustedTools([...permDraft.trustedTools, name]);
   };
+
+  // Trusted-tools picker data: tools observed in this profile's sessions (main
+  // records every tool_execution_start + one-time backfill from history), so
+  // users toggle from a searchable list instead of typing exact names.
+  const [toolQuery, setToolQuery] = useState("");
+  const [toolFilter, setToolFilter] = useState<ToolTrustFilter>("all");
+  const [observedTools, setObservedTools] = useState<ObservedToolInfo[]>([]);
+  useEffect(() => {
+    if (tab !== "permissions") return;
+    const listApi = window.pi.observedTools; // absent on older preloads
+    if (!listApi) return;
+    let alive = true;
+    listApi
+      .list()
+      .then((list) => {
+        if (alive) setObservedTools(list);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [tab]);
+
+  // Candidate rows = observed ∪ currently trusted ∪ common presets, classified.
+  const toolRows: TrustPickerRow[] = useMemo(() => {
+    const names = new Set<string>();
+    for (const t of observedTools) names.add(t.name);
+    for (const t of permDraft.trustedTools) if (t.trim()) names.add(t.trim());
+    for (const p of COMMON_EXTENSION_TOOLS) names.add(p.name);
+    const q = toolQuery.trim().toLowerCase();
+    return [...names]
+      .filter((n) => !q || n.toLowerCase().includes(q))
+      .sort((a, b) => a.localeCompare(b))
+      .map<TrustPickerRow>((name) => {
+        const kind = classifyToolName(name, permDraft.trustedTools);
+        if (kind === "never-trustable") {
+          return {
+            name,
+            trusted: false,
+            actionable: false,
+            badge: language === "zh" ? "始终需确认 · 不可信任" : "Always confirms · cannot be trusted",
+          };
+        }
+        if (kind === "no-approval") {
+          return { name, trusted: false, actionable: false, badge: language === "zh" ? "无需审批" : "No approval needed" };
+        }
+        const preset = COMMON_EXTENSION_TOOLS.find((p) => p.name === name);
+        return {
+          name,
+          trusted: kind === "trusted",
+          actionable: true,
+          subtitle: preset ? (language === "zh" ? preset.zh : preset.en) : undefined,
+        };
+      });
+  }, [observedTools, permDraft.trustedTools, toolQuery, language]);
+
+  const toolCounts = useMemo(() => {
+    let trusted = 0;
+    for (const r of toolRows) if (r.trusted) trusted++;
+    return { all: toolRows.length, trusted, untrusted: toolRows.length - trusted };
+  }, [toolRows]);
+
+  const visibleToolRows = useMemo(
+    () => toolRows.filter((r) => (toolFilter === "all" ? true : toolFilter === "trusted" ? r.trusted : !r.trusted)),
+    [toolRows, toolFilter],
+  );
   const [initialProfile, setInitialProfile] = useState("");
   const [saving, setSaving] = useState<null | "models" | "thinking" | "profile" | "permissions" | "data" | "system" | "conversation">(null);
   const [flash, setFlash] = useState<null | "models" | "thinking" | "profile" | "permissions" | "data" | "system" | "conversation">(null);
@@ -2542,92 +2621,113 @@ export function Settings() {
                 </Field>
                 <Field
                   wide
-                  label={language === "zh" ? "常用扩展工具（点击一键信任）" : "Common extension tools (click to trust)"}
+                  label={language === "zh" ? "扩展工具信任列表（沙盒/严格下免审批）" : "Trusted extension tools (skip approval in sandbox/strict)"}
                   hint={
                     language === "zh"
-                      ? "以下是常见的需要审批的扩展工具。点击卡片即可加入 / 移出信任列表（仍需点上方「保存权限设置」生效）。未列出的工具可在下方手动输入名称。"
-                      : "These are the common extension tools that would otherwise prompt. Click a card to add/remove it from the trusted list (still needs “Save permissions” above). For anything else, type a name below."
+                      ? "列出本机会话中出现过的扩展工具，打开开关后在沙盒/严格权限下不再弹审批；权限确认卡片上的「始终允许该工具」也会自动加入这里。只读 / 强制只读模式不受影响；bash 与文件写入/编辑工具不可被信任。（改动需点上方「保存权限设置」生效）"
+                      : "Extension tools seen in this profile's sessions. Toggling one on skips approval under sandbox/strict permissions; the approval card's “Always allow this tool” also adds it here. Read-only / enforced read-only modes are unaffected; bash and file write/edit tools can never be trusted. (Changes apply after “Save permissions” above.)"
                   }
                 >
-                  <div className="trust-grid">
-                    {COMMON_EXTENSION_TOOLS.map((tool) => {
-                      const trusted = isTrustedTool(permDraft.trustedTools, tool.name);
-                      return (
+                  <div className="trust-picker">
+                    <div className="plugins-search">
+                      <Search size={15} />
+                      <input
+                        value={toolQuery}
+                        onChange={(e) => setToolQuery(e.target.value)}
+                        placeholder={language === "zh" ? "搜索工具…" : "Search tools…"}
+                        aria-label={language === "zh" ? "搜索工具" : "Search tools"}
+                      />
+                      {toolQuery && (
                         <button
-                          key={tool.name}
                           type="button"
-                          className={`trust-card${trusted ? " trusted" : ""}`}
-                          aria-pressed={trusted}
-                          title={
-                            trusted
-                              ? language === "zh" ? "点击移出信任列表" : "Click to remove from trusted tools"
-                              : language === "zh" ? "点击加入信任列表" : "Click to add to trusted tools"
-                          }
-                          onClick={() => setTrustedTools(toggleTrustedTool(permDraft.trustedTools, tool.name))}
-                        >
-                          <span className="trust-card-name">
-                            {tool.name}
-                            {trusted ? "  ✓" : ""}
-                          </span>
-                          <span className="trust-card-desc">{language === "zh" ? tool.zh : tool.en}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </Field>
-                <Field
-                  wide
-                  label={language === "zh" ? "已信任工具（始终允许）" : "Trusted tools (always allowed)"}
-                  hint={
-                    language === "zh"
-                      ? "列表中的扩展工具在沙盒/严格权限下不再弹审批（例如 mem0_memory）。可在权限确认卡片上点「始终允许该工具」自动加入，也可在此手动输入名称。只读 / 强制只读模式不受影响；bash 与文件写入/编辑工具不可被信任。"
-                      : "Extension tools in this list skip approval under sandbox/strict permissions (e.g. mem0_memory). Add them from an approval card's “Always allow this tool” option or type a name here. Read-only / enforced read-only modes are unaffected; bash and file write/edit tools can never be trusted."
-                  }
-                >
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                    {permDraft.trustedTools.length === 0 && (
-                      <span className="set-hint" style={{ margin: 0 }}>
-                        {language === "zh" ? "（空）" : "(empty)"}
-                      </span>
-                    )}
-                    {permDraft.trustedTools.map((t) => (
-                      <span
-                        key={t}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 6,
-                          padding: "2px 8px",
-                          borderRadius: 10,
-                          background: "rgba(127,127,127,.15)",
-                          fontSize: 12,
-                        }}
-                      >
-                        {t}
-                        <button
-                          className="iconbtn"
-                          style={{ padding: 0 }}
-                          title={language === "zh" ? "从信任列表移除" : "Remove from trusted tools"}
-                          onClick={() => setTrustedTools(permDraft.trustedTools.filter((x) => x !== t))}
+                          className="plugins-search-clear"
+                          onClick={() => setToolQuery("")}
+                          aria-label={language === "zh" ? "清除搜索" : "Clear search"}
                         >
                           ×
                         </button>
-                      </span>
-                    ))}
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <input
-                      className="set-input"
-                      value={trustDraft}
-                      placeholder={language === "zh" ? "工具名称，如 mem0_memory" : "Tool name, e.g. mem0_memory"}
-                      onChange={(e) => setTrustDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") addTrustedTool();
-                      }}
-                    />
-                    <button className="btn" onClick={addTrustedTool} disabled={!trustDraft.trim()}>
-                      {language === "zh" ? "添加" : "Add"}
-                    </button>
+                      )}
+                    </div>
+
+                    <div className="skill-chips">
+                      {(
+                        [
+                          ["all", language === "zh" ? `全部 ${toolCounts.all}` : `All ${toolCounts.all}`],
+                          ["trusted", language === "zh" ? `已信任 ${toolCounts.trusted}` : `Trusted ${toolCounts.trusted}`],
+                          [
+                            "untrusted",
+                            language === "zh" ? `未信任 ${toolCounts.untrusted}` : `Untrusted ${toolCounts.untrusted}`,
+                          ],
+                        ] as [ToolTrustFilter, string][]
+                      ).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={`skill-chip${toolFilter === value ? " active" : ""}`}
+                          onClick={() => setToolFilter(value)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="trust-picker-list">
+                      {visibleToolRows.length === 0 && (
+                        <div className="set-empty-mini">
+                          {language === "zh"
+                            ? "没有匹配的工具。工具会在会话中被调用后出现在这里；也可以直接在下方手动添加。"
+                            : "No matching tools. Tools appear here once they are used in a session; you can also add one manually below."}
+                        </div>
+                      )}
+                      {visibleToolRows.map((row) => (
+                        <div
+                          key={row.name}
+                          role="button"
+                          tabIndex={0}
+                          className={`skill-row${row.actionable ? "" : " static"}`}
+                          onClick={() =>
+                            row.actionable && setTrustedTools(toggleTrustedTool(permDraft.trustedTools, row.name))
+                          }
+                          onKeyDown={(e) => {
+                            if (row.actionable && (e.key === "Enter" || e.key === " ")) {
+                              e.preventDefault();
+                              setTrustedTools(toggleTrustedTool(permDraft.trustedTools, row.name));
+                            }
+                          }}
+                        >
+                          <span className={`skill-dot ${row.trusted ? "on" : "off"}`} />
+                          <div className="skill-row-main">
+                            <div className="skill-row-name">{row.name}</div>
+                            {row.subtitle && <div className="skill-row-desc">{row.subtitle}</div>}
+                          </div>
+                          {row.actionable ? (
+                            <span className="skill-row-toggle" onClick={(e) => e.stopPropagation()}>
+                              <Toggle
+                                checked={row.trusted}
+                                onChange={() => setTrustedTools(toggleTrustedTool(permDraft.trustedTools, row.name))}
+                              />
+                            </span>
+                          ) : (
+                            <span className="trust-picker-badge">{row.badge}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input
+                        className="set-input"
+                        value={trustDraft}
+                        placeholder={language === "zh" ? "手动添加工具名称，如 mem0_memory" : "Manually add a tool name, e.g. mem0_memory"}
+                        onChange={(e) => setTrustDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") addTrustedTool();
+                        }}
+                      />
+                      <button className="btn" onClick={addTrustedTool} disabled={!trustDraft.trim()}>
+                        {language === "zh" ? "添加" : "Add"}
+                      </button>
+                    </div>
                   </div>
                 </Field>
               </div>
