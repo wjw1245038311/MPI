@@ -384,7 +384,7 @@ MPI uses permission gates to control how Pi executes shell commands, writes file
 | Full | Nothing is intercepted. | Tasks/environments you explicitly trust. |
 
 - Default permission for new sessions: a dropdown in Settings → Permissions & security (Read-only/Strict/Sandbox/Full) controlling the initial level of subsequently created sessions; existing sessions keep their own settings. Task modes (see [6.7](#67-task-modes-switch-how-the-agent-works-in-one-click)) also set the permission and thinking levels in one go; Research / Review are enforced read-only.
-- Trusted tools: in Settings → Permissions & security, click a card under "Common extension tools (click to trust)" or type a tool name to stop an extension tool (e.g. `mem0_memory`) from prompting every time under sandbox/strict. `bash` and file write/edit tools can never be trusted; read-only modes are unaffected.
+- Trusted tools: Settings → Permissions & security has a searchable "Trusted extension tools" list — it automatically shows the extension tools seen in this profile's sessions (search box + All/Trusted/Untrusted tabs); toggle one on to stop it prompting under sandbox/strict (e.g. `mem0_memory`), or type a name at the bottom to add one manually. `bash` and file write/edit tools are marked "always confirms" and can never be trusted; read-only tools like read/web_search need no approval, so they have no toggle; read-only modes are unaffected.
 - Confirmation dialog: when authorization is needed, a "Permission required" dialog shows the exact command and target path; review it before allowing or denying. Beginners should read the command and its target location first.
 - Automations can't wait for human approval, so they only offer Sandbox / Full (see [Section 11](#11-automations-scheduled-tasks)).
 
@@ -430,7 +430,7 @@ Click any file in the sidebar "Files" tab; click a file artifact chip in a chat 
 
 | Type | Behavior |
 | --- | --- |
-| Markdown | Full rendering of headings, lists, tables, code blocks and images. |
+| Markdown | Full rendering of headings, lists, tables, code blocks and images, plus inline HTML (e.g. README screenshot grids); relative image paths in the document are loaded from disk automatically; clicking a link to a local file opens that file right in the preview, while http(s) links open in the external browser. |
 | HTML | Live preview (sandboxed iframe) with zoom support (50%–200%, wheel/buttons). |
 | Source code | Syntax highlighting + line numbers. |
 | Images | Click to open in a lightbox. |
@@ -612,8 +612,8 @@ See [Section 4](#4-configuring-models). The top of the page has "Reload" and "Sa
 | Item | Notes |
 | --- | --- |
 | New session permission | Read-only / Strict / Sandbox / Full, the initial level of subsequently created sessions. See [Section 8](#8-permission-modes). |
-| Common extension tools (click to trust) | Cards for common tools that would otherwise prompt; click a card to add/remove it from the trusted list. |
-| Trusted tools (always allowed) | Tag list of trusted tools, removable individually or added by typing a name. Trusted extension tools skip approval under sandbox/strict (e.g. `mem0_memory`). Read-only is unaffected; `bash` and file write/edit tools can never be trusted. |
+| Trusted extension tools | Searchable list of the extension tools seen in this profile's sessions, with All/Trusted/Untrusted tabs and toggles to trust/untrust in one click; a manual name input sits at the bottom as fallback. |
+| Trusted tools (always allowed) | The "Trusted" tab of the list shows everything currently trusted; click a row or its toggle to remove it. Trusted extension tools skip approval under sandbox/strict (e.g. `mem0_memory`). Read-only is unaffected; `bash` and file write/edit tools can never be trusted. |
 
 Click "Save permissions" in the tab header to apply.
 
