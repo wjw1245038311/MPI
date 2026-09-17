@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.6.19（2026-09-17）
 
 1. **Mermaid 图表渲染**：聊天消息与 Markdown 预览里的 ```mermaid 围栏现在直接渲染为 SVG 图形（流程图/时序图等），不再显示原始代码。新增 mermaid 依赖但走动态 import 懒加载——只有页面里真出现 mermaid 块才拉取那个 ~400KB chunk，平时零开销；跟随应用明暗主题切换重绘；securityLevel=strict 防标签注入；语法错误时回退显示原始代码 + 提示行，不会白屏。
 
