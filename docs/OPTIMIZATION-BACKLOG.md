@@ -162,6 +162,9 @@
 ### 33 · SUBAGENT-PLAN 双机并行 subagent 扩展安装 ⬜ ~15min、MPI 源码零改动
 - pi 官方 subagent 示例装到 `~/.pi/agent/extensions/`（用户级全局扩展），所有 MPI 会话自动加载；子进程 argv[1] 解析已核实无坑。双机并发机制 9/09 实测成立（墙钟 42s ≈ max(两边)）。详见 `.tmp-workdocs/SUBAGENT-PLAN.md`。
 
+### 34 · 安装包瘦身：纯 renderer 依赖移 devDependencies ⏸ 用户拍板「等 MPI 完全成型后开做」（2026-09-17）
+- v0.6.19 +34MB 排查发现机制性重复打包：electron-builder 自动把生产依赖的原始 node_modules 打进 app.asar，而 Vite 早已 bundle 进 out/renderer。mermaid 已单点修复（commit 07b1f7a，下个版本回 ~158MB）。剩余候选：react/react-dom、xlsx、pdfjs-dist、mammoth、jszip、highlight.js、react-markdown/remark/rehype 全家、zustand——估计再省 50–100MB。开工前需逐个确认 main/preload 无运行时 require（ws/node-pty/electron-updater/@larksuiteoapi 必须留 dependencies）。验收：npm run dist 后 exe ≤~158MB + 全量功能回归过。
+
 ---
 
 ## 待用户拍板汇总
