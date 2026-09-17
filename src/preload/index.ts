@@ -70,6 +70,7 @@ const api = {
       ipcRenderer.invoke("app:setFeedback", args),
     deleteFeedback: (entryId: string) => ipcRenderer.invoke("app:deleteFeedback", entryId),
     fileExists: (absPath: string) => ipcRenderer.invoke("app:fileExists", absPath),
+    readImageForMd: (absPath: string) => ipcRenderer.invoke("app:readImageForMd", absPath),
     getPathForFile: (file: File) => {
       try {
         return webUtils.getPathForFile(file);

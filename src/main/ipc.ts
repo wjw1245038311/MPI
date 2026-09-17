@@ -113,7 +113,7 @@ import { ensureTodoExtension } from "./todo-extension";
 import { buildQuoteEnvelope } from "./quote-envelope";
 import type { QuoteMeta } from "../renderer/src/lib/types";
 import { registerTuiIpc } from "./tui";
-import { readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
+import { IMAGE_EXTS, readPreview, readRemotePreview, writePreviewHtml } from "./preview-service";
 import {
   closePreviewWindow,
   openPreviewWindow,
@@ -3089,7 +3089,21 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       return false;
     }
   });
-
+  // Small images embedded in Markdown previews (relative ![](img/x.png)).
+  // Capped so a huge file referenced from some README can't bloat the renderer.
+  const MD_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+  ipcMain.handle("app:readImageForMd", (_e, absPath: string) => {
+    try {
+      if (typeof absPath !== "string" || !absPath) return null;
+      const st = statSync(absPath);
+      if (!st.isFile() || st.size > MD_IMAGE_MAX_BYTES) return null;
+      const mime = IMAGE_EXTS[extname(absPath).toLowerCase()];
+      if (!mime) return null;
+      return { mime, base64: readFileSync(absPath).toString("base64") };
+    } catch {
+      return null;
+    }
+  });
   ipcMain.handle("app:readPreview", (_e, absPath: string, projectRoot?: string) => {
     const payload = readPreview(absPath);
     return payload.kind === "html"

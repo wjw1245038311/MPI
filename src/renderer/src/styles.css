@@ -1442,6 +1442,19 @@ body.sidebar-resizing * {
   max-width: 100%;
   border-radius: 8px;
 }
+.md-img-loading {
+  min-width: 48px;
+  min-height: 48px;
+  opacity: 0.3;
+}
+.md-img-missing {
+  margin: 6px 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
 
 /* thinking + tools (frameless — they sit directly on the assistant bubble) */
 .thinking {

@@ -81,8 +81,13 @@ export function TitleBar() {
   const openManual = async () => {
     try {
       const p: string | null = await window.pi.app.getUserManualPath();
-      if (p) void useStore.getState().openPreview(p);
-      else st().pushToast("error", language === "zh" ? "未找到使用手册文件" : "User manual file not found");
+      if (p) {
+        // Dev repo root as projectRoot so relative links inside the manual
+        // (e.g. MPI-BEGINNER-GUIDE.md at the repo root) can resolve; packaged
+        // builds get null and fall back to the manual's own directory.
+        const root = await window.pi.app.getDevRepoRoot().catch(() => null);
+        void useStore.getState().openPreview(p, root ?? undefined);
+      } else st().pushToast("error", language === "zh" ? "未找到使用手册文件" : "User manual file not found");
     } catch (e: any) {
       const msg = e?.message || String(e);
       st().pushToast("error", language === "zh" ? "打开使用手册失败：" + msg : `Could not open the user manual: ${msg}`);

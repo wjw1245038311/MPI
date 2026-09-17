@@ -95,7 +95,7 @@ const TEXT_EXTS: Record<string, string> = {
 };
 
 const MARKDOWN_EXTS = new Set([".md", ".markdown", ".mdown"]);
-const IMAGE_EXTS: Record<string, string> = {
+export const IMAGE_EXTS: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",

@@ -688,7 +688,13 @@ export function PreviewBody({
     case "text":
       return <CodePreview text={payload.text || ""} lang={payload.lang || "plaintext"} truncated={payload.truncated} language={language} />;
     case "markdown":
-      return <div className="pv-md"><Markdown text={payload.text || ""} /></div>;
+      // fileBasePath/projectRoot let relative links in the md open local files
+      // (e.g. the user manual's cross-language / beginner-guide links).
+      return (
+        <div className="pv-md">
+          <Markdown text={payload.text || ""} fileBasePath={path ?? null} projectRoot={projectRoot ?? null} />
+        </div>
+      );
     case "html":
       return (
         <HtmlPreview
