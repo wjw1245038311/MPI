@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type WheelEvent as ReactWheelEvent } from "react";
 import { getDisplayThreadTitle, normalizeThreadFile, useStore } from "../store";
 import { getTtsState, speakMessage, stopTts, subscribeTts } from "../lib/tts";
 import { parseSkillBlock } from "../lib/skill-block";
@@ -23,9 +23,12 @@ import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
 // shows up in essentially every real conversation — a single message has
 // nowhere to jump to, but from two on the rail is useful.
 const USER_MESSAGE_NAV_MIN_ITEMS = 2;
-// Distance from the transcript bottom (px) within which we treat the viewport
-// as "at the latest" — used for both auto-follow and the jump-to-latest button.
-const NEAR_BOTTOM_PX = 140;
+// Distance from the transcript bottom that counts as "at the latest": half of
+// the visible viewport, so it scales with window size / resolution instead of
+// a fixed pixel count. Scrolling back down partway into a reply re-arms
+// auto-follow well before hitting the very bottom; scrolling up past this band
+// is a deliberate read-history gesture and pauses follow.
+const nearBottomPx = (el: HTMLElement): number => Math.floor(el.clientHeight / 2);
 
 export function Chat() {
   const activeThreadId = useStore((s) => s.activeThreadId);
@@ -41,6 +44,7 @@ export function Chat() {
   const scrollPositionsRef = useRef(new Map<string, number>());
   const previousActiveThreadIdRef = useRef(activeThreadId);
   const lastAutoScrollThreadIdRef = useRef<string | null>(null);
+  const lastRestoreThreadIdRef = useRef<string | null>(null);
   const highlightedUserMessageRef = useRef<HTMLElement | null>(null);
   const jumpHighlightTimerRef = useRef<number | null>(null);
   const [editing, setEditing] = useState(false);
@@ -66,13 +70,14 @@ export function Chat() {
     );
     return () => window.clearTimeout(t);
   }, [chatSearchQuery, debouncedChatQuery]);
-  // True while the viewport sits within NEAR_BOTTOM_PX of the transcript end.
-  // Drives the floating "jump to latest" button.
+  // True while the viewport sits within the near-bottom band (half viewport)
+  // of the transcript end. Drives the floating "jump to latest" button.
   const [atBottom, setAtBottom] = useState(true);
   // Sticky-bottom intent: stays true until the user scrolls up away from the
-  // bottom. Unlike a per-frame pixel check, this survives large content deltas
-  // during fast streaming (a >NEAR_BOTTOM_PX growth must not silently disable
-  // auto-follow — that forced users to scroll down manually after each turn).
+  // bottom. Unlike a per-frame distance check, this survives large content
+  // deltas during fast streaming (a growth larger than the near-bottom band
+  // must not silently disable auto-follow — that forced users to scroll down
+  // manually after each turn).
   const stickRef = useRef(true);
   const editInputRef = useRef<HTMLInputElement>(null);
   const language = useStore((s) => s.config?.language || "en");
@@ -98,9 +103,18 @@ export function Chat() {
     const el = scrollRef.current;
     if (!el || !activeThreadId) return;
     scrollPositionsRef.current.set(activeThreadId, el.scrollTop);
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el);
     stickRef.current = near;
     setAtBottom(near);
+  };
+
+  // Wheel up = intent to read history. Captured synchronously on the wheel
+  // event because scroll events fire a frame late — during fast streaming
+  // that gap let stale bottom positions get re-applied over an in-progress
+  // scroll-up. Scrolling down is left to the scroll event, which re-arms
+  // follow once we're back inside the near-bottom band (half viewport).
+  const handleWheelUp = (e: ReactWheelEvent<HTMLDivElement>) => {
+    if (e.deltaY < 0) stickRef.current = false;
   };
 
   // Length of the last streaming block's content. blocks.length only changes
@@ -121,7 +135,7 @@ export function Chat() {
       lastAutoScrollThreadIdRef.current !== null &&
       lastAutoScrollThreadIdRef.current !== activeThreadId;
     lastAutoScrollThreadIdRef.current = activeThreadId;
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el);
     // A restored position is authoritative during a thread switch. Only
     // follow the bottom for new content within the already active thread.
     if (!switchedThread && (near || stickRef.current)) {
@@ -142,6 +156,11 @@ export function Chat() {
     const prev = prevStreamRef.current;
     prevStreamRef.current = { id: activeThreadId, on: now };
     if (prev.id === activeThreadId && prev.on && !now) {
+      // Only pull back to the latest message when the user was following —
+      // scrolling up mid-turn means they're reading history, and yanking them
+      // down on turn end is exactly what this guard prevents. The floating
+      // "jump to latest" button covers the explicit return.
+      if (!stickRef.current) return;
       const el = scrollRef.current;
       if (el) {
         // The restore layout-effect re-applies the saved position on the
@@ -177,18 +196,41 @@ export function Chat() {
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el || !activeThreadId || thread?.loading) return;
+    const switchedThread = lastRestoreThreadIdRef.current !== activeThreadId;
+    lastRestoreThreadIdRef.current = activeThreadId;
     const saved = scrollPositionsRef.current.get(activeThreadId);
-    if (saved === undefined) return;
 
-    const restore = () => {
-      const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-      el.scrollTop = Math.min(saved, maxScrollTop);
-      setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX);
-    };
+    if (switchedThread && saved !== undefined) {
+      // Thread switch: the saved position is authoritative. Re-derive follow
+      // intent from where we land — a stale stick=true left by another thread
+      // must not yank this one to its bottom on the next content change.
+      const restore = () => {
+        const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+        el.scrollTop = Math.min(saved, maxScrollTop);
+        const near = el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el);
+        stickRef.current = near;
+        setAtBottom(near);
+      };
 
-    restore();
-    const frame = window.requestAnimationFrame(restore);
-    return () => window.cancelAnimationFrame(frame);
+      restore();
+      const frame = window.requestAnimationFrame(restore);
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    if (!switchedThread && saved !== undefined) {
+      // Same-thread content growth: never write scrollTop while the user is
+      // reading history — scroll events lag a frame, so a stale saved value
+      // would yank an in-progress scroll-up back to the bottom. In follow
+      // mode re-applying is harmless (also recovers a remounted container).
+      if (stickRef.current) {
+        const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+        el.scrollTop = Math.min(saved, maxScrollTop);
+        setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el));
+      } else {
+        scrollPositionsRef.current.set(activeThreadId, el.scrollTop);
+        setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el));
+      }
+    }
   }, [activeThreadId, count, streaming?.blocks?.length, thread?.loading]);
 
   useEffect(() => {
@@ -585,7 +627,7 @@ export function Chat() {
       ) : (
         <>
           <div className="chat-stage">
-            <div className="chat-scroll" ref={scrollRef} onScroll={rememberScrollPosition}>
+            <div className="chat-scroll" ref={scrollRef} onScroll={rememberScrollPosition} onWheel={handleWheelUp}>
           <div className={`messages${searchingDim ? " searching" : ""}`}>
             {headGroups.map((g) => (
               <MessageGroup
