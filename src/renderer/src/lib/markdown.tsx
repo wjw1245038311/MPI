@@ -45,6 +45,93 @@ function CodeBlock({ className, children }: { className?: string; children: Reac
   );
 }
 
+// --- Mermaid diagrams -------------------------------------------------------
+// ```mermaid fences render as SVG via the mermaid package — lazy-loaded so its
+// ~400KB chunk only downloads when a diagram is actually present on screen.
+let mermaidModulePromise: Promise<typeof import("mermaid")> | null = null;
+function loadMermaid() {
+  if (!mermaidModulePromise) mermaidModulePromise = import("mermaid");
+  return mermaidModulePromise;
+}
+
+let mermaidSeq = 0;
+let mermaidInitializedTheme: string | null = null;
+
+function MermaidDiagram({ code }: { code: string }) {
+  const themePref = useStore((s) => s.config?.theme || "light");
+  // Mirror App.tsx's resolution (config.theme; system → prefers-color-scheme).
+  const [resolved, setResolved] = useState<"dark" | "light">(() =>
+    themePref === "system"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light"
+      : (themePref as "dark" | "light"),
+  );
+  useEffect(() => {
+    if (themePref !== "system") {
+      setResolved(themePref);
+      return;
+    }
+    const m = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => setResolved(m.matches ? "dark" : "light");
+    onChange();
+    m.addEventListener?.("change", onChange);
+    return () => m.removeEventListener?.("change", onChange);
+  }, [themePref]);
+
+  const [state, setState] = useState<{ status: "loading" | "ok" | "error"; svg?: string }>({ status: "loading" });
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const mermaid = (await loadMermaid()).default;
+        if (mermaidInitializedTheme !== resolved) {
+          // securityLevel strict sanitizes html labels — content may come from
+          // agent output, so keep the default-safe setting.
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: resolved === "dark" ? "dark" : "default",
+            securityLevel: "strict",
+          });
+          mermaidInitializedTheme = resolved;
+        }
+        const id = `mpi-mermaid-${++mermaidSeq}`;
+        const { svg } = await mermaid.render(id, code);
+        if (alive) setState({ status: "ok", svg });
+      } catch {
+        if (alive) setState({ status: "error" });
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [code, resolved]);
+
+  const language = useStore((s) => s.config?.language || "en");
+  if (state.status === "ok") {
+    return <div className="mermaid-diagram" dangerouslySetInnerHTML={{ __html: state.svg! }} />;
+  }
+  if (state.status === "error") {
+    return (
+      <>
+        <CodeBlock className="language-mermaid">{code}</CodeBlock>
+        <div className="mermaid-error">
+          {language === "zh" ? "Mermaid 语法错误，已显示原始代码。" : "Mermaid syntax error — showing raw code."}
+        </div>
+      </>
+    );
+  }
+  return (
+    <div className="code-block">
+      <div className="code-block-bar">
+        <span className="code-block-lang">mermaid</span>
+        <span className="spinner" />
+      </div>
+    </div>
+  );
+}
+
 // Module-level constants: markdown parsing + highlight.js is the single most
 // expensive thing the renderer does. ReactMarkdown re-initializes its plugin
 // pipeline when the plugin array identity changes, and re-parses the text on
@@ -316,6 +403,9 @@ const MD_COMPONENTS = {
   pre: ({ children }: any) => <>{children}</>,
   code: ({ className, children, ...rest }: any) => {
     const isBlock = /hljs|language-/.test(className || "") || extractText(children).includes("\n");
+    if (isBlock && /language-mermaid/i.test(className || "")) {
+      return <MermaidDiagram code={extractText(children)} />;
+    }
     if (isBlock) return <CodeBlock className={className}>{children}</CodeBlock>;
     return (
       <code className="inline-code" {...rest}>

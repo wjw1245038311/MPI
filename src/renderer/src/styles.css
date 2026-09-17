@@ -1385,6 +1385,21 @@ body.sidebar-resizing * {
   margin: 10px 0;
   overflow: hidden;
 }
+/* Mermaid diagrams (```mermaid fences) */
+.mermaid-diagram {
+  margin: 10px 0;
+  text-align: center;
+  overflow-x: auto;
+}
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+.mermaid-error {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-top: -4px;
+}
 .code-block-bar {
   display: flex;
   align-items: center;
