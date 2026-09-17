@@ -430,7 +430,7 @@ Click any file in the sidebar "Files" tab; click a file artifact chip in a chat 
 
 | Type | Behavior |
 | --- | --- |
-| Markdown | Full rendering of headings, lists, tables, code blocks and images, plus inline HTML (e.g. README screenshot grids); relative image paths in the document are loaded from disk automatically; clicking a link to a local file opens that file right in the preview, while http(s) links open in the external browser. |
+| Markdown | Full rendering of headings, lists, tables, code blocks and images, inline HTML (e.g. README screenshot grids) and ```mermaid fence diagrams (lazy-loaded; invalid syntax falls back to the raw code); relative image paths in the document are loaded from disk automatically; clicking a link to a local file opens that file right in the preview, while http(s) links open in the external browser. |
 | HTML | Live preview (sandboxed iframe) with zoom support (50%–200%, wheel/buttons). |
 | Source code | Syntax highlighting + line numbers. |
 | Images | Click to open in a lightbox. |
