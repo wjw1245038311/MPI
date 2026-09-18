@@ -4,6 +4,16 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## v0.6.20（2026-09-18）
+
+1. **画像体系升级：「用户画像」迁入知芽 Zhiya 文件**：设置里的旧「用户画像」页签移除——首次启动时已有画像文本自动迁移到 `~/.pi/agent/zhiya/persona.md`，注入行为不变（仍追加进每个会话的系统提示词），老用户无感。新增「知芽」面板（侧栏新入口，**仅开发版可见**，打包版无此入口）：人物画像 / 资产 / 知识库 / 短期记忆四个页签——画像与资产（`~/.pi/agent/zhiya/assets.md`，本机服务/工具清单）编辑保存后注入系统提示词（4KB 截断护栏），用 Obsidian/VSCode 等外部编辑器直接改文件同样生效（warm bridge 按内容指纹检测变化并重启备用进程，新会话即拿到最新画像）；知识库页签浏览当前项目 `.alexandria/knowledge/`（文件树 + MD 预览 + 一键打开 Obsidian）；短期记忆页签显示 mem0 服务器状态。定时任务（自动化面板）的注入同步切到知芽管线。
+
+   验证方式：升级后首次启动 → 设置里不再有「用户画像」页签；若之前填过画像，`~/.pi/agent/zhiya/persona.md` 里能看到迁移来的内容（带「迁移自旧『用户画像』设置」小节），新会话问 agent「你知道我是做什么的吗」仍按画像回答。开发版（npm run dev）：侧栏出现知芽入口 → 编辑画像保存 → 新会话生效；外部编辑器改 persona.md → 开新会话同样生效。
+
+2. **技能市场（Skills Hub）修复**：①skills CLI 路径解析失败时 UI 永久挂死无报错——根因是 Promise executor 内 throw 落入隐式 rejection 无人处理、外层 promise 永远 pending，现改为在守卫内显式 reject，UI 正常显示错误；②`skills` CLI 改为显式运行时依赖随包安装（`appRequire.resolve("skills/bin/cli.mjs")`），不再依赖间接安装——之前部分环境解析不到导致技能市场不可用。
+
+   验证方式：设置 → 扩展 → 技能页签正常加载技能列表（此前个别环境下打开后一直转圈无响应）；搜索/安装流程不变。测试：typecheck/build + `npm run test:ltm-newthread`（LongTaskMonitor 新会话回归，随本版本新增的复现脚本一并入库）。
+
 ## v0.6.19（2026-09-17）
 
 1. **Mermaid 图表渲染**：聊天消息与 Markdown 预览里的 ```mermaid 围栏现在直接渲染为 SVG 图形（流程图/时序图等），不再显示原始代码。新增 mermaid 依赖但走动态 import 懒加载——只有页面里真出现 mermaid 块才拉取那个 ~400KB chunk，平时零开销；跟随应用明暗主题切换重绘；securityLevel=strict 防标签注入；语法错误时回退显示原始代码 + 提示行，不会白屏。
