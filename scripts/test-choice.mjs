@@ -43,6 +43,9 @@ assert.ok(logic.qaModeInstruction("inline", "zh").includes("内联快速选择")
 assert.ok(logic.qaModeInstruction("inline", "zh").includes("我的选择："));
 assert.ok(logic.qaModeInstruction("manual", "zh").startsWith("## 问答方式：手动回答"));
 assert.ok(logic.qaModeInstruction("manual", "zh").includes("不要输出"));
+// conflict resolution: skills prescribing their own question format yield to the fence
+assert.ok(logic.qaModeInstruction("inline", "zh").includes("skill"));
+assert.ok(logic.qaModeInstruction("inline", "en").includes("interviewing skill"));
 assert.ok(logic.qaModeInstruction("inline", "en").includes("inline quick choice"));
 assert.ok(logic.qaModeInstruction("manual", "en").includes("Do NOT emit"));
 
