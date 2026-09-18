@@ -165,6 +165,12 @@ export interface AppConfig {
    * workflow/summaryModel in ~/.pi/web-search.json (shared with terminal pi).
    * Absent = enabled — the per-search popup is exactly what this removes. */
   extAutoPickModel?: boolean;
+  /** “问答方式” (Settings → Conversation). "inline" (default): multiple-choice
+   * questions are emitted as ```choices fences that MPI renders as a clickable
+   * inline panel; selections come back as one user message. "manual": the agent
+   * asks numbered plain-text questions and the user types answers. Injected into
+   * every session's system prompt at spawn time (see append-prompt.ts). */
+  qaMode?: "inline" | "manual";
   /** cwd of the most recently opened thread; seeds the warm spare's project. */
   lastThreadCwd?: string;
   /** User-defined scheduled automation tasks. */
@@ -472,6 +478,7 @@ export function loadConfig(userDataDir: string): AppConfig {
         userProfile: typeof parsed.userProfile === "string" ? parsed.userProfile : undefined,
         extAutoPickModel:
           typeof parsed.extAutoPickModel === "boolean" ? parsed.extAutoPickModel : undefined,
+        qaMode: parsed.qaMode === "inline" || parsed.qaMode === "manual" ? parsed.qaMode : undefined,
         smartCompact: sanitizeSmartCompact(parsed.smartCompact),
         defaultPermission:
           typeof parsed.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(parsed.defaultPermission)
@@ -683,6 +690,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (typeof p.agentAvatar === "string" && p.agentAvatar.startsWith("data:image/")) out.agentAvatar = p.agentAvatar;
   if (typeof p.userProfile === "string") out.userProfile = p.userProfile;
   if (typeof p.extAutoPickModel === "boolean") out.extAutoPickModel = p.extAutoPickModel;
+  if (p.qaMode === "inline" || p.qaMode === "manual") out.qaMode = p.qaMode;
   if (typeof p.lastThreadCwd === "string" && p.lastThreadCwd) out.lastThreadCwd = p.lastThreadCwd;
 
   if (Array.isArray(p.automationTasks)) {

@@ -11,7 +11,6 @@
  * lives per-project in .alexandria/knowledge/ and is queried on demand, not
  * injected; mem0 stays the short-term memory layer.
  */
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfig, updateConfig } from "./config";
@@ -160,11 +159,3 @@ export function buildZhiyaPrompt(): string | undefined {
   return out;
 }
 
-/**
- * Fingerprint of the injected text (not the raw files): comment-only edits do
- * not change it, so they must not force a warm-bridge restart.
- */
-export function zhiyaFingerprint(): string {
-  const prompt = buildZhiyaPrompt() ?? "";
-  return createHash("sha256").update(prompt).digest("hex");
-}

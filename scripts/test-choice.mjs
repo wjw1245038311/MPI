@@ -38,6 +38,14 @@ assert.deepEqual(renderer.choiceOption({ label: "x", detail: undefined }), { lab
 // dedupe by label, first wins
 assert.deepEqual(renderer.choiceOptions(["A", { label: "A", detail: "dup" }, "B"]), [{ label: "A" }, { label: "B" }]);
 
+// --- Q&A mode instruction (Settings → 对话设置 “问答方式”) -------------------
+assert.ok(logic.qaModeInstruction("inline", "zh").includes("内联快速选择"));
+assert.ok(logic.qaModeInstruction("inline", "zh").includes("我的选择："));
+assert.ok(logic.qaModeInstruction("manual", "zh").startsWith("## 问答方式：手动回答"));
+assert.ok(logic.qaModeInstruction("manual", "zh").includes("不要输出"));
+assert.ok(logic.qaModeInstruction("inline", "en").includes("inline quick choice"));
+assert.ok(logic.qaModeInstruction("manual", "en").includes("Do NOT emit"));
+
 // --- real extension source against stubs (same pattern as channel-ext) ------
 const root = mkdtempSync(join(tmpdir(), "mpi-choice-ext-"));
 try {

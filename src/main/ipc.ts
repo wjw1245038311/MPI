@@ -193,13 +193,12 @@ import {
   ASSETS_FILE,
   PERSONA_FILE,
   ZHIYA_PROMPT_BUDGET,
-  buildZhiyaPrompt,
   ensureZhiyaFiles,
   readZhiyaFile,
   writeZhiyaFile,
   zhiyaDir,
-  zhiyaFingerprint,
 } from "./zhiya";
+import { appendPromptFingerprint, buildAppendSystemPrompt } from "./append-prompt";
 
 
 
@@ -549,9 +548,9 @@ function createHandle(
     // Keep pi's runtime in sync with the Plugins inventory, including the
     // singular `.pi/agent/skill` compatibility path and other local roots.
     skills: getAdditionalSkillPaths(cwd),
-    // 知芽 Zhiya: persona.md + assets.md are appended to this run's system
-    // prompt; read at spawn time so edits apply from new sessions on.
-    appendSystemPrompt: buildZhiyaPrompt(),
+    // System-prompt injection (Zhiya persona/assets + 问答方式 instruction);
+    // read at spawn time so changes apply from new sessions on.
+    appendSystemPrompt: buildAppendSystemPrompt(),
     shellInfo: shell.info,
     toolFlags: shell.toolFlags,
     gateModeFile,
@@ -726,10 +725,10 @@ function createHandle(
  * Cost: one idle node process (~190MB); it is stopped on app quit.
  */
 let warmHandle: BridgeHandle | null = null;
-/** zhiyaFingerprint() at the moment the current spare was booted; a mismatch
- * means persona.md/assets.md changed on disk and the spare's baked-in system
- * prompt is stale. */
-let warmZhiyaFp = "";
+/** appendPromptFingerprint() at the moment the current spare was booted; a
+ * mismatch means the injected text (persona.md/assets.md or 问答方式) changed
+ * and the spare's baked-in system prompt is stale. */
+let warmAppendFp = "";
 let lastOpenCwd: string | null = null;
 let warmFailures = 0;
 let warmEnabled = false;
@@ -917,7 +916,7 @@ export function ensureWarmBridge(): void {
   const cwd = warmCwd();
   const handle = createHandle(cwd, undefined, undefined, "sandbox", sendToRenderer);
   warmHandle = handle;
-  warmZhiyaFp = zhiyaFingerprint();
+  warmAppendFp = appendPromptFingerprint();
   // eslint-disable-next-line no-console
   console.log("[pi] warm spare spawning (cwd=" + cwd + ")");
   handle.bridge
@@ -945,15 +944,15 @@ export function dropWarmBridge(): void {
     warmHandle.bridge.stop();
     warmHandle = null;
   }
-  warmZhiyaFp = "";
+  warmAppendFp = "";
 }
 
-/** Restart the standby when persona.md/assets.md changed since it booted.
+/** Restart the standby when the injected prompt text changed since it booted.
  * Cheap: two small file reads + a sha256. Call before adopting the spare. */
 function refreshWarmBridgeIfStale(): void {
   if (!warmHandle) return;
-  const fp = zhiyaFingerprint();
-  if (fp === warmZhiyaFp) return;
+  const fp = appendPromptFingerprint();
+  if (fp === warmAppendFp) return;
   // eslint-disable-next-line no-console
   console.log("[pi] zhiya files changed -> restarting warm spare with fresh system prompt");
   dropWarmBridge();
@@ -2538,6 +2537,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("app:setConfig", (_e, patch) => {
     const prevCli = getConfig().piCliPath;
     const prevProfile = (getConfig().userProfile || "").trim();
+    const prevQaMode = getConfig().qaMode || "inline";
     const prevExtAutoPick = getConfig().extAutoPickModel !== false;
     // P1-12: keep the live autopilot in sync when pool/policy change.
     if (patch && typeof patch === "object" && "autoModels" in patch) {
@@ -2561,6 +2561,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       ensureWarmBridge();
     } else if (((next.userProfile || "").trim() || "") !== prevProfile) {
       dropWarmBridge(); // standby was booted with the old profile text
+      ensureWarmBridge();
+    } else if ((next.qaMode || "inline") !== prevQaMode) {
+      dropWarmBridge(); // standby's system prompt carries the old Q&A instruction
       ensureWarmBridge();
     }
     // "扩展自动选模" toggle: off → restore web-search.json to its pre-MPI values;

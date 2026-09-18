@@ -8,7 +8,7 @@ import { ensureSmartCompactExtension } from "./compaction-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
 import { prepareShellForSpawn } from "./shell-bootstrap";
 import { getAgentDir } from "./session-store";
-import { buildZhiyaPrompt } from "./zhiya";
+import { buildAppendSystemPrompt } from "./append-prompt";
 import { join } from "node:path";
 import { ensureInboxDir, todosFilePath } from "./todo-store";
 
@@ -247,7 +247,7 @@ async function execute(task: AutomationTask): Promise<void> {
         // Same 知芽 Zhiya injection as interactive sessions. Scheduled runs
         // are never chat-channel sessions, so the mpi_channel_* bridge is not
         // loaded (desktop/automation sessions don't pay for its tools).
-        appendSystemPrompt: buildZhiyaPrompt(),
+        appendSystemPrompt: buildAppendSystemPrompt(),
         shellInfo: shell.info,
         toolFlags: shell.toolFlags,
         extensions: [

@@ -1314,6 +1314,8 @@ export function Settings() {
   const [initialProviders, setInitialProviders] = useState("{}");
   const [thinking, setThinking] = useState<ThinkingDefaults>({});
   const [initialThinking, setInitialThinking] = useState("{}");
+  // ---- Q&A style (config.qaMode; "inline" is the default) -------------------
+  const [qaDraft, setQaDraft] = useState<"inline" | "manual">("inline");
   // ---- smart-compaction summary model (saved immediately; the extension re-reads
   // config.json on every compaction, so no restart is needed) -----------------
   const [scProvider, setScProvider] = useState("");
@@ -1671,6 +1673,7 @@ export function Settings() {
     const seededVoice = { ...(config?.voice || {}) };
     setVoiceDraft(seededVoice);
     setInitialVoice(canonVoice(seededVoice));
+    setQaDraft(config?.qaMode || "inline");
     (async () => {
       try {
         const [models, think, d, p] = await Promise.all([
@@ -1717,6 +1720,7 @@ export function Settings() {
   const dataDirty = useMemo(() => JSON.stringify(dataDraft) !== initialData, [dataDraft, initialData]);
   const sysDirty = useMemo(() => initialSys !== "" && JSON.stringify(sysDraft) !== initialSys, [sysDraft, initialSys]);
   const voiceDirty = useMemo(() => canonVoice(voiceDraft) !== initialVoice, [voiceDraft, initialVoice]);
+  const qaDirty = useMemo(() => qaDraft !== (config?.qaMode || "inline"), [qaDraft, config]);
   // Re-sync the voice draft when main's persisted voice config changes behind us —
   // e.g. an app-store enable writes sttBaseUrl/sttModel while Settings is open.
   // Skipped while the user has unsaved voice edits so their draft stays intact;
@@ -1731,7 +1735,7 @@ export function Settings() {
   }, [persistedVoiceSig]);
   function attemptClose() {
     if (
-      (modelDirty || thinkDirty || permDirty || dataDirty || sysDirty || voiceDirty) &&
+      (modelDirty || thinkDirty || permDirty || dataDirty || sysDirty || voiceDirty || qaDirty) &&
       !window.confirm(language === "zh" ? "有未保存的更改，确定放弃并关闭？" : "Discard unsaved changes and close?")
     ) return;
     close();
@@ -1899,6 +1903,11 @@ export function Settings() {
       const res = await window.pi.settings.saveThinking(thinking as Record<string, unknown>);
       setThinking(res);
       setInitialThinking(JSON.stringify(res));
+      if (qaDirty) {
+        // config.json; main rebuilds the warm bridge so new sessions pick it up.
+        const cfg = await window.pi.app.setConfig({ qaMode: qaDraft });
+        useStore.setState({ config: cfg });
+      }
       await flushVoice();
       setFlash("conversation");
       setTimeout(() => setFlash(null), 1500);
@@ -2253,7 +2262,7 @@ export function Settings() {
                 <span className="set-tab-bar" />
                 {label}
                 {id === "models" && modelDirty && <span className="set-dot" />}
-                {id === "conversation" && (thinkDirty || voiceDirty) && <span className="set-dot" />}
+                {id === "conversation" && (thinkDirty || voiceDirty || qaDirty) && <span className="set-dot" />}
                 {id === "permissions" && permDirty && <span className="set-dot" />}
                 {id === "data" && dataDirty && <span className="set-dot" />}
                 {id === "system" && sysDirty && <span className="set-dot" />}
@@ -2313,7 +2322,7 @@ export function Settings() {
               {tab === "conversation" && (
                 <button className={`set-btn primary ${flash === "conversation" ? "saved" : ""}`} onClick={saveConversation} disabled={!!saving}>
                   {saving === "conversation" ? <span className="spinner" /> : flash === "conversation" ? (language === "zh" ? "已保存 ✓" : "Saved ✓") : language === "zh" ? "保存对话设置" : "Save conversation settings"}
-                  {(thinkDirty || voiceDirty) && flash !== "conversation" && <span className="set-dot" />}
+                  {(thinkDirty || voiceDirty || qaDirty) && flash !== "conversation" && <span className="set-dot" />}
                 </button>
               )}
               {tab === "permissions" && (
@@ -2343,6 +2352,19 @@ export function Settings() {
           <div className="set-body">
             {tab === "conversation" && (
               <div className="set-card">
+                <Field
+                  label={language === "zh" ? "问答方式" : "Q&A style"}
+                  hint={
+                    language === "zh"
+                      ? "带选项的问题在对话里渲染成可点击的内联面板，点选后综合一条消息发出；「手动回答」则 agent 用编号文本提问、你打字作答。对新会话生效（已开会话重连后生效）。"
+                      : "Multiple-choice questions render as a clickable inline panel in the chat; all picks are sent back as one message. “Manual answers” makes the agent ask numbered plain-text questions you answer by typing. Applies to new sessions (existing ones after reconnect)."
+                  }
+                >
+                  <select className="set-select" value={qaDraft} onChange={(e) => setQaDraft(e.target.value as "inline" | "manual")}>
+                    <option value="inline">{language === "zh" ? "内联快速选择（推荐）" : "Inline quick choice (recommended)"}</option>
+                    <option value="manual">{language === "zh" ? "手动回答" : "Manual answers"}</option>
+                  </select>
+                </Field>
                 <Field label="默认思考深度" hint="新建会话的初始思考等级；模型需 reasoning=true 才生效">
                   <select className="set-select" value={thinking.defaultThinkingLevel || "off"} onChange={(e) => setThinking((t) => ({ ...t, defaultThinkingLevel: e.target.value }))}>
                     {availableThinkingLevels.map((l) => (

@@ -568,6 +568,10 @@ export interface AppConfig {
    * current conversation's model without popping up; web searches skip the
    * browser curation window. Absent = enabled. */
   extAutoPickModel?: boolean;
+  /** “问答方式” (Settings → Conversation). "inline" (default): multiple-choice
+   * questions render as a clickable inline panel in the chat; "manual": numbered
+   * plain-text questions answered by typing. Absent = inline. */
+  qaMode?: "inline" | "manual";
   remoteSignalingUrl: string;
   remoteSignalingEnabled: boolean;
   remoteStunUrls: string[];
