@@ -46,7 +46,7 @@ const ASSETS_TEMPLATE = `# 资产（Assets）
 <!-- 一行一条，例：- mem0 语义记忆 — http://127.0.0.1:8000 -->
 
 ## 工具
-<!-- 一行一条，例：- alexandria v0.1.3 — E:\\MyWorkspace\\Software\\alexandria\\alexandria.exe -->
+<!-- 一行一条，例：- <工具名> <版本> — <安装目录>\\<可执行文件> -->
 `;
 
 /** Zhiya root dir; created on demand. */

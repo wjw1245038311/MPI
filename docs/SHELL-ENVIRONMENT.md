@@ -98,7 +98,7 @@ os: Windows 10 (10.0.19045) x64
 shell: Git Bash (POSIX bash)
 shell_path: E:\MyWorkSpace\Software\Git\bin\bash.exe
 shell_version: GNU bash, version 5.3.15(1)-release (x86_64-pc-cygwin)
-cwd: E:\MyWorkspace\Code\MPI
+cwd: <MyWorkspace>\Code\MPI
 shell_source: registry-git
 </environment_context>
 

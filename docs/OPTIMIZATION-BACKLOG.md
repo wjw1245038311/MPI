@@ -3,7 +3,7 @@
 > 合并日期：2026-09-17 · 基线版本 v0.6.17（dev == main，已同步）
 > 用途：把散在各文档里的「待优化」项合并成一份编号队列。处理时按编号挑条目，做完把状态改 ✅ 并注日期 + commit。
 > 来源文档（详细设计要点在那里，本文件只留可执行摘要）：
-> `.tmp-workdocs/improvement-suggestions.md` · `docs/REMOTE-PANEL-POLISH.md` · `docs/MOBILE-REMAINING-TODO.md` · `BRAIN-PLAN.md` · `.tmp-workdocs/SUBAGENT-PLAN.md` · `docs/HANDOFF-2026-09-16.md`
+> `.tmp-workdocs/improvement-suggestions.md` · `docs/REMOTE-PANEL-POLISH.md` · `docs/MOBILE-REMAINING-TODO.md` · `.tmp-workdocs/SUBAGENT-PLAN.md` · `docs/HANDOFF-2026-09-16.md`
 >
 > **状态图例**：⬜ 未开始 · 🟡 进行中 · ✅ 已完成（注日期+commit） · ⏸ 搁置（用户拍板「后面再说」） · ❓ 待用户拍板/配合
 
@@ -123,7 +123,8 @@
 
 ## 四、大脑系统 BRAIN-PLAN（方案 2026-09-16 定稿，未实施）
 
-> 总纲见 `BRAIN-PLAN.md`：文件为真相源（.alexandria/knowledge/ 四级阶梯+lessons）、alexandria 检索层（9/17 试点通过，zvec-grep 降为 fallback）、mem0 降为临时缓存。依赖：S4/S5 不阻塞 S3；S6 等 subagent 基建最顺。
+> 总纲为**本地私有设计文档**（不随本仓库分发，刻意不入公开仓）——原则摘要：文件为真相源（.alexandria/knowledge/ 四级阶梯+lessons）、alexandria 检索层（9/17 试点通过，zvec-grep 降为 fallback）、mem0 降为临时缓存。依赖：S4/S5 不阻塞 S3；S6 等 subagent 基建最顺。
+> ⚠️ 本仓库不得再出现大脑/知芽的设计内容（含本机路径、本地服务地址、tunnel 主机名）——只留可执行条目。
 
 ### 23 · S1 mem0 自启动 + 看门狗 ⬜ ≤半天
 - **验收**：重启工作站后 :8000 自动可用；kill uvicorn 后 5min 内自愈；MPI 离线提示可见。背景：9/16 实锤 server 无人值守停摆、大脑离线无人知晓。

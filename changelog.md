@@ -165,7 +165,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：全新配置 loadConfig → remoteSignalingUrl === ""；旧配置存 `wss://mpi-remote.scholarcn.com/ws` → 加载后变 ""；手动配置的其它 ws(s):// URL（如本地 signaling server）不受影响。测试：全量 npm test。
 
-14. **壳 0.2.3：黑屏可诊断 + 扫码实时反馈**（排查「新 APK 打开没显示」时发现壳无任何加载/失败反馈——中继不可达时就是纯黑屏零提示）。已排除代码因素：部署的 PWA bundle 经无头 Chromium 实测浏览器/壳两种模式均正常渲染、nginx MIME/缓存配置正确、APK dex 含全部新代码；最可能根因是手机当时不在 Tailscale（中继仅监听 tailnet `100.67.5.31:9443`）。本版把「无反馈」变成「有状态」：
+14. **壳 0.2.3：黑屏可诊断 + 扫码实时反馈**（排查「新 APK 打开没显示」时发现壳无任何加载/失败反馈——中继不可达时就是纯黑屏零提示）。已排除代码因素：部署的 PWA bundle 经无头 Chromium 实测浏览器/壳两种模式均正常渲染、nginx MIME/缓存配置正确、APK dex 含全部新代码；最可能根因是手机当时不在 Tailscale（中继仅监听 tailnet `<relay-tailnet-ip>:9443`）。本版把「无反馈」变成「有状态」：
    - **加载指示器**：启动后显示「正在连接中继…（长时间未打开请检查 Tailscale/地址）」，直到首帧渲染或错误面板出现；same-document 导航（扫码只改 hash）不误触发。
    - **扫码实时反馈**：8s / 23s 未识别到二维码弹提示 toast（不留静默路径）；相机初始化失败不再崩溃、明确显示原因。
    - **取证层**：壳侧 load/scan/update 事件写 logcat（tag `MpiShell`）+ SharedPreferences（最近 20 条，重启不丢），新增 `MpiShell.scanDiagnostics()` JS 桥（契约 #6）；PWA `?dbg=1` 浮层每 2s 拉取展示，且**无中继连接时也渲染**（黑屏场景正是需要它的时候）。
@@ -418,7 +418,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    - 实现：单 Activity WebView 载入自建中继托管的那套 H5（与手机浏览器 PWA 同一份构建），配对/E2E 加密/会话流全部沿用既有实现；壳只负责全屏窗口与原生兜底 UI——加载失败时给原生面板（可改中继地址 + 重试，换服务器也可用「用 MPI 打开」中继链接），返回键先退会话再后台化，预览 URL 限制在中继同源，触摸不拦截以免长列表滚动失效。
    - 刻意不做：后台常驻与锁屏推送（WebView 里没有 PushManager，自用场景只需「打开就能看到」；锁屏审批通知仍由浏览器 PWA + WebPush 承担）。
-   - 构建：需 JDK 21 + Android SDK 35 + Gradle（本机装在 `E:\MyWorkspace\Software\`，踩坑与联调手法见 `docs/ANDROID-SHELL.md`）；`cd android && ./gradlew assembleDebug`，debug 自签、侧载安装。
+   - 构建：需 JDK 21 + Android SDK 35 + Gradle（本机装在 `<MyWorkspace>\Software\`，踩坑与联调手法见 `docs/ANDROID-SHELL.md`）；`cd android && ./gradlew assembleDebug`，debug 自签、侧载安装。
 
    验证方式：安装 APK → 桌面侧栏「手机远程控制」生成配对二维码 → 手机壳里粘贴配对链接（桌面点「允许」）→ 壳里出现项目/会话列表；打开一个会话可看到完整历史与流式输出，并能直接发消息、回复实时回到壳里；中继不可达时出现原生兜底页面，可改地址后重试。
 

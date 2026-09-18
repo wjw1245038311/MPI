@@ -271,10 +271,10 @@ Qoder Mobile 已实现的用户功能（官方文档 + 截图 + H5 bundle 拆解
 
 ### 8.1 当前部署形态（测试阶段，走 Tailscale）
 
-- relay 跑在 **aliyun-ecs**：systemd `mpi-relay` 绑 tailnet IP `100.67.5.31:9443`，TLS 用
-  `tailscale cert aliyun-ecs.tail38d5a.ts.net`（LE，90 天，另有每月续期 cron），
+- relay 跑在 **aliyun-ecs**：systemd `mpi-relay` 绑 tailnet IP `<relay-tailnet-ip>:9443`，TLS 用
+  `tailscale cert aliyun-ecs.<tailnet>.ts.net`（LE，90 天，另有每月续期 cron），
   `RELAY_STATIC_DIR=/var/www/mpi-mobile` 同机托管 PWA。
-- 入口：PWA `https://aliyun-ecs.tail38d5a.ts.net:9443/`，wss 同址 `/ws`。**仅 tailnet 可达**
+- 入口：PWA `https://aliyun-ecs.<tailnet>.ts.net:9443/`，wss 同址 `/ws`。**仅 tailnet 可达**
   （公网未开）；手机需在 tailnet 内。
 - ⚠️ **WebPush 出口是硬约束**：大陆机器连不上 `fcm.googleapis.com`（relay 日志表现为
   `push … error: fetch failed`），而 Chrome/Android 的 WebPush 只能走 FCM、没有替代后端。
@@ -344,7 +344,7 @@ S1 Windows relay-uplink transport（host 注册/重连/帧转发进 RemoteServic
 
 ### 12.3 环境与仓库约定
 
-- 仓库 `E:\MyWorkspace\Code\MPI`（本机 = workstation，双远端 github/origin；同步流程见记忆）。
+- 仓库 `<MyWorkspace>\Code\MPI`（本机 = workstation，双远端 github/origin；同步流程见记忆）。
 - 分支：从 main 新建 `feat/mobile-relay`；提交风格沿用 conventional commits + 中文描述。
 - Node ≥ 24.14（repo engines），relay 与 PWA 同版本开发。
 - 代码布局：`mobile/relay/`（Node，仅 ws 依赖）、`mobile/pwa/`（Vite+React）；protocol 类型经 `mobile/shared/` 共享包或 vendored copy。

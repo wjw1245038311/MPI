@@ -21,7 +21,7 @@
 
 | 事项 | 做法 / 坑 |
 | --- | --- |
-| 安卓构建 | `cd android && JAVA_HOME='E:\MyWorkspace\Software\jdk21' ./gradlew assembleDebug`；SDK 在 `E:\MyWorkspace\Software\android-sdk`；Gradle 8.10.2 |
+| 安卓构建 | `cd android && JAVA_HOME='<MyWorkspace>\Software\jdk21' ./gradlew assembleDebug`；SDK 在 `<MyWorkspace>\Software\android-sdk`；Gradle 8.10.2 |
 | `local.properties` | `sdk.dir` **必须正斜杠**（`E:/MyWorkspace/...`），反斜杠会被 properties 当转义 → 报「文件名、目录名或卷标语法不正确」 |
 | 依赖源 | Gradle/Adoptium 官方下载 307 跳 github（被墙）→ wrapper 已指向华为镜像，JDK 走清华镜像 |
 | PWA 构建 | `cd mobile/pwa && NODE_ENV=production npm run build`；**必须显式 production**，否则打出 React 开发版（417KB vs 218KB） |
@@ -29,7 +29,7 @@
 | 中继部署 | `mobile/relay/index.mjs` 在 aliyun-ecs `/opt/mpi-relay`；SSH helper 在 `%TEMP%/ecs-ssh`（`run-any.mjs` 带 `SSH_HOST`、`upload.mjs`，密码走 `ECS_PWD`，远端路径要加 `MSYS_NO_PATHCONV=1`）；改完 `systemctl restart mpi-relay` |
 | 静态部署 PWA | 上传 `dist/index.html` + `dist/assets/*`（**JS 与 CSS 都要传**，改样式后哈希会变）到 `/var/www/mpi-mobile/` |
 | 模拟器 | 雷电 `F:/leidian/LDPlayer14/ldconsole.exe launch --index 0`；**它会抢 0.0.0.0:2222 = GitLab SSH 端口**，用完必须 `quit --index 0` 否则 `git push` 失败 |
-| 模拟器联调 | 宿主转发 `127.0.0.1:9443 → 100.67.5.31:9443` + `adb reverse tcp:9443 tcp:9443` + 壳地址用 `https://127.0.0.1:9443/`（debug 构建放行该域证书） |
+| 模拟器联调 | 宿主转发 `127.0.0.1:9443 → <relay-tailnet-ip>:9443` + `adb reverse tcp:9443 tcp:9443` + 壳地址用 `https://127.0.0.1:9443/`（debug 构建放行该域证书） |
 | WebView 调试 | `adb shell cat /proc/net/unix | grep webview_devtools_remote` → `adb forward tcp:9222 localabstract:<sock>` → `http://127.0.0.1:9222/json/list` 接 CDP |
 | 工具 | 这台机器上 `python` 是 Store 假入口会**挂住**，用 `node`；git bash 里 `&` 后台会打乱 cwd，用绝对路径 |
 | 验收基线 | `npm test`（56 passed/3 skipped）、`npm run typecheck`、`cd mobile/pwa && npx tsc --noEmit` |
@@ -98,7 +98,7 @@
      "E:/MyWorkspace/Code/MPI/mobile/pwa/dist/assets/index-CmLGSc0R.css" "/var/www/mpi-mobile/assets/index-CmLGSc0R.css" \
      "E:/MyWorkspace/Code/MPI/android/publish/mpi-android.json" "/var/www/mpi-mobile/download/mpi-android.json"
    ```
-   验证：`curl -sk https://100.67.5.31:9443/download/mpi-android.json | grep github`；手机刷新 PWA 应见「新建会话」与壳内提示条。
+   验证：`curl -sk https://<relay-tailnet-ip>:9443/download/mpi-android.json | grep github`；手机刷新 PWA 应见「新建会话」与壳内提示条。
    ⚠ 权限实时同步还需**重启桌面实例**（main 进程改动，Ctrl+R 不够）。
 2. **P3-S2–S6**（按 REMOTE-PANEL-POLISH.md 继续）
 3. **P5-1 / P5-5**（零散体验项：PWA 设置开关；已配对设备在线状态/最后活跃——不加新 IPC，重命名需拍板）

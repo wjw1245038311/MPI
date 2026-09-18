@@ -31,17 +31,17 @@
 
 ## 构建
 
-前置（本机已装，装在仓库外的 `E:\MyWorkspace\Software\`）：
+前置（本机已装，装在仓库外的 `<MyWorkspace>\Software\`）：
 
 | 组件 | 版本/路径 |
 | --- | --- |
-| JDK | Temurin 21（`E:\MyWorkspace\Software\jdk21`） |
-| Android SDK | `E:\MyWorkspace\Software\android-sdk`（build-tools;35.0.0、platform-tools、platforms;android-35） |
-| Gradle | 8.10.2（`E:\MyWorkspace\Software\gradle-8.10.2`，也可用仓库里的 wrapper） |
+| JDK | Temurin 21（`<MyWorkspace>\Software\jdk21`） |
+| Android SDK | `<MyWorkspace>\Software\android-sdk`（build-tools;35.0.0、platform-tools、platforms;android-35） |
+| Gradle | 8.10.2（`<MyWorkspace>\Software\gradle-8.10.2`，也可用仓库里的 wrapper） |
 
 ```bash
 cd android
-JAVA_HOME='E:\MyWorkspace\Software\jdk21' ./gradlew assembleDebug
+JAVA_HOME='<MyWorkspace>\Software\jdk21' ./gradlew assembleDebug
 # 产物：android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
@@ -77,7 +77,7 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk   # 或把 APK 
 
 ```bash
 # 1. 构建 + 生成本地产物（版本化 APK + sha256 + 清单，落在 android/publish/）
-cd android && JAVA_HOME='E:\MyWorkspace\Software\jdk21' ./gradlew assembleDebug && cd ..
+cd android && JAVA_HOME='<MyWorkspace>\Software\jdk21' ./gradlew assembleDebug && cd ..
 node scripts/publish-android.mjs                 # 只出本地产物
 # 本机直连 api.github.com 被墙时带代理：
 NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:10808 node scripts/publish-android.mjs --github
@@ -207,7 +207,7 @@ PWA 录音后端按环境自动选择，**接口一致**（同样的 16k 单声�
 
 ```bash
 # ① 宿主把 tailnet 中继映射到本机回环（临时脚本，不入库）
-node %TEMP%/mpi-relay-fwd.mjs            # 127.0.0.1:9443 → 100.67.5.31:9443
+node %TEMP%/mpi-relay-fwd.mjs            # 127.0.0.1:9443 → <relay-tailnet-ip>:9443
 # ② 模拟器用宿主回环
 F:/leidian/LDPlayer14/adb.exe reverse tcp:9443 tcp:9443
 # ③ 壳内地址改成 https://127.0.0.1:9443/
