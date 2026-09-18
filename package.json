@@ -1,6 +1,6 @@
 {
   "name": "mpi",
-  "version": "0.6.20",
+  "version": "0.6.21",
   "piRuntimeVersion": "0.85.1",
   "private": true,
   "license": "MIT",
@@ -145,7 +145,10 @@
     "productName": "MPI",
     "npmRebuild": false,
     "asarUnpack": [
-      "**/node_modules/node-pty/**"
+      "**/node_modules/node-pty/**",
+      "**/node_modules/skills/**",
+      "**/node_modules/tar/**",
+      "**/node_modules/yaml/**"
     ],
     "publish": [
       {

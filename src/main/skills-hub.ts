@@ -189,9 +189,19 @@ export async function getSkillDetails(skill: SkillHubSkill): Promise<SkillHubDet
   };
 }
 
+function toUnpackedPath(p: string): string {
+  // In packaged builds the CLI lives inside app.asar (see asarUnpack in
+  // package.json). Electron's fs layer transparently redirects reads of
+  // unpacked files, but a spawned plain-node process has no such patch and
+  // cannot read through the .asar virtual filesystem — it needs the real
+  // path under app.asar.unpacked. In dev builds there is no asar, so this
+  // rewrite is a no-op.
+  return p.replace(/([/\\]app\.asar)([/\\])/, "$1.unpacked$2");
+}
+
 function skillsCliPath(): string {
   try {
-    return appRequire.resolve("skills/bin/cli.mjs");
+    return toUnpackedPath(appRequire.resolve("skills/bin/cli.mjs"));
   } catch {
     throw new Error("The bundled skills CLI is unavailable. Reinstall MPI or its dependencies.");
   }

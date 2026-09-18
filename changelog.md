@@ -4,6 +4,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## v0.6.21（2026-09-18）
+
+1. **技能市场打包修复（安装版装技能报 MODULE_NOT_FOUND）**：v0.6.20 把 `skills` CLI 打进了 app.asar——Electron 自己能解析到，但实际 spawn 的是普通 node 进程，读不了 .asar 虚拟文件系统，导致安装任何技能都失败并报「安装技能失败：… MODULE_NOT_FOUND」。现在把 `skills`/`tar`/`yaml`（CLI 仅有的外部依赖）加入 asarUnpack 解包到磁盘 app.asar.unpacked，spawn 前把路径从 app.asar 重写到 app.asar.unpacked（dev 模式无 asar，重写为 no-op）。
+
+   验证方式：干净机器安装本版本 MPI-Setup-0.6.21.exe → 设置 → 扩展 → 技能页签 → 搜索任意技能点「安装」→ 安装成功并出现在已装列表（v0.6.20 在此步报 MODULE_NOT_FOUND）。
+
 ## v0.6.20（2026-09-18）
 
 1. **画像体系升级：「用户画像」迁入知芽 Zhiya 文件**：设置里的旧「用户画像」页签移除——首次启动时已有画像文本自动迁移到 `~/.pi/agent/zhiya/persona.md`，注入行为不变（仍追加进每个会话的系统提示词），老用户无感。新增「知芽」面板（侧栏新入口，**仅开发版可见**，打包版无此入口）：人物画像 / 资产 / 知识库 / 短期记忆四个页签——画像与资产（`~/.pi/agent/zhiya/assets.md`，本机服务/工具清单）编辑保存后注入系统提示词（4KB 截断护栏），用 Obsidian/VSCode 等外部编辑器直接改文件同样生效（warm bridge 按内容指纹检测变化并重启备用进程，新会话即拿到最新画像）；知识库页签浏览当前项目 `.alexandria/knowledge/`（文件树 + MD 预览 + 一键打开 Obsidian）；短期记忆页签显示 mem0 服务器状态。定时任务（自动化面板）的注入同步切到知芽管线。
