@@ -4,6 +4,7 @@ import { createAutomationExtUiHandler } from "./automation-ext-ui";
 import { PiBridge } from "./pi-bridge";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile } from "./permission-gate";
 import { ensureTodoExtension } from "./todo-extension";
+import { ensureSmartCompactExtension } from "./compaction-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
 import { prepareShellForSpawn } from "./shell-bootstrap";
 import { getAgentDir } from "./session-store";
@@ -253,9 +254,13 @@ async function execute(task: AutomationTask): Promise<void> {
           ensureGateExtension(getConfigDir()),
           ensureTodoExtension(getConfigDir()),
           ensureShellEnvExtension(getConfigDir()),
+          // Smart-compaction bridge (same as interactive threads): takes over HOW
+          // pi summarizes context on compaction; falls back to pi's built-in.
+          ensureSmartCompactExtension(getConfigDir()),
         ],
         // Live paths so a customized todo data location is honored.
         todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
+        smartCompactConfigFile: join(getConfigDir(), "config.json"),
         gateModeFile,
         name: automationSessionName(task.name, getConfig().language),
         onEvent: (e: any) => {

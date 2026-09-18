@@ -100,6 +100,7 @@ import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtim
 import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
 import { ensureChoiceExtension } from "./choice-extension";
+import { ensureSmartCompactExtension } from "./compaction-extension";
 import {
   isModeSwitchTitle,
   MODE_SWITCH_APPROVE_LABELS,
@@ -527,6 +528,11 @@ function createHandle(
       // automation spawns its own list without it, so unattended runs never
       // block on a dialog nobody can click.
       ensureChoiceExtension(getConfigDir()),
+      // Smart-compaction bridge: takes over HOW pi summarizes context when it
+      // compacts (CJK-aware estimation, chunked small-model summarization,
+      // verbatim user-message carry-over). Falls back to pi's built-in
+      // summarizer on any failure — never blocks compaction.
+      ensureSmartCompactExtension(getConfigDir()),
       // 任务模式 behaviour bridge: appends the active mode's instructions/spec
       // doc to the system prompt every turn (live switching, no restart).
       ensureTaskModeExtension(getConfigDir()),
@@ -539,6 +545,7 @@ function createHandle(
     // honored from the next spawned bridge on.
     todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
     choiceConfigFile: join(getConfigDir(), "config.json"),
+    smartCompactConfigFile: join(getConfigDir(), "config.json"),
     taskModeStateDir: join(getConfigDir(), "taskmodes"),
     channelInboxDir: isChannelSession ? ensureChannelCommandInbox() : undefined,
     // Keep pi's runtime in sync with the Plugins inventory, including the
