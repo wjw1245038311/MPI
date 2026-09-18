@@ -207,15 +207,21 @@ function safeSegment(value: string, label: string): string {
 
 function runSkillsCli(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise(async (resolve, reject) => {
-    let runtime: { node: string; cli: string };
+    let nodePath: string;
+    let skillsCli: string;
     try {
-      runtime = await resolvePiRuntime(getConfig().piCliPath);
+      const runtime = await resolvePiRuntime(getConfig().piCliPath);
+      // Resolve the CLI path inside this guard: a throw here would otherwise
+      // reject the async executor's implicit promise (unhandled) and leave
+      // the outer promise pending forever, so the UI hangs with no error.
+      nodePath = runtime.node;
+      skillsCli = skillsCliPath();
     } catch (error) {
       reject(error);
       return;
     }
 
-    const proc = spawn(runtime.node, [skillsCliPath(), ...args], {
+    const proc = spawn(nodePath, [skillsCli, ...args], {
       cwd: getAgentDir(),
       env: { ...process.env, DISABLE_TELEMETRY: "1" },
       windowsHide: true,
