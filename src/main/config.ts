@@ -191,6 +191,10 @@ export interface AppConfig {
   /** Per-thread auto-mode flag keyed by session file path (boot id until the
    * thread's real file name is known). Absent/false = manual model selection. */
   autoModelThreads?: Record<string, boolean>;
+  /** Smart compaction (mpi-smart-compact extension; Settings → Models & Providers).
+   * `model` = "provider/modelId" preferred for summarization; absent = follow the
+   * session's main model. `enabled=false` disables the whole extension (pi default). */
+  smartCompact?: { enabled?: boolean; model?: string };
   /** Voice system (语音系统): STT for composer voice input + TTS for reading
    * agent replies aloud. Absent = unconfigured; the mic button then points to
    * Settings → Conversation → 语音系统. See src/main/voice.ts for STT backends and
@@ -412,6 +416,16 @@ function configPath(dir: string): string {
   return join(dir, "config.json");
 }
 
+/** Sanitize the optional smartCompact section (hand-edited config can't break the ext). */
+function sanitizeSmartCompact(v: unknown): { enabled?: boolean; model?: string } | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const out: { enabled?: boolean; model?: string } = {};
+  if (typeof o.enabled === "boolean") out.enabled = o.enabled;
+  if (typeof o.model === "string" && o.model.trim()) out.model = o.model.trim();
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function loadConfig(userDataDir: string): AppConfig {
   cachedDir = userDataDir;
   const file = configPath(userDataDir);
@@ -458,6 +472,7 @@ export function loadConfig(userDataDir: string): AppConfig {
         userProfile: typeof parsed.userProfile === "string" ? parsed.userProfile : undefined,
         extAutoPickModel:
           typeof parsed.extAutoPickModel === "boolean" ? parsed.extAutoPickModel : undefined,
+        smartCompact: sanitizeSmartCompact(parsed.smartCompact),
         defaultPermission:
           typeof parsed.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(parsed.defaultPermission)
             ? (parsed.defaultPermission as PermissionLevel)

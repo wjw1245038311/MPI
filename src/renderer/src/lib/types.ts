@@ -604,6 +604,9 @@ export interface AppConfig {
   };
   /** P1-12 per-thread auto mode (threadId → enabled). */
   autoModelThreads?: Record<string, boolean>;
+  /** Smart compaction (mpi-smart-compact extension; Settings → Models & Providers).
+   * `model` = "provider/modelId" preferred for summarization; absent = main model. */
+  smartCompact?: { enabled?: boolean; model?: string };
   /** Voice system (语音系统): STT for the composer mic button + TTS for reading
    * replies aloud. Absent = unconfigured; see main/config.ts for semantics. */
   voice?: {

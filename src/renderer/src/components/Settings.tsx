@@ -1314,6 +1314,10 @@ export function Settings() {
   const [initialProviders, setInitialProviders] = useState("{}");
   const [thinking, setThinking] = useState<ThinkingDefaults>({});
   const [initialThinking, setInitialThinking] = useState("{}");
+  // ---- smart-compaction summary model (saved immediately; the extension re-reads
+  // config.json on every compaction, so no restart is needed) -----------------
+  const [scProvider, setScProvider] = useState("");
+  const [scModelId, setScModelId] = useState("");
   const [invalidJson, setInvalidJson] = useState<Record<string, boolean>>({});
   // ---- trusted tools (“始终允许该工具”) + default permission ----------------
   // Permission settings are edited as a draft and only written on save, matching
@@ -1679,6 +1683,15 @@ export function Settings() {
         setInitialProviders(JSON.stringify(models.providers || {}));
         setThinking(think || {});
         setInitialThinking(JSON.stringify(think || {}));
+        const scModel = useStore.getState().config?.smartCompact?.model;
+        if (typeof scModel === "string" && scModel.includes("/")) {
+          const [sp, ...sm] = scModel.split("/");
+          setScProvider(sp);
+          setScModelId(sm.join("/"));
+        } else {
+          setScProvider("");
+          setScModelId("");
+        }
         setDiag(d);
         setShellInfo(d.shell ?? null);
         setPaths(p);
@@ -1894,6 +1907,19 @@ export function Settings() {
       pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
     } finally {
       setSaving(null);
+    }
+  };
+
+  /** Smart-compaction summary model → config.json (smartCompact.model). The
+   * mpi-smart-compact extension re-reads the file on every compaction, so the
+   * change applies from the next compaction without a restart. */
+  const saveSmartCompact = async (provider?: string, modelId?: string) => {
+    const model = provider && modelId ? `${provider}/${modelId}` : undefined;
+    try {
+      const next = await window.pi.app.setConfig({ smartCompact: model ? { model } : undefined });
+      useStore.setState({ config: next });
+    } catch (e: any) {
+      pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
     }
   };
 
@@ -3126,6 +3152,51 @@ export function Settings() {
                       {defaultModels.map((id) => (
                         <option key={id} value={id}>
                           {id}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field
+                    label={language === "zh" ? "摘要模型（提供商）" : "Summary model (provider)"}
+                    hint={
+                      language === "zh"
+                        ? "上下文压缩时优先用它做摘要；留空 = 跟随会话主模型。改动即时生效，无需重启。"
+                        : "Preferred provider for context-compaction summaries; leave empty to follow the session's main model. Applies from the next compaction, no restart needed."
+                    }
+                  >
+                    <select
+                      className="set-select"
+                      value={scProvider}
+                      onChange={(e) => {
+                        const p = e.target.value;
+                        setScProvider(p);
+                        setScModelId("");
+                        void saveSmartCompact(p || undefined, undefined);
+                      }}
+                    >
+                      <option value="">{language === "zh" ? "（默认：会话主模型）" : "(default: session main model)"}</option>
+                      {providerKeys.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label={language === "zh" ? "摘要模型" : "Summary model"}>
+                    <select
+                      className="set-select"
+                      value={scModelId}
+                      onChange={(e) => {
+                        const m = e.target.value;
+                        setScModelId(m);
+                        void saveSmartCompact(scProvider || undefined, m || undefined);
+                      }}
+                      disabled={!scProvider}
+                    >
+                      <option value="">{language === "zh" ? "（未设）" : "(none)"}</option>
+                      {(draft.providers[scProvider]?.models || []).map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.id}
                         </option>
                       ))}
                     </select>
