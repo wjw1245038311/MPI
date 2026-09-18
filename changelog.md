@@ -4,6 +4,13 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **智能压缩机制（mpi-smart-compact）**：接管 pi 上下文快满时「如何压缩」——时机仍由 pi 决定，只改压缩方式。①CJK 感知的 token 估算（中文 ≈1 token/字，修复纯中文会话进度显示与切分点被低估的问题）；②结构化摘要：七段式 checkpoint + **用户原话逐字保留**（跨多次压缩永久继承、不改写不丢失）+ Key Replies（关键回复结论）+ 文件读写清单；③模型路由：默认用会话主模型单次直传（成本 ≈ pi 内置压缩），在 config.json 显式配置 `smartCompact.model`（"provider/model-id"，如快速小模型或便宜云模型）则优先用它、上下文装不下或失败时按调用自动回退主模型；④安全网：内部任何失败自动回退 pi 内置压缩——永不阻塞、不丢压缩。当前默认开启，高级用户可在 config.json 设 `smartCompact.enabled=false` 关闭。
+2. **设置 → 模型与提供商新增「摘要模型」两行下拉**（提供商 + 模型）：指定上下文压缩时优先用哪个模型做摘要（如主模型用贵的云端大模型、压缩走便宜的 flash 模型）；留空 = 跟随会话主模型。改动即时写入 config.json，扩展每次压缩前重读——下次压缩即生效，无需重启。
+
+   验证方式：npm run dev（完整重启）→ 打开一个长会话持续对话直到触发自动压缩（上下文接近满时线程出现「压缩中」状态）→ 完成后问「我之前让你做什么」「我们读过哪些文件」→ 均能准确回答且用户原话逐字保留；dev 终端可见 `[smart-compact]` 日志（SINGLE PASS / chunk 数、摘要 token 数等）。另：设置 → 模型与提供商 → 「摘要模型」选一个已配置提供商+模型 → 下次压缩的 dev 日志里 `small=` 显示所选模型（留空则 `small=none`）。
+
 ## v0.6.21（2026-09-18）
 
 1. **技能市场打包修复（安装版装技能报 MODULE_NOT_FOUND）**：v0.6.20 把 `skills` CLI 打进了 app.asar——Electron 自己能解析到，但实际 spawn 的是普通 node 进程，读不了 .asar 虚拟文件系统，导致安装任何技能都失败并报「安装技能失败：… MODULE_NOT_FOUND」。现在把 `skills`/`tar`/`yaml`（CLI 仅有的外部依赖）加入 asarUnpack 解包到磁盘 app.asar.unpacked，spawn 前把路径从 app.asar 重写到 app.asar.unpacked（dev 模式无 asar，重写为 no-op）。
