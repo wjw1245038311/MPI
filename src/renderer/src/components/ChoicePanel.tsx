@@ -118,17 +118,7 @@ export function ChoicePanel({
             {zh ? `已选 ${answeredCount}/${data.questions.length}` : `${answeredCount} of ${data.questions.length} selected`}
           </span>
         )}
-        {!frozen && (
-          <button className="btn primary cp-submit" onClick={() => void submit()}>
-            <Send size={13} /> {zh ? "发送选择" : "Send choices"}
-          </button>
-        )}
       </div>
-      {showMissing && !frozen && missingCount > 0 && (
-        <div className="cp-missing-hint" role="alert">
-          {zh ? `还有 ${missingCount} 题未选择` : `${missingCount} question${missingCount === 1 ? "" : "s"} still need an answer`}
-        </div>
-      )}
 
       {data.questions.map((q, qi) => {
         const a = answers[qi];
@@ -220,6 +210,21 @@ export function ChoicePanel({
           </div>
         );
       })}
+
+      {/* Submit lives at the END of the panel (after all questions); the
+       * missing-answer hint sits beside it so it is visible on click. */}
+      <div className="cp-foot">
+        {showMissing && !frozen && missingCount > 0 && (
+          <div className="cp-missing-hint" role="alert">
+            {zh ? `还有 ${missingCount} 题未选择` : `${missingCount} question${missingCount === 1 ? "" : "s"} still need an answer`}
+          </div>
+        )}
+        {!frozen && (
+          <button className="btn primary cp-submit" onClick={() => void submit()}>
+            <Send size={13} /> {zh ? "发送选择" : "Send choices"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

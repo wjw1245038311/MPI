@@ -2392,8 +2392,16 @@ body.sidebar-resizing * {
   align-items: center;
   gap: 5px;
 }
+/* Footer row at the END of the panel: missing-answer hint (left) + submit. */
+.cp-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
 .cp-missing-hint {
-  margin-top: 8px;
+  margin-right: auto;
   padding: 6px 9px;
   border-radius: 7px;
   background: #fff3f1;
@@ -2453,6 +2461,11 @@ body.sidebar-resizing * {
 .choice-panel .cp-opt-label svg {
   flex: 0 0 auto;
   color: var(--accent);
+}
+/* The shared .extui-opt-label uses space-between (for the card's 推荐 badge);
+   in the panel that pushes the option text to the right — keep it left. */
+.choice-panel .cp-opt-label {
+  justify-content: flex-start;
 }
 /* Frozen panels are read-only: no hover affordance on the option labels. */
 .choice-panel:not(.state-pending) .extui-card-options .extui-opt:hover {
