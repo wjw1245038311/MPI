@@ -60,3 +60,6 @@ android/publish/
 
 # 本地进程/重启日志（scripts/restart-dev.sh 输出）
 logs/
+
+# alexandria 知识引擎：索引 db 是编译产物（可丢弃重建）；toml+knowledge/ 进 git
+.alexandria/index/

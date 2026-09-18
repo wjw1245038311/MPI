@@ -1,0 +1,21 @@
+# Project library configuration. See the engine's bundled alexandria.toml for reference.
+
+[scan]
+# Scan roots, relative to the project root. Empty = scan everything.
+include_dirs = ["src", "scripts"]
+
+[index]
+# Project-private knowledge roots (documents live directly under them).
+docs_dirs = [".alexandria/knowledge"]
+
+# Shared knowledge packs to enable at query time.
+# Built and queried together with the project. Resolved in order:
+# <project>/.alexandria/packs/<name>, <project>/packs/<name>,
+# <packs_root>/packs/<name> (engine-level, UE's engine-plugins analog).
+enabled_packs = []
+# packs_root = "../DamiAgentInfra/alexandria"
+
+[retrieval]
+# max_results = 10
+# max_graph_depth = 3
+# max_graph_nodes = 2000

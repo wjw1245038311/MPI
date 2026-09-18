@@ -123,22 +123,22 @@
 
 ## 四、大脑系统 BRAIN-PLAN（方案 2026-09-16 定稿，未实施）
 
-> 总纲见 `BRAIN-PLAN.md`：文件为真相源（docs/knowledge/）、zvec-grep 检索层、mem0 降为临时缓存。依赖：S4/S5 不阻塞 S3；S6 等 subagent 基建最顺。
+> 总纲见 `BRAIN-PLAN.md`：文件为真相源（.alexandria/knowledge/ 四级阶梯+lessons）、alexandria 检索层（9/17 试点通过，zvec-grep 降为 fallback）、mem0 降为临时缓存。依赖：S4/S5 不阻塞 S3；S6 等 subagent 基建最顺。
 
 ### 23 · S1 mem0 自启动 + 看门狗 ⬜ ≤半天
 - **验收**：重启工作站后 :8000 自动可用；kill uvicorn 后 5min 内自愈；MPI 离线提示可见。背景：9/16 实锤 server 无人值守停摆、大脑离线无人知晓。
 
-### 24 · S2 docs/knowledge/ 四文件 + 一次性迁移 ⬜ 半天
-- README（布局契约）/ pitfalls.md / decisions.md / architecture.md，条目带 `[事实@commit]` / `[推断]` 标记。mem0 project scope 20 条：~7 git/changelog 重复 → delete；~5 任务状态快照 → 并入 HANDOFF 或 delete；~7 持久教训 → 提炼入 pitfalls.md。**删记忆前逐条给用户确认**。
+### 24 · S2 .alexandria/knowledge/ 四级阶梯+lessons 建设 + 一次性迁移 ⬜ 半天→1天
+- 试点已有 3 篇示例文档（Architecture.md / domains/FeishuMessaging.md / lessons/DevRestartAfterMainPreloadChange.md，lint+contract 全绿）。剩余：modules/ 补 main 子系统（建议先 pi-bridge/messaging/permission-gate）+ mem0 ~7 条持久教训提炼入 lessons/（一错一文，Symptom→Root Cause→Fix→Guard 结构，[extracted]/[inferred] 标记由引擎机械验证）。验收：lint+contract 全绿。mem0 project scope 20 条：~7 git/changelog 重复 → delete；~5 任务状态快照 → 并入 HANDOFF 或 delete；~7 持久教训 → 提炼入 lessons/。**删记忆前逐条给用户确认**。
 
-### 25 · S3 zvec-grep + pi 适配器安装实测 ⬜ 半天
-- `/zg index` 成功（本地 embedding）；真实问题验证：「飞书消息从 WS 到 runJob 的链路」「权限 gate 判定顺序」检索命中正确文件+行号，agent 据此少读文件。
+### 25 · S3 alexandria 安装实测 ✅ 9/17 完成（原计划 zvec-grep）
+- 试点通过：exe v0.1.3 可用；scan 269 files→2089 symbols/17517 edges @1.5s，locate file:line 与源码逐一核对一致、调用图正确；3 篇示例文档 lint 0 errors/warnings + contract 233 units 100% accepted、[extracted] claims 全部对活代码 verified；真实问题检索命中（飞书链路/权限 gate），越界问题诚实返回 Boundaries。剩余：exe 永久位置拍板 + skill 装进 ~/.pi/agent/skills/。已知缺口：abstract class 未索引（全仓库仅 1 个）。
 
 ### 26 · S4 context-loader skill 升级 ⬜ 1天
-- §2 读取顺序 + Evidence Packet 契约；新会话首轮自动注入①–③；代码问题走 zvec_search；过期条目标 ⚠️（fail-closed）。
+- §2 读取顺序 + Evidence Packet 契约；新会话首轮自动注入①–②；知识/代码问题走 alexandria query/locate/graph（Evidence Packet 是引擎原生输出）；过期条目标 ⚠️（fail-closed）。
 
 ### 27 · S5 dream 物化扩展 ⬜ 1天
-- `/mem0-dream` 产出 docs/knowledge/ 工作区 diff + mem0 prune 清单，不自动 commit。
+- `/mem0-dream` 产出 .alexandria/knowledge/ 工作区 diff（按 alexandria 格式）+ compile+contract 当验收门禁 + mem0 prune 清单，不自动 commit。
 
 ### 28 · S6 Reflection critic 子代理（可选）❓ critic 模型待拍板（本机 qwen27B vs .220）
 - 大任务收尾用便宜模型跑自检再交付；捕获程序性遗漏（漏 typecheck/手册未同步/测试没跑）。复用 SUBAGENT-PLAN subagent 基建。1–2天。
@@ -162,6 +162,9 @@
 ### 33 · SUBAGENT-PLAN 双机并行 subagent 扩展安装 ⬜ ~15min、MPI 源码零改动
 - pi 官方 subagent 示例装到 `~/.pi/agent/extensions/`（用户级全局扩展），所有 MPI 会话自动加载；子进程 argv[1] 解析已核实无坑。双机并发机制 9/09 实测成立（墙钟 42s ≈ max(两边)）。详见 `.tmp-workdocs/SUBAGENT-PLAN.md`。
 
+### 35 · S1 知识库应用封装：设置行 + KB 浏览面板 + 「添加到知识库」⬜ ~1天
+- 用户已拍板 S1 档位（9/17）。设置→通用加「知识库」行（knowledgeBaseDir，默认 <repo>/.alexandria/knowledge/，可指向外部 Obsidian vault）+「用 Obsidian 打开」按钮（obsidian:// URI）；KB 浏览面板复用现有 MD 预览/file tree 基建；消息右键菜单加「添加到知识库」（仿 MessageQuoteMenu「添加为待办」addTodo 模式，按 lesson 格式写入 lessons/）。S2（反向链接图/应用内搜索）不做——交给 Obsidian。
+
 ### 34 · 安装包瘦身：纯 renderer 依赖移 devDependencies ⏸ 用户拍板「等 MPI 完全成型后开做」（2026-09-17）
 - v0.6.19 +34MB 排查发现机制性重复打包：electron-builder 自动把生产依赖的原始 node_modules 打进 app.asar，而 Vite 早已 bundle 进 out/renderer。mermaid 已单点修复（commit 07b1f7a，下个版本回 ~158MB）。剩余候选：react/react-dom、xlsx、pdfjs-dist、mammoth、jszip、highlight.js、react-markdown/remark/rehype 全家、zustand——估计再省 50–100MB。开工前需逐个确认 main/preload 无运行时 require（ws/node-pty/electron-updater/@larksuiteoapi 必须留 dependencies）。验收：npm run dist 后 exe ≤~158MB + 全量功能回归过。
 
@@ -182,5 +185,5 @@
 2. **01** —— 差异化价值最高，独立排一个迭代
 3. **23 + 24** —— 大脑地基：先止血（看门狗）再建知识库
 4. 小项打包：**08/09**（composer 交互）+ **10/11/12**（顺手修）一次清掉
-5. **25 → 26 → 27** 大脑继续推进；**33** 随时可插队（15min）
+5. **26 → 27** 大脑继续推进（25 已完成）；**35** S1 封装可与 24 并行；**33** 随时可插队（15min）
 6. 长期候选：**02 / 03 / 04 / 05 / 06 / 07** 按使用痛点再挑
