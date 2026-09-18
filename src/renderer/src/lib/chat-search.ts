@@ -1,4 +1,5 @@
 import type { ViewMessage } from "./types";
+import { choiceFenceToVisibleText } from "./choice-block";
 import { parseHtmlReferenceText } from "./html-reference";
 import { parseSkillBlock } from "./skill-block";
 
@@ -25,7 +26,11 @@ export function messageSearchUnits(message: ViewMessage): { key: string; text: s
   if (message.role === "assistant") {
     const units: { key: string; text: string }[] = [];
     (message.blocks || []).forEach((block, index) => {
-      if (block.type === "text" && block.text) units.push({ key: `${message.key}:${index}`, text: block.text });
+      // A valid ```choices fence renders as an interactive panel — count only
+      // its visible equivalent (titles + labels), not the JSON body. Invalid
+      // fences render as code blocks and stay in the corpus untouched.
+      if (block.type === "text" && block.text)
+        units.push({ key: `${message.key}:${index}`, text: choiceFenceToVisibleText(block.text) });
     });
     return units;
   }

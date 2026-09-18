@@ -36,6 +36,7 @@ import { cleanOutput, extensionsAlreadyLatest, hasLibuvAssertion, lastLine, stri
 import { playCompletionChime } from "./lib/sound";
 import { speakMessage } from "./lib/tts";
 import { parseSkillBlock } from "./lib/skill-block";
+import type { ChoiceAnswer } from "./lib/choice-block";
 export type { ParsedSkillBlock } from "./lib/skill-block";
 
 /* ------------------------------------------------------------------ *
@@ -1121,6 +1122,9 @@ interface PiStore {
   // overlay
   toasts: Toast[];
   extuiQueue: { threadId: string; request: ExtUiRequest }[];
+  /** Inline choice-panel drafts (对话内多题选择): panelKey → qIndex → answer.
+   * Session-only; the frozen/answered state is derived from the transcript. */
+  choiceDrafts: Record<string, Partial<Record<number, ChoiceAnswer>>>;
 
   // actions
   bootstrap: () => Promise<void>;
@@ -1216,6 +1220,10 @@ interface PiStore {
   handleEvent: (threadId: string, event: any) => void;
   handleExtUi: (threadId: string, req: ExtUiRequest) => void;
   respondExtUi: (threadId: string, id: string, payload: Record<string, unknown>) => void;
+
+  // Inline choice-panel drafts (对话内多题选择). panelKey = `${messageKey}:${segIndex}`.
+  setChoiceDraft: (panelKey: string, qIndex: number, answer: ChoiceAnswer | null) => void;
+  clearChoiceDraft: (panelKey: string) => void;
   handleExit: (threadId: string, info: { code: number | null; stderr: string }) => void;
   handleError: (threadId: string, message: string) => void;
 
@@ -1601,6 +1609,7 @@ export const useStore = create<PiStore>()((set, get) => {
   activePreviewId: null,
   toasts: [],
   extuiQueue: [],
+  choiceDrafts: {},
   settingsOpen: false,
   trashEntries: [],
 
@@ -2985,6 +2994,27 @@ export const useStore = create<PiStore>()((set, get) => {
       })
       .catch(() => {});
     set((s) => ({ extuiQueue: s.extuiQueue.filter((q) => q.request.id !== id) }));
+  },
+
+  setChoiceDraft: (panelKey, qIndex, answer) => {
+    set((s) => {
+      const drafts = { ...s.choiceDrafts };
+      const cur = { ...(drafts[panelKey] || {}) };
+      if (answer === null) delete cur[qIndex];
+      else cur[qIndex] = answer;
+      if (Object.keys(cur).length) drafts[panelKey] = cur;
+      else delete drafts[panelKey];
+      return { choiceDrafts: drafts };
+    });
+  },
+
+  clearChoiceDraft: (panelKey) => {
+    set((s) => {
+      if (!s.choiceDrafts[panelKey]) return s;
+      const drafts = { ...s.choiceDrafts };
+      delete drafts[panelKey];
+      return { choiceDrafts: drafts };
+    });
   },
 
   handleExit: (threadId, info) => {

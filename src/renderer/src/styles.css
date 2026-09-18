@@ -2340,6 +2340,181 @@ body.sidebar-resizing * {
   color: var(--accent);
 }
 
+/* ---- Inline multi-question choice panel (对话内多题选择) ------------------
+   Rendered in place of a valid ```choices fence inside an assistant message.
+   Option rows reuse the live card's .extui-card-options / .extui-opt styles. */
+.choice-panel {
+  margin: 8px 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.012);
+}
+.choice-panel.state-answered {
+  border-left-color: #7fae8f;
+}
+.choice-panel.state-superseded {
+  border-left-color: var(--border-strong);
+  opacity: 0.85;
+}
+.cp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.cp-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.choice-panel.state-superseded .cp-icon {
+  color: var(--text-faint);
+}
+.cp-kicker {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.cp-progress {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.cp-submit {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.cp-missing-hint {
+  margin-top: 8px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: #fff3f1;
+  color: #9a3d32;
+  font-size: 12px;
+}
+.cp-q {
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+.cp-q.missing {
+  border-color: #e5b8b1;
+  background: #fff7f6;
+}
+.cp-q-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.cp-q-num {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 750;
+}
+.cp-q.missing .cp-q-num {
+  background: #f6dcd8;
+  color: #9a3d32;
+}
+/* Selected option row (reuses the live card's wrapper, accent it here). */
+.choice-panel .extui-card-options .extui-opt.recommended {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.cp-radio {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: #fff;
+}
+.choice-panel .cp-opt-label svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+/* Frozen panels are read-only: no hover affordance on the option labels. */
+.choice-panel:not(.state-pending) .extui-card-options .extui-opt:hover {
+  border-color: var(--border);
+  background: #fff;
+}
+.choice-panel.state-answered .extui-card-options .extui-opt.recommended:hover,
+.choice-panel.state-superseded .extui-card-options .extui-opt.recommended:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.choice-panel:not(.state-pending) .cp-opt-label {
+  cursor: default;
+}
+/* Per-question “其它” free-text input. */
+.cp-other-input {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: #fff;
+}
+.cp-other-field {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+}
+.cp-other-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.cp-other-input .extui-card-actions {
+  margin-top: 0;
+}
+.cp-other-shown .cp-other-text {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.cp-other-shown svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.choice-panel.state-pending .cp-other-shown.editable {
+  cursor: pointer;
+}
+.choice-panel.state-pending .cp-other-shown.editable:hover {
+  border-color: var(--accent);
+}
+
 .extui-card {
   width: 100%;
   padding: 14px 16px;

@@ -98,6 +98,7 @@ export default function mpiChoice(pi: ExtensionAPI) {
     description:
       "Present several alternative plans/options to the user as clickable buttons in the MPI chat, instead of asking them to type a reply. " +
       "Use when you have finished analyzing a task and are offering 2-6 distinct options for the user to choose from (e.g. design proposals A/B/C after '先出方案让我选'). " +
+      "For MULTIPLE related decisions in one round (e.g. an interview/grilling round), do NOT call this tool once per question — emit ONE fenced block in your message text instead: a line ```choices, then a JSON array of {\"title\",\"options\"} objects (2-6 options each; option = string or {label, detail}), then a closing ``` fence. MPI renders it as an inline multi-question panel and sends all selections back as one user message starting with 我的选择：/My choices:. Use this tool for a SINGLE decision. " +
       "Write the full comparison/analysis as normal message text FIRST, then call this tool with concise one-line labels per option; if you recommend one, mark it in its label like '（推荐）'. " +
       "When an option needs more than a line of explanation, pass {label, detail} so the user can expand the details on the card. " +
       "The card also offers an “其它/Other” input where the user can type their own plan — treat that text as the chosen option and follow it. " +

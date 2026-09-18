@@ -14,6 +14,8 @@ import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from ".
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
+import { splitChoiceSegments } from "../lib/choice-block";
+import { ChoicePanel } from "./ChoicePanel";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
 import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
@@ -1109,6 +1111,7 @@ function MessageGroupInner({
           group.items,
           toolRuns,
           language,
+          threadId,
           searchClass,
           searchMarkQuery ?? null,
           // When this group carries the in-progress message it is always the
@@ -1348,6 +1351,7 @@ function renderAssistantBlocks(
   items: ViewMessage[],
   toolRuns: Record<string, ToolRun>,
   language: "en" | "zh",
+  threadId: string,
   searchClass?: (key: string) => string,
   searchMarkQuery?: string | null,
   streamingKey?: string | null,
@@ -1370,8 +1374,20 @@ function renderAssistantBlocks(
           </div>,
         );
       }
-      const blockQuery = message.key === streamingKey ? null : (searchMarkQuery ?? null);
-      blockNodes.push(<BlockView key={key} block={block} toolRuns={toolRuns} language={language} searchQuery={blockQuery} />);
+      const isStreaming = message.key === streamingKey;
+      const blockQuery = isStreaming ? null : (searchMarkQuery ?? null);
+      blockNodes.push(
+        <BlockView
+          key={key}
+          block={block}
+          toolRuns={toolRuns}
+          language={language}
+          searchQuery={blockQuery}
+          threadId={threadId}
+          messageKey={message.key}
+          streaming={isStreaming}
+        />,
+      );
     });
     if (blockNodes.length === 0) return null;
     return (
@@ -1387,12 +1403,20 @@ function BlockView({
   toolRuns,
   language,
   searchQuery,
+  threadId,
+  messageKey,
+  streaming,
 }: {
   block: ContentBlock;
   toolRuns: Record<string, ToolRun>;
   language: "en" | "zh";
   /** Lowercased in-conversation search query to highlight inline; null = off. */
   searchQuery?: string | null;
+  threadId: string;
+  /** Key of the assistant ViewMessage carrying this block (choice-panel state). */
+  messageKey: string;
+  /** True while this message is still streaming — choice fences stay inert code blocks. */
+  streaming: boolean;
 }) {
   // Marks are injected into the rendered .md DOM (see lib/search-mark); the
   // content key re-applies them once a streaming block finalizes.
@@ -1400,7 +1424,33 @@ function BlockView({
     block.type === "text" ? (searchQuery ?? null) : null,
     block.type === "text" ? block.text : "",
   );
-  if (block.type === "text") return <Markdown text={block.text} containerRef={markRef} />;
+  // Inline multi-question choice blocks: split out ```choices fences once the
+  // message has finalized (while streaming they render as inert code blocks).
+  // Unconditional hook — guarded inside so non-text blocks cost one regex test.
+  const blockText = block.type === "text" ? block.text : "";
+  const choiceSegments = useMemo(
+    () => (block.type === "text" && !streaming ? splitChoiceSegments(blockText) : null),
+    [block.type, blockText, streaming],
+  );
+  if (block.type === "text") {
+    const segments = choiceSegments;
+    if (!segments || (segments.length === 1 && segments[0].kind === "md")) {
+      return <Markdown text={block.text} containerRef={markRef} />;
+    }
+    // Multiple rendered units: the mark ref wraps them all so search
+    // highlighting still covers every segment.
+    return (
+      <div ref={markRef}>
+        {segments.map((seg, index) =>
+          seg.kind === "choice" ? (
+            <ChoicePanel key={`c${index}`} data={seg.data} threadId={threadId} messageKey={messageKey} panelIndex={index} />
+          ) : (
+            <Markdown key={`m${index}`} text={seg.text} />
+          ),
+        )}
+      </div>
+    );
+  }
   if (block.type === "thinking") return <Thinking text={block.thinking} language={language} />;
   const run = toolRuns[block.id] || (block.contentIndex === undefined ? undefined : Object.values(toolRuns).find((candidate) => candidate.contentIndex === block.contentIndex));
   const name = effectiveToolName(block.name, run);

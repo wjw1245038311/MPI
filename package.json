@@ -60,6 +60,7 @@
     "test:channelcmd": "node --experimental-strip-types scripts/test-channel-command.mjs",
     "test:channelext": "node --experimental-strip-types scripts/test-channel-ext.mjs",
     "test:choice": "node --experimental-strip-types scripts/test-choice.mjs",
+    "test:choice-block": "node --experimental-strip-types scripts/test-choice-block.mjs",
     "test:taskmodes": "node --experimental-strip-types scripts/test-task-modes.mjs",
     "test:wechat": "node --experimental-strip-types scripts/test-wechat.mjs",
     "test:searchtrash": "node --experimental-strip-types scripts/test-search-trash.mjs",
