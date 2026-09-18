@@ -84,22 +84,37 @@ function MermaidDiagram({ code }: { code: string }) {
   useEffect(() => {
     let alive = true;
     void (async () => {
+      const id = `mpi-mermaid-${++mermaidSeq}`;
       try {
         const mermaid = (await loadMermaid()).default;
         if (mermaidInitializedTheme !== resolved) {
           // securityLevel strict sanitizes html labels — content may come from
           // agent output, so keep the default-safe setting.
+          // suppressErrorRendering: without it, v12 draws its own giant red
+          // “Syntax error” bomb SVG into a temp div in document.body on failed
+          // renders and leaves that div behind (stray graphic at the window's
+          // bottom-left) instead of throwing — we want our graceful raw-code
+          // fallback below, so make render() throw on parse/draw errors.
           mermaid.initialize({
             startOnLoad: false,
             theme: resolved === "dark" ? "dark" : "default",
             securityLevel: "strict",
+            suppressErrorRendering: true,
           });
           mermaidInitializedTheme = resolved;
         }
-        const id = `mpi-mermaid-${++mermaidSeq}`;
         const { svg } = await mermaid.render(id, code);
         if (alive) setState({ status: "ok", svg });
       } catch {
+        // Defensive cleanup: a failed render can leave mermaid's temp container
+        // (#d{id} / #i{id}) with an error graphic in document.body.
+        for (const sel of [`#d${id}`, `#i${id}`]) {
+          try {
+            document.querySelector(sel)?.remove();
+          } catch {
+            /* ignore */
+          }
+        }
         if (alive) setState({ status: "error" });
       }
     })();
