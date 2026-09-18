@@ -138,7 +138,7 @@ export default function mpiShellEnv(pi: ExtensionAPI) {
  * powershell`), but the PowerShell fallback cannot be expressed as a spawn flag
  * without `--tools` — and `--tools` is a strict allowlist over built-in *and*
  * extension/custom tools, which would silently disable MPI's own bridges
- * (mpi_ask_choice, mpi_todo_*, mode switch). So the no-bash session arrives with
+ * (mpi_todo_*, mode switch). So the no-bash session arrives with
  * the default tool set and this hook swaps `bash` for `powershell` instead.
  *
  * Feature-checked exactly like mpi-taskmode-ext: an older pi runtime without

@@ -1,30 +1,15 @@
 /**
- * Renderer-side helpers for the 方案选择 (mpi_ask_choice) feature.
+ * Renderer-side helpers for choice rendering.
  *
- * The extension (src/main/mpi-choice-ext.ts, mirrored by src/main/choice-logic.ts)
- * writes a stable title prefix before ctx.ui.select() and returns canonical
- * result texts; this module recognizes both so the live card (ExtUiPromptCard)
- * and the history card (Chat ChoiceToolCard) can render them cleanly. Keep in
- * sync with choice-logic.ts / mpi-choice-ext.ts.
+ * `choiceOptions` normalizes raw option arrays (string | {label, detail}) for
+ * the live select cards (ExtUiPromptCard) and the inline multi-question panel
+ * (ChoicePanel via lib/choice-block.ts). `parseChoiceOutcome` parses the
+ * canonical mpi_ask_choice tool-result texts that remain in OLD session
+ * transcripts — the history card (Chat ChoiceToolCard) renders those read-only.
  */
 
-/** Stable title prefix written by the extension (see choice-logic.ts). */
-export const CHOICE_TITLE_PREFIX_RE = /^(?:方案选择|Plan\s+choice)\s*[:：]/i;
-
-/** True when an extui select request is a plan-choice dialog, not a permission gate. */
-export function isChoiceTitle(title: unknown): boolean {
-  if (typeof title !== "string") return false;
-  const firstLine = title.split(/\r?\n/, 1)[0].trim();
-  return CHOICE_TITLE_PREFIX_RE.test(firstLine);
-}
-
-/** Remove the marker prefix so cards show only the agent's question. */
-export function stripChoicePrefix(title: string): string {
-  const line = String(title || "").split(/\r?\n/, 1)[0] || "";
-  return line.replace(CHOICE_TITLE_PREFIX_RE, "").trim() || line.trim();
-}
-
-/** Canonical result texts produced by the extension (keep in sync). */
+/** Canonical result texts produced by the (now-removed) mpi_ask_choice tool,
+ * still present in old transcripts (keep in sync with what it wrote). */
 const SELECTED_ZH_RE = /^用户已选择：「(.+)」/;
 const SELECTED_EN_RE = /^User selected:\s*"(.*)"/;
 const CANCELLED_RE = /未做出选择|did not select/i;
@@ -34,7 +19,7 @@ export type ChoiceOutcome =
   | { kind: "cancelled" }
   | null;
 
-/** Parse the mpi_ask_choice tool result back into a structured outcome. */
+/** Parse an mpi_ask_choice tool result (old transcripts) into a structured outcome. */
 export function parseChoiceOutcome(resultText: unknown): ChoiceOutcome {
   if (typeof resultText !== "string") return null;
   const text = resultText.trim();
@@ -47,8 +32,8 @@ export function parseChoiceOutcome(resultText: unknown): ChoiceOutcome {
 }
 
 /** One option as displayed on the cards. `detail` is an optional longer
- * explanation shown in an expandable section (mpi_ask_choice options may be
- * plain strings or {label, detail} objects — see mpi-choice-ext.ts). */
+ * explanation shown in an expandable section (options may be plain strings or
+ * {label, detail} objects). */
 export interface ChoiceOptionView {
   label: string;
   detail?: string;

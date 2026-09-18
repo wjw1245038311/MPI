@@ -105,7 +105,6 @@ import {
   isModeSwitchTitle,
   MODE_SWITCH_APPROVE_LABELS,
   MODE_SWITCH_DENY_LABELS,
-  stripChoicePrefix,
 } from "./choice-logic.ts";
 import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
@@ -169,7 +168,6 @@ import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } fro
 import { RemoteService, type RemoteBackend } from "./remote/service";
 import {
   createSystemNotificationCenter,
-  isChoiceRequest,
   isSandboxApprovalRequest,
   sandboxOperationFromTitle,
   type SystemNotificationCenter,
@@ -523,10 +521,10 @@ function createHandle(
       // Shell-environment bridge: tells the model which shell its commands run
       // in (paired with the --exclude-tools powershell passed to this spawn).
       ensureShellEnvExtension(getConfigDir()),
-      // 方案选择 bridge: mpi_ask_choice renders clickable option cards in the
-      // chat (existing extension-UI select). Interactive threads only —
-      // automation spawns its own list without it, so unattended runs never
-      // block on a dialog nobody can click.
+      // Mode-switch bridge: mpi_request_mode_switch lets the agent ask to leave
+      // an enforced read-only task mode (research/review) with one approval card.
+      // Interactive threads only — automation spawns its own list without it, so
+      // unattended runs never block on a dialog nobody can click.
       ensureChoiceExtension(getConfigDir()),
       // Smart-compaction bridge: takes over HOW pi summarizes context when it
       // compacts (CJK-aware estimation, chunked small-model summarization,
@@ -686,29 +684,6 @@ function createHandle(
               handle.bridge.respondExtUi((r as any).id, { cancelled: true });
             } catch (err) {
               console.error("[messaging] auto-deny failed:", err);
-            }
-          }, APPROVAL_GRACE_MS);
-        }
-      } else if (isChoiceRequest(r)) {
-        // Plan-choice card (mpi_ask_choice): same rules as approvals — notify
-        // the desktop, and for channel-owned threads tell the user + auto-
-        // cancel after the grace period so the agent falls back to plain text
-        // instead of hanging on a click nobody can make.
-        systemNotifications?.notifyChoicePending(id, lang, stripChoicePrefix((r as any)?.title ?? ""));
-        if (entry) {
-          const question = stripChoicePrefix((r as any)?.title ?? "");
-          void Promise.resolve(
-            entry.notifyApproval(
-              lang === "zh"
-                ? `🤔 有方案待选择：${question}。请在 MPI 中 ${APPROVAL_GRACE_MS / 1000} 秒内点击选项；无响应将自动取消，我会改用文字列出选项。`
-                : `🤔 A plan-choice is waiting: ${question}. Pick an option in MPI within ${APPROVAL_GRACE_MS / 1000}s or it will be auto-cancelled and I'll list the options as text.`,
-            ),
-          ).catch((err) => console.error("[messaging] choice notify failed:", err));
-          setTimeout(() => {
-            try {
-              handle.bridge.respondExtUi((r as any).id, { cancelled: true });
-            } catch (err) {
-              console.error("[messaging] choice auto-cancel failed:", err);
             }
           }, APPROVAL_GRACE_MS);
         }

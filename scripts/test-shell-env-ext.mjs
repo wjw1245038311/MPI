@@ -131,14 +131,14 @@ const { handler } = harness();
 // --- tool reconciliation: PowerShell fallback swaps bash → powershell -------
 {
   const info = { kind: "powershell", path: "C:\\pwsh.exe", source: "fallback-pwsh" };
-  const h = harness({ activeTools: ["read", "bash", "edit", "write", "mpi_todo_add", "mpi_ask_choice"] });
+  const h = harness({ activeTools: ["read", "bash", "edit", "write", "mpi_todo_add", "mpi_request_mode_switch"] });
   withEnv(JSON.stringify(info), () => h.handler(event(), {}));
   assert.equal(h.calls.length, 1, "must call setActiveTools exactly once");
   const next = h.active();
   assert.ok(!next.includes("bash"), "bash must be hidden when it cannot run");
   assert.ok(next.includes("powershell"), "powershell must be enabled");
   // The whole reason we avoid `--tools`: extension tools must survive.
-  assert.ok(next.includes("mpi_todo_add") && next.includes("mpi_ask_choice"), "extension tools preserved");
+  assert.ok(next.includes("mpi_todo_add") && next.includes("mpi_request_mode_switch"), "extension tools preserved");
   assert.ok(next.includes("read") && next.includes("edit") && next.includes("write"));
   ok("零 bash 会话：用 setActiveTools 换上 powershell 且保住扩展工具");
 }

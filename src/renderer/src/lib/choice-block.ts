@@ -23,7 +23,7 @@
  * the conversation itself — nothing extra is stored, so reloads stay correct.
  *
  * The fence format + reply texts below are the contract with the grilling
- * skill and the mpi_ask_choice tool description — keep them in sync.
+ * skill (and any agent instructions that emit these blocks) — keep in sync.
  */
 
 import { choiceOptions, type ChoiceOptionView } from "./choice";

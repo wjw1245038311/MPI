@@ -21,7 +21,6 @@ export const NO_APPROVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "grep",
   "find",
   "ls",
-  "mpi_ask_choice",
   "mpi_request_mode_switch",
   "mpi_todo_add",
   "mpi_todo_list",

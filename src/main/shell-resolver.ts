@@ -191,8 +191,8 @@ export function resolveShell(options: ResolveShellOptions = {}): ResolvedShell {
  *
  * The bash case uses `--exclude-tools` (a denylist) rather than `--tools`
  * (a strict allowlist for built-ins *and* extension/custom tools) because the
- * allowlist would silently disable MPI's own bridge tools (mpi_ask_choice,
- * mpi_todo_*, mode switch). The PowerShell case passes no flag at all: the
+ * allowlist would silently disable MPI's own bridge tools (mpi_todo_*,
+ * mode switch). The PowerShell case passes no flag at all: the
  * shell-env extension reconciles the active tool set at runtime, which cannot
  * be expressed as a spawn flag without the same allowlist problem.
  */

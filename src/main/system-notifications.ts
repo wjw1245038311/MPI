@@ -1,5 +1,4 @@
 import { BrowserWindow, Notification } from "electron";
-import { isChoiceTitle } from "./choice-logic.ts";
 
 export type NotificationLanguage = "en" | "zh";
 
@@ -11,8 +10,6 @@ export interface TaskCompletionNotification {
 
 export interface SystemNotificationCenter {
   notifySandboxApproval(threadId: string, language: NotificationLanguage, operation?: string): void;
-  /** A plan-choice card (mpi_ask_choice) is waiting for the user's click. */
-  notifyChoicePending(threadId: string, language: NotificationLanguage, question?: string): void;
   notifyTaskComplete(threadId: string, details: TaskCompletionNotification): void;
 }
 
@@ -35,15 +32,6 @@ export function isSandboxApprovalRequest(request: unknown): boolean {
   const value = request as { method?: unknown; title?: unknown };
   if (value.method !== "select" || typeof value.title !== "string") return false;
   return GATE_TITLE_PREFIX.test(value.title.trim());
-}
-
-/** The choice extension identifies its dialogs through the stable
- * “方案选择 / Plan choice” title prefix (see src/main/choice-logic.ts). */
-export function isChoiceRequest(request: unknown): boolean {
-  if (!request || typeof request !== "object") return false;
-  const value = request as { method?: unknown; title?: unknown };
-  if (value.method !== "select" || typeof value.title !== "string") return false;
-  return isChoiceTitle(value.title);
 }
 
 /** Extract only the operation label; the full command remains inside MPI. */
@@ -119,19 +107,6 @@ export function createSystemNotificationCenter(getWindow: WindowGetter): SystemN
           language === "zh"
             ? `操作正在等待确认（${label}）。点击此提醒返回 MPI。`
             : `A gated operation is waiting for approval (${label}). Click to return to MPI.`,
-        persistent: true,
-      });
-    },
-
-    notifyChoicePending(threadId, language, question) {
-      const label = truncateNotificationText(question || (language === "zh" ? "方案选择" : "Plan choice"), 80);
-      show(threadId, language, {
-        title: language === "zh" ? "MPI · 等待你的选择" : "MPI · Awaiting your choice",
-        subtitle: label,
-        body:
-          language === "zh"
-            ? `有方案正在等你点击选择（${label}）。点击此提醒返回 MPI。`
-            : `A plan-choice card is waiting for you (${label}). Click to return to MPI.`,
         persistent: true,
       });
     },
