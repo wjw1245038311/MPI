@@ -206,6 +206,21 @@ function masterPath(name: ZhiyaFileName): string | null {
   return root ? join(root, MASTER_REL[name]) : null;
 }
 
+/** Absolute path of the runtime copy (always present after ensureZhiyaFiles). */
+export function zhiyaLocalPath(name: ZhiyaFileName): string {
+  return filePath(name);
+}
+
+/**
+ * Absolute path of the master, when there is one. This is the file to hand to
+ * an external editor: edits belong in the git truth source, otherwise a later
+ * master→copy sync would silently overwrite them.
+ */
+export function zhiyaMasterPath(name: ZhiyaFileName): string | null {
+  const p = masterPath(name);
+  return p && existsSync(p) ? p : null;
+}
+
 export function readMasterFile(name: ZhiyaFileName): string {
   const p = masterPath(name);
   if (!p) return "";

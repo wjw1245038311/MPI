@@ -201,7 +201,9 @@ import {
   saveZhiyaFile,
   syncZhiyaFromMaster,
   zhiyaDir,
+  zhiyaLocalPath,
   zhiyaMasterDir,
+  zhiyaMasterPath,
   type ZhiyaFileName,
 } from "./zhiya";
 import { appendPromptFingerprint, buildAppendSystemPrompt } from "./append-prompt";
@@ -2594,7 +2596,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       dir: zhiyaDir(),
       masterDir: zhiyaMasterDir(),
       budget: ZHIYA_PROMPT_BUDGET,
-      files: ZHIYA_FILES.map((name) => ({ name, text: readZhiyaFile(name) })),
+      files: ZHIYA_FILES.map((name) => ({
+        name,
+        text: readZhiyaFile(name),
+        path: zhiyaLocalPath(name),
+        masterPath: zhiyaMasterPath(name),
+      })),
     };
   });
   /** Save one runtime file: master first (truth source), then the local copy. */
@@ -2647,29 +2654,55 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   });
 
   // Open the KB in Obsidian (obsidian:// URI; fails gracefully when absent).
-  ipcMain.handle("zhiya:openObsidian", async (_e, cwd: unknown) => {
+  /** Open one of the three files in Obsidian. Prefers the MASTER so edits land
+   * in the git truth source instead of being overwritten by the next sync. */
+  ipcMain.handle("zhiya:openInObsidian", async (_e, name: unknown) => {
+    if (typeof name !== "string" || !ZHIYA_FILES.includes(name as ZhiyaFileName)) {
+      throw new Error("Invalid zhiya file");
+    }
+    const key = name as ZhiyaFileName;
+    const master = zhiyaMasterPath(key);
+    const file = master || zhiyaLocalPath(key);
+    try {
+      await shell.openExternal(`obsidian://open?path=${encodeURIComponent(file)}`);
+      return { ok: true, file, master: !!master };
+    } catch (err) {
+      return { ok: false, error: String((err as Error)?.message || err) };
+    }
+  });
+
+  ipcMain.handle("zhiya:openObsidian", async (_e, cwd: unknown, relPath?: unknown) => {
     if (!cwd || typeof cwd !== "string") throw new Error("Invalid project dir");
     const root = join(cwd, ".alexandria", "knowledge");
     if (!existsSync(root)) return { ok: false, error: "no-kb" };
-    // Prefer Architecture.md (the L0 entry), else the first .md found.
-    let target = join(root, "Architecture.md");
-    if (!existsSync(target)) {
-      const findFirst = (dir: string): string | null => {
-        for (const entry of readdirSync(dir, { withFileTypes: true })) {
-          const abs = join(dir, entry.name);
-          if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) return abs;
-          if (entry.isDirectory()) {
-            const sub = findFirst(abs);
-            if (sub) return sub;
+    // An explicit file (the one selected in the panel) wins over the default.
+    let target = "";
+    if (typeof relPath === "string" && relPath) {
+      const abs = resolve(root, relPath);
+      if (abs !== root && !abs.startsWith(root + sep)) throw new Error("Path escapes knowledge dir");
+      if (existsSync(abs) && statSync(abs).isFile()) target = abs;
+    }
+    // Fallback: prefer Architecture.md (the L0 entry), else the first .md found.
+    if (!target) {
+      target = join(root, "Architecture.md");
+      if (!existsSync(target)) {
+        const findFirst = (dir: string): string | null => {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const abs = join(dir, entry.name);
+            if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) return abs;
+            if (entry.isDirectory()) {
+              const sub = findFirst(abs);
+              if (sub) return sub;
+            }
           }
-        }
-        return null;
-      };
-      target = findFirst(root) || root;
+          return null;
+        };
+        target = findFirst(root) || root;
+      }
     }
     try {
       await shell.openExternal(`obsidian://open?path=${encodeURIComponent(target)}`);
-      return { ok: true };
+      return { ok: true, file: target };
     } catch (err) {
       return { ok: false, error: String((err as Error)?.message || err) };
     }

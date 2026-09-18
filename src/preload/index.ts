@@ -128,22 +128,27 @@ const api = {
     editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => ipcRenderer.invoke("app:editAction", action),
   },
   zhiya: {
-    /** 知芽运行时三份文件的原文 + 母版目录 + 注入预算。 */
+    /** 知芽运行时三份文件的原文 + 路径 + 母版目录 + 注入预算。 */
     get: (): Promise<{
       dir: string;
       masterDir: string | null;
       budget: number;
-      files: { name: string; text: string }[];
+      files: { name: string; text: string; path: string; masterPath: string | null }[];
     }> => ipcRenderer.invoke("zhiya:get"),
     setPersona: (text: string): Promise<{ ok: boolean; master: boolean }> => ipcRenderer.invoke("zhiya:setPersona", text),
     setAgreement: (text: string): Promise<{ ok: boolean; master: boolean }> => ipcRenderer.invoke("zhiya:setAgreement", text),
     setWorkspace: (text: string): Promise<{ ok: boolean; master: boolean }> => ipcRenderer.invoke("zhiya:setWorkspace", text),
     /** 重新探测母版目录并同步母版→副本（用于自动探测失败后修正）。 */
     syncMaster: (): Promise<{ masterDir: string | null }> => ipcRenderer.invoke("zhiya:syncMaster"),
+    /** 用 Obsidian 打开三份文件之一（优先母版，避免副本被同步覆盖）。 */
+    openFileObsidian: (name: string): Promise<{ ok: boolean; file?: string; master?: boolean; error?: string }> =>
+      ipcRenderer.invoke("zhiya:openInObsidian", name),
     /** Per-project .alexandria/knowledge/ markdown file list. */
     listKb: (cwd: string): Promise<{ exists: boolean; root?: string; files: { path: string; size: number; mtime: number }[] }> => ipcRenderer.invoke("zhiya:listKb", cwd),
     getKbFile: (cwd: string, relPath: string): Promise<{ content: string }> => ipcRenderer.invoke("zhiya:getKbFile", cwd, relPath),
-    openObsidian: (cwd: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke("zhiya:openObsidian", cwd),
+    /** 用 Obsidian 打开所选 KB 文档（缺省 Architecture.md）。 */
+    openObsidian: (cwd: string, relPath?: string): Promise<{ ok: boolean; file?: string; error?: string }> =>
+      ipcRenderer.invoke("zhiya:openObsidian", cwd, relPath),
     /** Local mem0 server health + memory count. */
     mem0Status: (): Promise<{ online: boolean; baseUrl: string; userId: string; count: number | null }> => ipcRenderer.invoke("zhiya:mem0Status"),
   },

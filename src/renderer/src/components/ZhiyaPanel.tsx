@@ -71,7 +71,10 @@ export function ZhiyaPanel() {
   const [budget, setBudget] = useState(4000);
   const [texts, setTexts] = useState<Record<string, string>>({});
   const [initial, setInitial] = useState<Record<string, string>>({});
+  const [paths, setPaths] = useState<Record<string, { path: string; masterPath: string | null }>>({});
   const [saving, setSaving] = useState<string | null>(null);
+  /** 编辑 / 预览 两种模式（预览复用聊天同款 Markdown 渲染）。 */
+  const [mode, setMode] = useState<"edit" | "preview">("edit");
 
   // ---- knowledge base (per-project) ----
   const [kbExists, setKbExists] = useState(false);
@@ -96,9 +99,14 @@ export function ZhiyaPanel() {
       setMasterDir(d.masterDir);
       setBudget(d.budget);
       const next: Record<string, string> = {};
-      for (const f of d.files) next[f.name] = f.text;
+      const nextPaths: Record<string, { path: string; masterPath: string | null }> = {};
+      for (const f of d.files) {
+        next[f.name] = f.text;
+        nextPaths[f.name] = { path: f.path, masterPath: f.masterPath };
+      }
       setTexts(next);
       setInitial(next);
+      setPaths(nextPaths);
     } catch (e: any) {
       toast("error", (zh ? "加载知芽失败：" : "Failed to load Zhiya: ") + (e?.message || e));
     }
@@ -203,15 +211,43 @@ export function ZhiyaPanel() {
     }
   };
 
-  const openObsidian = async () => {
+  const openObsidian = async (relPath?: string) => {
     if (!cwd) return;
     try {
-      const r = await window.pi.zhiya.openObsidian(cwd);
+      const r = await window.pi.zhiya.openObsidian(cwd, relPath);
       if (!r.ok) toast("error", zh ? "无法打开 Obsidian（未安装或 URI 被拒绝）" : "Could not open Obsidian (not installed?)");
     } catch (e: any) {
       toast("error", (zh ? "打开失败：" : "Open failed: ") + (e?.message || e));
     }
   };
+
+  /** Open one of the three files in Obsidian. Main prefers the git master, so
+   * edits there are not clobbered by the next master→copy sync. */
+  const openFileObsidian = async (name: ZhiyaFileName) => {
+    try {
+      const r = await window.pi.zhiya.openFileObsidian(name);
+      if (!r.ok) {
+        toast("error", zh ? "无法打开 Obsidian（未安装或 URI 被拒绝）" : "Could not open Obsidian (not installed?)");
+      } else if (!r.master) {
+        toast("info", zh ? "已打开本机副本（未探测到母版目录）" : "Opened the local copy (no master dir detected)");
+      }
+    } catch (e: any) {
+      toast("error", (zh ? "打开失败：" : "Open failed: ") + (e?.message || e));
+    }
+  };
+
+  // Ctrl/Cmd+S saves the current tab (only meaningful in edit mode).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "s") return;
+      e.preventDefault();
+      const f = EDITABLE.find((x) => x.tab === tab);
+      if (f && (texts[f.name] ?? "") !== (initial[f.name] ?? "")) void save(f.name);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, tab, texts, initial]);
 
   if (!open) return null;
 
@@ -273,20 +309,46 @@ export function ZhiyaPanel() {
                 <h3>
                   {zh ? active.zh : active.en} <code>{active.name}</code>
                 </h3>
-                <button className="set-btn primary" onClick={() => save(active.name)} disabled={!activeDirty || !!saving}>
-                  {saving === active.name ? <span className="spinner" /> : zh ? "保存" : "Save"}
-                  {activeDirty && !saving && <span className="set-dot" />}
-                </button>
+                <div className="zhiya-sec-actions">
+                  <div className="zhiya-mode" role="group" aria-label={zh ? "编辑 / 预览" : "Edit / preview"}>
+                    <button type="button" className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")}>
+                      {zh ? "编辑" : "Edit"}
+                    </button>
+                    <button type="button" className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")}>
+                      {zh ? "预览" : "Preview"}
+                    </button>
+                  </div>
+                  <button
+                    className="set-btn ghost"
+                    onClick={() => openFileObsidian(active.name)}
+                    title={zh ? "用 Obsidian 打开（优先母版，改动不会被同步覆盖）" : "Open in Obsidian (prefers the git master)"}
+                  >
+                    {zh ? "用 Obsidian 打开" : "Open in Obsidian"}
+                  </button>
+                  <button className="set-btn primary" onClick={() => save(active.name)} disabled={!activeDirty || !!saving}>
+                    {saving === active.name ? <span className="spinner" /> : zh ? "保存" : "Save"}
+                    {activeDirty && !saving && <span className="set-dot" />}
+                  </button>
+                </div>
               </div>
-              <textarea
-                className="zhiya-editor"
-                value={activeText}
-                onChange={(e) => setTexts((prev) => ({ ...prev, [active.name]: e.target.value }))}
-                spellCheck={false}
-                placeholder={zh ? active.placeholderZh : active.placeholderEn}
-              />
+              {mode === "edit" ? (
+                <textarea
+                  className="zhiya-editor"
+                  value={activeText}
+                  onChange={(e) => setTexts((prev) => ({ ...prev, [active.name]: e.target.value }))}
+                  spellCheck={false}
+                  placeholder={zh ? active.placeholderZh : active.placeholderEn}
+                />
+              ) : (
+                <div className="zhiya-preview">
+                  <Markdown
+                    text={activeText}
+                    fileBasePath={paths[active.name]?.masterPath || paths[active.name]?.path || null}
+                  />
+                </div>
+              )}
               <div className="zhiya-sec-foot">
-                {zh ? active.hintZh : active.hintEn} · {activeText.length}/{budget}
+                {(zh ? active.hintZh : active.hintEn) + " · " + `${activeText.length}/${budget}`}
                 {activeText.length > budget && (
                   <span className="zhiya-warn">{zh ? " ⚠ 单文件已超出总预算" : " ⚠ over the shared budget"}</span>
                 )}
@@ -301,8 +363,8 @@ export function ZhiyaPanel() {
                   {zh ? "知识库" : "Knowledge base"} <code>.alexandria/knowledge/</code>
                 </h3>
                 {kbExists && (
-                  <button className="set-btn ghost" onClick={openObsidian}>
-                    {zh ? "在 Obsidian 中打开" : "Open in Obsidian"}
+                  <button className="set-btn ghost" onClick={() => void openObsidian(selPath ?? undefined)}>
+                    {zh ? (selPath ? "用 Obsidian 打开所选" : "在 Obsidian 中打开") : selPath ? "Open selected in Obsidian" : "Open in Obsidian"}
                   </button>
                 )}
               </div>
