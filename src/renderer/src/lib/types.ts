@@ -572,6 +572,9 @@ export interface AppConfig {
    * questions render as a clickable inline panel in the chat; "manual": numbered
    * plain-text questions answered by typing. Absent = inline. */
   qaMode?: "inline" | "manual";
+  /** 知芽母版根目录（AgentSetting 仓）：git 真相源，`~/.pi/agent/zhiya/` 是它
+   * 的单向同步副本。留空 = 首次启动自动探测并写回；探测不到时只用本机副本。 */
+  zhiyaMasterDir?: string;
   remoteSignalingUrl: string;
   remoteSignalingEnabled: boolean;
   remoteStunUrls: string[];

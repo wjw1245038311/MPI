@@ -128,10 +128,18 @@ const api = {
     editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => ipcRenderer.invoke("app:editAction", action),
   },
   zhiya: {
-    /** persona.md + assets.md raw text, dir, and the injection budget. */
-    get: (): Promise<{ dir: string; persona: string; assets: string; budget: number }> => ipcRenderer.invoke("zhiya:get"),
-    setPersona: (text: string): Promise<{ ok: boolean }> => ipcRenderer.invoke("zhiya:setPersona", text),
-    setAssets: (text: string): Promise<{ ok: boolean }> => ipcRenderer.invoke("zhiya:setAssets", text),
+    /** 知芽运行时三份文件的原文 + 母版目录 + 注入预算。 */
+    get: (): Promise<{
+      dir: string;
+      masterDir: string | null;
+      budget: number;
+      files: { name: string; text: string }[];
+    }> => ipcRenderer.invoke("zhiya:get"),
+    setPersona: (text: string): Promise<{ ok: boolean; master: boolean }> => ipcRenderer.invoke("zhiya:setPersona", text),
+    setAgreement: (text: string): Promise<{ ok: boolean; master: boolean }> => ipcRenderer.invoke("zhiya:setAgreement", text),
+    setWorkspace: (text: string): Promise<{ ok: boolean; master: boolean }> => ipcRenderer.invoke("zhiya:setWorkspace", text),
+    /** 重新探测母版目录并同步母版→副本（用于自动探测失败后修正）。 */
+    syncMaster: (): Promise<{ masterDir: string | null }> => ipcRenderer.invoke("zhiya:syncMaster"),
     /** Per-project .alexandria/knowledge/ markdown file list. */
     listKb: (cwd: string): Promise<{ exists: boolean; root?: string; files: { path: string; size: number; mtime: number }[] }> => ipcRenderer.invoke("zhiya:listKb", cwd),
     getKbFile: (cwd: string, relPath: string): Promise<{ content: string }> => ipcRenderer.invoke("zhiya:getKbFile", cwd, relPath),

@@ -51,6 +51,7 @@
     "test:toolargs": "node --experimental-strip-types scripts/test-tool-args.mjs",
     "test:permission": "node scripts/test-permission-gate.mjs",
     "test:pinnedorder": "node --experimental-strip-types scripts/test-pinned-order.mjs",
+    "test:zhiya": "node --experimental-strip-types scripts/test-zhiya.mjs",
     "test:migration": "node --experimental-strip-types scripts/test-data-migration.mjs",
     "test:npmcommand": "node --experimental-strip-types scripts/test-npm-command.mjs",
     "test:trash": "node --experimental-strip-types scripts/test-trash.mjs",

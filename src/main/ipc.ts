@@ -190,13 +190,19 @@ import {
 import { buildConfigPatch, planModeApplication, resolveModeById, type ConfigChangeOrigin, type ThreadConfigPatch } from "./thread-config";
 import { normalizeTaskModes, taskModeName, taskModeSummary } from "../shared/task-mode-catalog";
 import {
-  ASSETS_FILE,
+  AGREEMENT_FILE,
   PERSONA_FILE,
+  WORKSPACE_FILE,
+  ZHIYA_FILES,
   ZHIYA_PROMPT_BUDGET,
   ensureZhiyaFiles,
   readZhiyaFile,
-  writeZhiyaFile,
+  resetZhiyaMasterCache,
+  saveZhiyaFile,
+  syncZhiyaFromMaster,
   zhiyaDir,
+  zhiyaMasterDir,
+  type ZhiyaFileName,
 } from "./zhiya";
 import { appendPromptFingerprint, buildAppendSystemPrompt } from "./append-prompt";
 
@@ -726,7 +732,7 @@ function createHandle(
  */
 let warmHandle: BridgeHandle | null = null;
 /** appendPromptFingerprint() at the moment the current spare was booted; a
- * mismatch means the injected text (persona.md/assets.md or 问答方式) changed
+ * mismatch means the injected text (persona/agreement/workspace or 问答方式) changed
  * and the spare's baked-in system prompt is stale. */
 let warmAppendFp = "";
 let lastOpenCwd: string | null = null;
@@ -2580,27 +2586,34 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return next;
   });
 
-  // ---- 知芽 Zhiya: persona/assets files, KB browsing, mem0 status --------
+  // ---- 知芽 Zhiya: persona/agreement/workspace files, KB browsing, mem0 -----
   ipcMain.handle("zhiya:get", () => {
     ensureZhiyaFiles();
+    syncZhiyaFromMaster();
     return {
       dir: zhiyaDir(),
-      persona: readZhiyaFile(PERSONA_FILE),
-      assets: readZhiyaFile(ASSETS_FILE),
+      masterDir: zhiyaMasterDir(),
       budget: ZHIYA_PROMPT_BUDGET,
+      files: ZHIYA_FILES.map((name) => ({ name, text: readZhiyaFile(name) })),
     };
   });
-  ipcMain.handle("zhiya:setPersona", (_e, text: unknown) => {
-    if (typeof text !== "string") throw new Error("Invalid persona text");
-    writeZhiyaFile(PERSONA_FILE, text);
+  /** Save one runtime file: master first (truth source), then the local copy. */
+  const saveZhiya = (name: ZhiyaFileName, text: unknown) => {
+    if (typeof text !== "string") throw new Error("Invalid zhiya text");
+    const { master } = saveZhiyaFile(name, text);
     refreshWarmBridgeIfStale(); // in-app edit → restart standby with fresh prompt
-    return { ok: true };
-  });
-  ipcMain.handle("zhiya:setAssets", (_e, text: unknown) => {
-    if (typeof text !== "string") throw new Error("Invalid assets text");
-    writeZhiyaFile(ASSETS_FILE, text);
+    return { ok: true, master };
+  };
+  ipcMain.handle("zhiya:setPersona", (_e, text: unknown) => saveZhiya(PERSONA_FILE, text));
+  ipcMain.handle("zhiya:setAgreement", (_e, text: unknown) => saveZhiya(AGREEMENT_FILE, text));
+  ipcMain.handle("zhiya:setWorkspace", (_e, text: unknown) => saveZhiya(WORKSPACE_FILE, text));
+  /** Re-run master detection + sync (used after the user fixes the path). */
+  ipcMain.handle("zhiya:syncMaster", () => {
+    resetZhiyaMasterCache();
+    ensureZhiyaFiles();
+    syncZhiyaFromMaster();
     refreshWarmBridgeIfStale();
-    return { ok: true };
+    return { masterDir: zhiyaMasterDir() };
   });
 
   // Knowledge base browsing (per-project .alexandria/knowledge/).

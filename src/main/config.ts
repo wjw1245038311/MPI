@@ -171,6 +171,11 @@ export interface AppConfig {
    * asks numbered plain-text questions and the user types answers. Injected into
    * every session's system prompt at spawn time (see append-prompt.ts). */
   qaMode?: "inline" | "manual";
+  /** 知芽母版根目录（AgentSetting 仓）。母版是 git 真相源，`~/.pi/agent/zhiya/`
+   * 只是它的单向同步副本。留空 = 首次启动自动探测
+   * （<MyWorkspace>/Agent/AgentSetting，从 lastThreadCwd 向上找）并写回。
+   * 探测不到时知芽只用本机副本工作，且面板会显式提示——不静默假装已同步。 */
+  zhiyaMasterDir?: string;
   /** cwd of the most recently opened thread; seeds the warm spare's project. */
   lastThreadCwd?: string;
   /** User-defined scheduled automation tasks. */
@@ -479,6 +484,7 @@ export function loadConfig(userDataDir: string): AppConfig {
         extAutoPickModel:
           typeof parsed.extAutoPickModel === "boolean" ? parsed.extAutoPickModel : undefined,
         qaMode: parsed.qaMode === "inline" || parsed.qaMode === "manual" ? parsed.qaMode : undefined,
+        zhiyaMasterDir: typeof parsed.zhiyaMasterDir === "string" ? parsed.zhiyaMasterDir : undefined,
         smartCompact: sanitizeSmartCompact(parsed.smartCompact),
         defaultPermission:
           typeof parsed.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(parsed.defaultPermission)
@@ -689,6 +695,9 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (typeof p.userAvatar === "string" && p.userAvatar.startsWith("data:image/")) out.userAvatar = p.userAvatar;
   if (typeof p.agentAvatar === "string" && p.agentAvatar.startsWith("data:image/")) out.agentAvatar = p.agentAvatar;
   if (typeof p.userProfile === "string") out.userProfile = p.userProfile;
+  // NOTE: zhiyaMasterDir is intentionally NOT imported — it is a machine-local
+  // path (the AgentSetting checkout) that would dangle on the target machine.
+  // Each machine re-detects it on first launch.
   if (typeof p.extAutoPickModel === "boolean") out.extAutoPickModel = p.extAutoPickModel;
   if (p.qaMode === "inline" || p.qaMode === "manual") out.qaMode = p.qaMode;
   if (typeof p.lastThreadCwd === "string" && p.lastThreadCwd) out.lastThreadCwd = p.lastThreadCwd;

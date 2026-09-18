@@ -5,7 +5,7 @@ import { app, BrowserWindow, Menu, shell, Tray } from "electron";
 import { loadConfig, getConfig, updateConfig } from "./config";
 import { flushDrafts } from "./draft-store";
 import { runPendingDataMigrations } from "./data-migration";
-import { migrateUserProfileToZhiya } from "./zhiya";
+import { ensureZhiyaFiles, migrateUserProfileToZhiya, zhiyaMasterDir } from "./zhiya";
 import { flushTodos, ingestInbox } from "./todo-store";
 import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
@@ -253,14 +253,21 @@ if (!gotLock) {
     } catch (e: any) {
       console.error("[migration] failed:", e?.message || String(e));
     }
-    // 知芽 Zhiya: seed persona.md/assets.md templates and one-time-migrate the
-    // legacy Settings → 用户画像 text into persona.md. Must run before registerIpc
-    // so the first zhiya:get already sees the migrated content.
+    // 知芽 Zhiya: seed templates (persona/agreement/workspace), pull the latest
+    // master files from AgentSetting, and one-time-migrate the legacy Settings →
+    // 用户画像 text into persona.md. Must run before registerIpc so the first
+    // zhiya:get already sees the migrated content.
     try {
+      ensureZhiyaFiles();
       const r = migrateUserProfileToZhiya();
       if (r === "migrated") console.log("[zhiya] legacy userProfile migrated to persona.md");
+      const master = zhiyaMasterDir();
+      // Detection failure is reported loudly on purpose: "on demand" injection
+      // silently degrades into "never" otherwise (design §11.5).
+      if (master) console.log("[zhiya] master dir:", master);
+      else console.warn("[zhiya] no AgentSetting master dir detected — local copies only");
     } catch (e: any) {
-      console.error("[zhiya] migration failed:", e?.message || String(e));
+      console.error("[zhiya] init failed:", e?.message || String(e));
     }
     registerHtmlPreviewProtocol();
     registerPdfViewerProtocol();
