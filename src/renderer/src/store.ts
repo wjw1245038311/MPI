@@ -1303,6 +1303,14 @@ interface PiStore {
   loadWeChatMessaging: () => Promise<void>;
   saveWeChatConfig: (patch: Partial<NonNullable<AppConfig["wechatChannel"]>>) => Promise<boolean>;
 
+  /** True when running from source (npm run dev); false in packaged builds. */
+  isDev: boolean;
+
+  // zhiya panel（知芽：画像/资产/知识库/短期记忆；仅开发版可见）
+  zhiyaOpen: boolean;
+  openZhiya: () => void;
+  closeZhiya: () => void;
+
   // thread permission / folder
   setPermission: (threadId: string, level: PermissionLevel) => Promise<void>;
   /** Apply a task-mode preset to the thread (permission + thinking level). */
@@ -1618,6 +1626,12 @@ export const useStore = create<PiStore>()((set, get) => {
     // One-time notice when a data-location migration ran at this launch
     // (Settings → 数据管理). main keeps the summary in memory only, so it is
     // null on launches without pending work.
+    // Dev-only feature gating (e.g. the Zhiya panel nav entry).
+    window.pi.app
+      .isDev()
+      .then((ok) => set({ isDev: ok }))
+      .catch(() => {});
+
     if (!migrationToastShown) {
       window.pi.dataMigration
         .status()
@@ -3495,6 +3509,13 @@ export const useStore = create<PiStore>()((set, get) => {
       return false;
     }
   },
+
+  isDev: false,
+
+  // ---- zhiya（知芽，仅开发版可见）----
+  zhiyaOpen: false,
+  openZhiya: () => set({ zhiyaOpen: true }),
+  closeZhiya: () => set({ zhiyaOpen: false }),
 
   // ---- thread permission / folder ----
   setPermission: async (threadId, level) => {

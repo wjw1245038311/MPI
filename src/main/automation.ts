@@ -7,6 +7,7 @@ import { ensureTodoExtension } from "./todo-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
 import { prepareShellForSpawn } from "./shell-bootstrap";
 import { getAgentDir } from "./session-store";
+import { buildZhiyaPrompt } from "./zhiya";
 import { join } from "node:path";
 import { ensureInboxDir, todosFilePath } from "./todo-store";
 
@@ -242,10 +243,10 @@ async function execute(task: AutomationTask): Promise<void> {
       bridge = new PiBridge({
         cwd: task.cwd,
         piCliPath: getConfig().piCliPath,
-        // Same user-profile injection as interactive sessions. Scheduled runs
+        // Same 知芽 Zhiya injection as interactive sessions. Scheduled runs
         // are never chat-channel sessions, so the mpi_channel_* bridge is not
         // loaded (desktop/automation sessions don't pay for its tools).
-        appendSystemPrompt: getConfig().userProfile?.trim() || undefined,
+        appendSystemPrompt: buildZhiyaPrompt(),
         shellInfo: shell.info,
         toolFlags: shell.toolFlags,
         extensions: [

@@ -953,7 +953,7 @@ function ProviderCard({
  * Main panel
  * ------------------------------------------------------------------ */
 
-type Tab = "conversation" | "profile" | "models" | "permissions" | "data" | "appearance" | "system";
+type Tab = "conversation" | "models" | "permissions" | "data" | "appearance" | "system";
 
 /** Mirror of main's DataMigrationStatus (preload inlines the same shape). */
 interface DataMigrationStatus {
@@ -1315,10 +1315,6 @@ export function Settings() {
   const [thinking, setThinking] = useState<ThinkingDefaults>({});
   const [initialThinking, setInitialThinking] = useState("{}");
   const [invalidJson, setInvalidJson] = useState<Record<string, boolean>>({});
-  // User profile (Settings → User Profile): free text appended to every
-  // session's system prompt. Lives in AppConfig; draft/initial mirror the
-  // models/thinking save pattern.
-  const [profileDraft, setProfileDraft] = useState("");
   // ---- trusted tools (“始终允许该工具”) + default permission ----------------
   // Permission settings are edited as a draft and only written on save, matching
   // the models/thinking/profile pattern. The trusted list is also written by the
@@ -1418,9 +1414,8 @@ export function Settings() {
     () => toolRows.filter((r) => (toolFilter === "all" ? true : toolFilter === "trusted" ? r.trusted : !r.trusted)),
     [toolRows, toolFilter],
   );
-  const [initialProfile, setInitialProfile] = useState("");
-  const [saving, setSaving] = useState<null | "models" | "thinking" | "profile" | "permissions" | "data" | "system" | "conversation">(null);
-  const [flash, setFlash] = useState<null | "models" | "thinking" | "profile" | "permissions" | "data" | "system" | "conversation">(null);
+  const [saving, setSaving] = useState<null | "models" | "thinking" | "permissions" | "data" | "system" | "conversation">(null);
+  const [flash, setFlash] = useState<null | "models" | "thinking" | "permissions" | "data" | "system" | "conversation">(null);
   const [diag, setDiag] = useState<Diagnostics | null>(null);
   // Shell runtime card: seeded from diagnostics, replaceable by an explicit
   // re-check (which is what adopts a just-installed Git into settings.json).
@@ -1658,11 +1653,6 @@ export function Settings() {
     setNewProvider(emptyNewProvider());
     setPresetQuery("");
     setExpandedProvider(null);
-    // Seed the profile editor from the persisted config (read once per open;
-    // deliberately not a dep so later config updates don't clobber edits).
-    const savedProfile = config?.userProfile || "";
-    setProfileDraft(savedProfile);
-    setInitialProfile(savedProfile);
     // Permission draft (default level + trusted tools) — seeded per open so
     // approval-card “始终允许” additions show up next time Settings opens.
     const seededPerms = {
@@ -1710,7 +1700,6 @@ export function Settings() {
 
   const modelDirty = useMemo(() => JSON.stringify(draft.providers) !== initialProviders, [draft.providers, initialProviders]);
   const thinkDirty = useMemo(() => JSON.stringify(thinking) !== initialThinking, [thinking, initialThinking]);
-  const profileDirty = profileDraft !== initialProfile;
   const permDirty = useMemo(() => JSON.stringify(permDraft) !== initialPerms, [permDraft, initialPerms]);
   const dataDirty = useMemo(() => JSON.stringify(dataDraft) !== initialData, [dataDraft, initialData]);
   const sysDirty = useMemo(() => initialSys !== "" && JSON.stringify(sysDraft) !== initialSys, [sysDraft, initialSys]);
@@ -1729,7 +1718,7 @@ export function Settings() {
   }, [persistedVoiceSig]);
   function attemptClose() {
     if (
-      (modelDirty || thinkDirty || profileDirty || permDirty || dataDirty || sysDirty || voiceDirty) &&
+      (modelDirty || thinkDirty || permDirty || dataDirty || sysDirty || voiceDirty) &&
       !window.confirm(language === "zh" ? "有未保存的更改，确定放弃并关闭？" : "Discard unsaved changes and close?")
     ) return;
     close();
@@ -1901,28 +1890,6 @@ export function Settings() {
       setFlash("conversation");
       setTimeout(() => setFlash(null), 1500);
       pushToast("info", language === "zh" ? "对话设置已保存。" : "Conversation settings saved.");
-    } catch (e: any) {
-      pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  const saveProfile = async () => {
-    setSaving("profile");
-    try {
-      const text = profileDraft.trim();
-      await window.pi.app.setConfig({ userProfile: text || undefined });
-      setProfileDraft(text);
-      setInitialProfile(text);
-      setFlash("profile");
-      setTimeout(() => setFlash(null), 1500);
-      pushToast(
-        "info",
-        language === "zh"
-          ? "用户画像已保存，对新会话生效。"
-          : "User profile saved. Applies to new sessions.",
-      );
     } catch (e: any) {
       pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
     } finally {
@@ -2250,7 +2217,6 @@ export function Settings() {
           <nav className="set-tabs">
             {([
               ["conversation", language === "zh" ? "对话设置" : "Conversation"],
-              ["profile", language === "zh" ? "用户画像" : "User profile"],
               ["models", "模型与提供商"],
               ["permissions", language === "zh" ? "权限与安全" : "Permissions & security"],
               ["data", language === "zh" ? "数据管理" : "Data management"],
@@ -2260,7 +2226,6 @@ export function Settings() {
               <button key={id} className={`set-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
                 <span className="set-tab-bar" />
                 {label}
-                {id === "profile" && profileDirty && <span className="set-dot" />}
                 {id === "models" && modelDirty && <span className="set-dot" />}
                 {id === "conversation" && (thinkDirty || voiceDirty) && <span className="set-dot" />}
                 {id === "permissions" && permDirty && <span className="set-dot" />}
@@ -2289,11 +2254,7 @@ export function Settings() {
                 ? language === "zh"
                   ? "对话设置"
                   : "Conversation"
-                : tab === "profile"
-                  ? language === "zh"
-                    ? "用户画像"
-                    : "User profile"
-                  : tab === "models"
+                : tab === "models"
                     ? "模型与提供商"
                   : tab === "permissions"
                     ? language === "zh"
@@ -2322,12 +2283,6 @@ export function Settings() {
                     {modelDirty && flash !== "models" && <span className="set-dot" />}
                   </button>
                 </>
-              )}
-              {tab === "profile" && (
-                <button className={`set-btn primary ${flash === "profile" ? "saved" : ""}`} onClick={saveProfile} disabled={!!saving}>
-                  {saving === "profile" ? <span className="spinner" /> : flash === "profile" ? (language === "zh" ? "已保存 ✓" : "Saved ✓") : language === "zh" ? "保存用户画像" : "Save profile"}
-                  {profileDirty && flash !== "profile" && <span className="set-dot" />}
-                </button>
               )}
               {tab === "conversation" && (
                 <button className={`set-btn primary ${flash === "conversation" ? "saved" : ""}`} onClick={saveConversation} disabled={!!saving}>
@@ -2892,35 +2847,6 @@ export function Settings() {
               </div>
             )}
 
-            {tab === "profile" && (
-              <div className="set-card">
-                <Field
-                  wide
-                  label={language === "zh" ? "用户画像" : "User profile"}
-                  hint={
-                    language === "zh"
-                      ? "这段文字会附加到每个会话的系统提示词里，让 AI 从第一条消息起就了解你是谁、偏好什么。对新会话生效（已打开的会话重连后生效）；留空则不注入。仅对 MPI 生效，不影响终端 pi。"
-                      : "This text is appended to every session's system prompt so the agent knows who you are and what you prefer from the very first message. Applies to new sessions (open ones pick it up on reconnect); leave empty to disable. MPI-only — terminal pi is not affected."
-                  }
-                >
-                  <textarea
-                    className="set-profile-textarea"
-                    value={profileDraft}
-                    maxLength={4000}
-                    spellCheck={false}
-                    placeholder={
-                      language === "zh"
-                        ? "例如：\n我是后端工程师，主要用 TypeScript / Node.js。\n回复请简洁、先说结论；代码注释用中文。"
-                        : "e.g.\nI'm a backend engineer, mainly TypeScript / Node.js.\nKeep replies concise and lead with the conclusion; write code comments in Chinese."
-                    }
-                    onChange={(e) => setProfileDraft(e.target.value)}
-                  />
-                  <div className="set-profile-count">
-                    {profileDraft.length} / 4000
-                  </div>
-                </Field>
-              </div>
-            )}
 
             {tab === "models" && (
               <>

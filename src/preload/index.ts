@@ -127,6 +127,18 @@ const api = {
       }>,
     editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => ipcRenderer.invoke("app:editAction", action),
   },
+  zhiya: {
+    /** persona.md + assets.md raw text, dir, and the injection budget. */
+    get: (): Promise<{ dir: string; persona: string; assets: string; budget: number }> => ipcRenderer.invoke("zhiya:get"),
+    setPersona: (text: string): Promise<{ ok: boolean }> => ipcRenderer.invoke("zhiya:setPersona", text),
+    setAssets: (text: string): Promise<{ ok: boolean }> => ipcRenderer.invoke("zhiya:setAssets", text),
+    /** Per-project .alexandria/knowledge/ markdown file list. */
+    listKb: (cwd: string): Promise<{ exists: boolean; root?: string; files: { path: string; size: number; mtime: number }[] }> => ipcRenderer.invoke("zhiya:listKb", cwd),
+    getKbFile: (cwd: string, relPath: string): Promise<{ content: string }> => ipcRenderer.invoke("zhiya:getKbFile", cwd, relPath),
+    openObsidian: (cwd: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke("zhiya:openObsidian", cwd),
+    /** Local mem0 server health + memory count. */
+    mem0Status: (): Promise<{ online: boolean; baseUrl: string; userId: string; count: number | null }> => ipcRenderer.invoke("zhiya:mem0Status"),
+  },
   transfers: {
     /** Snapshot of in-flight transfers (late-subscriber catch-up). */
     getSnapshot: (): Promise<TransferInfo[]> => ipcRenderer.invoke("transfers:snapshot"),

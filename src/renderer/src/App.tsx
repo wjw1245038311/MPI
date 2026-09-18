@@ -16,6 +16,7 @@ import { AppStorePanel } from "./components/AppStorePanel";
 import { AutomationPanel } from "./components/AutomationPanel";
 import { TodoPanel } from "./components/TodoPanel";
 import { MessagingPanel } from "./components/MessagingPanel";
+import { ZhiyaPanel } from "./components/ZhiyaPanel";
 import { Folder, Plus, Smartphone } from "./components/icons";
 import { ImageCopyMenu } from "./components/ImageCopyMenu";
 import { MessageQuoteMenu } from "./components/MessageQuoteMenu";
@@ -168,6 +169,7 @@ export default function App() {
       <AutomationPanel />
       <TodoPanel />
       <MessagingPanel />
+      <ZhiyaPanel />
       <Settings />
       {remoteOpen && (
         <div className="settings-backdrop" onMouseDown={() => setRemoteOpen(false)}>

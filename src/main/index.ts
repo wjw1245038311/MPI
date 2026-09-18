@@ -5,6 +5,7 @@ import { app, BrowserWindow, Menu, shell, Tray } from "electron";
 import { loadConfig, getConfig, updateConfig } from "./config";
 import { flushDrafts } from "./draft-store";
 import { runPendingDataMigrations } from "./data-migration";
+import { migrateUserProfileToZhiya } from "./zhiya";
 import { flushTodos, ingestInbox } from "./todo-store";
 import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
@@ -251,6 +252,15 @@ if (!gotLock) {
       if (summary) console.log("[migration]", JSON.stringify(summary));
     } catch (e: any) {
       console.error("[migration] failed:", e?.message || String(e));
+    }
+    // 知芽 Zhiya: seed persona.md/assets.md templates and one-time-migrate the
+    // legacy Settings → 用户画像 text into persona.md. Must run before registerIpc
+    // so the first zhiya:get already sees the migrated content.
+    try {
+      const r = migrateUserProfileToZhiya();
+      if (r === "migrated") console.log("[zhiya] legacy userProfile migrated to persona.md");
+    } catch (e: any) {
+      console.error("[zhiya] migration failed:", e?.message || String(e));
     }
     registerHtmlPreviewProtocol();
     registerPdfViewerProtocol();

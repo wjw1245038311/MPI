@@ -6,7 +6,7 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { MPI_FILE_MIME, MPI_SESSION_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
-import { AppStore, Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Smartphone, Sidebar as SidebarIcon } from "./icons";
+import { AppStore, Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Smartphone, Sprout, Sidebar as SidebarIcon } from "./icons";
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
 
@@ -71,6 +71,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const activeThreadId = useStore((s) => s.activeThreadId);
   const sidebarTab = useStore((s) => s.sidebarTab);
   const language = useStore((s) => s.config?.language || "en");
+  // Zhiya（知芽）is a dev-only panel: hidden in packaged releases.
+  const isDev = useStore((s) => s.isDev);
   // Absent/corrupt config means the trash is on (safe default, see main/config.ts).
   const trashEnabled = useStore((s) => s.config?.trashEnabled !== false);
 
@@ -363,6 +365,14 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             </span>
             {language === "zh" ? "消息接入" : "Messaging"}
           </button>
+          {isDev && (
+            <button className="sb-nav-item zhiya-nav" onClick={() => useStore.getState().openZhiya()} title={language === "zh" ? "知芽：智能体的大脑与灵魂（仅开发版）" : "Zhiya: the agent's brain & soul (dev only)"}>
+              <span className="ico">
+                <Sprout size={15} />
+              </span>
+              {language === "zh" ? "知芽 Zhiya" : "Zhiya"}
+            </button>
+          )}
         </div>
 
         <div className="sb-tabs">

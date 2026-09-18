@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -190,6 +190,17 @@ import {
 } from "./remote/protocol";
 import { buildConfigPatch, planModeApplication, resolveModeById, type ConfigChangeOrigin, type ThreadConfigPatch } from "./thread-config";
 import { normalizeTaskModes, taskModeName, taskModeSummary } from "../shared/task-mode-catalog";
+import {
+  ASSETS_FILE,
+  PERSONA_FILE,
+  ZHIYA_PROMPT_BUDGET,
+  buildZhiyaPrompt,
+  ensureZhiyaFiles,
+  readZhiyaFile,
+  writeZhiyaFile,
+  zhiyaDir,
+  zhiyaFingerprint,
+} from "./zhiya";
 
 
 
@@ -533,9 +544,9 @@ function createHandle(
     // Keep pi's runtime in sync with the Plugins inventory, including the
     // singular `.pi/agent/skill` compatibility path and other local roots.
     skills: getAdditionalSkillPaths(cwd),
-    // User profile text (Settings → User Profile) is appended to this run's
-    // system prompt; read at spawn time so edits apply from new sessions on.
-    appendSystemPrompt: getConfig().userProfile?.trim() || undefined,
+    // 知芽 Zhiya: persona.md + assets.md are appended to this run's system
+    // prompt; read at spawn time so edits apply from new sessions on.
+    appendSystemPrompt: buildZhiyaPrompt(),
     shellInfo: shell.info,
     toolFlags: shell.toolFlags,
     gateModeFile,
@@ -733,6 +744,10 @@ function createHandle(
  * Cost: one idle node process (~190MB); it is stopped on app quit.
  */
 let warmHandle: BridgeHandle | null = null;
+/** zhiyaFingerprint() at the moment the current spare was booted; a mismatch
+ * means persona.md/assets.md changed on disk and the spare's baked-in system
+ * prompt is stale. */
+let warmZhiyaFp = "";
 let lastOpenCwd: string | null = null;
 let warmFailures = 0;
 let warmEnabled = false;
@@ -920,6 +935,7 @@ export function ensureWarmBridge(): void {
   const cwd = warmCwd();
   const handle = createHandle(cwd, undefined, undefined, "sandbox", sendToRenderer);
   warmHandle = handle;
+  warmZhiyaFp = zhiyaFingerprint();
   // eslint-disable-next-line no-console
   console.log("[pi] warm spare spawning (cwd=" + cwd + ")");
   handle.bridge
@@ -947,6 +963,19 @@ export function dropWarmBridge(): void {
     warmHandle.bridge.stop();
     warmHandle = null;
   }
+  warmZhiyaFp = "";
+}
+
+/** Restart the standby when persona.md/assets.md changed since it booted.
+ * Cheap: two small file reads + a sha256. Call before adopting the spare. */
+function refreshWarmBridgeIfStale(): void {
+  if (!warmHandle) return;
+  const fp = zhiyaFingerprint();
+  if (fp === warmZhiyaFp) return;
+  // eslint-disable-next-line no-console
+  console.log("[pi] zhiya files changed -> restarting warm spare with fresh system prompt");
+  dropWarmBridge();
+  ensureWarmBridge();
 }
 
 async function gatherThread(bridge: PiBridge, threadId: string, permission: PermissionLevel) {
@@ -2566,6 +2595,126 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return next;
   });
 
+  // ---- 知芽 Zhiya: persona/assets files, KB browsing, mem0 status --------
+  ipcMain.handle("zhiya:get", () => {
+    ensureZhiyaFiles();
+    return {
+      dir: zhiyaDir(),
+      persona: readZhiyaFile(PERSONA_FILE),
+      assets: readZhiyaFile(ASSETS_FILE),
+      budget: ZHIYA_PROMPT_BUDGET,
+    };
+  });
+  ipcMain.handle("zhiya:setPersona", (_e, text: unknown) => {
+    if (typeof text !== "string") throw new Error("Invalid persona text");
+    writeZhiyaFile(PERSONA_FILE, text);
+    refreshWarmBridgeIfStale(); // in-app edit → restart standby with fresh prompt
+    return { ok: true };
+  });
+  ipcMain.handle("zhiya:setAssets", (_e, text: unknown) => {
+    if (typeof text !== "string") throw new Error("Invalid assets text");
+    writeZhiyaFile(ASSETS_FILE, text);
+    refreshWarmBridgeIfStale();
+    return { ok: true };
+  });
+
+  // Knowledge base browsing (per-project .alexandria/knowledge/).
+  ipcMain.handle("zhiya:listKb", (_e, cwd: unknown) => {
+    if (!cwd || typeof cwd !== "string") throw new Error("Invalid project dir");
+    const root = join(cwd, ".alexandria", "knowledge");
+    if (!existsSync(root)) return { exists: false, files: [] as { path: string; size: number; mtime: number }[] };
+    const files: { path: string; size: number; mtime: number }[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const abs = join(dir, entry.name);
+        if (entry.isDirectory()) walk(abs);
+        else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+          const st = statSync(abs);
+          files.push({ path: relative(root, abs), size: st.size, mtime: st.mtimeMs });
+        }
+      }
+    };
+    walk(root);
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    return { exists: true, root, files };
+  });
+  ipcMain.handle("zhiya:getKbFile", (_e, cwd: unknown, relPath: unknown) => {
+    if (!cwd || typeof cwd !== "string" || !relPath || typeof relPath !== "string") throw new Error("Invalid args");
+    const root = join(cwd, ".alexandria", "knowledge");
+    const abs = resolve(root, relPath);
+    // Path-traversal guard: the resolved path must stay inside the KB root.
+    if (abs !== root && !abs.startsWith(root + sep)) throw new Error("Path escapes knowledge dir");
+    if (!existsSync(abs) || !statSync(abs).isFile()) throw new Error("Not a file");
+    return { content: readFileSync(abs, "utf8") };
+  });
+
+  // Open the KB in Obsidian (obsidian:// URI; fails gracefully when absent).
+  ipcMain.handle("zhiya:openObsidian", async (_e, cwd: unknown) => {
+    if (!cwd || typeof cwd !== "string") throw new Error("Invalid project dir");
+    const root = join(cwd, ".alexandria", "knowledge");
+    if (!existsSync(root)) return { ok: false, error: "no-kb" };
+    // Prefer Architecture.md (the L0 entry), else the first .md found.
+    let target = join(root, "Architecture.md");
+    if (!existsSync(target)) {
+      const findFirst = (dir: string): string | null => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const abs = join(dir, entry.name);
+          if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) return abs;
+          if (entry.isDirectory()) {
+            const sub = findFirst(abs);
+            if (sub) return sub;
+          }
+        }
+        return null;
+      };
+      target = findFirst(root) || root;
+    }
+    try {
+      await shell.openExternal(`obsidian://open?path=${encodeURIComponent(target)}`);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: String((err as Error)?.message || err) };
+    }
+  });
+
+  // Short-term memory status: ping the local mem0 server + count memories.
+  ipcMain.handle("zhiya:mem0Status", async () => {
+    let baseUrl = "http://127.0.0.1:8000";
+    let userId = "";
+    try {
+      const cfgPath = join(getAgentDir(), "mem0-config.json");
+      if (existsSync(cfgPath)) {
+        const c = JSON.parse(readFileSync(cfgPath, "utf8"));
+        if (typeof c.baseUrl === "string") baseUrl = c.baseUrl;
+        if (typeof c.userId === "string") userId = c.userId;
+      }
+    } catch {
+      /* defaults */
+    }
+    let online = false;
+    try {
+      const res = await fetch(`${baseUrl.replace(/\/$/, "")}/health`, { signal: AbortSignal.timeout(3000) });
+      online = res.ok;
+    } catch {
+      online = false;
+    }
+    let count: number | null = null;
+    if (online && userId) {
+      try {
+        const res = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/memories/all?user_id=${encodeURIComponent(userId)}`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (res.ok) {
+          const d: any = await res.json();
+          count = Array.isArray(d?.results) ? d.results.length : null;
+        }
+      } catch {
+        count = null;
+      }
+    }
+    return { online, baseUrl, userId, count };
+  });
+
   // ---- backup & restore (Settings → 数据管理) ---------------------------
   const backupStamp = () => new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
 
@@ -3034,6 +3183,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("app:prewarm", (_e, cwd: string) => {
     if (!cwd || typeof cwd !== "string") return { ok: false };
     lastOpenCwd = cwd;
+    refreshWarmBridgeIfStale();
     if (warmHandle && !sameDir(warmHandle.bridge.cwd, cwd)) dropWarmBridge();
     ensureWarmBridge();
     return { ok: true };
@@ -3346,6 +3496,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     const permission = resolvePermission(sessionFile, args.permission);
     let handle: BridgeHandle | null = null;
     let adopted = false;
+    refreshWarmBridgeIfStale();
     const spareAtEntry = !!warmHandle;
     // Try to adopt the warm spare: switching a booted process is ~0.5s vs
     // ~5s for a cold start. A dead spare is dropped, a spare booted for
