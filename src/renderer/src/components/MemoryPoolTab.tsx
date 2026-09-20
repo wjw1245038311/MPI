@@ -97,14 +97,30 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
   const [type, setType] = useState("all");
   const [project, setProject] = useState("all");
   const [sort, setSort] = useState<"recent" | "importance" | "recurrence">("recent");
+  const [range, setRange] = useState<"all" | "today" | "7d" | "30d">("all");
+  // 具体日期区间（与预设互斥：填了日期就以日期为准，选预设会清掉日期）
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [full, setFull] = useState<{ id: string; text: string; evidence: string[]; path: string | null } | null>(null);
+  /** 应用内确认框（**不用原生 window.confirm**：原生模态在 Electron/Windows 上
+   *  出现过点关闭后输入框夺不回鼠标焦点的问题，用户反馈"批准后无法输入"）。 */
+  const [confirmAsk, setConfirmAsk] = useState<{ title: string; body: string; confirmLabel: string; run: () => Promise<void> } | null>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
     try {
       // 过滤/排序在主进程侧做一次也行，但本地做更跟手：先取全量（默认 200 条上限）
-      const s = (await window.pi.memory.snapshot({ sort, status, type, project, q })) as Snapshot | null;
+      const s = (await window.pi.memory.snapshot({
+        sort,
+        status,
+        type,
+        project,
+        q,
+        range: from || to ? "all" : range, // 有具体日期时预设让位
+        from: from || undefined,
+        to: to || undefined,
+      })) as Snapshot | null;
       if (!s) throw new Error(zh ? "主进程未返回数据" : "no data from main process");
       setSnap(s);
       setErr(null);
@@ -113,43 +129,61 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
     } finally {
       setBusy(false);
     }
-  }, [q, sort, status, type, project, zh]);
+  }, [q, sort, status, type, project, range, from, to, zh]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const doArchive = async (entry: EntryView) => {
-    const okGo = window.confirm(
-      zh
-        ? `归档这条记忆？\n\n${entry.summary}\n\n（归档≠删除，可在归档目录找回）`
-        : `Archive this memory?\n\n${entry.summary}\n\n(Archive ≠ delete — you can restore it from the archive folder.)`,
-    );
-    if (!okGo) return;
-    const r = await window.pi.memory.archive(entry.id);
-    pushToast(r.ok ? "success" : "error", r.detail);
-    void load();
+  const doArchive = (entry: EntryView) => {
+    setConfirmAsk({
+      title: zh ? "归档这条记忆？" : "Archive this memory?",
+      body: `${entry.summary}\n\n${zh ? "归档≠删除，可在归档目录找回。" : "Archive ≠ delete — restorable from the archive folder."}`,
+      confirmLabel: zh ? "归档" : "Archive",
+      run: async () => {
+        const r = await window.pi.memory.archive(entry.id);
+        pushToast(r.ok ? "success" : "error", r.detail);
+        await load();
+      },
+    });
   };
 
-  const doDecide = async (p: ProposalView, decision: "approve" | "reject") => {
-    if (decision === "approve") {
-      const what =
-        p.kind === "archive"
-          ? zh
-            ? "把这些条记忆移到归档目录（可找回）"
-            : "move the entries to the archive folder (restorable)"
-          : p.kind === "promote-kb"
-            ? zh
-              ? `写入 ${p.target || "项目知识库"}（不自动 commit，留给你 git diff 审）`
-              : `write to ${p.target || "the project KB"} (no auto-commit; review with git diff)`
-            : zh
-              ? "标记为已批准，由你人工合并进长期内容"
-              : "mark as approved; you merge it into long-term content yourself";
-      if (!window.confirm(`${zh ? "批准" : "Approve"}「${p.title}」？\n\n${what}`)) return;
+  const doDecide = (p: ProposalView, decision: "approve" | "reject") => {
+    if (decision === "reject") {
+      setConfirmAsk({
+        title: `${zh ? "拒绝" : "Reject"}「${p.title}」？`,
+        body: zh ? "只改提案状态（留痕），不动池子里的条目。" : "Only the proposal status changes; pool entries stay put.",
+        confirmLabel: zh ? "拒绝" : "Reject",
+        run: async () => {
+          const r = await window.pi.memory.decide(p.id, "reject");
+          pushToast(r.ok ? "success" : "error", r.detail);
+          await load();
+        },
+      });
+      return;
     }
-    const r = await window.pi.memory.decide(p.id, decision);
-    pushToast(r.ok ? "success" : "error", r.detail);
-    void load();
+    const what =
+      p.kind === "archive"
+        ? zh
+          ? "把这些条记忆移到归档目录（可找回）"
+          : "move the entries to the archive folder (restorable)"
+        : p.kind === "promote-kb"
+          ? zh
+            ? `写入 ${p.target || "项目知识库（按同项目条目解析）"}（不自动 commit，留给你 git diff 审）`
+            : `write to ${p.target || "the project KB (resolved from sibling entries)"} (no auto-commit; review with git diff)`
+          : zh
+            ? "标记为已批准，由你人工合并进长期内容"
+            : "mark as approved; you merge it into long-term content yourself";
+    setConfirmAsk({
+      title: `${zh ? "批准" : "Approve"}「${p.title}」？`,
+      body: what,
+      confirmLabel: zh ? "批准" : "Approve",
+      run: async () => {
+        const r = await window.pi.memory.decide(p.id, "approve");
+        pushToast(r.ok ? "success" : "error", r.detail);
+        await load();
+      },
+    });
   };
 
   const runDream = async (dry: boolean) => {
@@ -169,10 +203,39 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
   };
 
   const entries = snap?.entries ?? [];
+
+  /** 按日期分组（只在"最新"排序下做：其它排序里日期是乱的，分组反而晕）。
+   *  标签用本地日历：今天 / 昨天 / YYYY-MM-DD（周几）。 */
+  const groups = useMemo(() => {
+    if (sort !== "recent") return null;
+    const label = (iso: string): string => {
+      const t = Date.parse(iso);
+      if (!Number.isFinite(t)) return zh ? "未知日期" : "Unknown date";
+      const d = new Date(t);
+      const p = (n: number) => String(n).padStart(2, "0");
+      const key = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+      const now = new Date();
+      const todayKey = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+      const y = new Date(now.getTime() - 86400000);
+      const yesterdayKey = `${y.getFullYear()}-${p(y.getMonth() + 1)}-${p(y.getDate())}`;
+      const weekday = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
+      if (key === todayKey) return zh ? "今天" : "Today";
+      if (key === yesterdayKey) return zh ? "昨天" : "Yesterday";
+      return zh ? `${key} 周${weekday}` : `${key} (${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]})`;
+    };
+    const out: { label: string; items: typeof entries }[] = [];
+    for (const e of entries) {
+      const l = label(e.createdAt);
+      const last = out[out.length - 1];
+      if (last && last.label === l) last.items.push(e);
+      else out.push({ label: l, items: [e] });
+    }
+    return out;
+  }, [entries, sort, zh]);
   const pending = useMemo(() => (snap?.proposals ?? []).filter((p) => p.status === "pending"), [snap]);
 
   return (
-    <section className="zhiya-sec">
+    <section className="zhiya-sec mempool-sec">
       <div className="zhiya-sec-head">
         <h3>
           {zh ? "记忆池" : "Memory pool"} <code>{snap?.stats.total ?? "—"}</code>
@@ -243,6 +306,58 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
             </option>
           ))}
         </select>
+        <select
+          className="set-select"
+          value={from || to ? "custom" : range}
+          onChange={(e) => {
+            const v = e.target.value;
+            setFrom("");
+            setTo("");
+            setRange(v === "custom" ? "all" : (v as never));
+          }}
+          title={zh ? "按写入日期" : "By date"}
+        >
+          <option value="custom" hidden>{zh ? "自定义日期" : "Custom dates"}</option>
+          <option value="all">{zh ? "全部时间" : "All time"}</option>
+          <option value="today">{zh ? "今天" : "Today"}</option>
+          <option value="7d">{zh ? "近 7 天" : "Last 7 days"}</option>
+          <option value="30d">{zh ? "近 30 天" : "Last 30 days"}</option>
+        </select>
+        <span className="mempool-dates">
+          <input
+            className="set-input mempool-date"
+            type="date"
+            value={from}
+            onChange={(e) => {
+              setFrom(e.target.value);
+              if (e.target.value) setRange("all");
+            }}
+            title={zh ? "起始日期（含当天）" : "From (inclusive)"}
+          />
+          <span className="zhiya-dim">→</span>
+          <input
+            className="set-input mempool-date"
+            type="date"
+            value={to}
+            onChange={(e) => {
+              setTo(e.target.value);
+              if (e.target.value) setRange("all");
+            }}
+            title={zh ? "结束日期（含当天）" : "To (inclusive)"}
+          />
+          {(from || to) && (
+            <button
+              className="set-btn ghost"
+              onClick={() => {
+                setFrom("");
+                setTo("");
+              }}
+              title={zh ? "清除日期" : "Clear dates"}
+            >
+              <Close size={12} />
+            </button>
+          )}
+        </span>
         <select className="set-select" value={sort} onChange={(e) => setSort(e.target.value as never)}>
           <option value="recent">{zh ? "最新" : "Newest"}</option>
           <option value="importance">{zh ? "重要性" : "Importance"}</option>
@@ -261,7 +376,7 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
           <div className="mempool-sub">
             {zh ? "待审批提案" : "Pending proposals"} · {pending.length}
           </div>
-          {pending.slice(0, 10).map((p) => (
+          {pending.map((p) => (
             <div className="mempool-prop" key={p.id}>
               <div className="mempool-prop-main">
                 <div className="mempool-prop-title">
@@ -280,6 +395,11 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
               </div>
             </div>
           ))}
+          {pending.length > 20 && (
+            <div className="zhiya-dim">
+              {zh ? `（待审批提案较多，共 ${pending.length} 份，建议先批准/拒绝一批）` : `(${pending.length} pending — approve or reject a batch first)`}
+            </div>
+          )}
           {(snap?.proposals.length ?? 0) > pending.length && (
             <div className="zhiya-dim">
               {zh
@@ -303,42 +423,56 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
         </div>
       ) : (
         <div className="mempool-list">
-          {entries.map((e) => (
-            <div className={`mempool-row${expanded === e.id ? " open" : ""}`} key={e.id}>
-              <div className="mempool-row-head">
-                <button className="mempool-row-title" onClick={() => void openFull(e.id)}>
-                  {e.summary}
-                  {e.length > e.summary.length && <span className="zhiya-dim"> …</span>}
-                </button>
-                <div className="mempool-row-btns">
-                  <button className="set-btn ghost" onClick={() => void doArchive(e)} title={zh ? "归档（不是删除）" : "Archive (not delete)"}>
-                    <Close size={12} />
-                  </button>
-                </div>
-              </div>
-              <div className="mempool-row-meta">
-                <span>{ago(e.createdAt)}</span>
-                <span>
-                  {STATUS_LABEL[e.status]?.[zh ? 0 : 1] ?? e.status}
-                </span>
-                <span>{e.project}</span>
-                <span title={zh ? "重要性" : "Importance"}>★{e.importance}</span>
-                {e.recurrence > 1 && <span title={zh ? "复现次数（≥3 够格晋升）" : "Recurrence (≥3 eligible)"}>↻{e.recurrence}</span>}
-                {e.evidenceCount > 0 && <span>证据 {e.evidenceCount}</span>}
-                {e.warnings.length > 0 && <span className="mempool-warnflag">{zh ? "需复核" : "review"}</span>}
-              </div>
-              {expanded === e.id && full && full.id === e.id && (
-                <div className="mempool-full">
-                  <pre>{full.text}</pre>
-                  {full.evidence.length > 0 && (
-                    <>
-                      <div className="zhiya-dim">{zh ? "证据" : "Evidence"}</div>
-                      <pre>{full.evidence.join("\n")}</pre>
-                    </>
-                  )}
-                  {full.path && <div className="mempool-prop-path">{full.path}</div>}
+          {(groups ?? [{ label: "", items: entries }]).map((g) => (
+            <div key={g.label || "flat"}>
+              {g.label && (
+                <div className="mempool-day">
+                  {g.label}
+                  <span className="zhiya-dim"> · {g.items.length}</span>
                 </div>
               )}
+              {g.items.map((e) => (
+                <div className={`mempool-row${expanded === e.id ? " open" : ""}`} key={e.id}>
+                  <div className="mempool-row-head">
+                    <button className="mempool-row-title" onClick={() => void openFull(e.id)}>
+                      {e.summary}
+                      {e.length > e.summary.length && <span className="zhiya-dim"> …</span>}
+                    </button>
+                    <div className="mempool-row-btns">
+                      <button
+                        className="set-btn ghost"
+                        onClick={() => void doArchive(e)}
+                        title={zh ? "归档（不是删除）" : "Archive (not delete)"}
+                      >
+                        <Close size={12} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mempool-row-meta">
+                    <span>{ago(e.createdAt)}</span>
+                    <span>{STATUS_LABEL[e.status]?.[zh ? 0 : 1] ?? e.status}</span>
+                    <span>{e.project}</span>
+                    <span title={zh ? "重要性" : "Importance"}>★{e.importance}</span>
+                    {e.recurrence > 1 && (
+                      <span title={zh ? "复现次数（≥3 够格晋升）" : "Recurrence (>=3 eligible)"}>↻{e.recurrence}</span>
+                    )}
+                    {e.evidenceCount > 0 && <span>{zh ? "证据" : "evidence"} {e.evidenceCount}</span>}
+                    {e.warnings.length > 0 && <span className="mempool-warnflag">{zh ? "需复核" : "review"}</span>}
+                  </div>
+                  {expanded === e.id && full && full.id === e.id && (
+                    <div className="mempool-full">
+                      <pre>{full.text}</pre>
+                      {full.evidence.length > 0 && (
+                        <>
+                          <div className="zhiya-dim">{zh ? "证据" : "Evidence"}</div>
+                          <pre>{full.evidence.join("\n")}</pre>
+                        </>
+                      )}
+                      {full.path && <div className="mempool-prop-path">{full.path}</div>}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           ))}
         </div>
@@ -357,6 +491,31 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* 应用内确认层：不用原生 window.confirm（原生模态在 Windows 上会留下焦点问题） */}
+      {confirmAsk && (
+        <div className="mempool-confirm-layer" onMouseDown={() => setConfirmAsk(null)}>
+          <div className="mempool-confirm" onMouseDown={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true">
+            <div className="mempool-confirm-title">{confirmAsk.title}</div>
+            <div className="mempool-confirm-body">{confirmAsk.body}</div>
+            <div className="mempool-confirm-btns">
+              <button className="set-btn ghost" onClick={() => setConfirmAsk(null)} autoFocus>
+                {zh ? "取消" : "Cancel"}
+              </button>
+              <button
+                className="set-btn"
+                onClick={() => {
+                  const run = confirmAsk.run;
+                  setConfirmAsk(null);
+                  void run();
+                }}
+              >
+                {confirmAsk.confirmLabel}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

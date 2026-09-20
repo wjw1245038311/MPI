@@ -3099,7 +3099,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     },
     // 扩展发起的重活（dream/审批）：由主进程执行，结果写 ops.jsonl 供扩展读
     ops: {
-      dream: (op) => startDream(opRunnerDeps(), op.dryRun === true, getConfig().zhiyaDreamLlmClassify === true),
+      // 扩展触发的分诊带上它自己的工作目录——老条目没有 projectRoot 时靠它算 lesson 落点
+      dream: (op) =>
+        startDream(opRunnerDeps(), op.dryRun === true, getConfig().zhiyaDreamLlmClassify === true, op.cwd),
       approve: (id) => approveProposal(opRunnerDeps(), id),
       reject: (id) => rejectProposal(opRunnerDeps(), id),
       logResult: (r) => appendOpResult(memoryPoolDir(), r),
@@ -3330,7 +3332,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
 
   // 面板里的"跑一次分诊"：与扩展的 op 走同一条路（单飞 + 结果进 ops.jsonl）
   ipcMain.handle("memory:dream", async (_e, dry?: unknown) => {
-    const r = await startDream(opRunnerDeps(), dry === true, getConfig().zhiyaDreamLlmClassify === true);
+    // 面板触发的分诊：用最近活跃会话的 cwd 当兜底项目根（老条目没 root 时靠它算落点）
+    const cwd = (getConfig() as { lastThreadCwd?: string }).lastThreadCwd || undefined;
+    const r = await startDream(opRunnerDeps(), dry === true, getConfig().zhiyaDreamLlmClassify === true, cwd);
     return r;
   });
 

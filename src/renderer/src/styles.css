@@ -5009,6 +5009,8 @@ textarea.modal-input {
   gap: 8px;
   z-index: 200;
   -webkit-app-region: no-drag;
+  /* ⚠️ 容器必须不吃点击（长提示会盖住输入框/发送键，点不到也别点空） */
+  pointer-events: none;
 }
 
 /* ---------- long task monitor (ring button + popover, in the composer) --
@@ -5152,6 +5154,7 @@ textarea.modal-input {
   word-break: break-all;
 }
 .toast {
+  pointer-events: auto; /* 只有气泡本身可点（点击=关闭） */
   background: #2b2d28;
   color: #fff;
   border-radius: 10px;
@@ -10800,6 +10803,9 @@ mark.hl {
 .zhiya-sec-fill .zhiya-kb { flex: 1 1 auto; }
 
 /* ---- 知芽：记忆池面板（P4）----------------------------------------------- */
+/* ⚠️ .zhiya-sec 是 overflow:hidden 且 flex 默认会收缩——面板内容长时会被**裁掉**，
+   既看不到下面也没有滚动条（真机反馈）。这里取消收缩与裁剪，交给 .zhiya-body 滚动。 */
+.mempool-sec { flex: 0 0 auto; overflow: visible; }
 .mempool-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .mempool-stats {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
@@ -10862,3 +10868,32 @@ mark.hl {
 }
 .mempool-warn ul { margin: 6px 0 0; padding-left: 18px; }
 .mempool-warn code { font-family: var(--mono); font-size: 10.5px; }
+.mempool-day {
+  position: sticky; top: 0; z-index: 1;
+  padding: 6px 14px; background: var(--rail-solid);
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px; font-weight: 650; color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+.mempool-dates { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.mempool-date { width: 132px; font-size: 11.5px; }
+/* 记忆池：应用内确认层（不用原生 window.confirm） */
+.mempool-confirm-layer {
+  position: fixed; inset: 0; z-index: 220;
+  background: rgba(20, 22, 18, 0.42);
+  display: grid; place-items: center;
+  -webkit-app-region: no-drag;
+}
+.mempool-confirm {
+  width: min(420px, 90vw);
+  background: var(--bg);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  padding: 16px 18px;
+}
+.mempool-confirm-title { font-size: 13.5px; font-weight: 650; color: var(--text); }
+.mempool-confirm-body {
+  margin-top: 8px; font-size: 12px; line-height: 1.6; color: var(--text-dim);
+  white-space: pre-wrap; max-height: 40vh; overflow: auto;
+}
+.mempool-confirm-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }

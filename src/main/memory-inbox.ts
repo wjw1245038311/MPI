@@ -58,6 +58,8 @@ export interface MemoryOpFile {
   match?: string;
   /** dream：只分诊不落盘 */
   dryRun?: boolean;
+  /** dream：会话工作目录（兜底项目根，用于给老条目算 lesson 落点） */
+  cwd?: string;
   reason?: string;
 }
 

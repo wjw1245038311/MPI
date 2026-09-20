@@ -60,6 +60,8 @@ export async function startDream(
   deps: OpRunnerDeps,
   dryRun: boolean,
   llmClassify = false,
+  /** 兜底项目根：老条目没有 projectRoot 时，用它算出 lesson 落点 */
+  defaultProjectRoot?: string,
 ): Promise<{ detail: string; files?: string[] }> {
   if (deps.isDreaming?.()) return { detail: "已有一次分诊在进行中，稍后再试" };
   deps.setDreaming?.(true);
@@ -77,6 +79,7 @@ export async function startDream(
         log,
         mode: mm.mode,
         modelDesc: mm.describe,
+        defaultProjectRoot: defaultProjectRoot || undefined,
         llmUrl: mm.url || undefined,
         llmModel: mm.model || undefined,
         llmKey: mm.key,

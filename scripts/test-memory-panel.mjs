@@ -13,9 +13,8 @@ import { join } from "node:path";
 import { register } from "node:module";
 
 register(new URL("./ts-ext-loader.mjs", import.meta.url));
-const { buildSnapshot, filterEntries, archiveEntryFromPanel, decideProposalFromPanel } = await import(
-  "../src/main/memory-panel.ts"
-);
+const { buildSnapshot, filterEntries, archiveEntryFromPanel, decideProposalFromPanel, dayKey, rangeStart, parseBound, resolveLessonsDirFor } =
+  await import("../src/main/memory-panel.ts");
 const { decideIngest, lexicalSimilarity, listEntries } = await import("../src/main/zhiya/pool.ts");
 const { writeProposal, listProposals, setProposalStatus } = await import("../src/main/zhiya/proposals.ts");
 const { newId } = await import("../src/main/zhiya/pool.ts");
@@ -214,6 +213,193 @@ function seed(items) {
   assert.equal(snap.broken.length, 1, "坏文件要在快照里报出来（面板显示而不是静默）");
   ok("坏提案文件：快照里单独报告，不静默、不炸");
   rmSync(pool, { recursive: true, force: true });
+}
+
+
+// --- 按日期：分组键与时间范围 -------------------------------------------------
+{
+  // 分组键用**本地日历**（不是 UTC 日界）：跨零点的条目不能被算到前一天
+  const iso = new Date(2026, 8, 20, 23, 30).toISOString();
+  assert.equal(dayKey(iso), "2026-09-20", "本地日期键");
+  assert.equal(dayKey("坏时间"), "未知日期", "坏时间不炸");
+
+  // 范围起点：today = 今天本地零点；7d 含今天共 7 天；30d 含今天共 30 天
+  const now = new Date(2026, 8, 20, 15, 0).getTime();
+  const midnight = new Date(2026, 8, 20, 0, 0).getTime();
+  assert.equal(rangeStart("all", now), 0);
+  assert.equal(rangeStart("today", now), midnight);
+  assert.equal(rangeStart("7d", now), midnight - 6 * 86400000, "近 7 天含今天");
+  assert.equal(rangeStart("30d", now), midnight - 29 * 86400000, "近 30 天含今天");
+  ok("按日期：分组键用本地日历、范围起点含今天（不是 7*24 小时的滑动窗口）");
+
+  // 过滤：造三条不同日期的条目（用真实时钟算相对日期，避免依赖测试运行日）
+  const pool = mkdtempSync(join(tmpdir(), "mpi-panel-date-"));
+  const mkAt = (text, daysAgo, hours = 12) => {
+    const d = new Date();
+    d.setDate(d.getDate() - daysAgo);
+    d.setHours(hours, 0, 0, 0);
+    const p = join(pool, "inbox", `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    mkdirSync(p, { recursive: true });
+    // 直接写文件（绕过 decideIngest 的"现在"），这样能构造历史日期
+    const id = newId(d.getTime());
+    writeFileSync(
+      join(p, `${id}.md`),
+      [
+        "---",
+        `id: ${id}`,
+        `created_at: ${new Date(d.getTime()).toISOString()}`,
+        "type: semantic",
+        "temporal: retrospective",
+        "importance: 6",
+        "relevance: 0.6",
+        "recurrence: 1",
+        "project: MPI",
+        "source: test",
+        "status: inbox",
+        "promoted_to: null",
+        "tags: []",
+        "---",
+        "",
+        text,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  };
+  mkAt("今天的条目。", 0);
+  mkAt("三天前的条目。", 3);
+  mkAt("四十天前的条目。", 40);
+  const all = listEntries(pool).entries;
+  assert.equal(all.length, 3, "三条历史条目都读进来");
+  assert.equal(filterEntries(all, { range: "all" }).length, 3, "全部时间");
+  assert.equal(filterEntries(all, { range: "today" }).length, 1, "只看今天");
+  assert.equal(filterEntries(all, { range: "7d" }).length, 2, "近 7 天含今天与三天前");
+  assert.equal(filterEntries(all, { range: "30d" }).length, 2, "近 30 天不含四十天前");
+  rmSync(pool, { recursive: true, force: true });
+  ok("时间范围过滤：全部/今天/近 7 天/近 30 天（含今天，历史条目不漏不重）");
+}
+
+
+// --- 具体日期区间（面板上的"从 / 到"）------------------------------------------
+{
+  const mk = (y, mo, d, h = 12, mi = 0) => new Date(y, mo - 1, d, h, mi).toISOString();
+  const entries = [
+    { createdAt: mk(2026, 9, 18), text: "18 号的。", project: "P", tags: [], status: "inbox", type: "semantic", importance: 6, recurrence: 1, id: "01AAAAAAAAAAAAAAAAAAAAAAAA", warnings: [], evidence: [], recurrences: [] },
+    { createdAt: mk(2026, 9, 20, 9), text: "20 号早上。", project: "P", tags: [], status: "inbox", type: "semantic", importance: 6, recurrence: 1, id: "01BBBBBBBBBBBBBBBBBBBBBBBB", warnings: [], evidence: [], recurrences: [] },
+    { createdAt: mk(2026, 9, 20, 23, 30), text: "20 号深夜。", project: "P", tags: [], status: "inbox", type: "semantic", importance: 6, recurrence: 1, id: "01CCCCCCCCCCCCCCCCCCCCCCCC", warnings: [], evidence: [], recurrences: [] },
+    { createdAt: mk(2026, 9, 22), text: "22 号的。", project: "P", tags: [], status: "inbox", type: "semantic", importance: 6, recurrence: 1, id: "01DDDDDDDDDDDDDDDDDDDDDDDD", warnings: [], evidence: [], recurrences: [] },
+  ];
+
+  // 边界：只给日期时，"到 X" 必须**包含 X 当天**（按零点算会漏掉一整天，最容易踩）
+  assert.equal(parseBound("2026-09-20", "start"), new Date(2026, 8, 20, 0, 0, 0, 0).getTime());
+  assert.equal(parseBound("2026-09-20", "end"), new Date(2026, 8, 20, 23, 59, 59, 999).getTime());
+  assert.equal(parseBound("2026-09-20T08:30", "start"), new Date(2026, 8, 20, 8, 30, 0, 0).getTime(), "带时分按精确时刻");
+  assert.equal(parseBound("", "start"), null);
+  assert.equal(parseBound("乱填", "start"), null, "认不出来当没填（不会把面板滤空）");
+  ok("日期边界解析：只给日期时含当天；支持时分精度；非法输入忽略");
+
+  assert.equal(filterEntries(entries, { from: "2026-09-20", to: "2026-09-20" }).length, 2, "20 号整天（含深夜 23:30）");
+  assert.equal(filterEntries(entries, { from: "2026-09-20" }).length, 3, "只给起点");
+  assert.equal(filterEntries(entries, { to: "2026-09-18" }).length, 1, "只给终点");
+  assert.equal(filterEntries(entries, { from: "2026-09-19", to: "2026-09-21" }).length, 2, "区间");
+  assert.equal(filterEntries(entries, { from: "2026-09-20T10:00" }).length, 2, "时分精度：20 号 10 点之后 = 20 号深夜 + 22 号");
+  assert.equal(filterEntries(entries, { from: "2026-09-20T10:00", to: "2026-09-20T23:59" }).length, 1, "两端带时分可以精确到那一天的那一时段");
+  assert.equal(filterEntries(entries, { from: "2026-09-20", to: "2026-09-20", range: "today" }).length, 2, "自定义区间优先于预设范围");
+  ok("具体日期过滤：闭区间含当天、只给一端也行、时分精度可用、优先于预设范围");
+}
+
+
+// --- kb 落点兜底链（真机报错：老条目没有 projectRoot → "无法确认 lesson 落点"）-----
+{
+  // 换行用变量拼，避免测试文件里堆转义
+  const NL = String.fromCharCode(10);
+  const writeEntry = (poolDir, text, { project, root = null, daysAgo = 0 }) => {
+    const d = new Date(Date.now() - daysAgo * 86400000);
+    const dir = join(poolDir, "inbox", `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    mkdirSync(dir, { recursive: true });
+    const id = newId(d.getTime());
+    const lines = [
+      "---",
+      `id: ${id}`,
+      `created_at: ${new Date(d.getTime()).toISOString()}`,
+      "type: semantic",
+      "temporal: retrospective",
+      "importance: 6",
+      "relevance: 0.6",
+      "recurrence: 1",
+      `project: ${project}`,
+      root ? `root: ${root}` : "root: null",
+      "source: test",
+      "status: inbox",
+      "promoted_to: null",
+      "tags: []",
+      "---",
+      "",
+      text,
+      "",
+    ];
+    writeFileSync(join(dir, `${id}.md`), lines.join(NL), "utf8");
+    return id;
+  };
+  const prop = (entries, over = {}) => ({
+    id: newId(),
+    createdAt: new Date().toISOString(),
+    kind: "promote-kb",
+    status: "pending",
+    outlet: "kb",
+    entries,
+    reason: "t",
+    title: "T",
+    body: "b",
+    target: null,
+    decidedAt: null,
+    result: null,
+    ...over,
+  });
+
+  const pool = mkdtempSync(join(tmpdir(), "mpi-panel-roots-"));
+  // ⚠️ 项目根必须也放临时目录：写死真实路径的话，第二次跑就撞"同名 lesson 已存在"，
+  //    还会往磁盘上留垃圾目录（第一次写测试时踩过）
+  const rootA = join(pool, "fake-proj-a");
+  const rootB = join(pool, "fake-proj-b");
+
+  // ① 条目自带 root
+  const withRoot = writeEntry(pool, "有 root 的项目条目。", { project: "OldProj", root: rootA });
+  assert.equal(
+    resolveLessonsDirFor(pool, prop([withRoot])),
+    join(rootA, ".alexandria", "knowledge", "lessons"),
+    "① 条目自带 root 优先",
+  );
+
+  // ② 老条目没有 root → 用**同项目**较新条目的 root（真机上就是这一档救回来的）
+  const noRoot = writeEntry(pool, "没有 root 的老条目。", { project: "MPI", daysAgo: 30 });
+  writeEntry(pool, "同项目新条目（有 root）。", { project: "MPI", root: rootB, daysAgo: 1 });
+  assert.equal(
+    resolveLessonsDirFor(pool, prop([noRoot])),
+    join(rootB, ".alexandria", "knowledge", "lessons"),
+    "② 同项目条目的 root 兜底",
+  );
+
+  // ③ 整个池子都没 root → null（宁可失败，也不要瞎猜一个目录往里写）
+  const solo = mkdtempSync(join(tmpdir(), "mpi-panel-noroot-"));
+  const lone = writeEntry(solo, "孤独条目。", { project: "X" });
+  assert.equal(resolveLessonsDirFor(solo, prop([lone])), null, "③ 全都没 root → null（不瞎猜）");
+
+  // ④ 集成：没有 target 的老条目提案，批准时也能落地（不再报「无法确认 lesson 落点」）
+  const lessonsOfMpi = resolveLessonsDirFor(pool, prop([noRoot]));
+  const p1 = prop([noRoot], {
+    title: "Legacy lesson",
+    body: ["---", "lesson: legacy", "---", "", "# L", "", "## Guard", "", "x", ""].join(NL),
+  });
+  writeProposal(pool, p1);
+  const r = await decideProposalFromPanel(pool, p1.id.slice(-8), "approve", { kbLessonsDir: lessonsOfMpi });
+  assert.equal(r.ok, true, `无 target 的老条目也应能落地：${r.detail}`);
+  assert.equal(existsSync(join(lessonsOfMpi, "LegacyLesson.md")), true, "lesson 真的写进了同项目解析出的目录");
+  assert.equal(listProposals(pool).proposals.find((x) => x.id === p1.id).status, "applied");
+  ok("kb 落点兜底链：条目 root → 同项目 root → null；老条目提案批准不再报「无法确认 lesson 落点」");
+
+  rmSync(pool, { recursive: true, force: true });
+  rmSync(solo, { recursive: true, force: true });
 }
 
 console.log(`\ntest:memorypanel 全部通过（${n} 项）`);

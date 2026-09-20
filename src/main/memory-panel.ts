@@ -6,6 +6,7 @@
  * 所有写操作都复用已验证的执行器（memory-promote / memory-ops），不另写一套。
  */
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { listEntries, type PoolEntry } from "./zhiya/pool";
 import { listProposals, pendingProposals, type ProposalList } from "./zhiya/proposals";
 import type { Proposal } from "./zhiya/triage";
@@ -68,11 +69,20 @@ export interface SnapshotQuery {
   project?: string;
   /** 排序：时间倒序（默认）/ 重要性 / 复现次数 */
   sort?: "recent" | "importance" | "recurrence";
+  /** 时间范围（按写入日期）：全部 / 今天 / 近 7 天 / 近 30 天 */
+  range?: "all" | "today" | "7d" | "30d";
+  /**
+   * 自定义时间区间（优先级高于 range）：`YYYY-MM-DD` 或 `YYYY-MM-DDTHH:mm`。
+   * 只给日期时，起止都按**本地日历**算（起点当天零点、终点当天 23:59:59.999）；
+   * 带时分时按精确时刻。任一端非法就忽略那一端。
+   */
+  from?: string;
+  to?: string;
   limit?: number;
 }
 
 export function toView(e: PoolEntry, summaryChars = 160): PoolEntryView {
-  const text = e.text.replace(/\s+/g, " ").trim();
+  const text = (e.text ?? "").replace(/\s+/g, " ").trim();
   return {
     id: e.id,
     createdAt: e.createdAt,
@@ -84,14 +94,64 @@ export function toView(e: PoolEntry, summaryChars = 160): PoolEntryView {
     projectRoot: e.projectRoot,
     status: e.status,
     promotedTo: e.promotedTo,
-    tags: e.tags,
+    tags: e.tags ?? [],
     summary: text.slice(0, summaryChars),
     length: text.length,
-    evidenceCount: e.evidence.length,
-    recurrenceCount: e.recurrences.length,
-    warnings: e.warnings,
+    // 防御：字段缺失不能把整个面板带崩（老条目/手改文件都可能缺）
+    evidenceCount: (e.evidence ?? []).length,
+    recurrenceCount: (e.recurrences ?? []).length,
+    warnings: e.warnings ?? [],
     path: e.path,
   };
+}
+
+/** 本地日期键（YYYY-MM-DD）——按"写作那天的本地日历"分组，而不是 UTC 日界。 */
+export function dayKey(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "未知日期";
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** 范围起点（本地零点算）。today = 今天零点；7d/30d = 今天零点往前推。 */
+export function rangeStart(range: "all" | "today" | "7d" | "30d", now = Date.now()): number {
+  if (range === "all") return 0;
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  const midnight = d.getTime();
+  if (range === "today") return midnight;
+  if (range === "7d") return midnight - 6 * 24 * 3600 * 1000; // 含今天共 7 天
+  return midnight - 29 * 24 * 3600 * 1000; // 含今天共 30 天
+}
+
+/**
+ * 解析时间边界。
+ * `edge="start"` → 只给日期时取本地零点；`edge="end"` → 取当天最后一毫秒。
+ * 为什么要区分：用户填「到 2026-09-20」的直觉是"包含 20 号这一天"，
+ * 如果按零点算就会把 20 号的条目全滤掉（差一天，最容易踩的坑）。
+ */
+export function parseBound(value: string | undefined, edge: "start" | "end"): number | null {
+  const v = (value || "").trim();
+  if (!v) return null;
+  // 带时分：按精确时刻
+  const withTime = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(v);
+  if (withTime) {
+    const [, y, mo, d, h, mi] = withTime.map(Number) as unknown as number[];
+    const t = new Date(y, mo - 1, d, h, mi, edge === "end" ? 59 : 0, edge === "end" ? 999 : 0).getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  // 只有日期：本地日历
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (dateOnly) {
+    const [, y, mo, d] = dateOnly.map(Number) as unknown as number[];
+    const t =
+      edge === "start"
+        ? new Date(y, mo - 1, d, 0, 0, 0, 0).getTime()
+        : new Date(y, mo - 1, d, 23, 59, 59, 999).getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  return null; // 认不出来就当没填，而不是把面板滤空
 }
 
 /** 过滤 + 排序（纯函数，面板与 CLI 共用；也方便单测）。 */
@@ -100,17 +160,30 @@ export function filterEntries(entries: PoolEntry[], q: SnapshotQuery = {}): Pool
   const status = q.status && q.status !== "all" ? q.status : null;
   const type = q.type && q.type !== "all" ? q.type : null;
   const project = q.project && q.project !== "all" ? q.project : null;
+  // 自定义区间优先于预设范围（面板上两者可以同时存在，以具体日期为准）
+  const fromTs = parseBound(q.from, "start");
+  const toTs = parseBound(q.to, "end");
+  const custom = fromTs !== null || toTs !== null;
+  const since = custom ? 0 : q.range && q.range !== "all" ? rangeStart(q.range) : 0;
 
   let out = entries.filter((e) => {
     if (status && e.status !== status) return false;
     if (type && e.type !== type) return false;
     if (project && e.project !== project) return false;
+    const t = Date.parse(e.createdAt);
+    if (custom) {
+      if (!Number.isFinite(t)) return false; // 时间戳坏掉的条目在自定义区间里排除（不然会莫名其妙混进来）
+      if (fromTs !== null && t < fromTs) return false;
+      if (toTs !== null && t > toTs) return false;
+    } else if (since) {
+      if (!Number.isFinite(t) || t < since) return false;
+    }
     if (!needle) return true;
     return (
-      e.text.toLowerCase().includes(needle) ||
-      e.project.toLowerCase().includes(needle) ||
-      e.tags.some((t) => t.toLowerCase().includes(needle)) ||
-      e.id.toLowerCase().startsWith(needle)
+      (e.text ?? "").toLowerCase().includes(needle) ||
+      (e.project ?? "").toLowerCase().includes(needle) ||
+      (e.tags ?? []).some((t) => t.toLowerCase().includes(needle)) ||
+      (e.id ?? "").toLowerCase().startsWith(needle)
     );
   });
 
@@ -203,6 +276,34 @@ function readConsolidationSafe(poolDir: string) {
   }
 }
 
+/**
+ * 解析一个 kb 提案该往哪个 lessons 目录落。
+ * 兜底链（按可靠性从高到低）：
+ *   ① 提案自带 target（dream 解析出来的确切路径）
+ *   ② 提案依据条目的 projectRoot
+ *   ③ **同项目其它条目**的 projectRoot（老条目没有 root 字段时的现实解）
+ *   ④ 拿不到 → null，让调用方给出可操作的提示（而不是写到一个瞎猜的目录里）
+ */
+export function resolveLessonsDirFor(poolDir: string, p: Proposal): string | null {
+  const { entries } = listEntries(poolDir);
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const picked = p.entries.map((id) => byId.get(id)).filter((e): e is PoolEntry => !!e);
+  const own = picked.find((e) => e.projectRoot)?.projectRoot;
+  if (own) return joinForLessons(own);
+  // 同项目其它条目兜底：老条目没 root，但同项目的较新条目有
+  for (const e of picked) {
+    const sibling = entries.find((x) => x.project === e.project && x.projectRoot);
+    if (sibling?.projectRoot) return joinForLessons(sibling.projectRoot);
+  }
+  const anyWithRoot = entries.find((e) => e.projectRoot);
+  return anyWithRoot?.projectRoot ? joinForLessons(anyWithRoot.projectRoot) : null;
+}
+
+/** <项目根>/.alexandria/knowledge/lessons（用 path.join，避免与 Windows 根斜杠混用） */
+function joinForLessons(root: string): string {
+  return join(root.replace(/[\/]+$/, ""), ".alexandria", "knowledge", "lessons");
+}
+
 export interface ActionResult {
   ok: boolean;
   detail: string;
@@ -259,10 +360,13 @@ export async function decideProposalFromPanel(
   }
   const approved = setProposalStatus(poolDir, p.id, "approved");
   if (!approved) return { ok: false, detail: `状态流转被拒绝：${p.status} → approved` };
+  // kb 提案：提案没带 target（老条目没有 projectRoot）时**兜底解析**
+  const kbLessonsDir =
+    deps.kbLessonsDir ?? (p.kind === "promote-kb" && !p.target ? resolveLessonsDirFor(poolDir, p) : null);
   const r = await applyProposal(approved, {
     poolDir,
     archiveDir: deps.archiveDir,
-    kbLessonsDir: deps.kbLessonsDir,
+    kbLessonsDir,
     index: deps.index,
   });
   return { ok: r.ok, detail: r.detail, files: r.files };

@@ -1257,7 +1257,15 @@ ${STATUS_TAG[p.status] ?? p.status} · ${KIND_TAG[p.kind] ?? p.kind}`,
       acFilter([ac("--dry", "--dry　预览：只分诊不落盘")], prefix),
     handler: async (args: string, ctx: any) => {
       const dry = /--dry|--preview/.test(String(args || ""));
-      const n = enqueue([{ op: "dream", dryRun: dry, reason: `cmd-dream:${sessionKey(ctx)}` }]);
+      const n = enqueue([
+        {
+          op: "dream",
+          dryRun: dry,
+          // 带上会话的工作目录：主进程用它给老条目（没有 projectRoot）算 lesson 落点
+          cwd: ctx.cwd,
+          reason: `cmd-dream:${sessionKey(ctx)}`,
+        },
+      ]);
       ctx.ui.notify(
         n
           ? `已启动周期分诊${dry ? "（预览，不落盘）" : ""}。本地模型要跑 1-2 分钟，完成后用 /memory-proposals 看结果。`
