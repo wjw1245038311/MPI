@@ -83,6 +83,9 @@ export interface OpLogEntry {
 
 /** 归档目录：优先进私有仓的 archive/（跨设备可见），没配母版则落在池内 archived/。 */
 export function archiveDirFor(poolDir: string): string {
+  // 显式覆盖优先（测试隔离 / 多实例；不给才按母版配置推导）
+  const override = (process.env.MPI_ZHIYA_ARCHIVE_DIR || "").trim();
+  if (override) return override;
   try {
     const master = zhiyaMasterDir();
     if (master) return join(master, "archive", "zhiya-pool");

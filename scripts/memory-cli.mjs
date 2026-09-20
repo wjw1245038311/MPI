@@ -40,6 +40,8 @@ const {
   decideIngest, ensurePool, lexicalSimilarity, listEntries, promoteTarget, shouldPromote,
   THRESHOLD, PROMOTE_RECURRENCE,
 } = await import("../src/main/zhiya/pool.ts");
+// 归档走**面板同一条执行路径**（跨卷安全移动 + 索引移除），不自己 rm 文件
+const { archiveEntryFromPanel } = await import("../src/main/memory-panel.ts");
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -62,6 +64,7 @@ function flags(argv) {
 const f = flags(args.slice(1));
 const poolDir = defaultPoolDir();
 
+const NL = String.fromCharCode(10);
 const dim = (s) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s) => `\x1b[1m${s}\x1b[0m`;
 
@@ -204,6 +207,65 @@ async function cmdOptimize() {
     `✓ 已压缩：${(before / 1048576).toFixed(1)}MB → ${(after / 1048576).toFixed(1)}MB（${Date.now() - t0}ms）`,
   );
 }
+
+/**
+ * 归档一条记忆（归档 ≠ 删除）。
+ *
+ * 设计取舍：
+ *   - **前缀歧义不猜**：前缀匹配到多条就列出来让人挑，绝不批量误归档（--all 才全归）。
+ *   - 默认**先看清楚再动手**：打印命中的正文摘要；--dry 只预览不落盘。
+ *   - 与面板「归档」/扩展 /memory-forget 同一执行路径（archiveEntryFromPanel）。
+ */
+async function cmdForget() {
+  const needle = (f._ || [])[0];
+  if (!needle) {
+    console.error("用法：npm run memory:forget -- <id 前缀或正文关键词> [--dry] [--all]");
+    process.exit(2);
+  }
+  const { entries } = listEntries(poolDir);
+  const byId = entries.filter((e) => e.id.startsWith(needle) || e.id.endsWith(needle));
+  const byText = entries.filter((e) => !byId.includes(e) && e.text.includes(needle));
+  const hit = byId.length ? byId : byText;
+  if (!hit.length) {
+    console.error(`没找到匹配「${needle}」的条目（可用 npm run memory:list 或 memory:recall 找 id）`);
+    process.exit(1);
+  }
+  // 前缀歧义不猜：匹配多条就列出来让人挑，绝不批量误归档（--all 才全归）
+  if (hit.length > 1 && f.all !== true) {
+    console.log(`${NL}前缀「${needle}」匹配到 ${hit.length} 条，不会猜。请给更长的前缀，或加 --all 全部归档：${NL}`);
+    for (const e of hit.slice(0, 20)) {
+      console.log(`  ${e.id}  ${dim(`${e.project} · ${e.createdAt.slice(0, 10)}`)}`);
+      console.log(`    ${oneLine(e.text, 90)}`);
+    }
+    process.exit(1);
+  }
+  // 归档目录：与 IPC/面板一致（母版配了就放母版的 archive/zhiya-pool，否则池内 archived/）
+  const dir = archiveDirFor(poolDir);
+  console.log(`${NL}将归档 ${hit.length} 条到 ${dir}（归档 ≠ 删除，可恢复）：`);
+  for (const e of hit) {
+    console.log(`  ${e.id}  ${dim(e.project)}`);
+    console.log(`    ${oneLine(e.text, 90)}`);
+  }
+  if (f.dry === true || f.preview === true) {
+    console.log(`${NL}（--dry 预览，未落盘）`);
+    return;
+  }
+  let okCount = 0;
+  for (const e of hit) {
+    const r = await archiveEntryFromPanel(poolDir, e.id, { archiveDir: dir, index: undefined });
+    if (r.ok) okCount++;
+    else console.error(`  ✗ ${e.id}：${r.detail}`);
+  }
+  console.log(`${NL}✓ 已归档 ${okCount}/${hit.length} 条 → ${dir}`);
+  console.log("  提示：跑 npm run memory:reindex 让索引同步");
+}
+
+/** 单行化 + 截断（列表里显示）。 */
+function oneLine(text, max) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
 
 async function cmdProposals() {
   const { proposals, broken } = listProposals(poolDir);
@@ -371,11 +433,13 @@ const table = {
   proposals: cmdProposals,
   approve: cmdApprove,
   reject: cmdReject,
+  forget: cmdForget,
+  archive: cmdForget, // 同义词：归档（归档 ≠ 删除）
   dream: cmdDream,
 };
 if (!table[cmd]) {
   console.log(
-    "用法：memory:list | memory:add | memory:recall | memory:reindex | memory:optimize | memory:show | memory:proposals | memory:approve | memory:reject | memory:dream",
+    "用法：memory:list | memory:add | memory:recall | memory:reindex | memory:optimize | memory:show | memory:proposals | memory:approve | memory:reject | memory:forget（别名 archive）| memory:dream",
   );
   process.exit(2);
 }
