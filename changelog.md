@@ -26,6 +26,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run test:poolwrite`（9 例：假失败判定成功 / 真失败重试 3 次后抛且清理 tmp / 600 条真机 soak 零异常零丢失 / 批量与逐条判定逐条一致 / 批内去重 / 缓存相似度与 `lexicalSimilarity` 逐位一致 / 872 条批量 <8s）；`npm run bench:memory-scale`（规模预检，报告 O(n²) 成本曲线与索引/检索指标）。
 
+9. **mem0 迁移工具链（P5-1，只出报告不写数据）**：为"mem0 退役"做了离线迁移通道——`npm run mem0:export`（只读副本导出 JSONL，**不碰线上库**）+ `npm run mem0:plan`（干跑：范围筛选 / 分类 / 三层去重 / 统计报告）+ `npm run mem0:apply`（真写，走批量通道）。映射规则：**正文一字不改**、保留原时间、`agent_id`→项目、无项目根就留空（不瞎猜）、`evidence` 写 `mem0:<uuid>` 幂等键。范围按拍板只取高价值四类（`[insight]` / `[tool-quirk]` / `[correction]` / 英文事实）。报告带**对账段**：与勘察数字逐项核对（872 条 / tool-quirk 19 / insight 7 / correction 3 / 英文事实 73 / 口径 102 → 去重后 96 条待写）。
+
+   验证方式：`npm run mem0:plan`（干跑，不写任何文件；`--all` / `--english` / `--attributed` 可换口径）；`npm run test:mem0migrate`（7 例：分类规则与迁移默认分、范围三种口径、正文一字不改与幂等键、去重三层（mem0 内部压复现 / 已导入 / 知识库已有）、干跑不写文件 + 导入后重跑 0 条待写、真实导出对账）。
+
 ## Unreleased
 
 1. **设置里新增「记忆模型」（知芽记忆池）——三档：不设置 / 跟随主模型 / 指定模型**：位置在「模型与提供商」的摘要模型下方，与摘要模型同样的两行下拉。**不设置（默认）= 完全不调模型**：记忆功能照常可用，但只剩基础读写改——`/memory-remember`、`memory_note`、检索、归档/删除都在，**自动捕获、重要性打分、lesson 正文生成停用**（与 mem0 的 `infer:false` 形态相同）。选「跟随主模型」则用当前会话主模型（扩展侧走 pi 运行时的 `completeSimple`，鉴权交运行时；主进程侧的分诊用设置里的默认模型）；选具体供应商+型号则只用它。供应商/型号缺失、协议不是 OpenAI 兼容（如 anthropic-messages）、缺 baseUrl 时，**退化成「不使用模型」并在日志里说明原因**，不会静默拿一个连不上的端点把记忆功能整体搞哑。
