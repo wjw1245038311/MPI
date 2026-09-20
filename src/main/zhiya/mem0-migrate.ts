@@ -193,7 +193,13 @@ export function inScope(rec: Mem0Record, opts: ScopeOptions = {}): boolean {
 export interface SkippedItem {
   key: string;
   rule: string;
-  reason: "duplicate-in-mem0" | "already-imported" | "exists-in-pool" | "exists-in-kb" | "empty-text";
+  reason:
+    | "duplicate-in-mem0"
+    | "duplicate-near"
+    | "already-imported"
+    | "exists-in-pool"
+    | "exists-in-kb"
+    | "empty-text";
   /** 命中目标的说明（哪条 id / 哪个文件） */
   detail: string;
 }
@@ -211,6 +217,8 @@ export interface MigrationPlan {
     byDevice: Record<string, number>;
     byMonth: Record<string, number>;
     duplicateInMem0: number;
+    /** 近似重复（不是完全相同）被折叠掉的条数 */
+    duplicateNear: number;
     /** mem0 内部重复被压成的复现次数 */
     recurrenceAdded: number;
     /** 范围外条目里的完全重复数（用于与勘察报告对账） */
@@ -278,15 +286,20 @@ export function planMigration(
     /** 判重用（默认归一化后精确比较；可注入相似度以放宽） */
     similarity?: (a: string, b: string) => number;
     threshold?: number;
+    /** 近似重复折叠阈值（默认与池子写入端一致 0.82）；设 1 即关闭折叠 */
+    nearThreshold?: number;
   },
 ): MigrationPlan {
   const scope = opts.scope ?? { highValueOnly: true };
   const threshold = opts.threshold ?? 0.9;
   const sim = opts.similarity;
+  // 折叠阈值与池子写入端一致：低于它的条目池子本来也不会判重，折叠它就没有依据
+  const nearThreshold = opts.nearThreshold ?? 0.82;
+  const similarityOf = sim ?? ((a: string, b: string) => (norm(a) === norm(b) ? 1 : 0));
+
   const already = opts.poolDir ? importedKeys(opts.poolDir) : new Set<string>();
   const poolEntries = opts.poolDir ? listEntries(opts.poolDir).entries : [];
   const poolNorm = new Set(poolEntries.map((e) => norm(e.text)));
-  const poolByNorm = poolEntries.map((e) => ({ id: e.id, text: e.text }));
   const kb = kbTexts(opts.kbDir ?? null).map((k) => ({ ...k, norm: norm(k.text) }));
 
   const plan: MigrationPlan = {
@@ -300,6 +313,7 @@ export function planMigration(
       byDevice: {},
       byMonth: {},
       duplicateInMem0: 0,
+      duplicateNear: 0,
       recurrenceAdded: 0,
       duplicateOutOfScope: 0,
       byRuleRaw: {},
@@ -308,7 +322,7 @@ export function planMigration(
     outOfScope: { byRule: {} },
   };
 
-  // ⓿ 对账用：全量（未筛选未去重）的形态分布——勘察报告 §0 报的就是这一层
+  // ---- 阶段 0：对账用的全量分布（未筛选未去重）--------------------------
   {
     const norms = new Set<string>();
     let dup = 0;
@@ -322,12 +336,12 @@ export function planMigration(
     plan.stats.duplicateRaw = dup;
   }
 
-  // ① mem0 内部：先按归一化正文分组，保留 created_at 最早的一条，其余记复现
+  // ---- 阶段 1：按"归一化正文"分组，处理完全相同（精确重复）---------------
   const byNorm = new Map<string, Mem0Record[]>();
   for (const r of recs) {
     const k = norm(String(r.data ?? ""));
     if (!k) {
-      plan.skipped.push({ key: idempotencyKey(r), rule: "plain", reason: "empty-text", detail: "正文为空" });
+      plan.skipped.push({ key: idempotencyKey(r), rule: classify(r).rule, reason: "empty-text", detail: "正文为空" });
       continue;
     }
     const list = byNorm.get(k);
@@ -335,16 +349,23 @@ export function planMigration(
     else byNorm.set(k, [r]);
   }
 
+  /** 分组代表（精确重复组的头，按创建时间最早者） */
+  interface Head {
+    rec: Mem0Record;
+    cand: Candidate;
+    /** 精确重复被压掉的条数 */
+    exactDups: number;
+    /** 折叠进来的近似条目 key */
+    absorbed: string[];
+  }
+  const heads: Head[] = [];
   for (const [, group] of byNorm) {
-    // 最早的一条代表整组（复现次数=组大小）
     group.sort((a, b) => String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
     const head = group[0];
-    const extra = group.length - 1;
     const c = classify(head);
-
     if (!inScope(head, scope)) {
       bump(plan.outOfScope.byRule, c.rule);
-      plan.stats.duplicateOutOfScope += extra;
+      plan.stats.duplicateOutOfScope += group.length - 1;
       continue;
     }
     plan.stats.inScope++;
@@ -352,7 +373,7 @@ export function planMigration(
     bump(plan.stats.byProject, projectOf(head));
     bump(plan.stats.byDevice, String(head.user_id ?? "(空)"));
     bump(plan.stats.byMonth, String(head.created_at ?? "").slice(0, 7) || "(无)");
-
+    const extra = group.length - 1;
     if (extra > 0) {
       plan.stats.duplicateInMem0 += extra;
       plan.stats.recurrenceAdded += extra;
@@ -365,39 +386,69 @@ export function planMigration(
         });
       }
     }
-
-    const key = idempotencyKey(head);
-    if (already.has(key)) {
-      plan.skipped.push({ key, rule: c.rule, reason: "already-imported", detail: "池子里已有此幂等键" });
-      continue;
-    }
-    const text = String(head.data ?? "").trim();
-    const n = norm(text);
-    if (poolNorm.has(n)) {
-      const hit = poolByNorm.find((p) => norm(p.text) === n);
-      plan.skipped.push({ key, rule: c.rule, reason: "exists-in-pool", detail: `池内已有同内容条目 ${hit?.id ?? ""}` });
-      continue;
-    }
-    const kbHit = kb.find((k) => k.norm.includes(n) || (sim && sim(text, k.text) > threshold));
-    if (kbHit) {
-      plan.skipped.push({ key, rule: c.rule, reason: "exists-in-kb", detail: `知识库已有：${kbHit.path}` });
-      continue;
-    }
-
-    plan.toWrite.push({ rec: head, cand: toCandidate(head) });
+    heads.push({ rec: head, cand: toCandidate(head), exactDups: extra, absorbed: [] });
   }
 
-  // 复现次数补进候选（迁移后在条目上体现"这条被记录过 N 次"）
-  for (const item of plan.toWrite) {
-    const n = norm(String(item.rec.data ?? ""));
-    const group = byNorm.get(n);
-    if (group && group.length > 1) {
-      item.cand.tags = [...(item.cand.tags ?? []), `mem0-dups:${group.length - 1}`];
+  // ---- 阶段 2：近似重复折叠（同一件事的多次记录，留**最长正文**=超集）------
+  // 为什么必须折叠：池子的写入路径对近似条目是"累加复现、保留旧正文"，
+  // 于是"后记的超集"会丢掉新增内容（真机抓到：一条 tool-quirk 的 `.retired-*`
+  // 说明就是这样消失的）。迁移阶段先折叠，就保留了最全的那份。
+  if (nearThreshold < 1) {
+    for (let i = 0; i < heads.length; i++) {
+      const cur = heads[i];
+      if (cur.absorbed.includes("__dropped__")) continue;
+      for (let j = 0; j < heads.length; j++) {
+        if (i === j) continue;
+        const other = heads[j];
+        if (other.absorbed.includes("__dropped__")) continue;
+        const s = similarityOf(cur.cand.text, other.cand.text);
+        if (s < nearThreshold) continue;
+        // 长的留下（超集），短的被吸收
+        const [keep, drop] = cur.cand.text.length >= other.cand.text.length ? [cur, other] : [other, cur];
+        drop.absorbed.push("__dropped__");
+        keep.absorbed.push(idempotencyKey(drop.rec));
+        plan.stats.duplicateNear++;
+        plan.skipped.push({
+          key: idempotencyKey(drop.rec),
+          rule: classify(drop.rec).rule,
+          reason: "duplicate-near",
+          detail: `近似重复（${s.toFixed(2)}），已并入 ${idempotencyKey(keep.rec)}（保留较长正文）`,
+        });
+      }
     }
+  }
+
+  // ---- 阶段 3：逐条做"已导入 / 池内已有 / KB 已有"检查，产出待写列表 -------
+  for (const h of heads) {
+    if (h.absorbed.includes("__dropped__")) continue;
+    const key = idempotencyKey(h.rec);
+    const rule = classify(h.rec).rule;
+    if (already.has(key)) {
+      plan.skipped.push({ key, rule, reason: "already-imported", detail: "池子里已有此幂等键" });
+      continue;
+    }
+    const n = norm(h.cand.text);
+    if (poolNorm.has(n)) {
+      const hit = poolEntries.find((p) => norm(p.text) === n);
+      plan.skipped.push({ key, rule, reason: "exists-in-pool", detail: `池内已有同内容条目 ${hit?.id ?? ""}` });
+      continue;
+    }
+    const kbHit = kb.find((k) => k.norm.includes(n) || (sim && sim(h.cand.text, k.text) > threshold));
+    if (kbHit) {
+      plan.skipped.push({ key, rule, reason: "exists-in-kb", detail: `知识库已有：${kbHit.path}` });
+      continue;
+    }
+    const tags = [...(h.cand.tags ?? [])];
+    if (h.exactDups > 0) tags.push(`mem0-dups:${h.exactDups}`);
+    if (h.absorbed.length) tags.push(`mem0-near-dups:${h.absorbed.length}`);
+    if (h.absorbed.length && h.cand.text.length > 0) tags.push("mem0-superset");
+    h.cand.tags = tags;
+    plan.toWrite.push({ rec: h.rec, cand: h.cand });
   }
 
   return plan;
 }
+
 
 
 // ---------------------------------------------------------------------------

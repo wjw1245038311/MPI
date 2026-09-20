@@ -330,4 +330,25 @@ t("项目根目录：root 字段往返一致、缺省为 null、不触发未知�
   ;
 });
 
+
+// --- 多值小节 round-trip（真机抓到：只解析第一条，第二个幂等键读不回）--------
+t("多值小节：evidence 三条与复现记录三条全部 round-trip（修前只回第一条）", () => {
+  const pool = mkdtempSync(join(tmpdir(), "mpi-pool-multi-"));
+  const e = {
+    id: newId(), createdAt: new Date().toISOString(), type: "semantic", temporal: "retrospective",
+    importance: 6, relevance: 0.7, recurrence: 3, project: "MPI", projectRoot: null, source: "t",
+    status: "inbox", promotedTo: null, tags: ["a", "b"], text: "多值小节测试正文。",
+    evidence: ["mem0:key-1", "mem0:key-2", "mem0-user:wjj"],
+    recurrences: ["2026-09-01（相似度 0.900，来源 a）", "2026-09-02（相似度 0.910，来源 b）", "2026-09-03（相似度 0.920，来源 c）"],
+    warnings: [], path: null,
+  };
+  writeEntry(pool, e);
+  const back = listEntries(pool).entries[0];
+  assert.deepEqual(back.evidence, e.evidence, "evidence 三条都要读回来（只回一条 = 幂等键丢失）");
+  assert.deepEqual(back.recurrences, e.recurrences, "复现记录三条都要读回来");
+  assert.equal(back.text.trim(), e.text, "正文不受影响（小节切分正确）");
+  assert.equal(back.recurrence, 3);
+  rmSync(pool, { recursive: true, force: true });
+});
+
 console.log(`\ntest:memorypool 全部通过（${n} 项）`);

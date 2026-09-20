@@ -288,11 +288,23 @@ export function parseEntry(raw: string, path: string | null = null): ParseResult
   const cut = [evidenceIdx, recurIdx].filter((i) => i >= 0).sort((a, b) => a - b);
   if (cut.length) textPart = body.slice(0, cut[0]);
 
+  /**
+   * 取正文里的一个 ## 小节（多值）。
+   *
+   * ⚠️ 这里踩过坑：原先写成 `([\s\S]*?)(?=\n## |$)` 配 `m` 标志——`$` 在 m 模式下匹配**行尾**，
+   * 惰性量词于是停在第一行，**多值小节只解析出第一条**（evidence 的第二个来源、
+   * 复现记录的第 2 条起全丢）。真机抓到：迁移条目的第二个幂等键读不回来，重跑会重复导入。
+   * 改为按位置切分，不依赖 `$` 的语义。
+   */
   const section = (name: string): string[] => {
-    const re = new RegExp(`^## ${name}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`, "m");
-    const s = re.exec(body);
-    if (!s) return [];
-    return s[1]
+    const start = body.search(new RegExp(`^## ${name}\\s*$`, "m"));
+    if (start < 0) return [];
+    const nl = body.indexOf("\n", start);
+    if (nl < 0) return [];
+    let content = body.slice(nl + 1);
+    const next = content.search(/^##\s/m);
+    if (next >= 0) content = content.slice(0, next);
+    return content
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("<!--"))
