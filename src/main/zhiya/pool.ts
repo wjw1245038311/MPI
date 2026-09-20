@@ -475,6 +475,11 @@ export function atomicReplace(tmp: string, dest: string, content: string, rename
 
 export interface Candidate {
   text: string;
+  /**
+   * 条目创建时间（ISO）。不给则用"现在"。
+   * ⚠️ 迁移场景必须给：否则 872 条 mem0 记忆全变成"今天"，面板按日期分组直接失去意义。
+   */
+  createdAt?: string;
   type: PoolType;
   temporal: PoolTemporal;
   importance: number;
@@ -591,10 +596,13 @@ function decideAgainst(
     return { action: "bump", entry: e, matchedId: e.id };
   }
 
-  const id = newId(now);
+  // 允许外部给创建时间（迁移/补录）：非法值退回"现在"，不因一条脏数据炸掉写入
+  const createdMs = cand.createdAt ? Date.parse(cand.createdAt) : NaN;
+  const created = Number.isFinite(createdMs) ? new Date(createdMs) : new Date(now);
+  const id = newId(Number.isFinite(createdMs) ? createdMs : now);
   const entry: PoolEntry = {
     id,
-    createdAt: nowIso(new Date(now)),
+    createdAt: nowIso(created),
     type: cand.type,
     temporal: cand.temporal,
     importance: cand.importance,

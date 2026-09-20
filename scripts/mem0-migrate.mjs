@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { register } from "node:module";
 
 register(new URL("./ts-ext-loader.mjs", import.meta.url));
-const { planMigration, DEVICE_LABEL } = await import("../src/main/zhiya/mem0-migrate.ts");
+const { planMigration, classify, DEVICE_LABEL, fileHash, writeManifest, rollbackMigration } = await import("../src/main/zhiya/mem0-migrate.ts");
 const { ingestBatch, lexicalSimilarity, makeSimilarity } = await import("../src/main/zhiya/pool.ts");
 const { defaultPoolDir } = await import("../src/main/zhiya/memory-index.ts");
 
@@ -31,12 +31,28 @@ const input = val("input", "E:/MyWorkspace/tempfile/mem0-export.jsonl");
 const poolDir = val("pool", defaultPoolDir());
 const kbDir = val("kb", null);
 const apply = flag("apply");
+const diverse = flag("diverse");
+const rollbackFile = val("rollback", null);
 const limit = val("limit", null) ? Number(val("limit")) : null;
 const scope = {
   highValueOnly: !flag("all"),
   includeAllEnglish: flag("english"),
   includeAttributed: flag("attributed"),
 };
+
+// ---- 回滚模式：按 manifest 撤销（默认只删哈希一致的，被改过的需 --force）----
+if (rollbackFile) {
+  const res = rollbackMigration(rollbackFile, { force: flag("force") });
+  console.log(`
+=== 回滚（manifest: ${rollbackFile}）===`);
+  console.log(`已删除：${res.removed.length} 个文件`);
+  if (res.missing.length) console.log(`文件已不在（可能被手动删过）：${res.missing.length}`);
+  if (res.changed.length) {
+    console.log(`⚠️ 内容已被改动、**未删除**：${res.changed.length}（确认要删加 --force）`);
+    for (const f of res.changed.slice(0, 5)) console.log(`  · ${f}`);
+  }
+  process.exit(0);
+}
 
 if (!existsSync(input)) {
   console.log(`找不到导出文件：${input}\n先跑：python scripts/mem0-export.py`);
@@ -100,16 +116,52 @@ if (!apply) {
 }
 
 // ---- 真写：走批量通道（一次读池 + 内存判定），并把幂等键写进 evidence ----
-const toWrite = limit ? plan.toWrite.slice(0, limit) : plan.toWrite;
+// 取样：--limit N 取前 N；--diverse 先每类各取一条再补足（小批量验证时覆盖各分类）
+let picked = plan.toWrite;
+if (diverse) {
+  // 每个分类先各抽一条，剩下的按原顺序补——小批量验证时能覆盖全部分类
+  const seenRule = new Set();
+  const heads = [];
+  const rest = [];
+  for (const item of plan.toWrite) {
+    const r = classify(item.rec).rule;
+    if (seenRule.has(r)) rest.push(item);
+    else {
+      seenRule.add(r);
+      heads.push(item);
+    }
+  }
+  picked = [...heads, ...rest];
+}
+const toWrite = limit ? picked.slice(0, limit) : picked;
 if (!toWrite.length) {
   console.log("\n没有要写入的条目。");
   process.exit(0);
 }
 const t0 = Date.now();
+// 先写 manifest 占位（写入后回填哈希）——回滚要能只靠这一份文件
+const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+const manifestPath = val("manifest", join(poolDir, ".migration", `mem0-${stamp}.jsonl`));
 const { ctx } = ingestBatch(poolDir, toWrite.map((x) => x.cand), makeSimilarity());
 const ms = Date.now() - t0;
+const manifestLines = ctx.added.map((e) => {
+  const src = toWrite.find((x) => x.cand.text === e.text);
+  return {
+    key: src ? `mem0:${src.rec._point_id}` : "",
+    entryId: e.id,
+    file: e.path,
+    project: e.project,
+    rule: src ? classify(src.rec).rule : "",
+    sha256: fileHash(e.path) || "",
+    writtenAt: new Date().toISOString(),
+  };
+});
+writeManifest(manifestPath, manifestLines);
 console.log(`\n--- 写入结果 ---`);
 console.log(`新增 ${ctx.added.length} / 累加 ${ctx.bumped.length} / 用时 ${(ms / 1000).toFixed(2)}s`);
+console.log(`manifest：${manifestPath}（${manifestLines.length} 行）`);
+console.log(`回滚：npm run mem0:plan -- --rollback "${manifestPath}"`);
+for (const l of manifestLines) console.log(`  写 ${l.entryId} [${l.rule}] ${l.project} → ${l.file}`);
 if (ctx.bumped.length) {
   console.log(`⚠️ 有 ${ctx.bumped.length} 条被判为重复累加（不是新增）——抽查确认是否符合预期：`);
   for (const e of ctx.bumped.slice(0, 5)) console.log(`  · ${e.id} 复现 ${e.recurrence}：${e.text.slice(0, 80)}`);

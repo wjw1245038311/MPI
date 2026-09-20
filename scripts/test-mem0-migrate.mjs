@@ -10,13 +10,13 @@
  * 运行：npm run test:mem0migrate
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { register } from "node:module";
 
 register(new URL("./ts-ext-loader.mjs", import.meta.url));
-const { classify, inScope, toCandidate, idempotencyKey, planMigration, importedKeys, zhRatio, isEnglishFact } =
+const { classify, inScope, toCandidate, idempotencyKey, planMigration, importedKeys, zhRatio, isEnglishFact, writeManifest, readManifest, rollbackMigration, fileHash } =
   await import("../src/main/zhiya/mem0-migrate.ts");
 const { decideIngest, listEntries, openIngestCtx } = await import("../src/main/zhiya/pool.ts");
 
@@ -25,6 +25,7 @@ const ok = (m) => {
   n++;
   console.log(`  ✅ ${m}`);
 };
+const CH_NL = String.fromCharCode(10);
 const tmpRoot = mkdtempSync(join(tmpdir(), "mpi-p5-1-"));
 process.on("exit", () => rmSync(tmpRoot, { recursive: true, force: true }));
 const fresh = (name) => {
@@ -223,6 +224,100 @@ const rec = (over = {}) => ({
   } else {
     console.log("  ⏭️ 跳过真实导出对账（先跑 python scripts/mem0-export.py 生成）");
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// manifest + 回滚（写真实池子前的安全网）
+// ---------------------------------------------------------------------------
+{
+  const { ingestBatch } = await import("../src/main/zhiya/pool.ts");
+  const pool = fresh("manifest-pool");
+  const recs = [
+    rec({ _point_id: "m1", data: "[insight] 回滚测试第一条。" }),
+    rec({ _point_id: "m2", data: "[tool-quirk] 回滚测试第二条。" }),
+  ];
+  const plan = planMigration(recs, { poolDir: pool });
+  const { ctx } = ingestBatch(pool, plan.toWrite.map((x) => x.cand));
+  const manifestPath = join(pool, ".migration", "test.jsonl");
+  writeManifest(
+    manifestPath,
+    ctx.added.map((e) => ({
+      key: `mem0:${e.id}`,
+      entryId: e.id,
+      file: e.path,
+      project: e.project,
+      rule: "insight",
+      sha256: fileHash(e.path),
+      writtenAt: new Date().toISOString(),
+    })),
+  );
+  const mLines = readManifest(manifestPath);
+  assert.equal(mLines.length, 2, "manifest 两行");
+  assert.ok(mLines.every((l) => l.sha256 && l.file), "每行都有文件路径与哈希");
+  assert.equal(listEntries(pool).entries.length, 2, "池内 2 条");
+
+  // 干扰项：不在 manifest 里的条目，回滚不得碰它
+  ingestBatch(pool, [
+    { text: "不在 manifest 里的条目，回滚不该删。", type: "semantic", temporal: "retrospective", importance: 6, relevance: 0.7, project: "MPI", source: "test" },
+  ]);
+  assert.equal(listEntries(pool).entries.length, 3, "现在是 3 条");
+
+  // 先留一份内容副本（后面要按原路径还原，才能验证"文件被改过"这条分支）
+  const saved = ctx.added.map((e) => ({ path: e.path, content: readFileSync(e.path, "utf8") }));
+
+  const res = rollbackMigration(manifestPath, {});
+  assert.equal(res.removed.length, 2, "删掉 manifest 里的 2 条");
+  assert.equal(res.changed.length, 0, "无内容变动");
+  assert.equal(listEntries(pool).entries.length, 1, "无关条目没被误删");
+  ok("manifest + 回滚：按清单精确删除，不碰清单外的条目");
+
+  // 还原：第一条原样、第二条被人工改过
+  writeFileSync(saved[0].path, saved[0].content, "utf8");
+  writeFileSync(saved[1].path, saved[1].content + CH_NL + CH_NL + "（后续被人工改过）" + CH_NL, "utf8");
+  const r2 = rollbackMigration(manifestPath, {});
+  assert.equal(r2.removed.length, 1, "只删哈希一致的那条");
+  assert.equal(r2.changed.length, 1, "被改动的那条默认不删");
+  assert.equal(r2.missing.length, 0, "两条此刻都在盘上（一条被改过一条未变）");
+  assert.ok(readFileSync(saved[1].path, "utf8").includes("被人工改过"), "被改动的文件确实还在");
+  const r2b = rollbackMigration(manifestPath, { force: false });
+  assert.equal(r2b.changed.length, 1, "再跑一次仍拒绝删（幂等：不会悄悄升级为删除）");
+  rollbackMigration(manifestPath, { force: true });
+  assert.equal(existsSync(saved[1].path), false, "force 后连被改动的也删");
+  assert.equal(existsSync(saved[0].path), false, "force 下已删的保持删除");
+  ok("回滚安全性：内容被改动的默认跳过（需 --force），缺失文件单独记为 missing");
+
+  // dry-run：只报告不真删
+  writeFileSync(saved[0].path, saved[0].content, "utf8");
+  const dry = rollbackMigration(manifestPath, { dryRun: true });
+  assert.ok(dry.removed.length >= 1, "dryRun 报告会删的条数");
+  assert.ok(dry.removed.every((f) => existsSync(f)), "dryRun 不得真删");
+  ok("回滚 dry-run：只报告，不真删文件");
+}
+
+
+// ---------------------------------------------------------------------------
+// 创建时间保留（真机迁移抓到的 bug：Candidate 没有 createdAt → 全变成"迁移当天"）
+// ---------------------------------------------------------------------------
+{
+  const { ingestBatch, decideIngest } = await import("../src/main/zhiya/pool.ts");
+  const pool = fresh("createdat-pool");
+  const { ctx } = ingestBatch(pool, [
+    { text: "带原时间的条目。", createdAt: "2026-09-02T08:30:00+08:00", type: "semantic", temporal: "retrospective", importance: 6, relevance: 0.7, project: "MPI", source: "test" },
+  ]);
+  const e = ctx.added[0];
+  assert.equal(e.createdAt.slice(0, 10), "2026-09-02", "候选给了 createdAt 就必须用它（不是迁移当天）");
+  assert.ok(e.path.includes("2026-09"), `落盘月份目录应按原时间：${e.path}`);
+  assert.ok(e.id.startsWith(""), "ULID 仍为 26 位时间序 id");
+  assert.ok(e.id.slice(0, 10).length === 10, "id 前 10 位编码时间序");
+  ok("创建时间：候选带 createdAt 时保留原时间，并按原时间落月目录");
+
+  // 非法时间不能炸：退回"现在"
+  const d = decideIngest(pool, { text: "非法时间的条目。", createdAt: "不是时间", type: "semantic", temporal: "retrospective", importance: 6, relevance: 0.7, project: "MPI", source: "test" }, () => 0);
+  assert.equal(d.action, "add", "非法 createdAt 不应导致失败");
+  const today = new Date().toISOString().slice(0, 10);
+  assert.equal(d.entry.createdAt.slice(0, 10), today, "非法时间退回现在");
+  ok("创建时间：非法 createdAt 安全退回「现在」（不因脏数据炸掉写入）");
 }
 
 console.log(`\ntest:mem0migrate 全部通过（${n} 项）`);

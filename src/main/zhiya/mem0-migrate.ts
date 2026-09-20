@@ -11,8 +11,9 @@
  *
  * 本文件不依赖 electron / zvec，可被 CLI 与测试直接使用。
  */
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { listEntries, type Candidate, type PoolType, type PoolTemporal } from "./pool";
 
 /** 导出的一行（mem0 原始 payload + `_point_id`）。 */
@@ -138,6 +139,8 @@ export function toCandidate(rec: Mem0Record): Candidate {
 
   return {
     text,
+    // 保留原始时间：面板按日期分组、时间衰减都依赖它（不给会全变成"迁移当天"）
+    createdAt: rec.created_at ? String(rec.created_at) : undefined,
     type: c.type,
     temporal: c.temporal,
     // ⚠️ 迁移默认分，不是"当时的判断"（mem0 没有这两个字段）
@@ -394,4 +397,88 @@ export function planMigration(
   }
 
   return plan;
+}
+
+
+// ---------------------------------------------------------------------------
+// 回滚保障：manifest（写什么就记什么）+ 撤销
+// ---------------------------------------------------------------------------
+
+/** manifest 一行 = 本次写入的一条（回滚时不需要重新算幂等键）。 */
+/** 换行与拆分用的常量（写成常量是为了避免转义在多层工具里被改写） */
+const CH_NL = String.fromCharCode(10);
+const CH_SPLIT_NL = new RegExp(String.fromCharCode(13) + "?" + String.fromCharCode(10));
+
+export interface ManifestLine {
+  /** 幂等键 mem0:<uuid> */
+  key: string;
+  /** 池内条目 id */
+  entryId: string;
+  /** 落盘绝对路径 */
+  file: string;
+  project: string;
+  rule: string;
+  /** 文件内容的 sha256（回滚时校验，避免删到"已经被改过的"文件还当没事） */
+  sha256: string;
+  /** 写入时间 */
+  writtenAt: string;
+}
+
+/** 算文件内容哈希（不存在返回 null）。 */
+export function fileHash(path: string): string | null {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/** 写 manifest（JSONL）——**写池子之前**先准备好，写完逐条追加。 */
+export function writeManifest(path: string, lines: ManifestLine[]): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, lines.map((l) => JSON.stringify(l)).join(CH_NL) + (lines.length ? CH_NL : ""), "utf8");
+}
+
+/** 读 manifest（坏行跳过，不因一行坏了就整份不可用）。 */
+export function readManifest(path: string): ManifestLine[] {
+  const out: ManifestLine[] = [];
+  for (const line of readFileSync(path, "utf8").split(CH_SPLIT_NL)) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      /* 跳过坏行 */
+    }
+  }
+  return out;
+}
+
+/**
+ * 按 manifest 回滚（删除本次写入的池内文件）。
+ *
+ * 安全设计：**默认只删哈希一致的文件**。若文件已被后续操作改动（比如复现次数被累加），
+ * 说明它已不再是"我们刚写进去的那份"，默认跳过并报告，避免回滚误删别处的成果；
+ * 确认要删就显式 force。
+ */
+export function rollbackMigration(
+  manifestPath: string,
+  opts: { force?: boolean; dryRun?: boolean } = {},
+): { removed: string[]; missing: string[]; changed: string[] } {
+  const removed: string[] = [];
+  const missing: string[] = [];
+  const changed: string[] = [];
+  for (const line of readManifest(manifestPath)) {
+    if (!existsSync(line.file)) {
+      missing.push(line.file);
+      continue;
+    }
+    const now = fileHash(line.file);
+    if (now !== line.sha256 && !opts.force) {
+      changed.push(line.file);
+      continue;
+    }
+    if (!opts.dryRun) rmSync(line.file, { force: true });
+    removed.push(line.file);
+  }
+  return { removed, missing, changed };
 }
