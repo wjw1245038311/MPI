@@ -128,6 +128,21 @@ const api = {
       }>,
     editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => ipcRenderer.invoke("app:editAction", action),
   },
+  memory: {
+    /** 记忆池面板快照：条目 + 提案 + 统计（过滤在 renderer 侧本地做）。 */
+    snapshot: (query?: unknown): Promise<any> => ipcRenderer.invoke("memory:snapshot", query),
+    /** 单条全文（列表里只给摘要）。 */
+    entryFull: (id: string): Promise<any> => ipcRenderer.invoke("memory:entryFull", id),
+    /** 归档一条（归档≠删除，可在归档目录找回）。 */
+    archive: (id: string): Promise<{ ok: boolean; detail: string }> => ipcRenderer.invoke("memory:archive", id),
+    /** 批准/拒绝一份提案（与命令行同一条执行路径）。 */
+    decide: (id: string, decision: "approve" | "reject"): Promise<{ ok: boolean; detail: string }> =>
+      ipcRenderer.invoke("memory:decide", id, decision),
+    /** 跑一次分诊（单飞；结果进 ops.jsonl）。 */
+    dream: (dry?: boolean): Promise<{ detail: string }> => ipcRenderer.invoke("memory:dream", dry === true),
+    /** 在文件管理器里打开归档目录。 */
+    openArchive: (): Promise<{ ok: boolean; detail: string }> => ipcRenderer.invoke("memory:openArchive"),
+  },
   zhiya: {
     /** 知芽运行时三份文件的原文 + 路径 + 母版目录 + 注入预算。 */
     get: (): Promise<{

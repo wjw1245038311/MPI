@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useStore } from "../store";
 import { Markdown } from "../lib/markdown";
-import { Close, Refresh, Sprout } from "./icons";
+import { Close, Sprout } from "./icons";
+import { MemoryPoolTab } from "./MemoryPoolTab";
 
 type KbFile = { path: string; size: number; mtime: number };
-type Mem0Status = { online: boolean; baseUrl: string; userId: string; count: number | null };
-type ZhiyaTab = "persona" | "agreement" | "workspace" | "kb" | "tasks" | "inbox";
+type ZhiyaTab = "persona" | "agreement" | "workspace" | "kb" | "tasks" | "pool";
 /** The three editable runtime files, mirroring main/zhiya.ts ZHIYA_FILES. */
 type ZhiyaFileName = "persona.md" | "agreement.md" | "workspace.md";
 
@@ -54,7 +54,7 @@ const EDITABLE: {
 /** 知芽 Zhiya — the agent's brain & soul panel.
  * Static declarations on the left of the tab bar (persona / agreement /
  * workspace — all injected), dynamic memory on the right (knowledge base for
- * frozen project knowledge, current tasks, and the mem0 inbox).
+ * frozen project knowledge, current tasks, and the memory pool).
  *
  * Master (git truth source) = AgentSetting; the files edited here are its
  * one-way synced copies, so saving writes the master first. */
@@ -82,8 +82,6 @@ export function ZhiyaPanel() {
   const [selPath, setSelPath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState("");
 
-  // ---- inbox (mem0) ----
-  const [mem0, setMem0] = useState<Mem0Status | null>(null);
 
   // ---- top tab bar（顶部分栏，同 PluginsPanel 的 .plugin-tab 样式）----
   const [tab, setTab] = useState<ZhiyaTab>("persona");
@@ -130,20 +128,9 @@ export function ZhiyaPanel() {
     }
   }, [cwd]);
 
-  const loadMem0 = useCallback(async () => {
-    try {
-      setMem0(await window.pi.zhiya.mem0Status());
-    } catch {
-      setMem0(null);
-    }
-  }, []);
-
   useEffect(() => {
-    if (open) {
-      void loadCore();
-      void loadMem0();
-    }
-  }, [open, loadCore, loadMem0]);
+    if (open) void loadCore();
+  }, [open, loadCore]);
 
   useEffect(() => {
     if (open) void loadKb();
@@ -295,9 +282,8 @@ export function ZhiyaPanel() {
             <button type="button" role="tab" aria-selected={tab === "tasks"} className={`plugin-tab${tab === "tasks" ? " active" : ""}`} onClick={() => setTab("tasks")}>
               {zh ? "当前任务" : "Current tasks"}
             </button>
-            <button type="button" role="tab" aria-selected={tab === "inbox"} className={`plugin-tab${tab === "inbox" ? " active" : ""}`} onClick={() => setTab("inbox")}>
-              {zh ? "记忆收件箱" : "Memory inbox"}
-              {typeof mem0?.count === "number" && <span className="tabs-count">{mem0.count}</span>}
+            <button type="button" role="tab" aria-selected={tab === "pool"} className={`plugin-tab${tab === "pool" ? " active" : ""}`} onClick={() => setTab("pool")}>
+              {zh ? "记忆池" : "Memory pool"}
             </button>
           </div>
         </div>
@@ -426,49 +412,7 @@ export function ZhiyaPanel() {
             </section>
           )}
 
-          {tab === "inbox" && (
-            <section className="zhiya-sec">
-              <div className="zhiya-sec-head">
-                <h3>
-                  {zh ? "记忆收件箱" : "Memory inbox"} <code>mem0</code>
-                </h3>
-                <button className="set-btn ghost" onClick={loadMem0} title={zh ? "刷新状态" : "Refresh status"}>
-                  <Refresh size={13} /> {zh ? "刷新" : "Refresh"}
-                </button>
-              </div>
-              {mem0 ? (
-                <div className="zhiya-mem0">
-                  <span className={`zhiya-dot ${mem0.online ? "on" : "off"}`} />
-                  {mem0.online ? (
-                    <span>
-                      {zh ? "在线" : "Online"} · {mem0.baseUrl}
-                      {typeof mem0.count === "number" && (
-                        <>
-                          {" "}· {mem0.count} {zh ? "条记忆" : "memories"}
-                        </>
-                      )}
-                    </span>
-                  ) : (
-                    <span className="zhiya-dim">
-                      {zh ? "离线" : "Offline"}（{mem0.baseUrl}）
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <span className="zhiya-dim">{zh ? "查询中…" : "Querying…"}</span>
-              )}
-              <div className="zhiya-empty">
-                {zh
-                  ? "列表、删除与「晋升」按钮（分流到画像/约定/工作空间/知识库，或遗忘）属于下一批。"
-                  : "The list, delete and “promote” actions (draining into persona/agreement/workspace/KB, or forgetting) ship in the next batch."}
-              </div>
-              <div className="zhiya-sec-foot">
-                {zh
-                  ? "agent 自动捕获的未归类事实；不进系统提示。稳定的内容请写进上方三份文件——画像类事实只写 persona.md，不再靠 mem0 沉淀。"
-                  : "Unfiled facts the agent captures automatically; never injected. Keep anything stable in the three files above — persona facts go to persona.md only, not mem0."}
-              </div>
-            </section>
-          )}
+          {tab === "pool" && <MemoryPoolTab zh={zh} />}
 
           {/* file location hint */}
           <div className="zhiya-loc">

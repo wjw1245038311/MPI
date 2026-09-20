@@ -115,6 +115,13 @@ import { ensureMemoryExtension, ensureMemoryCandidateInbox } from "./memory-exte
 import { startMemoryInboxWatcher } from "./memory-inbox";
 import { getMemoryIndex, memoryPoolDir, scheduleMemoryMaintenance } from "./memory-service";
 import { appendOpResult, approveProposal, rejectProposal, startDream, type OpRunnerDeps } from "./memory-ops";
+import {
+  archiveEntryFromPanel,
+  buildSnapshot,
+  decideProposalFromPanel,
+  type SnapshotQuery,
+} from "./memory-panel";
+import { listEntries, type PoolEntry } from "./zhiya/pool";
 import { noteIngest } from "./zhiya/consolidation";
 import { archiveDirFor } from "./memory-inbox";
 import { startMemoryEndpoint, memoryEndpointPath } from "./memory-endpoint";
@@ -3283,6 +3290,60 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return null;
   });
 
+
+  // ---- 记忆池面板（P4）------------------------------------------------------
+  // 数据层在 memory-panel.ts（不带 electron，可单测）；这里只做转发与目录解析。
+  ipcMain.handle("memory:snapshot", (_e, query?: unknown) => {
+    try {
+      return buildSnapshot({
+        poolDir: memoryPoolDir(),
+        archiveDir: archiveDirFor(memoryPoolDir()),
+        query: (query as SnapshotQuery) || {},
+      });
+    } catch (e) {
+      console.warn("[memory] 面板快照失败：", (e as Error).message);
+      return null;
+    }
+  });
+
+  ipcMain.handle("memory:entryFull", (_e, id: unknown) => {
+    const { entries } = listEntries(memoryPoolDir());
+    const e = entries.find((x) => x.id === String(id) || x.id.endsWith(String(id)));
+    return e ? { id: e.id, text: e.text, evidence: e.evidence, recurrences: e.recurrences, path: e.path } : null;
+  });
+
+  ipcMain.handle("memory:archive", async (_e, id: unknown) => {
+    const idx = await getMemoryIndex();
+    return archiveEntryFromPanel(memoryPoolDir(), String(id), {
+      archiveDir: archiveDirFor(memoryPoolDir()),
+      index: { upsert: (es: PoolEntry[]) => idx.upsert(es), remove: (ids: string[]) => idx.remove(ids) },
+    });
+  });
+
+  ipcMain.handle("memory:decide", async (_e, id: unknown, decision: unknown) => {
+    const idx = await getMemoryIndex();
+    return decideProposalFromPanel(memoryPoolDir(), String(id), decision === "reject" ? "reject" : "approve", {
+      archiveDir: archiveDirFor(memoryPoolDir()),
+      index: { upsert: (es: PoolEntry[]) => idx.upsert(es), remove: (ids: string[]) => idx.remove(ids) } as never,
+    });
+  });
+
+  // 面板里的"跑一次分诊"：与扩展的 op 走同一条路（单飞 + 结果进 ops.jsonl）
+  ipcMain.handle("memory:dream", async (_e, dry?: unknown) => {
+    const r = await startDream(opRunnerDeps(), dry === true, getConfig().zhiyaDreamLlmClassify === true);
+    return r;
+  });
+
+  ipcMain.handle("memory:openArchive", async () => {
+    const dir = archiveDirFor(memoryPoolDir());
+    try {
+      mkdirSync(dir, { recursive: true });
+      const err = await shell.openPath(dir);
+      return err ? { ok: false, detail: err } : { ok: true, detail: dir };
+    } catch (e) {
+      return { ok: false, detail: (e as Error).message };
+    }
+  });
 
   // Absolute path of the bundled **memory system** manual (Help → 记忆系统手册).
   // Separate file on purpose: the memory system is documented standalone.

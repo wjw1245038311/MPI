@@ -113,6 +113,7 @@
     "test:dream": "node --experimental-strip-types scripts/test-memory-dream.mjs",
     "test:ops": "node --experimental-strip-types scripts/test-memory-ops.mjs",
     "test:memorymodel": "node --experimental-strip-types scripts/test-memory-model.mjs",
+    "test:memorypanel": "node --experimental-strip-types scripts/test-memory-panel.mjs",
     "test:zvecindex": "node --experimental-strip-types scripts/test-zvec-index.mjs",
     "bench:memory-vs-mem0": "node --experimental-strip-types scripts/bench-memory-vs-mem0.mjs",
     "bench:memory": "node --experimental-strip-types scripts/bench-memory.mjs",
