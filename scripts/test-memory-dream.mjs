@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { register } from "node:module";
 
 register(new URL("./ts-ext-loader.mjs", import.meta.url));
-const { runDream, extractJson, parseClassifyLines, lessonFileFor, titleFromEntry } = await import(
+const { runDream, extractJson, parseClassifyLines, lessonFileFor, titleFromEntry, clipTitle, existingLessonFor } = await import(
   "../src/main/memory-dream.ts"
 );
 const { listProposals, readProposal, writeProposal } = await import("../src/main/zhiya/proposals.ts");
@@ -154,7 +154,7 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
 
 // --- 漏答兜底 / 幻觉 id -----------------------------------------------------
 {
-  const pool = seedPool([{ text: "条目甲，没有出现在模型输出里。" }, { text: "条目乙。" }]);
+  const pool = seedPool([{ text: "条目甲：这条要用来验证模型漏答时的兜底行为。" }, { text: "条目乙：长度也要够，否则会被内容过滤器拦下。" }]);
   const ids = listEntries(pool).entries.map((e) => e.id);
   const stub = async (sys) => {
     if (sys.includes("记忆分诊器")) return line(ids[1], [true, false, true, false, false, true]); // 漏了 ids[0]
@@ -196,7 +196,7 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
 
 // --- 已有提案去重（防止每次 dream 都刷重复提案）-----------------------------
 {
-  const pool = seedPool([{ text: "会被处理两次的条目。" }]);
+  const pool = seedPool([{ text: "会被处理两次的条目，内容长度要够才不会先被过滤。" }]);
   const id = listEntries(pool).entries[0].id;
   const stub = async (sys) => (sys.includes("记忆分诊器") ? line(id, [true, false, true, false, false, true]) : "正文");
 
@@ -213,7 +213,7 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
 
 // --- 模型失败 / 垃圾输出 / 空池（fail-soft：退回启发式，但仍要说清楚）----------
 {
-  const pool = seedPool([{ text: "任何条目，用于验证模型失败时的退化行为。" }]);
+  const pool = seedPool([{ text: "任何一条长度足够的内容，用于验证模型失败时的退化行为。" }]);
   const r1 = await runDream({ poolDir: pool, chat: async () => { throw new Error("模型挂了"); }, llmClassify: true });
   assert.equal(r1.ok, true, "模型失败不该让整个分诊失败（退回启发式）");
   assert.ok(r1.errors.some((e) => e.includes("模型挂了")), `必须报出模型失败：${r1.errors.join("；")}`);
@@ -225,7 +225,7 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
   const r2 = await runDream({ poolDir: pool, chat: async () => "我觉得挺好的呀", llmClassify: true, force: true });
   assert.equal(r2.ok, true, "垃圾输出也退化而不是崩");
   const kb = r2.proposals[0];
-  assert.equal(kb.body, "任何条目，用于验证模型失败时的退化行为。", "正文不合格式 → 退回原文（不是那句客套话）");
+  assert.equal(kb.body, "任何一条长度足够的内容，用于验证模型失败时的退化行为。", "正文不合格式 → 退回原文（不是那句客套话）");
   assert.ok(r2.errors.some((e) => e.includes("不合格式") || e.includes("退回启发式")), `要说明原因：${r2.errors.join("；")}`);
 
   // 空池：不算错
@@ -240,7 +240,7 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
 
 // --- dry-run 与正文预算 ------------------------------------------------------
 {
-  const pool = seedPool([{ text: "预览用条目。" }, { text: "第二个条目，用来验证正文预算。" }]);
+  const pool = seedPool([{ text: "预览用的条目，长度要足以通过内容过滤。" }, { text: "第二个条目，用来验证正文预算是否按顺序消耗。" }]);
   const ids = listEntries(pool).entries.map((e) => e.id);
   const stub = async (sys) => (sys.includes("记忆分诊器") ? ids.map((id) => line(id, [true, false, true, false, false, true])).join("\n") : "正文");
 
@@ -292,6 +292,42 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
   assert.deepEqual(extractJson('```json\n{"a":1}\n```'), { a: 1 });
   assert.equal(extractJson("无 JSON"), null);
   ok("工具函数：lesson 文件名、标题生成（去代码块）、JSON 提取");
+}
+
+// --- 文件名与标题：真机踩过的怪名（108108.md / MemoryMemory.md / MemoryZve.md）----
+{
+  const { lessonSlug, lessonHint } = await import("../src/main/memory-promote.ts");
+  // 纯数字词丢掉（旧实现把标题里的两个日期抓出来拼成 108108.md）
+  assert.equal(lessonSlug("2026 10 08 的采购计划", "01ABCDEFGH"), "Lesson-ABCDEFGH", "纯数字不进文件名（回退到提示+id）");
+  // 重复词去重（Memory/Memory → 只留一个）
+  assert.equal(lessonSlug("Memory Memory approve reject", "01ABCDEFGH"), "MemoryApproveReject", "重复词去重");
+  // 词数封顶 5
+  assert.equal(lessonSlug("Aaa Bbb Ccc Ddd Eee Fff Ggg", "01ABCDEFGH").split(/(?=[A-Z])/).filter(Boolean).length, 5, "词数封顶 5");
+  // 中文标题（没有可用 ASCII 词）→ 主题提示 + 稳定短 id（可读、唯一）
+  assert.equal(lessonSlug("用户的检索需求", "01ABCDEFGH", "ToolQuirk"), "ToolQuirk-ABCDEFGH", "中文标题回退成可读提示+id");
+  assert.equal(lessonHint({ tags: ["tool-quirk"] }), "ToolQuirk");
+  assert.equal(lessonHint({ tags: ["insight"] }), "Insight");
+  assert.equal(lessonHint({ type: "procedural", tags: [] }), "Procedure");
+  assert.equal(lessonHint({ tags: [], type: "semantic" }), "Lesson");
+  ok("lesson 文件名：丢纯数字、去重复词、封顶 5 词；中文标题回退成可读提示+id");
+
+  // 标题不在词中间下刀
+  assert.equal(clipTitle("短标题"), "短标题", "不超长时原样返回");
+  const clipped = clipTitle("/memory 的检索目前是字面的，因为扩展受自包含限制无法读取 zvec 索引，所以只能做字面匹配");
+  assert.ok(clipped.endsWith("…"), "超长要带省略号");
+  assert.ok(!clipped.includes("zve…") || clipped.includes("读取…"), `不该把 zvec 切成 zve：${clipped}`);
+  assert.ok(clipTitle("在该项目中，涉及扩展文件或主进程改动时必须完整重启 dev（Ctrl+C 后重跑）").length <= 37, "截断长度受控");
+  ok("标题截断：不切碎词（zvec 不会变成 zve）");
+
+  // 与既有 lesson 去重（真机：提案目标 MemoryApproveMemoryRejectMemo.md 在 KB 里已存在）
+  const dir = mkdtempSync(join(tmpdir(), "mpi-lessons-"));
+  const CH_NL = String.fromCharCode(10);
+  writeFileSync(join(dir, "SomeLesson.md"), "# 已有教训" + CH_NL + CH_NL + "这条内容已经写进知识库了，不该再出提案。" + CH_NL, "utf8");
+  assert.match(String(existingLessonFor(dir, "Some Lesson", "这条内容已经写进知识库了，不该再出提案。", "01ABCDEFGH")), /SomeLesson\.md/, "同内容应命中既有 lesson");
+  assert.equal(existingLessonFor(dir, "完全不同的话题 FullWidth", "另一件毫不相干的事情，讲的是别的模块。", "01ABCDEFGH"), null, "无关内容不误判");
+  assert.match(String(existingLessonFor(dir, "Some Lesson", "x", "01ABCDEFGH")), /同名/, "同 slug 直接命中");
+  rmSync(dir, { recursive: true, force: true });
+  ok("既有 lesson 去重：同内容/同名命中（真机重复提案已消除）");
 }
 
 console.log(`\ntest:dream 全部通过（${n} 项）`);

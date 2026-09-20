@@ -15,12 +15,14 @@
  *
  * 产出永远是**提案**：不直接改池子、不直接改 KB。
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { defaultMemoryModel } from "./memory-model";
 import { listEntries, newId, type PoolEntry } from "./zhiya/pool";
 import { listProposals, writeProposal } from "./zhiya/proposals";
-import { OUTLET_TO_KIND, dreamInput, heuristicAnswers, triage, type Proposal, type TriageAnswers } from "./zhiya/triage";
+import { OUTLET_TO_KIND, dreamInput, heuristicAnswers, notLessonMaterial, triage, type Proposal, type TriageAnswers } from "./zhiya/triage";
+import { lessonHint, lessonSlug } from "./memory-promote";
+import { lexicalSimilarity } from "./zhiya/pool";
 
 export interface DreamDeps {
   poolDir: string;
@@ -278,7 +280,40 @@ export function titleFromEntry(text: string, max = 36): string {
     .split(/[。！？\n.!?]/)
     .map((s) => s.trim())
     .find(Boolean);
-  return (first || cleaned || "（无标题）").slice(0, max);
+  return clipTitle(first || cleaned || "（无标题）", max);
+}
+
+/**
+ * 按长度截断标题，但**不在词中间下刀**。
+ *
+ * 真机问题（2026-09-20）：直接 `slice(0, 36)` 会把 "…读取 zvec" 截成 "…读取 zve"、
+ * "重启 dev（Ctrl+C" 截成半截 —— 标题读不通，还会顺着文件名生成传给 lesson 文件名
+ * （`MemoryZve.md` 就是这么来的）。
+ * 做法：超长时在 max 附近**回退到最近的边界**（空格/标点/中英交界），并补省略号。
+ */
+export function clipTitle(raw: string, max = 36): string {
+  const t = raw.trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max);
+  const isWordChar = (c: string | undefined) => !!c && /[A-Za-z0-9]/.test(c);
+  let cut = -1;
+  // 从 max-2 往前找：**不能把"头部末尾"当边界**（head[max-1] 后面没字符，
+  // 一开始写成了 head.length-1，于是永远在最后一位"假命中边界"，等于没回退）
+  for (let i = Math.min(head.length, max) - 2; i >= Math.max(0, max - 12); i--) {
+    const c = head[i];
+    if (/\s/.test(c) || "，。；：、,;:（(【[/|—-]".includes(c) || isWordChar(c) !== isWordChar(head[i + 1])) {
+      cut = i;
+      break;
+    }
+  }
+  if (cut < 0) {
+    // 实在没边界：至少不要把一个 ASCII 词切一半
+    let j = head.length - 1;
+    while (j > 0 && isWordChar(head[j])) j--;
+    cut = j > 0 && head.length - j <= 6 ? j : head.length - 1;
+  }
+  const trimmed = head.slice(0, cut + 1).replace(/[\s，。；：、,;:（(【[/|—-]+$/, "");
+  return `${trimmed}…`;
 }
 
 /**
@@ -352,6 +387,17 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
     pool = pool.filter((e) => !covered.has(e.id));
     if (before !== pool.length) log(`[memory] dream：跳过 ${before - pool.length} 条已有提案的条目`);
   }
+  // 内容层过滤：个人事务 / 任务推进记录不进 KB 候选（见 notLessonMaterial 注释里的真机背景）
+  {
+    const before = pool.length;
+    const skipped: string[] = [];
+    pool = pool.filter((e) => {
+      const why = notLessonMaterial(e);
+      if (why) skipped.push(`${e.id.slice(-6)}：${why}`);
+      return !why;
+    });
+    if (skipped.length) log(`[memory] dream：跳过 ${before - pool.length} 条不适合当 lesson 的条目（${skipped.slice(0, 3).join("；")}${skipped.length > 3 ? " …" : ""}）`);
+  }
   pool = pool.slice(0, maxEntries);
 
   if (!pool.length) {
@@ -423,6 +469,18 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
     const routed = triage(answers.get(id)!);
     const kind = OUTLET_TO_KIND[routed.outlet];
 
+    // 既有 lesson 去重（真机问题：提案目标 MemoryApproveMemoryRejectMemo.md 在 KB 里已存在，
+    // 真跑就会撞已有文件/写出重复内容）。命中即不出提案，只在报告里说明。
+    if (kind === "promote-kb") {
+      const root0 = e.projectRoot ?? deps.defaultProjectRoot ?? null;
+      const dir0 = root0 ? join(root0, ".alexandria", "knowledge", "lessons") : null;
+      const dup = dir0 ? existingLessonFor(dir0, titleForDedupe(e), e.text, e.id) : null;
+      if (dup) {
+        errors.push(`跳过 ${e.id.slice(-6)}：KB 已有同一教训（${dup}）`);
+        continue;
+      }
+    }
+
     let body = "";
     let reason = routed.reason;
     if (kind === "archive") {
@@ -470,7 +528,7 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
       body,
       target:
         kind === "promote-kb" && root
-          ? join(root, ".alexandria", "knowledge", "lessons", lessonFileFor(title, body))
+          ? join(root, ".alexandria", "knowledge", "lessons", lessonFileFor(title, body, lessonHint(e), e.id))
           : null,
       decidedAt: null,
       result: null,
@@ -490,16 +548,43 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
   return { ok: true, entries: pool.length, classified, proposals, errors, ms: Date.now() - t0 };
 }
 
-/** 从 lesson 正文的 frontmatter 里取 lesson 名做文件名；取不到就用标题。 */
-export function lessonFileFor(title: string, body: string): string {
+/**
+ * 从 lesson 正文的 frontmatter 里取 lesson 名做文件名；取不到就用标题。
+ * 具体命名规则统一在 `lessonSlug`（promote 落盘时用的是同一份），这里不再各写一套——
+ * 真机踩过：两处文件名生成不一致，提案预览的名字和实际落盘的名字不一样。
+ */
+export function lessonFileFor(title: string, body: string, hint?: string, id = "00000000"): string {
   const name = /^lesson:\s*(.+)$/m.exec(body)?.[1]?.trim();
-  const base = name || title;
-  const slug = base
-    .replace(/[^A-Za-z0-9]+/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => w[0].toUpperCase() + w.slice(1))
-    .join("");
-  return `${slug || "Lesson"}.md`;
+  return `${lessonSlug(name || title, id, hint)}.md`;
+}
+
+/** 既有 lesson 查重：同 slug，或与某篇既有 lesson 正文高度相似。 */
+export function existingLessonFor(dir: string, title: string, text: string, id: string): string | null {
+  const slug = lessonSlug(title, id, "Lesson");
+  const same = join(dir, `${slug}.md`);
+  if (existsSync(same)) return `${slug}.md（同名）`;
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir).filter((f: string) => f.endsWith(".md"));
+  } catch {
+    return null;
+  }
+  const needle = text.replace(/\s+/g, "");
+  for (const n of names) {
+    let body = "";
+    try {
+      body = readFileSync(join(dir, n), "utf8");
+    } catch {
+      continue;
+    }
+    const hay = body.replace(/\s+/g, "");
+    if (needle.length > 20 && hay.includes(needle.slice(0, 20))) return `${n}（正文已含该内容）`;
+    if (lexicalSimilarity(text, body) >= 0.9) return `${n}（正文高度相似）`;
+  }
+  return null;
+}
+
+/** 查重用的标题（与提案标题保持同样的取法，避免两处不一致）。 */
+function titleForDedupe(e: PoolEntry): string {
+  return titleFromEntry(e.text);
 }

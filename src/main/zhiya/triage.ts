@@ -138,6 +138,49 @@ export function heuristicAnswers(e: PoolEntry): TriageAnswers {
 }
 
 /**
+ * 这条记忆**不适合当项目 lesson** 吗？返回原因字符串表示应跳过。
+ *
+ * 真机背景（2026-09-20）：126 条里第一次分诊挑出 8 条，其中有「国庆回程票 + 请假」这种
+ * 个人事务、以及「用户决定下一步先审查提案」这种任务性记录 —— 判定规则只看复现次数与
+ * 重要性，看不懂内容，这类东西被当成"项目经验"写进 KB，人得手工收拾。
+ *
+ * 两条确定性规则（可测、可解释）：
+ *   A. **个人事务**：命中生活类词，且**没有任何技术信号**（文件路径/文件名/代码标识/反引号内容）。
+ *      要求"无技术信号"是为了不误杀"用 12306 抢票脚本"这类真正的技术记录。
+ *   B. **任务/流程性记录**（不是可复用知识）：以"用户决定/计划/希望/要求/打算"开头，
+ *      或含"下一步/待办/待处理/先审查/暂缓"等推进词。
+ * 已显式打标的 `[insight]`/`[tool-quirk]`/`[correction]` **豁免 A、B**——那是人/采集端
+ * 明确认定的知识，宁可多留给人看一眼。
+ */
+export function notLessonMaterial(e: PoolEntry): string | null {
+  const text = (e.text ?? "").trim();
+  const norm = text.replace(/\s+/g, "");
+  if (norm.length < 10) return "内容过短，信息量不足";
+
+  const tagged = (e.tags ?? []).some((t) => ["insight", "tool-quirk", "correction"].includes(t));
+  if (tagged) return null;
+
+  // 技术信号：文件路径 / 带扩展名的文件 / 代码标识 / 反引号里的东西
+  const technical =
+    /[\\/][\w.-]+[\\/]/.test(text) ||
+    /\b[\w-]+\.(ts|tsx|js|mjs|cjs|json|md|ya?ml|ps1|sh|py|cs|cpp|h)\b/i.test(text) ||
+    /`[^`]{2,}`/.test(text) ||
+    (text.match(/\b[A-Za-z]{3,}\b/g) ?? []).length >= 2;
+
+  if (!technical) {
+    const life = /(机票|车票|回程|返程|假期|请假|行程|日程|酒店|民宿|快递|外卖|购物|缴费|预约|体检|聚餐|理发|护照|签证|家人|朋友|生日|体重|减脂)/;
+    if (life.test(text)) return "看起来是个人事务（生活安排），不是项目经验";
+  }
+
+  if (/^(用户)?(决定|计划|希望|要求|打算|准备)/.test(text)) return "是决策/需求记录（任务态），不是可复用经验";
+  // 推进词只看**短文本**：长文里提一句"下一步"往往是正常的技术叙述
+  if (norm.length < 80 && /(待办|待处理|先审查|暂缓|先放着|尚未执行|未完成)/.test(norm)) {
+    return "是任务推进记录，不是可复用经验";
+  }
+  return null;
+}
+
+/**
  * 挑选 dream 要看的条目。
  * 排序刻意让 **够格的排前面**：模型上下文有限，"复现 3 次"是唯一有认知科学依据的硬资格，
  * 不该被一堆单次记录挤掉。

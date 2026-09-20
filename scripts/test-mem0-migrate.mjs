@@ -315,8 +315,10 @@ const rec = (over = {}) => ({
   // 非法时间不能炸：退回"现在"
   const d = decideIngest(pool, { text: "非法时间的条目。", createdAt: "不是时间", type: "semantic", temporal: "retrospective", importance: 6, relevance: 0.7, project: "MPI", source: "test" }, () => 0);
   assert.equal(d.action, "add", "非法 createdAt 不应导致失败");
-  const today = new Date().toISOString().slice(0, 10);
-  assert.equal(d.entry.createdAt.slice(0, 10), today, "非法时间退回现在");
+  // 比较**时刻**而不是日期字符串：toISOString() 是 UTC，条目时间是本地 (+08:00)，
+  // 跨午夜跑测试时会差一天（这里被真机抓过一次，属测试自身的时区 bug）
+  const delta = Math.abs(Date.parse(d.entry.createdAt) - Date.now());
+  assert.ok(delta < 120000, `非法时间应退回"现在"（相差 ${delta}ms）`);
   ok("创建时间：非法 createdAt 安全退回「现在」（不因脏数据炸掉写入）");
 }
 

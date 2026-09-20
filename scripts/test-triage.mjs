@@ -20,6 +20,7 @@ const {
   settle,
   dueForConsolidation,
   CONSOLIDATION_THRESHOLD,
+  notLessonMaterial,
   OUTLET_TO_KIND,
   serializeProposal,
   parseProposal,
@@ -214,5 +215,36 @@ assert.equal(parseProposal("没有 frontmatter 的正文").ok, false);
 assert.equal(parseProposal(serializeProposal(p).replace(p.id, "不是ULID")).ok, false, "非法 id 判坏");
 assert.equal(parseProposal(serializeProposal(p).replace("kind: promote-kb", "kind: whatever")).ok, false, "未知 kind 判坏");
 ok("提案解析：坏输入判坏而不是猜（缺 frontmatter/非法 id/未知 kind）");
+
+// --- 不适合当 lesson 的条目（真机：8 条候选里混进个人事务与任务记录）--------
+{
+  const mk = (text, tags = [], type = "semantic") => ({ id: newId(), text, tags, type, status: "inbox", project: "MPI" });
+  // 个人事务：无技术信号 → 跳过
+  assert.match(
+    notLessonMaterial(mk("用户计划购买国庆假期10月8日的回程票（因10月8日请假），参考开售时间")) ?? "",
+    /个人事务|决策/,
+    "个人事务应被拦下",
+  );
+  // 同样的生活词但**有技术信号**（带文件名）→ 不拦（避免误杀"抢票脚本"这类真技术记录）
+  assert.equal(notLessonMaterial(mk("抢票脚本 scripts/ticket.mjs 里用 12306 接口查车票，注意限流")), null, "带技术信号的生活内容不该被误杀");
+  // 任务/需求态记录 → 跳过
+  assert.match(notLessonMaterial(mk("用户决定下一步先审查记忆提案，并真机测试 /memory-proposals")) ?? "", /决策|任务/, "决策记录应被拦下");
+  assert.match(notLessonMaterial(mk("用户希望记忆系统提供类似 mem0 的一操作一命令低层命令族")) ?? "", /决策/, "需求记录应被拦下");
+  assert.match(notLessonMaterial(mk("待处理事项：① changelog 废弃清理未做 ② README 导航表要改")) ?? "", /任务/, "任务推进记录应被拦下");
+  // 真教训 → 放过
+  assert.equal(
+    notLessonMaterial(mk("在该项目中，涉及扩展文件或主进程改动时必须完整重启 dev（Ctrl+C），否则扩展不生效", ["insight"])),
+    null,
+    "真教训不该被拦",
+  );
+  assert.equal(
+    notLessonMaterial(mk("让思考型模型做分诊时 content 恒为空，实测 4000/12000 token 全烧在 reasoning 上", ["tool-quirk"])),
+    null,
+    "带知识标签的条目豁免",
+  );
+  assert.match(notLessonMaterial(mk("太短")) ?? "", /过短/, "过短内容拦下");
+  ok("不适合当 lesson：个人事务/决策需求/任务推进被拦；带技术信号的生活内容与真教训放过");
+}
+
 
 console.log(`\ntest:triage 全部通过（${n} 项）`);

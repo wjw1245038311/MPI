@@ -36,14 +36,51 @@ export interface ApplyResult {
   files: string[];
 }
 
-/** 标题 → PascalCase 文件名（与既有 lesson 命名一致：DevRestartAfterMainPreloadChange.md）。 */
-export function lessonSlug(title: string, fallbackId: string): string {
-  const words = (title.match(/[A-Za-z0-9]+/g) ?? []).filter((w) => w.length > 0);
-  if (!words.length) return `Lesson-${fallbackId.slice(-8)}`;
-  return words
-    .slice(0, 8)
-    .map((w) => w[0].toUpperCase() + w.slice(1))
-    .join("");
+/**
+ * 标题 → PascalCase 文件名（与既有 lesson 命名一致：DevRestartAfterMainPreloadChange.md）。
+ *
+ * 真机踩过的坑（2026-09-20，中文记忆迁移后第一次分诊）：
+ *   - 旧实现把所有 ASCII 词直接拼接，于是出现 `108108.md`（只从标题里抓出两个数字）、
+ *     `MemoryMemory.md`（重复词）、`MemoryZve.md`（中文标题里只有零散英文词）这类怪名。
+ * 现在的规则：
+ *   1. **丢掉纯数字词**（日期、编号对文件名没意义）；
+ *   2. **去重重复词**（Memory/Memory → 只留一个）；
+ *   3. 词数封顶 5 个（文件名不该长到读不完）；
+ *   4. 可用词不足（≤1 个）时，回退成 _可读的主题提示_ +
+ *      条目 id 后 8 位（例：`ToolQuirk-1WJYRPC0.md`）——虽然不知道内容，
+ *      至少一眼能看出"这是个工具怪癖陷阱"而不是一串数字。
+ */
+export function lessonSlug(title: string, fallbackId: string, hint?: string): string {
+  const raw = (title.match(/[A-Za-z0-9]+/g) ?? [])
+    .filter((w) => /[A-Za-z]/.test(w)) // 纯数字不要（日期/编号）
+    .filter((w) => w.length > 1);
+  const words: string[] = [];
+  const seen = new Set<string>();
+  for (const w of raw) {
+    const key = w.toLowerCase();
+    if (seen.has(key)) continue; // 重复词丢掉
+    seen.add(key);
+    words.push(w);
+    if (words.length >= 5) break;
+  }
+  if (words.length <= 1) {
+    // 中文标题（或英文词太少）→ 主题提示 + 稳定短 id，保证唯一且能识别类型
+    const tag = (hint || "Lesson").replace(/[^A-Za-z]/g, "") || "Lesson";
+    return `${tag}-${fallbackId.slice(-8)}`;
+  }
+  return words.map((w) => w[0].toUpperCase() + w.slice(1)).join("");
+}
+
+/** 从条目的标签/类型推一个"主题提示"（文件名回退时用）。 */
+export function lessonHint(e: { tags?: string[]; type?: string }): string {
+  for (const t of e.tags ?? []) {
+    if (t === "tool-quirk") return "ToolQuirk";
+    if (t === "insight") return "Insight";
+    if (t === "correction") return "Correction";
+  }
+  if (e.type === "procedural") return "Procedure";
+  if (e.type === "episodic") return "Episode";
+  return "Lesson";
 }
 
 function entryById(poolDir: string, id: string): PoolEntry | null {
@@ -87,7 +124,7 @@ export async function applyProposal(p: Proposal, deps: ApplyDeps): Promise<Apply
   // ---- 出口② 知识库：写 lesson 文件（alexandria 格式）----
   if (p.kind === "promote-kb") {
     // 优先用提案里写明的确切目标（dream 已按条目里的项目根解析好，人在提案里能看见）
-    const slug = lessonSlug(p.title, p.id);
+    const slug = lessonSlug(p.title, p.id, lessonHint({ tags: [], type: undefined }));
     const path = p.target && p.target.toLowerCase().endsWith(".md")
       ? p.target
       : deps.kbLessonsDir
