@@ -342,6 +342,53 @@ export async function archiveEntryFromPanel(
   return { ok: r.ok, detail: r.detail, files: r.files };
 }
 
+/** 批量操作的结果（逐条回报：哪些成功、哪些为什么失败）。 */
+export interface BatchResult {
+  ok: number;
+  failed: { id: string; reason: string }[];
+}
+
+/**
+ * 批量归档。
+ * 逐条独立处理：**一条失败不影响其它条**（面板上批量操作最怕"全有或全无"，
+ * 一条坏数据把所有选择都卡住）。
+ */
+export async function archiveManyFromPanel(
+  poolDir: string,
+  ids: string[],
+  deps: { archiveDir?: string; index?: { upsert(es: PoolEntry[]): Promise<void>; remove(ids: string[]): Promise<void> } },
+): Promise<BatchResult> {
+  const failed: { id: string; reason: string }[] = [];
+  let ok = 0;
+  for (const id of ids) {
+    const r = await archiveEntryFromPanel(poolDir, id, deps);
+    if (r.ok) ok++;
+    else failed.push({ id, reason: r.detail });
+  }
+  return { ok, failed };
+}
+
+/** 批量批准/拒绝（同样逐条独立）。 */
+export async function decideManyFromPanel(
+  poolDir: string,
+  ids: string[],
+  decision: "approve" | "reject",
+  deps: {
+    archiveDir?: string;
+    kbLessonsDir?: string | null;
+    index?: { upsert(es: PoolEntry[]): Promise<void>; remove(ids: string[]): Promise<void> };
+  } = {},
+): Promise<BatchResult> {
+  const failed: { id: string; reason: string }[] = [];
+  let ok = 0;
+  for (const id of ids) {
+    const r = await decideProposalFromPanel(poolDir, id, decision, deps as never);
+    if (r.ok) ok++;
+    else failed.push({ id, reason: r.detail });
+  }
+  return { ok, failed };
+}
+
 /** 批准/拒绝提案（面板按钮；与命令行走同一条执行路径）。 */
 export async function decideProposalFromPanel(
   poolDir: string,

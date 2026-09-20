@@ -117,7 +117,9 @@ import { getMemoryIndex, memoryPoolDir, scheduleMemoryMaintenance } from "./memo
 import { appendOpResult, approveProposal, rejectProposal, startDream, type OpRunnerDeps } from "./memory-ops";
 import {
   archiveEntryFromPanel,
+  archiveManyFromPanel,
   buildSnapshot,
+  decideManyFromPanel,
   decideProposalFromPanel,
   type SnapshotQuery,
 } from "./memory-panel";
@@ -3319,6 +3321,22 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return archiveEntryFromPanel(memoryPoolDir(), String(id), {
       archiveDir: archiveDirFor(memoryPoolDir()),
       index: { upsert: (es: PoolEntry[]) => idx.upsert(es), remove: (ids: string[]) => idx.remove(ids) },
+    });
+  });
+
+  ipcMain.handle("memory:archiveMany", async (_e, ids: unknown) => {
+    const idx = await getMemoryIndex();
+    return archiveManyFromPanel(memoryPoolDir(), (ids as string[]) ?? [], {
+      archiveDir: archiveDirFor(memoryPoolDir()),
+      index: { upsert: (es: PoolEntry[]) => idx.upsert(es), remove: (ids2: string[]) => idx.remove(ids2) },
+    });
+  });
+
+  ipcMain.handle("memory:decideMany", async (_e, ids: unknown, decision: unknown) => {
+    const idx = await getMemoryIndex();
+    return decideManyFromPanel(memoryPoolDir(), (ids as string[]) ?? [], decision === "reject" ? "reject" : "approve", {
+      archiveDir: archiveDirFor(memoryPoolDir()),
+      index: { upsert: (es: PoolEntry[]) => idx.upsert(es), remove: (ids2: string[]) => idx.remove(ids2) } as never,
     });
   });
 

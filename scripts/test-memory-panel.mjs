@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { register } from "node:module";
 
 register(new URL("./ts-ext-loader.mjs", import.meta.url));
-const { buildSnapshot, filterEntries, archiveEntryFromPanel, decideProposalFromPanel, dayKey, rangeStart, parseBound, resolveLessonsDirFor } =
+const { buildSnapshot, filterEntries, archiveEntryFromPanel, archiveManyFromPanel, decideProposalFromPanel, decideManyFromPanel, dayKey, rangeStart, parseBound, resolveLessonsDirFor } =
   await import("../src/main/memory-panel.ts");
 const { decideIngest, lexicalSimilarity, listEntries } = await import("../src/main/zhiya/pool.ts");
 const { writeProposal, listProposals, setProposalStatus } = await import("../src/main/zhiya/proposals.ts");
@@ -400,6 +400,94 @@ function seed(items) {
 
   rmSync(pool, { recursive: true, force: true });
   rmSync(solo, { recursive: true, force: true });
+}
+
+
+// --- 批量操作：逐条独立，一条失败不影响其它 -----------------------------------
+{
+  const NL = String.fromCharCode(10);
+  const pool = mkdtempSync(join(tmpdir(), "mpi-panel-batch-"));
+  const archDir = join(pool, "_archive");
+  const lessons = join(pool, "_lessons");
+
+  // 三条条目：两条正常、一条"文件已被移走"用来制造失败
+  const ids = [];
+  for (let i = 0; i < 3; i++) {
+    const e = decideIngest(pool, {
+      text: `批量操作条目 ${i}。`,
+      type: "semantic",
+      temporal: "retrospective",
+      importance: 6,
+      relevance: 0.6,
+      project: "MPI",
+      source: "test",
+    }, lexicalSimilarity).entry;
+    ids.push(e.id);
+  }
+  // 制造一个坏目标：把第三条的文件删掉（模拟"已被别人归档"）
+  const entriesBefore = listEntries(pool).entries;
+  const bad = entriesBefore[0];
+  rmSync(bad.path, { force: true });
+
+  const removed = [];
+  const idx = { upsert: async () => {}, remove: async (list) => removed.push(...list) };
+  const archRes = await archiveManyFromPanel(pool, ids, { archiveDir: archDir, index: idx });
+  assert.equal(archRes.ok, 2, `两条应成功，实际 ${archRes.ok}`);
+  assert.equal(archRes.failed.length, 1, "一条失败");
+  assert.equal(archRes.failed[0].id, bad.id, "失败的是那条文件已消失的");
+  assert.ok(archRes.failed[0].reason.length > 0, "失败必须带原因（面板要显示给用户）");
+  assert.equal(listEntries(pool).entries.length, 0, "成功的都已离开池子");
+  ok("批量归档：逐条独立（2 成功 / 1 失败），失败带原因，成功的照常落地");
+
+  // 批量批准：一条正常 + 一条已 applied（应失败但不影响另一条）
+  const e = decideIngest(pool, {
+    text: "批量审批用的条目。", type: "semantic", temporal: "retrospective",
+    importance: 6, relevance: 0.6, project: "MPI", source: "test",
+  }, lexicalSimilarity).entry;
+  const mk = (over = {}) => ({
+    id: newId(),
+    createdAt: new Date().toISOString(),
+    kind: "promote-kb",
+    status: "pending",
+    outlet: "kb",
+    entries: [e.id],
+    reason: "t",
+    title: over.title || "Batch lesson",
+    body: ["---", "lesson: batch", "---", "", "# B", "", "## Guard", "", "x", ""].join(NL),
+    target: null,
+    decidedAt: null,
+    result: null,
+    ...over,
+  });
+  const p1 = mk({ id: newId(), title: "Batch lesson one" });
+  const p2 = mk({ id: newId(), title: "Batch lesson two" });
+  writeProposal(pool, p1);
+  writeProposal(pool, p2);
+  setProposalStatus(pool, p2.id, "approved");
+  setProposalStatus(pool, p2.id, "applied"); // 已落地 → 再批准应失败
+
+  const decRes = await decideManyFromPanel(pool, [p1.id, p2.id], "approve", { kbLessonsDir: lessons });
+  assert.equal(decRes.ok, 1, `一条应成功，实际 ${decRes.ok}`);
+  assert.equal(decRes.failed.length, 1);
+  assert.equal(decRes.failed[0].id, p2.id, "失败的是已落地那条");
+  assert.equal(existsSync(join(lessons, "BatchLessonOne.md")), true, "成功的那份 lesson 已写出");
+  assert.equal(listProposals(pool).proposals.find((x) => x.id === p1.id).status, "applied");
+  ok("批量批准：一条成功一条失败（已落地），互不影响；成功的 lesson 真写出去了");
+
+  // 批量拒绝
+  const p3 = mk({ id: newId(), title: "Batch lesson three" });
+  writeProposal(pool, p3);
+  const rejRes = await decideManyFromPanel(pool, [p3.id], "reject", {});
+  assert.equal(rejRes.ok, 1);
+  assert.equal(listProposals(pool).proposals.find((x) => x.id === p3.id).status, "rejected");
+  ok("批量拒绝：状态置 rejected");
+
+  // 空列表是安全的（不该报错）
+  const empty = await decideManyFromPanel(pool, [], "approve", {});
+  assert.deepEqual(empty, { ok: 0, failed: [] }, "空选择安全返回");
+  ok("批量操作空列表：安全返回 0/0（不会因为没选就报错）");
+
+  rmSync(pool, { recursive: true, force: true });
 }
 
 console.log(`\ntest:memorypanel 全部通过（${n} 项）`);

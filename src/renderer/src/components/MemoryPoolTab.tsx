@@ -103,6 +103,10 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
   const [to, setTo] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [full, setFull] = useState<{ id: string; text: string; evidence: string[]; path: string | null } | null>(null);
+  /** 批量选择：条目与提案各自一组（操作语义不同，混选容易误操作） */
+  const [selEntries, setSelEntries] = useState<Set<string>>(new Set());
+  const [selProps, setSelProps] = useState<Set<string>>(new Set());
+
   /** 应用内确认框（**不用原生 window.confirm**：原生模态在 Electron/Windows 上
    *  出现过点关闭后输入框夺不回鼠标焦点的问题，用户反馈"批准后无法输入"）。 */
   const [confirmAsk, setConfirmAsk] = useState<{ title: string; body: string; confirmLabel: string; run: () => Promise<void> } | null>(null);
@@ -181,6 +185,58 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
       run: async () => {
         const r = await window.pi.memory.decide(p.id, "approve");
         pushToast(r.ok ? "success" : "error", r.detail);
+        await load();
+      },
+    });
+  };
+
+  /** 批量结果提示：成功多少条、失败的逐条给原因 */
+  const reportBatch = (whatZh: string, whatEn: string, r: { ok: number; failed: { id: string; reason: string }[] }) => {
+    const head = `${zh ? whatZh : whatEn}：${zh ? "成功" : "ok"} ${r.ok}${r.failed.length ? `，${zh ? "失败" : "failed"} ${r.failed.length}` : ""}`;
+    if (!r.failed.length) {
+      pushToast("success", head);
+      return;
+    }
+    // 失败要逐条列出，不能只报「部分失败」——批量操作最怕不知道哪条没成
+    const detail = r.failed.map((f) => `· ${f.id.slice(-8)} ${f.reason}`).join("\n");
+    pushToast("error", `${head}\n${detail}`);
+  };
+
+  const batchArchive = () => {
+    const ids = [...selEntries];
+    setConfirmAsk({
+      title: `${zh ? "归档选中的" : "Archive"} ${ids.length} ${zh ? "条记忆？" : "entries?"}`,
+      body: zh ? "归档≠删除，可在归档目录找回。逐条独立处理，失败会逐条列出。" : "Archive ≠ delete. Processed one by one; failures are listed.",
+      confirmLabel: zh ? "全部归档" : "Archive all",
+      run: async () => {
+        const r = await window.pi.memory.archiveMany(ids);
+        reportBatch("已归档", "Archived", r);
+        setSelEntries(new Set());
+        await load();
+      },
+    });
+  };
+
+  const batchDecide = (decision: "approve" | "reject") => {
+    const ids = [...selProps];
+    setConfirmAsk({
+      title:
+        decision === "approve"
+          ? `${zh ? "批准选中的" : "Approve"} ${ids.length} ${zh ? "份提案？" : "proposals?"}`
+          : `${zh ? "拒绝选中的" : "Reject"} ${ids.length} ${zh ? "份提案？" : "proposals?"}`,
+      body:
+        decision === "approve"
+          ? zh
+            ? "逐条落地：知识库类写 lesson（不自动 commit）、归档类移入归档目录、注入/当前任务类标记为待人工合并。逐条独立，失败会列出原因。"
+            : "Applied one by one: KB → lesson file (no auto-commit), archive → archive folder, inject/now → marked for manual merge. Failures are listed."
+          : zh
+            ? "只改提案状态（留痕），不动池子里的条目。"
+            : "Only proposal statuses change; pool entries stay put.",
+      confirmLabel: decision === "approve" ? (zh ? "全部批准" : "Approve all") : zh ? "全部拒绝" : "Reject all",
+      run: async () => {
+        const r = await window.pi.memory.decideMany(ids, decision);
+        reportBatch(decision === "approve" ? "已批准" : "已拒绝", decision === "approve" ? "Approved" : "Rejected", r);
+        setSelProps(new Set());
         await load();
       },
     });
@@ -279,6 +335,42 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
         </div>
       )}
 
+      {/* 批量工具条：有选中才出现 */}
+      {(selEntries.size > 0 || selProps.size > 0) && (
+        <div className="mempool-batchbar">
+          <span>
+            {zh ? "已选" : "Selected"}：
+            {selEntries.size > 0 && `${selEntries.size} ${zh ? "条记忆" : "entries"}`}
+            {selEntries.size > 0 && selProps.size > 0 && " + "}
+            {selProps.size > 0 && `${selProps.size} ${zh ? "份提案" : "proposals"}`}
+          </span>
+          {selProps.size > 0 && (
+            <>
+              <button className="set-btn" onClick={() => batchDecide("approve")}>
+                {zh ? "批量批准" : "Approve"}
+              </button>
+              <button className="set-btn ghost" onClick={() => batchDecide("reject")}>
+                {zh ? "批量拒绝" : "Reject"}
+              </button>
+            </>
+          )}
+          {selEntries.size > 0 && (
+            <button className="set-btn ghost" onClick={batchArchive}>
+              {zh ? "批量归档" : "Archive"}
+            </button>
+          )}
+          <button
+            className="set-btn ghost"
+            onClick={() => {
+              setSelEntries(new Set());
+              setSelProps(new Set());
+            }}
+          >
+            {zh ? "清除选择" : "Clear"}
+          </button>
+        </div>
+      )}
+
       {/* 过滤行 */}
       <div className="mempool-filters">
         <input
@@ -373,11 +465,33 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
       {/* 提案区：待审批优先 */}
       {pending.length > 0 && (
         <div className="mempool-props">
-          <div className="mempool-sub">
-            {zh ? "待审批提案" : "Pending proposals"} · {pending.length}
+          <div className="mempool-sub mempool-sub-row">
+            <span>
+              {zh ? "待审批提案" : "Pending proposals"} · {pending.length}
+            </span>
+            <button
+              className="set-btn ghost"
+              onClick={() =>
+                setSelProps(selProps.size === pending.length ? new Set() : new Set(pending.map((x) => x.id)))
+              }
+            >
+              {selProps.size === pending.length ? (zh ? "取消全选" : "Clear") : zh ? "全选" : "Select all"}
+            </button>
           </div>
           {pending.map((p) => (
             <div className="mempool-prop" key={p.id}>
+              <input
+                type="checkbox"
+                className="mempool-check"
+                checked={selProps.has(p.id)}
+                onChange={(e) => {
+                  const next = new Set(selProps);
+                  if (e.target.checked) next.add(p.id);
+                  else next.delete(p.id);
+                  setSelProps(next);
+                }}
+                title={zh ? "选中以便批量批准/拒绝" : "Select for batch approve/reject"}
+              />
               <div className="mempool-prop-main">
                 <div className="mempool-prop-title">
                   <span className="mempool-badge">{KIND_LABEL[p.kind]?.[zh ? 0 : 1] ?? p.kind}</span> {p.title}
@@ -434,6 +548,18 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
               {g.items.map((e) => (
                 <div className={`mempool-row${expanded === e.id ? " open" : ""}`} key={e.id}>
                   <div className="mempool-row-head">
+                    <input
+                      type="checkbox"
+                      className="mempool-check"
+                      checked={selEntries.has(e.id)}
+                      onChange={(ev) => {
+                        const next = new Set(selEntries);
+                        if (ev.target.checked) next.add(e.id);
+                        else next.delete(e.id);
+                        setSelEntries(next);
+                      }}
+                      title={zh ? "选中以便批量归档" : "Select for batch archive"}
+                    />
                     <button className="mempool-row-title" onClick={() => void openFull(e.id)}>
                       {e.summary}
                       {e.length > e.summary.length && <span className="zhiya-dim"> …</span>}

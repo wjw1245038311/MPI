@@ -138,6 +138,12 @@ const api = {
     /** 批准/拒绝一份提案（与命令行同一条执行路径）。 */
     decide: (id: string, decision: "approve" | "reject"): Promise<{ ok: boolean; detail: string }> =>
       ipcRenderer.invoke("memory:decide", id, decision),
+    /** 批量归档（逐条独立，返回成功数与失败原因）。 */
+    archiveMany: (ids: string[]): Promise<{ ok: number; failed: { id: string; reason: string }[] }> =>
+      ipcRenderer.invoke("memory:archiveMany", ids),
+    /** 批量批准/拒绝提案（逐条独立）。 */
+    decideMany: (ids: string[], decision: "approve" | "reject"): Promise<{ ok: number; failed: { id: string; reason: string }[] }> =>
+      ipcRenderer.invoke("memory:decideMany", ids, decision),
     /** 跑一次分诊（单飞；结果进 ops.jsonl）。 */
     dream: (dry?: boolean): Promise<{ detail: string }> => ipcRenderer.invoke("memory:dream", dry === true),
     /** 在文件管理器里打开归档目录。 */
