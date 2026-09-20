@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
+import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { appendDiagLog } from "./diag-log";
 import { capRenderedHistory, MAX_REMOTE_RAW_MESSAGES, remoteMessageSize, trimRemoteHistory } from "./remote/history-limit";
@@ -598,6 +599,20 @@ function createHandle(
         const estimated = (event as any)?.result?.estimatedTokensAfter;
         if (typeof estimated === "number" && Number.isFinite(estimated)) compactionEstimates.set(id, Math.trunc(estimated));
         publishThreadContextUsageHook?.(id);
+        // CJK 修正：pi 的 chars/4 估算对中文低估约 3–4 倍。从会话条目重算真实值，
+        // 与 pi 值不同时补发 context_estimate（桌面圆环）并刷新手机端 map。
+        if ((event as any)?.result) {
+          // refresh:true：刚发生新压缩，旧缓存必然陈旧。
+          void cachedPostCompactionEstimate(handle.bridge, id, { refresh: true })
+            .then((est) => {
+              const corrected = est ? Math.trunc(est.tokens) : null;
+              if (corrected === null || corrected === estimated) return;
+              compactionEstimates.set(id, corrected);
+              send("pi:event", { threadId: id, event: { type: "context_estimate", estimatedTokensAfter: corrected } });
+              publishThreadContextUsageHook?.(id);
+            })
+            .catch(() => {});
+        }
       }
       if (event?.type === "agent_settled") {
         publishThreadContextUsageHook?.(id);
@@ -978,9 +993,13 @@ async function gatherThread(bridge: PiBridge, threadId: string, permission: Perm
   // Which task mode this session was last set to (config.threadTaskModes is
   // keyed by the same UUID the mpi-taskmode extension uses for its state file).
   const uuid = threadUuidFromSessionFile(threadId) || /^boot:(.+)$/.exec(threadId)?.[1] || null;
+  // 压缩后 pi 报 tokens=null（直到下次回复）；renderer 内存里的 contextEstimate 在
+  // 重连/重启后会丢，这里从条目重建 CJK 感知估算随响应下发，避免界面显示 0。
+  const postCompact = postCompactionEstimateFromEntries(entriesRes?.entries, entriesRes?.leafId ?? null);
   return {
     threadId,
     cwd: bridge.cwd,
+    ...(postCompact ? { contextEstimate: postCompact.tokens } : {}),
     sessionFile: state.sessionFile ?? null,
     sessionName: state.sessionName ?? null,
     model: state.model ?? null,
@@ -1795,7 +1814,18 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     const h = bridges.get(localId);
     if (!h) return null;
     try {
-      return remoteContextUsage(await h.bridge.getSessionStats(), estimated);
+      let est = typeof estimated === "number" ? estimated : null;
+      const stats: any = await h.bridge.getSessionStats();
+      // pi 压缩后报 tokens=null（直到下次回复）；map 里没有估算值时（如应用重启后），
+      // 从会话条目重算 CJK 感知估算，避免手机端显示 0。
+      if (est === null && stats?.contextUsage && typeof stats.contextUsage.tokens !== "number") {
+        try {
+          est = (await cachedPostCompactionEstimate(h.bridge, localId))?.tokens ?? null;
+        } catch {
+          /* 估算失败保持 null，手机显示「—」 */
+        }
+      }
+      return remoteContextUsage(stats, est);
     } catch {
       return null;
     }

@@ -753,6 +753,8 @@ function threadFromResponse(res: any, fallback: ThreadState, pendingEditorText?:
   return {
     ...emptyThread(res.cwd || fallback.cwd),
     sessionFile: res.sessionFile,
+    // 压缩后估算值：优先取响应里的（main 从条目重算），否则保留旧值，避免显示回退成 0。
+    contextEstimate: typeof res.contextEstimate === "number" ? res.contextEstimate : fallback.contextEstimate,
     sessionName: res.sessionName,
     model: res.model,
     models: res.models || fallback.models || [],
@@ -808,6 +810,11 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
         ? { message: String(event.errorMessage), aborted: !!event.aborted }
         : null;
       return { ...t, compacting: false, contextEstimate: estimated, compactionFailure: failure };
+    }
+    case "context_estimate": {
+      // main 从会话条目重算的 CJK 感知压缩后估算（pi 的 chars/4 对中文低估约 3–4 倍）。
+      const est = typeof event?.estimatedTokensAfter === "number" ? event.estimatedTokensAfter : undefined;
+      return est !== undefined ? { ...t, contextEstimate: est } : t;
     }
     case "message_start": {
       const m = event.message;
@@ -2155,6 +2162,8 @@ export const useStore = create<PiStore>()((set, get) => {
             // main reports the last applied task mode (config.threadTaskModes);
             // fall back to the pre-merge value when it has no entry yet.
             taskMode: res.taskMode ?? prev?.taskMode,
+            // 压缩后估算值：重连/重启后 pi 仍报 tokens=null，必须保留（响应里的新值优先）。
+            contextEstimate: typeof res.contextEstimate === "number" ? res.contextEstimate : prev?.contextEstimate,
             pendingEditorText: prev?.pendingEditorText,
           };
           const threads: Record<string, ThreadState> = { ...s.threads, [id]: merged };
