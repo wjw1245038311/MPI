@@ -13,7 +13,7 @@
  * 运行：npm run test:dream
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { register } from "node:module";
@@ -334,6 +334,25 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
   assert.match(String(existingLessonFor(dir, "Some Lesson", "x", "01ABCDEFGH")), /同名/, "同 slug 直接命中");
   rmSync(dir, { recursive: true, force: true });
   ok("既有 lesson 去重：同内容/同名命中（真机重复提案已消除）");
+}
+
+// --- 已处理的提案不再重提（inject/now 落地不改条目状态，特别容易漏）-------------
+{
+  const pool = seedPool([{ text: "跨项目通用的工具怪癖，会被路由到常驻注入。", tags: ["tool-quirk"] }]);
+  const id = listEntries(pool).entries[0].id;
+  const mk = (status) => ({
+    id: newId(), createdAt: new Date().toISOString(), kind: "promote-inject", status, outlet: "inject",
+    entries: [id], reason: "测试", title: "t", body: "b", target: null, decidedAt: null, result: null,
+  });
+  for (const status of ["pending", "approved", "applied", "rejected"]) {
+    // 清空提案目录后只放这一份，观察候选是否被跳过
+    const pdir = join(pool, "proposals");
+    if (existsSync(pdir)) for (const f of readdirSync(pdir).filter((x) => x.endsWith(".md"))) rmSync(join(pdir, f), { force: true });
+    writeProposal(pool, mk(status));
+    const r = await runDream({ poolDir: pool, chat: async () => "正文", log: () => {}, llmClassify: true });
+    assert.equal(r.entries, 0, `${status} 的提案覆盖的条目不该再出提案（否则会无限重提）`);
+  }
+  ok("已处理（pending/approved/applied/rejected）的提案覆盖条目不再重提；failed 仍会重试");
 }
 
 console.log(`\ntest:dream 全部通过（${n} 项）`);

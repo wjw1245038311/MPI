@@ -382,8 +382,12 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
   //      因为拒绝只改提案状态、条目仍是 inbox）。想重提用 --force。
   if (!deps.force) {
     const all = listProposals(deps.poolDir).proposals;
+    // 覆盖 = 已经**处理过**的（待批 / 已批 / 已落地 / 已拒绝）。
+    // ⚠️ applied 必须算：inject / now 出口落地时**故意不改条目状态**（"不假标记为已晋升"），
+    // 若不算 applied，这两类出口会每轮 dream 都重新冒出来（真机算过：17 份 inject 会无限重提）。
+    // failed 不算（那是真失败，值得下一轮重试并再次暴露给人看）。
     const covered = new Set(
-      all.filter((p) => p.status === "pending" || p.status === "approved").flatMap((p) => p.entries),
+      all.filter((p) => ["pending", "approved", "applied", "rejected"].includes(p.status)).flatMap((p) => p.entries),
     );
     const rejected = new Set(all.filter((p) => p.status === "rejected").flatMap((p) => p.entries));
     const before = pool.length;
