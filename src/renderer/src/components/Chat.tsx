@@ -10,6 +10,7 @@ import { diffLines } from "../lib/diff";
 import { extractEditPairs, normalizeTranscriptText } from "../lib/tool-args";
 import { findMessageOccurrences } from "../lib/chat-search";
 import { MarkedDiv, useSearchMark } from "../lib/search-mark";
+import { getExpandState, setExpandState } from "../lib/expand-state";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
@@ -1430,6 +1431,7 @@ function renderAssistantBlocks(
           threadId={threadId}
           messageKey={message.key}
           streaming={isStreaming}
+          expandKey={key}
         />,
       );
     });
@@ -1450,6 +1452,7 @@ function BlockView({
   threadId,
   messageKey,
   streaming,
+  expandKey,
 }: {
   block: ContentBlock;
   toolRuns: Record<string, ToolRun>;
@@ -1461,6 +1464,8 @@ function BlockView({
   messageKey: string;
   /** True while this message is still streaming — choice fences stay inert code blocks. */
   streaming: boolean;
+  /** Stable "messageKey:index" key for cross-remount expand-state persistence. */
+  expandKey?: string;
 }) {
   // Marks are injected into the rendered .md DOM (see lib/search-mark); the
   // content key re-applies them once a streaming block finalizes.
@@ -1495,12 +1500,12 @@ function BlockView({
       </div>
     );
   }
-  if (block.type === "thinking") return <Thinking text={block.thinking} language={language} />;
+  if (block.type === "thinking") return <Thinking text={block.thinking} language={language} expandKey={expandKey} />;
   const run = toolRuns[block.id] || (block.contentIndex === undefined ? undefined : Object.values(toolRuns).find((candidate) => candidate.contentIndex === block.contentIndex));
   const name = effectiveToolName(block.name, run);
   // Plan-choice calls render as a compact option card instead of raw JSON.
   if (name === "mpi_ask_choice") return <ChoiceToolCard id={block.id} blockArgs={block.arguments} run={run} language={language} />;
-  return <ToolCard id={block.id} name={name} blockArgs={block.arguments} run={run} language={language} />;
+  return <ToolCard id={block.id} name={name} blockArgs={block.arguments} run={run} language={language} expandKey={expandKey} />;
 }
 
 const SkillInvocation = memo(function SkillInvocation({ name, language }: { name: string; language: "en" | "zh" }) {
@@ -1548,12 +1553,22 @@ const HtmlReferenceCard = memo(function HtmlReferenceCard({
   );
 });
 
-const Thinking = memo(function Thinking({ text, language }: { text: string; language: "en" | "zh" }) {
-  const [open, setOpen] = useState(false);
+// 展开状态经 lib/expand-state 持久化（key = 消息 key:块序号）：dev HMR 替换本
+// 模块会重挂整棵聊天树，已展开的块从 Map 恢复、不被折回。
+const Thinking = memo(function Thinking({ text, language, expandKey }: { text: string; language: "en" | "zh"; expandKey?: string }) {
+  // 展开状态存模块级 Map（lib/expand-state）：HMR/重挂载后恢复，不再被折叠回去。
+  const [open, setOpen] = useState(() => (expandKey ? getExpandState(expandKey) : undefined) ?? false);
+  const toggle = () => {
+    setOpen((v) => {
+      const next = !v;
+      if (expandKey) setExpandState(expandKey, next);
+      return next;
+    });
+  };
   const displayText = normalizeTranscriptText(text);
   return (
     <div className="thinking">
-      <button className="thinking-toggle" onClick={() => setOpen((v) => !v)}>
+      <button className="thinking-toggle" onClick={toggle}>
         <span style={{ transform: open ? "rotate(90deg)" : "none", display: "inline-block", transition: "transform .12s" }}>›</span>
         {language === "zh" ? `思考过程 · ${displayText.length} 字` : `Reasoning · ${displayText.length} chars`}
       </button>
@@ -1623,8 +1638,11 @@ function toolDuration(run?: ToolRun): string {
   return seconds < 1 ? "<1s" : `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
 }
 
-const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language }: { id: string; name: string; blockArgs?: unknown; run?: ToolRun; language: "en" | "zh" }) {
-  const [open, setOpen] = useState(false);
+// 同 Thinking：open 经 lib/expand-state 跨 HMR/重挂载保留；edit 卡自动展开
+// 也写入记录，避免热重载后重新折叠。
+const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language, expandKey }: { id: string; name: string; blockArgs?: unknown; run?: ToolRun; language: "en" | "zh"; expandKey?: string }) {
+  // 展开状态存模块级 Map（lib/expand-state）：HMR/重挂载后恢复，不再被折叠回去。
+  const [open, setOpen] = useState(() => (expandKey ? getExpandState(expandKey) : undefined) ?? false);
   const running = run?.running;
   const diffViewMode = useStore((s) => s.config?.diffViewMode || "unified");
   const argsView = renderToolArgs(name, run, blockArgs, language, diffViewMode);
@@ -1641,8 +1659,14 @@ const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language }: 
     autoExpand = lines <= 240;
   }
   const userToggled = useRef(false);
+  // 自动展开只发生在「无用户意图记录」时；一旦自动打开过就写入 Map，
+  // 重挂载后保持展开（否则每次 HMR 都会把 edit 卡折回去）。
   useEffect(() => {
-    if (autoExpand && !userToggled.current) setOpen(true);
+    const recorded = expandKey ? getExpandState(expandKey) : undefined;
+    if (autoExpand && !userToggled.current && recorded === undefined) {
+      setOpen(true);
+      if (expandKey) setExpandState(expandKey, true);
+    }
   }, [autoExpand]);
   const result = run?.resultText ?? run?.partialText ?? "";
   const status = toolStatus(run);
@@ -1665,7 +1689,11 @@ const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language }: 
         aria-controls={detailsId}
         onClick={() => {
           userToggled.current = true;
-          setOpen((v) => !v);
+          setOpen((v) => {
+            const next = !v;
+            if (expandKey) setExpandState(expandKey, next);
+            return next;
+          });
         }}
       >
         <span style={{ transform: open ? "rotate(90deg)" : "none", display: "inline-block", transition: "transform .12s" }}>›</span>
