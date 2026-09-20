@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.6.25（2026-09-20）
 
 1. **修复 smart-compact 压缩后上下文弹窗显示「暂无上下文数据」**：smart-compact 扩展产出的压缩 entry 的 usage 缺 `cost` 字段，而 pi 的 get_session_stats 统计时无条件读 `usage.cost.total` → 整个 RPC 抛错（Cannot read properties of undefined (reading 'total')）→ 桌面端上下文弹窗整体显示「暂无上下文数据」（手机端已有容错、只显示「—」）。两处修复：①扩展的 zeroUsage/addUsage 始终携带并累加完整 cost 对象（本地模型为 0，API 模型累加实际费用），新压缩不再产生坏 entry；②main 侧 thread:getStats 捕获 pi 抛错后回退最小 stats（contextUsage={tokens:null} + 当前模型 contextWindow），renderer 走 ~估算值路径而不是空白。
 
