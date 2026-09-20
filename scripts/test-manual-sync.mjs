@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+/** 换行拆分（写成常量：多行正则在本项目里被多处工具转义踩过坑） */
+const SPLIT_LINES = new RegExp(String.fromCharCode(13) + "?" + String.fromCharCode(10));
+
 const {
   CHANGELOG_PATH,
   parseChangelog,
@@ -118,9 +121,30 @@ const SAMPLE = `# Changelog
 
 // --- 真实 changelog 冒烟 ----------------------------------------------------
 {
-  const sections = parseChangelog(readFileSync(CHANGELOG_PATH, "utf8"));
+  const changelogText = readFileSync(CHANGELOG_PATH, "utf8");
+  const sections = parseChangelog(changelogText);
   assert.ok(sections.length >= 1, "至少一个分节");
   assert.ok(sections.every((s) => s.items.length >= 1), "每个已存在分节至少有 1 条");
+  // 防复发：编号条目必须落在某个 ## 小节之内。
+  // （真事故：新条目被插到 "## Unreleased" 之上——任何小节之外，解析器完全看不到，
+  //   手册同步因此漏掉 8 条改动，而"每节至少 1 条"这种断言不会报警。）
+  {
+    const lines = changelogText.split(SPLIT_LINES);
+    let inSection = false;
+    let stray = 0;
+    const strayLines = [];
+    for (const l of lines) {
+      if (/^##\s/.test(l)) {
+        inSection = true;
+        continue;
+      }
+      if (/^\d+\.\s+\S/.test(l) && !inSection) {
+        stray++;
+        if (strayLines.length < 3) strayLines.push(l.slice(0, 60));
+      }
+    }
+    assert.equal(stray, 0, `有 ${stray} 条编号条目落在任何 ## 小节之外（例如：${strayLines.join(" | ")}）`);
+  }
   // 发版会把 Unreleased 改名为 vX（日期），故此处不要求 Unreleased 存在
   const released = sections.filter((s) => /^v\d/.test(s.title));
   assert.ok(released.length >= 1, "至少一个已发布版本分节");
