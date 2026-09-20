@@ -10,7 +10,7 @@
  * 本模块再叠加模型自己的两项（时间衰减 + 重要性）算总分——引擎不认识的维度不硬塞给它。
  */
 import { createRequire } from "node:module";
-import { existsSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   fuseScore, halfLifeFor, importanceNorm, matchesFilter, recencyScore,
@@ -22,14 +22,26 @@ const DIM = 768;
 const COLLECTION_DIR = ".zvec";
 
 /** 写者重试策略（纪律 2）。实测 3 读 + 1 写下零失败、最长等待约 400ms。
- * 窗口要 ≥ 读者闲时 TTL：读者会短暂持有句柄复用，写者需要等它让出。 */
-const WRITE_RETRY = { attempts: Number(process.env.MPI_ZHIYA_WRITE_ATTEMPTS || 150), delayMs: 20 };
+ * 窗口要 ≥ 读者的**空闲释放**时间：读者会短暂持有句柄复用，写者需要等它让出。
+ * 读者侧空闲释放默认 2s（MPI_ZHIYA_READ_IDLE_MS），所以预算放到 8s，避免“读者空闲中但还没放锁”
+ * 被当成写失败。 */
+const WRITE_RETRY = { attempts: Number(process.env.MPI_ZHIYA_WRITE_ATTEMPTS || 400), delayMs: 20 };
 /** 读者重试（读也有极小概率撞上写者窗口）。 */
 const READ_RETRY = { attempts: 40, delayMs: 20 };
-/** 只读句柄空闲多久再释放，把锁让回给写者。
- *  实测：不复用时每次 recall 要付 ~214ms 的开合成本（FTS/词典加载），复用后降到 <1ms。
- *  TTL 短是有意的：它只覆盖"同一个回合内的连续检索"，一旦停下来就把锁还给写者。 */
-const READ_TTL_MS = Number(process.env.MPI_ZHIYA_READ_TTL_MS || 300);
+/**
+ * 只读句柄**空闲**多久再释放（把锁还给写者）。
+ *
+ * ⚠️ 这个 TTL **不再承担“感知索引变化”的职责**——那是代际标记（`.zvec-generation`）的事。
+ * 它现在只是一张“礼貌”：长时间没人检索就别占着锁。
+ *
+ * 历史：以前 TTL=300ms 且带“失效”语义，于是**两次召回只要隔了 300ms 就要重开索引
+ * （实测 ~216ms）**——而应用里真实召回的间隔几乎都超过 300ms，等于每次召回都在付这笔钱。
+ * 实测（修前/修后，池内 126 条）：
+ *   间隔 500ms 调用 216ms/次  →  现在 ~2ms/次（无人写时直接复用句柄）
+ *   连续调用 7-14ms           →  不变
+ * 索引真被改过时靠代际变化重开（见 acquireRead），所以读到的不会除旧。
+ */
+const READ_IDLE_MS = Number(process.env.MPI_ZHIYA_READ_IDLE_MS || process.env.MPI_ZHIYA_READ_TTL_MS || 2000);
 /** 写入意向标记的新鲜度：写者崩溃留下的陈旧标记要能被忽略。写操作是短持有的（<1s），2s 足够。 */
 const INTENT_FRESH_MS = Number(process.env.MPI_ZHIYA_INTENT_FRESH_MS || 2000);
 /** 读者见到写入意向时最多等多久（等它清掉再读）。
@@ -179,11 +191,38 @@ export class ZvecIndex implements MemoryIndex {
   private readonly root: string;
   /** 写入意向标记：写者创建、成功后删除；读者见到就让锁（见 withRead）。 */
   private readonly intentPath: string;
+  /** 写者代际标记：写者每次成功变更后更新；读者据此决定是否重开句柄。 */
+  private readonly generationPath: string;
 
   private constructor(poolDir: string) {
     this.root = join(poolDir, COLLECTION_DIR);
     this.intentPath = join(poolDir, ".zvec-write-intent");
+    this.generationPath = join(poolDir, ".zvec-generation");
   }
+
+  /**
+   * 写者代际：**任何**成功变更索引的写入都必须调用（统一放在 withWrite 里）。
+   * 内容取时间戳+pid+计数，只要求“变了就行”；写成小文件，读者读一次 ~0.1ms。
+   */
+  private bumpGeneration(): void {
+    this.genCounter += 1;
+    try {
+      writeFileSync(this.generationPath, `${Date.now()}-${process.pid}-${this.genCounter}\n`, "utf8");
+    } catch {
+      /* 标记写不了不影响写入本身；读者至多退化为“靠空闲 TTL 重开” */
+    }
+  }
+
+  /** 当前代际（读不到返回 null，代表“没有代际信息”）。 */
+  private currentGeneration(): string | null {
+    try {
+      return readFileSync(this.generationPath, "utf8");
+    } catch {
+      return null;
+    }
+  }
+
+  private genCounter = 0;
 
   /** 打开（必要时创建集合并建中文 FTS 索引）。
    *
@@ -284,7 +323,10 @@ export class ZvecIndex implements MemoryIndex {
           col = existsSync(this.root)
             ? this.z!.ZVecOpen(this.root)
             : this.z!.ZVecCreateAndOpen(this.root, this.schema());
-          return fn(col);
+          const out = fn(col);
+          // 成功变更 → 推进代际（读者据此重开句柄，不会读到旧数据）
+          this.bumpGeneration();
+          return out;
         } catch (e) {
           lastErr = e;
           if (!isLockError(e)) throw e;
@@ -342,9 +384,12 @@ export class ZvecIndex implements MemoryIndex {
   // 实测：zvec 的 open 不是免费操作——带 FTS 索引的集合，只读开+关要 ~214ms（向量查
   // 询本身 <1ms）。而每次 recall 都开合 → p50 239ms；复用句柄后降到 <1ms。
   //
-  // 代价：只读句柄会挡住写者（zvec 写者需独占）。所以设一个**空闲 TTL**（默认 800ms）：
-  // 连续检索（同一个 agent 回合内）复用句柄，空闲下来就自动放锁给写者。
-  private readSession: { col: ZvecCollection; timer: NodeJS.Timeout | null } | null = null;
+  // 复用的**正确性依据是代际**：写者每次成功写入都会更新 `<池>/.zvec-generation`，
+  // 读者在取句柄前比一下代际——**没变就不重开**，变了（或没有会话）才丢句柄重开。
+  // 这样“隔了一会儿再查”不再白白付 214ms，而“有人在写”也不会读到旧索引。
+  // 另外还有两条保险：① writerPending() 见到写入意向就让锁（防写者饿死）；
+  // ② 空闲超过 READ_IDLE_MS 主动释放（长时间没人用就不该占着锁）。
+  private readSession: { col: ZvecCollection; timer: NodeJS.Timeout | null; gen: string | null } | null = null;
 
   private dropRead(): void {
     const s = this.readSession;
@@ -358,21 +403,27 @@ export class ZvecIndex implements MemoryIndex {
     }
   }
 
-  private armReadTtl(): void {
+  private armIdleTtl(): void {
     const s = this.readSession;
     if (!s) return;
     if (s.timer) clearTimeout(s.timer);
-    const t = setTimeout(() => this.dropRead(), READ_TTL_MS);
+    const t = setTimeout(() => this.dropRead(), READ_IDLE_MS);
     t.unref?.(); // 不要因为它把进程吊住
     s.timer = t;
   }
 
-  /** 取一个只读句柄（复用或重开）。抛错的语义与之前一致（锁冲突可重试）。 */
+  /** 取一个只读句柄（代际未变则复用，否则重开）。抛错的语义与之前一致（锁冲突可重试）。 */
   private acquireRead(): ZvecCollection {
-    if (this.readSession) return this.readSession.col;
+    const gen = this.currentGeneration();
+    if (this.readSession && this.readSession.gen === gen) {
+      this.armIdleTtl();
+      return this.readSession.col;
+    }
+    // 代际变了（或有别的写者动过索引而本进程不知道）→ 必须重开，否则会读到旧数据
+    if (this.readSession) this.dropRead();
     const col = this.z!.ZVecOpen(this.root, { readOnly: true });
-    this.readSession = { col, timer: null };
-    this.armReadTtl();
+    this.readSession = { col, timer: null, gen };
+    this.armIdleTtl();
     return col;
   }
 
@@ -389,7 +440,7 @@ export class ZvecIndex implements MemoryIndex {
       try {
         const col = this.acquireRead();
         const out = fn(col);
-        this.armReadTtl();
+        this.armIdleTtl();
         return out;
       } catch (e) {
         lastErr = e;

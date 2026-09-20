@@ -145,4 +145,42 @@ await idx2.close();
 ok("索引丢失后打开自动重建（索引是编译产物，丢了不丢记忆）");
 
 await idx.close();
+
+// --- E) 只读句柄的复用与失效（P5-3：写者代际取代时间 TTL）-------------------
+{
+  const idxB = await ZvecIndex.open(poolDir, { readOnly: true });
+  // E1 空闲复用：两次召回间隔 > 旧 TTL（300ms）时，第二不应重开索引（重开实测 ~216ms）
+  await idxB.recall({ text: "调用图", topK: 3 });
+  await new Promise((r) => setTimeout(r, 700)); // 旧实现：超过 TTL 就重开
+  const t1 = process.hrtime.bigint();
+  const again = await idxB.recall({ text: "调用图", topK: 3 });
+  const ms = Number(process.hrtime.bigint() - t1) / 1e6;
+  assert.ok(again.length, "复用句柄也要正常返回结果");
+  assert.ok(ms < 80, `间隔 700ms 后应复用句柄（<80ms），实际 ${ms.toFixed(0)}ms——回到时间 TTL 就会是 ~216ms`);
+  ok(`空闲后复用句柄：间隔 700ms 的一次召回仅 ${ms.toFixed(0)}ms（修前 ~216ms）`);
+
+  // E2 **正确性**：写者写入后，读者的下一次召回必须看到新数据（代际失效生效）
+  const fresh = add("代际失效验证：这条是写入后立刻检索必须能命中的句子（量子芝士烤串）。", {
+    importance: 8, relevance: 0.9, project: "MPI",
+  });
+  assert.equal(fresh.action, "add");
+  await idxB.upsert([fresh.entry]); // 写者（同一实例的写路径）→ 应推进代际
+  const after = await idxB.recall({ text: "量子芝士烤串", topK: 3 });
+  assert.ok(
+    after.some((h) => h.id === fresh.entry.id),
+    "写者写完，读者的下一次召回必须能搜到（若读到旧句柄这里就会漏）",
+  );
+  ok("代际失效：写者写入后，读者立刻能搜到新条目（不会因复用旧句柄而漏）");
+
+  // E3 写者不被饿死：读者刚读完（句柄还热），写者应能在预算内完成
+  await idxB.recall({ text: "调用图", topK: 3 });
+  const t2 = Date.now();
+  const e2 = add("写者不被饿死验证：读者句柄还热的时候写。", { importance: 7, relevance: 0.8, project: "MPI" });
+  await idxB.upsert([e2.entry]);
+  const wms = Date.now() - t2;
+  assert.ok(wms < 5000, `写者应在预算内完成，实际 ${wms}ms`);
+  ok(`写者不被饿死：读者句柄还热时写入 ${wms}ms 完成（意向标记让读者让锁）`);
+  await idxB.close();
+}
+
 console.log(`\ntest:zvecindex 全部通过（${n} 项）`);
