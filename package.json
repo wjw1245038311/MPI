@@ -118,6 +118,7 @@
     "test:memorypanel": "node --experimental-strip-types scripts/test-memory-panel.mjs",
     "mem0:export": "python scripts/mem0-export.py",
     "mem0:plan": "node --experimental-strip-types scripts/mem0-migrate.mjs",
+    "backfill:lessons": "node --experimental-strip-types scripts/backfill-lesson-skeleton.mjs",
     "check:switch": "node --experimental-strip-types scripts/check-device-switch.mjs",
     "mem0:verify": "node --experimental-strip-types scripts/mem0-verify.mjs",
     "mem0:apply": "node --experimental-strip-types scripts/mem0-migrate.mjs --apply",

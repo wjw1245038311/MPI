@@ -63,3 +63,6 @@ logs/
 
 # alexandria 知识引擎：索引 db 是编译产物（可丢弃重建）；toml+knowledge/ 进 git
 .alexandria/index/
+
+# 回填时的原文备份（临时，不入库）
+.alexandria/knowledge/lessons/.backup-bare/
