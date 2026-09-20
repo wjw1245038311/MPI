@@ -176,6 +176,18 @@ export interface AppConfig {
    * （<MyWorkspace>/Agent/AgentSetting，从 lastThreadCwd 向上找）并写回。
    * 探测不到时知芽只用本机副本工作，且面板会显式提示——不静默假装已同步。 */
   zhiyaMasterDir?: string;
+  /**
+   * 巩固（dream）是否自动跑。
+   * 默认 false：累计重要性到 150 只**记账并提示**，不自动花几分钟跑本地模型——
+   * 自动消耗算力这件事要用户明确点头（改为 true 即开启）。
+   */
+  zhiyaDreamAuto?: boolean;
+  /**
+   * dream 的六题判定是否调模型。
+   * 默认 false —— 实测本机思考型模型在该任务上思考停不下来（content 恒空），
+   * 改用确定性启发式规则；换了非思考型模型再开。
+   */
+  zhiyaDreamLlmClassify?: boolean;
   /** cwd of the most recently opened thread; seeds the warm spare's project. */
   lastThreadCwd?: string;
   /** User-defined scheduled automation tasks. */
@@ -485,6 +497,9 @@ export function loadConfig(userDataDir: string): AppConfig {
           typeof parsed.extAutoPickModel === "boolean" ? parsed.extAutoPickModel : undefined,
         qaMode: parsed.qaMode === "inline" || parsed.qaMode === "manual" ? parsed.qaMode : undefined,
         zhiyaMasterDir: typeof parsed.zhiyaMasterDir === "string" ? parsed.zhiyaMasterDir : undefined,
+        zhiyaDreamAuto: typeof parsed.zhiyaDreamAuto === "boolean" ? parsed.zhiyaDreamAuto : undefined,
+        zhiyaDreamLlmClassify:
+          typeof parsed.zhiyaDreamLlmClassify === "boolean" ? parsed.zhiyaDreamLlmClassify : undefined,
         smartCompact: sanitizeSmartCompact(parsed.smartCompact),
         defaultPermission:
           typeof parsed.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(parsed.defaultPermission)

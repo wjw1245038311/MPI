@@ -29,6 +29,7 @@ const ok = (label) => {
     assert.ok(tool.zh.trim().length > 0 && tool.en.trim().length > 0, `${tool.name} has bilingual copy`);
   }
   assert.ok(names.includes("mem0_memory"), "mem0_memory ships as a preset");
+  assert.ok(names.includes("memory_note"), "memory_note ships as a preset（记忆池写入）");
   ok("presets are unique, trustable and bilingual");
 }
 

@@ -320,6 +320,16 @@ export interface PiBridgeOptions {
   /** Paths for the 待办任务 bridge extension (mpi-todo-ext): todos.json and the
    * inbox dir where agent-side additions land before main ingests them. */
   todoPaths?: { file: string; inboxDir: string };
+  /** Inbox dir for the 记忆池 capture bridge (mpi-memory-ext): the extension drops
+   * one candidate JSON per memory here; the main process ingests them into the
+   * pool (it is the single writer). */
+  memoryInboxDir?: string;
+  /** Project name stamped onto captured memories (usually the session cwd name). */
+  memoryProject?: string;
+  /** Pool dir (file truth source) — the `/memory` command reads it directly. */
+  memoryPoolDir?: string;
+  /** 端点信息文件（url + token）——扩展每次现读它来调主进程做语义召回。 */
+  memoryEndpointFile?: string;
   /** Inbox dir for the channel session bridge (mpi-channel ext): agent-side
    * mpi_channel_* requests land here before main ingests them. */
   channelInboxDir?: string;
@@ -392,6 +402,17 @@ export class PiBridge {
       env.MPI_TODO_FILE = this.opts.todoPaths.file;
       env.MPI_TODO_INBOX_DIR = this.opts.todoPaths.inboxDir;
       if (this.opts.sessionFile) env.MPI_TODO_SESSION_FILE = this.opts.sessionFile;
+    }
+    if (this.opts.memoryInboxDir) {
+      env.MPI_MEMORY_INBOX_DIR = this.opts.memoryInboxDir;
+      if (this.opts.sessionFile) env.MPI_MEMORY_SESSION_FILE = this.opts.sessionFile;
+      if (this.opts.memoryProject) env.MPI_MEMORY_PROJECT = this.opts.memoryProject;
+      if (this.opts.memoryPoolDir) env.MPI_MEMORY_POOL_DIR = this.opts.memoryPoolDir;
+      if (this.opts.memoryEndpointFile) env.MPI_MEMORY_ENDPOINT_FILE = this.opts.memoryEndpointFile;
+      // 模型端点可在环境里覆盖（默认 LM Studio :1234 / llama-server :1235）
+      if (process.env.MPI_MEMORY_LLM_URL) env.MPI_MEMORY_LLM_URL = process.env.MPI_MEMORY_LLM_URL;
+      if (process.env.MPI_MEMORY_LLM_MODEL) env.MPI_MEMORY_LLM_MODEL = process.env.MPI_MEMORY_LLM_MODEL;
+      if (process.env.MPI_MEMORY_EMBED_URL) env.MPI_MEMORY_EMBED_URL = process.env.MPI_MEMORY_EMBED_URL;
     }
     if (this.opts.channelInboxDir) {
       env.MPI_CHANNEL_INBOX_DIR = this.opts.channelInboxDir;

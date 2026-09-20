@@ -12,6 +12,8 @@ import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-p
 import { registerPdfViewerProtocol, registerPdfViewerScheme } from "./pdf-viewer-protocol";
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
+import { stopMemoryEndpoint } from "./memory-endpoint";
+import { disposeMemoryIndex } from "./memory-service";
 import { ensureBackfilled as backfillObservedTools } from "./observed-tools";
 import { activateAutostartApps, killAllManagedProcesses } from "./app-store";
 import { startDevReleaseProgressTail } from "./dev-release-progress";
@@ -331,6 +333,13 @@ app.on("before-quit", (e) => {
     /* ignore */
   }
   flushTodos(); // synchronous: the coalesced todo write must not be lost
+  // 记忆池：先关本地端点（删端点文件），再释放索引（解除 zvec 只读句柄，
+  // 否则 .zvec 目录会被继续占着，Windows 上删不掉/换名会失败）。失败不拦退出。
+  void stopMemoryEndpoint(app.getPath("userData"))
+    .catch(() => undefined)
+    .finally(() => {
+      void disposeMemoryIndex().catch(() => undefined);
+    });
   quitInFlight = true;
   // Safety net in case a bridge ever fails to settle (stopGraceful is bounded
   // at ~4s internally; this caps the whole sequence well beyond that).

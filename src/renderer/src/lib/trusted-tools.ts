@@ -34,6 +34,11 @@ export const COMMON_EXTENSION_TOOLS: readonly CommonExtensionTool[] = [
     zh: "记忆读写（本地 mem0 服务，跨会话长期记忆）",
     en: "Memory read/write (local mem0 service, cross-session recall)",
   },
+  {
+    name: "memory_note",
+    zh: "写入记忆池（知芽：立即记住一条偏好/决定/教训）",
+    en: "Write to the memory pool (Zhiya: remember a preference/decision/lesson now)",
+  },
 ];
 
 /** True when `name` is a non-empty tool name that may be trusted. */

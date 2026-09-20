@@ -24,6 +24,7 @@
     "src/main/mpi-smart-compact-ext.ts",
     "src/main/mpi-taskmode-ext.ts",
     "src/main/mpi-shelenv-ext.ts",
+    "src/main/mpi-memory-ext.ts",
     "src/main/messaging/channel-command-ext.ts"
   ]
 }

@@ -153,6 +153,15 @@ const SAFE_TOOLS = new Set([
   // normal research workflow ("record a follow-up task"), no shell/file risk.
   "mpi_todo_add",
   "mpi_todo_list",
+  // memory_note only drops one candidate JSON into <userData>/zhiya-memory-inbox
+  // and asks the LOCAL model for a score — same risk class as mpi_todo_add
+  // (never touches the pool index or shell; main decides whether to keep it).
+  // Deliberately allowed even under enforced read-only: the automatic capture
+  // hooks are not gated at all, so blocking the explicit tool would be
+  // inconsistent (and recording a memory is not a project mutation).
+  "memory_note",
+  // memory_recall 是纯只读（问主进程的本地端点要几条命中），没有理由拦。
+  "memory_recall",
   "ask_question",
   "plan_question",
   "plan_complete",

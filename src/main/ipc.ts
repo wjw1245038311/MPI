@@ -111,6 +111,13 @@ import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
 import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
+import { ensureMemoryExtension, ensureMemoryCandidateInbox } from "./memory-extension";
+import { startMemoryInboxWatcher } from "./memory-inbox";
+import { getMemoryIndex, memoryPoolDir, scheduleMemoryMaintenance } from "./memory-service";
+import { appendOpResult, approveProposal, rejectProposal, startDream, type OpRunnerDeps } from "./memory-ops";
+import { noteIngest } from "./zhiya/consolidation";
+import { archiveDirFor } from "./memory-inbox";
+import { startMemoryEndpoint, memoryEndpointPath } from "./memory-endpoint";
 import { buildQuoteEnvelope } from "./quote-envelope";
 import type { QuoteMeta } from "../renderer/src/lib/types";
 import { registerTuiIpc } from "./tui";
@@ -233,6 +240,9 @@ const bridges = new Map<string, BridgeHandle>();
 let systemNotifications: SystemNotificationCenter | null = null;
 let activeRemoteHost: RemoteHost | null = null;
 let activeRelayUplink: RelayUplink | null = null;
+
+/** 记忆池 inbox 监听的停止函数（退出/重生时释放）。 */
+let stopMemoryInbox: (() => void) | null = null;
 
 // "扩展自动选模" (Settings → Conversation): keeps pi-web-access's web-search.json in
 // sync with each conversation's current model and auto-answers extension
@@ -542,6 +552,9 @@ function createHandle(
       // 任务模式 behaviour bridge: appends the active mode's instructions/spec
       // doc to the system prompt every turn (live switching, no restart).
       ensureTaskModeExtension(getConfigDir()),
+      // 记忆池捕获 bridge: 会话收尾/压缩前抽取候选进 inbox，并给 agent memory_note 工具。
+      // 只捕获不落池——落池由主进程做（见 memory-inbox.ts）。
+      ensureMemoryExtension(getConfigDir()),
       ...(isChannelSession ? [ensureChannelExtension(getConfigDir())] : []),
       // App-shipped pi extensions (manifest v2 `pi.extensions`): enabled apps
       // only, pointed straight at their installed dir (see app-store.ts).
@@ -550,6 +563,10 @@ function createHandle(
     // Live paths so a customized todo data location (Settings → 数据管理) is
     // honored from the next spawned bridge on.
     todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
+    memoryInboxDir: ensureMemoryCandidateInbox(getConfigDir()),
+    memoryProject: cwd.split(/[\\/]/).filter(Boolean).pop(),
+    memoryPoolDir: memoryPoolDir(),
+    memoryEndpointFile: memoryEndpointPath(getConfigDir()),
     choiceConfigFile: join(getConfigDir(), "config.json"),
     smartCompactConfigFile: join(getConfigDir(), "config.json"),
     taskModeStateDir: join(getConfigDir(), "taskmodes"),
@@ -3015,6 +3032,72 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
   }, 2000);
   todoInboxPoll.unref?.();
+
+  // op 执行器的依赖装配（dream/审批共用）。单飞标志放在闭包外：
+  // 本地模型一次分诊要 1-2 分钟，叠加跑两个会把机器拖死。
+  let memoryDreaming = false;
+  const opRunnerDeps = (): OpRunnerDeps => ({
+    poolDir: memoryPoolDir(),
+    apply: {
+      index: { upsert: async (es) => (await getMemoryIndex()).upsert(es), remove: async (ids) => (await getMemoryIndex()).remove(ids) },
+      archiveDirFor,
+    },
+    log: (m) => console.log(m),
+    isDreaming: () => memoryDreaming,
+    setDreaming: (v) => {
+      memoryDreaming = v;
+    },
+  });
+
+  // 记忆池候选：扩展（mpi-memory-ext）把候选丢进 inbox，主进程统一落池并更新索引。
+  // 主进程是唯一写者；索引失败只记日志（池文件才是真相源）。
+  stopMemoryInbox?.();
+  stopMemoryInbox = startMemoryInboxWatcher({
+    inboxDir: ensureMemoryCandidateInbox(getConfigDir()),
+    poolDir: memoryPoolDir(),
+    getIndex: () => getMemoryIndex(),
+    log: (m) => console.log(m),
+    // 巩固累加器：每写入一条扣它的重要性分，减到 0 就该跑一次 dream（MEMORY-MODEL §5）
+    onIngested: (e) => {
+      try {
+        const { triggered, state } = noteIngest(memoryPoolDir(), e.importance);
+        if (!triggered) return;
+        console.log(`[memory] 累计重要性已到阈值，建议跑一次巩固（dream）`);
+        if (getConfig().zhiyaDreamAuto) {
+          void startDream(opRunnerDeps(), false, getConfig().zhiyaDreamLlmClassify === true).catch((err) =>
+            console.warn("[memory] 自动巩固失败：", (err as Error).message),
+          );
+        } else {
+          appendOpResult(memoryPoolDir(), {
+            at: new Date().toISOString(),
+            op: "consolidation-due",
+            id: null,
+            ok: true,
+            detail: `累计写入 ${state.writes} 条已到 150 分阈值，可跑 /memory-dream（自动巩固未开启）`,
+          });
+        }
+      } catch (err) {
+        console.warn("[memory] 巩固记账失败：", (err as Error).message);
+      }
+    },
+    // 扩展发起的重活（dream/审批）：由主进程执行，结果写 ops.jsonl 供扩展读
+    ops: {
+      dream: (op) => startDream(opRunnerDeps(), op.dryRun === true, getConfig().zhiyaDreamLlmClassify === true),
+      approve: (id) => approveProposal(opRunnerDeps(), id),
+      reject: (id) => rejectProposal(opRunnerDeps(), id),
+      logResult: (r) => appendOpResult(memoryPoolDir(), r),
+    },
+  });
+
+  // 本地查询端点：给 pi 扩展提供语义召回（扩展自包含、拿不到索引）。
+  // 只绑 127.0.0.1 + 随机 token，失败不影响其它功能（扩展会降级为字面检索）。
+  void startMemoryEndpoint(getConfigDir());
+
+  // 索引维护：zvec 不会自动合并碎片（实测跑一天 16 条就涨到 124MB），启动后台压一次。
+  // 延迟 20 秒再动手——避开启动高峰，也让首次语义查询先拿到句柄。
+  setTimeout(() => {
+    scheduleMemoryMaintenance((m) => console.log(m));
+  }, 20000).unref?.();
 
   // Channel session commands (mpi_channel_* tools): same watch + poll pattern.
   startChannelCommandInboxWatcher();
