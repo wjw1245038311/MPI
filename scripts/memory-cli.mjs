@@ -41,7 +41,7 @@ const {
   THRESHOLD, PROMOTE_RECURRENCE,
 } = await import("../src/main/zhiya/pool.ts");
 // 归档走**面板同一条执行路径**（跨卷安全移动 + 索引移除），不自己 rm 文件
-const { archiveEntryFromPanel } = await import("../src/main/memory-panel.ts");
+const { archiveEntryFromPanel, resolveLessonsDirFor } = await import("../src/main/memory-panel.ts");
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -318,7 +318,16 @@ async function cmdApprove() {
   } catch (e) {
     console.warn(`（索引层不可用，仅写文件真相源：${e.message}）`);
   }
-  const r = await applyProposal(approved, { poolDir, archiveDirFor, index, log: (m) => console.log(m) });
+  // 老提案（打 projectRoot 之前采集的）没有 target —— 用**面板同一条兜底链**解析落点，
+  // 否则同一条提案"面板能批、CLI 报无法确定落点"（两条执行路径行为不一致，真机抓到过）。
+  const lessonsDir = approved.kind === "promote-kb" && !approved.target ? resolveLessonsDirFor(poolDir, approved) : null;
+  const r = await applyProposal(approved, {
+    poolDir,
+    archiveDirFor,
+    index,
+    kbLessonsDir: lessonsDir ?? undefined,
+    log: (m) => console.log(m),
+  });
   console.log(`${r.ok ? "✓" : "✗"} ${r.detail}`);
   if (r.action === "manual") {
     console.log("\n待人工合并的正文：\n---");

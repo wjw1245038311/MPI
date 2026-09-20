@@ -70,6 +70,8 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 19. **历史 lesson 全部补齐骨架（9 篇裸文件 → 0）**：上一条修的是"以后不再产生裸文件"，这条把**历史遗留**一并清掉——用同一个 `wrapRawLesson` 回填 8 篇无结构 lesson（`Commit.md` / `Lesson-1WJYRPC0.md` / `MemoryApprove.md` / `MemoryApproveMemoryReject.md` / `MemoryApproveMemoryRejectMemo.md` / `MemoryUserData.md` / `MemorycmdOpsDreamPromoteTriage.md` / `Upsert205.md`），补上 frontmatter + 标准分节，**原文一字不丢**（完整保留在「原文（待整理）」一节，原件另存 `.backup-bare/`）。同时删掉一篇重复 lesson（`DevCtrl.md` 与既有英文篇 `DevRestartAfterMainPreloadChange.md` 同义）。新增 `npm run backfill:lessons`（默认干跑，`--apply` 才改，幂等：合格 lesson 自动跳过）。
 
+20. **修 CLI 与面板批准行为不一致（老提案无落点）**：早期采集的条目没有 `projectRoot`，那批提案的 `target` 是空的——**面板**批准时有兜底链（提案目标 → 条目项目根 → 同项目其它条目项目根）能落地，而**命令行** `memory:approve` 直接调 `applyProposal` 没带知识库目录，会报「无法确定 lesson 落点」。现在 CLI 复用面板同一条解析函数（`resolveLessonsDirFor`），两条路径行为一致。实测：4 份无目标提案全部能解析出 `.alexandria/knowledge/lessons`。
+
 ## v0.6.26（2026-09-20）
 
 1. **修复 choices 块偶发不渲染成内联面板（降级为普通代码块）**：模型（deepseek 系尤其常见）有时把闭合的 ``` 直接贴在最后一行 JSON 末尾，或反引号数与开围栏不一致（4 开 3 闭），甚至干脆忘写闭合——按 CommonMark 严格判定这都属于「围栏未闭合」，整块被当普通文本渲染成 raw 代码块，表现为「面板没弹出来」（此前调查曾误判为 MPI / pi-web 版本不支持渲染，实际 choices 面板完全由 MPI renderer 自己实现，与 pi-web 无关）。现在 choices 围栏的闭合判定加了三层容错：①严格独行闭合优先（保持原语义）；②找不到时接受「行尾 ≥3 反引号」的粘行闭合、以及反引号数不匹配的独行闭合；③压根没有闭合时把围栏之后剩余文本整体当正文——后两层**仅在正文能解析成合法 choices JSON 时**才采纳，否则维持原行为，不会误吞普通文本。另外新增降级提示：正文真解析不了时，在代码块下方显示一行灰色「此 choices 块格式不合法」提示，一眼分清是模型格式问题而非 MPI 没渲染。系统提示词（问答方式：内联快速选择）同步加硬要求：围栏里除 JSON 无它物，闭合 ``` 必须另起一行独占一行。
