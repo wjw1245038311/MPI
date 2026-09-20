@@ -1,5 +1,5 @@
 /**
- * memory-cli 的 forget / archive 子命令测试
+ * memory-cli 行为契约测试（forget / archive / dream 默认干跑）
  *
  * 为什么单独测：归档是**改动真相源**的操作，行为契约必须钉住——
  *   ① 前缀歧义**不许猜**（匹配多条就列出来让人挑）
@@ -108,6 +108,28 @@ const cli = (args) => {
   assert.ok(help.out.includes("forget") && help.out.includes("archive"), `用法文本应列出两个命令：${help.out.slice(0, 160)}`);
   ok("按正文关键词定位；用法文本列出 forget 与 archive");
 }
+
+// ⑥ dream 默认干跑：不写提案；--apply 才写（用户决定"只在主动问时才跑分诊"）
+{
+  // 造一条达晋升门槛的条目（带知识标签）
+  decideIngest(pool, {
+    text: "这条带知识标签，会被分诊选为候选（用于验证默认干跑）。",
+    type: "semantic", temporal: "retrospective", importance: 7, relevance: 0.7,
+    project: "MPI", source: "test", tags: ["insight"],
+  }, () => 0);
+  const propDir = join(pool, "proposals");
+  const count = () => (existsSync(propDir) ? readdirSync(propDir).filter((f) => f.endsWith(".md")).length : 0);
+  const before = count();
+  const dry = cli(["dream", "--entries", "5"]);
+  assert.equal(dry.code, 0, `干跑应成功：${dry.err.slice(0, 120)}`);
+  assert.ok(dry.out.includes("干跑") || dry.out.includes("预览"), `应说明是干跑：${dry.out.slice(-160)}`);
+  assert.equal(count(), before, "默认干跑不得写提案");
+  const applied = cli(["dream", "--entries", "5", "--apply"]);
+  assert.equal(applied.code, 0, `--apply 应成功：${applied.err.slice(0, 120)}`);
+  assert.ok(count() > before, `--apply 应写出提案（前 ${before} → 后 ${count()}）`);
+  ok("dream 默认干跑不落盘；--apply 才写提案（分诊不再自动往队列塞东西）");
+}
+
 
 console.log(`\ntest:forget 全部通过（${n} 项）`);
 void a;

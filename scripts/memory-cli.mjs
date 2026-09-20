@@ -396,12 +396,21 @@ function readMemoryModelSetting() {
   }
 }
 
-/** 跑一次分诊（本地模型 1-2 分钟）。 */
+/**
+ * 跑一次分诊。
+ *
+ * ⚠️ **默认干跑**：只出预览、不写提案文件。要真写提案必须显式 `--apply`。
+ * 为什么改成默认干跑（2026-09-21 用户决定"dream 默认静默，只在我主动问时才跑"）：
+ * 之前 `npm run memory:dream` 直接落盘，一次跑出 26 份提案，把待审队列堆满；
+ * 分诊是"辅助审阅"，不是"自动生产"——没看清之前不该往队列里塞东西。
+ * （应用内也**不会自己跑**：自动巩固由 zhiyaDreamAuto 控制，默认关闭，只记一条"可以跑"的提示。）
+ */
 async function cmdDream() {
-  const dry = f.dry === true || f.preview === true;
+  const apply = f.apply === true || f["dry-run"] === false;
+  const dry = !apply;
   const mm = readMemoryModelSetting();
   console.log(`记忆模型：${mm.describe}`);
-  console.log(`开始周期分诊${dry ? "（预览，不落盘）" : ""}…`);
+  console.log(`开始周期分诊${dry ? "（干跑，不落盘；要写提案加 --apply）" : "（真写，落提案文件）"}…`);
   const report = await runDream({
     poolDir,
     dryRun: dry,
@@ -418,7 +427,7 @@ async function cmdDream() {
     // 从项目目录跑时用 cwd 兜底：老条目没带 projectRoot，否则 lesson 落点解析不出来
     defaultProjectRoot: process.cwd(),
   });
-  console.log(`\n${report.ok ? "✓" : "✗"} ${report.entries} 条 → ${report.themes} 个主题 → ${report.proposals.length} 份提案（${(report.ms / 1000).toFixed(1)}s）`);
+  console.log(`${NL}${report.ok ? "✓" : "✗"} ${report.entries} 条候选 → ${report.proposals.length} 份提案（${(report.ms / 1000).toFixed(1)}s）`);
   for (const p of report.proposals) {
     console.log(`  [${KIND_LABEL[p.kind] ?? p.kind}] ${p.title}`);
     console.log(`    ${p.reason}`);
