@@ -150,6 +150,14 @@ const api = {
     openArchive: (): Promise<{ ok: boolean; detail: string }> => ipcRenderer.invoke("memory:openArchive"),
   },
   zhiya: {
+    /** 当前任务聚合：HANDOFF + changelog（待办走既有 todo.list）。只读，不改文件。 */
+    tasks: (cwd?: string): Promise<{
+      handoffs: { path: string; name: string; mtime: string; title: string }[];
+      changelog: { path: string; hasUnreleased: boolean; recent: { version: string; items: string[] }[] } | null;
+      searched: string[];
+    }> => ipcRenderer.invoke("zhiya:tasks", cwd),
+    /** 读一份 HANDOFF 正文（面板预览用，主进程截断 20k）。 */
+    readHandoff: (path: string): Promise<string | null> => ipcRenderer.invoke("zhiya:readHandoff", path),
     /** 知芽运行时三份文件的原文 + 路径 + 母版目录 + 注入预算。 */
     get: (): Promise<{
       dir: string;

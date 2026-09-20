@@ -124,6 +124,7 @@ import {
   type SnapshotQuery,
 } from "./memory-panel";
 import { listEntries, type PoolEntry } from "./zhiya/pool";
+import { aggregateTasks } from "./task-aggregate";
 import { noteIngest } from "./zhiya/consolidation";
 import { archiveDirFor } from "./memory-inbox";
 import { startMemoryEndpoint, memoryEndpointPath } from "./memory-endpoint";
@@ -3294,6 +3295,28 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return null;
   });
 
+
+  // ---- 当前任务聚合（P4）----------------------------------------------------
+  // 三层来源：待办（既有 todo:list）/ HANDOFF / changelog；这里只读，不改文件。
+  ipcMain.handle("zhiya:tasks", (_e, cwd?: unknown) => {
+    const master = zhiyaMasterDir();
+    const project = typeof cwd === "string" && cwd ? cwd : "";
+    return aggregateTasks({
+      // HANDOFF 的常见位置：母版 zhiya 目录、项目根
+      handoffDirs: [master ? join(master, "zhiya") : null, master, project || null],
+      changelogPath: project ? join(project, "changelog.md") : null,
+    });
+  });
+
+  ipcMain.handle("zhiya:readHandoff", (_e, path: unknown) => {
+    const p = String(path || "");
+    try {
+      if (!existsSync(p)) return null;
+      return readFileSync(p, "utf8").slice(0, 20000); // 面板只做预览，全文用"打开"
+    } catch {
+      return null;
+    }
+  });
 
   // ---- 记忆池面板（P4）------------------------------------------------------
   // 数据层在 memory-panel.ts（不带 electron，可单测）；这里只做转发与目录解析。
