@@ -179,8 +179,6 @@ const api = {
     /** 用 Obsidian 打开所选 KB 文档（缺省 Architecture.md）。 */
     openObsidian: (cwd: string, relPath?: string): Promise<{ ok: boolean; file?: string; error?: string }> =>
       ipcRenderer.invoke("zhiya:openObsidian", cwd, relPath),
-    /** Local mem0 server health + memory count. */
-    mem0Status: (): Promise<{ online: boolean; baseUrl: string; userId: string; count: number | null }> => ipcRenderer.invoke("zhiya:mem0Status"),
   },
   transfers: {
     /** Snapshot of in-flight transfers (late-subscriber catch-up). */

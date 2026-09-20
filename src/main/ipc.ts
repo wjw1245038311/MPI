@@ -2765,44 +2765,6 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
   });
 
-  // Short-term memory status: ping the local mem0 server + count memories.
-  ipcMain.handle("zhiya:mem0Status", async () => {
-    let baseUrl = "http://127.0.0.1:8000";
-    let userId = "";
-    try {
-      const cfgPath = join(getAgentDir(), "mem0-config.json");
-      if (existsSync(cfgPath)) {
-        const c = JSON.parse(readFileSync(cfgPath, "utf8"));
-        if (typeof c.baseUrl === "string") baseUrl = c.baseUrl;
-        if (typeof c.userId === "string") userId = c.userId;
-      }
-    } catch {
-      /* defaults */
-    }
-    let online = false;
-    try {
-      const res = await fetch(`${baseUrl.replace(/\/$/, "")}/health`, { signal: AbortSignal.timeout(3000) });
-      online = res.ok;
-    } catch {
-      online = false;
-    }
-    let count: number | null = null;
-    if (online && userId) {
-      try {
-        const res = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/memories/all?user_id=${encodeURIComponent(userId)}`, {
-          signal: AbortSignal.timeout(5000),
-        });
-        if (res.ok) {
-          const d: any = await res.json();
-          count = Array.isArray(d?.results) ? d.results.length : null;
-        }
-      } catch {
-        count = null;
-      }
-    }
-    return { online, baseUrl, userId, count };
-  });
-
   // ---- backup & restore (Settings → 数据管理) ---------------------------
   const backupStamp = () => new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
 
