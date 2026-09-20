@@ -234,11 +234,11 @@ export function looksLikeLessonDoc(body: string): boolean {
  * 为什么不做语义填充分配（把原文塞进 Fix/Guard 之类）：那是**猜测**，会把
  * "一条限制说明"写成"修复步骤"。宁可诚实分节留空 + 原文单独一节标明"待整理"。
  */
-export function wrapRawLesson(opts: { title: string; body: string; tags?: string[]; id?: string }): string {
+export function wrapRawLesson(opts: { title: string; body: string; tags?: string[]; id?: string; slug?: string }): string {
   const tags = [...new Set((opts.tags ?? []).filter(Boolean))];
   return [
     "---",
-    `lesson: ${lessonSlug(opts.title, opts.id ?? "00000000").replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase()}`,
+    `lesson: ${opts.slug ?? lessonSlug(opts.title, opts.id ?? "00000000").replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase()}`,
     "module: unknown",
     `tags: [${tags.join(", ")}]`,
     "source: zhiya",
