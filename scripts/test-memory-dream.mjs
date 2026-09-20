@@ -52,6 +52,9 @@ function seedPool(items) {
         project: it.project ?? "MPI",
         projectRoot: it.projectRoot === null ? undefined : (it.projectRoot ?? fakeRoot),
         source: "test",
+        // 标签要转发：晋升门槛（复现 ≥2 或带知识标签）依赖它
+        tags: it.tags ?? [],
+        evidence: it.evidence ?? [],
       },
       lexicalSimilarity,
     );
@@ -107,11 +110,14 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
 
 // --- 四出口路由（逐条）-----------------------------------------------------
 {
+  // 注意：这些条目必须**达到晋升门槛**（复现 ≥2 或带知识标签）才会进候选——
+  // 门槛见 triage.meetsPromotionBar（单次、无标签的普通记录不再自动出提案）。
+  // 这里给知识标签，路由仍由下面的 stub 模型决定，不受标签影响。
   const pool = seedPool([
-    { text: "pi 扩展以 ?raw 源码写进 userData，不能 import 本仓模块。" },
-    { text: "提交前必须等用户确认再 push。", type: "procedural", temporal: "prospective", project: "global", projectRoot: null },
-    { text: "这条记忆已经过期了，不再成立。", temporal: "present" },
-    { text: "这一轮任务的临时决定，任务还没做完。", temporal: "present" },
+    { text: "pi 扩展以 ?raw 源码写进 userData，不能 import 本仓模块。", tags: ["tool-quirk"] },
+    { text: "提交前必须等用户确认再 push。", type: "procedural", temporal: "prospective", project: "global", projectRoot: null, tags: ["insight"] },
+    { text: "这条记忆已经过期了，不再成立。", temporal: "present", tags: ["insight"] },
+    { text: "这一轮任务的临时决定，任务还没做完。", temporal: "present", tags: ["insight"] },
   ]);
   const byText = (t) => listEntries(pool).entries.find((e) => e.text.startsWith(t)).id;
 
@@ -154,7 +160,7 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
 
 // --- 漏答兜底 / 幻觉 id -----------------------------------------------------
 {
-  const pool = seedPool([{ text: "条目甲：这条要用来验证模型漏答时的兜底行为。" }, { text: "条目乙：长度也要够，否则会被内容过滤器拦下。" }]);
+  const pool = seedPool([{ text: "条目甲：这条要用来验证模型漏答时的兜底行为。", tags: ["insight"] }, { text: "条目乙：长度也要够，否则会被内容过滤器拦下。", tags: ["insight"] }]);
   const ids = listEntries(pool).entries.map((e) => e.id);
   const stub = async (sys) => {
     if (sys.includes("记忆分诊器")) return line(ids[1], [true, false, true, false, false, true]); // 漏了 ids[0]
@@ -173,10 +179,10 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
 // --- 默认路径：启发式判定（不调模型，瞬时）-------------------------------------
 {
   const pool = seedPool([
-    { text: "提交前必须等用户确认再 push。", type: "procedural", temporal: "prospective", project: "global", projectRoot: null },
-    { text: "zvec 的 ZVecOpen 要 208ms，必须复用句柄。" },
-    { text: "这条做法已经废弃，不再适用。", temporal: "present" },
-    { text: "本轮临时记一下：先跑测试再打包。", temporal: "present" },
+    { text: "提交前必须等用户确认再 push。", type: "procedural", temporal: "prospective", project: "global", projectRoot: null, tags: ["insight"] },
+    { text: "zvec 的 ZVecOpen 要 208ms，必须复用句柄。", tags: ["insight"] },
+    { text: "这条做法已经废弃，不再适用。", temporal: "present", tags: ["insight"] },
+    { text: "本轮临时记一下：先跑测试再打包。", temporal: "present", tags: ["insight"] },
   ]);
   const calls = [];
   const stub = async (sys) => {
@@ -196,7 +202,7 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
 
 // --- 已有提案去重（防止每次 dream 都刷重复提案）-----------------------------
 {
-  const pool = seedPool([{ text: "会被处理两次的条目，内容长度要够才不会先被过滤。" }]);
+  const pool = seedPool([{ text: "会被处理两次的条目，内容长度要够才不会先被过滤。", tags: ["insight"] }]);
   const id = listEntries(pool).entries[0].id;
   const stub = async (sys) => (sys.includes("记忆分诊器") ? line(id, [true, false, true, false, false, true]) : "正文");
 
@@ -213,7 +219,7 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
 
 // --- 模型失败 / 垃圾输出 / 空池（fail-soft：退回启发式，但仍要说清楚）----------
 {
-  const pool = seedPool([{ text: "任何一条长度足够的内容，用于验证模型失败时的退化行为。" }]);
+  const pool = seedPool([{ text: "任何一条长度足够的内容，用于验证模型失败时的退化行为。", tags: ["insight"] }]);
   const r1 = await runDream({ poolDir: pool, chat: async () => { throw new Error("模型挂了"); }, llmClassify: true });
   assert.equal(r1.ok, true, "模型失败不该让整个分诊失败（退回启发式）");
   assert.ok(r1.errors.some((e) => e.includes("模型挂了")), `必须报出模型失败：${r1.errors.join("；")}`);
@@ -240,7 +246,7 @@ const line = (id, [a, b, c, d, e, f]) => `${id}|${a}|${b}|${c}|${d}|${e}|${f}`;
 
 // --- dry-run 与正文预算 ------------------------------------------------------
 {
-  const pool = seedPool([{ text: "预览用的条目，长度要足以通过内容过滤。" }, { text: "第二个条目，用来验证正文预算是否按顺序消耗。" }]);
+  const pool = seedPool([{ text: "预览用的条目，长度要足以通过内容过滤。", tags: ["insight"] }, { text: "第二个条目，用来验证正文预算是否按顺序消耗。", tags: ["insight"] }]);
   const ids = listEntries(pool).entries.map((e) => e.id);
   const stub = async (sys) => (sys.includes("记忆分诊器") ? ids.map((id) => line(id, [true, false, true, false, false, true])).join("\n") : "正文");
 

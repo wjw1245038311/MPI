@@ -373,19 +373,27 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
       defaultChat(llmUrl, llmModel, s, u, m, false, llmKey));
 
   const { entries } = listEntries(deps.poolDir);
-  const { promotable, rest } = dreamInput(entries, maxEntries);
+  const { promotable, rest, belowBar } = dreamInput(entries, maxEntries);
   let pool = [...promotable, ...rest];
 
-  // 去重：已经有待审批/已批准提案覆盖的条目，这轮不再重复出提案
+  // 去重/尊重人的决定：
+  //   ① 已有待审批/已批准提案覆盖的条目 → 这轮不再重复出提案；
+  //   ② **被人拒绝过的条目 → 不再自动重提**（真机抓到：拒绝后下一轮又原样冒出来，
+  //      因为拒绝只改提案状态、条目仍是 inbox）。想重提用 --force。
   if (!deps.force) {
+    const all = listProposals(deps.poolDir).proposals;
     const covered = new Set(
-      listProposals(deps.poolDir)
-        .proposals.filter((p) => p.status === "pending" || p.status === "approved")
-        .flatMap((p) => p.entries),
+      all.filter((p) => p.status === "pending" || p.status === "approved").flatMap((p) => p.entries),
     );
+    const rejected = new Set(all.filter((p) => p.status === "rejected").flatMap((p) => p.entries));
     const before = pool.length;
     pool = pool.filter((e) => !covered.has(e.id));
-    if (before !== pool.length) log(`[memory] dream：跳过 ${before - pool.length} 条已有提案的条目`);
+    const covSkipped = before - pool.length;
+    const before2 = pool.length;
+    pool = pool.filter((e) => !rejected.has(e.id));
+    const rejSkipped = before2 - pool.length;
+    if (covSkipped) log(`[memory] dream：跳过 ${covSkipped} 条已有提案的条目`);
+    if (rejSkipped) log(`[memory] dream：跳过 ${rejSkipped} 条已被你拒绝过的条目（想重提加 --force）`);
   }
   // 内容层过滤：个人事务 / 任务推进记录不进 KB 候选（见 notLessonMaterial 注释里的真机背景）
   {
@@ -398,6 +406,7 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
     });
     if (skipped.length) log(`[memory] dream：跳过 ${before - pool.length} 条不适合当 lesson 的条目（${skipped.slice(0, 3).join("；")}${skipped.length > 3 ? " …" : ""}）`);
   }
+  if (belowBar) log(`[memory] dream：${belowBar} 条单次记录未达晋升门槛（复现 ≥2 或带知识标签），留在池里不出提案`);
   pool = pool.slice(0, maxEntries);
 
   if (!pool.length) {

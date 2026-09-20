@@ -89,6 +89,8 @@ export function isPromotable(e: PoolEntry): boolean {
 }
 
 export interface DreamInput {
+  /** 未达晋升门槛、留在池里的单次记录数（报告用） */
+  belowBar?: number;
   /** 够格晋升的（复现 ≥3）—— 提案的第一优先级 */
   promotable: PoolEntry[];
   /** 其余待分诊的（高重要性但复现不足、或单纯积压的） */
@@ -173,6 +175,11 @@ export function notLessonMaterial(e: PoolEntry): string | null {
   }
 
   if (/^(用户)?(决定|计划|希望|要求|打算|准备)/.test(text)) return "是决策/需求记录（任务态），不是可复用经验";
+  // 祈使/请求式：是"让人做件事"，不是"学到了什么"。
+  // 真机抓到：「帮我归档最近30分钟的记录」这种指令被当成了项目 lesson 候选。
+  if (/^(帮我|请|麻烦|给我|替我|把[^，。]{0,20}(改成|改一下|删掉|归档|整理))/.test(text)) {
+    return "是用户指令/请求，不是可复用经验";
+  }
   // 推进词只看**短文本**：长文里提一句"下一步"往往是正常的技术叙述
   if (norm.length < 80 && /(待办|待处理|先审查|暂缓|先放着|尚未执行|未完成)/.test(norm)) {
     return "是任务推进记录，不是可复用经验";
@@ -188,12 +195,33 @@ export function notLessonMaterial(e: PoolEntry): string | null {
 export function dreamInput(entries: PoolEntry[], maxRest = 40): DreamInput {
   const live = entries.filter((e) => e.status === "inbox");
   const promotable = live.filter(isPromotable).sort((a, b) => b.recurrence - a.recurrence || b.importance - a.importance);
-  const rest = live
-    .filter((e) => !isPromotable(e))
+  const qualified = live.filter((e) => !isPromotable(e) && meetsPromotionBar(e));
+  const rest = qualified
     .sort((a, b) => b.importance - a.importance || (a.createdAt < b.createdAt ? 1 : -1))
     .slice(0, maxRest);
-  return { promotable, rest };
+  return { promotable, rest, belowBar: live.length - promotable.length - qualified.length };
 }
+
+/**
+ * 晋升门槛：**复现 ≥2 次，或带显式知识标签**。
+ *
+ * 为什么要这道门槛（真机数据，2026-09-21）：把候选上限放大到 200 跑一次，100 条里出了
+ * **99 份提案**——因为启发式判定对"看起来长期有效"的单次记录一律路由到"本项目知识"。
+ * 池内实际情况：复现 ≥2 只有 **6** 条、复现 ≥3 是 **0** 条、带知识标签 **22** 条。
+ * 也就是说"单次、无标签的普通叙述"占绝大多数，把它们都写成 lesson 只是把 KB 灌成池子副本
+ * （而且未设模型时正文就是原文）。所以定这道客观门槛：
+ *   - 复现 ≥2：同一件事被记了不止一次，值得沉淀（认知科学里"重复=重要"的最硬依据）；
+ *   - 带 [insight]/[tool-quirk]/[correction] 标签：采集端/人明确认定这是知识；
+ *   - 其余留在池里：随着时间衰减，或人工用 `/memory-forget` 归档。
+ * 门槛只影响"自动出提案"，不拦人工：面板/命令都能手动批准任何条目。
+ */
+export function meetsPromotionBar(e: PoolEntry): boolean {
+  if (e.recurrence >= 2) return true;
+  return (e.tags ?? []).some((t) => KNOWLEDGE_TAGS.includes(t));
+}
+
+/** 显式知识标签（采集端约定，见 mpi-memory-ext 的 [insight]/[tool-quirk]/[correction] 前缀）。 */
+export const KNOWLEDGE_TAGS = ["insight", "tool-quirk", "correction"];
 
 // ---------------------------------------------------------------------------
 // 三、巩固累加器（dream 何时跑）

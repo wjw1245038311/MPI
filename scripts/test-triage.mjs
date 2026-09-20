@@ -21,6 +21,8 @@ const {
   dueForConsolidation,
   CONSOLIDATION_THRESHOLD,
   notLessonMaterial,
+  meetsPromotionBar,
+  KNOWLEDGE_TAGS,
   OUTLET_TO_KIND,
   serializeProposal,
   parseProposal,
@@ -91,8 +93,10 @@ ok("N=3：复现 ≥3 且在池内才够格晋升");
 const mixed = [
   entry({ recurrence: 3, importance: 5, text: "够格但重要性一般" }),
   entry({ recurrence: 7, importance: 9, text: "够格且重要" }),
-  entry({ recurrence: 1, importance: 10, text: "重要但只出现一次" }),
-  entry({ recurrence: 1, importance: 2, text: "琐事" }),
+  // 「复现 1 次」的条目现在要**达晋升门槛**（复现 ≥2 或带知识标签）才进 rest，
+  // 所以这里给它们带上知识标签——否则会被 belowBar 拦下（见晋升门槛测试）
+  entry({ recurrence: 1, importance: 10, text: "重要但只出现一次", tags: ["insight"] }),
+  entry({ recurrence: 1, importance: 2, text: "琐事", tags: ["tool-quirk"] }),
   entry({ recurrence: 4, status: "promoted", text: "已晋升" }),
 ];
 const di = dreamInput(mixed, 10);
@@ -104,7 +108,7 @@ assert.deepEqual(
 assert.deepEqual(
   di.rest.map((e) => e.text),
   ["重要但只出现一次", "琐事"],
-  "不够格的按重要性排序，且排除已晋升的",
+  "达门槛的单次记录按重要性排序，且排除已晋升的",
 );
 ok("dreamInput：够格的排前面，其余按重要性，已晋升的不再进上下文");
 
@@ -231,6 +235,9 @@ ok("提案解析：坏输入判坏而不是猜（缺 frontmatter/非法 id/未�
   assert.match(notLessonMaterial(mk("用户决定下一步先审查记忆提案，并真机测试 /memory-proposals")) ?? "", /决策|任务/, "决策记录应被拦下");
   assert.match(notLessonMaterial(mk("用户希望记忆系统提供类似 mem0 的一操作一命令低层命令族")) ?? "", /决策/, "需求记录应被拦下");
   assert.match(notLessonMaterial(mk("待处理事项：① changelog 废弃清理未做 ② README 导航表要改")) ?? "", /任务/, "任务推进记录应被拦下");
+  assert.match(notLessonMaterial(mk("帮我归档最近30分钟的记录")) ?? "", /指令|请求/, "用户指令不是教训（真机漏网过）");
+  assert.match(notLessonMaterial(mk("请把 dev 重启一下再试")) ?? "", /指令|请求/, "请求式不是教训");
+  assert.equal(notLessonMaterial(mk("把主进程改成批量 flush 之后写入快了 23 倍", ["insight"])), null, "带知识标签的叙述仍放行");
   // 真教训 → 放过
   assert.equal(
     notLessonMaterial(mk("在该项目中，涉及扩展文件或主进程改动时必须完整重启 dev（Ctrl+C），否则扩展不生效", ["insight"])),
@@ -244,6 +251,32 @@ ok("提案解析：坏输入判坏而不是猜（缺 frontmatter/非法 id/未�
   );
   assert.match(notLessonMaterial(mk("太短")) ?? "", /过短/, "过短内容拦下");
   ok("不适合当 lesson：个人事务/决策需求/任务推进被拦；带技术信号的生活内容与真教训放过");
+}
+
+
+// --- 晋升门槛（真机：放大候选上限后 100 条出了 99 份提案）--------------------
+{
+  const mk = (over = {}) => ({ id: newId(), text: "内容", status: "inbox", project: "MPI", tags: [], recurrence: 1, importance: 6, createdAt: new Date().toISOString(), ...over });
+  assert.equal(meetsPromotionBar(mk()), false, "单次、无标签 → 不达门槛");
+  assert.equal(meetsPromotionBar(mk({ recurrence: 2 })), true, "复现 ≥2 → 达门槛");
+  assert.equal(meetsPromotionBar(mk({ tags: ["tool-quirk"] })), true, "带知识标签 → 达门槛");
+  assert.equal(meetsPromotionBar(mk({ tags: ["from-mem0"] })), false, "普通标签不算（只有 insight/tool-quirk/correction）");
+  assert.deepEqual(KNOWLEDGE_TAGS, ["insight", "tool-quirk", "correction"]);
+  ok("晋升门槛：复现 ≥2 或带知识标签才够格；普通标签不算");
+
+  const entries = [
+    mk({ text: "复现三次的", recurrence: 3 }),          // promotable
+    mk({ text: "复现两次的", recurrence: 2 }),          // 达门槛 → rest
+    mk({ text: "带标签的单次", tags: ["insight"] }),     // 达门槛 → rest
+    mk({ text: "单次无标签的普通叙述 A" }),               // 未达门槛
+    mk({ text: "单次无标签的普通叙述 B" }),               // 未达门槛
+    mk({ text: "已晋升过的", status: "promoted" }),       // 不算 live
+  ];
+  const { promotable, rest, belowBar } = dreamInput(entries, 40);
+  assert.deepEqual(promotable.map((e) => e.text), ["复现三次的"], "promotable 仍是复现 ≥3");
+  assert.deepEqual(rest.map((e) => e.text).sort(), ["复现两次的", "带标签的单次"], "rest 只收达门槛的（按 UTF-16 排序）");
+  assert.equal(belowBar, 2, `未达门槛数应报出来（实际 ${belowBar}）`);
+  ok("dreamInput：promotable / 达门槛的 rest / belowBar 计数三者正确（单次记录不再自动进 KB）");
 }
 
 
