@@ -13,7 +13,7 @@
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { decideIngest, lexicalSimilarity, listEntries, THRESHOLD, type Candidate, type PoolEntry, type PoolTemporal, type PoolType } from "./zhiya/pool";
+import { decideIngestIn, lexicalSimilarity, listEntries, openIngestCtx, THRESHOLD, type Candidate, type IngestCtx, type PoolEntry, type PoolTemporal, type PoolType } from "./zhiya/pool";
 import { defaultPoolDir, JsonIndex, type MemoryIndex } from "./zhiya/memory-index";
 import { zhiyaMasterDir } from "./zhiya";
 
@@ -169,6 +169,12 @@ export interface IngestDeps {
   ops?: OpHandlers;
   /** 每写入/累加一条后的回调（巩固累加器记账用） */
   onIngested?: (e: PoolEntry) => void;
+  /**
+   * 批量摄入上下文（一次读池）。
+   * 批处理时**必须**传：否则每条都重读全池 → O(n²)。
+   * 实测：池内 300→600 条时单次写入 153.5ms；用上下文后读盘只发生一次。
+   */
+  ctx?: IngestCtx;
 }
 
 /**
@@ -277,7 +283,9 @@ export async function ingestOne(file: string, deps: IngestDeps = {}): Promise<In
     return { file, action: "invalid", detail: v.reason };
   }
 
-  const decision = decideIngest(poolDir, v.cand, similarity);
+  // 用上下文判定（一次读池）；单条调用时现开一个（等价于原行为）
+  const ctx = deps.ctx ?? openIngestCtx(poolDir);
+  const decision = decideIngestIn(ctx, v.cand, similarity);
   if (decision.action === "drop") {
     log(`[memory] 丢弃（${decision.reason}）：${v.cand.text.slice(0, 40)}`);
     rmSync(file, { force: true });
@@ -409,8 +417,11 @@ export async function ingestMemoryInbox(inboxDir: string, deps: IngestDeps = {})
   // 为什么必须这样：zvec 每次 upsert 的开销是**按调用**计的（实测 20 条：
   // 逐条 250ms/条 = 5.0s，一次批量 11ms/条 = 0.22s，23× 差距）。
   const pending: PoolEntry[] = [];
+  // 一次读池：整批共用上下文，避免逐条 listEntries（O(n²)，见 pool.ts 的 IngestCtx 注释）
+  const ctx = deps.ctx ?? openIngestCtx(deps.poolDir ?? defaultPoolDir());
   const batchDeps: IngestDeps = {
     ...deps,
+    ctx,
     index:
       deps.index && typeof deps.index.upsert === "function"
         ? {
@@ -427,7 +438,12 @@ export async function ingestMemoryInbox(inboxDir: string, deps: IngestDeps = {})
       // 不认领会导致同一份请求被执行两次（真事故，见 claimFile 注释）
       const claimed = claimFile(f);
       if (!claimed) continue;
-      out.push(await ingestOne(claimed, batchDeps));
+      const outcome = await ingestOne(claimed, batchDeps);
+      out.push(outcome);
+      // forget 会把条目移出池子。上下文里若留着旧副本，本轮后续候选可能把它"匹配"上
+      // 并重新写回——那等于把已归档的记忆复活。罕见路径（同批 forget + 相似文本），
+      // 但代价只有一次全池重读，故直接刷新（不做增量记账，少一处出错可能）。
+      if (outcome.action === "forget") ctx.entries = listEntries(ctx.poolDir).entries;
     }
   } finally {
     if (pending.length && deps.index) {
