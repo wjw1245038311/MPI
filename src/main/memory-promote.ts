@@ -10,6 +10,10 @@
  *   ④ 归档（archive）→ 移到归档目录（归档≠删除）+ 索引移除。
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+
+/** 换行与多行正则写成常量：本仓多次被"多层转义把 \n 吃掉"坑过（见 lesson 教训） */
+const SEP_NL = String.fromCharCode(10);
+const RE_FM_LESSON = new RegExp("^---\\s*\\n[^]*?^lesson:", "m");
 import { dirname, join } from "node:path";
 import { listEntries, writeEntry, type PoolEntry } from "./zhiya/pool";
 import { moveFileSafe } from "./memory-inbox";
@@ -141,7 +145,14 @@ export async function applyProposal(p: Proposal, deps: ApplyDeps): Promise<Apply
     }
     try {
       mkdirSync(dir, { recursive: true });
-      writeFileSync(path, p.body.trimEnd() + "\n", "utf8");
+      // 裸正文（未设置记忆模型时“正文=原文”）必须套上 lesson 骨架再落盘。
+      // 真机事故（2026-09-21）：promote 一直直接写 p.body，于是没有 frontmatter、没有分节，
+      // 16 篇 lesson 里有 9 篇是“记忆原文裸文件”——既过不了质量闸门，后续 agent 也读不出结构。
+      const tagPool = entries.flatMap((e) => e.tags ?? []);
+      const text = looksLikeLessonDoc(p.body)
+        ? p.body.trimEnd() + "\n"
+        : wrapRawLesson({ title: p.title, body: p.body, tags: tagPool, id: p.id });
+      writeFileSync(path, text, "utf8");
     } catch (e) {
       setProposalStatus(poolDir, p.id, "failed", { result: `写入失败：${(e as Error).message}` });
       return { ok: false, action: "failed", detail: `写入失败：${(e as Error).message}`, files: [] };
@@ -206,6 +217,65 @@ export async function applyProposal(p: Proposal, deps: ApplyDeps): Promise<Apply
 
   setProposalStatus(poolDir, p.id, "failed", { result: `未知提案类型：${p.kind}` });
   return { ok: false, action: "failed", detail: `未知提案类型：${p.kind}`, files: [] };
+}
+
+/**
+ * 正文看起来已经是 lesson 文档了吗？
+ * 判据与 dream 的 looksLikeBody（promote-kb）一致：有 frontmatter 的 `lesson:`，或 ≥2 个 `##`。
+ */
+export function looksLikeLessonDoc(body: string): boolean {
+  const b = body || "";
+  return RE_FM_LESSON.test(b) || (b.match(/^##\s+/gm) ?? []).length >= 2;
+}
+
+/**
+ * 把"记忆原文"包成合格 lesson 骨架（保留原文，人再整理）。
+ *
+ * 为什么不做语义填充分配（把原文塞进 Fix/Guard 之类）：那是**猜测**，会把
+ * "一条限制说明"写成"修复步骤"。宁可诚实分节留空 + 原文单独一节标明"待整理"。
+ */
+export function wrapRawLesson(opts: { title: string; body: string; tags?: string[]; id?: string }): string {
+  const tags = [...new Set((opts.tags ?? []).filter(Boolean))];
+  return [
+    "---",
+    `lesson: ${lessonSlug(opts.title, opts.id ?? "00000000").replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase()}`,
+    "module: unknown",
+    `tags: [${tags.join(", ")}]`,
+    "source: zhiya",
+    "guard-strength: directive",
+    "applies-when: []",
+    "---",
+    "",
+    `# ${opts.title}`,
+    "",
+    "> ⚠️ 本节骨架由知芽自动生成：正文取自**记忆原文**（未设置记忆模型，未生成 lesson 正文）。",
+    "> `module` / `tags` / 各节内容需要人工整理；下面「原文」一节保留原始记录。",
+    "",
+    "## Symptom",
+    "",
+    "<!-- TODO：什么现象下会踩到？ -->",
+    "",
+    "## Root Cause",
+    "",
+    "<!-- TODO：为什么？ -->",
+    "",
+    "## Fix",
+    "",
+    "<!-- TODO：正确做法 -->",
+    "",
+    "## Guard",
+    "",
+    "<!-- TODO：以后怎么避免 -->",
+    "",
+    "## Evidence",
+    "",
+    "<!-- TODO：日志/命令/文件 -->",
+    "",
+    "## 原文（待整理）",
+    "",
+    opts.body.trim(),
+    "",
+  ].join(SEP_NL);
 }
 
 /** 生成 lesson 文档的骨架（供 dream 的模型填充；也给人工兜底用）。 */

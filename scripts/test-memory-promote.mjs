@@ -41,6 +41,7 @@ const ok = (msg) => {
   console.log(`  ✅ ${msg}`);
 };
 
+const NL = String.fromCharCode(10);
 const mkProposal = (over = {}) => ({
   id: newId(),
   createdAt: new Date().toISOString(),
@@ -233,6 +234,45 @@ const mkProposal = (over = {}) => ({
   assert.equal(lessonSlug("扩展自包含", "01H2ABCDEFGH"), "Lesson-ABCDEFGH", "纯中文标题退回 id 末 8 位");
   assert.equal(lessonSlug("扩展自包含", "01ABCXYZ"), "Lesson-01ABCXYZ", "id 短于 8 位就用整段");
   rmSync(pool, { recursive: true, force: true });
+}
+
+// --- 裸正文必须套骨架（真机事故：promote 直接写原文，16 篇里 9 篇没结构）----
+{
+  const pool = mkdtempSync(join(tmpdir(), "mpi-promote-raw-"));
+  const lessons = mkdtempSync(join(tmpdir(), "mpi-promote-raw-kb-"));
+  const e = decideIngest(pool, {
+    text: "扩展里的检索是字面的，因为读不到 zvec 索引。", type: "semantic", temporal: "retrospective",
+    importance: 7, relevance: 0.7, project: "MPI", source: "test", tags: ["memory", "limitation"],
+  }, lexicalSimilarity).entry;
+  // 未设置记忆模型时 dream 会给出"正文=原文"的提案
+  const p = mkProposal({ entries: [e.id], title: "Search is literal", body: "扩展里的检索是字面的，因为读不到 zvec 索引。", target: null });
+  writeProposal(pool, p);
+  setProposalStatus(pool, p.id, "approved");
+  const r = await applyProposal(readProposal(pool, p.id), { poolDir: pool, kbLessonsDir: lessons });
+  assert.equal(r.action, "applied", `应落地：${r.detail}`);
+  const file = r.files[0];
+  const text = readFileSync(file, "utf8");
+  assert.ok(text.startsWith("---") && text.includes("lesson: "), "裸正文落盘必须补 frontmatter（否则是原文裸文件）");
+  assert.ok((text.match(/^## /gm) ?? []).length >= 2, "必须有分节骨架");
+  assert.ok(text.includes("## 原文（待整理）"), "原文要单独一节标明待整理");
+  assert.ok(text.includes("扩展里的检索是字面的，因为读不到 zvec 索引。"), "原文一字不丢");
+  assert.ok(text.includes("tags: [memory, limitation]"), "标签从池内条目带过来");
+  ok("裸正文兜底：自动套 lesson 骨架（frontmatter + 分节 + 原文单独一节），原文不丢");
+
+  // 已经是合格 lesson 的正文**不得**被二次包裹
+  const p2 = mkProposal({
+    entries: [e.id],
+    title: "Already structured",
+    body: ["---","lesson: already-structured","module: x","---","","# T","","## Symptom","","A",""].join(NL),
+  });
+  writeProposal(pool, p2);
+  setProposalStatus(pool, p2.id, "approved");
+  const r2 = await applyProposal(readProposal(pool, p2.id), { poolDir: pool, kbLessonsDir: lessons });
+  assert.equal(r2.action, "applied");
+  const t2 = readFileSync(r2.files[0], "utf8");
+  assert.ok(!t2.includes("## 原文（待整理）"), "合格正文不得被包裹");
+  assert.ok(t2.startsWith("---"), "合格正文原样落盘");
+  ok("合格正文（已有 frontmatter/分节）原样落盘，不做二次包裹");
 }
 
 console.log(`\ntest:promote 全部通过（${n} 项）`);
