@@ -1400,6 +1400,12 @@ body.sidebar-resizing * {
   color: var(--text-faint);
   margin-top: -4px;
 }
+/* choices 围栏解析失败时（降级为代码块）的提示行，同 mermaid-error 风格 */
+.choice-fence-warn {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-top: -4px;
+}
 .code-block-bar {
   display: flex;
   align-items: center;

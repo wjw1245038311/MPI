@@ -48,6 +48,10 @@ assert.ok(logic.qaModeInstruction("inline", "zh").includes("skill"));
 assert.ok(logic.qaModeInstruction("inline", "en").includes("interviewing skill"));
 assert.ok(logic.qaModeInstruction("inline", "en").includes("inline quick choice"));
 assert.ok(logic.qaModeInstruction("manual", "en").includes("Do NOT emit"));
+// format hard rule: the closing fence must sit on its own line (a glued ``` silently
+// kills the panel — the renderer falls back to a plain code block)
+assert.ok(logic.qaModeInstruction("inline", "zh").includes("独占一行"));
+assert.ok(logic.qaModeInstruction("inline", "en").includes("own line"));
 
 // --- real extension source against stubs (same pattern as channel-ext) ------
 const root = mkdtempSync(join(tmpdir(), "mpi-choice-ext-"));

@@ -66,6 +66,64 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   assert.equal(segs[0].kind, "md");
 }
 
+// 粘行闭合（模型把闭合反引号贴在 JSON 同一行末尾，deepseek 系常见）——仍应识别为 choices。
+{
+  const body = JSON.stringify([{ title: "q", options: ["a", "b"] }]);
+  const text = `前言\n${FENCE_OPEN}\n${body}\`\`\` `;
+  const segs = cb.splitChoiceSegments(text);
+  assert.deepEqual(segs.map((s) => s.kind), ["md", "choice"]);
+  assert.deepEqual(segs[1].data.questions, [{ title: "q", options: [{ label: "a" }, { label: "b" }] }]);
+}
+
+// 粘行闭合 + 后续还有正文：后文保留为普通 markdown（不被吞进围栏）。
+{
+  const body = JSON.stringify([{ title: "q", options: ["a", "b"] }]);
+  const text = `${FENCE_OPEN}\n${body}\`\`\`\n补充说明`;
+  const segs = cb.splitChoiceSegments(text);
+  assert.deepEqual(segs.map((s) => s.kind), ["choice", "md"]);
+  assert.equal(segs[1].text, "补充说明");
+}
+
+// 多行 JSON + 末行粘行闭合。
+{
+  const body = `[\n  {\n    "title": "q",\n    "options": ["a", "b"]\n  }\n]`;
+  const text = `前\n${FENCE_OPEN}\n${body}\`\`\` `;
+  const segs = cb.splitChoiceSegments(text);
+  assert.deepEqual(segs.map((s) => s.kind), ["md", "choice"]);
+}
+
+// 干脆忘了闭合：围栏一直到文本末尾（JSON 合法）→ 容错成 choices。
+{
+  const body = JSON.stringify([{ title: "q", options: ["a", "b"] }]);
+  const text = `前\n${FENCE_OPEN}\n${body}`;
+  const segs = cb.splitChoiceSegments(text);
+  assert.deepEqual(segs.map((s) => s.kind), ["md", "choice"]);
+}
+
+// 忘了闭合且正文不是合法 choices JSON → 保持原样（普通文本，渲染成代码块）。
+{
+  const text = `前\n${FENCE_OPEN}\n{"title":"q","options":["只有一个"]}\n后记`;
+  const segs = cb.splitChoiceSegments(text);
+  assert.equal(segs.length, 1);
+  assert.equal(segs[0].kind, "md");
+  assert.equal(segs[0].text, text);
+}
+
+// 粘行闭合但 JSON 非法 → 降级为 code 段（容错不得误吞）。
+{
+  const text = `前\n${FENCE_OPEN}\n[{oops}]\`\`\` `;
+  const segs = cb.splitChoiceSegments(text);
+  assert.deepEqual(segs.map((s) => s.kind), ["md", "code"]);
+}
+
+// 反引号数不匹配（4 开 3 闭）→ 容错接受。
+{
+  const body = JSON.stringify([{ title: "q", options: ["a", "b"] }]);
+  const text = `前\n\`\`\`\`choices\n${body}\n\`\`\` `;
+  const segs = cb.splitChoiceSegments(text);
+  assert.deepEqual(segs.map((s) => s.kind), ["md", "choice"]);
+}
+
 // A choices example inside a LONGER (4-backtick) fence stays inert — the
 // closer must be at least as long as the opener (CommonMark).
 {

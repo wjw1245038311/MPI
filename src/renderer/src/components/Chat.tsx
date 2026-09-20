@@ -1493,6 +1493,17 @@ function BlockView({
         {segments.map((seg, index) =>
           seg.kind === "choice" ? (
             <ChoicePanel key={`c${index}`} data={seg.data} threadId={threadId} messageKey={messageKey} panelIndex={index} />
+          ) : seg.kind === "code" ? (
+            // choices 围栏解析失败（JSON 非法 / 围栏写坏）→ 按普通代码块显示，
+            // 并提示一行，便于一眼分清是模型格式问题而不是 MPI 没渲染。
+            <div key={`m${index}`}>
+              <Markdown text={seg.text} />
+              <div className="choice-fence-warn">
+                {language === "zh"
+                  ? "这个 choices 块格式不合法，已按普通代码块显示（常见原因：闭合 ``` 没有独占一行，或 JSON 有语法错误）。"
+                  : "This choices block is malformed and is shown as a plain code block (usually a closing ``` that is not on its own line, or invalid JSON)."}
+              </div>
+            </div>
           ) : (
             <Markdown key={`m${index}`} text={seg.text} />
           ),

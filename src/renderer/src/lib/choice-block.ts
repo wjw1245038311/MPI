@@ -24,6 +24,12 @@
  *
  * The fence format + reply texts below are the contract with the grilling
  * skill (and any agent instructions that emit these blocks) — keep in sync.
+ *
+ * 闭合围栏以 CommonMark 严格形态为准（独占一行、反引号数 ≥ 开围栏），但模型
+ * 常把闭合反引号粘在最后一行 JSON 末尾（deepseek 系尤甚），严格判定会判成
+ * 「围栏未闭合」而整块降级成普通代码块。因此这里对 choices 围栏额外做容错：
+ * 粘行闭合 / 反引号数不匹配 / 干脆忘了闭合 都接受，但**仅当正文能解析成合法
+ * choices JSON** 时才采纳，否则退回原行为（普通文本 / 降级代码块）。
  */
 
 import { choiceOptions, type ChoiceOptionView } from "./choice";
@@ -50,7 +56,8 @@ const TITLE_MAX = 200;
 export type ChoiceSegment =
   | { kind: "md"; text: string }
   | { kind: "choice"; data: ChoiceBlockData }
-  /** A ```choices fence whose body is not valid JSON — rendered as a plain code block. */
+  /** A ```choices fence whose body is not valid JSON — rendered as a plain code block
+   * (Chat.tsx 会在其下方给一行「未渲染成面板」提示). */
   | { kind: "code"; text: string };
 
 /** Opening backtick fence: capture the run length + info string. */
@@ -58,6 +65,8 @@ const FENCE_OPEN_RE = /^\s*(`{3,})(.*)$/;
 /** Closing fence for a fence opened with `len` backticks (CommonMark: the
  * closer must be at least as long and carry no info string). */
 const closeReFor = (len: number) => new RegExp("^\\s*`{" + len + ",}\\s*$");
+/** 行尾挂着 ≥3 个反引号的行（模型把闭合围栏粘在正文末尾时）；捕获反引号之前的正文。 */
+const GLUED_CLOSE_RE = /^(.*?)`{3,}\s*$/;
 
 /** Parse + validate the JSON body of a choices fence. Null when invalid. */
 export function parseChoiceBlockData(body: string): ChoiceBlockData | null {
@@ -88,11 +97,46 @@ export function parseChoiceBlockData(body: string): ChoiceBlockData | null {
 }
 
 /**
+ * 定位一个 choices 围栏的闭合位置并解析正文（容错版，见文件头注释）。
+ * 返回 null 表示「连容错都用不上」——调用方按未闭合围栏处理（原样文本）。
+ * `end` 是闭合行的下标；正文解析失败时 `data` 为 null（降级为代码块）。
+ */
+function readChoiceFence(
+  lines: string[],
+  openIndex: number,
+  openLen: number,
+): { data: ChoiceBlockData | null; end: number } | null {
+  // 第一遍：CommonMark 严格闭合行优先，且无论正文是否合法都以它为界。
+  let loose: { index: number; prefix: string } | null = null;
+  for (let k = openIndex + 1; k < lines.length; k++) {
+    if (closeReFor(openLen).test(lines[k])) {
+      return { data: parseChoiceBlockData(lines.slice(openIndex + 1, k).join("\n")), end: k };
+    }
+    // 顺手记下首个「行尾反引号」候选（粘行闭合 / 反引号数不足），等严格扫描落空后再验证。
+    if (!loose) {
+      const glued = GLUED_CLOSE_RE.exec(lines[k]);
+      if (glued) loose = { index: k, prefix: glued[1] };
+    }
+  }
+  // 第二遍：容错闭合——剥掉行尾反引号后正文仍能解析才采纳；解析失败但边界明确
+  // （确实是模型写坏的围栏）仍以它为界返回，让调用方降级成代码块而不是当普通文本。
+  if (loose) {
+    const body = [...lines.slice(openIndex + 1, loose.index), loose.prefix].join("\n");
+    return { data: parseChoiceBlockData(body), end: loose.index };
+  }
+  // 第三遍：一个闭合都没有（模型忘了写）——把剩余文本整体当正文，剥掉可能的行尾反引号。
+  const tail = lines.slice(openIndex + 1).join("\n").replace(/`{3,}\s*$/, "");
+  const tailData = parseChoiceBlockData(tail);
+  return tailData ? { data: tailData, end: lines.length - 1 } : null;
+}
+
+/**
  * Split an assistant text block around ```choices fences. Fast path: blocks
  * without the marker come back as a single md segment with the ORIGINAL string
  * (identity preserved for memoization). A state machine tracks generic code
  * fences so a choices example QUOTED inside another fence is never activated.
- * Unterminated fences are left as text.
+ * Sloppily closed fences are tolerated by readChoiceFence; a fence with no usable
+ * close is left as plain text unless its body parses as valid choices JSON.
  */
 export function splitChoiceSegments(text: string): ChoiceSegment[] {
   if (!/```\s*choices/i.test(text)) return [{ kind: "md", text }];
@@ -127,20 +171,18 @@ export function splitChoiceSegments(text: string): ChoiceSegment[] {
       i++;
       continue;
     }
-    const len = open[1].length;
-    let j = i + 1;
-    while (j < lines.length && !closeReFor(len).test(lines[j])) j++;
-    if (j >= lines.length) {
+    const read = readChoiceFence(lines, i, open[1].length);
+    if (!read) {
       // Unterminated fence — treat the opening line as plain text.
       buf.push(line);
       i++;
       continue;
     }
-    const body = lines.slice(i + 1, j).join("\n");
     flushMd();
-    const data = parseChoiceBlockData(body);
-    segments.push(data ? { kind: "choice", data } : { kind: "code", text: lines.slice(i, j + 1).join("\n") });
-    i = j + 1;
+    segments.push(
+      read.data ? { kind: "choice", data: read.data } : { kind: "code", text: lines.slice(i, read.end + 1).join("\n") },
+    );
+    i = read.end + 1;
   }
   flushMd();
 

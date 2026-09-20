@@ -4,6 +4,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **修复 choices 块偶发不渲染成内联面板（降级为普通代码块）**：模型（deepseek 系尤其常见）有时把闭合的 ``` 直接贴在最后一行 JSON 末尾，或反引号数与开围栏不一致（4 开 3 闭），甚至干脆忘写闭合——按 CommonMark 严格判定这都属于「围栏未闭合」，整块被当普通文本渲染成 raw 代码块，表现为「面板没弹出来」（此前调查曾误判为 MPI / pi-web 版本不支持渲染，实际 choices 面板完全由 MPI renderer 自己实现，与 pi-web 无关）。现在 choices 围栏的闭合判定加了三层容错：①严格独行闭合优先（保持原语义）；②找不到时接受「行尾 ≥3 反引号」的粘行闭合、以及反引号数不匹配的独行闭合；③压根没有闭合时把围栏之后剩余文本整体当正文——后两层**仅在正文能解析成合法 choices JSON 时**才采纳，否则维持原行为，不会误吞普通文本。另外新增降级提示：正文真解析不了时，在代码块下方显示一行灰色「此 choices 块格式不合法」提示，一眼分清是模型格式问题而非 MPI 没渲染。系统提示词（问答方式：内联快速选择）同步加硬要求：围栏里除 JSON 无它物，闭合 ``` 必须另起一行独占一行。
+
+   验证方式：`npm run test:choice-block`（新增 7 例：粘行闭合 / 多行 JSON 粘行闭合 / 粘行闭合且后续有正文 / 缺闭合 / 缺闭合且 JSON 非法 / 粘行闭合但 JSON 非法 / 4 开 3 闭）与 `npm run test:choice`。应用内：Ctrl+R（纯 renderer 改动）→ 让 agent 输出多题 choices 面板（如 grill me 一轮多问）→ 面板正常出现；把某条历史消息里的 choices 闭合 ``` 手动挪到 JSON 同行后重新打开该会话 → 仍渲染成面板而不再是代码块；JSON 真写错时 → 代码块下方出现灰色提示行。提示词改动需新会话或重连后生效。
+
 ## v0.6.25（2026-09-20）
 
 1. **修复 smart-compact 压缩后上下文弹窗显示「暂无上下文数据」**：smart-compact 扩展产出的压缩 entry 的 usage 缺 `cost` 字段，而 pi 的 get_session_stats 统计时无条件读 `usage.cost.total` → 整个 RPC 抛错（Cannot read properties of undefined (reading 'total')）→ 桌面端上下文弹窗整体显示「暂无上下文数据」（手机端已有容错、只显示「—」）。两处修复：①扩展的 zeroUsage/addUsage 始终携带并累加完整 cost 对象（本地模型为 0，API 模型累加实际费用），新压缩不再产生坏 entry；②main 侧 thread:getStats 捕获 pi 抛错后回退最小 stats（contextUsage={tokens:null} + 当前模型 contextWindow），renderer 走 ~估算值路径而不是空白。
