@@ -14,6 +14,7 @@
  *   MPI_MEMORY_SESSION_FILE 本会话 JSONL 绝对路径（可选，拿不到时用 ctx.sessionManager）
  *   MPI_MEMORY_LLM_URL     抽取模型端点（默认 LM Studio :1234）
  *   MPI_MEMORY_LLM_MODEL   模型 id
+ *   MPI_MEMORY_LLM_KEY     记忆模型密钥（云端供应商才需要；本机 LM Studio 无需）
  *   MPI_MEMORY_EMBED_URL   embedding 端点（默认 llama-server :1235）
  *   MPI_MEMORY_PROJECT     当前项目名（默认取 cwd 末段）
  *
@@ -25,10 +26,22 @@ import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { contentText } from "@earendil-works/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 
 const INBOX = process.env.MPI_MEMORY_INBOX_DIR || "";
-const LLM_URL = process.env.MPI_MEMORY_LLM_URL || "http://127.0.0.1:1234/v1/chat/completions";
-const LLM_MODEL = process.env.MPI_MEMORY_LLM_MODEL || "qwen3.8-27b@q5_k_m";
+/**
+ * 记忆模型（设置 → 模型与提供商 → 记忆模型），由主进程按配置注入：
+ *   ""                 —— 未设置：**完全不调模型**（基础记忆读写改照常，等价 mem0 的 infer:false）
+ *   "__session__"      —— 跟随主模型（本会话的主模型）
+ *   "provider/modelId" —— 指定模型（从 pi 的 models.json 解析，鉴权交给运行时）
+ * 为什么不再自己拼 HTTP：pi 运行时的 completeSimple 会把协议/鉴权/思考开关都处理好
+ * （手写 fetch 只能覆盖 OpenAI 兼容协议，而且本机推理模型会把 token 烧在思考上）。
+ */
+const MM_SPEC = (process.env.MPI_MEMORY_MODEL || "").trim();
+const MM_DESC = (process.env.MPI_MEMORY_MODEL_DESC || "").trim();
+const SESSION_SPEC = "__session__";
+const modelEnabled = MM_SPEC !== "";
 const EMBED_URL = process.env.MPI_MEMORY_EMBED_URL || "http://127.0.0.1:1235/v1/embeddings";
 const SESSION_FILE = process.env.MPI_MEMORY_SESSION_FILE || "";
 
@@ -196,41 +209,80 @@ function parseJsonLoose(raw: string): any | null {
  *    打分只给 16 token 必然失败）。所以：①预算给足 ②拿不到 content 时从 reasoning 里兜
  * ③记 finish_reason 便于排障。
  */
-async function chat(system: string, user: string, maxTokens = 3000): Promise<string> {
-  const res = await fetch(LLM_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: LLM_MODEL,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      temperature: 0,
-      max_tokens: maxTokens,
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(180_000),
-  });
-  if (!res.ok) throw new Error(`LLM HTTP ${res.status}`);
-  const j = (await res.json()) as {
-    choices?: { message?: { content?: string; reasoning_content?: string }; finish_reason?: string }[];
-  };
-  const choice = j.choices?.[0];
-  const content = (choice?.message?.content ?? "").trim();
-  if (content) return content;
-  const reasoning = (choice?.message?.reasoning_content ?? "").trim();
-  if (choice?.finish_reason === "length") {
-    log(`模型输出被 max_tokens(${maxTokens}) 截断（reasoning 占满），已尝试从思考内容里兜答案`);
+/** 最近一次拿到的 ctx（跟随主模型需要它）——钩子/命令/Tool 进入时刷新。 */
+let activeCtx: any = null;
+const rememberCtx = (ctx: any) => {
+  if (ctx) activeCtx = ctx;
+};
+
+/** 解析本次要用的模型：null = 未设置记忆模型（不调模型）。 */
+async function resolveChatModel(): Promise<{ model: any; auth: any } | null> {
+  if (!modelEnabled) return null;
+  const ctx = activeCtx;
+  if (!ctx) return null;
+  const reg = ctx.modelRegistry;
+  try {
+    let model: any = null;
+    if (MM_SPEC === SESSION_SPEC) {
+      model = ctx.model ?? null;
+    } else {
+      const [provider, ...rest] = MM_SPEC.split("/");
+      const id = rest.join("/");
+      if (provider && id) model = reg?.find?.(provider, id) ?? null;
+      if (!model) {
+        log(`记忆模型 ${MM_SPEC} 不在 models.json 里或未配置鉴权——本次不调模型`);
+        return null;
+      }
+    }
+    if (!model) return null;
+    if (reg?.hasConfiguredAuth && !reg.hasConfiguredAuth(model)) {
+      log(`记忆模型 ${model.provider}/${model.id} 没有配置鉴权——本次不调模型`);
+      return null;
+    }
+    const auth = (await reg?.getApiKeyAndHeaders?.(model)) || {};
+    return { model, auth };
+  } catch (e) {
+    log(`记忆模型解析失败（本次不调模型）：${e instanceof Error ? e.message : String(e)}`);
+    return null;
   }
-  return reasoning;
+}
+
+/**
+ * 调记忆模型（未设置时**直接失败**，调用方一律 fail-open）。
+ *
+ * 为什么用运行时的 completeSimple 而不是手写 fetch：
+ *   ① 协议/鉴权交给运行时（云端供应商的 baseUrl、header、$ENV 都由它处理）
+ *   ② `reasoning: "off"` 能关掉思考——本机推理模型手写调用时会把 token 全烧在思考上
+ *      （实测：抽取返回空、打分必然失败），这是之前踩过的坑。
+ */
+async function chat(system: string, user: string, maxTokens = 3000): Promise<string> {
+  const picked = await resolveChatModel();
+  if (!picked) throw new Error("未启用记忆模型（设置 → 模型与提供商 → 记忆模型）");
+  const context = {
+    systemPrompt: system,
+    messages: [{ role: "user", content: [{ type: "text", text: user }], timestamp: Date.now() }],
+  };
+  const response = await completeSimple(picked.model, context as never, {
+    maxTokens,
+    reasoning: "off", // 抽取/打分不需要思考；开着会把输出预算吃光
+    apiKey: picked.auth?.apiKey,
+    headers: picked.auth?.headers,
+    env: picked.auth?.env,
+    cacheRetention: "none",
+  });
+  const text = contentText(response.content as never, "").trim();
+  if (text) return text;
+  if (response.stopReason === "length") {
+    log(`记忆模型输出被 max_tokens(${maxTokens}) 截断`);
+  }
+  throw new Error(`记忆模型返回空内容（stopReason=${response.stopReason}）`);
 }
 
 async function embed(text: string): Promise<number[] | null> {
   try {
     const res = await fetch(EMBED_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(LLM_KEY ? { Authorization: `Bearer ${LLM_KEY}` } : {}) },
       body: JSON.stringify({ input: text.slice(0, 2000) }),
       signal: AbortSignal.timeout(20_000),
     });
@@ -546,6 +598,9 @@ let sweeping = false;
 
 /** 处理一段窗口：抽取 → 打分 → 入队。长窗口自动分段（每段一次调用）。 */
 async function processWindow(window: string, reason: string): Promise<number> {
+  // 未设置记忆模型 → 不做自动抽取（等价 mem0 没配 LLM 时的形态）：
+  // 记忆仍然可用，但只走显式路径（/memory-remember、memory_note）。
+  if (!modelEnabled) return 0;
   const found: Extracted[] = [];
   for (const [i, chunk] of chunkWindow(window).entries()) {
     try {
@@ -660,12 +715,14 @@ export default function (pi: ExtensionAPI) {
 
   // 主通道：一轮彻底结束（pi 不会再自动继续）。只快照，抽取留给后台。
   pi.on("agent_settled", (_event, ctx) => {
+    rememberCtx(ctx);
     snapshot(ctx, "settled");
     scheduleSweep();
   });
 
   // 防丢失：压缩前先落快照（压缩会改变模型可见上下文）
   pi.on("session_before_compact", (_event, ctx) => {
+    rememberCtx(ctx);
     snapshot(ctx, "pre-compact");
     scheduleSweep(800);
   });
@@ -676,7 +733,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   // 会话开始：回收上次遗留的快照（进程退出时没来得及抽取的那些）
-  pi.on("session_start", () => {
+  pi.on("session_start", (_event, ctx) => {
+    rememberCtx(ctx);
     scheduleSweep(1500);
   });
 
@@ -749,7 +807,7 @@ ${h.id}`,
   async function doRemember(ctx: any, text: string, opts: { verbatim?: boolean; from?: string } = {}): Promise<void> {
     let importance = 6;
     let scoringFailed = false;
-    try {
+    if (modelEnabled) try {
       const scored = await chat(
         `给这条要记住的信息打 1-10 分的重要性（1=琐事，10=极重）。最后一行只输出一个数字。`,
         text,
@@ -1303,11 +1361,12 @@ ${STATUS_TAG[p.status] ?? p.status} · ${KIND_TAG[p.kind] ?? p.kind}`,
       "Save one durable memory to the user's memory pool (知芽记忆池) immediately. Use it when the user explicitly asks to remember something, or when a decision/preference/lesson is clearly worth keeping. For automatic capture you do NOT need to call it — the pool captures on its own.",
     parameters: NoteParams,
     execute: async (args: any, ctx: any) => {
+      rememberCtx(ctx);
       const text = String(args?.text || "").trim();
       if (!text) return { content: [{ type: "text", text: "memory_note: text 为空，未记录。" }] };
       let importance = Number(args?.importance);
       let scoringFailed = false;
-      if (!Number.isFinite(importance)) {
+      if (!Number.isFinite(importance) && modelEnabled) {
         try {
           const raw = await chat(
             `给这条要记住的信息打 1-10 分的重要性（1=琐事，10=极重）。最后一行只输出一个数字。`,

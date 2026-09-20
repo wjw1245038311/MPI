@@ -16,6 +16,7 @@
  * 环境变量：MPI_ZHIYA_POOL_DIR 覆盖池目录（测试/多实例用）。
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { register } from "node:module";
 
@@ -25,6 +26,7 @@ register(new URL("./ts-ext-loader.mjs", import.meta.url));
 const { defaultPoolDir, JsonIndex } = await import("../src/main/zhiya/memory-index.ts");
 const { listProposals, setProposalStatus } = await import("../src/main/zhiya/proposals.ts");
 const { applyProposal } = await import("../src/main/memory-promote.ts");
+const { defaultMemoryModel, resolveMemoryModelFrom } = await import("../src/main/memory-model.ts");
 const { runDream } = await import("../src/main/memory-dream.ts");
 const { markConsolidated } = await import("../src/main/zhiya/consolidation.ts");
 const { archiveDirFor } = await import("../src/main/memory-inbox.ts");
@@ -286,13 +288,57 @@ async function cmdReject() {
   if (!done) process.exit(1);
 }
 
+/**
+ * 从磁盘读「记忆模型」设置（CLI 没有 electron，不能走主进程那套 getConfig）。
+ * 配置文件路径可用 MPI_CONFIG_FILE 覆盖；models.json 取 pi 的默认位置。
+ */
+function readMemoryModelSetting() {
+  const cfgFile =
+    process.env.MPI_CONFIG_FILE || join(process.env.APPDATA || "", "MPI Dev", "config.json");
+  let mm;
+  try {
+    mm = JSON.parse(readFileSync(cfgFile, "utf8")).memoryModel;
+  } catch {
+    return defaultMemoryModel(); // 读不到就按"未设置"
+  }
+  const mode = mm?.mode ?? (mm?.provider && mm?.model ? "model" : "none");
+  if (mode === "none") return defaultMemoryModel();
+  if (mode === "session") {
+    // CLI 里没有"会话"，用 settings.json 的默认模型代表主模型
+    try {
+      const settings = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "settings.json"), "utf8"));
+      const provider = settings.defaultProvider;
+      const modelId = settings.defaultModel;
+      if (!provider || !modelId) return { ...defaultMemoryModel(), describe: "跟随主模型：settings.json 没写默认模型 → 不调模型" };
+      const providers = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "models.json"), "utf8")).providers || {};
+      const r = resolveMemoryModelFrom(provider, modelId, providers, "model");
+      return { ...r, mode: "session", source: "session", describe: `跟随主模型（默认模型 ${provider}/${modelId}）` };
+    } catch (e) {
+      return { ...defaultMemoryModel(), describe: `跟随主模型：读取失败（${e.message}）→ 不调模型` };
+    }
+  }
+  try {
+    const providers = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "models.json"), "utf8")).providers || {};
+    return resolveMemoryModelFrom(mm.provider, mm.model, providers, "model");
+  } catch (e) {
+    return { ...defaultMemoryModel(), describe: `读 models.json 失败（${e.message}）→ 不调模型` };
+  }
+}
+
 /** 跑一次分诊（本地模型 1-2 分钟）。 */
 async function cmdDream() {
   const dry = f.dry === true || f.preview === true;
+  const mm = readMemoryModelSetting();
+  console.log(`记忆模型：${mm.describe}`);
   console.log(`开始周期分诊${dry ? "（预览，不落盘）" : ""}…`);
   const report = await runDream({
     poolDir,
     dryRun: dry,
+    mode: mm.mode,
+    modelDesc: mm.describe,
+    llmUrl: mm.url || undefined,
+    llmModel: mm.model || undefined,
+    llmKey: mm.key,
     log: (m) => console.log(m),
     maxEntries: Number(f.entries) || undefined,
     maxBodies: Number(f.bodies) || undefined,

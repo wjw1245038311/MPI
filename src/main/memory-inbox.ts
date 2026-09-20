@@ -403,12 +403,38 @@ export async function ingestMemoryInbox(inboxDir: string, deps: IngestDeps = {})
     .map((f) => join(inboxDir, f));
   if (!files.length) return [];
   const out: IngestOutcome[] = [];
-  for (const f of files) {
-    // ⚠️ 先认领再处理：批处理每 2 秒一轮，上一轮没结束时下一轮会重叠，
-    // 不认领会导致同一份请求被执行两次（真事故，见 claimFile 注释）
-    const claimed = claimFile(f);
-    if (!claimed) continue;
-    out.push(await ingestOne(claimed, deps));
+  // 同一批的索引写入攒起来一次 flush。
+  // 为什么必须这样：zvec 每次 upsert 的开销是**按调用**计的（实测 20 条：
+  // 逐条 250ms/条 = 5.0s，一次批量 11ms/条 = 0.22s，23× 差距）。
+  const pending: PoolEntry[] = [];
+  const batchDeps: IngestDeps = {
+    ...deps,
+    index:
+      deps.index && typeof deps.index.upsert === "function"
+        ? {
+            ...deps.index,
+            upsert: async (entries: PoolEntry[]) => {
+              pending.push(...entries);
+            },
+          }
+        : deps.index,
+  };
+  try {
+    for (const f of files) {
+      // ⚠️ 先认领再处理：批处理每 2 秒一轮，上一轮没结束时下一轮会重叠，
+      // 不认领会导致同一份请求被执行两次（真事故，见 claimFile 注释）
+      const claimed = claimFile(f);
+      if (!claimed) continue;
+      out.push(await ingestOne(claimed, batchDeps));
+    }
+  } finally {
+    if (pending.length && deps.index) {
+      try {
+        await deps.index.upsert(pending);
+      } catch (e) {
+        deps.log?.(`[memory] 批量索引写入失败（池文件已是真相源，下次 rebuild 会补）：${(e as Error).message}`);
+      }
+    }
   }
   return out;
 }

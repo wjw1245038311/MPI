@@ -614,6 +614,8 @@ export interface AppConfig {
   /** Smart compaction (mpi-smart-compact extension; Settings → Models & Providers).
    * `model` = "provider/modelId" preferred for summarization; absent = main model. */
   smartCompact?: { enabled?: boolean; model?: string };
+  /** 记忆模型（知芽）：未设置 = 本机 LM Studio（与 mem0 相同）。 */
+  memoryModel?: { mode?: "none" | "session" | "model"; provider?: string; model?: string };
   /** Voice system (语音系统): STT for the composer mic button + TTS for reading
    * replies aloud. Absent = unconfigured; see main/config.ts for semantics. */
   voice?: {

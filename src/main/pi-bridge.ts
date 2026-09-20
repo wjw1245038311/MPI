@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { ensureRuntimePackage, getActiveRuntimeRoot, getRuntimePackageManifest, runtimePathsForRoot } from "./runtime-package";
 import type { ShellInfoPayload } from "./shell-bootstrap";
+import { memoryModelEnv } from "./memory-model-runtime";
 
 /**
  * PiBridge
@@ -409,9 +410,9 @@ export class PiBridge {
       if (this.opts.memoryProject) env.MPI_MEMORY_PROJECT = this.opts.memoryProject;
       if (this.opts.memoryPoolDir) env.MPI_MEMORY_POOL_DIR = this.opts.memoryPoolDir;
       if (this.opts.memoryEndpointFile) env.MPI_MEMORY_ENDPOINT_FILE = this.opts.memoryEndpointFile;
-      // 模型端点可在环境里覆盖（默认 LM Studio :1234 / llama-server :1235）
-      if (process.env.MPI_MEMORY_LLM_URL) env.MPI_MEMORY_LLM_URL = process.env.MPI_MEMORY_LLM_URL;
-      if (process.env.MPI_MEMORY_LLM_MODEL) env.MPI_MEMORY_LLM_MODEL = process.env.MPI_MEMORY_LLM_MODEL;
+      // 记忆模型：设置里选了就用它，没选就走本机 LM Studio（与 mem0 相同）。
+      // 交给 memory-model 解析，避免这里和主进程 dream 两套逻辑各写一遍。
+      Object.assign(env, memoryModelEnv());
       if (process.env.MPI_MEMORY_EMBED_URL) env.MPI_MEMORY_EMBED_URL = process.env.MPI_MEMORY_EMBED_URL;
     }
     if (this.opts.channelInboxDir) {

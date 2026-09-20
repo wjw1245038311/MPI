@@ -77,6 +77,20 @@ export function TitleBar() {
     );
   };
 
+  // 打开记忆系统手册（独立文档：知芽记忆池的用法/设置/排障）
+  const openMemoryManual = async () => {
+    try {
+      const p: string | null = await window.pi.app.getMemoryManualPath();
+      if (p) {
+        const root = await window.pi.app.getDevRepoRoot().catch(() => null);
+        void useStore.getState().openPreview(p, root ?? undefined);
+      } else st().pushToast("error", language === "zh" ? "未找到记忆系统手册文件" : "Memory manual file not found");
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      st().pushToast("error", language === "zh" ? "打开记忆系统手册失败：" + msg : `Could not open the memory manual: ${msg}`);
+    }
+  };
+
   // Open the bundled user manual in a preview tab (main resolves its path).
   const openManual = async () => {
     try {
@@ -128,6 +142,7 @@ export function TitleBar() {
       label: "帮助",
       items: [
         { label: language === "zh" ? "使用手册" : "User manual", onClick: act(() => void openManual()) },
+        { label: language === "zh" ? "记忆系统手册" : "Memory system manual", onClick: act(() => void openMemoryManual()) },
         { label: "", sep: true },
         { label: "关于 MPI", onClick: act(() => setAboutOpen(true)) },
       ],

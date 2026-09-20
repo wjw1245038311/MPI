@@ -50,6 +50,7 @@ const api = {
     openPreviewWindow: (absPath: string, opts?: { atCursor?: boolean }) =>
       ipcRenderer.invoke("app:openPreviewWindow", absPath, opts),
     getUserManualPath: () => ipcRenderer.invoke("app:getUserManualPath"),
+    getMemoryManualPath: () => ipcRenderer.invoke("app:getMemoryManualPath"),
     closePreviewWindow: (absPath: string) => ipcRenderer.invoke("app:closePreviewWindow", absPath),
     previewWindowMoveStart: (absPath: string) => ipcRenderer.invoke("app:previewWindowMoveStart", absPath),
     previewWindowMoveEnd: (absPath: string) => ipcRenderer.invoke("app:previewWindowMoveEnd", absPath),

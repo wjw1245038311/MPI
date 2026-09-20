@@ -3052,6 +3052,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // 记忆池候选：扩展（mpi-memory-ext）把候选丢进 inbox，主进程统一落池并更新索引。
   // 主进程是唯一写者；索引失败只记日志（池文件才是真相源）。
   stopMemoryInbox?.();
+  let lastMemoryMaintenance = Date.now(); // 启动时刚维护过
   stopMemoryInbox = startMemoryInboxWatcher({
     inboxDir: ensureMemoryCandidateInbox(getConfigDir()),
     poolDir: memoryPoolDir(),
@@ -3079,6 +3080,15 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       } catch (err) {
         console.warn("[memory] 巩固记账失败：", (err as Error).message);
       }
+    },
+    // 写入后按阈值压一次索引（zvec 段文件不自动合并；批量写入也会累积）。
+    // 5 分钟节流 + 内部阈值判断，低于阈值时只是一次目录统计。
+    onChanged: (outcomes) => {
+      if (!outcomes.some((o) => o.action === "add" || o.action === "bump")) return;
+      const now = Date.now();
+      if (now - lastMemoryMaintenance < 5 * 60_000) return;
+      lastMemoryMaintenance = now;
+      scheduleMemoryMaintenance((m) => console.log(m));
     },
     // 扩展发起的重活（dream/审批）：由主进程执行，结果写 ops.jsonl 供扩展读
     ops: {
@@ -3273,6 +3283,21 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return null;
   });
 
+
+  // Absolute path of the bundled **memory system** manual (Help → 记忆系统手册).
+  // Separate file on purpose: the memory system is documented standalone.
+  ipcMain.handle("app:getMemoryManualPath", () => {
+    const en = getConfig().language === "en";
+    const names = en ? ["memory-manual-en.md", "memory-manual.md"] : ["memory-manual.md"];
+    for (const name of names) {
+      const candidates = [
+        join(process.resourcesPath, name), // packaged: extraResources
+        join(app.getAppPath(), "resources", name), // dev: repo resources/
+      ];
+      for (const p of candidates) if (existsSync(p)) return p;
+    }
+    return null;
+  });
 
   // Caption drag on the frameless floating window (VS-style move + dock).
   ipcMain.handle("app:previewWindowMoveStart", (_e, absPath: string) => {

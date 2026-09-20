@@ -1320,6 +1320,10 @@ export function Settings() {
   // config.json on every compaction, so no restart is needed) -----------------
   const [scProvider, setScProvider] = useState("");
   const [scModelId, setScModelId] = useState("");
+  // ---- 记忆模型（知芽记忆池用它做抽取/打分与 lesson 正文；未设置 = 本机 LM Studio）
+  const [mmMode, setMmMode] = useState<"none" | "session" | "model">("none");
+  const [mmProvider, setMmProvider] = useState("");
+  const [mmModelId, setMmModelId] = useState("");
   const [invalidJson, setInvalidJson] = useState<Record<string, boolean>>({});
   // ---- trusted tools (“始终允许该工具”) + default permission ----------------
   // Permission settings are edited as a draft and only written on save, matching
@@ -1695,6 +1699,11 @@ export function Settings() {
           setScProvider("");
           setScModelId("");
         }
+        const mm = useStore.getState().config?.memoryModel;
+        const mmModeRaw = mm?.mode ?? (mm?.provider && mm?.model ? "model" : "none");
+        setMmMode(mmModeRaw === "session" ? "session" : mmModeRaw === "model" ? "model" : "none");
+        setMmProvider(typeof mm?.provider === "string" ? mm.provider : "");
+        setMmModelId(typeof mm?.model === "string" ? mm.model : "");
         setDiag(d);
         setShellInfo(d.shell ?? null);
         setPaths(p);
@@ -1926,6 +1935,23 @@ export function Settings() {
     const model = provider && modelId ? `${provider}/${modelId}` : undefined;
     try {
       const next = await window.pi.app.setConfig({ smartCompact: model ? { model } : undefined });
+      useStore.setState({ config: next });
+    } catch (e: any) {
+      pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
+    }
+  };
+
+  /** 记忆模型 → config.json（memoryModel）。主进程每次用前解析（dream 立即生效）；
+   *  捕获扩展在**下一个会话**启动时才拿到新的端点环境变量。 */
+  const saveMemoryModel = async (mode: "none" | "session" | "model", provider?: string, modelId?: string) => {
+    const patch =
+      mode === "session"
+        ? { memoryModel: { mode } }
+        : mode === "model" && provider && modelId
+          ? { memoryModel: { mode, provider, model: modelId } }
+          : { memoryModel: { mode: "none" } };
+    try {
+      const next = await window.pi.app.setConfig(patch);
       useStore.setState({ config: next });
     } catch (e: any) {
       pushToast("error", (language === "zh" ? "保存失败：" : "Save failed: ") + (e?.message || e));
@@ -3217,6 +3243,67 @@ export function Settings() {
                     >
                       <option value="">{language === "zh" ? "（未设）" : "(none)"}</option>
                       {(draft.providers[scProvider]?.models || []).map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.id}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field
+                    label={language === "zh" ? "记忆模型" : "Memory model"}
+                    hint={
+                      language === "zh"
+                        ? "知芽记忆池用它做抽取/打分与 lesson 正文。不设置 = 完全不调模型，只用基础记忆读写改（与 mem0 相同）；也可以跟随主模型或指定模型。改动对分诊立即生效，捕获扩展在下一个会话生效。"
+                        : "Zhiya uses it for extraction/scoring and lesson drafting. Unset = no model at all, basic memory read/write only (same as mem0); you may also follow the session main model or pick one. Dream applies immediately; capture applies from the next session."
+                    }
+                  >
+                    <select
+                      className="set-select"
+                      value={mmMode === "model" ? mmProvider || "" : mmMode}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === "none" || v === "session") {
+                          setMmMode(v);
+                          setMmProvider("");
+                          setMmModelId("");
+                          void saveMemoryModel(v);
+                        } else {
+                          setMmMode("model");
+                          setMmProvider(v);
+                          setMmModelId("");
+                          void saveMemoryModel("model");
+                        }
+                      }}
+                    >
+                      <option value="none">{language === "zh" ? "（不设置：不使用模型）" : "(unset: no model)"}</option>
+                      <option value="session">{language === "zh" ? "跟随主模型" : "Follow session main model"}</option>
+                      {providerKeys.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field
+                    label={language === "zh" ? "记忆模型（型号）" : "Memory model (id)"}
+                    hint={
+                      language === "zh"
+                        ? "模型不可用时记忆功能不会报错：自动捕获停用，/memory-remember 与检索照常工作。"
+                        : "If the model is unavailable the memory system degrades instead of failing: auto-capture stops, /memory-remember and recall keep working."
+                    }
+                  >
+                    <select
+                      className="set-select"
+                      value={mmModelId}
+                      onChange={(e) => {
+                        const m = e.target.value;
+                        setMmModelId(m);
+                        void saveMemoryModel("model", mmProvider || undefined, m || undefined);
+                      }}
+                      disabled={mmMode !== "model" || !mmProvider}
+                    >
+                      <option value="">{language === "zh" ? "（未设）" : "(none)"}</option>
+                      {(draft.providers[mmProvider]?.models || []).map((m) => (
                         <option key={m.id} value={m.id}>
                           {m.id}
                         </option>

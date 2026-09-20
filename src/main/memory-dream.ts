@@ -17,6 +17,7 @@
  */
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
+import { defaultMemoryModel } from "./memory-model";
 import { listEntries, newId, type PoolEntry } from "./zhiya/pool";
 import { listProposals, writeProposal } from "./zhiya/proposals";
 import { OUTLET_TO_KIND, dreamInput, heuristicAnswers, triage, type Proposal, type TriageAnswers } from "./zhiya/triage";
@@ -25,6 +26,12 @@ export interface DreamDeps {
   poolDir: string;
   llmUrl?: string;
   llmModel?: string;
+  /** 记忆模型密钥（走配置里的供应商时才有；本机 LM Studio 没有） */
+  llmKey?: string;
+  /** 记忆模型模式（调用方解析后传入；不传则按 llmUrl/环境变量推断） */
+  mode?: "none" | "session" | "model";
+  /** 模式说明（日志用，例如 "跟随主模型（默认模型 xxx/yyy）"） */
+  modelDesc?: string;
   /** 注入对话函数（测试用）；默认走本地 LLM */
   chat?: (system: string, user: string, maxTokens: number) => Promise<string>;
   log?: (m: string) => void;
@@ -55,8 +62,7 @@ export interface DreamReport {
   ms: number;
 }
 
-const DEFAULT_LLM = "http://127.0.0.1:1234/v1/chat/completions";
-const DEFAULT_MODEL = "qwen3.8-27b@q5_k_m";
+// 默认端点/模型现在由 memory-model.resolveMemoryModel() 统一给出（设置里可改）
 
 /**
  * 关掉思考模式：Qwen3 系在提示词末尾加 `/no_think` 才肯直接作答。
@@ -77,10 +83,11 @@ async function defaultChat(
   user: string,
   maxTokens: number,
   allowReasoningFallback = true,
+  apiKey?: string,
 ): Promise<string> {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
     body: JSON.stringify({
       model,
       messages: [
@@ -308,28 +315,27 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
   const maxEntries = deps.maxEntries ?? 12;
   const maxBodies = deps.maxBodies ?? 6;
   const batchSize = Math.max(1, deps.batchSize ?? 8);
+  // 记忆模型：调用方（memory-ops / CLI）负责按设置解析后传进来；
+  // 没传就用纯默认（环境变量，或"不调模型"）——这样本模块不依赖 electron，可在纯 node 里测。
+  //   none    —— 不调模型：正文用原文（提案仍产出，人能看到材料）
+  //   session —— 跟随主模型（由调用方解析成具体端点）
+  //   model   —— 指定供应商+模型
+  const fallback = defaultMemoryModel();
+  const mode = deps.mode ?? (deps.chat || deps.llmUrl || deps.llmModel ? "model" : fallback.mode);
+  const modelOff = mode === "none" && !deps.chat;
+  const llmUrl = deps.llmUrl ?? fallback.url;
+  const llmModel = deps.llmModel ?? fallback.model;
+  const llmKey = deps.llmKey ?? fallback.key;
+  if (modelOff) log("[memory] dream：未设置记忆模型 → 不调模型，正文用原文");
+  else if (deps.modelDesc) log(`[memory] dream 使用记忆模型：${deps.modelDesc}`);
   const chat =
     deps.chat ??
-    ((s: string, u: string, m: number) =>
-      defaultChat(
-        deps.llmUrl ?? process.env.MPI_MEMORY_LLM_URL ?? DEFAULT_LLM,
-        deps.llmModel ?? process.env.MPI_MEMORY_LLM_MODEL ?? DEFAULT_MODEL,
-        s,
-        u,
-        m,
-        true, // 判定可接受 reasoning 兜底
-      ));
+    ((s: string, u: string, m: number) => defaultChat(llmUrl, llmModel, s, u, m, true, llmKey));
   const bodyChat =
     deps.chat ??
     ((s: string, u: string, m: number) =>
-      defaultChat(
-        deps.llmUrl ?? process.env.MPI_MEMORY_LLM_URL ?? DEFAULT_LLM,
-        deps.llmModel ?? process.env.MPI_MEMORY_LLM_MODEL ?? DEFAULT_MODEL,
-        s,
-        u,
-        m,
-        false, // 正文：content 为空就失败，拿 reasoning 当正文会把思考过程写进 KB
-      ));
+      // 正文：content 为空就失败——拿 reasoning 当正文会把"思考过程"写进知识库
+      defaultChat(llmUrl, llmModel, s, u, m, false, llmKey));
 
   const { entries } = listEntries(deps.poolDir);
   const { promotable, rest } = dreamInput(entries, maxEntries);
@@ -359,12 +365,15 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
     };
   }
 
+  // none 模式：连"让模型判定"都不做（llmClassify 也要模型）
+  const useLlmClassify = deps.llmClassify === true && !modelOff;
+
   // ---- 阶段一：判定（默认启发式；可选让模型判）----
   //
   // 默认走 heuristicAnswers：本机思考型模型在该任务上思考停不下来（实测见 triage.ts 注释）。
   // 开 deps.llmClassify（配置 zhiyaDreamLlmClassify / --llm-classify）才调模型。
   const answers = new Map<string, TriageAnswers>();
-  if (!deps.llmClassify) {
+  if (!useLlmClassify) {
     for (const e of pool) answers.set(e.id, heuristicAnswers(e));
     log(`[memory] dream：用启发式规则判定 ${answers.size} 条（未调用模型）`);
   } else {
@@ -418,6 +427,10 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
     let reason = routed.reason;
     if (kind === "archive") {
       // 归档不需要正文（归档≠删除，文件本身留档）
+    } else if (modelOff) {
+      // 不调模型：正文用原文，提案照出（人能看到材料）
+      body = e.text;
+      reason += "｜未设置记忆模型：正文用原文（设置「跟随主模型」或指定模型后可由 /memory-dream 生成 lesson）";
     } else if (bodies < maxBodies) {
       try {
         body = await buildBody(bodyChat, kind, e);

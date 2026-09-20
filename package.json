@@ -112,7 +112,9 @@
     "test:promote": "node --experimental-strip-types scripts/test-memory-promote.mjs",
     "test:dream": "node --experimental-strip-types scripts/test-memory-dream.mjs",
     "test:ops": "node --experimental-strip-types scripts/test-memory-ops.mjs",
+    "test:memorymodel": "node --experimental-strip-types scripts/test-memory-model.mjs",
     "test:zvecindex": "node --experimental-strip-types scripts/test-zvec-index.mjs",
+    "bench:memory-vs-mem0": "node --experimental-strip-types scripts/bench-memory-vs-mem0.mjs",
     "bench:memory": "node --experimental-strip-types scripts/bench-memory.mjs",
     "diag:latency": "node --experimental-strip-types scripts/diag-latency.mjs",
     "test:memoryinbox": "node --experimental-strip-types scripts/test-memory-inbox.mjs",
@@ -220,6 +222,10 @@
       {
         "from": "resources/user-manual-en.md",
         "to": "user-manual-en.md"
+      },
+      {
+        "from": "resources/memory-manual.md",
+        "to": "memory-manual.md"
       }
     ],
     "win": {

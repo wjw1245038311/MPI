@@ -218,6 +218,13 @@ export interface AppConfig {
    * `model` = "provider/modelId" preferred for summarization; absent = follow the
    * session's main model. `enabled=false` disables the whole extension (pi default). */
   smartCompact?: { enabled?: boolean; model?: string };
+  /**
+   * 记忆模型（设置 → 模型与提供商 → 记忆模型）——三模式：
+   *   none（默认/未设置）：**完全不调模型**，只用基础记忆读写改（= mem0 的 infer:false 形态）
+   *   session：跟随主模型（扩展用当前会话主模型；主进程 dream 用配置里的默认模型）
+   *   model：指定供应商 + 模型
+   */
+  memoryModel?: { mode?: "none" | "session" | "model"; provider?: string; model?: string };
   /** Voice system (语音系统): STT for composer voice input + TTS for reading
    * agent replies aloud. Absent = unconfigured; the mic button then points to
    * Settings → Conversation → 语音系统. See src/main/voice.ts for STT backends and
@@ -449,6 +456,21 @@ function sanitizeSmartCompact(v: unknown): { enabled?: boolean; model?: string }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/** 记忆模型消毒：只留非空字符串（手改 config.json 不该把记忆功能搞哑）。 */
+function sanitizeMemoryModel(
+  v: unknown,
+): { mode?: "none" | "session" | "model"; provider?: string; model?: string } | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const out: { mode?: "none" | "session" | "model"; provider?: string; model?: string } = {};
+  if (o.mode === "none" || o.mode === "session" || o.mode === "model") out.mode = o.mode;
+  if (typeof o.provider === "string" && o.provider.trim()) out.provider = o.provider.trim();
+  if (typeof o.model === "string" && o.model.trim()) out.model = o.model.trim();
+  // session / none 模式不需要 provider+model；model 模式必须要
+  if (out.mode === "session" || out.mode === "none") return { mode: out.mode };
+  return out.provider && out.model ? out : undefined;
+}
+
 export function loadConfig(userDataDir: string): AppConfig {
   cachedDir = userDataDir;
   const file = configPath(userDataDir);
@@ -501,6 +523,7 @@ export function loadConfig(userDataDir: string): AppConfig {
         zhiyaDreamLlmClassify:
           typeof parsed.zhiyaDreamLlmClassify === "boolean" ? parsed.zhiyaDreamLlmClassify : undefined,
         smartCompact: sanitizeSmartCompact(parsed.smartCompact),
+        memoryModel: sanitizeMemoryModel(parsed.memoryModel),
         defaultPermission:
           typeof parsed.defaultPermission === "string" && (PERMISSION_LEVELS as readonly string[]).includes(parsed.defaultPermission)
             ? (parsed.defaultPermission as PermissionLevel)

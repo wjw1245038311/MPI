@@ -262,4 +262,42 @@ ok("遗弃认领文件：老的清掉、新的保留", () => {
   rmSync(d, { recursive: true, force: true });
 });
 
+// --- 批量索引写入（性能：zvec 的开销按「调用」计）-----------------------------
+ok("同批多候选只写一次索引（实测 23× 差距）", async () => {
+  const d = mkdtempSync(join(tmpdir(), "mpi-inbox-batch-"));
+  const pool = join(d, "pool");
+  const inbox = join(d, "inbox");
+  mkdirSync(inbox, { recursive: true });
+  const calls = [];
+  const idx = {
+    upsert: async (es) => calls.push(es.map((e) => e.text.slice(0, 8))),
+    remove: async () => {},
+    recall: async () => [],
+    rebuild: async () => {},
+    close: async () => {},
+  };
+  for (let i = 0; i < 5; i++) put0(inbox, `b${i}.json`, { text: `批量索引候选 ${i}。`, importance: 6, relevance: 0.6 });
+  const out = await ingestMemoryInbox(inbox, { poolDir: pool, index: idx });
+  assert.equal(out.filter((o) => o.action === "add").length, 5);
+  assert.equal(calls.length, 1, `5 条应只触发 1 次索引写入，实际 ${calls.length} 次`);
+  assert.equal(calls[0].length, 5, "并且这 5 条一次性传下去");
+  assert.equal(listEntries(pool).entries.length, 5, "池文件照旧 5 条");
+  rmSync(d, { recursive: true, force: true });
+});
+
+// --- 单条路径（ingestOne）不受批处理影响 --------------------------------------
+ok("单独调用 ingestOne 仍然逐条写索引（批处理只在扫描入口生效）", async () => {
+  const d = mkdtempSync(join(tmpdir(), "mpi-inbox-single-"));
+  const pool = join(d, "pool");
+  const inbox = join(d, "inbox");
+  mkdirSync(inbox, { recursive: true });
+  const calls = [];
+  const idx = { upsert: async (es) => calls.push(es.length), remove: async () => {}, recall: async () => [], rebuild: async () => {}, close: async () => {} };
+  await ingestOne(put0(inbox, "s1.json", { text: "单条一。", importance: 6, relevance: 0.6 }), { poolDir: pool, index: idx });
+  await ingestOne(put0(inbox, "s2.json", { text: "单条二。", importance: 6, relevance: 0.6 }), { poolDir: pool, index: idx });
+  assert.deepEqual(calls, [1, 1], "单条调用各写一次");
+  rmSync(d, { recursive: true, force: true });
+});
+
 console.log(`\ntest:memoryinbox 全部通过（${n} 项）`);
+

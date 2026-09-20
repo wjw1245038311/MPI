@@ -66,7 +66,21 @@ export async function startDream(
   const log = deps.log ?? (() => {});
   void (async () => {
     try {
-      const report: DreamReport = await runDream({ poolDir: deps.poolDir, dryRun, llmClassify, log });
+      // 记忆模型由设置决定；这里动态引入解析层（它要读 electron 的配置），
+      // 免得把 electron 依赖拖进单元测试。
+      const { resolveMemoryModel } = await import("./memory-model-runtime");
+      const mm = resolveMemoryModel();
+      const report: DreamReport = await runDream({
+        poolDir: deps.poolDir,
+        dryRun,
+        llmClassify,
+        log,
+        mode: mm.mode,
+        modelDesc: mm.describe,
+        llmUrl: mm.url || undefined,
+        llmModel: mm.model || undefined,
+        llmKey: mm.key,
+      });
       const detail = report.ok
         ? `分诊完成：${report.entries} 条 → ${report.proposals.length} 份提案（${(report.ms / 1000).toFixed(1)}s）${dryRun ? "（预览，未落盘）" : ""}`
         : `分诊未产出：${report.errors.join("；") || "未知原因"}`;
