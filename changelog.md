@@ -4,6 +4,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **修复 smart-compact 压缩后上下文弹窗显示「暂无上下文数据」**：smart-compact 扩展产出的压缩 entry 的 usage 缺 `cost` 字段，而 pi 的 get_session_stats 统计时无条件读 `usage.cost.total` → 整个 RPC 抛错（Cannot read properties of undefined (reading 'total')）→ 桌面端上下文弹窗整体显示「暂无上下文数据」（手机端已有容错、只显示「—」）。两处修复：①扩展的 zeroUsage/addUsage 始终携带并累加完整 cost 对象（本地模型为 0，API 模型累加实际费用），新压缩不再产生坏 entry；②main 侧 thread:getStats 捕获 pi 抛错后回退最小 stats（contextUsage={tokens:null} + 当前模型 contextWindow），renderer 走 ~估算值路径而不是空白。
+
+   本机历史坏 entry（2 个会话文件各 1 条）已一次性补零值 cost 修复（repair-compaction-cost.mjs，带并发写护栏），重启后这些会话直接显示真实 tokens；fallback 作为未来未知崩溃的兜底保留。验证方式：完整重启 MPI（main 侧改动）→ 打开经历过 smart-compact 压缩的长会话 → 上下文弹窗显示正常数字（已修数据的会话为真实值，未修的为 ~估算值 + 「压缩后估算值」提示）、不再是「暂无上下文数据」；再手动触发一次压缩 → 完成后弹窗仍正常。
+
 ## v0.6.24（2026-09-20）
 
 1. **修复压缩后上下文用量显示异常（显示 0 / 低估）**：压缩完成到下次回复之间，pi 固定把 context tokens 报成 null，MPI 回退显示内存里的「压缩后估算值」——但该值在线程重连/应用重启后会丢（状态合并只保留白名单字段），于是圆环显示 0 / 「—」直到下次回复。现在 main 从会话条目重建「便签+保留区」并用 CJK 感知估算器重算真实 token 数：①thread:open/fork/clone 响应携带该值、renderer 合并时保留——重连/重启后不再显示 0；②压缩完成后异步补发修正值（桌面圆环 + 手机端同步）——pi 自带的 estimatedTokensAfter 用 chars/4，对中文内容低估约 3–4 倍，修正后圆环压缩后立即显示真实占比、下次回复不再跳变。估算逻辑与 pi 的分支遍历/上下文重建逐条对齐（含「压缩后已有有效 usage 则不估算」守卫），按 compaction id 缓存避免重复取条目。

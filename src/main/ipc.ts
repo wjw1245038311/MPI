@@ -4040,7 +4040,34 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ipcMain.handle("thread:getStats", async (_e, threadId: string) => {
     const h = bridges.get(threadId);
     if (!h) return null;
-    return h.bridge.getSessionStats();
+    try {
+      return await h.bridge.getSessionStats();
+    } catch (e) {
+      // pi 的 get_session_stats 遇到畸形 entry 会整体抛错（历史数据：smart-compact
+      // 早期版本的压缩 entry usage 缺 cost → addUsageToTotals 读 undefined.total）。
+      // 回退到最小 stats：contextUsage={tokens:null} 让 renderer 走 ~估算值路径，
+      // 而不是整个弹窗显示「暂无上下文数据」。
+      try {
+        const state: any = await h.bridge.getState();
+        const cw = Number(state?.model?.contextWindow) || 0;
+        // eslint-disable-next-line no-console
+        console.log(`[pi] getStats failed ("${e instanceof Error ? e.message : String(e)}") -> minimal fallback for ${threadId}`);
+        return {
+          sessionFile: state?.sessionFile ?? threadId,
+          sessionId: state?.sessionId ?? null,
+          userMessages: 0,
+          assistantMessages: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          totalMessages: 0,
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          cost: 0,
+          contextUsage: cw > 0 ? { tokens: null, contextWindow: cw, percent: null } : undefined,
+        };
+      } catch {
+        return null;
+      }
+    }
   });
 
   ipcMain.handle(

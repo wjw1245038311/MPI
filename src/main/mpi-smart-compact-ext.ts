@@ -275,19 +275,36 @@ type Usage = {
   cost?: Record<string, number>;
 };
 
+// pi 的 getSessionStats → addUsageToTotals 无条件读 usage.cost.total：压缩 entry
+// 的 usage 缺 cost 会让整个 get_session_stats RPC 抛错（renderer 表现为上下文
+// 弹窗「暂无上下文数据」）。所以这里必须始终携带完整 cost 对象——本地模型为 0，
+// API 模型累加各次响应的实际费用。
+function zeroCost(): Record<string, number> {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+}
+
 function zeroUsage(): Usage {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: zeroCost() };
 }
 
 function addUsage(a: Usage, b: Usage | undefined): Usage {
   if (!b) return a;
   const get = (u: Usage | undefined, k: string): number => (u ? Number((u as Record<string, unknown>)[k]) || 0 : 0);
+  const costA = a.cost ?? zeroCost();
+  const costB = b.cost;
   return {
     input: a.input + get(b, "input"),
     output: a.output + get(b, "output"),
     cacheRead: a.cacheRead + get(b, "cacheRead"),
     cacheWrite: a.cacheWrite + get(b, "cacheWrite"),
     totalTokens: (a.totalTokens ?? 0) + get(b, "totalTokens"),
+    cost: {
+      input: costA.input + get(costB, "input"),
+      output: costA.output + get(costB, "output"),
+      cacheRead: costA.cacheRead + get(costB, "cacheRead"),
+      cacheWrite: costA.cacheWrite + get(costB, "cacheWrite"),
+      total: costA.total + get(costB, "total"),
+    },
   };
 }
 
