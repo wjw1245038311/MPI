@@ -107,13 +107,46 @@ export function Chat() {
   const streaming = thread?.streaming;
   const count = (thread?.messages.length || 0) + (streaming ? 1 : 0);
 
+  // 「活跃输入」跟踪：区分真实上滚手势与布局引起的 scrollTop 位移。
+  // content-visibility 高度解析 / 浏览器钳制会在无用户输入时产生微小上移，
+  // 若按方向检测解除跟随，发送消息后就会「不自动滚、要手动下滚一下」。
+  const pointerDownRef = useRef(false);
+  const keyScrollUntilRef = useRef(0);
+  useEffect(() => {
+    const onPointerDown = () => { pointerDownRef.current = true; };
+    const onPointerUp = () => { pointerDownRef.current = false; };
+    const onKeyDown = (e: KeyboardEvent) => {
+      // 输入框里的按键（打字）不算滚动意图。
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "PageUp" || e.key === "Home" || e.key === "ArrowUp") {
+        keyScrollUntilRef.current = performance.now() + 400; // 覆盖键重复产生的后续滚动事件
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
   const rememberScrollPosition = () => {
     const el = scrollRef.current;
     if (!el || !activeThreadId) return;
     lastScrollTopRef.current = el.scrollTop;
     scrollPositionsRef.current.set(activeThreadId, el.scrollTop);
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el);
-    stickRef.current = near;
+    // 距离只用于「重新武装」跟随（用户滚回底部附近），绝不用于解除：
+    // 任何真实上滚输入（滚轮/滚动条/键盘）都会先被方向检测捕获
+    // （handleWheelUp / handleUserScroll 的上移分支）。而 stick=true 时距离
+    // 单独超出跟随带只可能来自布局变化——content-visibility 高度解析 +
+    // 浏览器滚动锚定产生的非用户位移，按距离解除会把流式跟随无声杀死。
+    if (!stickRef.current && near) stickRef.current = true;
     setAtBottom(near);
   };
 
@@ -139,6 +172,13 @@ export function Chat() {
     const cur = el.scrollTop;
     lastScrollTopRef.current = cur;
     if (prev !== null && cur < prev - 1) {
+      // 滚轮上翻已在 handleWheelUp 同步解除；这里只处理滚动条拖拽/键盘等
+      // 需要「活跃输入」佐证的来源。无活跃输入的上移 = 布局位移，不解除。
+      const userGesture = pointerDownRef.current || performance.now() < keyScrollUntilRef.current;
+      if (!userGesture) {
+        rememberScrollPosition();
+        return;
+      }
       stickRef.current = false;
       scrollPositionsRef.current.set(activeThreadId, cur);
       setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el));
@@ -266,11 +306,15 @@ export function Chat() {
     if (!switchedThread && saved !== undefined) {
       // Same-thread content growth: never write scrollTop while the user is
       // reading history — scroll events lag a frame, so a stale saved value
-      // would yank an in-progress scroll-up back to the bottom. In follow
-      // mode re-applying is harmless (also recovers a remounted container).
+      // would yank an in-progress scroll-up back to the bottom.
       if (stickRef.current) {
-        const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-        el.scrollTop = Math.min(saved, maxScrollTop);
+        // Follow mode: pin straight to the new bottom. Re-applying `saved`
+        // leaves a one-frame intermediate position Δ above it; when a single
+        // commit grows more than the near-bottom band (common in long threads:
+        // content-visibility groups resolving estimate→actual height), the
+        // scroll event's distance check latches stick off and follow dies
+        // mid-stream. Pinning directly leaves no out-of-band intermediate.
+        el.scrollTop = el.scrollHeight;
         lastScrollTopRef.current = el.scrollTop; // programmatic: not user intent
         setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el));
       } else {
@@ -376,10 +420,22 @@ export function Chat() {
   const lastGroup = groups[groups.length - 1];
   const streamingExtends = !!streaming && !!lastGroup && lastGroup.role === "assistant";
   const headGroups = streamingExtends ? groups.slice(0, -1) : groups;
-  const userGroups = useMemo(
-    () => groups.filter((group) => group.items[0]?.role === "user"),
-    [groups],
-  );
+  // 「更早的对话」加载完成后并入导航（earlierLoaded 变化驱动重渲染，缓存本身是模块级 Map）。
+  const earlierCount = useStore((s) => (activeThreadId ? s.earlierLoaded[activeThreadId] : undefined));
+  const userGroups = useMemo(() => {
+    const live = groups.filter((group) => group.items[0]?.role === "user");
+    if (!activeThreadId || earlierCount === undefined) return live;
+    const earlier = getEarlierViews(activeThreadId);
+    if (!earlier) return live;
+    const older = groupMessages(earlier.views).filter((group) => group.items[0]?.role === "user");
+    return [...older, ...live]; // 时间序：压缩前的在前
+  }, [groups, activeThreadId, earlierCount]);
+
+  // 压缩过的会话：后台自动加载「更早的对话」（幂等）——左侧导航要包含压缩前节点。
+  const hasCompaction = useMemo(() => groups.some((group) => group.role === "compaction"), [groups]);
+  useEffect(() => {
+    if (hasCompaction && activeThreadId) void useStore.getState().loadEarlierMessages(activeThreadId);
+  }, [activeThreadId, hasCompaction]);
 
   // In-conversation search state, derived from the finalized messages only
   // and driven by the debounced query (see above).
@@ -404,9 +460,30 @@ export function Chat() {
 
   const jumpToUserMessage = (key: string) => {
     const scroll = scrollRef.current;
-    if (!scroll) return;
-    const target = Array.from(scroll.querySelectorAll<HTMLElement>("[data-user-message-key]"))
-      .find((node) => node.dataset.userMessageKey === key);
+    if (!scroll || !activeThreadId) return;
+    // 点导航跳转 = 明确的读历史意图：显式解除跟随。不能依赖滚动事件的方向
+    // 检测——平滑滚动期间 pointerup 早已触发，上移事件会被判成布局噪声。
+    stickRef.current = false;
+    const findTarget = () =>
+      Array.from(scroll.querySelectorAll<HTMLElement>("[data-user-message-key]"))
+        .find((node) => node.dataset.userMessageKey === key);
+    let target = findTarget();
+    if (!target && useStore.getState().earlierLoaded[activeThreadId] !== undefined) {
+      // 目标在「更早的对话」段里——折叠时 DOM 不存在：先展开，等两帧再定位。
+      const doJump = (node: HTMLElement | undefined) => {
+        if (!node) return;
+        const scrollRect = scroll.getBoundingClientRect();
+        const targetRect = node.getBoundingClientRect();
+        const targetOffset = targetRect.top - scrollRect.top - (scroll.clientHeight - targetRect.height) / 2;
+        const maxScrollTop = Math.max(0, scroll.scrollHeight - scroll.clientHeight);
+        scroll.scrollTo({ top: Math.min(maxScrollTop, Math.max(0, scroll.scrollTop + targetOffset)), behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      };
+      if (!useStore.getState().earlierExpanded[activeThreadId]) {
+        useStore.getState().setEarlierExpanded(activeThreadId, true);
+        requestAnimationFrame(() => requestAnimationFrame(() => doJump(findTarget())));
+        return;
+      }
+    }
     if (!target) return;
 
     const scrollRect = scroll.getBoundingClientRect();
@@ -723,7 +800,7 @@ export function Chat() {
           </div>
         </div>
         {userGroups.length >= USER_MESSAGE_NAV_MIN_ITEMS && (
-          <UserMessageNav groups={userGroups} language={language} onJump={jumpToUserMessage} />
+          <UserMessageNav groups={userGroups} language={language} onJump={jumpToUserMessage} scrollRef={scrollRef} />
         )}
         {!atBottom && count > 0 && (
           <button
@@ -816,9 +893,11 @@ function CompactionDivider({
   onPreviewImage: (src: string) => void;
 }) {
   const [summaryOpen, setSummaryOpen] = useState(false);
-  const [earlierOpen, setEarlierOpen] = useState(false);
   // undefined = 尚未加载；0 = 已加载但为空。
   const earlierCount = useStore((s) => s.earlierLoaded[threadId]);
+  // 展开状态放 store：左侧导航跳转到折叠段内的消息前需要先置 true。
+  const earlierOpen = useStore((s) => !!s.earlierExpanded[threadId]);
+  const setEarlierOpen = (open: boolean) => useStore.getState().setEarlierExpanded(threadId, open);
   const hasSessionFile = useStore((s) => !!s.threads[threadId]?.sessionFile);
   const zh = language === "zh";
   const first = group.items[0];
@@ -928,25 +1007,85 @@ function userMessagePreview(group: MsgGroup, language: string): string {
   return chars.length > 20 ? `${chars.slice(0, 20).join("")}…` : text;
 }
 
+/** 左侧用户消息导航（参考 Qwen 网页版）：圆点常驻；悬停展开列出全部节点的面板
+ *  （而非单条 tooltip）；视口中心附近的消息为「选中」——其圆点颜色加深、
+ *  面板行高亮。点击圆点或面板行跳转。 */
 function UserMessageNav({
   groups,
   language,
   onJump,
+  scrollRef,
 }: {
   groups: MsgGroup[];
   language: string;
   onJump: (key: string) => void;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const navRef = useRef<HTMLElement>(null);
-  const [hovered, setHovered] = useState<{ text: string; top: number } | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const hideTimer = useRef<number | null>(null);
+  // 「选中」节点：视口中心线（偏上）之下最近的用户消息组。
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const rect = el.getBoundingClientRect();
+      const line = rect.top + rect.height * 0.45;
+      let current: string | null = null;
+      // DOM 顺序 = 对话顺序；取中心线之上最后一个用户消息组。
+      for (const node of Array.from(el.querySelectorAll<HTMLElement>("[data-user-message-key]"))) {
+        if (node.getBoundingClientRect().top <= line) current = node.dataset.userMessageKey ?? null;
+        else break;
+      }
+      setActiveKey((prev) => (prev === current ? prev : current));
+    };
+    const onScroll = () => {
+      if (!raf) raf = requestAnimationFrame(update);
+    };
+    update();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [groups.length, scrollRef]);
+
+  const showPanel = () => {
+    if (hideTimer.current) {
+      window.clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    }
+    setPanelOpen(true);
+  };
+  // 160ms 宽限：从圆点条移向面板的途中不闪断。
+  const scheduleHide = () => {
+    if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => {
+      hideTimer.current = null;
+      setPanelOpen(false);
+    }, 160);
+  };
 
   if (groups.length < USER_MESSAGE_NAV_MIN_ITEMS) return null;
+
+  const zh = language === "zh";
 
   return (
     <nav
       ref={navRef}
       className="user-message-nav"
-      aria-label={language === "zh" ? "用户消息导航" : "User message navigation"}
+      aria-label={zh ? "用户消息导航" : "User message navigation"}
+      onMouseEnter={showPanel}
+      onMouseLeave={scheduleHide}
+      // React 的 focus/blur 会冒泡：子圆点获焦即展开，焦点移出整个导航才收起。
+      onFocus={showPanel}
+      onBlur={(event) => {
+        if (!navRef.current?.contains(event.relatedTarget as Node | null)) scheduleHide();
+      }}
     >
       <div className="user-message-nav-scroll">
         {groups.map((group, index) => {
@@ -955,33 +1094,34 @@ function UserMessageNav({
             <button
               key={group.key}
               type="button"
-              className="user-message-nav-dot"
-              aria-label={language === "zh" ? `跳转到第 ${index + 1} 条用户消息：${preview}` : `Jump to user message ${index + 1}: ${preview}`}
+              className={`user-message-nav-dot${group.key === activeKey ? " active" : ""}`}
+              aria-label={zh ? `跳转到第 ${index + 1} 条用户消息：${preview}` : `Jump to user message ${index + 1}: ${preview}`}
               title={preview}
               onClick={() => onJump(group.key)}
-              onMouseEnter={(event) => {
-                const nav = navRef.current;
-                if (!nav) return;
-                const navRect = nav.getBoundingClientRect();
-                const dotRect = event.currentTarget.getBoundingClientRect();
-                setHovered({ text: preview, top: dotRect.top - navRect.top + dotRect.height / 2 });
-              }}
-              onMouseLeave={() => setHovered(null)}
-              onFocus={(event) => {
-                const nav = navRef.current;
-                if (!nav) return;
-                const navRect = nav.getBoundingClientRect();
-                const dotRect = event.currentTarget.getBoundingClientRect();
-                setHovered({ text: preview, top: dotRect.top - navRect.top + dotRect.height / 2 });
-              }}
-              onBlur={() => setHovered(null)}
             >
               <span aria-hidden="true" />
             </button>
           );
         })}
       </div>
-      {hovered && <div className="user-message-nav-tooltip" style={{ top: hovered.top }}>{hovered.text}</div>}
+      {panelOpen && (
+        <div className="user-message-nav-panel" onMouseEnter={showPanel} onMouseLeave={scheduleHide}>
+          {groups.map((group) => {
+            const preview = userMessagePreview(group, language);
+            return (
+              <button
+                key={group.key}
+                type="button"
+                className={`user-message-nav-item${group.key === activeKey ? " active" : ""}`}
+                onClick={() => onJump(group.key)}
+              >
+                <span className="user-message-nav-item-text">{preview}</span>
+                <span className="user-message-nav-item-dash" aria-hidden="true" />
+              </button>
+            );
+          })}
+        </div>
+      )}
     </nav>
   );
 }

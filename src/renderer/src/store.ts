@@ -1128,6 +1128,8 @@ interface PiStore {
   threads: Record<string, ThreadState>;
   /** threadId -> 「更早的对话」已加载的消息条数（0 = 已加载但为空）。未出现 = 尚未加载。 */
   earlierLoaded: Record<string, number>;
+  /** threadId -> 「更早的对话」展开段是否展开（导航跳转折叠段内的消息前会先置 true）。 */
+  earlierExpanded: Record<string, boolean>;
   /** threadId -> true while that thread shows the interactive pi TUI terminal. */
   tuiThreads: Record<string, boolean>;
   /** threadId -> true when a TUI session wrote to the session file and the RPC
@@ -1208,6 +1210,7 @@ interface PiStore {
   compactContext: (threadId: string, instructions?: string) => Promise<void>;
   /** 懒加载「更早的对话」（压缩点之前的历史消息，磁盘全量）。幂等：已加载直接返回。 */
   loadEarlierMessages: (threadId: string) => Promise<void>;
+  setEarlierExpanded: (threadId: string, open: boolean) => void;
   repairSession: (threadId: string) => Promise<void>;
   setSoundOnComplete: (on: boolean) => Promise<void>;
   /** Voice system (语音系统): merge a partial voice config and persist it. */
@@ -1512,12 +1515,18 @@ function scheduleEventFlush(): void {
       let changed = false;
       const threads = { ...s.threads };
       let earlierLoaded: Record<string, number> | null = null;
+      let earlierExpandedNext: Record<string, boolean> | null = null;
       for (const [threadId, events] of byThread) {
         if (events.some((ev) => ev?.type === "compaction_end") && s.earlierLoaded[threadId] !== undefined) {
           // 删 key = 「尚未加载」，下次展开会重新拉取（新压缩后「更早」内容已变）。
           const next: Record<string, number> = earlierLoaded ? { ...earlierLoaded } : { ...s.earlierLoaded };
           delete next[threadId];
           earlierLoaded = next;
+        }
+        if (events.some((ev) => ev?.type === "compaction_end") && s.earlierExpanded[threadId]) {
+          const next: Record<string, boolean> = earlierExpandedNext ? { ...earlierExpandedNext } : { ...s.earlierExpanded };
+          delete next[threadId];
+          earlierExpandedNext = next;
         }
         const t0 = threads[threadId];
         if (!t0) continue;
@@ -1528,7 +1537,9 @@ function scheduleEventFlush(): void {
           changed = true;
         }
       }
-      return changed || earlierLoaded ? { ...s, threads, ...(earlierLoaded ? { earlierLoaded } : {}) } : s;
+      return changed || earlierLoaded || earlierExpandedNext
+        ? { ...s, threads, ...(earlierLoaded ? { earlierLoaded } : {}), ...(earlierExpandedNext ? { earlierExpanded: earlierExpandedNext } : {}) }
+        : s;
     });
 
     // Completion chime: one ding per flush even if several threads settle together.
@@ -1688,6 +1699,7 @@ export const useStore = create<PiStore>()((set, get) => {
   activeThreadId: null,
   threads: {},
   earlierLoaded: {},
+  earlierExpanded: {},
   // threadId -> true while that thread shows the interactive pi terminal.
   tuiThreads: {},
   // threadId -> true when a TUI session wrote to the session file and the RPC
@@ -2306,6 +2318,11 @@ export const useStore = create<PiStore>()((set, get) => {
         earlierLoaded = { ...s.earlierLoaded };
         delete earlierLoaded![id];
       }
+      let earlierExpandedNext: Record<string, boolean> | null = null;
+      if (s.earlierExpanded[id]) {
+        earlierExpandedNext = { ...s.earlierExpanded };
+        delete earlierExpandedNext![id];
+      }
       let activeThreadId = s.activeThreadId;
       if (activeThreadId === id) activeThreadId = openThreadIds[openThreadIds.length - 1] || null;
       const activeProjectCwd = activeThreadId ? threads[activeThreadId]?.cwd || null : null;
@@ -2318,6 +2335,7 @@ export const useStore = create<PiStore>()((set, get) => {
         // them so a full-screen ExtUiModal backdrop doesn't stay up.
         extuiQueue: s.extuiQueue.filter((q) => q.threadId !== id),
         ...(earlierLoaded ? { earlierLoaded } : {}),
+        ...(earlierExpandedNext ? { earlierExpanded: earlierExpandedNext } : {}),
       };
     });
   },
@@ -2644,6 +2662,10 @@ export const useStore = create<PiStore>()((set, get) => {
     }
   },
 
+  setEarlierExpanded: (threadId, open) => {
+    set((s) => (s.earlierExpanded[threadId] === open ? s : { earlierExpanded: { ...s.earlierExpanded, [threadId]: open } }));
+  },
+
   loadEarlierMessages: async (threadId) => {
     const t = get().threads[threadId];
     // 幂等：已加载（含「加载过但为空」）不重取；无会话文件（未连接占位）不可取。
@@ -2660,6 +2682,8 @@ export const useStore = create<PiStore>()((set, get) => {
       for (const tr of Object.values(toolRuns)) {
         if (!tr.completed) tr.running = false;
       }
+      // key 加前缀：与活跃视图的 hu-N/ha-N 键空间隔离（导航跳转/DOM 属性依赖唯一性）。
+      for (const v of views) v.key = `e-${v.key}`;
       earlierCache.set(threadId, { views, toolRuns });
       set((s) => ({ earlierLoaded: { ...s.earlierLoaded, [threadId]: views.length } }));
     } catch {
