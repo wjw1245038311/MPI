@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "./config";
 import { forEachLine, getSessionsDir, listAllSessionFiles } from "./session-store";
@@ -218,7 +218,3 @@ export function __resetObservedToolsForTests(): void {
   backfillPromise = null;
 }
 
-/** Test hook: whether the registry file exists on disk. */
-export function observedToolsFileExists(): boolean {
-  return existsSync(file());
-}

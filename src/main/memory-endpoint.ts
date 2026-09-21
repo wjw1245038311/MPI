@@ -179,8 +179,3 @@ export async function stopMemoryEndpoint(userDataDir: string): Promise<void> {
     /* 同上 */
   }
 }
-
-/** 供测试/诊断读当前端点（未启动则 null）。 */
-export function currentMemoryEndpoint(): MemoryEndpointInfo | null {
-  return info;
-}

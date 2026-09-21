@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import todoSource from "./mpi-todo-ext.ts?raw";
 
@@ -21,9 +21,3 @@ export function ensureTodoExtension(userDataDir: string): string {
   return file;
 }
 
-/** Ensure the agent inbox directory exists (the extension also creates it lazily). */
-export function ensureTodoInbox(userDataDir: string): string {
-  const dir = join(userDataDir, "todos-inbox");
-  mkdirSync(dir, { recursive: true });
-  return dir;
-}

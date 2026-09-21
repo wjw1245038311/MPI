@@ -210,19 +210,6 @@ export const Paperclip = (p: P) => (
     <path d="M21 11.5 12.5 20a5 5 0 0 1-7-7l8-8a3.3 3.3 0 0 1 4.7 4.7l-8 8a1.7 1.7 0 0 1-2.4-2.4l7.3-7.3" />
   </svg>
 );
-export const ImageIcon = (p: P) => (
-  <svg {...base(p)}>
-    <rect x="3" y="4" width="18" height="16" rx="2" />
-    <circle cx="8.5" cy="9.5" r="1.5" />
-    <path d="m21 16-5-5L5 20" />
-  </svg>
-);
-export const Smile = (p: P) => (
-  <svg {...base(p)}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01" />
-  </svg>
-);
 export const Copy = (p: P) => (
   <svg {...base(p)}>
     <rect x="9" y="9" width="11" height="11" rx="2" />
@@ -260,13 +247,6 @@ export const Info = (p: P) => (
   <svg {...base(p)}>
     <circle cx="12" cy="12" r="9" />
     <path d="M12 11v5M12 7.5h.01" />
-  </svg>
-);
-export const Dots = (p: P) => (
-  <svg {...base(p)}>
-    <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
-    <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
-    <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
   </svg>
 );
 export const Sparkle = (p: P) => (

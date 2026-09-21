@@ -101,11 +101,6 @@ export function runtimeBaseDir(): string {
   return managedRuntimeBaseDir();
 }
 
-/** Directory holding the active app-updated runtime, if any. */
-export function activeRuntimeDir(): string {
-  return getActiveRuntimeRoot() || join(runtimeBaseDir(), "pi");
-}
-
 interface LockEntry {
   version?: string;
   resolved?: string;

@@ -9,7 +9,7 @@
  *   ③ 当前任务（now）→ 同样需要人工并入 HANDOFF/changelog/待办。
  *   ④ 归档（archive）→ 移到归档目录（归档≠删除）+ 索引移除。
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 
 /** 换行与多行正则写成常量：本仓多次被"多层转义把 \n 吃掉"坑过（见 lesson 教训） */
 const SEP_NL = String.fromCharCode(10);
@@ -278,32 +278,3 @@ export function wrapRawLesson(opts: { title: string; body: string; tags?: string
   ].join(SEP_NL);
 }
 
-/** 生成 lesson 文档的骨架（供 dream 的模型填充；也给人工兜底用）。 */
-export function lessonTemplate(opts: { title: string; module?: string; tags?: string[]; body?: string }): string {
-  const { title, module = "unknown", tags = [], body = "" } = opts;
-  return [
-    "---",
-    `lesson: ${lessonSlug(title, "00000000").replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase()}`,
-    `module: ${module}`,
-    `tags: [${tags.join(", ")}]`,
-    "source: zhiya",
-    "guard-strength: directive",
-    "applies-when: []",
-    "---",
-    "",
-    `# ${title}`,
-    "",
-    body.trim() || ["## Symptom", "", "## Root Cause", "", "## Fix", "", "## Guard", "", "## Evidence", ""].join("\n"),
-    "",
-  ].join("\n");
-}
-
-/** 读取已有 lesson 的 frontmatter 键（判断重复用，避免同名/同 lesson 重复写入）。 */
-export function lessonKey(path: string): string | null {
-  try {
-    const raw = readFileSync(path, "utf8");
-    return /^lesson:\s*(.+)$/m.exec(raw)?.[1]?.trim() ?? null;
-  } catch {
-    return null;
-  }
-}

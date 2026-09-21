@@ -186,11 +186,3 @@ export function startDevReleaseProgressTail(): void {
   }, POLL_MS);
   timer.unref?.(); // never keep the process alive just for this poller
 }
-
-/** Stop polling and drop bridge entries (tests / shutdown). */
-export function stopDevReleaseProgressTail(): void {
-  if (!timer) return;
-  clearInterval(timer);
-  timer = null;
-  dropAll(state);
-}

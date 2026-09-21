@@ -14,16 +14,8 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { decideIngestIn, lexicalSimilarity, listEntries, openIngestCtx, THRESHOLD, type Candidate, type IngestCtx, type PoolEntry, type PoolTemporal, type PoolType } from "./zhiya/pool";
-import { defaultPoolDir, JsonIndex, type MemoryIndex } from "./zhiya/memory-index";
+import { defaultPoolDir, type MemoryIndex } from "./zhiya/memory-index";
 import { zhiyaMasterDir } from "./zhiya";
-
-export const MEMORY_INBOX_DIRNAME = "zhiya-memory-inbox";
-
-export function ensureMemoryInbox(userDataDir: string): string {
-  const dir = join(userDataDir, MEMORY_INBOX_DIRNAME);
-  mkdirSync(dir, { recursive: true });
-  return dir;
-}
 
 /** 扩展写进 inbox 的候选形状（扩展侧必须保持同步——这是唯一的跨进程契约）。 */
 export interface MemoryCandidateFile {
@@ -498,12 +490,6 @@ export function startMemoryInboxWatcher(opts: {
   const timer = setInterval(() => void run(), 2000);
   timer.unref?.();
   return () => clearInterval(timer);
-}
-
-/** 兜底索引的便捷构造（主进程/CLI 共用）。 */
-export function fallbackIndex(poolDir: string = defaultPoolDir()): MemoryIndex {
-  const idx = new JsonIndex(poolDir);
-  return idx;
 }
 
 export { THRESHOLD };

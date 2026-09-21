@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { runDream, type DreamReport } from "./memory-dream";
 import { applyProposal, type ApplyDeps } from "./memory-promote";
 import { markConsolidated } from "./zhiya/consolidation";
-import { listProposals, readProposal, setProposalStatus } from "./zhiya/proposals";
+import { readProposal, setProposalStatus } from "./zhiya/proposals";
 import type { OpLogEntry } from "./memory-inbox";
 
 export function opLogPath(poolDir: string): string {
@@ -149,7 +149,3 @@ export async function rejectProposal(deps: OpRunnerDeps, id: string): Promise<{ 
   return { detail };
 }
 
-/** 待审批提案数（/memory-status 与面板用）。 */
-export function pendingCount(poolDir: string): number {
-  return listProposals(poolDir).proposals.filter((p) => p.status === "pending").length;
-}

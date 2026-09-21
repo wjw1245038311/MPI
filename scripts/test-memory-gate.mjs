@@ -14,7 +14,8 @@ import { readFileSync } from "node:fs";
 import { transform } from "esbuild";
 
 const SRC = "src/main/mpi-memory-ext.ts";
-const src = readFileSync(SRC, "utf8");
+// 归一化行尾：Windows autocrlf checkout 下源码是 CRLF，多行锚点（\n\n...）会失配
+const src = readFileSync(SRC, "utf8").replace(/\r\n/g, "\n");
 
 // ---- 抽取出 MIN_IMPORTANCE + gateManualImportance（锚点：注释头 → const log）----
 const start = src.indexOf("/** 低于这个重要性连 inbox 都不进");

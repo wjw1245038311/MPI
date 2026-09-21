@@ -257,17 +257,6 @@ export function zhiyaMasterPath(name: ZhiyaFileName): string | null {
   return p && existsSync(p) ? p : null;
 }
 
-export function readMasterFile(name: ZhiyaFileName): string {
-  const p = masterPath(name);
-  if (!p) return "";
-  try {
-    if (existsSync(p)) return readFileSync(p, "utf8");
-  } catch {
-    /* unreadable → treat as empty */
-  }
-  return "";
-}
-
 /** Write the master. Returns false when unavailable (no AgentSetting here). */
 export function writeMasterFile(name: ZhiyaFileName, text: string): boolean {
   const p = masterPath(name);

@@ -4,7 +4,7 @@
  * 为什么提案也是文件：它要进 git、要被人工 diff 审、要能跨设备看。
  * 池子是临时记忆，提案是"准备变成长期内容"的阶段，天然属于文件世界。
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseProposal, serializeProposal, type Proposal, type ProposalStatus } from "./triage";
 
@@ -114,10 +114,3 @@ export function setProposalResult(poolDir: string, id: string, result: string): 
   return next;
 }
 
-/** 删除提案（人工清理用；破坏性操作，调用方必须先确认）。 */
-export function deleteProposal(poolDir: string, id: string): boolean {
-  const path = proposalPath(poolDir, id);
-  if (!existsSync(path)) return false;
-  rmSync(path, { force: true });
-  return true;
-}

@@ -139,22 +139,6 @@ export function getActiveRuntimeRoot(): string | null {
   return null;
 }
 
-export function getActiveRuntimeVersion(): string | null {
-  const pointer = readPointer();
-  if (pointer && isUsableRuntimeRoot(runtimeRootForVersion(pointer.version))) return pointer.version;
-  const root = getActiveRuntimeRoot();
-  if (!root) return null;
-  try {
-    const packagePath = existsSync(join(root, "pi", "package.json"))
-      ? join(root, "pi", "package.json")
-      : join(root, "package.json");
-    const parsed = JSON.parse(readFileSync(packagePath, "utf8")) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : null;
-  } catch {
-    return null;
-  }
-}
-
 export function getActiveRuntimePaths(): RuntimePaths | null {
   const root = getActiveRuntimeRoot();
   return root ? runtimePathsForRoot(root) : null;

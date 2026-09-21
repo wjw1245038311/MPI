@@ -1,27 +1,8 @@
 import type { ModelInfo } from "./types";
 
-export function formatRelativeTime(ms: number): string {
-  if (!ms) return "";
-  const diff = Date.now() - ms;
-  const s = Math.floor(diff / 1000);
-  if (s < 45) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d ago`;
-  return new Date(ms).toLocaleDateString();
-}
-
 export function formatClock(ms: number): string {
   if (!ms) return "";
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-export function modelLabel(m: ModelInfo | null | undefined): string {
-  if (!m) return "No model";
-  return m.name || m.id || m.provider;
 }
 
 export function modelShort(m: ModelInfo | null | undefined): string {

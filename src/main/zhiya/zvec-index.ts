@@ -88,13 +88,6 @@ export function jiebaDictDir(): string | null {
 const EMBED_CACHE_MAX = Number(process.env.MPI_ZHIYA_EMBED_CACHE_MAX || 512);
 const embedCache = new Map<string, number[]>();
 
-export function embedCacheSize(): number {
-  return embedCache.size;
-}
-export function clearEmbedCache(): void {
-  embedCache.clear();
-}
-
 export async function embedText(text: string, opts: { noCache?: boolean } = {}): Promise<number[]> {
   const key = `${embedUrl()}::${text}`;
   if (!opts.noCache) {

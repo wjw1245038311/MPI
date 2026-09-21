@@ -326,11 +326,6 @@ export interface Proposal {
   result: string | null;
 }
 
-/** 提案落盘路径：<池>/proposals/<id>.md（不分月——提案生命周期短，平铺更好翻）。 */
-export function proposalFileName(id: string): string {
-  return `${id}.md`;
-}
-
 const FM_KEYS = [
   "id",
   "created",

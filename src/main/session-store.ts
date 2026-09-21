@@ -543,12 +543,6 @@ function localDayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** Drop the mtime+size usage cache (test hook; also safe to call after data migration). */
-export function resetUsageCache(): void {
-  usageCache.clear();
-  usageCacheDay = "";
-}
-
 /** Aggregate token/cost usage across every session file (all-time plus local-today). */
 export async function getTotalUsage(): Promise<TotalUsage> {
   const root = getSessionsDir();
