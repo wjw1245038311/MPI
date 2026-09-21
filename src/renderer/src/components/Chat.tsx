@@ -1073,6 +1073,11 @@ function MessageGroupInner({
   }, [artifacts, group.items, toolRuns]);
   const [artifactExists, setArtifactExists] = useState<Record<string, boolean>>({});
 
+  // 文件产物默认折叠（与工具卡同一交互）：文件多时不挤占对话正文。
+  // 展开状态存模块级 Map——HMR 重挂载后按用户上次操作恢复。
+  const artifactExpandKey = `${group.key}:artifacts`;
+  const [artifactsOpen, setArtifactsOpen] = useState(() => getExpandState(artifactExpandKey) ?? false);
+
   useEffect(() => {
     let cancelled = false;
     if (!artifacts.length) {
@@ -1291,12 +1296,24 @@ function MessageGroupInner({
         {streaming && <span className="streaming-dot" />}
         {last.errorMessage && <div style={{ color: "#c0392b", marginTop: 6 }}>{last.errorMessage}</div>}
         {visibleArtifacts.length > 0 && (
-          <section className="msg-artifacts" aria-label={language === "zh" ? "文件产物" : "File outputs"}>
-            <div className="msg-artifacts-head">
+          <section className={`msg-artifacts${artifactsOpen ? " open" : ""}`} aria-label={language === "zh" ? "文件产物" : "File outputs"}>
+            <button
+              type="button"
+              className="msg-artifacts-head"
+              aria-expanded={artifactsOpen}
+              title={language === "zh" ? (artifactsOpen ? "收起文件列表" : "展开文件列表") : artifactsOpen ? "Collapse file list" : "Expand file list"}
+              onClick={() => {
+                const next = !artifactsOpen;
+                setArtifactsOpen(next);
+                setExpandState(artifactExpandKey, next);
+              }}
+            >
               <Files size={13} />
               <span>{language === "zh" ? "文件产物" : "File outputs"}</span>
               <span className="msg-artifacts-count">{visibleArtifacts.length}</span>
-            </div>
+              <ChevronRight size={12} className={`msg-artifacts-chevron${artifactsOpen ? " up" : ""}`} />
+            </button>
+            {artifactsOpen && (
             <div className="msg-artifacts-list">
               {visibleArtifacts.map((artifact) => (
                 <button
@@ -1330,6 +1347,7 @@ function MessageGroupInner({
                 </button>
               ))}
             </div>
+            )}
           </section>
         )}
         {!streaming && (
