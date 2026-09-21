@@ -16,6 +16,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileS
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { getConfig, updateConfig } from "./config";
+import { configuredKnowledgeDir } from "./knowledge-dir";
 import { getAgentDir } from "./session-store";
 
 export const PERSONA_FILE = "persona.md";
@@ -86,7 +87,7 @@ const AGREEMENT_TEMPLATE = `# 协作约定（Agreement）
 <!-- 环境锚点 / 职责分离 / 执行逻辑 / 最小必要 / 安全底线 / 代码规范 / 状态一致 -->
 
 ## 跨设备协作（devmail）
-<!-- 例：「发送任务 …」触发词 → 经 devmail 给指定设备发邮件指令 -->
+<!-- 例：「发送邮件 …」/「接收邮件」触发词 → 经 devmail 收发设备间邮件 -->
 
 ## 协作偏好
 <!-- 例：排障时先复述理解再动手；「继续任务」= 从上次中断点恢复 -->
@@ -421,10 +422,13 @@ function extractSection(text: string, heading: string): string {
  * the hard rules.
  */
 function buildZhiyaPointers(): string {
+  // 知识库位置随知芽设置变（默认才是每项目的 .alexandria/knowledge）。
+  const kb = configuredKnowledgeDir();
+  const kbWhere = kb ? `\`${kb}\`（知芽设置里配的目录）` : "本项目根目录的 `.alexandria/knowledge/`（存在时）";
   return [
     "## 知芽 · 指针（按需读取）",
-    "- **协作约定全文** `~/.pi/agent/zhiya/agreement.md`：涉及 git 提交/推送、破坏性操作（删除/覆盖/重置）、跨设备发任务（devmail「发送任务」）、新建文件或目录、进入陌生项目、无人值守任务（定时任务）之前，先读该文件确认规则。",
-    "- **项目知识库** 本项目根目录的 `.alexandria/knowledge/`（存在时）：回答架构、数据流、模块职责、历史决策类问题前，先用 alexandria 检索它缩小范围，再读关键源码确认；证据不足时明确说明并回退到源码。",
+    "- **协作约定全文** `~/.pi/agent/zhiya/agreement.md`：涉及 git 提交/推送、破坏性操作（删除/覆盖/重置）、跨设备收发邮件（devmail「发送邮件」/「接收邮件」）、新建文件或目录、进入陌生项目、无人值守任务（定时任务）之前，先读该文件确认规则。",
+    `- **知识库** ${kbWhere}：回答架构、数据流、模块职责、历史决策类问题前，先用 alexandria 检索它缩小范围，再读关键源码确认；证据不足时明确说明并回退到源码。`,
   ].join("\n");
 }
 

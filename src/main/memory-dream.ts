@@ -17,6 +17,7 @@
  */
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { knowledgeLessonsDir } from "./knowledge-dir";
 import { defaultMemoryModel } from "./memory-model";
 import { listEntries, newId, type PoolEntry } from "./zhiya/pool";
 import { listProposals, writeProposal } from "./zhiya/proposals";
@@ -486,7 +487,7 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
     // 真跑就会撞已有文件/写出重复内容）。命中即不出提案，只在报告里说明。
     if (kind === "promote-kb") {
       const root0 = e.projectRoot ?? deps.defaultProjectRoot ?? null;
-      const dir0 = root0 ? join(root0, ".alexandria", "knowledge", "lessons") : null;
+      const dir0 = knowledgeLessonsDir(root0);
       const dup = dir0 ? existingLessonFor(dir0, titleForDedupe(e), e.text, e.id) : null;
       if (dup) {
         errors.push(`跳过 ${e.id.slice(-6)}：KB 已有同一教训（${dup}）`);
@@ -529,6 +530,7 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
       kind === "promote-kb" ? (/^#\s+(.+)$/m.exec(body)?.[1]?.trim() || titleFromEntry(e.text)) : titleFromEntry(e.text);
 
     const root = e.projectRoot ?? deps.defaultProjectRoot ?? null;
+    const lessonsDir = kind === "promote-kb" ? knowledgeLessonsDir(root) : null;
     const proposal: Proposal = {
       id: newId(),
       createdAt: new Date().toISOString(),
@@ -539,10 +541,7 @@ export async function runDream(deps: DreamDeps): Promise<DreamReport> {
       reason: `${reason}｜复现 ${e.recurrence} 次｜重要性 ${e.importance}`,
       title,
       body,
-      target:
-        kind === "promote-kb" && root
-          ? join(root, ".alexandria", "knowledge", "lessons", lessonFileFor(title, body, lessonHint(e), e.id))
-          : null,
+      target: lessonsDir ? join(lessonsDir, lessonFileFor(title, body, lessonHint(e), e.id)) : null,
       decidedAt: null,
       result: null,
     };

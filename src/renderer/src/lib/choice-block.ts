@@ -101,6 +101,49 @@ export function parseChoiceBlockData(body: string): ChoiceBlockData | null {
  * 返回 null 表示「连容错都用不上」——调用方按未闭合围栏处理（原样文本）。
  * `end` 是闭合行的下标；正文解析失败时 `data` 为 null（降级为代码块）。
  */
+/**
+ * 截出正文里第一个括号配对的 JSON 值（跳过字符串内的括号与转义）。
+ * 用于正文被尾部垃圾污染时：只要前面那段 JSON 合法，就仍然认它。
+ */
+function sliceFirstJson(text: string): string | null {
+  const start = text.search(/[[{]/);
+  if (start < 0) return null;
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "[") stack.push("]");
+    else if (ch === "{") stack.push("}");
+    else if (ch === "]" || ch === "}") {
+      if (stack.pop() !== ch) return null;
+      if (!stack.length) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * 解析围栏正文（容错版）：先整体 parse；失败则截出第一个完整 JSON 再试。
+ *
+ * 为什么要这一步：模型偶尔会把闭合围栏吐成特殊 token（类似 `<` + 标签名 + `>`
+ * 的一串控制标记），于是正文尾部挂上了非 JSON 行，严格 parse 必失败——
+ * 结果是整块降级、面板不出现。截到第一个完整 JSON 为止就能救回来。
+ */
+function parseChoiceBodyLoose(body: string): ChoiceBlockData | null {
+  const direct = parseChoiceBlockData(body.trim());
+  if (direct) return direct;
+  const sliced = sliceFirstJson(body);
+  return sliced ? parseChoiceBlockData(sliced) : null;
+}
+
 function readChoiceFence(
   lines: string[],
   openIndex: number,
@@ -110,7 +153,7 @@ function readChoiceFence(
   let loose: { index: number; prefix: string } | null = null;
   for (let k = openIndex + 1; k < lines.length; k++) {
     if (closeReFor(openLen).test(lines[k])) {
-      return { data: parseChoiceBlockData(lines.slice(openIndex + 1, k).join("\n")), end: k };
+      return { data: parseChoiceBodyLoose(lines.slice(openIndex + 1, k).join("\n")), end: k };
     }
     // 顺手记下首个「行尾反引号」候选（粘行闭合 / 反引号数不足），等严格扫描落空后再验证。
     if (!loose) {
@@ -122,11 +165,11 @@ function readChoiceFence(
   // （确实是模型写坏的围栏）仍以它为界返回，让调用方降级成代码块而不是当普通文本。
   if (loose) {
     const body = [...lines.slice(openIndex + 1, loose.index), loose.prefix].join("\n");
-    return { data: parseChoiceBlockData(body), end: loose.index };
+    return { data: parseChoiceBodyLoose(body), end: loose.index };
   }
   // 第三遍：一个闭合都没有（模型忘了写）——把剩余文本整体当正文，剥掉可能的行尾反引号。
   const tail = lines.slice(openIndex + 1).join("\n").replace(/`{3,}\s*$/, "");
-  const tailData = parseChoiceBlockData(tail);
+  const tailData = parseChoiceBodyLoose(tail);
   return tailData ? { data: tailData, end: lines.length - 1 } : null;
 }
 

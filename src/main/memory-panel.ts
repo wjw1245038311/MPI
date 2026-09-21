@@ -6,7 +6,7 @@
  * 所有写操作都复用已验证的执行器（memory-promote / memory-ops），不另写一套。
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { knowledgeLessonsDir } from "./knowledge-dir";
 import { listEntries, type PoolEntry } from "./zhiya/pool";
 import { listProposals, pendingProposals, type ProposalList } from "./zhiya/proposals";
 import type { Proposal } from "./zhiya/triage";
@@ -299,9 +299,9 @@ export function resolveLessonsDirFor(poolDir: string, p: Proposal): string | nul
   return anyWithRoot?.projectRoot ? joinForLessons(anyWithRoot.projectRoot) : null;
 }
 
-/** <项目根>/.alexandria/knowledge/lessons（用 path.join，避免与 Windows 根斜杠混用） */
-function joinForLessons(root: string): string {
-  return join(root.replace(/[\/]+$/, ""), ".alexandria", "knowledge", "lessons");
+/** 知识库 lessons 目录：优先显式配置的 knowledgeDir，否则 <项目根>/.alexandria/knowledge/lessons。 */
+function joinForLessons(root: string): string | null {
+  return knowledgeLessonsDir(root);
 }
 
 export interface ActionResult {

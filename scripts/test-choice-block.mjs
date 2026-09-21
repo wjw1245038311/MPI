@@ -109,6 +109,32 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   assert.equal(segs[0].text, text);
 }
 
+// 回归：模型把闭合围栏吐成特殊 token（尾部挂非 JSON 垃圾）→ 仍要认成面板。
+// 实测故障：`[{"a"}]` 后面跟三行 `</XXX_SPECIAL_TOKEN>` 类控制标记，严格 parse 必失败。
+{
+  const body = JSON.stringify([{ title: "q", options: ["a", "b"] }]);
+  const text = `前言\n${FENCE_OPEN}\n${body}\n</XyZ_SPECIAL_TOKEN_1>\n</XyZ_SPECIAL_TOKEN_2>`;
+  const segs = cb.splitChoiceSegments(text);
+  assert.deepEqual(segs.map((s) => s.kind), ["md", "choice"]);
+  assert.equal(segs[1].data.questions[0].title, "q");
+}
+
+// 同上，但闭合围栏还在（垃圾污染的是正文尾部）→ 一样要认。
+{
+  const body = JSON.stringify([{ title: "q", options: ["a", "b"] }]);
+  const text = `前\n${fence(`${body}\n</XyZ_SPECIAL_TOKEN>` )}\n后`;
+  const segs = cb.splitChoiceSegments(text);
+  assert.deepEqual(segs.map((s) => s.kind), ["md", "choice", "md"]);
+}
+
+// 垃圾 + JSON 本身非法 → 仍不认（截第一个 JSON 不得变成「能截就认」）。
+{
+  const text = `前\n${FENCE_OPEN}\n[{oops}]\n</XyZ_SPECIAL_TOKEN>\n后记`;
+  const segs = cb.splitChoiceSegments(text);
+  assert.equal(segs.length, 1);
+  assert.equal(segs[0].kind, "md");
+}
+
 // 粘行闭合但 JSON 非法 → 降级为 code 段（容错不得误吞）。
 {
   const text = `前\n${FENCE_OPEN}\n[{oops}]\`\`\` `;

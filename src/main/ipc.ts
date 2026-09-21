@@ -225,6 +225,7 @@ import {
   zhiyaMasterPath,
   type ZhiyaFileName,
 } from "./zhiya";
+import { knowledgeRoot } from "./knowledge-dir";
 import { appendPromptFingerprint, buildAppendSystemPrompt } from "./append-prompt";
 
 
@@ -2692,9 +2693,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
 
   // Knowledge base browsing (per-project .alexandria/knowledge/).
   ipcMain.handle("zhiya:listKb", (_e, cwd: unknown) => {
-    if (!cwd || typeof cwd !== "string") throw new Error("Invalid project dir");
-    const root = join(cwd, ".alexandria", "knowledge");
-    if (!existsSync(root)) return { exists: false, files: [] as { path: string; size: number; mtime: number }[] };
+    // 知识库根：显式配置的目录优先（可跨项目共享），否则 <项目根>/.alexandria/knowledge。
+    const root = knowledgeRoot(typeof cwd === "string" && cwd ? cwd : null);
+    if (!root || !existsSync(root)) return { exists: false, files: [] as { path: string; size: number; mtime: number }[] };
     const files: { path: string; size: number; mtime: number }[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -2711,8 +2712,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { exists: true, root, files };
   });
   ipcMain.handle("zhiya:getKbFile", (_e, cwd: unknown, relPath: unknown) => {
-    if (!cwd || typeof cwd !== "string" || !relPath || typeof relPath !== "string") throw new Error("Invalid args");
-    const root = join(cwd, ".alexandria", "knowledge");
+    if (typeof cwd !== "string" || !relPath || typeof relPath !== "string") throw new Error("Invalid args");
+    const root = knowledgeRoot(cwd || null);
+    if (!root) throw new Error("No knowledge dir");
     const abs = resolve(root, relPath);
     // Path-traversal guard: the resolved path must stay inside the KB root.
     if (abs !== root && !abs.startsWith(root + sep)) throw new Error("Path escapes knowledge dir");
@@ -2739,9 +2741,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   });
 
   ipcMain.handle("zhiya:openObsidian", async (_e, cwd: unknown, relPath?: unknown) => {
-    if (!cwd || typeof cwd !== "string") throw new Error("Invalid project dir");
-    const root = join(cwd, ".alexandria", "knowledge");
-    if (!existsSync(root)) return { ok: false, error: "no-kb" };
+    const root = knowledgeRoot(typeof cwd === "string" && cwd ? cwd : null);
+    if (!root || !existsSync(root)) return { ok: false, error: "no-kb" };
     // An explicit file (the one selected in the panel) wins over the default.
     let target = "";
     if (typeof relPath === "string" && relPath) {

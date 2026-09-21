@@ -176,6 +176,9 @@ export interface AppConfig {
    * （<MyWorkspace>/Agent/AgentSetting，从 lastThreadCwd 向上找）并写回。
    * 探测不到时知芽只用本机副本工作，且面板会显式提示——不静默假装已同步。 */
   zhiyaMasterDir?: string;
+  /** 知芽知识库目录（可选）：设置了就用它（目录里放 md 文件，可跨项目共享），
+   * 留空 = 每项目的 `<项目根>/.alexandria/knowledge`。机器本地路径，不随备份导入。 */
+  knowledgeDir?: string;
   /**
    * 巩固（dream）是否自动跑。
    * 默认 false：累计重要性到 150 只**记账并提示**，不自动花几分钟跑本地模型——
@@ -519,6 +522,7 @@ export function loadConfig(userDataDir: string): AppConfig {
           typeof parsed.extAutoPickModel === "boolean" ? parsed.extAutoPickModel : undefined,
         qaMode: parsed.qaMode === "inline" || parsed.qaMode === "manual" ? parsed.qaMode : undefined,
         zhiyaMasterDir: typeof parsed.zhiyaMasterDir === "string" ? parsed.zhiyaMasterDir : undefined,
+        knowledgeDir: typeof parsed.knowledgeDir === "string" ? parsed.knowledgeDir : undefined,
         zhiyaDreamAuto: typeof parsed.zhiyaDreamAuto === "boolean" ? parsed.zhiyaDreamAuto : undefined,
         zhiyaDreamLlmClassify:
           typeof parsed.zhiyaDreamLlmClassify === "boolean" ? parsed.zhiyaDreamLlmClassify : undefined,
@@ -733,9 +737,9 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (typeof p.userAvatar === "string" && p.userAvatar.startsWith("data:image/")) out.userAvatar = p.userAvatar;
   if (typeof p.agentAvatar === "string" && p.agentAvatar.startsWith("data:image/")) out.agentAvatar = p.agentAvatar;
   if (typeof p.userProfile === "string") out.userProfile = p.userProfile;
-  // NOTE: zhiyaMasterDir is intentionally NOT imported — it is a machine-local
-  // path (the AgentSetting checkout) that would dangle on the target machine.
-  // Each machine re-detects it on first launch.
+  // NOTE: zhiyaMasterDir / knowledgeDir are intentionally NOT imported — they are
+  // machine-local paths (checkouts / vault dirs) that would dangle on the target
+  // machine. Each machine re-detects or re-sets them on first launch.
   if (typeof p.extAutoPickModel === "boolean") out.extAutoPickModel = p.extAutoPickModel;
   if (p.qaMode === "inline" || p.qaMode === "manual") out.qaMode = p.qaMode;
   if (typeof p.lastThreadCwd === "string" && p.lastThreadCwd) out.lastThreadCwd = p.lastThreadCwd;

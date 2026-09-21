@@ -3642,9 +3642,15 @@ export const useStore = create<PiStore>()((set, get) => {
     set({ zhiyaModule: module });
     try {
       if (module === "kb") {
-        const cwd = get().activeProjectCwd;
-        if (!cwd) {
-          get().pushToast("warning", zh ? "先打开一个项目再看知识库。" : "Open a project to view its knowledge base.");
+        const cwd = get().activeProjectCwd || "";
+        const configured = (get().config?.knowledgeDir || "").trim();
+        if (!cwd && !configured) {
+          get().pushToast(
+            "warning",
+            zh
+              ? "先打开一个项目，或在知芽设置里指定一个知识库目录。"
+              : "Open a project, or set a knowledge dir in Zhiya settings.",
+          );
           return;
         }
         const r = await window.pi.zhiya.listKb(cwd);

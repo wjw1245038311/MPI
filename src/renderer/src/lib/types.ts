@@ -576,6 +576,9 @@ export interface AppConfig {
    * `~/.pi/agent/zhiya/` 是它的单向同步副本。留空 = 首次启动自动探测并写回；
    * 探测不到时只用本机副本。 */
   zhiyaMasterDir?: string;
+  /** 知芽知识库目录（可选）：设置了就用它（目录里放 md 文件，可跨项目共享），
+   * 留空 = 每项目的 `<项目根>/.alexandria/knowledge`。 */
+  knowledgeDir?: string;
   /** 巩固（dream）是否自动跑。默认 false：只记账并提示。 */
   zhiyaDreamAuto?: boolean;
   /** dream 六题判定是否调模型。默认 false：用确定性启发式。 */

@@ -13,6 +13,8 @@ export function ZhiyaSettingsView({ zh }: { zh: boolean }) {
   const [dirInput, setDirInput] = useState("");
   const [editDir, setEditDir] = useState(false);
   const [providers, setProviders] = useState<Providers>({});
+  const [kbEdit, setKbEdit] = useState(false);
+  const [kbInput, setKbInput] = useState("");
   const [mmMode, setMmMode] = useState<"none" | "session" | "model">("none");
   const [mmProvider, setMmProvider] = useState("");
   const [mmModelId, setMmModelId] = useState("");
@@ -63,13 +65,38 @@ export function ZhiyaSettingsView({ zh }: { zh: boolean }) {
     }
   };
 
-  const browse = async () => {
+  useEffect(() => {
+    setKbInput(config?.knowledgeDir || "");
+  }, [config?.knowledgeDir]);
+
+  const pickFolder = async (): Promise<string | null> => {
     try {
-      const p = await window.pi.app.showOpenDialog("folder");
-      if (p) setDirInput(p);
+      return await window.pi.app.showOpenDialog("folder");
     } catch (e: any) {
       toast("error", (zh ? "选择目录失败：" : "Pick dir failed: ") + (e?.message || e));
+      return null;
     }
+  };
+
+  const saveKbDir = async (value: string) => {
+    try {
+      const next = await window.pi.app.setConfig({ knowledgeDir: value.trim() });
+      useStore.setState({ config: next });
+      setKbEdit(false);
+      toast("info", zh ? "已保存知识库目录。" : "Knowledge dir saved.");
+    } catch (e: any) {
+      toast("error", (zh ? "保存失败：" : "Save failed: ") + (e?.message || e));
+    }
+  };
+
+  const browse = async () => {
+    const p = await pickFolder();
+    if (p) setDirInput(p);
+  };
+
+  const browseKb = async () => {
+    const p = await pickFolder();
+    if (p) setKbInput(p);
   };
 
   const saveMemoryModel = async (mode: "none" | "session" | "model", provider?: string, modelId?: string) => {
@@ -141,6 +168,56 @@ export function ZhiyaSettingsView({ zh }: { zh: boolean }) {
               {zh ? "保存" : "Save"}
             </button>
             <button className="set-btn ghost" onClick={() => setEditDir(false)}>
+              {zh ? "取消" : "Cancel"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="zhiya-settings-sec">
+        <div className="mempool-sub">{zh ? "知识库目录" : "Knowledge base dir"}</div>
+        <div className="zhiya-dim">
+          {zh
+            ? "目录里放 md 文件即可；留空 = 每个项目自己的 .alexandria/knowledge（跟项目走）。"
+            : "Point at a folder of md files; empty = each project's own .alexandria/knowledge."}
+        </div>
+        <div className="zhiya-setting-row">
+          <code>
+            {(config?.knowledgeDir || "").trim() ||
+              (zh ? "（未设：用项目内的 .alexandria/knowledge）" : "(unset: per-project .alexandria/knowledge)")}
+          </code>
+        </div>
+        {!kbEdit ? (
+          <div className="zhiya-setting-actions">
+            <button
+              className="set-btn ghost"
+              onClick={() => {
+                setKbInput(config?.knowledgeDir || "");
+                setKbEdit(true);
+              }}
+            >
+              {zh ? "修改" : "Edit"}
+            </button>
+            <button className="set-btn ghost" onClick={() => void saveKbDir("")}>
+              {zh ? "重置为项目内" : "Reset to per-project"}
+            </button>
+          </div>
+        ) : (
+          <div className="zhiya-setting-actions">
+            <input
+              className="set-input zhiya-dir-input"
+              value={kbInput}
+              onChange={(e) => setKbInput(e.target.value)}
+              placeholder={zh ? "知识库目录绝对路径" : "Knowledge dir absolute path"}
+              spellCheck={false}
+            />
+            <button className="set-btn ghost" onClick={browseKb}>
+              {zh ? "浏览…" : "Browse…"}
+            </button>
+            <button className="set-btn primary" onClick={() => void saveKbDir(kbInput)}>
+              {zh ? "保存" : "Save"}
+            </button>
+            <button className="set-btn ghost" onClick={() => setKbEdit(false)}>
               {zh ? "取消" : "Cancel"}
             </button>
           </div>

@@ -152,5 +152,34 @@ ok("空池 / 未配置池目录都不炸");
   ok("提案交互契约：前缀/后缀都可查、短柄补全、列表可点选批准/拒绝/看正文");
 }
 
+// --- 工具签名契约（真机 bug：execute(args, ctx) 把 toolCallId 当成了参数对象）-----
+{
+  // pi 的工具 API 是 execute(toolCallId, params, signal, onUpdate, ctx)。
+  // 曾写成 execute(args, ctx) → 第一个参数其实是**字符串 toolCallId**，
+  // 于是 args.text 永远为空，memory_note 每次只回「text 为空，未记录」。
+  const files = readdirSync("src/main").filter((f) => /^mpi-.*-ext\.ts$/.test(f));
+  assert.ok(files.length >= 3, `应扫到多个扩展（实际 ${files.length}）`);
+  let checked = 0;
+  for (const f of files) {
+    const text = readFileSync(`src/main/${f}`, "utf8");
+    // 抓 execute 的形参列表：方法写法或箭头属性写法
+    for (const m of text.matchAll(/execute\s*:?\s*(?:async\s*)?\(([^)]*)\)/g)) {
+      const params = m[1].split(",").map((x) => x.trim()).filter(Boolean);
+      if (!params.length) continue; // 无参工具 execute() 是合法的
+      // 取形参名的第一段标识符（参数可能带 TS 标注：`_toolCallId: string`）
+      const first = (/^([A-Za-z_$][\w$]*)/.exec(params[0] || "") || [, ""])[1];
+      checked++;
+      assert.ok(
+        /^_?toolCallId$/.test(first),
+        `${f}: execute 的第一个参数应是 toolCallId，实际是「${first}」——写错会把参数对象挤到 ctx 位置（真机 bug）`,
+      );
+      assert.ok(params.length >= 2, `${f}: execute 至少要有 (toolCallId, params) 两个参数，实际 ${params.length} 个`);
+    }
+  }
+  assert.ok(checked >= 3, `应检查到多个 execute（实际 ${checked}）`);
+  ok(`工具签名契约：${files.length} 个扩展 / ${checked} 处 execute 首参都是 toolCallId（防"args 当参数对象"复发）`);
+}
+
+
 console.log(`\ntest:memorycmd 全部通过（${n} 项）`);
 
