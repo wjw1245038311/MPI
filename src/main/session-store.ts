@@ -167,7 +167,21 @@ function truncate(s: string, n: number): string {
   return flat.length > n ? flat.slice(0, n - 1) + "…" : flat;
 }
 
+// 摘要缓存（mtime+size 为键，与下方 usageCache 同模式）：全量扫描所有会话
+// ~700ms/127 文件/170MB，而 refreshProjects 在每次新建会话连接落地时都会跑——
+// 不缓存的话侧边栏每次「新建」都卡一下。首扫后只重读有变化的文件。
+const summaryCache = new Map<string, { mtimeMs: number; size: number; result: { summary: ThreadSummary; cwd: string } | null }>();
+
 async function readThreadSummary(file: string): Promise<{ summary: ThreadSummary; cwd: string } | null> {
+  let st: Stats;
+  try {
+    st = statSync(file);
+  } catch {
+    return null; // 文件不存在/不可读（与旧行为一致）
+  }
+  const hit = summaryCache.get(file);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.result;
+
   let id = "";
   let cwd = "";
   let name = "";
@@ -210,17 +224,16 @@ async function readThreadSummary(file: string): Promise<{ summary: ThreadSummary
   } catch {
     return null;
   }
-  if (!id && !cwd) return null;
-  if (!cwd) return null;
-  let updatedAt = lastTs;
-  try {
-    const st = statSync(file);
-    updatedAt = Math.max(updatedAt, st.mtimeMs);
-  } catch {
-    /* ignore */
+  let result: { summary: ThreadSummary; cwd: string } | null = null;
+  if (cwd) {
+    const updatedAt = Math.max(lastTs, st.mtimeMs);
+    const title = displayThreadTitle(name, preview) || "New thread";
+    result = { summary: { file, id, title, preview, updatedAt, messageCount }, cwd };
   }
-  const title = displayThreadTitle(name, preview) || "New thread";
-  return { summary: { file, id, title, preview, updatedAt, messageCount }, cwd };
+  // 缓存结果（含损坏文件的 null，避免反复重读）；简单封顶。
+  summaryCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, result });
+  if (summaryCache.size > 4096) summaryCache.clear();
+  return result;
 }
 
 /** Full transcript + display metadata read straight from a session .jsonl,
@@ -612,6 +625,11 @@ export async function scanProjects(): Promise<ProjectSummary[]> {
   const groups = new Map<string, ProjectSummary>();
   // light concurrency limit
   const queue: string[] = listAllSessionFiles(root);
+  // Prune cache entries for files that no longer exist (deleted/trashed sessions).
+  if (summaryCache.size > queue.length) {
+    const alive = new Set(queue);
+    for (const key of summaryCache.keys()) if (!alive.has(key)) summaryCache.delete(key);
+  }
 
   const concurrency = 8;
   let cursor = 0;
