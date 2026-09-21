@@ -1158,7 +1158,7 @@ interface PiStore {
 
   /** Open a thread. `name` (new tasks only) pins the display title before the
    * first prompt — used by release-review sessions titled with the version. */
-  openThread: (cwd: string, sessionFile?: string, permission?: PermissionLevel, name?: string) => Promise<string | null>;
+  openThread: (cwd: string, sessionFile?: string, permission?: PermissionLevel, name?: string, opts?: { keepFolderDraft?: boolean }) => Promise<string | null>;
   /** Ensure a live pi process backs the thread (adopting the warm spare).
    *  Resolves with the thread id, or null if the connection failed. Safe to
    *  call repeatedly: concurrent calls share one in-flight connect. */
@@ -2041,7 +2041,7 @@ export const useStore = create<PiStore>()((set, get) => {
   toggleProject: (cwd) => set((s) => ({ expandedProjects: { ...s.expandedProjects, [cwd]: !s.expandedProjects[cwd] } })),
   setActiveProject: (cwd) => set({ activeProjectCwd: cwd, activeThreadId: null }),
 
-  openThread: async (cwd, sessionFile, permission, name) => {
+  openThread: async (cwd, sessionFile, permission, name, opts) => {
     // Already on screen: just activate. If it was only disk-rendered so far
     // (no live process yet), kick off / reuse the background connect so it
     // becomes interactive.
@@ -2122,7 +2122,19 @@ export const useStore = create<PiStore>()((set, get) => {
     // background (adopting the warm spare). No blocking "starting pi" spinner.
     // The temp id is remapped to the real session file once connected.
     const tempId = `opening-${uid()}`;
-    const placeholder: ThreadState = { ...emptyThread(cwd), loading: false, connected: false, permission: permission || defaultPermission() };
+    // 新对话 = 干净输入框：不带出上次未发送的文件夹级草稿（n:cwd）。例外是
+    // keepFolderDraft——换文件夹流程刚把在途草稿搬过来，不能抹掉。
+    const folderDraftKey = draftKeyFor({ cwd }, tempId);
+    if (!opts?.keepFolderDraft && folderDraftKey) get().clearDraft(folderDraftKey);
+    // 新会话从默认任务模式起步（balanced，除非用户配置了其它存在的模式）。
+    // 权限直接用模式的值：占位权限就是 thread:open 启动 pi + 写 gate mode 用的
+    // 值——若先用应用默认（可能是 full）、连接后再改回 sandbox，中间有数秒窗口
+    // 新会话实际以高权限运行。
+    const defaultMode = resolveDefaultTaskMode(
+      normalizeTaskModes(get().config?.taskModes, get().config?.language === "zh" ? "zh" : "en"),
+      get().config?.defaultTaskModeId,
+    );
+    const placeholder: ThreadState = { ...emptyThread(cwd), loading: false, connected: false, permission: permission || defaultMode?.permission || defaultPermission() };
     placeholder.isNewSession = true;
     if (name) placeholder.sessionName = name;
     set((s) => ({
@@ -2133,13 +2145,7 @@ export const useStore = create<PiStore>()((set, get) => {
       expandedProjects: { ...s.expandedProjects, [cwd]: true },
     }));
     get().ensureConnected(tempId);
-    // New conversations start on the default task mode (balanced unless the
-    // user configured another existing mode): apply it once the bridge is live
-    // so permission + thinking + injected content all take effect.
-    const defaultMode = resolveDefaultTaskMode(
-      normalizeTaskModes(get().config?.taskModes, get().config?.language === "zh" ? "zh" : "en"),
-      get().config?.defaultTaskModeId,
-    );
+    // 连接落地后应用模式的其余参数（thinking + 注入内容）；权限已在占位时就位。
     if (defaultMode) void get().applyTaskMode(tempId, defaultMode.id);
     return tempId;
   },
@@ -2217,6 +2223,9 @@ export const useStore = create<PiStore>()((set, get) => {
           }
           return { threads, openThreadIds, activeThreadId };
         });
+        // 占位阶段的输入存在文件夹键 n:cwd；重映射后 composer 改读 s:sessionFile，
+        // 把在途文本搬过去（目标为空才搬），否则刚打的字会凭空消失。
+        if (id !== threadId && !t.sessionFile && t.cwd && res.sessionFile) carryDraftTo(`n:${t.cwd}`, `s:${res.sessionFile}`);
         // A brand-new session just appeared on disk (temp id remapped to the
         // real session file); refresh the sidebar so it shows under its project.
         if (id !== threadId) get().refreshProjects();
@@ -3813,7 +3822,8 @@ export const useStore = create<PiStore>()((set, get) => {
       carryDraftTo(draftKeyFor(get().threads[threadId]), `n:${path}`);
       await window.pi.app.openProject(path);
       await get().refreshProjects();
-      await get().openThread(path, undefined, get().threads[threadId]?.permission);
+      // keepFolderDraft：上面刚把在途草稿搬到 n:path，不能被新建流程清掉
+      await get().openThread(path, undefined, get().threads[threadId]?.permission, undefined, { keepFolderDraft: true });
     } catch (e: any) {
       get().pushToast("error", "切换文件夹失败：" + (e?.message || e));
     }
@@ -3836,7 +3846,8 @@ export const useStore = create<PiStore>()((set, get) => {
       const oldId = (await get().ensureConnected(threadId)) || threadId;
       await window.pi.app.openProject(cwd);
       await get().refreshProjects();
-      const newId = await get().openThread(cwd, undefined, original.permission);
+      // keepFolderDraft：上面刚把在途草稿搬到 n:cwd，不能被新建流程清掉
+      const newId = await get().openThread(cwd, undefined, original.permission, undefined, { keepFolderDraft: true });
       if (!newId) return;
       await get().closeThread(oldId);
     } catch (e: any) {

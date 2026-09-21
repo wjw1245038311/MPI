@@ -3769,6 +3769,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     };
   });
 
+const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
   ipcMain.handle("thread:open", async (_e, args: { cwd: string; sessionFile?: string; name?: string; permission?: PermissionLevel }) => {
     const { cwd, sessionFile, name } = args;
     if (sessionFile && bridges.has(sessionFile)) {
@@ -3784,11 +3786,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       );
     }
     lastOpenCwd = cwd;
-    if ((getConfig().lastThreadCwd || "") !== cwd) updateConfig({ lastThreadCwd: cwd });
+    if ((getConfig().lastThreadCwd || "") !== cwd) updateConfig({ lastThreadCwd: cwd }); // 同步全量写 config.json
     const permission = resolvePermission(sessionFile, args.permission);
     let handle: BridgeHandle | null = null;
     let adopted = false;
-    refreshWarmBridgeIfStale();
+    refreshWarmBridgeIfStale(); // 同步 fs stat（zhiya 指纹）；过期时会 drop+重生 spare
     const spareAtEntry = !!warmHandle;
     // Try to adopt the warm spare: switching a booted process is ~0.5s vs
     // ~5s for a cold start. A dead spare is dropped, a spare booted for
@@ -3824,6 +3826,10 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     bridges.set(handle.getId(), handle);
     try {
       await handle.bridge.start(); // no-op for the already-running spare
+      // pi 可能还在启动（全新 spawn，或几秒前刚重生的热备）：对未就绪的 pi 发
+      // newSession/switchSession 既慢又报 model=null / models=[]。先等第一个 RPC
+      // 应答（有界），再切会话——就绪后这些调用都是毫秒级。
+      await Promise.race([handle.bridge.getState().catch(() => undefined), delayMs(8000)]);
       if (adopted) {
         if (sessionFile) {
           await handle.bridge.switchSession(sessionFile);
@@ -3842,6 +3848,20 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         if (perms[state.sessionFile] !== permission) updateConfig({ threadPermissions: { ...perms, [state.sessionFile]: permission } });
       }
       const gathered = await gatherThread(handle.bridge, finalId, permission);
+      // 兜底：刚启动完的 pi 可能还在加载 providers——短暂重试，避免 UI 卡在
+      // 「model」+ 空模型列表（renderer 侧没有自动重取路径）。
+      let modelTries = 0;
+      while (((gathered.models || []).length === 0 || !gathered.model) && modelTries < 6) {
+        await delayMs(500);
+        modelTries++;
+        const st: any = await handle.bridge.getState().catch(() => null);
+        if (st?.model && !gathered.model) gathered.model = st.model;
+        const ms: any = await handle.bridge.getAvailableModels().catch(() => null);
+        if ((ms?.models || []).length > 0) {
+          gathered.models = ms.models;
+          break;
+        }
+      }
       // P1-12: restore per-thread auto mode. New sessions (no messages yet)
       // explicitly pick their initial model — this also fixes the "new session
       // starts on drifted pi global default" quirk for auto threads.
