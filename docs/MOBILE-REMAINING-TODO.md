@@ -92,11 +92,11 @@
 
 1. ~~**部署**~~ ✅ 已完成（2026-09-15，SFTP 4 文件 + curl 验证）。⚠ 权限实时同步还需**重启桌面实例**（main 进程改动，Ctrl+R 不够）；手机浏览器若缓存旧 index.html 则关掉标签页重开。
    ```bash
-   cd /e/MyWorkspace/Code/MPI && MSYS_NO_PATHCONV=1 ECS_PWD="<ecs root 密码>" node "$TEMP/ecs-ssh/upload.mjs" \
-     "E:/MyWorkspace/Code/MPI/mobile/pwa/dist/index.html" "/var/www/mpi-mobile/index.html" \
-     "E:/MyWorkspace/Code/MPI/mobile/pwa/dist/assets/index-CQEg0IcI.js" "/var/www/mpi-mobile/assets/index-CQEg0IcI.js" \
-     "E:/MyWorkspace/Code/MPI/mobile/pwa/dist/assets/index-CmLGSc0R.css" "/var/www/mpi-mobile/assets/index-CmLGSc0R.css" \
-     "E:/MyWorkspace/Code/MPI/android/publish/mpi-android.json" "/var/www/mpi-mobile/download/mpi-android.json"
+   cd /e/MyWorkspace/Project/MPI && MSYS_NO_PATHCONV=1 ECS_PWD="<ecs root 密码>" node "$TEMP/ecs-ssh/upload.mjs" \
+     "E:/MyWorkspace/Project/MPI/mobile/pwa/dist/index.html" "/var/www/mpi-mobile/index.html" \
+     "E:/MyWorkspace/Project/MPI/mobile/pwa/dist/assets/index-CQEg0IcI.js" "/var/www/mpi-mobile/assets/index-CQEg0IcI.js" \
+     "E:/MyWorkspace/Project/MPI/mobile/pwa/dist/assets/index-CmLGSc0R.css" "/var/www/mpi-mobile/assets/index-CmLGSc0R.css" \
+     "E:/MyWorkspace/Project/MPI/android/publish/mpi-android.json" "/var/www/mpi-mobile/download/mpi-android.json"
    ```
    验证：`curl -sk https://<relay-tailnet-ip>:9443/download/mpi-android.json | grep github`；手机刷新 PWA 应见「新建会话」与壳内提示条。
    ⚠ 权限实时同步还需**重启桌面实例**（main 进程改动，Ctrl+R 不够）。

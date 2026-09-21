@@ -17,7 +17,7 @@ const allow = [
   'rg "rm|rmdir|git push" src',
   // cd/pushd are navigation-only: the ubiquitous `cd <dir>; <read-only chain>`
   // pattern must classify as read-only (2026-09-15: it prompted under sandbox).
-  'cd "E:/MyWorkspace/Code/MPI"; wc -l src/x.tsx; grep -n "name" src/x.tsx | head -30',
+  'cd "E:/MyWorkspace/Project/MPI"; wc -l src/x.tsx; grep -n "name" src/x.tsx | head -30',
   "cd /tmp && ls",
 ];
 for (const command of allow) {

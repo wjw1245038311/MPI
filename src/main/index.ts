@@ -5,6 +5,7 @@ import { app, BrowserWindow, Menu, shell, Tray } from "electron";
 import { loadConfig, getConfig, updateConfig } from "./config";
 import { flushDrafts } from "./draft-store";
 import { runPendingDataMigrations } from "./data-migration";
+import { ensureKnowledgeDirConfigured } from "./knowledge-dir";
 import { ensureZhiyaFiles, migrateUserProfileToZhiya, zhiyaMasterDir } from "./zhiya";
 import { flushTodos, ingestInbox } from "./todo-store";
 import { cleanupOldRuntimes } from "./core-updater";
@@ -268,6 +269,8 @@ if (!gotLock) {
       // silently degrades into "never" otherwise (design §11.5).
       if (master) console.log("[zhiya] master dir:", master);
       else console.warn("[zhiya] no AgentSetting master dir detected — local copies only");
+      // 知识库目录同样"探测一次并写回"：新电脑/未配置实例否则会落空
+      console.log("[zhiya] knowledge dir:", ensureKnowledgeDirConfigured());
     } catch (e: any) {
       console.error("[zhiya] init failed:", e?.message || String(e));
     }

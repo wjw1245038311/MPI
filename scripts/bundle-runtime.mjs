@@ -142,6 +142,35 @@ function pruneEsbuildPlatforms(root) {
   if (removedBytes > 0) log(`pruned @esbuild platform binaries except ${keep}: -${formatSize(removedBytes)}`);
 }
 
+/** pi 依赖 @mariozechner/clipboard：npm 会把各平台的原生二进制一起装上
+ * （darwin-universal/x64/arm64、linux-x64/arm64/riscv64、win32-arm64 等，约 10MB），
+ * 而本机只可能加载当前平台那一份。只留当前平台的，其余删掉。
+ * 注意：不带平台后缀的 `@mariozechner/clipboard`（JS 包装层）要保留。 */
+function pruneClipboardPlatforms(root) {
+  const scope = join(root, "node_modules", "@mariozechner");
+  if (!existsSync(scope)) return;
+  const keepPrefix =
+    process.platform === "win32"
+      ? `clipboard-win32-${process.arch}`
+      : process.platform === "darwin"
+        ? "clipboard-darwin"
+        : `clipboard-linux-${process.arch}`;
+  let removedBytes = 0;
+  for (const entry of readdirSync(scope, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (!entry.name.startsWith("clipboard-")) continue; // JS 包装层保留
+    if (entry.name.startsWith(keepPrefix)) continue;
+    const abs = join(scope, entry.name);
+    try {
+      removedBytes += directoryStats(abs).bytes;
+      rmSync(abs, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+  if (removedBytes > 0) log(`pruned clipboard binaries except ${keepPrefix}: -${formatSize(removedBytes)}`);
+}
+
 function readPiVersion(dir) {
   try {
     const packageJson = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
@@ -239,6 +268,7 @@ function bundlePi(source) {
   const before = directoryStats(destination);
   pruneTree(destination);
   pruneEsbuildPlatforms(destination);
+  pruneClipboardPlatforms(destination);
   const after = directoryStats(destination);
   log(`pruned pi runtime: ${before.files} files/${formatSize(before.bytes)} -> ${after.files} files/${formatSize(after.bytes)}`);
 

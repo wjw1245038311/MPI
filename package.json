@@ -213,7 +213,20 @@
       "output": "release"
     },
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "!**/*.map",
+      "!**/node_modules/pdfjs-dist/**",
+      "!**/node_modules/@napi-rs/**",
+      "!**/node_modules/react-dom/**",
+      "!**/node_modules/highlight.js/**",
+      "!**/node_modules/node-pty/prebuilds/darwin-*/**",
+      "!**/node_modules/node-pty/prebuilds/win32-arm64/**",
+      "!**/node_modules/node-pty/third_party/**",
+      "!**/node_modules/node-pty/deps/**"
+    ],
+    "electronLanguages": [
+      "en-US",
+      "zh-CN"
     ],
     "extraResources": [
       {
