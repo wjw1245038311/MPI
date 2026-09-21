@@ -51,6 +51,7 @@ import {
 import {
   getDataMigrationStatus,
   previewMigration,
+  remapProjectPath,
   setSessionsDir,
   setTodosDir,
 } from "./data-migration";
@@ -165,7 +166,7 @@ import {
 import { getSkillDetails, getSkillsHubLeaderboard, installSkillFromHub, searchSkillsHub } from "./skills-hub";
 import { getMcpMarketDetail, searchMcpMarket } from "./mcp-market";
 import { getNpmReadme, searchNpmPackages } from "./npm-registry";
-import { removeAutomationTask, runTaskNow, startScheduler } from "./automation";
+import { hasActiveAutomationBridge, removeAutomationTask, runTaskNow, startScheduler } from "./automation";
 import { cancelAppRegistration, startAppRegistration } from "./messaging/app-registration";
 import { getMessagingState, initMessaging, messagingSetConfig, sanitizeFeishuConfig } from "./messaging/service";
 import type { FeishuChannelConfig, WeChatChannelConfig } from "./messaging/types";
@@ -904,8 +905,14 @@ const autopilot = new ModelAutopilot({
 
 function warmCwd(): string {
   // Prefer the project actually used most recently (persisted), so the first
-  // click after an app restart already hits a matching spare.
-  return lastOpenCwd || getConfig().lastThreadCwd || (getConfig().pinnedProjects || [])[0] || homedir();
+  // click after an app restart already hits a matching spare. Stale entries
+  // (a folder moved/renamed outside of MPI) must not seed the spare — spawning
+  // into a missing directory fails and would burn warm-start retries.
+  const candidates = [lastOpenCwd, getConfig().lastThreadCwd, ...(getConfig().pinnedProjects || [])];
+  for (const c of candidates) {
+    if (c && existsSync(c)) return c;
+  }
+  return homedir();
 }
 
 /**
@@ -3227,6 +3234,35 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return { cwd: absPath, name };
   });
 
+  // The user moved a project folder outside of MPI; re-point every store at
+  // the new location (session dir rename + header cwds + path-keyed refs).
+  ipcMain.handle("app:remapProjectPath", (_e, oldCwd: unknown, newCwd: unknown) => {
+    const busy = { ok: false, error: "project-busy", sessionsMoved: 0, headersUpdated: 0, refsUpdated: 0, errors: [] as string[] };
+    if (typeof oldCwd !== "string" || typeof newCwd !== "string") {
+      return { ...busy, error: "invalid-args" };
+    }
+    const key = resolve(oldCwd.trim()).toLowerCase();
+    // A live thread in this project holds its session file open — refuse.
+    for (const h of bridges.values()) {
+      if (h.bridge && resolve(h.bridge.cwd).toLowerCase() === key) return busy;
+    }
+    // An unattended automation run in this folder — refuse as well.
+    if (hasActiveAutomationBridge(oldCwd)) return busy;
+    // The invisible warm spare is safe to drop; it refills on next need.
+    if (warmHandle && warmHandle.bridge && resolve(warmHandle.bridge.cwd).toLowerCase() === key) {
+      dropWarmBridge();
+    }
+    const result = remapProjectPath(oldCwd, newCwd);
+    if (!result.ok) return result;
+    // Drop the stale cache entry so getProjects doesn't resurrect a ghost.
+    openedProjects.delete(key);
+    openedProjectOrder = openedProjectOrder.filter((c) => c !== key);
+    // The warm spare seeds its cwd from lastOpenCwd — don't let it keep
+    // spawning in a folder that no longer exists.
+    if (lastOpenCwd && resolve(lastOpenCwd).toLowerCase() === key) lastOpenCwd = resolve(newCwd.trim());
+    return result;
+  });
+
   ipcMain.handle("app:openFolderInExplorer", async (_e, absPath: string) => {
     if (!absPath || !existsSync(absPath) || !statSync(absPath).isDirectory()) {
       throw new Error("Project folder not found: " + absPath);
@@ -3738,6 +3774,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     if (sessionFile && bridges.has(sessionFile)) {
       const existing = bridges.get(sessionFile)!;
       return gatherThread(existing.bridge, sessionFile, existing.permission);
+    }
+    // Validate BEFORE spawning: on Windows a missing working directory makes
+    // CreateProcess fail and Node reports it as "spawn <node.exe> ENOENT" —
+    // indistinguishable from a broken node install. Say what is actually wrong.
+    if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
+      throw new Error(
+        `项目文件夹不存在：${cwd}（如果已移动，请右键该项目 →「更新项目路径…」）`,
+      );
     }
     lastOpenCwd = cwd;
     if ((getConfig().lastThreadCwd || "") !== cwd) updateConfig({ lastThreadCwd: cwd });

@@ -4,6 +4,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **侧边栏右键项目 →「更新项目路径…」：项目文件夹被移动后一键重映射**（v0.7.3 的 `Code` → `Project` 改名后，旧路径的项目点开会报 “Not a directory”）：选择新位置后主进程立即执行——会话子目录按 pi 编码规则改名、每个 `.jsonl` session 头行的 `cwd` 改写（正文里提到的旧路径不动）、config.json（置顶/归档项目、lastThreadCwd、自动化任务 cwd、threadPermissions、置顶/归档会话）与草稿（`n:<cwd>` / `s:<file>` 键 + 附件绝对路径，经 draft-store 内存+磁盘同步改）、回收站索引、todos 的 sessionFile 引用全部重指向；toast 汇报「会话 N 个，引用 M 处」。守卫：该项目有运行中的会话/自动化任务时拒绝（project-busy），warm spare 静默丢弃重建；目标会话目录已存在且非空时拒绝防覆盖；平铺布局（自定义会话目录）只改头行不移动文件。操作幂等可重试。配套修复：打开「项目文件夹已不存在」的会话不再报误导性的 `spawn node.exe ENOENT`，而是明确提示「项目文件夹不存在…右键→更新项目路径」；失败打开不再把死路径写进 lastThreadCwd；warm spare 启动目录跳过不存在的候选；remap 成功后同步修正下次启动自动恢复的线程指针。
+
+   验证方式：`npm run test:project-remap`（6 组：编码/头行改写不动正文/全量重映射+引用核对/错误码/目标占用拒绝/平铺布局）；手工——把某项目文件夹移走，侧边栏右键该项目 →「更新项目路径…」→ 选新位置，toast 报成功且项目可正常打开、置顶/草稿/权限保持。
+
 ## v0.7.3（2026-09-21）
 
 1. **记忆写入不再「静默丢弃」：importance<4 如实报「未写入」**（minibox 2026-09-21 实测反馈）：`importance < 4` 的条目会被主进程写入把关（`minImportance=4`，pool.ts）静默 drop，但 `/memory`、`/memory-remember`、`memory_note` 都在入队时就回「已记入记忆池」——**成功提示与实际落盘脱节**，容易误判成写入故障。现在入队前先把关（`gateManualImportance`，阈值与 pool.ts 同步 + 漂移守卫测试）：

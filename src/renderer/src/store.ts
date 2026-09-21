@@ -1419,6 +1419,16 @@ function writeLastActive(value: { cwd: string; file: string } | null): void {
   }
 }
 
+/** Re-point the startup-restore pointer after a project path remap so the
+ * next launch doesn't try to open a thread whose folder moved. */
+export function remapLastActiveThread(oldCwd: string, newCwd: string, fromDir?: string, toDir?: string): void {
+  const la = readLastActive();
+  if (!la || la.cwd !== oldCwd) return;
+  let file = la.file;
+  if (fromDir && toDir) file = file.split(fromDir).join(toDir);
+  writeLastActive({ cwd: newCwd, file });
+}
+
 let pendingRestore = readLastActive();
 
 /* ------------------------------------------------------------------ *

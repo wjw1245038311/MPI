@@ -9,7 +9,7 @@ import { ensureShellEnvExtension } from "./shellenv-extension";
 import { prepareShellForSpawn } from "./shell-bootstrap";
 import { getAgentDir } from "./session-store";
 import { buildAppendSystemPrompt } from "./append-prompt";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ensureInboxDir, todosFilePath } from "./todo-store";
 
 /**
@@ -118,6 +118,14 @@ function tick(): void {
 }
 
 /** Remove a task and stop a run that was already spawned for it. */
+/** True when an unattended run currently holds a pi process for `cwd` —
+ * used to refuse project-path remaps while such a bridge is live. */
+export function hasActiveAutomationBridge(cwd: string): boolean {
+  const key = resolve(cwd).toLowerCase();
+  for (const b of activeBridges) if (resolve(b.cwd).toLowerCase() === key) return true;
+  return false;
+}
+
 export function removeAutomationTask(id: string): void {
   const tasks = persistedTasks();
   if (tasks.some((task) => task.id === id)) persist(tasks.filter((task) => task.id !== id));

@@ -45,6 +45,8 @@ const api = {
     searchThreads: (query: string, includeArchived?: boolean) => ipcRenderer.invoke("app:searchThreads", query, includeArchived),
     getTotalUsage: () => ipcRenderer.invoke("app:getTotalUsage"),
     openProject: (absPath: string) => ipcRenderer.invoke("app:openProject", absPath),
+    remapProjectPath: (oldCwd: string, newCwd: string) =>
+      ipcRenderer.invoke("app:remapProjectPath", oldCwd, newCwd),
     openFolderInExplorer: (absPath: string) => ipcRenderer.invoke("app:openFolderInExplorer", absPath),
     revealFileInExplorer: (absPath: string) => ipcRenderer.invoke("app:revealFileInExplorer", absPath),
     openPreviewWindow: (absPath: string, opts?: { atCursor?: boolean }) =>

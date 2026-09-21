@@ -1,5 +1,5 @@
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { getConfigDir } from "./config";
 import type { ComposerDraft, PendingQuote } from "../renderer/src/lib/types";
 
@@ -135,4 +135,48 @@ export function flushDrafts(): void {
     flushTimer = null;
   }
   writeNow();
+}
+
+/** Re-point drafts after a project path change: “n:<cwd>” / “s:<file>” keys
+ * plus attached files that live inside the moved folder. Updates memory AND
+ * disk (a raw on-disk edit would be clobbered by the next coalesced flush).
+ * LRU order is preserved — remapping must not evict an unrelated draft.
+ * Returns how many references changed. */
+export function remapDrafts(oldCwd: string, newCwd: string, fileMap: Map<string, string>): number {
+  const map = ensureLoaded();
+  if (map.size === 0) return 0;
+  const oldKey = resolve(oldCwd).toLowerCase();
+  let n = 0;
+
+  // Pass 1: compute new keys + rewrite attached file paths in place.
+  const renamed: Array<[string, string]> = []; // [oldKey, newKey]
+  for (const [k, d] of map) {
+    if (k.startsWith("n:") && resolve(k.slice(2)).toLowerCase() === oldKey) {
+      renamed.push([k, `n:${newCwd}`]);
+      n++;
+    } else if (k.startsWith("s:")) {
+      const np = fileMap.get(resolve(k.slice(2)));
+      if (np && np !== k.slice(2)) {
+        renamed.push([k, `s:${np}`]);
+        n++;
+      }
+    }
+    for (const f of d.files || []) {
+      if (!f || typeof f.abs !== "string") continue;
+      const r = resolve(f.abs);
+      if (r.toLowerCase() === oldKey || r.toLowerCase().startsWith(oldKey + sep)) {
+        f.abs = newCwd + r.slice(resolve(oldCwd).length);
+        n++;
+      }
+    }
+  }
+
+  // Pass 2: rebuild the map in original insertion order under the new keys.
+  if (renamed.length > 0) {
+    const keyMap = new Map(renamed);
+    drafts = new Map([...map.entries()].map(([k, d]) => [keyMap.get(k) || k, d]));
+  }
+
+  if (n > 0) writeNow(); // synchronous — the remap must not wait for a keystroke
+  return n;
 }

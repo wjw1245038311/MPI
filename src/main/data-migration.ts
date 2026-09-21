@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
-import { getConfig, getConfigDir, updateConfig, type PendingDataMigration } from "./config";
+import { getConfig, getConfigDir, updateConfig, type AppConfig, type PendingDataMigration } from "./config";
 import { defaultSessionsDir, getAgentDir, getSessionsDir, listAllSessionFiles } from "./session-store";
 import { getTrashDir } from "./trash-store";
 import { allAttachmentDirs, inboxDir, todosFilePath } from "./todo-store";
+import { remapDrafts } from "./draft-store";
 
 /**
  * Data-location migrations (Settings → 数据管理). The user picks a new home for
@@ -145,41 +146,44 @@ export function setPiSessionDir(dir: string | null): void {
 // replacement is harmless) so a retried migration stays safe.
 // ---------------------------------------------------------------------------
 
-function remapJsonFileKeys(file: string, map: Map<string, string>): void {
+/** Returns the number of keys remapped (0 when nothing matched). */
+function remapJsonFileKeys(file: string, map: Map<string, string>): number {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(file, "utf8"));
   } catch {
-    return; // missing/corrupt — nothing to remap
+    return 0; // missing/corrupt — nothing to remap
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return 0;
   const obj = parsed as Record<string, unknown>;
-  let changed = false;
+  let changed = 0;
   for (const [k, v] of Object.entries(obj)) {
     const nk = map.get(k);
     if (nk && nk !== k) {
       delete obj[k];
       obj[nk] = v;
-      changed = true;
+      changed++;
     }
   }
-  if (changed) writeFileSync(file, JSON.stringify(obj), "utf8");
+  if (changed > 0) writeFileSync(file, JSON.stringify(obj), "utf8");
+  return changed;
 }
 
+/** Returns the number of values remapped (0 when nothing matched). */
 function remapJsonFileValues(
   file: string,
   map: Map<string, string>,
   pick: (entry: Record<string, unknown>) => string | undefined,
   set: (entry: Record<string, unknown>, value: string) => void,
-): void {
+): number {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(file, "utf8"));
   } catch {
-    return;
+    return 0;
   }
   const entries: Record<string, unknown>[] = Array.isArray(parsed) ? (parsed as any[]) : [parsed as Record<string, unknown>];
-  let changed = false;
+  let changed = 0;
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
     const v = pick(entry);
@@ -187,11 +191,12 @@ function remapJsonFileValues(
       const nv = map.get(v);
       if (nv && nv !== v) {
         set(entry, nv);
-        changed = true;
+        changed++;
       }
     }
   }
-  if (changed) writeFileSync(file, JSON.stringify(parsed), "utf8");
+  if (changed > 0) writeFileSync(file, JSON.stringify(parsed), "utf8");
+  return changed;
 }
 
 /** Remap session-file path references in every MPI-owned store. */
@@ -603,4 +608,286 @@ export function previewMigration(kind: "sessions" | "todos", dir: unknown): SetR
   const toDir = dir == null || String(dir).trim() === "" ? getConfigDir() : resolve(String(dir).trim());
   const plan = planTodoMigration(toDir);
   return { ok: true, pending: false, count: plan.count, bytes: plan.bytes };
+}
+
+// ---------------------------------------------------------------------------
+// Project path remap (sidebar → right-click project → “更新项目路径…”).
+// The user moved a project folder OUTSIDE of MPI; this re-points every app
+// store at the new location immediately. Unlike data-location migrations it
+// runs live, not on next launch: the old folder is gone by definition, so no
+// healthy pi process can still be holding its session files (the IPC layer
+// additionally refuses while a thread/automation bridge for that cwd is up).
+// ---------------------------------------------------------------------------
+
+export interface ProjectRemapResult {
+  ok: boolean;
+  /** Machine-readable error code when !ok (invalid-args | same-path |
+   * target-not-dir | target-sessions-dir-exists | rename-failed…). */
+  error?: string;
+  /** Session files that physically moved (per-project dir renamed). */
+  sessionsMoved: number;
+  /** .jsonl session header lines whose cwd was rewritten. */
+  headersUpdated: number;
+  /** Config/drafts/trash/todo references re-pointed. */
+  refsUpdated: number;
+  /** Session dir rename actually performed (absent for flat layout). Lets the
+   * renderer re-point its own path-keyed state (e.g. last-active thread). */
+  sessionsFromDir?: string;
+  sessionsToDir?: string;
+  /** Per-file problems (locked files…). Empty when clean. */
+  errors: string[];
+}
+
+/** Rewrite the `cwd` field of every session header line in one .jsonl file.
+ * Only lines that parse as a `type:"session"` entry are touched — message
+ * content mentioning the old path is history and stays untouched. Returns the
+ * number of rewritten lines (0 = no write). */
+export function rewriteSessionHeaderCwd(file: string, oldCwd: string, newCwd: string): number {
+  const oldKey = resolve(oldCwd).toLowerCase();
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return 0; // vanished/unreadable — caller reports
+  }
+  const lines = raw.split("\n");
+  let changed = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Cheap pre-filter: session entries start with {"type":"session" — but the
+    // header is always line 1, so parse it even if key order ever differs.
+    if (i !== 0 && !line.startsWith('{"type":"session"')) continue;
+    let entry: any;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue; // not JSON — leave the line alone
+    }
+    if (!entry || typeof entry !== "object" || entry.type !== "session") continue;
+    if (typeof entry.cwd !== "string" || resolve(entry.cwd).toLowerCase() !== oldKey) continue;
+    entry.cwd = newCwd;
+    lines[i] = JSON.stringify(entry);
+    changed++;
+  }
+  if (changed > 0) writeFileSync(file, lines.join("\n"), "utf8");
+  return changed;
+}
+
+/** Re-point every MPI-owned store that keys on this project's old cwd and/or
+ * its (moved) session file paths. Returns how many references changed. */
+function remapProjectReferences(oldCwd: string, newCwd: string, fileMap: Map<string, string>): number {
+  const oldKey = resolve(oldCwd).toLowerCase();
+  let n = 0;
+
+  // --- config.json (one atomic updateConfig) -------------------------------
+  const cfg = getConfig();
+  const patch: Partial<AppConfig> = {};
+  const remapPathList = (list?: string[]): string[] | undefined => {
+    if (!Array.isArray(list)) return list;
+    let touched = false;
+    const next = list.map((p) => {
+      if (typeof p === "string" && resolve(p).toLowerCase() === oldKey) {
+        n++;
+        touched = true;
+        return newCwd;
+      }
+      return p;
+    });
+    return touched ? next : undefined;
+  };
+  const pinnedProjects = remapPathList(cfg.pinnedProjects);
+  if (pinnedProjects) patch.pinnedProjects = pinnedProjects;
+  const archivedProjects = remapPathList(cfg.archivedProjects);
+  if (archivedProjects) patch.archivedProjects = archivedProjects;
+  if (typeof cfg.lastThreadCwd === "string" && resolve(cfg.lastThreadCwd).toLowerCase() === oldKey) {
+    patch.lastThreadCwd = newCwd;
+    n++;
+  }
+  if (Array.isArray(cfg.automationTasks)) {
+    let touched = false;
+    const next = cfg.automationTasks.map((t) => {
+      if (typeof t.cwd === "string" && resolve(t.cwd).toLowerCase() === oldKey) {
+        n++;
+        touched = true;
+        return { ...t, cwd: newCwd };
+      }
+      return t;
+    });
+    if (touched) patch.automationTasks = next;
+  }
+
+  // File-path-keyed fields only matter when the session files actually moved.
+  if (fileMap.size > 0) {
+    const remapFileList = (list?: string[]): string[] | undefined => {
+      if (!Array.isArray(list)) return list;
+      let touched = false;
+      const next = list.map((p) => {
+        if (typeof p !== "string") return p;
+        const np = fileMap.get(resolve(p));
+        if (np && np !== p) {
+          n++;
+          touched = true;
+          return np;
+        }
+        return p;
+      });
+      return touched ? next : undefined;
+    };
+    const pinnedThreads = remapFileList(cfg.pinnedThreads);
+    if (pinnedThreads) patch.pinnedThreads = pinnedThreads;
+    if (Array.isArray(cfg.archivedThreads) && cfg.archivedThreads.length > 0) {
+      let touched = false;
+      const next = cfg.archivedThreads.map((t) => {
+        const nf = typeof t.file === "string" ? fileMap.get(resolve(t.file)) : undefined;
+        const nc = typeof t.cwd === "string" && resolve(t.cwd).toLowerCase() === oldKey ? newCwd : t.cwd;
+        if (nf || nc !== t.cwd) {
+          n++;
+          touched = true;
+          return { ...t, ...(nf ? { file: nf } : {}), ...(nc !== t.cwd ? { cwd: nc } : {}) };
+        }
+        return t;
+      });
+      if (touched) patch.archivedThreads = next;
+    }
+    if (cfg.threadPermissions && Object.keys(cfg.threadPermissions).length > 0) {
+      let touched = false;
+      const next: Record<string, (typeof cfg.threadPermissions)[string]> = {};
+      for (const [k, v] of Object.entries(cfg.threadPermissions)) {
+        const nk = fileMap.get(resolve(k));
+        if (nk && nk !== k) {
+          n++;
+          touched = true;
+        }
+        next[nk || k] = v;
+      }
+      if (touched) patch.threadPermissions = next;
+    }
+  }
+
+  if (Object.keys(patch).length > 0) updateConfig(patch);
+
+  // --- drafts (memory + disk via the store — a raw on-disk edit would be
+  // clobbered by the next coalesced flush) ------------------------------------
+  n += remapDrafts(oldCwd, newCwd, fileMap);
+
+  // --- trash index + agent-sourced todos (session-file links) ---------------
+  if (fileMap.size > 0) {
+    n += remapJsonFileValues(
+      join(getTrashDir(), "index.json"),
+      fileMap,
+      (e) => (typeof e.originalFile === "string" ? e.originalFile : undefined),
+      (e, v) => {
+        e.originalFile = v;
+      },
+    );
+    n += remapJsonFileValues(
+      todosFilePath(),
+      fileMap,
+      (e) => (typeof e.sessionFile === "string" ? e.sessionFile : undefined),
+      (e, v) => {
+        e.sessionFile = v;
+      },
+    );
+  }
+
+  return n;
+}
+
+/** Re-point one project from `oldCwd` to `newCwd`: rename its session dir,
+ * rewrite the .jsonl header cwds, and remap every path-keyed reference.
+ * Synchronous; safe to retry (every step is idempotent). */
+export function remapProjectPath(oldCwdRaw: unknown, newCwdRaw: unknown): ProjectRemapResult {
+  const base: ProjectRemapResult = { ok: false, sessionsMoved: 0, headersUpdated: 0, refsUpdated: 0, errors: [] };
+  if (
+    typeof oldCwdRaw !== "string" ||
+    typeof newCwdRaw !== "string" ||
+    !oldCwdRaw.trim() ||
+    !newCwdRaw.trim()
+  ) {
+    return { ...base, error: "invalid-args" };
+  }
+  const oldCwd = resolve(oldCwdRaw.trim());
+  const newCwd = resolve(newCwdRaw.trim());
+  if (oldCwd.toLowerCase() === newCwd.toLowerCase()) return { ...base, error: "same-path" };
+  if (!existsSync(newCwd) || !statSync(newCwd).isDirectory()) return { ...base, error: "target-not-dir" };
+
+  const errors: string[] = [];
+  const fileMap = new Map<string, string>(); // old session-file path -> new (only when moved)
+
+  // --- locate the project's session files -----------------------------------
+  const root = getSessionsDir();
+  const fromDir = join(root, safeProjectDir(oldCwd));
+  let targetDir: string | null = null; // dir holding the files after a rename
+  let moved = false;
+  if (existsSync(fromDir) && statSync(fromDir).isDirectory()) {
+    const toDir = join(root, safeProjectDir(newCwd));
+    if (toDir.toLowerCase() !== fromDir.toLowerCase()) {
+      if (existsSync(toDir)) {
+        // Refusing a non-empty target avoids clobbering another project's
+        // history; an empty leftover dir can simply be cleared.
+        let empty = true;
+        try {
+          if (readdirSync(toDir).length > 0) empty = false;
+        } catch {
+          empty = false; // unreadable — treat as non-empty
+        }
+        if (!empty) return { ...base, error: "target-sessions-dir-exists" };
+        rmdirSync(toDir);
+      }
+      try {
+        renameSync(fromDir, toDir);
+      } catch (e: any) {
+        return { ...base, error: `rename-failed: ${String(e?.message || e)}` };
+      }
+      targetDir = toDir;
+      moved = true;
+    } else {
+      targetDir = fromDir;
+    }
+  }
+
+  // --- collect candidates ----------------------------------------------------
+  const candidates: string[] = [];
+  if (targetDir) {
+    try {
+      for (const f of readdirSync(targetDir)) if (f.endsWith(".jsonl")) candidates.push(join(targetDir, f));
+    } catch (e: any) {
+      errors.push(`read dir: ${String(e?.message || e)}`);
+    }
+  } else {
+    // Flat layout (custom session dir) or no per-project subdir at all: pick
+    // files by their header cwd.
+    for (const f of listAllSessionFiles(root)) {
+      const c = readHeaderCwd(f);
+      if (c && resolve(c).toLowerCase() === oldCwd.toLowerCase()) candidates.push(f);
+    }
+  }
+
+  // The rename already happened — register every file's new location for the
+  // reference remap even if its header rewrite later fails.
+  if (moved) {
+    for (const f of candidates) {
+      fileMap.set(resolve(join(fromDir, basename(f))), resolve(join(targetDir as string, basename(f))));
+    }
+  }
+
+  let headersUpdated = 0;
+  for (const f of candidates) {
+    try {
+      headersUpdated += rewriteSessionHeaderCwd(f, oldCwd, newCwd);
+    } catch (e: any) {
+      errors.push(`${basename(f)}: ${String(e?.message || e)}`);
+    }
+  }
+
+  const refsUpdated = remapProjectReferences(oldCwd, newCwd, fileMap);
+
+  return {
+    ok: errors.length === 0,
+    sessionsMoved: fileMap.size,
+    headersUpdated,
+    refsUpdated,
+    ...(moved && targetDir ? { sessionsFromDir: fromDir, sessionsToDir: targetDir } : {}),
+    errors,
+  };
 }

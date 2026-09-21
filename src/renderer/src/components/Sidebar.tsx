@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
-import { localizeAutomationThreadTitle, useStore } from "../store";
+import { localizeAutomationThreadTitle, remapLastActiveThread, useStore } from "../store";
 import { formatTokens } from "../lib/format";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { MPI_FILE_MIME, MPI_SESSION_MIME } from "../lib/file-drag";
@@ -53,6 +53,26 @@ const SIDEBAR_DEFAULT_WIDTH = 286;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 520;
 const clampSidebarWidth = (width: number) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+
+/** Human-readable toast for a failed project-path remap (main-process error code). */
+function remapProjectPathError(code: string | undefined, language: "zh" | "en"): string {
+  switch (code) {
+    case "same-path":
+      return language === "zh" ? "新位置与当前项目路径相同" : "New location is the same as the current project path";
+    case "target-not-dir":
+      return language === "zh" ? "所选位置不存在或不是文件夹" : "Selected location does not exist or is not a folder";
+    case "target-sessions-dir-exists":
+      return language === "zh"
+        ? "会话存储中已存在该目标项目的目录，请换一个位置"
+        : "A session directory for the target project already exists — pick another location";
+    case "project-busy":
+      return language === "zh"
+        ? "该项目还有正在运行的会话或自动化任务，请先停止后再试"
+        : "This project still has a running session or automation task — stop it first";
+    default:
+      return code || (language === "zh" ? "未知错误" : "Unknown error");
+  }
+}
 
 function initialSidebarWidth(): number {
   try {
@@ -238,6 +258,50 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
       useStore.getState().pushToast(
         "error",
         language === "zh" ? `打开项目文件夹失败：${detail}` : `Could not open project folder: ${detail}`,
+      );
+    }
+  };
+
+  // The user moved a project folder outside of MPI; pick the new location and
+  // let the main process re-point sessions + every path-keyed reference.
+  const remapProjectPath = async (oldCwd: string) => {
+    setProjectMenu(null);
+    let newCwd: string | null;
+    try {
+      newCwd = await window.pi.app.showOpenDialog("folder");
+    } catch (error: any) {
+      const detail = error?.message || String(error);
+      useStore.getState().pushToast(
+        "error",
+        language === "zh" ? `选择新位置失败：${detail}` : `Could not open folder picker: ${detail}`,
+      );
+      return;
+    }
+    if (!newCwd) return; // user cancelled
+    try {
+      const res = await window.pi.app.remapProjectPath(oldCwd, newCwd);
+      if (!res.ok) {
+        useStore.getState().pushToast("error", remapProjectPathError(res.error, language));
+        return;
+      }
+      useStore.getState().pushToast(
+        "success",
+        language === "zh"
+          ? `项目路径已更新（会话 ${res.sessionsMoved} 个，引用 ${res.refsUpdated} 处）`
+          : `Project path updated (${res.sessionsMoved} sessions, ${res.refsUpdated} references)`,
+      );
+      await useStore.getState().refreshProjects();
+      // If the user was inside this project, follow it to the new location.
+      if (useStore.getState().activeProjectCwd === oldCwd) {
+        useStore.getState().setActiveProject(newCwd);
+      }
+      // Keep next launch's auto-restore from pointing at the moved folder.
+      remapLastActiveThread(oldCwd, newCwd, res.sessionsFromDir, res.sessionsToDir);
+    } catch (error: any) {
+      const detail = error?.message || String(error);
+      useStore.getState().pushToast(
+        "error",
+        language === "zh" ? `更新项目路径失败：${detail}` : `Failed to update project path: ${detail}`,
       );
     }
   };
@@ -683,6 +747,13 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             onClick={() => void openProjectInExplorer(projectMenu.cwd)}
           >
             {language === "zh" ? "在资源管理器中打开" : "Open in File Explorer"}
+          </button>
+          <button
+            role="menuitem"
+            title={language === "zh" ? "项目文件夹被移动后，把会话与配置指向新位置" : "Re-point sessions and settings after the project folder moved"}
+            onClick={() => void remapProjectPath(projectMenu.cwd)}
+          >
+            {language === "zh" ? "更新项目路径…" : "Update project path…"}
           </button>
           <button
             role="menuitem"
