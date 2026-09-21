@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.7.3（2026-09-21）
 
 1. **记忆写入不再「静默丢弃」：importance<4 如实报「未写入」**（minibox 2026-09-21 实测反馈）：`importance < 4` 的条目会被主进程写入把关（`minImportance=4`，pool.ts）静默 drop，但 `/memory`、`/memory-remember`、`memory_note` 都在入队时就回「已记入记忆池」——**成功提示与实际落盘脱节**，容易误判成写入故障。现在入队前先把关（`gateManualImportance`，阈值与 pool.ts 同步 + 漂移守卫测试）：
    - `/memory <内容>`：模型评分低于 4 → 不写，通知「未写入记忆池（重要性 N<4，琐事不沉淀）。确需保留可用 /memory-remember」；
@@ -12,6 +12,21 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    - `memory_note`：importance 低于 4 → 不入队，直接回「未写入……请以 importance ≥4 重试」；参数描述同步注明下限。
 
    验证方式：`npm run test:memorygate`（7 例：压线通过 / 丢弃 / verbatim 钳位 + 与 pool.ts 阈值一致性）；手工——`/memory <琐事>`（模型评 <4）出现「未写入」警示且池内无新文件，`/memory-remember <同一句>` 成功落池、importance 记 4。
+
+2. **发行版瘦身：安装包 169 MB → 137 MB，安装后目录 513 MB → 374 MB**：
+   - `locales/` 只留 en-US + zh-CN（`electronLanguages`）：41 MB → 976 KB；
+   - 排除 417 个 sourcemap（24.4 MB）、`pdfjs-dist`（32.8 MB，渲染层已由 Vite 打进 bundle）、`@napi-rs/canvas`（37 MB，实测是 pdfjs-dist 的 Node 端依赖而非 MPI 依赖）、`react-dom` 与 `highlight.js`（渲染层已 bundle）、node-pty 非 win32-x64 的 prebuilds 与 third_party/deps；
+   - 运行时归档只留当前平台的 `@mariozechner/clipboard-*`（-10.4 MiB 未压缩）。
+
+   验证方式：看安装目录体积（约 374 MB）；`resources/app.asar` 内不应再有 pdfjs-dist / @napi-rs / react-dom / highlight.js / *.map，`locales/` 只有 en-US.pak + zh-CN.pak；逐项确认 PDF 附件能预览、代码块有高亮、终端面板可用、知芽召回可用、飞书通道可用。
+
+3. **知识库迁出仓库 + 「知识库目录」默认值**：仓库内 `.alexandria/knowledge`（35 篇）迁到 vault 目录（`<root>/Agent/WJW/30-Resources`）后删除，仓库不再携带项目知识库；知芽设置的「知识库目录」新增默认值——未配置时启动即「探测一次并写回」（母版附近的 `WJW/30-Resources`，兜底 `~/.pi/agent/zhiya/knowledge`），新装机 / 未配置实例不再落空。
+
+   验证方式：启动日志出现 `[zhiya] knowledge dir: <路径>`；设置 → 知芽 → 知识库目录显示具体路径；在未配置的机器上首次启动后 `config.json` 的 `knowledgeDir` 被写入该路径。
+
+4. **工作空间目录改名：`E:\MyWorkspace\Code` → `E:\MyWorkspace\Project`**（仓库内当前态文档与测试夹具同步更新；历史文档保持原样）。
+
+   验证方式：仓库现位于 `<root>\Project\MPI`；全仓 grep `MyWorkspace/Code` 只剩历史文档与生成物。
 
 ## v0.7.2（2026-09-21）
 
