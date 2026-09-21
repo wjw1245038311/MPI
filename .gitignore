@@ -50,6 +50,8 @@ Thumbs.db
 qa-*.png
 nul
 tmp/
+# 本地临时脚本/缓存工作区（审计、基准等，不入库）
+tempfile/
 # Staging dir for app packages to upload/share (large zips, never commit).
 # Anchored to repo root: a bare "Apps/" would case-insensitively match examples/apps/ on Windows.
 /Apps/

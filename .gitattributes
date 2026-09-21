@@ -1,0 +1,14 @@
+# 行尾统一：仓库内一律存 LF，各设备检出也强制 LF（本机唯一 shell 是 Git Bash）。
+# 根治「Windows autocrlf 检出 CRLF → 读源码做文本锚点匹配失配」一类问题。
+* text=auto eol=lf
+
+# Windows 批处理必须 CRLF（cmd.exe 解析 LF-only bat 会出错）
+*.bat text eol=crlf
+
+# 二进制资产——不做任何转换（text=auto 也能自动识别，显式声明更稳）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.icns binary
+*.jar binary
