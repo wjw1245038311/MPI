@@ -14,7 +14,18 @@ npm test -- zhiya    # 只跑名字含过滤词的测试
 npm run test:zhiya   # 等价的单套件入口，名字见 package.json 的 scripts
 ```
 
-- 收尾门槛：至少 `npm run typecheck`；动了有测试覆盖的模块，跑对应 `test:*`（或 `npm test -- <名字>`）。
+### 测试范围（默认不全量）
+
+全量 L1 约 4–5 分钟，小改动每次跑是浪费时间——按改动规模定范围：
+
+| 改动规模 | 判定 | 要跑的 |
+|---|---|---|
+| **小** | 单模块 / 单一功能域（如某个面板、某条 memory 链路） | `npm run typecheck` + 相关套件。套件名自描述（`test:<area>`，见 package.json scripts）；批量用子串过滤：`npm test -- memory` = 跑所有名字含 "memory" 的套件 |
+| **大** | 跨模块，或动共享基础设施（store.ts / ipc.ts / main 入口 / pi-bridge / 构建配置 / package.json 依赖） | `npm run typecheck` + 全量 `npm test` |
+| **发版 / push main 前** | — | 必须全量一次 |
+
+- 拿不准算大还是小：宁多跑，但单文件改动不要反射性全量。
+- 示例：改 `src/main/zhiya/*` → `npm test -- memory` + `npm run test:zhiya`；改 renderer markdown → `npm run test:markdown` + `test:slugs`；改 Chat.tsx/store.ts → 算大，全量。
 - 测试分层与约定见 `docs/E2E-TESTING.md`。
 
 ## 发版与分发
