@@ -39,6 +39,7 @@
     "test:pwa-pairing": "node --experimental-transform-types scripts/test-pwa-pairing.mjs",
     "test:pwa-home": "node --experimental-transform-types scripts/test-pwa-home.mjs",
     "test:pwa-thread": "node --experimental-transform-types scripts/test-pwa-thread.mjs",
+    "test:pwa-choice": "node --experimental-transform-types scripts/test-pwa-choice.mjs",
     "test:approval-diff": "node --experimental-strip-types scripts/test-approval-diff.mjs",
     "test:pwa-actions": "node --experimental-transform-types scripts/test-pwa-actions.mjs",
     "test:pwa-composer": "node --experimental-transform-types scripts/test-pwa-composer.mjs",

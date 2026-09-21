@@ -12,6 +12,8 @@ import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./li
 import { compressImageFile, type CompressedImage } from "./lib/image-attach";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
+import { withChoiceSegments } from "./lib/choice-block";
+import { ChoicePanel } from "./components/ChoicePanel";
 import { groupToolBlocks, type ToolGroup } from "./lib/tool-groups";
 import { formatTokens, readContextUsage } from "./lib/context-usage";
 
@@ -177,20 +179,54 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   );
 }
 
-/** 正文：按代码围栏切段，其余仍以纯文本渲染（保留换行与缩进）。 */
-function MessageText({ text }: { text: string }) {
+/** choices 面板的上下文（仅已定稿的 assistant 消息提供；流式中/用户消息为 null）。 */
+interface ChoiceContext {
+  threadId: string;
+  messageId: string;
+  /** 该文本块在消息内的序号（草稿键的一部分，跨重挂载稳定）。 */
+  blockIndex: number;
+  messages: ViewMessage[];
+  onSend: (text: string) => Promise<void>;
+}
+
+/** 正文：按代码围栏切段；已定稿 assistant 消息里的合法 choices 围栏升级为交互面板，其余纯文本。 */
+function MessageText({ text, choiceCtx }: { text: string; choiceCtx?: ChoiceContext | null }) {
   const segments = useMemo(() => parseSegments(text), [text]);
+  const items = useMemo(
+    () => withChoiceSegments(segments, !!choiceCtx),
+    [segments, choiceCtx],
+  );
   return (
     <>
-      {segments.map((segment, i) =>
-        segment.type === "code" ? (
-          <CodeBlock key={`c${i}`} code={segment.text} lang={segment.lang} />
-        ) : (
+      {items.map((item, i) => {
+        if (item.kind === "code") {
+          return (
+            <div key={`c${i}`}>
+              <CodeBlock code={item.text} lang={item.lang} />
+              {item.choiceWarn && <p className="choice-warn">这个 choices 块格式不合法，已按普通代码块显示。</p>}
+            </div>
+          );
+        }
+        if (item.kind === "choice") {
+          return choiceCtx ? (
+            <ChoicePanel
+              key={`c${i}`}
+              data={item.data}
+              threadId={choiceCtx.threadId}
+              messageId={choiceCtx.messageId}
+              blockIndex={choiceCtx.blockIndex}
+              panelIndex={i}
+              messages={choiceCtx.messages}
+              onSend={choiceCtx.onSend}
+            />
+          ) : null;
+        }
+        return (
           <p key={`t${i}`} className="msg-text">
-            {segment.text}
+            {item.text}
           </p>
-        ),
-      )}
+        );
+      })}
     </>
   );
 }
@@ -264,7 +300,7 @@ function ToolGroupRow({ group }: { group: ToolGroup }) {
   );
 }
 
-function Block({ block }: { block: ViewBlock }) {
+function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceContext | null }) {
   if (block.type === "thinking") {
     return (
       <details className="msg-thinking">
@@ -279,7 +315,7 @@ function Block({ block }: { block: ViewBlock }) {
   if (block.type === "image") {
     return block.data ? <img className="msg-image" src={block.data} alt={block.mimeType || "image"} /> : null;
   }
-  return <MessageText text={block.text ?? ""} />;
+  return <MessageText text={block.text ?? ""} choiceCtx={choiceCtx} />;
 }
 
 /** 草稿按会话存放（切走再回来、下拉刷新都不丢）。 */
@@ -304,8 +340,28 @@ function messageText(message: ViewMessage): string {
     .trim();
 }
 
-function Message({ message, onCopied }: { message: ViewMessage; onCopied?: (ok: boolean) => void }) {
+function Message({
+  message,
+  onCopied,
+  threadId,
+  allMessages,
+  onSendChoice,
+}: {
+  message: ViewMessage;
+  onCopied?: (ok: boolean) => void;
+  /** 提供时（且为 assistant 消息）choices 围栏渲染成交互面板；流式尾不传。 */
+  threadId?: string;
+  allMessages?: ViewMessage[];
+  onSendChoice?: (text: string) => Promise<void>;
+}) {
   const isUser = message.role === "user";
+  // 每个文本块在消息内的序号（choices 面板草稿的稳定键）。
+  const textOrdinalOf = useMemo(() => {
+    const m = new Map<ViewBlock, number>();
+    let n = 0;
+    for (const b of message.blocks) if (b.type === "text") { m.set(b, n); n += 1; }
+    return m;
+  }, [message.blocks]);
   // 长按复制（600ms）：手机上选中文本很难，复制整条消息反而常用。
   const pressTimer = useRef<number | null>(null);
   const cancelPress = () => {
@@ -351,7 +407,21 @@ function Message({ message, onCopied }: { message: ViewMessage; onCopied?: (ok: 
         item.kind === "toolGroup" ? (
           <ToolGroupRow key={`g${i}`} group={item.group} />
         ) : (
-          <Block key={`b${i}`} block={item.block} />
+          <Block
+            key={`b${i}`}
+            block={item.block}
+            choiceCtx={
+              !isUser && threadId && allMessages && onSendChoice && item.block.type === "text"
+                ? {
+                    threadId,
+                    messageId: message.id,
+                    blockIndex: textOrdinalOf.get(item.block) ?? 0,
+                    messages: allMessages,
+                    onSend: onSendChoice,
+                  }
+                : null
+            }
+          />
         ),
       )}
       {!isUser && message.artifacts && message.artifacts.length > 0 && (
@@ -656,6 +726,21 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     }
   };
 
+  /** choices 面板发送：followUp（与桌面端同语义——agent 在跑就排队）+ 乐观回显；
+   *  失败时撤掉占位气泡并抛错，面板保留草稿供重发。 */
+  const sendChoice = useMemo(() => {
+    if (!actions) return undefined;
+    return async (text: string): Promise<void> => {
+      const echoId = onEcho?.({ text }) || "";
+      try {
+        await actions.send(text, "followUp");
+      } catch (error) {
+        if (echoId) onEchoDrop?.(echoId);
+        throw error;
+      }
+    };
+  }, [actions, onEcho, onEchoDrop]);
+
   // ---- T2: image attachments -------------------------------------------------
 
   const pickImages = (source: "camera" | "album") => {
@@ -922,7 +1007,14 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
           <div className="thread-scroll-wrap">
             <div className="thread-scroll" ref={scrollRef} onScroll={handleScroll}>
               {view.messages.map((message) => (
-                <Message key={message.id} message={message} onCopied={(ok) => setToast(ok ? "已复制" : "复制失败")} />
+                <Message
+                  key={message.id}
+                  message={message}
+                  threadId={view.threadId}
+                  allMessages={view.messages}
+                  onSendChoice={sendChoice}
+                  onCopied={(ok) => setToast(ok ? "已复制" : "复制失败")}
+                />
               ))}
               {view.streaming && <Message message={view.streaming} />}
               {running && !view.streaming && <p className="hint">正在工作…</p>}
