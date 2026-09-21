@@ -140,7 +140,7 @@ import {
   previewWindowMoveEnd,
   previewWindowMoveStart,
 } from "./preview-window";
-import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, type ThreadSearchHit } from "./session-store";
+import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readEarlierMessages, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
 import { emptyTrash, listTrash, moveToTrash, purgeFromTrash, restoreFromTrash } from "./trash-store";
 import {
@@ -4011,6 +4011,19 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
       return null;
     }
     return readSessionCompactions(requested);
+  });
+
+  // 「更早的对话」：压缩点之前的历史消息（磁盘全量，pi getMessages 不含）。
+  // UI 懒加载用——不进 thread:open payload，避免大会话切换变慢。
+  ipcMain.handle("thread:earlierMessages", async (_e, args: { sessionFile?: string }) => {
+    const requested = typeof args?.sessionFile === "string" ? args.sessionFile : "";
+    if (!requested) return { messages: [] };
+    try {
+      assertDeletableSessionFile(requested);
+    } catch {
+      return { messages: [] };
+    }
+    return readEarlierMessages(requested);
   });
 
   ipcMain.handle(

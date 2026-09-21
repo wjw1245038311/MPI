@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type WheelEvent as ReactWheelEvent } from "react";
-import { getDisplayThreadTitle, normalizeThreadFile, useStore } from "../store";
+import { getDisplayThreadTitle, getEarlierViews, normalizeThreadFile, useStore } from "../store";
 import { getTtsState, speakMessage, stopTts, subscribeTts } from "../lib/tts";
 import { parseSkillBlock } from "../lib/skill-block";
 import { Markdown } from "../lib/markdown";
@@ -676,17 +676,21 @@ export function Chat() {
           <div className="chat-stage">
             <div className="chat-scroll" ref={scrollRef} onScroll={handleUserScroll} onWheel={handleWheelUp}>
           <div className={`messages${searchingDim ? " searching" : ""}`}>
-            {headGroups.map((g) => (
-              <MessageGroup
-                key={g.key}
-                threadId={activeThreadId}
-                group={g}
-                toolRuns={thread.toolRuns}
-                locked={thread.isStreaming}
-                onPreviewImage={setPreviewImage}
-                {...groupSearchProps}
-              />
-            ))}
+            {headGroups.map((g) =>
+              g.role === "compaction" ? (
+                <CompactionDivider key={g.key} group={g} threadId={activeThreadId} language={language} onPreviewImage={setPreviewImage} />
+              ) : (
+                <MessageGroup
+                  key={g.key}
+                  threadId={activeThreadId}
+                  group={g}
+                  toolRuns={thread.toolRuns}
+                  locked={thread.isStreaming}
+                  onPreviewImage={setPreviewImage}
+                  {...groupSearchProps}
+                />
+              ),
+            )}
             {streaming && streamingExtends && lastGroup && (
               <MessageGroup
                 key={lastGroup.key}
@@ -781,7 +785,7 @@ function referencedRunIds(m: ViewMessage): string[] {
  *  (a whole agent round) rendered under a single avatar. */
 interface MsgGroup {
   key: string;
-  role: "user" | "assistant" | "custom";
+  role: "user" | "assistant" | "custom" | "compaction";
   items: ViewMessage[];
 }
 
@@ -792,10 +796,129 @@ function groupMessages(messages: ViewMessage[]): MsgGroup[] {
     if (m.role === "assistant" && last && last.role === "assistant") {
       last.items.push(m);
     } else {
-      groups.push({ key: m.key, role: m.role === "custom" ? "custom" : m.role === "assistant" ? "assistant" : "user", items: [m] });
+      groups.push({ key: m.key, role: m.role === "custom" ? "custom" : m.role === "compaction" ? "compaction" : m.role === "assistant" ? "assistant" : "user", items: [m] });
     }
   }
   return groups;
+}
+
+/** 压缩分隔条：上方可展开「更早的对话」（懒加载磁盘全量），下方摘要正文可折叠。
+ *  branchSummary（fork 分支摘要）复用同一组件，仅标签不同。 */
+function CompactionDivider({
+  group,
+  threadId,
+  language,
+  onPreviewImage,
+}: {
+  group: MsgGroup;
+  threadId: string;
+  language: "en" | "zh";
+  onPreviewImage: (src: string) => void;
+}) {
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [earlierOpen, setEarlierOpen] = useState(false);
+  // undefined = 尚未加载；0 = 已加载但为空。
+  const earlierCount = useStore((s) => s.earlierLoaded[threadId]);
+  const hasSessionFile = useStore((s) => !!s.threads[threadId]?.sessionFile);
+  const zh = language === "zh";
+  const first = group.items[0];
+  const summaryText = first?.text || "";
+  const isBranchSummary = first?.customType === "branchSummary";
+
+  const openEarlier = () => {
+    setEarlierOpen(true);
+    if (earlierCount === undefined) void useStore.getState().loadEarlierMessages(threadId);
+  };
+
+  const earlier = earlierOpen && earlierCount !== undefined ? getEarlierViews(threadId) : null;
+
+  return (
+    <div className="compaction-divider" data-message-key={group.key}>
+      {earlierOpen && hasSessionFile && (
+        <div className="earlier-section">
+          {!earlier ? (
+            <div className="earlier-loading">{zh ? "正在加载更早的对话…" : "Loading earlier messages…"}</div>
+          ) : earlier.views.length === 0 ? (
+            <button type="button" className="compaction-earlier-toggle" onClick={() => setEarlierOpen(false)}>
+              {zh ? "上方没有更多内容 · 点击收起" : "Nothing older above · click to collapse"}
+            </button>
+          ) : (
+            <>
+              <div className="earlier-header">
+                <span>{zh ? `更早的对话（${earlier.views.length} 条）` : `Earlier messages (${earlier.views.length})`}</span>
+                <button type="button" className="iconbtn" title={zh ? "收起" : "Collapse"} onClick={() => setEarlierOpen(false)}>
+                  <ChevronUp size={14} />
+                </button>
+              </div>
+              {groupMessages(earlier.views).map((g) =>
+                g.role === "compaction" ? (
+                  // 更早段里的旧压缩摘要：简单分隔 + 可折叠正文，不再嵌套展开入口。
+                  <OldCompactionSummary key={g.key} group={g} language={language} />
+                ) : (
+                  <MessageGroup
+                    key={g.key}
+                    threadId={threadId}
+                    group={g}
+                    toolRuns={earlier.toolRuns}
+                    locked
+                    onPreviewImage={onPreviewImage}
+                  />
+                ),
+              )}
+            </>
+          )}
+        </div>
+      )}
+      {!earlierOpen && hasSessionFile && (
+        <button type="button" className="compaction-earlier-toggle" onClick={openEarlier}>
+          ↑ {zh ? "查看更早的对话" : "Show earlier messages"}
+        </button>
+      )}
+      <div className="compaction-line">
+        <span className="compaction-label">{isBranchSummary ? (zh ? "分支摘要" : "Branch summary") : zh ? "上下文已压缩" : "Context compacted"}</span>
+        {summaryText && (
+          <button type="button" className="compaction-summary-toggle" onClick={() => setSummaryOpen((v) => !v)}>
+            {summaryOpen
+              ? zh
+                ? "收起摘要"
+                : "Hide summary"
+              : zh
+                ? `查看摘要（${Array.from(summaryText).length} 字）`
+                : `Show summary (${Array.from(summaryText).length} chars)`}
+          </button>
+        )}
+      </div>
+      {summaryOpen && summaryText && (
+        <div className="compaction-summary">
+          <Markdown text={summaryText} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 「更早的对话」段内的旧压缩摘要（只读、可折叠，无展开入口）。 */
+function OldCompactionSummary({ group, language }: { group: MsgGroup; language: "en" | "zh" }) {
+  const [open, setOpen] = useState(false);
+  const zh = language === "zh";
+  const text = group.items[0]?.text || "";
+  return (
+    <div className="compaction-divider old">
+      <div className="compaction-line">
+        <span className="compaction-label">{group.items[0]?.customType === "branchSummary" ? (zh ? "分支摘要" : "Branch summary") : zh ? "上下文已压缩（更早）" : "Context compacted (earlier)"}</span>
+        {text && (
+          <button type="button" className="compaction-summary-toggle" onClick={() => setOpen((v) => !v)}>
+            {open ? (zh ? "收起摘要" : "Hide summary") : zh ? `查看摘要（${Array.from(text).length} 字）` : `Show summary (${Array.from(text).length} chars)`}
+          </button>
+        )}
+      </div>
+      {open && text && (
+        <div className="compaction-summary">
+          <Markdown text={text} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 function userMessagePreview(group: MsgGroup, language: string): string {

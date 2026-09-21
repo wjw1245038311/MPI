@@ -49,6 +49,7 @@
     "test:diff": "node --experimental-strip-types scripts/test-diff.mjs",
     "test:context-estimate": "node --experimental-strip-types scripts/test-context-estimate.mjs",
     "test:compactions": "node --experimental-strip-types scripts/test-compaction-stats.mjs",
+    "test:earlier-history": "node --experimental-strip-types scripts/test-earlier-history.mjs",
     "test:ltm-newthread": "node --experimental-strip-types scripts/test-ltm-newthread.mjs",
     "test:toolargs": "node --experimental-strip-types scripts/test-tool-args.mjs",
     "test:permission": "node scripts/test-permission-gate.mjs",

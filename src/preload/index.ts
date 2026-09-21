@@ -371,6 +371,8 @@ const api = {
     setName: (args: { threadId: string; name: string }) => ipcRenderer.invoke("thread:setName", args),
     getStats: (threadId: string) => ipcRenderer.invoke("thread:getStats", threadId),
     getCompactionStats: (sessionFile: string) => ipcRenderer.invoke("thread:compaction-stats", { sessionFile }),
+    // 「更早的对话」：压缩点之前的历史消息（磁盘全量，pi getMessages 不含）。
+    earlierMessages: (args: { sessionFile: string }) => ipcRenderer.invoke("thread:earlierMessages", args),
     extuiResponse: (args: { threadId: string; id: string; payload: Record<string, unknown> }) =>
       ipcRenderer.invoke("thread:extuiResponse", args),
     setPermission: (args: { threadId: string; permission: PermissionLevel }) => ipcRenderer.invoke("thread:setPermission", args),

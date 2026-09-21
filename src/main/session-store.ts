@@ -2,6 +2,7 @@ import { createReadStream, existsSync, readdirSync, statSync, type Stats } from 
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { earlierDisplayMessages } from "./context-estimate";
 import { getConfig } from "./config";
 import { getTrashDir } from "./trash-store";
 
@@ -295,6 +296,22 @@ export async function readThreadHistory(file: string): Promise<ThreadHistory> {
     }
   });
   return { cwd, sessionName, model, thinkingLevel, messages, branchMessages };
+}
+
+/**
+ * 「更早的对话」：活跃上下文之外（压缩点之前）的全部消息。
+ * .jsonl 全量保留，pi getMessages 只返回「摘要 + 保留区 + 压缩后」；这里直接读磁盘、
+ * 按与 pi buildContextEntries 相同的语义切分（context-estimate.ts），供 UI 懒加载展示。
+ */
+export async function readEarlierMessages(file: string): Promise<{ messages: any[] }> {
+  const entries: unknown[] = [];
+  await forEachLine(file, (line) => {
+    try {
+      const e = JSON.parse(line);
+      if (e && typeof e === "object") entries.push(e);
+    } catch { /* 跳过坏行 */ }
+  });
+  return { messages: earlierDisplayMessages(entries, null) };
 }
 
 export interface ThreadSearchHit {

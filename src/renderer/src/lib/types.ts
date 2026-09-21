@@ -271,7 +271,7 @@ export interface ViewMessage {
   key: string;
   /** Stable Pi session entry id used by message-level branching. */
   branchEntryId?: string;
-  role: "user" | "assistant" | "system" | "custom";
+  role: "user" | "assistant" | "system" | "custom" | "compaction";
   /** Extension command output (pi.sendMessage with display:true), e.g. /mem0-status. */
   customType?: string;
   timestamp?: number;

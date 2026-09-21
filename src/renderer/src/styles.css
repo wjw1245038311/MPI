@@ -1334,6 +1334,86 @@ body.sidebar-resizing * {
   padding: 8px 12px;
 }
 
+/* 压缩分隔条 + 「更早的对话」懒加载展开段 */
+.compaction-divider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 18px 0;
+}
+.compaction-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+.compaction-line::before,
+.compaction-line::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-strong);
+}
+.compaction-label {
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.compaction-summary-toggle,
+.compaction-earlier-toggle {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.compaction-summary-toggle:hover,
+.compaction-earlier-toggle:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text);
+}
+.compaction-summary {
+  width: min(100%, 720px);
+  color: var(--text-dim);
+  font-size: 13px;
+  background: #faf9f4;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.compaction-summary .md {
+  font-size: 13px;
+}
+.earlier-section {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border-strong);
+  margin-bottom: 6px;
+}
+.earlier-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 0 4px;
+}
+.earlier-loading {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  text-align: center;
+  padding: 8px 0;
+}
+:root[data-theme="dark"] .compaction-summary {
+  background: var(--surface-muted);
+}
+
 /* markdown content */
 .md {
   user-select: text;

@@ -690,6 +690,24 @@ function historyToView(
         text,
         timestamp: m.timestamp,
       });
+    } else if (m.role === "compactionSummary") {
+      // 压缩后 pi 返回的摘要伪消息：渲染成分隔条 + 可折叠摘要正文
+      // （此前被静默丢弃，UI 里看不到任何压缩痕迹）。
+      views.push({
+        key: `hcompact-${i}`,
+        role: "compaction",
+        text: typeof m.summary === "string" ? m.summary : "",
+        timestamp: m.timestamp,
+      });
+    } else if (m.role === "branchSummary") {
+      // fork 分支摘要——同样以分隔条呈现，避免静默丢失。
+      views.push({
+        key: `hcompact-${i}`,
+        role: "compaction",
+        customType: "branchSummary",
+        text: typeof m.summary === "string" ? m.summary : "",
+        timestamp: m.timestamp,
+      });
     }
   });
   return { views: attachBranchEntryIds(views, branchMessages), toolRuns };
@@ -1108,6 +1126,8 @@ interface PiStore {
   openThreadIds: string[];
   activeThreadId: string | null;
   threads: Record<string, ThreadState>;
+  /** threadId -> 「更早的对话」已加载的消息条数（0 = 已加载但为空）。未出现 = 尚未加载。 */
+  earlierLoaded: Record<string, number>;
   /** threadId -> true while that thread shows the interactive pi TUI terminal. */
   tuiThreads: Record<string, boolean>;
   /** threadId -> true when a TUI session wrote to the session file and the RPC
@@ -1186,6 +1206,8 @@ interface PiStore {
   abortThread: (id: string) => Promise<void>;
   /** Manually compact the thread's context (pi /compact). */
   compactContext: (threadId: string, instructions?: string) => Promise<void>;
+  /** 懒加载「更早的对话」（压缩点之前的历史消息，磁盘全量）。幂等：已加载直接返回。 */
+  loadEarlierMessages: (threadId: string) => Promise<void>;
   repairSession: (threadId: string) => Promise<void>;
   setSoundOnComplete: (on: boolean) => Promise<void>;
   /** Voice system (语音系统): merge a partial voice config and persist it. */
@@ -1393,6 +1415,14 @@ const draftPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
  *  same-tick prompt share one process boot instead of spawning two. */
 const connectPromises = new Map<string, Promise<string | null>>();
 
+/** 「更早的对话」（压缩点之前的消息）懒加载缓存：threadId → 渲染好的 views。
+ *  纯展示缓存，不进 ThreadState——重连/新压缩后丢弃重取即可。 */
+const earlierCache = new Map<string, { views: ViewMessage[]; toolRuns: Record<string, ToolRun> }>();
+
+export function getEarlierViews(threadId: string): { views: ViewMessage[]; toolRuns: Record<string, ToolRun> } | null {
+  return earlierCache.get(threadId) ?? null;
+}
+
 // ---- last-active session restore ------------------------------------------
 // The on-screen session is persisted (per renderer profile) so restarting the
 // app lands back in it. Captured at module load — before any store update —
@@ -1473,10 +1503,22 @@ function scheduleEventFlush(): void {
       }
     }
 
+    // 新压缩改变了「活跃上下文」边界 → 「更早的对话」缓存作废，下次展开重取。
+    for (const [threadId, events] of byThread) {
+      if (events.some((ev) => ev?.type === "compaction_end")) earlierCache.delete(threadId);
+    }
+
     useStore.setState((s) => {
       let changed = false;
       const threads = { ...s.threads };
+      let earlierLoaded: Record<string, number> | null = null;
       for (const [threadId, events] of byThread) {
+        if (events.some((ev) => ev?.type === "compaction_end") && s.earlierLoaded[threadId] !== undefined) {
+          // 删 key = 「尚未加载」，下次展开会重新拉取（新压缩后「更早」内容已变）。
+          const next: Record<string, number> = earlierLoaded ? { ...earlierLoaded } : { ...s.earlierLoaded };
+          delete next[threadId];
+          earlierLoaded = next;
+        }
         const t0 = threads[threadId];
         if (!t0) continue;
         let t = t0;
@@ -1486,7 +1528,7 @@ function scheduleEventFlush(): void {
           changed = true;
         }
       }
-      return changed ? { threads } : s;
+      return changed || earlierLoaded ? { ...s, threads, ...(earlierLoaded ? { earlierLoaded } : {}) } : s;
     });
 
     // Completion chime: one ding per flush even if several threads settle together.
@@ -1645,6 +1687,7 @@ export const useStore = create<PiStore>()((set, get) => {
   openThreadIds: [],
   activeThreadId: null,
   threads: {},
+  earlierLoaded: {},
   // threadId -> true while that thread shows the interactive pi terminal.
   tuiThreads: {},
   // threadId -> true when a TUI session wrote to the session file and the RPC
@@ -2253,10 +2296,16 @@ export const useStore = create<PiStore>()((set, get) => {
     } catch {
       /* ignore */
     }
+    earlierCache.delete(id);
     set((s) => {
       const openThreadIds = s.openThreadIds.filter((x) => x !== id);
       const threads = { ...s.threads };
       delete threads[id];
+      let earlierLoaded: Record<string, number> | null = null;
+      if (s.earlierLoaded[id] !== undefined) {
+        earlierLoaded = { ...s.earlierLoaded };
+        delete earlierLoaded![id];
+      }
       let activeThreadId = s.activeThreadId;
       if (activeThreadId === id) activeThreadId = openThreadIds[openThreadIds.length - 1] || null;
       const activeProjectCwd = activeThreadId ? threads[activeThreadId]?.cwd || null : null;
@@ -2268,6 +2317,7 @@ export const useStore = create<PiStore>()((set, get) => {
         // The thread is gone — its pending dialogs can never be answered; drop
         // them so a full-screen ExtUiModal backdrop doesn't stay up.
         extuiQueue: s.extuiQueue.filter((q) => q.threadId !== id),
+        ...(earlierLoaded ? { earlierLoaded } : {}),
       };
     });
   },
@@ -2591,6 +2641,29 @@ export const useStore = create<PiStore>()((set, get) => {
       } else {
         get().pushToast("error", e?.message || (zh ? "压缩失败" : "compaction failed"));
       }
+    }
+  },
+
+  loadEarlierMessages: async (threadId) => {
+    const t = get().threads[threadId];
+    // 幂等：已加载（含「加载过但为空」）不重取；无会话文件（未连接占位）不可取。
+    if (!t?.sessionFile || earlierCache.has(threadId)) return;
+    try {
+      const res: any = await window.pi.thread.earlierMessages({ sessionFile: t.sessionFile });
+      const msgs: any[] = Array.isArray(res?.messages) ? res.messages : [];
+      if (msgs.length === 0) {
+        set((s) => ({ earlierLoaded: { ...s.earlierLoaded, [threadId]: 0 } }));
+        return;
+      }
+      const { views, toolRuns } = historyToView(msgs);
+      // 历史消息里的工具调用都已完成——补齐缺失结果，避免渲染成「运行中」。
+      for (const tr of Object.values(toolRuns)) {
+        if (!tr.completed) tr.running = false;
+      }
+      earlierCache.set(threadId, { views, toolRuns });
+      set((s) => ({ earlierLoaded: { ...s.earlierLoaded, [threadId]: views.length } }));
+    } catch {
+      // 展示性懒加载失败不影响主流程；不写缓存，下次点击可重试。
     }
   },
 
@@ -3874,7 +3947,8 @@ export const useStore = create<PiStore>()((set, get) => {
         // was cleared in the meantime.
         const current = useStore.getState().drafts[key];
         if (!current) return;
-        window.pi.drafts.set(key, current).catch(() => {});
+        // 可选链：L1 测试的 window.pi mock 可能不含 drafts API。
+        window.pi?.drafts?.set(key, current)?.catch(() => {});
       }, 500),
     );
   },
@@ -3891,7 +3965,8 @@ export const useStore = create<PiStore>()((set, get) => {
       delete drafts[key];
       return { drafts };
     });
-    window.pi.drafts.delete(key).catch(() => {});
+    // 可选链：L1 测试的 window.pi mock 可能不含 drafts API。
+    window.pi?.drafts?.delete(key)?.catch(() => {});
   },
 
   rateMessage: async (entryId, rating, note) => {

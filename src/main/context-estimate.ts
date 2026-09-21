@@ -53,7 +53,7 @@ export type PostCompactionEstimate = { compactionId: string; tokens: number };
 // 分支遍历（镜像 pi buildSessionPath）
 // ---------------------------------------------------------------------------
 
-function branchPath(entries: Entry[], leafId: string | null): Entry[] {
+export function branchPath(entries: Entry[], leafId: string | null): Entry[] {
   const byId = new Map<string, Entry>();
   for (const e of entries) if (e?.id) byId.set(e.id, e);
   let current: Entry | undefined = leafId ? byId.get(leafId) : undefined;
@@ -203,6 +203,72 @@ export function postCompactionEstimateFromEntries(
     return { compactionId: String(compaction.id ?? ""), tokens };
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// 「更早的对话」——活跃上下文之外的分支条目（供 UI 展示，只读）
+// ---------------------------------------------------------------------------
+
+/**
+ * 计算分支上「更早的对话」条目：pi buildContextEntries 省略掉的那部分。
+ * 镜像 pi 语义：分支上有 compaction 时，活跃 = [最新压缩] + firstKeptEntryId..压缩前
+ * + 压缩后全部；更早 = firstKeptEntryId 之前的全部（含更旧的消息与更旧的摘要）。
+ * 无 compaction → 空数组。多次压缩自然支持（旧摘要都在保留区之前）。
+ */
+export function earlierEntriesFromEntries(entries: unknown, leafId?: string | null): Entry[] {
+  if (!Array.isArray(entries) || entries.length === 0) return [];
+  const list = (entries as Entry[]).filter((e) => e && typeof e === "object" && e.type !== "session");
+  const path = branchPath(list, typeof leafId === "string" ? leafId : null);
+  let latestIdx = -1;
+  for (let i = path.length - 1; i >= 0; i--) {
+    if (path[i].type === "compaction") {
+      latestIdx = i;
+      break;
+    }
+  }
+  if (latestIdx < 0) return [];
+  const compaction = path[latestIdx] as any;
+  let firstKeptIdx = -1;
+  for (let i = 0; i < latestIdx; i++) {
+    if (path[i].id === compaction?.firstKeptEntryId) {
+      firstKeptIdx = i;
+      break;
+    }
+  }
+  // firstKeptEntryId 不在路径上 → 活跃无保留区，压缩前全部算「更早」。
+  return path.slice(0, firstKeptIdx >= 0 ? firstKeptIdx : latestIdx);
+}
+
+/**
+ * 「更早的对话」条目 → 可展示消息（镜像 pi sessionEntryToContextMessages）：
+ * message 原样、custom_message/branch_summary/compaction 转伪消息。
+ * 返回顺序 = 时间序，可直接喂给 renderer 的 historyToView。
+ */
+export function earlierDisplayMessages(entries: unknown, leafId?: string | null): any[] {
+  const out: any[] = [];
+  for (const e of earlierEntriesFromEntries(entries, leafId)) {
+    if (e.type === "message" && e.message) {
+      out.push(e.message);
+    } else if (e.type === "custom_message") {
+      // pi createCustomMessage 形状
+      out.push({
+        role: "custom",
+        customType: e.customType,
+        content: e.content ?? [],
+        display: e.display,
+        details: e.details,
+        timestamp: typeof e.timestamp === "string" ? new Date(e.timestamp).getTime() : (e.timestamp as number),
+      });
+    } else if (e.type === "branch_summary" && e.summary) {
+      // pi createBranchSummaryMessage 形状
+      out.push({ role: "branchSummary", summary: e.summary, fromId: e.fromId, timestamp: typeof e.timestamp === "string" ? new Date(e.timestamp).getTime() : (e.timestamp as number) });
+    } else if (e.type === "compaction") {
+      // pi createCompactionSummaryMessage 形状（renderer 渲染成分隔条）
+      out.push({ role: "compactionSummary", summary: e.summary, tokensBefore: e.tokensBefore, timestamp: typeof e.timestamp === "string" ? new Date(e.timestamp).getTime() : (e.timestamp as number) });
+    }
+    // 其它条目（session/model_change/…）不进上下文，跳过。
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
