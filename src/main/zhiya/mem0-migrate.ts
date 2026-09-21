@@ -113,7 +113,8 @@ export const DEVICE_LABEL: Record<string, string> = {
   // 2026-09-21 修正：wjj-mb = minibox（此前误标「手机」；数据内容核验 26/179 命中 minibox 专属关键词、0 条手机相关）
   "wjj-mb": "minibox",
   "wjj-tb": "平板",
-  "wjj-wjw": "另一台",
+  // 2026-09-21 修正：wjj-wjw = maxbox（journal 2026-09-05 userId 分配 + LanDeviceInfo.md；此前为占位标签「另一台」）
+  "wjj-wjw": "maxbox",
 };
 
 /** agent_id → 项目名（空 = 全局）。 */
