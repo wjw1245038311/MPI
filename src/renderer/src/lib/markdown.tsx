@@ -1,11 +1,5 @@
 import { memo, useEffect, useMemo, useState, type ReactNode, type Ref } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeHighlight from "rehype-highlight";
-import rehypeRaw from "rehype-raw";
-import rehypeSlug from "rehype-slug";
-import { CODE_LANGUAGE_ALIASES, CODE_LANGUAGE_NAMES, CODE_LANGUAGES } from "./code-languages";
-import { remarkTrimAutolinkTrailingUnicode } from "./remark-autolink-trim";
+import { renderMd } from "./md-pipeline";
 import { useStore } from "../store";
 
 function extractText(node: ReactNode): string {
@@ -147,48 +141,8 @@ function MermaidDiagram({ code }: { code: string }) {
   );
 }
 
-// Module-level constants: markdown parsing + highlight.js is the single most
-// expensive thing the renderer does. ReactMarkdown re-initializes its plugin
-// pipeline when the plugin array identity changes, and re-parses the text on
-// every render — so everything here must be stable, and the component itself
-// is memoized on `text`. Unchanged messages then cost nothing to re-render.
-// The trim plugin must run after gfm (it fixes autolink literals gfm produced).
-const REMARK_PLUGINS = [remarkGfm, remarkTrimAutolinkTrailingUnicode];
-
-// rehype-raw enables inline HTML in markdown (READMEs use <table>/<img> for
-// screenshot grids). Raw markup can carry event-handler attributes — react-
-// markdown v9 does not filter those itself, so strip on* props before render.
-function stripEventProps(node: any): void {
-  if (!node || typeof node !== "object") return;
-  if (node.type === "element" && node.properties) {
-    for (const key of Object.keys(node.properties)) {
-      if (/^on/i.test(key)) delete node.properties[key];
-    }
-  }
-  if (Array.isArray(node.children)) node.children.forEach(stripEventProps);
-}
-const rehypeStripEvents = () => (tree: any) => stripEventProps(tree);
-
-const REHYPE_PLUGINS = [
-  // Must run first: turns raw HTML text nodes into real elements so the rest
-  // of the pipeline (and our component overrides, e.g. local <img>) sees them.
-  rehypeRaw,
-  rehypeStripEvents,
-  // GitHub-style heading ids so in-document anchor links (e.g. the user
-  // manual's table of contents) can jump to headings inside the app.
-  rehypeSlug,
-  [
-    rehypeHighlight,
-    {
-      aliases: CODE_LANGUAGE_ALIASES,
-      // Detect unlabeled fenced blocks after checking explicit languages. This
-      // makes copied shell/code snippets useful while keeping the subset small.
-      detect: true,
-      languages: CODE_LANGUAGES,
-      subset: CODE_LANGUAGE_NAMES,
-    },
-  ],
-] as any;
+// 解析管线（插件列表 + processor + post）在 ./md-pipeline.ts——纯函数模块，
+// 可被 node 测试直接 import 与 react-markdown 原库对拍。
 // --- Local file link resolution (markdown previews of on-disk files) -------
 // Relative links in a rendered .md should open the target file in the preview
 // panel, not as a web page. Resolution order: directory of the md file first,
@@ -435,12 +389,80 @@ const MD_COMPONENTS = {
   ),
 };
 
+// --- Parse cache（切换会话重挂载免重复解析）---------------------------------
+// 切换线程会卸载/重挂整条消息列表；没有缓存时每次切换都要对每个块重跑完整
+// remark/rehype 管线（highlight.js 最重）——这是「切长会话慢」的主因。
+// renderMd（./md-pipeline.ts，复刻 react-markdown v9 同步路径）的产物元素树是
+// (text, fileBasePath, projectRoot) 的纯函数，按此缓存、跨挂载复用。
+
+// components 按 (fileBasePath, projectRoot) 共享：缓存的元素树引用这些函数，
+// identity 必须跨实例稳定（原实现是每实例 useMemo，效果相同但不共享）。
+const mdComponentsCache = new Map<string, Record<string, unknown>>();
+function getMdComponents(fileBasePath?: string | null, projectRoot?: string | null): Record<string, unknown> {
+  const prefix = `${fileBasePath ?? ""}\u0001${projectRoot ?? ""}`;
+  let c = mdComponentsCache.get(prefix);
+  if (!c) {
+    c = {
+      ...MD_COMPONENTS,
+      a: makeAnchorComponent(fileBasePath ?? undefined, projectRoot ?? undefined),
+      img: makeImgComponent(fileBasePath ?? undefined, projectRoot ?? undefined),
+    };
+    if (mdComponentsCache.size >= 32) mdComponentsCache.clear(); // 前缀很少，简单重置封顶
+    mdComponentsCache.set(prefix, c);
+  }
+  return c;
+}
+
+// LRU：外层 prefix → 内层 src → {len, node}；按缓存源文本总字节数封顶。
+// 元素树比源文本重（约一个数量级），2MB 源 ≈ 可容纳数个长会话的热工作集。
+const MD_PARSE_CACHE_MAX_BYTES = 2 * 1024 * 1024;
+const mdParseCache = new Map<string, Map<string, { len: number; node: ReactNode }>>();
+let mdParseCacheBytes = 0;
+
+function cachedRenderMd(src: string, prefix: string, components: Record<string, unknown>): ReactNode {
+  let inner = mdParseCache.get(prefix);
+  if (inner) {
+    const hit = inner.get(src);
+    if (hit) {
+      // LRU touch：移到末尾（内层 + 外层）
+      inner.delete(src);
+      inner.set(src, hit);
+      mdParseCache.delete(prefix);
+      mdParseCache.set(prefix, inner);
+      return hit.node;
+    }
+  } else {
+    inner = new Map();
+    mdParseCache.set(prefix, inner);
+  }
+  const node = renderMd(src, components);
+  inner.set(src, { len: src.length, node });
+  mdParseCacheBytes += src.length;
+  while (mdParseCacheBytes > MD_PARSE_CACHE_MAX_BYTES) {
+    // 从最旧的前缀里逐条淘汰（跨前缀近似 LRU，足够当内存护栏）
+    const oldestPrefix = mdParseCache.keys().next();
+    if (oldestPrefix.done) break;
+    const oldestInner = mdParseCache.get(oldestPrefix.value)!;
+    const oldestSrc = oldestInner.keys().next();
+    if (oldestSrc.done) {
+      mdParseCache.delete(oldestPrefix.value);
+      continue;
+    }
+    const entry = oldestInner.get(oldestSrc.value)!;
+    oldestInner.delete(oldestSrc.value);
+    mdParseCacheBytes -= entry.len;
+    if (!oldestInner.size) mdParseCache.delete(oldestPrefix.value);
+  }
+  return node;
+}
+
 export const Markdown = memo(
   function Markdown({
     text,
     containerRef,
     fileBasePath,
     projectRoot,
+    noCache,
   }: {
     text: string;
     containerRef?: Ref<HTMLDivElement>;
@@ -448,23 +470,15 @@ export const Markdown = memo(
      *  enables relative links to open local files. */
     fileBasePath?: string | null;
     projectRoot?: string | null;
+    /** 流式内容每个 tick 都在变：不入缓存，避免中间态挤掉已定稿条目。 */
+    noCache?: boolean;
   }) {
-    // Per-instance anchor renderer; stable identity per (file, root) so chat
-    // messages keep the zero-cost memoization of the shared components.
-    const components = useMemo(
-      () => ({
-        ...MD_COMPONENTS,
-        a: makeAnchorComponent(fileBasePath ?? undefined, projectRoot ?? undefined),
-        img: makeImgComponent(fileBasePath ?? undefined, projectRoot ?? undefined),
-      }),
-      [fileBasePath, projectRoot],
-    );
-    return (
-      <div className="md" ref={containerRef}>
-        <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components as any}>
-          {text || ""}
-        </ReactMarkdown>
-      </div>
-    );
+    const src = text || "";
+    const node = useMemo(() => {
+      const components = getMdComponents(fileBasePath ?? undefined, projectRoot ?? undefined);
+      if (noCache) return renderMd(src, components);
+      return cachedRenderMd(src, `${fileBasePath ?? ""}\u0001${projectRoot ?? ""}`, components);
+    }, [src, fileBasePath, projectRoot, noCache]);
+    return <div className="md" ref={containerRef}>{node}</div>;
   },
 );

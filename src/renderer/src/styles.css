@@ -947,6 +947,18 @@ body.sidebar-resizing * {
   display: flex;
   gap: 12px;
 }
+/* 长会话快切：视口外的消息组跳过渲染（content-visibility），进入视口才真正
+   构建 DOM/跑 markdown。`auto` 记住每组上次渲染高度，重进后滚动条位置稳定；
+   首次未渲染前用固定值估算（用户消息短 / assistant 组含折叠工具卡）。 */
+.messages > .msg.user,
+.messages > .msg.custom {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
+}
+.messages > .msg.assistant {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
+}
 .msg-avatar {
   width: 26px;
   height: 26px;

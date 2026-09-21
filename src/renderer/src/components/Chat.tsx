@@ -1484,7 +1484,8 @@ function BlockView({
   if (block.type === "text") {
     const segments = choiceSegments;
     if (!segments || (segments.length === 1 && segments[0].kind === "md")) {
-      return <Markdown text={block.text} containerRef={markRef} />;
+      // 流式中的文本每个 tick 都在变：noCache，避免中间态污染 markdown 解析缓存
+      return <Markdown text={block.text} containerRef={markRef} noCache={streaming} />;
     }
     // Multiple rendered units: the mark ref wraps them all so search
     // highlighting still covers every segment.
@@ -1511,7 +1512,7 @@ function BlockView({
       </div>
     );
   }
-  if (block.type === "thinking") return <Thinking text={block.thinking} language={language} expandKey={expandKey} />;
+  if (block.type === "thinking") return <Thinking text={block.thinking} language={language} expandKey={expandKey} noCache={streaming} />;
   const run = toolRuns[block.id] || (block.contentIndex === undefined ? undefined : Object.values(toolRuns).find((candidate) => candidate.contentIndex === block.contentIndex));
   const name = effectiveToolName(block.name, run);
   // Plan-choice calls render as a compact option card instead of raw JSON.
@@ -1566,7 +1567,7 @@ const HtmlReferenceCard = memo(function HtmlReferenceCard({
 
 // 展开状态经 lib/expand-state 持久化（key = 消息 key:块序号）：dev HMR 替换本
 // 模块会重挂整棵聊天树，已展开的块从 Map 恢复、不被折回。
-const Thinking = memo(function Thinking({ text, language, expandKey }: { text: string; language: "en" | "zh"; expandKey?: string }) {
+const Thinking = memo(function Thinking({ text, language, expandKey, noCache }: { text: string; language: "en" | "zh"; expandKey?: string; noCache?: boolean }) {
   // 展开状态存模块级 Map（lib/expand-state）：HMR/重挂载后恢复，不再被折叠回去。
   const [open, setOpen] = useState(() => (expandKey ? getExpandState(expandKey) : undefined) ?? false);
   const toggle = () => {
@@ -1585,7 +1586,7 @@ const Thinking = memo(function Thinking({ text, language, expandKey }: { text: s
       </button>
       {open && (
         <div className="thinking-body">
-          <Markdown text={displayText} />
+          <Markdown text={displayText} noCache={noCache} />
         </div>
       )}
     </div>
@@ -1728,7 +1729,8 @@ const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language, ex
             <div className="tool-section-label">{language === "zh" ? "输出" : "Output"}</div>
             {result ? (
               <div className={`tool-result ${run?.isError ? "err" : ""}`}>
-                <ToolCode text={normalizeTranscriptText(result)} language={languageForResult(name, run, blockArgs)} />
+                {/* 运行中的工具 partialText 逐 tick 增长：noCache */}
+                <ToolCode text={normalizeTranscriptText(result)} language={languageForResult(name, run, blockArgs)} noCache={!!run?.running} />
               </div>
             ) : (
               <div className="tool-empty compact">{emptyMessage}</div>
@@ -1914,8 +1916,8 @@ function codeFence(text: string, language?: string): string {
   return `${fence}${language || ""}\n${normalized}${normalized.endsWith("\n") ? "" : "\n"}${fence}`;
 }
 
-function ToolCode({ text, language }: { text: string; language?: string }) {
-  return <Markdown text={codeFence(text, language)} />;
+function ToolCode({ text, language, noCache }: { text: string; language?: string; noCache?: boolean }) {
+  return <Markdown text={codeFence(text, language)} noCache={noCache} />;
 }
 
 /** Unified (single-column) diff for edit-tool results — git-style rows with
