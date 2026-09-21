@@ -467,7 +467,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             <span className="ico">
               <Sprout size={15} />
             </span>
-            {language === "zh" ? "知芽 Zhiya" : "Zhiya"}
+            {language === "zh" ? "知芽" : "Zhiya"}
           </button>
         </div>
 

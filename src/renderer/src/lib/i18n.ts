@@ -34,6 +34,7 @@ const exact: Record<string, string> = {
   "拖动调整导航栏宽度；双击恢复默认": "Drag to resize; double-click to reset",
   "知芽：智能体的大脑与灵魂": "Zhiya: the agent's brain & soul",
   "知芽 Zhiya": "Zhiya",
+  "知芽": "Zhiya",
   "打开文件夹": "Open folder",
   "已置顶项目": "Pinned project",
   "取消置顶项目": "Unpin project",
