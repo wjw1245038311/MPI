@@ -1,6 +1,6 @@
 {
   "name": "mpi",
-  "version": "0.7.0",
+  "version": "0.7.2",
   "piRuntimeVersion": "0.85.1",
   "private": true,
   "license": "MIT",
@@ -138,6 +138,7 @@
     "diag:extract": "node --experimental-strip-types scripts/diag-memory-extract.mjs",
     "check:ext": "node scripts/check-extensions.mjs",
     "test:memorycmd": "node --experimental-strip-types scripts/test-memory-command.mjs",
+    "test:memorygate": "node --experimental-strip-types scripts/test-memory-gate.mjs",
     "test:memoryendpoint": "node --experimental-strip-types scripts/test-memory-endpoint.mjs",
     "test:memoryrecall": "node --experimental-strip-types scripts/test-memory-recall.mjs",
     "test:memoryregress": "node --experimental-strip-types scripts/test-memory-regress.mjs"

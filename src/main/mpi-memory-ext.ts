@@ -53,8 +53,19 @@ const CONTEXT_MAX_CHARS = 2000;
  *  实测 4753 字符的窗口会返回空（content 与 reasoning 都空）→ 抽取静默失败。 */
 const EXTRACT_CHUNK_CHARS = Number(process.env.MPI_MEMORY_CHUNK_CHARS || 3000);
 const EXTRACT_MAX_CHUNKS = 3;
-/** 低于这个重要性连 inbox 都不进（主进程还会再判一次，这里先省一次 IO）。 */
+/** 低于这个重要性连 inbox 都不进（主进程还会再判一次，这里先省一次 IO）。
+ *  ⚠️ 与 main 侧 pool.ts THRESHOLD.minImportance 保持一致——扩展 import 不到本仓模块，改阈值时两处同步。 */
 const MIN_IMPORTANCE = 4;
+
+/** 手动写入的重要性把关（minibox 2026-09-21 实测反馈：低于下限的条目会被主进程静默 drop，
+ *  但入队方仍回「已记入」——成功提示与实际落盘脱节）。
+ *  - ≥ 下限 → 原样通过；
+ *  - < 下限且 verbatim（/memory-remember）→ 显式「存这条」指令，模型评分不得否决，钳到下限；
+ *  - < 下限其余情况 → 返回 null（丢弃），调用方必须如实报「未写入」，不再静默入队。 */
+export function gateManualImportance(scored: number, verbatim: boolean): number | null {
+  if (scored >= MIN_IMPORTANCE) return scored;
+  return verbatim ? MIN_IMPORTANCE : null;
+}
 
 const log = (msg: string) => {
   try {
@@ -704,7 +715,7 @@ const NoteParams = Type.Object({
   text: Type.String({ description: "The fact/preference/lesson to remember, one self-contained sentence." }),
   type: Type.Optional(Type.String({ description: "semantic | episodic | procedural (default semantic)" })),
   temporal: Type.Optional(Type.String({ description: "retrospective | present | prospective (default retrospective)" })),
-  importance: Type.Optional(Type.Number({ description: "1-10; omit to let the local model decide" })),
+  importance: Type.Optional(Type.Number({ description: `1-10; omit to let the local model decide. Below ${MIN_IMPORTANCE} is discarded (pool floor minImportance=${MIN_IMPORTANCE}) — pass ≥${MIN_IMPORTANCE} if it must be kept.` })),
 });
 
 export default function (pi: ExtensionAPI) {
@@ -818,12 +829,25 @@ ${h.id}`,
     } catch {
       scoringFailed = true; // fail-open：打分失败也要记下，交人工复核
     }
+    const gated = gateManualImportance(importance, !!opts.verbatim);
+    if (gated === null) {
+      // 低于下限且非原文模式 → 主进程必 drop，不再「先入队再静默丢」：如实告知
+      log(`memory 写入被丢弃：重要性 ${importance} < ${MIN_IMPORTANCE}`);
+      ctx.ui.notify(
+        `未写入记忆池：模型判定重要性 ${importance}（低于下限 ${MIN_IMPORTANCE}，琐事不沉淀）。确需保留可用 /memory-remember <内容> 原文记入。`,
+        "warn",
+      );
+      return;
+    }
+    if (gated !== importance) {
+      log(`memory-remember：模型评分 ${importance} 低于下限，原文模式按 ${gated} 强制保留`);
+    }
     const n = enqueue([
       {
         text,
         type: "semantic",
         temporal: /以后|下次|不要再|必须/.test(text) ? "prospective" : "retrospective",
-        importance,
+        importance: gated,
         relevance: 0.9, // 手动记录 = 与当前关切高度相关
         project: process.env.MPI_MEMORY_PROJECT || basename(process.cwd()) || "global",
           projectRoot: process.cwd(),
@@ -834,7 +858,7 @@ ${h.id}`,
     ]);
     ctx.ui.notify(
       n
-        ? `${opts.verbatim ? "已原文记入" : "已记入"}记忆池（重要性 ${importance}${scoringFailed ? "，打分失败已标记" : ""}），主进程稍后落盘。`
+        ? `${opts.verbatim ? "已原文记入" : "已记入"}记忆池（重要性 ${gated}${scoringFailed ? "，打分失败已标记" : ""}${gated !== importance ? `；模型评分 ${importance} 低于下限、原文模式强制保留` : ""}），主进程稍后落盘。`
         : "写入记忆池失败，请看日志。",
       n ? "info" : "error",
     );
@@ -1368,11 +1392,19 @@ ${STATUS_TAG[p.status] ?? p.status} · ${KIND_TAG[p.kind] ?? p.kind}`,
     description:
       "Save one durable memory to the user's memory pool (知芽记忆池) immediately. Use it when the user explicitly asks to remember something, or when a decision/preference/lesson is clearly worth keeping. For automatic capture you do NOT need to call it — the pool captures on its own.",
     parameters: NoteParams,
-    execute: async (args: any, ctx: any) => {
+    // ⚠️ pi 的工具签名是 execute(toolCallId, params, signal, onUpdate, ctx)——
+    // 第一个参数是**字符串 toolCallId**，不是参数对象。这里曾写成 (args, ctx)，
+    // 于是 params 落到了 ctx 的位置、args 拿到 toolCallId → params.text 永远为空，
+    // 工具每次都回「text 为空，未记录」（真机抓到的 bug，2026-09-21）。
+    execute: async (_toolCallId: string, params: any, _signal?: any, _onUpdate?: any, ctx?: any) => {
       rememberCtx(ctx);
-      const text = String(args?.text || "").trim();
-      if (!text) return { content: [{ type: "text", text: "memory_note: text 为空，未记录。" }] };
-      let importance = Number(args?.importance);
+      const text = String(params?.text || "").trim();
+      if (!text) {
+        // 空参数时把收到的原样打出来——这类签名/传参错误最难查，日志里留证据
+        log(`memory_note：收到空 text，params=${JSON.stringify(params).slice(0, 200)}`);
+        return { content: [{ type: "text", text: "memory_note: text 为空，未记录（参数没传进来，见日志）。" }] };
+      }
+      let importance = Number(params?.importance);
       let scoringFailed = false;
       if (!Number.isFinite(importance) && modelEnabled) {
         try {
@@ -1393,12 +1425,25 @@ ${STATUS_TAG[p.status] ?? p.status} · ${KIND_TAG[p.kind] ?? p.kind}`,
           scoringFailed = true; // fail-open：打分失败也记下来，交给人工复核
         }
       }
+      const gated = gateManualImportance(importance, false);
+      if (gated === null) {
+        // 低于下限必被主进程 drop——不再「先入队再静默丢」，直接如实回报（minibox 2026-09-21 实测坑）
+        log(`memory_note：丢弃——重要性 ${importance} < ${MIN_IMPORTANCE}`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `未写入记忆池：重要性 ${importance} 低于下限 ${MIN_IMPORTANCE}，条目已丢弃。若确需保留，请以 importance ≥${MIN_IMPORTANCE} 重试。`,
+            },
+          ],
+        };
+      }
       const items = [
         {
           text,
-          type: typeof args?.type === "string" ? args.type : "semantic",
-          temporal: typeof args?.temporal === "string" ? args.temporal : "retrospective",
-          importance,
+          type: typeof params?.type === "string" ? params.type : "semantic",
+          temporal: typeof params?.temporal === "string" ? params.temporal : "retrospective",
+          importance: gated,
           // 用户明确要求记住 → 与当前任务的相关性按定义就高
           relevance: 0.9,
           project: process.env.MPI_MEMORY_PROJECT || basename(process.cwd()) || "global",
@@ -1431,10 +1476,10 @@ ${STATUS_TAG[p.status] ?? p.status} · ${KIND_TAG[p.kind] ?? p.kind}`,
       query: Type.String({ description: "What to look for, in natural language (Chinese is fine)." }),
       topK: Type.Optional(Type.Number({ description: "How many memories to return (default 5, max 20)." })),
     }),
-    execute: async (args: any, _ctx: any) => {
-      const query = String(args?.query || "").trim();
-      const topK = Math.max(1, Math.min(20, Number(args?.topK) || 5));
-      if (!query) return { content: [{ type: "text", text: "memory_recall: query 为空。" }] };
+    execute: async (_toolCallId: string, params: any, _signal?: any, _onUpdate?: any, _ctx?: any) => {
+      const query = String(params?.query || "").trim();
+      const topK = Math.max(1, Math.min(20, Number(params?.topK) || 5));
+      if (!query) return { content: [{ type: "text", text: "memory_recall: query 为空（参数没传进来）。" }] };
 
       const remote = await remoteRecall(query, topK);
       if (remote) {

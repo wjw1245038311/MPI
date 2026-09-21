@@ -4,6 +4,23 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **记忆写入不再「静默丢弃」：importance<4 如实报「未写入」**（minibox 2026-09-21 实测反馈）：`importance < 4` 的条目会被主进程写入把关（`minImportance=4`，pool.ts）静默 drop，但 `/memory`、`/memory-remember`、`memory_note` 都在入队时就回「已记入记忆池」——**成功提示与实际落盘脱节**，容易误判成写入故障。现在入队前先把关（`gateManualImportance`，阈值与 pool.ts 同步 + 漂移守卫测试）：
+   - `/memory <内容>`：模型评分低于 4 → 不写，通知「未写入记忆池（重要性 N<4，琐事不沉淀）。确需保留可用 /memory-remember」；
+   - `/memory-remember <内容>`：显式「存这条」指令——**行为变更**：模型评分不得否决，低于 4 时钳到 4 强制保留（通知里注明「强制保留」）；
+   - `memory_note`：importance 低于 4 → 不入队，直接回「未写入……请以 importance ≥4 重试」；参数描述同步注明下限。
+
+   验证方式：`npm run test:memorygate`（7 例：压线通过 / 丢弃 / verbatim 钳位 + 与 pool.ts 阈值一致性）；手工——`/memory <琐事>`（模型评 <4）出现「未写入」警示且池内无新文件，`/memory-remember <同一句>` 成功落池、importance 记 4。
+
+## v0.7.2（2026-09-21）
+
+1. **修 agent 记忆工具调不通（`memory_note` / `memory_recall` 一直是坏的）**：pi 的工具签名是 `execute(toolCallId, params, signal, onUpdate, ctx)`，而这两个工具写成了 `execute(args, ctx)`——**第一个参数其实是字符串 `toolCallId`**，于是 `args.text` 永远为空，`memory_note` 每次都只回一句「text 为空，未记录」：**模型永远存不进记忆**（命令 `/memory-remember` 不受影响，所以一直没被发现）。现在签名与参数名都改对（`params`），空参数时把收到的内容打进日志便于再排查，并加**契约测试**扫描所有扩展的 `execute` 首参必须是 `toolCallId`（6 个扩展 / 5 处），防同类问题复发。
+
+## v0.7.1（2026-09-21）
+
+1. **知芽面板对所有版本开放（打包版也能看到）**：侧栏的「知芽 Zhiya」入口此前被开发模式判定挡住——**打包版里根本看不到**，而其它设备（thinkbook 等）装的正是打包版、要靠它做记忆迁移，等于被挡住用不了。现在**移除该判定**：所有版本都显示知芽入口（面板内部的「开发工具」菜单仍只在开发版出现）。
+
 ## v0.7.0（2026-09-21）
 
 1. **设置里新增「记忆模型」（知芽记忆池）——三档：不设置 / 跟随主模型 / 指定模型**：位置在「模型与提供商」的摘要模型下方，与摘要模型同样的两行下拉。**不设置（默认）= 完全不调模型**：记忆功能照常可用，但只剩基础读写改——`/memory-remember`、`memory_note`、检索、归档/删除都在，**自动捕获、重要性打分、lesson 正文生成停用**（与 mem0 的 `infer:false` 形态相同）。选「跟随主模型」则用当前会话主模型（扩展侧走 pi 运行时的 `completeSimple`，鉴权交运行时；主进程侧的分诊用设置里的默认模型）；选具体供应商+型号则只用它。供应商/型号缺失、协议不是 OpenAI 兼容（如 anthropic-messages）、缺 baseUrl 时，**退化成「不使用模型」并在日志里说明原因**，不会静默拿一个连不上的端点把记忆功能整体搞哑。
