@@ -14,8 +14,11 @@ import { describeOs, resolveShell, shellToolFlags, type ResolvedShell, type Reso
  *     instead of failing as `No bash shell found` inside the transcript.
  *
  * The resolution spawns a couple of probe processes (`reg`, `where`,
- * `bash --version`), so it is cached briefly; `resetShellState()` forces a
- * re-probe when settings change or Git is installed from the UI.
+ * `bash --version`) SYNCHRONOUSLY — on Windows that blocks the main event
+ * loop for ~600ms. It therefore runs once per app run (at startup, hidden by
+ * launch) and is cached until an explicit `resetShellState()`; there is no
+ * periodic re-probe. The Settings → 系统 「重新检测」 button (and config
+ * changes) call resetShellState() when Git is installed/uninstalled.
  */
 
 /** Payload handed to the extension via MPI_SHELL_INFO. */
@@ -52,8 +55,7 @@ export interface ShellState {
   os: string;
 }
 
-const CACHE_TTL_MS = 10_000;
-let cache: { key: string; at: number; state: ShellState } | null = null;
+let cache: { key: string; state: ShellState } | null = null;
 
 /** Read pi's `shellPath` setting. Returns null for a missing/corrupt file. */
 export function readShellPathFromSettings(settingsPath: string): string | null {
@@ -66,10 +68,12 @@ export function readShellPathFromSettings(settingsPath: string): string | null {
   }
 }
 
-/** Resolve (and briefly cache) the shell state for this machine. */
+/** Resolve the shell state for this machine; cached until resetShellState(). */
 export function getShellState(settingsPath: string, options: { deps?: ResolveShellOptions["deps"] } = {}): ShellState {
   const key = settingsPath;
-  if (cache && cache.key === key && Date.now() - cache.at < CACHE_TTL_MS && !options.deps) return cache.state;
+  // 无 TTL：探测是同步 spawn（Windows ~600ms），周期性重探会在「新建会话」时
+  // 卡主进程事件循环。失效只走 resetShellState()（重新检测 / 配置变更）。
+  if (cache && cache.key === key && !options.deps) return cache.state;
 
   const configuredPath = readShellPathFromSettings(settingsPath);
   const shell = resolveShell({ settingsShellPath: configuredPath, deps: options.deps });
@@ -80,7 +84,7 @@ export function getShellState(settingsPath: string, options: { deps?: ResolveShe
     configuredPathStale: !!configuredPath && shell.source !== "settings",
     os: describeOs(),
   };
-  if (!options.deps) cache = { key, at: Date.now(), state };
+  if (!options.deps) cache = { key, state };
   return state;
 }
 
