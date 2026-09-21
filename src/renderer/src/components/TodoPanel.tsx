@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStore } from "../store";
+import { SidePanel } from "./SidePanel";
 import type { ProjectSummary, TodoItem } from "../lib/types";
 import { parseQuickAdd } from "../lib/quick-add-date";
 import {
@@ -12,7 +13,7 @@ import {
   TODO_SECTION_ORDER,
   type TodoSectionId,
 } from "../lib/todo-sections";
-import { CheckSquare, Close, Paperclip } from "./icons";
+import { CheckSquare, Paperclip } from "./icons";
 
 const SECTION_LABELS: Record<TodoSectionId, string> = {
   all: "全部",
@@ -360,16 +361,6 @@ export function TodoPanel() {
     }
   }, [open]);
 
-  // Esc closes the panel.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, close]);
-
   if (!open) return null;
 
   const scoped = scopeCwd ? todos.filter((t) => t.cwd === scopeCwd) : todos;
@@ -417,28 +408,8 @@ export function TodoPanel() {
   };
 
   return (
-    <div className="settings-backdrop" onMouseDown={close}>
-      <div className="plugins-modal todo-panel" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <header className="plugins-head">
-          <div className="plugins-head-title">
-            <span className="set-brand-mark">
-              <CheckSquare size={18} />
-            </span>
-            <div>
-              <div className="set-brand-title">待办任务</div>
-              <div className="set-brand-sub">
-                {language === "zh"
-                  ? "按项目记录待办，支持日期与备注；智能体也可在对话中添加"
-                  : "Track todos per project with dates and notes; the agent can add them from conversations too"}
-              </div>
-            </div>
-          </div>
-          <button className="set-iconbtn" title="关闭" onClick={close}>
-            <Close size={16} />
-          </button>
-        </header>
-
-        <div className="todo-body">
+    <SidePanel title={language === "zh" ? "待办任务" : "Todos"} icon={<CheckSquare size={15} />} onClose={close}>
+      <div className="todo-body">
           {/* Left: project scope list */}
           <div className="todo-side">
             <button type="button" className={`todo-proj ${scopeCwd === null ? "active" : ""}`} onClick={() => setScopeCwd(null)}>
@@ -566,7 +537,6 @@ export function TodoPanel() {
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </SidePanel>
   );
 }

@@ -71,8 +71,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const activeThreadId = useStore((s) => s.activeThreadId);
   const sidebarTab = useStore((s) => s.sidebarTab);
   const language = useStore((s) => s.config?.language || "en");
+  const zhiyaOpen = useStore((s) => s.zhiyaOpen);
   // Zhiya（知芽）is a dev-only panel: hidden in packaged releases.
-  const isDev = useStore((s) => s.isDev);
   // Absent/corrupt config means the trash is on (safe default, see main/config.ts).
   const trashEnabled = useStore((s) => s.config?.trashEnabled !== false);
 
@@ -335,44 +335,76 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             </span>
             新建会话
           </button>
-          <button className="sb-nav-item" onClick={() => useStore.getState().openAutomation()}>
+          <button
+            className="sb-nav-item"
+            onClick={() =>
+              useStore.getState().automationOpen ? useStore.getState().closeAutomation() : useStore.getState().openAutomation()
+            }
+          >
             <span className="ico">
               <Clock size={15} />
             </span>
             定时任务
           </button>
-          <button className="sb-nav-item" onClick={() => useStore.getState().openTodoPanel()}>
+          <button
+            className="sb-nav-item"
+            onClick={() =>
+              useStore.getState().todoPanelOpen ? useStore.getState().closeTodoPanel() : useStore.getState().openTodoPanel()
+            }
+          >
             <span className="ico">
               <CheckSquare size={15} />
             </span>
             待办任务
           </button>
-          <button className="sb-nav-item" onClick={() => useStore.getState().openPlugins()}>
+          <button
+            className="sb-nav-item"
+            onClick={() =>
+              useStore.getState().pluginsOpen ? useStore.getState().closePlugins() : useStore.getState().openPlugins()
+            }
+          >
             <span className="ico">
               <Plug size={15} />
             </span>
             {language === "zh" ? "扩展功能" : "Extensions"}
           </button>
-          <button className="sb-nav-item" onClick={() => useStore.getState().openAppStore()}>
+          <button
+            className="sb-nav-item"
+            onClick={() =>
+              useStore.getState().appsOpen ? useStore.getState().closeAppStore() : useStore.getState().openAppStore()
+            }
+          >
             <span className="ico">
               <AppStore size={15} />
             </span>
             {language === "zh" ? "应用商店" : "App Store"}
           </button>
-          <button className="sb-nav-item" onClick={() => useStore.getState().openMessaging()}>
+          <button
+            className="sb-nav-item"
+            onClick={() =>
+              useStore.getState().messagingOpen ? useStore.getState().closeMessaging() : useStore.getState().openMessaging()
+            }
+          >
             <span className="ico">
               <MessageSquare size={15} />
             </span>
             {language === "zh" ? "消息接入" : "Messaging"}
           </button>
-          {isDev && (
-            <button className="sb-nav-item zhiya-nav" onClick={() => useStore.getState().openZhiya()} title={language === "zh" ? "知芽：智能体的大脑与灵魂（仅开发版）" : "Zhiya: the agent's brain & soul (dev only)"}>
-              <span className="ico">
-                <Sprout size={15} />
-              </span>
-              {language === "zh" ? "知芽 Zhiya" : "Zhiya"}
-            </button>
-          )}
+          {/* 知芽：**所有版本都开放**（2026-09-21 用户要求）。
+              之前用 isDev 门挡住，导致打包版看不到——而其它设备（thinkbook 等）正是装着打包版来用记忆系统，
+              门一挡就没法用。面板内部的“开发工具”菜单仍然只在 dev 显示。 */}
+          <button
+            className={`sb-nav-item zhiya-nav${zhiyaOpen ? " active" : ""}`}
+            onClick={() =>
+              useStore.getState().zhiyaOpen ? useStore.getState().closeZhiya() : useStore.getState().openZhiya()
+            }
+            title={language === "zh" ? "知芽：智能体的大脑与灵魂" : "Zhiya: the agent's brain & soul"}
+          >
+            <span className="ico">
+              <Sprout size={15} />
+            </span>
+            {language === "zh" ? "知芽 Zhiya" : "Zhiya"}
+          </button>
         </div>
 
         <div className="sb-tabs">

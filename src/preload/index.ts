@@ -170,6 +170,9 @@ const api = {
     setWorkspace: (text: string): Promise<{ ok: boolean; master: boolean }> => ipcRenderer.invoke("zhiya:setWorkspace", text),
     /** 重新探测母版目录并同步母版→副本（用于自动探测失败后修正）。 */
     syncMaster: (): Promise<{ masterDir: string | null }> => ipcRenderer.invoke("zhiya:syncMaster"),
+    /** 设置/清除母版根目录（空字符串=回到自动探测）。 */
+    setMasterDir: (dir: string): Promise<{ ok: boolean; masterDir: string | null }> =>
+      ipcRenderer.invoke("zhiya:setMasterDir", dir),
     /** 用 Obsidian 打开三份文件之一（优先母版，避免副本被同步覆盖）。 */
     openFileObsidian: (name: string): Promise<{ ok: boolean; file?: string; master?: boolean; error?: string }> =>
       ipcRenderer.invoke("zhiya:openInObsidian", name),

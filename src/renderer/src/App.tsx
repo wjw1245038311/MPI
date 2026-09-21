@@ -16,7 +16,8 @@ import { AppStorePanel } from "./components/AppStorePanel";
 import { AutomationPanel } from "./components/AutomationPanel";
 import { TodoPanel } from "./components/TodoPanel";
 import { MessagingPanel } from "./components/MessagingPanel";
-import { ZhiyaPanel } from "./components/ZhiyaPanel";
+import { ZhiyaMenu } from "./components/ZhiyaMenu";
+import { ZhiyaSidePanel } from "./components/ZhiyaSidePanel";
 import { Folder, Plus, Smartphone } from "./components/icons";
 import { ImageCopyMenu } from "./components/ImageCopyMenu";
 import { MessageQuoteMenu } from "./components/MessageQuoteMenu";
@@ -29,6 +30,14 @@ export default function App() {
   const activeThreadId = useStore((s) => s.activeThreadId);
   const previewOpen = useStore((s) => s.previewOpen);
   const previewExpanded = useStore((s) => s.previewExpanded);
+  const todoPanelOpen = useStore((s) => s.todoPanelOpen);
+  const automationOpen = useStore((s) => s.automationOpen);
+  const pluginsOpen = useStore((s) => s.pluginsOpen);
+  const appsOpen = useStore((s) => s.appsOpen);
+  const messagingOpen = useStore((s) => s.messagingOpen);
+  const zhiyaPanelOpen = useStore((s) => s.zhiyaPanelOpen);
+  const sidePanelExpanded = useStore((s) => s.sidePanelExpanded);
+  const sidePanelOpen = todoPanelOpen || automationOpen || pluginsOpen || appsOpen || messagingOpen || zhiyaPanelOpen;
   const projects = useStore((s) => s.projects);
   const runtime = useStore((s) => s.runtime);
   const theme = useStore((s) => s.config?.theme || "light");
@@ -130,8 +139,11 @@ export default function App() {
       <ImageCopyMenu />
       <MessageQuoteMenu />
       <TitleBar />
-      <div className={`body ${previewExpanded ? "preview-expanded" : ""}`}>
+      <div
+        className={`body${previewExpanded && !sidePanelOpen ? " preview-expanded" : ""}${sidePanelExpanded && sidePanelOpen ? " side-panel-expanded" : ""}`}
+      >
         <Sidebar onOpenRemote={() => setRemoteOpen(true)} remoteOpen={remoteOpen} />
+        <ZhiyaMenu />
         {activeThreadId ? (
           <Chat />
         ) : (
@@ -159,17 +171,17 @@ export default function App() {
             </div>
           </section>
         )}
-        {previewOpen && <Preview />}
+        {todoPanelOpen && <TodoPanel />}
+        {automationOpen && <AutomationPanel />}
+        {pluginsOpen && <PluginsPanel />}
+        {appsOpen && <AppStorePanel />}
+        {messagingOpen && <MessagingPanel />}
+        {zhiyaPanelOpen && <ZhiyaSidePanel />}
+        {previewOpen && !sidePanelOpen && <Preview />}
       </div>
       <Toasts />
       <ExtUiModal />
       <SearchModal />
-      <PluginsPanel />
-      <AppStorePanel />
-      <AutomationPanel />
-      <TodoPanel />
-      <MessagingPanel />
-      <ZhiyaPanel />
       <Settings />
       {remoteOpen && (
         <div className="settings-backdrop" onMouseDown={() => setRemoteOpen(false)}>

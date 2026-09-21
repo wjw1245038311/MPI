@@ -572,9 +572,14 @@ export interface AppConfig {
    * questions render as a clickable inline panel in the chat; "manual": numbered
    * plain-text questions answered by typing. Absent = inline. */
   qaMode?: "inline" | "manual";
-  /** 知芽母版根目录（AgentSetting 仓）：git 真相源，`~/.pi/agent/zhiya/` 是它
-   * 的单向同步副本。留空 = 首次启动自动探测并写回；探测不到时只用本机副本。 */
+  /** 知芽母版根目录（如 Obsidian vault 里的 Zhiya-assets/）：git 真相源，
+   * `~/.pi/agent/zhiya/` 是它的单向同步副本。留空 = 首次启动自动探测并写回；
+   * 探测不到时只用本机副本。 */
   zhiyaMasterDir?: string;
+  /** 巩固（dream）是否自动跑。默认 false：只记账并提示。 */
+  zhiyaDreamAuto?: boolean;
+  /** dream 六题判定是否调模型。默认 false：用确定性启发式。 */
+  zhiyaDreamLlmClassify?: boolean;
   remoteSignalingUrl: string;
   remoteSignalingEnabled: boolean;
   remoteStunUrls: string[];

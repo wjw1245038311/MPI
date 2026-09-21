@@ -14,6 +14,7 @@ import type {
 } from "../lib/types";
 import { Markdown } from "../lib/markdown";
 import { AppStore, At, Check, Close, Copy, Files, Gauge, Plug, Plus, Refresh, Search } from "./icons";
+import { SidePanel } from "./SidePanel";
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -1824,26 +1825,8 @@ export function PluginsPanel() {
   if (!open) return null;
 
   return (
-    <div className="settings-backdrop" onMouseDown={close}>
-      <div className="plugins-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <header className="plugins-head">
-          <div className="plugins-head-title">
-            <span className="set-brand-mark">
-              <At size={18} />
-            </span>
-            <div>
-              <div className="set-brand-title">{zh ? "扩展功能" : "Extensions"}</div>
-              <div className="set-brand-sub">{zh ? "管理 pi 的扩展包、技能与 MCP" : "Manage Pi extension packages, skills & MCP"}</div>
-            </div>
-          </div>
-          <div className="plugins-head-actions">
-            <button className="set-iconbtn" title={zh ? "关闭" : "Close"} onClick={close}>
-              <Close size={16} />
-            </button>
-          </div>
-        </header>
-
-        <div className="plugins-tabs-row">
+    <SidePanel title={zh ? "扩展功能" : "Extensions"} icon={<At size={15} />} onClose={close}>
+      <div className="plugins-tabs-row">
           <div className="plugins-module-tabs" role="tablist" aria-label={zh ? "扩展功能模块" : "Extension modules"}>
             <button type="button" role="tab" aria-selected={module === "skills"} className={`plugin-tab${module === "skills" ? " active" : ""}`} onClick={() => setModule("skills")}>
               {zh ? "技能" : "Skills"} <span className="tabs-count">{skills.length}</span>
@@ -1922,7 +1905,6 @@ export function PluginsPanel() {
             <SkillStatsView skills={skills} language={language} />
           )}
         </div>
-      </div>
-    </div>
+    </SidePanel>
   );
 }

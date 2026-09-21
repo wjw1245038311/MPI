@@ -217,6 +217,7 @@ import {
   readZhiyaFile,
   resetZhiyaMasterCache,
   saveZhiyaFile,
+  setZhiyaMasterDir,
   syncZhiyaFromMaster,
   zhiyaDir,
   zhiyaLocalPath,
@@ -2678,6 +2679,15 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     syncZhiyaFromMaster();
     refreshWarmBridgeIfStale();
     return { masterDir: zhiyaMasterDir() };
+  });
+  /** Set/clear the master root explicitly (Settings UI). */
+  ipcMain.handle("zhiya:setMasterDir", (_e, dir: unknown) => {
+    if (dir !== null && typeof dir !== "string") throw new Error("Invalid master dir");
+    const r = setZhiyaMasterDir(dir ?? "");
+    ensureZhiyaFiles();
+    syncZhiyaFromMaster();
+    refreshWarmBridgeIfStale();
+    return r;
   });
 
   // Knowledge base browsing (per-project .alexandria/knowledge/).

@@ -4057,6 +4057,44 @@ body.preview-resizing * {
 .preview.collapsed {
   display: none;
 }
+/* ---- 通用右侧侧板（试点：待办任务）---- */
+/* 复用 .preview 外壳（border-left / rail 底色 / flex 列）、.preview-resizer、
+   .preview-head、.preview-head-spacer；这里只补侧板自己的头与内容区。 */
+.side-panel-head { gap: 8px; }
+.side-panel-head-mark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.side-panel-head-title { flex: 0 0 auto; font-size: 13px; font-weight: 600; color: var(--text); }
+.side-panel-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* 待办侧板在窄槽里：收窄项目列，给主区留空间。 */
+.side-panel .todo-body { grid-template-columns: 150px 1fr; }
+/* 侧板窄槽自适应：原来按 ~1080px 模态设计的面板，在窄槽里改成纵向堆叠，避免横向溢出。 */
+.side-panel .plugins-body { padding: 12px 12px 20px; }
+.side-panel .plugins-tabs-row { flex-wrap: wrap; gap: 8px; padding: 10px 12px 0; }
+.side-panel .plugins-module-tabs,
+.side-panel .skills-subtabs { flex-wrap: wrap; }
+.side-panel .appstore-grid { grid-template-columns: 1fr; padding: 12px; }
+.side-panel .appstore-head { padding: 10px 12px; }
+.side-panel .msg-split { flex-direction: column; gap: 10px; }
+.side-panel .msg-channels {
+  width: auto;
+  flex-direction: row;
+  flex-wrap: wrap;
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+  padding: 0 0 10px;
+}
+/* 展开态：侧板占满主区（聊天区隐藏），同预览的展开。 */
+.body.side-panel-expanded > .main { display: none; }
+.body.side-panel-expanded > .side-panel { width: auto; flex: 1 1 auto; }
 .preview-head {
   position: relative;
   z-index: 10;
@@ -10789,9 +10827,101 @@ mark.hl {
 
 .zhiya-loc { font-size: 11.5px; color: var(--text-faint); padding: 0 2px; line-height: 1.5; }
 .zhiya-loc code { font-family: var(--mono); font-size: 11px; background: var(--code-bg); padding: 1px 6px; border-radius: 5px; color: var(--text-dim); word-break: break-all; }
+.zhiya-dir-edit { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.zhiya-dir-input { flex: 1 1 240px; min-width: 0; width: auto; }
 
 /* sidebar nav accent for Zhiya */
 .zhiya-nav .ico { color: var(--accent); }
+.zhiya-nav.active { background: var(--accent-soft); color: var(--accent); }
+
+/* ---- 知芽二级菜单（紧贴导航栏右侧的独立窄列，参考飞书）---- */
+.zhiya-menu {
+  width: 178px;
+  flex: 0 0 178px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--rail);
+  border-right: 1px solid var(--border);
+}
+.zhiya-menu-head {
+  flex: 0 0 auto;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+.zhiya-menu-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.zhiya-menu-title { font-size: 13px; font-weight: 600; }
+.zhiya-menu-spacer { flex: 1; }
+.zhiya-menu-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.zhiya-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.zhiya-menu-item:hover { background: rgba(0, 0, 0, 0.04); color: var(--text); }
+.zhiya-menu-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.zhiya-menu-item .ico { display: inline-flex; }
+
+/* ---- 知芽侧板内容（当前任务 / 设置）---- */
+.zhiya-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 12px 20px;
+}
+.zhiya-settings-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.zhiya-settings-sec:last-child { border-bottom: none; padding-bottom: 0; }
+.zhiya-setting-row code {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--code-bg);
+  padding: 1px 6px;
+  border-radius: 5px;
+  word-break: break-all;
+}
+.zhiya-setting-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.zhiya-setting-actions .set-select { flex: 1 1 140px; min-width: 0; width: auto; }
+.zhiya-toggle { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--text); }
 
 /* Zhiya top tab bar (reuses .plugins-module-tabs / .plugin-tab / .tabs-count) */
 .zhiya-tabs-row { flex: 0 0 auto; display: flex; align-items: center; padding: 12px 18px 0; }
@@ -10904,6 +11034,13 @@ mark.hl {
   background: var(--accent-soft, var(--surface-muted));
   font-size: 12px; color: var(--text);
 }
+.mempool-listbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 14px; border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.mempool-listbar-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* 侧板里记忆池自己滚：父容器（.side-panel-body）是 overflow:hidden。 */
+.side-panel .mempool-sec { flex: 1 1 auto; overflow-y: auto; }
 .mempool-check { margin: 0; flex: 0 0 auto; cursor: pointer; }
 .mempool-sub-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 /* 当前任务聚合（知芽） */

@@ -1313,6 +1313,9 @@ interface PiStore {
   wechatState: WeChatMessagingState | null;
   openMessaging: () => void;
   closeMessaging: () => void;
+  /** 右侧侧板：是否展开占满主区（同预览的展开态）。 */
+  sidePanelExpanded: boolean;
+  toggleSidePanelExpanded: () => void;
   loadMessaging: () => Promise<void>;
   saveMessagingConfig: (patch: Partial<NonNullable<AppConfig["feishuChannel"]>>) => Promise<boolean>;
   loadWeChatMessaging: () => Promise<void>;
@@ -1321,10 +1324,19 @@ interface PiStore {
   /** True when running from source (npm run dev); false in packaged builds. */
   isDev: boolean;
 
-  // zhiya panel（知芽：画像/资产/知识库/短期记忆；仅开发版可见）
+  // zhiya（知芽）：二级菜单 + 模块内容（md→预览，任务/记忆池/设置→右侧侧板）
   zhiyaOpen: boolean;
   openZhiya: () => void;
   closeZhiya: () => void;
+  /** 当前选中的知芽模块。 */
+  zhiyaModule: ZhiyaModule;
+  /** 知芽的右侧侧板是否打开（任务/记忆池/设置）。 */
+  zhiyaPanelOpen: boolean;
+  /** 选择模块：md 类打开预览，任务/记忆池/设置打开侧板。 */
+  selectZhiyaModule: (module: ZhiyaModule) => Promise<void>;
+  /** 打开知芽设置侧板。 */
+  openZhiyaSettings: () => void;
+  closeZhiyaPanel: () => void;
 
   // thread permission / folder
   setPermission: (threadId: string, level: PermissionLevel) => Promise<void>;
@@ -1575,6 +1587,25 @@ function missingToolRemoveMessage(missing: "npm" | "git", zh: boolean): string {
     : zh
       ? "未找到 git：扩展包已从列表移除，但本地文件未能清理。请安装 Git（https://git-scm.com）后再次移除以清理。"
       : "Git was not found: the package was removed from the list, but its local files were left behind. Install Git (https://git-scm.com) and remove it again to clean up.";
+}
+
+/** 知芽的模块（二级菜单项）。md 类走右侧预览，任务/记忆池/设置走右侧侧板。 */
+export type ZhiyaModule = "persona" | "agreement" | "workspace" | "kb" | "tasks" | "pool" | "settings";
+
+/** 右侧槽的所有侧板 flag。 */
+type RightPanelFlag = "todoPanelOpen" | "automationOpen" | "pluginsOpen" | "appsOpen" | "messagingOpen" | "zhiyaPanelOpen";
+
+/** 右侧槽互斥：保留 keep，其余关闭；并复位展开态。 */
+function onlyRightPanel(keep: RightPanelFlag | null) {
+  return {
+    todoPanelOpen: keep === "todoPanelOpen",
+    automationOpen: keep === "automationOpen",
+    pluginsOpen: keep === "pluginsOpen",
+    appsOpen: keep === "appsOpen",
+    messagingOpen: keep === "messagingOpen",
+    zhiyaPanelOpen: keep === "zhiyaPanelOpen",
+    sidePanelExpanded: false,
+  };
 }
 
 export const useStore = create<PiStore>()((set, get) => {
@@ -2811,10 +2842,25 @@ export const useStore = create<PiStore>()((set, get) => {
   setSidebarTab: (t) => set({ sidebarTab: t }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   togglePreview: () =>
-    set((s) => ({
-      previewOpen: !s.previewOpen,
-      previewExpanded: s.previewOpen ? false : s.previewExpanded,
-    })),
+    set((s) => {
+      // 右侧槽互斥：任一侧板占着槽时，切换预览 = 把槽让回预览。
+      if (s.todoPanelOpen || s.automationOpen || s.pluginsOpen || s.appsOpen || s.messagingOpen || s.zhiyaPanelOpen) {
+        return {
+          todoPanelOpen: false,
+          automationOpen: false,
+          pluginsOpen: false,
+          appsOpen: false,
+          messagingOpen: false,
+          zhiyaPanelOpen: false,
+          sidePanelExpanded: false,
+          previewOpen: true,
+        };
+      }
+      return {
+        previewOpen: !s.previewOpen,
+        previewExpanded: s.previewOpen ? false : s.previewExpanded,
+      };
+    }),
   togglePreviewExpanded: () =>
     set((s) => ({
       previewExpanded: s.previewOpen ? !s.previewExpanded : false,
@@ -2885,6 +2931,14 @@ export const useStore = create<PiStore>()((set, get) => {
       const newId = uid();
       set((s) => ({
         previewOpen: true,
+        // 右侧槽互斥：预览抢占槽位，关掉任一侧板（含展开态）。
+        todoPanelOpen: false,
+        automationOpen: false,
+        pluginsOpen: false,
+        appsOpen: false,
+        messagingOpen: false,
+        zhiyaPanelOpen: false,
+        sidePanelExpanded: false,
         previewTabs: [...s.previewTabs, { id: newId, path: abs, root: projectRoot || null, payload: null, loading: true }],
         activePreviewId: newId,
       }));
@@ -2892,8 +2946,20 @@ export const useStore = create<PiStore>()((set, get) => {
       return;
     }
     // Always make the panel visible — e.g. docking back while it is hidden.
-    if (!get().previewOpen || existing.id !== get().activePreviewId) {
-      set({ previewOpen: true, activePreviewId: existing.id });
+    const anySidePanel =
+      get().todoPanelOpen || get().automationOpen || get().pluginsOpen || get().appsOpen || get().messagingOpen || get().zhiyaPanelOpen;
+    if (!get().previewOpen || anySidePanel || existing.id !== get().activePreviewId) {
+      set({
+        previewOpen: true,
+        todoPanelOpen: false,
+        automationOpen: false,
+        pluginsOpen: false,
+        appsOpen: false,
+        messagingOpen: false,
+        zhiyaPanelOpen: false,
+        sidePanelExpanded: false,
+        activePreviewId: existing.id,
+      });
     }
     // Re-reading keeps a clicked/refreshed tab current even when it was already open.
     await get().loadPreviewTab(existing.id);
@@ -3093,6 +3159,10 @@ export const useStore = create<PiStore>()((set, get) => {
     await s.openThread(cwd, file);
   },
 
+  // ---- 右侧侧板（互斥槽）：展开态 ----
+  sidePanelExpanded: false,
+  toggleSidePanelExpanded: () => set((s) => ({ sidePanelExpanded: !s.sidePanelExpanded })),
+
   // ---- plugins ----
   pluginsOpen: false,
   packages: [],
@@ -3100,10 +3170,11 @@ export const useStore = create<PiStore>()((set, get) => {
   mcpServers: [],
   pluginsLoading: false,
   openPlugins: () => {
-    set({ pluginsOpen: true });
+    // 右侧槽互斥：打开一个侧板时关掉其它侧板（预览由 App 渲染逻辑让位）。
+    set({ ...onlyRightPanel("pluginsOpen") });
     get().loadPlugins();
   },
-  closePlugins: () => set({ pluginsOpen: false }),
+  closePlugins: () => set({ pluginsOpen: false, sidePanelExpanded: false }),
   loadPlugins: async () => {
     set({ pluginsLoading: true });
     try {
@@ -3246,10 +3317,11 @@ export const useStore = create<PiStore>()((set, get) => {
   appStoreEntries: [],
   appsLoading: false,
   openAppStore: () => {
-    set({ appsOpen: true });
+    // 右侧槽互斥（同上）。
+    set({ ...onlyRightPanel("appsOpen") });
     get().loadAppStore();
   },
-  closeAppStore: () => set({ appsOpen: false }),
+  closeAppStore: () => set({ appsOpen: false, sidePanelExpanded: false }),
   loadAppStore: async () => {
     // A dev instance started before this feature has an old preload without
     // the apps API — degrade to an empty list instead of breaking panel load.
@@ -3344,10 +3416,11 @@ export const useStore = create<PiStore>()((set, get) => {
   automationOpen: false,
   tasks: [],
   openAutomation: () => {
-    set({ automationOpen: true });
+    // 右侧槽互斥（同上）。
+    set({ ...onlyRightPanel("automationOpen") });
     get().loadTasks();
   },
-  closeAutomation: () => set({ automationOpen: false }),
+  closeAutomation: () => set({ automationOpen: false, sidePanelExpanded: false }),
   loadTasks: async () => {
     try {
       const tasks = await window.pi.automation.getTasks();
@@ -3387,10 +3460,11 @@ export const useStore = create<PiStore>()((set, get) => {
   todoPanelOpen: false,
   todos: [],
   openTodoPanel: () => {
-    set({ todoPanelOpen: true });
+    // 右侧槽互斥（同上）。
+    set({ ...onlyRightPanel("todoPanelOpen") });
     void get().loadTodos();
   },
-  closeTodoPanel: () => set({ todoPanelOpen: false }),
+  closeTodoPanel: () => set({ todoPanelOpen: false, sidePanelExpanded: false }),
   loadTodos: async () => {
     if (typeof window.pi.todo?.list !== "function") return; // old preload in a stale dev instance
     try {
@@ -3504,10 +3578,11 @@ export const useStore = create<PiStore>()((set, get) => {
   messagingState: null as MessagingState | null,
   wechatState: null as WeChatMessagingState | null,
   openMessaging: () => {
-    set({ messagingOpen: true });
+    // 右侧槽互斥（同上）。
+    set({ ...onlyRightPanel("messagingOpen") });
     void get().loadMessaging();
   },
-  closeMessaging: () => set({ messagingOpen: false }),
+  closeMessaging: () => set({ messagingOpen: false, sidePanelExpanded: false }),
   loadMessaging: async () => {
     try {
       const state = await window.pi.messaging.getState();
@@ -3555,6 +3630,46 @@ export const useStore = create<PiStore>()((set, get) => {
   zhiyaOpen: false,
   openZhiya: () => set({ zhiyaOpen: true }),
   closeZhiya: () => set({ zhiyaOpen: false }),
+  zhiyaModule: "persona",
+  zhiyaPanelOpen: false,
+  selectZhiyaModule: async (module) => {
+    const zh = (get().config?.language || "en") === "zh";
+    // 任务 / 记忆池 / 设置：走右侧侧板。
+    if (module === "tasks" || module === "pool" || module === "settings") {
+      set({ zhiyaModule: module, ...onlyRightPanel("zhiyaPanelOpen") });
+      return;
+    }
+    set({ zhiyaModule: module });
+    try {
+      if (module === "kb") {
+        const cwd = get().activeProjectCwd;
+        if (!cwd) {
+          get().pushToast("warning", zh ? "先打开一个项目再看知识库。" : "Open a project to view its knowledge base.");
+          return;
+        }
+        const r = await window.pi.zhiya.listKb(cwd);
+        if (!r.exists || !r.files?.length || !r.root) {
+          get().pushToast("info", zh ? "当前项目还没有知识库。" : "No knowledge base for this project yet.");
+          return;
+        }
+        const entry = r.files.find((f) => /(^|\/)Architecture\.md$/i.test(f.path)) || r.files[0];
+        const sep = r.root.includes("\\") ? "\\" : "/";
+        const abs = r.root.replace(/[\\/]+$/, "") + sep + entry.path.replace(/\//g, sep);
+        await get().openPreview(abs, cwd);
+        return;
+      }
+      // persona / agreement / workspace：打开母版 md 预览。
+      const d = await window.pi.zhiya.get();
+      const file = d.files.find((f) => f.name === `${module}.md`);
+      const p = file?.masterPath || file?.path;
+      if (p) await get().openPreview(p);
+      else get().pushToast("error", zh ? "找不到该文件。" : "File not found.");
+    } catch (e: any) {
+      get().pushToast("error", (zh ? "打开失败：" : "Open failed: ") + (e?.message || e));
+    }
+  },
+  openZhiyaSettings: () => set({ zhiyaModule: "settings", ...onlyRightPanel("zhiyaPanelOpen") }),
+  closeZhiyaPanel: () => set({ zhiyaPanelOpen: false, sidePanelExpanded: false }),
 
   // ---- thread permission / folder ----
   setPermission: async (threadId, level) => {

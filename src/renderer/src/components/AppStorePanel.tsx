@@ -3,6 +3,7 @@ import { useStore } from "../store";
 import type { AppConfigField, AppLocalizedText, AppStoreEntry } from "../lib/types";
 import { sttTranscribeErrorText } from "../lib/stt";
 import { AppStore as AppStoreIcon, Check, ChevronRight, Close, Copy, Info, Refresh, Trash } from "./icons";
+import { SidePanel } from "./SidePanel";
 
 /** Pick localized manifest text for the UI language (fallback to the other). */
 function pickLoc(value: AppLocalizedText | undefined, lang: "zh" | "en"): string {
@@ -428,9 +429,16 @@ export function AppStorePanel() {
   const selected = entries.find((e) => e.id === selectedId) || null;
 
   return (
-    <div className="settings-backdrop" onMouseDown={close}>
-      <div className="set-modal appstore-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        {selected ? (
+    <SidePanel
+      title={
+        selected
+          ? pickLoc(selected.name, zh ? "zh" : "en") || (zh ? "应用" : "App")
+          : zh ? "应用商店" : "App Store"
+      }
+      icon={<AppStoreIcon size={15} />}
+      onClose={close}
+    >
+      {selected ? (
           <AppDetail entry={selected} zh={zh} onBack={() => setSelectedId(null)} />
         ) : (
           <>
@@ -456,9 +464,6 @@ export function AppStorePanel() {
                 <button className="set-iconbtn" title={zh ? "刷新" : "Refresh"} onClick={() => void loadAppStore()}>
                   <Refresh size={15} />
                 </button>
-                <button className="set-iconbtn" title={zh ? "关闭" : "Close"} onClick={close}>
-                  <Close size={16} />
-                </button>
               </div>
             </header>
 
@@ -479,7 +484,6 @@ export function AppStorePanel() {
             )}
           </>
         )}
-      </div>
-    </div>
+    </SidePanel>
   );
 }

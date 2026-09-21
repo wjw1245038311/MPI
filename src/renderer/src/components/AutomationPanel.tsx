@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import type { AutomationTask, ModelsFile, ScheduleFrequency, TaskSchedule } from "../lib/types";
-import { Close, Plus, Clock, Folder, Play } from "./icons";
+import { Plus, Clock, Folder, Play } from "./icons";
+import { SidePanel } from "./SidePanel";
 
 const DAY_NAMES = {
   en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
@@ -103,24 +104,8 @@ export function AutomationPanel() {
   };
 
   return (
-    <div className="settings-backdrop" onMouseDown={close}>
-      <div className="plugins-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <header className="plugins-head">
-          <div className="plugins-head-title">
-            <span className="set-brand-mark">
-              <Clock size={18} />
-            </span>
-            <div>
-              <div className="set-brand-title">定时任务</div>
-              <div className="set-brand-sub">{language === "zh" ? "定时执行可使用技能的自定义提示词（仅在 MPI 运行时调度）" : "Schedule custom prompts that can use skills (runs while MPI is open)"}</div>
-            </div>
-          </div>
-          <button className="set-iconbtn" title="关闭" onClick={close}>
-            <Close size={16} />
-          </button>
-        </header>
-
-        <div className="plugins-body">
+    <SidePanel title={language === "zh" ? "定时任务" : "Scheduled tasks"} icon={<Clock size={15} />} onClose={close}>
+      <div className="plugins-body">
           {!draft && (
             <>
               <div className="plugins-install">
@@ -333,8 +318,7 @@ export function AutomationPanel() {
               </div>
             </div>
           )}
-        </div>
       </div>
-    </div>
+    </SidePanel>
   );
 }

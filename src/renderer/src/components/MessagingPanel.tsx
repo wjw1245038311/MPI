@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { useStore } from "../store";
 import type { MessagingState, WeChatMessagingState } from "../lib/types";
-import { Close, Folder, MessageSquare, Plug } from "./icons";
+import { Folder, MessageSquare, Plug } from "./icons";
+import { SidePanel } from "./SidePanel";
 
 type ChannelId = "feishu" | "wechat";
 
@@ -300,26 +301,8 @@ export function MessagingPanel() {
   };
 
   return (
-    <div className="settings-backdrop" onMouseDown={close}>
-      <div className="plugins-modal" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <header className="plugins-head">
-          <div className="plugins-head-title">
-            <span className="set-brand-mark">
-              <MessageSquare size={18} />
-            </span>
-            <div>
-              <div className="set-brand-title">{zh ? "消息接入" : "Messaging"}</div>
-              <div className="set-brand-sub">
-                {zh ? "通过聊天工具与 MPI 会话对话（仅 MPI 运行时在线）" : "Chat with your MPI sessions from messaging apps (online while MPI is running)"}
-              </div>
-            </div>
-          </div>
-          <button className="set-iconbtn" title={zh ? "关闭" : "Close"} onClick={close}>
-            <Close size={16} />
-          </button>
-        </header>
-
-        <div className="plugins-body msg-body">
+    <SidePanel title={zh ? "消息接入" : "Messaging"} icon={<MessageSquare size={15} />} onClose={close}>
+      <div className="plugins-body msg-body">
           <div className="msg-split">
             {/* channel list */}
             <aside className="msg-channels" aria-label={zh ? "消息通道" : "Channels"}>
@@ -762,7 +745,6 @@ export function MessagingPanel() {
             </section>
           </div>
         </div>
-      </div>
-    </div>
+    </SidePanel>
   );
 }

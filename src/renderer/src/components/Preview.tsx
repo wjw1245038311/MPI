@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { DragEvent as ReactDragEvent } from "react";
+import { SIDE_PANEL_DEFAULT_WIDTH, SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, useSidePanelWidth } from "../lib/side-panel";
 import hljs from "highlight.js/lib/core";
 import { useStore } from "../store";
 import { Markdown } from "../lib/markdown";
@@ -20,10 +21,6 @@ Object.entries(CODE_LANGUAGE_ALIASES).forEach(([name, aliases]) => {
   hljs.registerAliases(aliases, { languageName: name });
 });
 
-const PREVIEW_WIDTH_KEY = "mpi.preview-width";
-const PREVIEW_DEFAULT_WIDTH = 420;
-const PREVIEW_MIN_WIDTH = 300;
-const PREVIEW_MAX_WIDTH = 900;
 const HTML_PREVIEW_MESSAGE_SOURCE = "mpi-html-preview";
 const HTML_ZOOM_MIN = 0.5;
 const HTML_ZOOM_MAX = 2;
@@ -79,21 +76,6 @@ function updateHtmlElementSource(source: string, selector: string, innerHTML: st
   }
 }
 
-function clampPreviewWidth(width: number): number {
-  const sidebarWidth = document.querySelector<HTMLElement>(".sidebar")?.getBoundingClientRect().width || 0;
-  const available = Math.max(PREVIEW_MIN_WIDTH, window.innerWidth - sidebarWidth - 320);
-  return Math.min(Math.min(PREVIEW_MAX_WIDTH, available), Math.max(PREVIEW_MIN_WIDTH, width));
-}
-
-function initialPreviewWidth(): number {
-  try {
-    const saved = Number(localStorage.getItem(PREVIEW_WIDTH_KEY));
-    return Number.isFinite(saved) && saved > 0 ? clampPreviewWidth(saved) : clampPreviewWidth(PREVIEW_DEFAULT_WIDTH);
-  } catch {
-    return PREVIEW_DEFAULT_WIDTH;
-  }
-}
-
 export function Preview() {
   const open = useStore((s) => s.previewOpen);
   const tabs = useStore((s) => s.previewTabs);
@@ -109,7 +91,7 @@ export function Preview() {
   const close = useStore((s) => s.closePreview);
   const activeThreadId = useStore((s) => s.activeThreadId);
   const language = useStore((s) => s.config?.language || "en");
-  const [previewWidth, setPreviewWidth] = useState(initialPreviewWidth);
+  const { width: previewWidth, beginResize, resizeWithKeyboard, persistWidth: persistPreviewWidth } = useSidePanelWidth(expanded);
   const [htmlAnnotationMode, setHtmlAnnotationMode] = useState(false);
   const [htmlEditMode, setHtmlEditMode] = useState(false);
   const [selectedHtmlTag, setSelectedHtmlTag] = useState<string | null>(null);
@@ -129,7 +111,6 @@ export function Preview() {
   const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
   useOutsideClose(tabMenuRef, !!tabMenu, () => setTabMenu(null));
-  const resizeRef = useRef<{ startX: number; startWidth: number; width: number; element: HTMLDivElement } | null>(null);
 
   const active = tabs.find((t) => t.id === activeId) || null;
   const path = active?.path ?? null;
@@ -163,72 +144,6 @@ export function Preview() {
       setSelectedHtmlTag(null);
     }
   }, []);
-
-  useEffect(() => {
-    const onPointerMove = (event: PointerEvent) => {
-      const drag = resizeRef.current;
-      if (!drag) return;
-      drag.width = clampPreviewWidth(drag.startWidth + drag.startX - event.clientX);
-      setPreviewWidth(drag.width);
-    };
-    const onPointerUp = (event: PointerEvent) => {
-      const drag = resizeRef.current;
-      if (!drag) return;
-      resizeRef.current = null;
-      document.body.classList.remove("preview-resizing");
-      if (drag.element.hasPointerCapture(event.pointerId)) drag.element.releasePointerCapture(event.pointerId);
-      try {
-        localStorage.setItem(PREVIEW_WIDTH_KEY, String(Math.round(drag.width)));
-      } catch {
-        // Resizing still works when persistent storage is unavailable.
-      }
-    };
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
-      document.body.classList.remove("preview-resizing");
-    };
-  }, []);
-
-  const persistPreviewWidth = (width: number) => {
-    const next = clampPreviewWidth(width);
-    setPreviewWidth(next);
-    try {
-      localStorage.setItem(PREVIEW_WIDTH_KEY, String(Math.round(next)));
-    } catch {
-      // See pointer-up persistence note above.
-    }
-  };
-
-  const beginResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || expanded) return;
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    resizeRef.current = {
-      startX: event.clientX,
-      startWidth: previewWidth,
-      width: previewWidth,
-      element: event.currentTarget,
-    };
-    document.body.classList.add("preview-resizing");
-  };
-
-  const resizeWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "ArrowLeft") {
-      event.preventDefault();
-      persistPreviewWidth(previewWidth + 16);
-    } else if (event.key === "ArrowRight") {
-      event.preventDefault();
-      persistPreviewWidth(previewWidth - 16);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      persistPreviewWidth(PREVIEW_DEFAULT_WIDTH);
-    }
-  };
 
   const revealInExplorer = async () => {
     if (!path) return;
@@ -484,13 +399,13 @@ export function Preview() {
           role="separator"
           aria-orientation="vertical"
           aria-label={language === "zh" ? "调整预览栏宽度" : "Resize preview pane"}
-          aria-valuemin={PREVIEW_MIN_WIDTH}
-          aria-valuemax={PREVIEW_MAX_WIDTH}
+          aria-valuemin={SIDE_PANEL_MIN_WIDTH}
+          aria-valuemax={SIDE_PANEL_MAX_WIDTH}
           aria-valuenow={Math.round(previewWidth)}
           tabIndex={0}
           onPointerDown={beginResize}
           onKeyDown={resizeWithKeyboard}
-          onDoubleClick={() => persistPreviewWidth(PREVIEW_DEFAULT_WIDTH)}
+          onDoubleClick={() => persistPreviewWidth(SIDE_PANEL_DEFAULT_WIDTH)}
           title={language === "zh" ? "拖动调整预览栏宽度；双击恢复默认" : "Drag to resize; double-click to reset"}
         />
       )}

@@ -27,15 +27,15 @@ export const ZHIYA_FILES = [PERSONA_FILE, AGREEMENT_FILE, WORKSPACE_FILE] as con
 export type ZhiyaFileName = (typeof ZHIYA_FILES)[number];
 
 /**
- * Where each runtime file's master sits, relative to the AgentSetting root.
- * The master is the single source of truth (git-synced across devices); the
- * copy under ~/.pi/agent/zhiya/ exists only so every client can read a
- * machine-independent path.
+ * Where each runtime file's master sits, relative to the zhiya master root
+ * (e.g. the Obsidian vault's Zhiya-assets/). The master is the single source
+ * of truth (git-synced across devices); the copy under ~/.pi/agent/zhiya/
+ * exists only so every client can read a machine-independent path.
  */
 const MASTER_REL: Record<ZhiyaFileName, string> = {
-  [PERSONA_FILE]: join("persona", "Persona.md"),
-  [AGREEMENT_FILE]: join("persona", "Agreement.md"),
-  [WORKSPACE_FILE]: join("devices", "WorkspaceLayout.md"),
+  [PERSONA_FILE]: join("人物画像", "Persona.md"),
+  [AGREEMENT_FILE]: join("协作约定", "Agreement.md"),
+  [WORKSPACE_FILE]: join("工作空间", "WorkspaceLayout.md"),
 };
 
 /** Total injected budget (chars) — guards the Windows command-line length. */
@@ -144,15 +144,24 @@ export function writeZhiyaFile(name: ZhiyaFileName, text: string): void {
 
 let masterDirCache: string | null | undefined;
 
-/** Looks like an AgentSetting root? (loose signature check) */
-function looksLikeAgentSetting(dir: string): boolean {
-  return existsSync(join(dir, "persona")) || existsSync(join(dir, "README.md"));
+/** Looks like a zhiya master root? (loose signature check)
+ *  New master (Zhiya-assets/): 人物画像/ 协作约定/ 工作空间/ dirs.
+ *  Legacy master (AgentSetting): persona/ devices/ dirs. */
+function looksLikeZhiyaMaster(dir: string): boolean {
+  return (
+    existsSync(join(dir, "人物画像")) ||
+    existsSync(join(dir, "工作空间")) ||
+    existsSync(join(dir, "persona")) ||
+    existsSync(join(dir, "devices"))
+  );
 }
 
 /**
- * Probe for the master dir: walk up from the last thread cwd looking for
- * `<root>/Agent/AgentSetting`, then fall back to `<home>/MyWorkspace/...`.
- * The result is persisted to config so detection happens at most once.
+ * Probe for the master dir: walk up from the last thread cwd looking for the
+ * Obsidian vault's Zhiya-assets (`<root>/Agent/WJW/40-Private/Zhiya-assets`,
+ * preferred) and the legacy AgentSetting, then fall back to
+ * `<home>/MyWorkspace/...`. The result is persisted to config so detection
+ * happens at most once.
  */
 function detectMasterDir(): string | null {
   const seeds: string[] = [];
@@ -160,15 +169,17 @@ function detectMasterDir(): string | null {
   if (last && isAbsolute(last)) {
     let dir: string = last;
     for (let i = 0; i < 8; i++) {
+      seeds.push(join(dir, "Agent", "WJW", "40-Private", "Zhiya-assets"));
       seeds.push(join(dir, "Agent", "AgentSetting"));
       const parent = dirname(dir);
       if (parent === dir) break;
       dir = parent;
     }
   }
+  seeds.push(join(homedir(), "MyWorkspace", "Agent", "WJW", "40-Private", "Zhiya-assets"));
   seeds.push(join(homedir(), "MyWorkspace", "Agent", "AgentSetting"));
   for (const cand of seeds) {
-    if (existsSync(cand) && looksLikeAgentSetting(cand)) return cand;
+    if (existsSync(cand) && looksLikeZhiyaMaster(cand)) return cand;
   }
   return null;
 }
@@ -199,6 +210,30 @@ export function zhiyaMasterDir(): string | null {
 /** Re-run detection (Settings changed / new machine layout). */
 export function resetZhiyaMasterCache(): void {
   masterDirCache = undefined;
+}
+
+/**
+ * Set the master root explicitly (Settings UI). Empty string clears the
+ * override so detection runs again. Only existing directories are accepted;
+ * the signature check is deliberately not enforced here — when the path is
+ * wrong the file reads below simply come up empty.
+ */
+export function setZhiyaMasterDir(dir: string): { ok: boolean; masterDir: string | null } {
+  const p = (dir || "").trim();
+  if (p) {
+    try {
+      if (!statSync(p).isDirectory()) return { ok: false, masterDir: zhiyaMasterDir() };
+    } catch {
+      return { ok: false, masterDir: zhiyaMasterDir() };
+    }
+  }
+  try {
+    updateConfig({ zhiyaMasterDir: p || undefined });
+  } catch {
+    /* config write must never break injection */
+  }
+  resetZhiyaMasterCache();
+  return { ok: true, masterDir: zhiyaMasterDir() };
 }
 
 function masterPath(name: ZhiyaFileName): string | null {

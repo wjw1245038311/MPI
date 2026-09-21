@@ -469,14 +469,22 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
             <span>
               {zh ? "待审批提案" : "Pending proposals"} · {pending.length}
             </span>
-            <button
-              className="set-btn ghost"
-              onClick={() =>
-                setSelProps(selProps.size === pending.length ? new Set() : new Set(pending.map((x) => x.id)))
-              }
-            >
-              {selProps.size === pending.length ? (zh ? "取消全选" : "Clear") : zh ? "全选" : "Select all"}
-            </button>
+            <div className="mempool-listbar-actions">
+              <button
+                className="set-btn ghost"
+                onClick={() =>
+                  setSelProps(selProps.size === pending.length ? new Set() : new Set(pending.map((x) => x.id)))
+                }
+              >
+                {selProps.size === pending.length ? (zh ? "取消全选" : "Clear") : zh ? "全选" : "Select all"}
+              </button>
+              <button
+                className="set-btn ghost"
+                onClick={() => setSelProps((prev) => new Set(pending.filter((x) => !prev.has(x.id)).map((x) => x.id)))}
+              >
+                {zh ? "反选" : "Invert"}
+              </button>
+            </div>
           </div>
           {pending.map((p) => (
             <div className="mempool-prop" key={p.id}>
@@ -536,7 +544,25 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
               : "The pool is empty. It fills up as you chat (needs a memory model), or use /memory-remember."}
         </div>
       ) : (
-        <div className="mempool-list">
+        <>
+          <div className="mempool-listbar">
+            <span className="zhiya-dim">{zh ? `共 ${entries.length} 条` : `${entries.length} entries`}</span>
+            <div className="mempool-listbar-actions">
+              <button className="set-btn ghost" onClick={() => setSelEntries(new Set(entries.map((e) => e.id)))}>
+                {zh ? "全选" : "Select all"}
+              </button>
+              <button
+                className="set-btn ghost"
+                onClick={() => setSelEntries((prev) => new Set(entries.filter((e) => !prev.has(e.id)).map((e) => e.id)))}
+              >
+                {zh ? "反选" : "Invert"}
+              </button>
+              <button className="set-btn ghost" onClick={() => setSelEntries(new Set())}>
+                {zh ? "清除" : "Clear"}
+              </button>
+            </div>
+          </div>
+          <div className="mempool-list">
           {(groups ?? [{ label: "", items: entries }]).map((g) => (
             <div key={g.label || "flat"}>
               {g.label && (
@@ -601,7 +627,8 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
               ))}
             </div>
           ))}
-        </div>
+          </div>
+        </>
       )}
 
       {/* 坏文件 */}
