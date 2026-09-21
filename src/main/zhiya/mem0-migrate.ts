@@ -107,10 +107,11 @@ export function classify(rec: Mem0Record): Classified {
   return { rule: "plain", type: "semantic", temporal: "retrospective", importance: 5, tags: [] };
 }
 
-/** 设备代号 → 可读标签（user_id 是本机/手机/平板/另一台的区分）。 */
+/** 设备代号 → 可读标签（user_id 是各设备的区分；分配见 AgentSetting journal 2026-09-05）。 */
 export const DEVICE_LABEL: Record<string, string> = {
   wjj: "本机",
-  "wjj-mb": "手机",
+  // 2026-09-21 修正：wjj-mb = minibox（此前误标「手机」；数据内容核验 26/179 命中 minibox 专属关键词、0 条手机相关）
+  "wjj-mb": "minibox",
   "wjj-tb": "平板",
   "wjj-wjw": "另一台",
 };
