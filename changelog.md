@@ -31,6 +31,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run test:relay-s0`（S0.3b 新段：同设备双配对、两边 token 各自有效、路由隔离、按边撤销、legacy hello 回退）+ `npm run test:relay-uplink` + `npm test -- pwa`。真机：手机先后配两台桌面 → 抽屉里切换两台都能正常连（此前只有最后配对的那台能连）。
 
+5. **修复「会话运行时手机端发消息失败」**——PWA 按自己的 running 状态决定发裸 prompt 还是 steer/followUp，但该状态滞后于主机真实状态：冷启动建桥 / agent_start 事件未到达的窗口内连发时，第二条仍按「空闲」发裸 prompt → SDK 拒绝（`INTERNAL_ERROR: Agent is already processing`）。现在主机侧远程 prompt 撞上运行中的回合时自动回退 followUp——排队到当前回合结束再投递、不打断进行中的任务（与 choices 面板同语义），手机端发送不再因会话在跑而失败。
+
+   验证方式：`npm run typecheck` + 全量 L1。真机：会话运行中从手机连发两条消息 → 都成功（第二条排队到回合结束后投递）；mpi-diag.log 可见 `remote prompt busy → queued as followUp`。
+
 ## v0.8.0（2026-09-21）
 
 1. **压缩后可见：分隔条 + 「更早的对话」懒加载**——此前上下文压缩后，压缩前的消息在界面里直接消失（pi 按设计只把「摘要+保留区+压缩后」放进活跃上下文，UI 连摘要本身都静默丢弃），只能靠引用信封让 agent 找回原文。现在磁盘全量历史（.jsonl 本就完整保留）可以在 UI 里看到：

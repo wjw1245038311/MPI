@@ -2131,7 +2131,17 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       const tBridge = Date.now();
       // 文件先落盘，再按桌面同款规则内联/引用（图片仍直传模型）。
       const staged = processAttachments(stageRemoteFiles(files), text);
-      await bridge.bridge.prompt(staged.text, [...(images ?? []), ...staged.images]);
+      try {
+        await bridge.bridge.prompt(staged.text, [...(images ?? []), ...staged.images]);
+      } catch (error) {
+        // 手机端的 running 状态滞后于主机（冷启动建桥 / agent_start 事件未到达的窗口内连发），
+        // 裸 prompt 撞上运行中的回合会被 SDK 拒绝。回退 followUp：排队到当前回合结束再投递，
+        // 不打断进行中的任务（与 choices 面板同语义）。
+        const detail = error instanceof Error ? error.message : String(error);
+        if (!/already processing/i.test(detail)) throw error;
+        appendDiagLog(`remote prompt busy → queued as followUp (${threadId.slice(0, 12)})`);
+        await bridge.bridge.followUp(staged.text, [...(images ?? []), ...staged.images]);
+      }
       const tSent = Date.now();
       if (tSent - t0 > 500) {
         appendDiagLog(`prompt slow total=${tSent - t0}ms bridge=${tBridge - t0}ms send=${tSent - tBridge}ms bytes=${(text || "").length}`);
