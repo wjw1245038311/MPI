@@ -60,6 +60,14 @@ tempfile/
 scripts/.tui-race-bundle.cjs
 android/publish/
 
+# 新原生手机端工程（Kotlin + Compose，docs/MOBILE-NATIVE-DESIGN.md）
+mobile/app/.gradle/
+mobile/app/.idea/
+mobile/app/.kotlin/
+mobile/app/local.properties
+mobile/app/**/build/
+mobile/app/publish/
+
 # 本地进程/重启日志（scripts/restart-dev.sh 输出）
 logs/
 

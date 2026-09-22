@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  仅用于 Compose 接管前的窗口底色（避免冷启动白闪）。
+  真正的配色在 Compose 侧（ui/theme/Color.kt），与桌面端 / PWA 的令牌同名同值。
+-->
+<resources>
+    <style name="Theme.Mpi" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFFFF</item>
+    </style>
+</resources>
