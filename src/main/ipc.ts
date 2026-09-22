@@ -2131,16 +2131,19 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       const tBridge = Date.now();
       // 文件先落盘，再按桌面同款规则内联/引用（图片仍直传模型）。
       const staged = processAttachments(stageRemoteFiles(files), text);
+      let queuedAs: "followUp" | undefined;
       try {
         await bridge.bridge.prompt(staged.text, [...(images ?? []), ...staged.images]);
       } catch (error) {
         // 手机端的 running 状态滞后于主机（冷启动建桥 / agent_start 事件未到达的窗口内连发），
-        // 裸 prompt 撞上运行中的回合会被 SDK 拒绝。回退 followUp：排队到当前回合结束再投递，
-        // 不打断进行中的任务（与 choices 面板同语义）。
+        // 裸 prompt 撞上运行中的回合会被 SDK 拒绝。回退 followUp：排队到当前回合结束再投递——
+        // 与手机端「待处理后续」横幅同语义（要立即插入时 PWA 会显式发 steer）。
+        // queuedAs 随响应带回，PWA 据此显示排队提示而不是静默吞掉。
         const detail = error instanceof Error ? error.message : String(error);
         if (!/already processing/i.test(detail)) throw error;
         appendDiagLog(`remote prompt busy → queued as followUp (${threadId.slice(0, 12)})`);
         await bridge.bridge.followUp(staged.text, [...(images ?? []), ...staged.images]);
+        queuedAs = "followUp";
       }
       const tSent = Date.now();
       if (tSent - t0 > 500) {
@@ -2162,7 +2165,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         if (!ref.sessionFile) send("pi:projects-changed", { cwd: ref.cwd, sessionFile: state.sessionFile });
       }
       invalidateRemoteProjects();
-      return { ok: true };
+      return queuedAs ? { ok: true, queuedAs } : { ok: true };
     },
     async (threadId, text, images, files) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));

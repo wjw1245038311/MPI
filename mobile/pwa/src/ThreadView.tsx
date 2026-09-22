@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RemotePermission, RemoteThreadState, RemoteUiRequest } from "../../shared/protocol";
-import type { ThreadActions } from "./lib/thread-actions";
+import type { ThreadActions, SendMode } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
 import { compressImageFile, type CompressedImage } from "./lib/image-attach";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
@@ -62,6 +62,25 @@ function IconStop() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
       <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
+
+/** 「待处理后续」横幅：重新编辑（铅笔）。 */
+function IconEdit() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+    </svg>
+  );
+}
+
+/** 「待处理后续」横幅：立即插入（闪电，steer）。 */
+function IconZap() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
     </svg>
   );
 }
@@ -590,6 +609,10 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  /** 「待处理后续」暂存区（与桌面端同语义）：运行中点发送先本地暂存、不进 pi；
+   *  settle 时自动以 prompt 投递。⚡=立即插入（steer），✎=取回输入框重编。
+   *  注意：组件级状态，切走会话再回来会丢（v1 限制）。 */
+  const [pendingFu, setPendingFu] = useState<{ text: string; images: CompressedImage[]; files: PickedFile[] } | null>(null);
   // 顶部配置抽屉（权限/模式/模型）与瞬时提示。
   const [sheet, setSheet] = useState<null | "permission" | "mode" | "model" | "ctx">(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -678,17 +701,10 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
   const running = view.running || view.summary?.state === "running";
 
-  const doSend = async () => {
-    if (!actions || sending) return;
-    const text = draft;
-    const images = attachments;
-    const picked = files;
-    if (!text.trim() && !images.length && !picked.length) return;
-    setSendError(null);
-
-    // 乐观回显：先上屏 + 清空输入框，再走网络。
-    // （真机反馈：等主机 ACK 才清空，点完要卡五六秒才有动静；这段往返里包含主机
-    //   建桥/冷启动 pi 的时间，与本机体验无关。）
+  /** 共享发送路径：乐观回显 + actions.send；失败时撤气泡、内容还回输入框。
+   *  （真机反馈：等主机 ACK 才清空，点完要卡五六秒才有动静——先上屏再走网络。） */
+  const dispatch = async (text: string, images: CompressedImage[], picked: PickedFile[], mode: SendMode): Promise<void> => {
+    if (!actions) return;
     const echoId = onEcho?.({ text, images: images.length ? images : undefined, fileCount: picked.length }) || "";
     setDraft("");
     setAttachments([]);
@@ -698,10 +714,12 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     try {
       await actions.send(
         text,
-        running ? "steer" : "prompt",
+        mode,
         images.length ? images : undefined,
         picked.length ? picked.map((f) => ({ name: f.name, mimeType: f.mimeType, data: f.data })) : undefined,
       );
+      // 状态滞后窗口：主机实际在跑 → 它已把本条回退成 followUp 排队（queuedAs）。
+      // 回显气泡保留即可——pi 投递后真实 user entry 到达会按文本对账转正，无需额外提示。
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // 发送失败：撤掉占位气泡并把内容还回输入框，别让用户丢字。
@@ -714,6 +732,65 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       setSending(false);
     }
   };
+
+  const doSend = async () => {
+    if (!actions || sending) return;
+    const text = draft;
+    const images = attachments;
+    const picked = files;
+    if (!text.trim() && !images.length && !picked.length) return;
+    setSendError(null);
+
+    // 运行中：先本地暂存为「待处理后续」（与桌面端同语义——streaming 时回车是排队，
+    // 不是立即发送；要插入用横幅上的 ⚡）。已有一条暂存时，本条直接 followUp 进 pi 队列。
+    if (running) {
+      if (!pendingFu) {
+        setPendingFu({ text: text.trim(), images, files: picked });
+        setDraft("");
+        setAttachments([]);
+        setFiles([]);
+        return;
+      }
+      void dispatch(text, images, picked, "followUp");
+      return;
+    }
+
+    // 空闲：照常 prompt。
+    void dispatch(text, images, picked, "prompt");
+  };
+
+  /** settle（running true→false）：自动投递暂存内容。 */
+  const flushPending = async () => {
+    if (!actions || !pendingFu) return;
+    const p = pendingFu;
+    setPendingFu(null);
+    await dispatch(p.text, p.images, p.files, "prompt");
+  };
+
+  /** ⚡ 立即插入：打断当前回合马上处理（steer）。 */
+  const sendPendingSteering = async () => {
+    if (!actions || !pendingFu) return;
+    const p = pendingFu;
+    setPendingFu(null);
+    await dispatch(p.text, p.images, p.files, "steer");
+  };
+
+  /** ✎ 取回输入框重新编辑。 */
+  const reEditPending = () => {
+    if (!pendingFu) return;
+    setDraft(pendingFu.text);
+    setAttachments(pendingFu.images);
+    setFiles(pendingFu.files);
+    setPendingFu(null);
+    inputRef.current?.focus();
+  };
+
+  // settle → 自动投递暂存内容（effect 在 running 变化那一帧读最新 pendingFu）。
+  const prevRunningRef = useRef(running);
+  useEffect(() => {
+    if (prevRunningRef.current && !running) void flushPending();
+    prevRunningRef.current = running;
+  }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doAbort = async () => {
     if (!actions || sending) return;
@@ -1053,12 +1130,43 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
               </div>
             )}
 
+            {pendingFu && (
+              <div className="pending-fu">
+                <div className="pf-main">
+                  <div className="pf-label">
+                    <span className="pf-dot" />
+                    待处理后续
+                    <span className="pf-sub">· 当前任务完成后自动发送</span>
+                  </div>
+                  {pendingFu.text ? (
+                    <div className="pf-text">{pendingFu.text}</div>
+                  ) : (
+                    <div className="pf-text">{`${pendingFu.images.length + pendingFu.files.length} 个附件`}</div>
+                  )}
+                </div>
+                <div className="pf-actions">
+                  <button type="button" className="pf-btn" title="重新编辑" aria-label="重新编辑" onClick={reEditPending}>
+                    <IconEdit />
+                  </button>
+                  <button
+                    type="button"
+                    className="pf-btn steer"
+                    title="立即插入上下文执行"
+                    aria-label="立即插入"
+                    onClick={() => void sendPendingSteering()}
+                  >
+                    <IconZap />
+                  </button>
+                </div>
+              </div>
+            )}
+
             <textarea
               ref={inputRef}
               className="composer-input"
               value={draft}
               placeholder={
-                recording ? "正在录音…点麦克风结束并转文字" : running ? "引导当前任务…" : "描述你的任务…"
+                recording ? "正在录音…点麦克风结束并转文字" : running ? "输入插话…发送后排队，任务完成时自动发出" : "描述你的任务…"
               }
               rows={1}
               onChange={(e) => setDraft(e.target.value)}
@@ -1114,7 +1222,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                   className={`send-btn primary ${running ? "steer" : ""}`}
                   onClick={() => void doSend()}
                   disabled={sending || (!draft.trim() && !attachments.length && !files.length)}
-                  aria-label={running ? "引导发送" : "发送"}
+                  aria-label={running ? (pendingFu ? "再排一条" : "存为待处理后续") : "发送"}
                 >
                   <IconSend />
                 </button>

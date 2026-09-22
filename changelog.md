@@ -31,9 +31,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run test:relay-s0`（S0.3b 新段：同设备双配对、两边 token 各自有效、路由隔离、按边撤销、legacy hello 回退）+ `npm run test:relay-uplink` + `npm test -- pwa`。真机：手机先后配两台桌面 → 抽屉里切换两台都能正常连（此前只有最后配对的那台能连）。
 
-5. **修复「会话运行时手机端发消息失败」**——PWA 按自己的 running 状态决定发裸 prompt 还是 steer/followUp，但该状态滞后于主机真实状态：冷启动建桥 / agent_start 事件未到达的窗口内连发时，第二条仍按「空闲」发裸 prompt → SDK 拒绝（`INTERNAL_ERROR: Agent is already processing`）。现在主机侧远程 prompt 撞上运行中的回合时自动回退 followUp——排队到当前回合结束再投递、不打断进行中的任务（与 choices 面板同语义），手机端发送不再因会话在跑而失败。
+5. **手机端「待处理后续」（与桌面端对齐）+ 修复「会话运行时发消息失败」**——此前 PWA 按自己的 running 状态决定发裸 prompt / steer，但该状态滞后于主机（冷启动建桥、agent_start 未到达的窗口内连发 → SDK 拒绝 `INTERNAL_ERROR: Agent is already processing`）。现在与桌面端同语义：
+   - **运行中点发送 = 本地暂存**：输入框上方出现绿色横幅「待处理后续 · 当前任务完成后自动发送」（消息还没进 pi）；回合结束（settle）时自动以 prompt 投递
+   - 横幅两个动作：**⚡ 立即插入**（steer，打断当前回合马上处理）、**✎ 重新编辑**（取回输入框）
+   - 已有一条暂存时再发 → 直接 followUp 进 pi 队列；状态滞后窗口内发的裸 prompt 撞上运行中回合时，主机自动回退 followUp 排队并在响应里带 `queuedAs` 标志（回显气泡保留，pi 投递后按文本对账转正）
 
-   验证方式：`npm run typecheck` + 全量 L1。真机：会话运行中从手机连发两条消息 → 都成功（第二条排队到回合结束后投递）；mpi-diag.log 可见 `remote prompt busy → queued as followUp`。
+   验证方式：`npm run typecheck` + 全量 L1。真机：会话运行中从手机发消息 → 出现「待处理后续」横幅、不报错；等回合结束自动发出；点 ⚡ 可立即插入打断当前任务；点 ✎ 取回重编。mpi-diag.log 可见 `remote prompt busy → queued as followUp`（仅滞后窗口触发时）。
 
 ## v0.8.0（2026-09-21）
 

@@ -76,7 +76,7 @@ function UpdatePill() {
   );
 }
 // 临时诊断标记：确认手机端加载的是哪一版构建（扫码排查用，稳定后移除）。
-const BUILD_TAG = "260922c";
+const BUILD_TAG = "260922d";
 
 /** 安卓壳注入的桥（浏览器里不存在）——用来显示「扫码配对」并提供壳版本号。 */
 type ShellBridge = { scanPairQr: () => void; shellVersion?: () => string };
