@@ -28,6 +28,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.mpi.app.ui.BenchmarkScreen
+import com.mpi.app.ui.EXTRA_BENCHMARK
 import com.mpi.app.ui.theme.MpiTheme
 
 /**
@@ -40,10 +42,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // 基准入口：adb shell am start -n com.mpi.app/.MainActivity --ez benchmark true
+        val benchmark = intent?.getBooleanExtra(EXTRA_BENCHMARK, false) == true
         setContent {
             MpiTheme {
-                Scaffold { innerPadding ->
-                    SkeletonScreen(Modifier.padding(innerPadding))
+                if (benchmark) {
+                    BenchmarkScreen()
+                } else {
+                    Scaffold { innerPadding ->
+                        SkeletonScreen(Modifier.padding(innerPadding))
+                    }
                 }
             }
         }
