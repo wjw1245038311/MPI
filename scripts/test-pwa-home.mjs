@@ -137,7 +137,7 @@ async function main() {
     const pairingRequest = rendererEvents.find(([ch]) => ch === "remote:pairing-request")[1];
     assert.equal(remoteHost.approvePairing(pairingRequest.connectionId), true);
     const result = await resultPromise;
-    client.setHelloCreds(identity.deviceId, result.deviceToken);
+    client.setHelloCreds(identity.deviceId, result.deviceToken, payload.hostId);
 
     // --- S4.1: session layer — lists, correlation, online state ------------------------
     let reauthCount = 0;
@@ -185,7 +185,7 @@ async function main() {
     // the first must stop (no auto-reconnect → no ping-pong loop between two tabs).
     const client2 = new RelayClient({ url });
     clients.push(client2);
-    client2.setHelloCreds(identity.deviceId, result.deviceToken);
+    client2.setHelloCreds(identity.deviceId, result.deviceToken, payload.hostId);
     client2.connect();
     await waitFor(() => client.getState() === "closed", "first client replaced by second connection", 10_000);
     assert.equal(client.getLastError(), "REPLACED", "replacement surfaced as REPLACED error");

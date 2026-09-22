@@ -342,7 +342,7 @@ async function part2FullStack() {
     const pairingRequest = rendererEvents.find(([ch]) => ch === "remote:pairing-request")[1];
     assert.equal(remoteHost.approvePairing(pairingRequest.connectionId), true);
     const pairResult = await resultPromise;
-    client.setHelloCreds(identity.deviceId, pairResult.deviceToken);
+    client.setHelloCreds(identity.deviceId, pairResult.deviceToken, payload.hostId);
 
     // --- report a PushSubscription over the encrypted channel -------------------------
     const clientKeys = makeClientKeys();

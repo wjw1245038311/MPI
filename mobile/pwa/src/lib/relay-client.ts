@@ -39,7 +39,7 @@ export class RelayClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   /** When set, the client keeps itself alive (auto-reconnect + re-hello). */
   private stayAlive = false;
-  private helloCreds: { deviceId: string; deviceToken: string } | null = null;
+  private helloCreds: { deviceId: string; deviceToken: string; hostId?: string } | null = null;
   private frameCrypto: FrameCrypto | null = null;
   private readonly listeners = new Set<FrameListener>();
   private readonly stateListeners = new Set<(state: RelayClientState, lastError: string | null) => void>();
@@ -200,15 +200,17 @@ export class RelayClient {
 
   // --- control frames -----------------------------------------------------------
 
-  /** Store credentials used for re-auth on (re)connect; sent automatically on open. */
-  setHelloCreds(deviceId: string, deviceToken: string): void {
-    this.helloCreds = { deviceId, deviceToken };
+  /** Store credentials used for re-auth on (re)connect; sent automatically on open.
+   * hostId routes the hello to this host's record — one phone can be paired with
+   * several desktops, each holding its own token (relay keys by host+device). */
+  setHelloCreds(deviceId: string, deviceToken: string, hostId?: string): void {
+    this.helloCreds = { deviceId, deviceToken, hostId };
   }
 
   /** Re-authenticate with a stored token now (and keep it for future reconnects). */
-  hello(deviceId: string, deviceToken: string): boolean {
-    this.setHelloCreds(deviceId, deviceToken);
-    return this.send({ type: "hello", deviceId, deviceToken });
+  hello(deviceId: string, deviceToken: string, hostId?: string): boolean {
+    this.setHelloCreds(deviceId, deviceToken, hostId);
+    return this.send({ type: "hello", deviceId, deviceToken, ...(hostId ? { hostId } : {}) });
   }
 
   /** Start pairing with a fresh ticket (first frame of the socket). */

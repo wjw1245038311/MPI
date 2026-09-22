@@ -18,8 +18,8 @@
  * Frame rules:
  *   host  → relay : control {ticket.register|pair.approved|device.revoke|push.subscribe|push.request}
  *                   data    {to:"<deviceId>", ...opaque...}   (whole object forwarded)
- *   device→ relay : first frame {hello | pair.request}; afterwards opaque data
- *                   frames are forwarded to the bound host uplink.
+ *   device→ relay : first frame {hello (carries hostId) | pair.request}; afterwards
+ *                   opaque data frames are forwarded to the bound host uplink.
  *
  * Env: RELAY_PORT (default 9001, 0 = ephemeral), RELAY_HOST (default 0.0.0.0),
  *      RELAY_PING_MS (default 20000), RELAY_DEAD_MS (default 60000),
@@ -190,8 +190,21 @@ const CLOSE_REPLACED = 4006;
 // --- routing table ---------------------------------------------------------------
 /** hostId -> { ws } */
 const hosts = new Map();
-/** deviceId -> { ws|null, hostId, token|null, status:"pending"|"approved", name } */
+/** (hostId, deviceId) -> { ws|null, hostId, deviceId, token|null, status:"pending"|"approved", name }.
+ * One record per HOST+device pair — a phone can be paired with several desktops,
+ * each holding its own token. Keying by the composite stopped two hosts' token
+ * announcements from overwriting one shared record (2026-09-22 auth conflict). */
 const devices = new Map();
+/** Composite key: hostId and deviceId are both opaque strings; NUL cannot appear
+ * in a JSON string we accept (str() keeps any chars, but ids come from our own
+ * base64url/randomBytes generators) — good enough as a separator. */
+const devKey = (hostId, deviceId) => hostId + "\u0000" + deviceId;
+/** All records for one device across hosts (legacy hello without hostId matches by token). */
+function deviceRecords(deviceId) {
+  const out = [];
+  for (const rec of devices.values()) if (rec.deviceId === deviceId) out.push(rec);
+  return out;
+}
 /** ticket -> { hostId, expiresAt, used } (one-shot, 5 min default TTL). Expired
  * entries are kept until queried (so the phone gets TICKET_EXPIRED, not
  * TICKET_INVALID) and pruned lazily at registration time. */
@@ -249,7 +262,8 @@ function dropSocket(conn) {
       }
     }
   } else if (conn.role === "device") {
-    const rec = devices.get(conn.id);
+    // The connection is bound to the host it authenticated against (hello / pair.request).
+    const rec = conn.authHostId ? devices.get(devKey(conn.authHostId, conn.id)) : undefined;
     log(`device ${conn.id} gone${closeInfo(conn)}`);
     // Only the currently bound socket counts as an offline event; a replaced
     // (stale) socket closing must not notify the host.
@@ -288,14 +302,17 @@ function handleHostFrame(conn, raw) {
     case "pair.approved": {
       const deviceId = str(frame.deviceId, 128);
       const token = str(frame.deviceToken, 128);
-      let rec = devices.get(deviceId);
-      if (rec && rec.hostId !== conn.id) return send(conn.ws, { type: "relay.error", code: "UNKNOWN_DEVICE" });
+      if (!deviceId) return send(conn.ws, { type: "relay.error", code: "INVALID_REQUEST" });
       if (!token) return send(conn.ws, { type: "relay.error", code: "INVALID_TOKEN" });
+      // Keyed by (this host, device): each desktop keeps its own token for a
+      // phone — no more cross-host overwrites of one shared record.
+      const key = devKey(conn.id, deviceId);
+      let rec = devices.get(key);
       if (!rec) {
         // Token (re-)registration without a live pending pairing — e.g. the
         // uplink re-announces its stored tokens after a relay restart.
-        rec = { ws: null, hostId: conn.id, token: null, status: "pending", name: deviceId };
-        devices.set(deviceId, rec);
+        rec = { ws: null, hostId: conn.id, deviceId, token: null, status: "pending", name: deviceId };
+        devices.set(key, rec);
       }
       rec.token = token;
       rec.status = "approved";
@@ -305,12 +322,13 @@ function handleHostFrame(conn, raw) {
 
     case "device.revoke": {
       const deviceId = str(frame.deviceId, 128);
-      const rec = devices.get(deviceId);
+      // Only this host's own record for the device — other hosts' pairings are untouched.
+      const rec = deviceId ? devices.get(devKey(conn.id, deviceId)) : undefined;
       let removed = false;
-      if (rec && rec.hostId === conn.id) {
+      if (rec) {
         send(rec.ws, { type: "revoked" });
         tryClose(rec.ws, CLOSE_REVOKED, "REVOKED");
-        devices.delete(deviceId);
+        devices.delete(devKey(conn.id, deviceId));
         removed = true;
         log(`device ${deviceId} revoked by host ${conn.id}`);
       }
@@ -344,10 +362,16 @@ function handleHostFrame(conn, raw) {
       // Data frame → must carry plaintext routing target `to` = deviceId.
       const to = str(frame.to, 128);
       if (!to) return send(conn.ws, { type: "relay.error", code: "NO_ROUTE" });
-      const rec = devices.get(to);
-      if (!rec || !isWsOpen(rec.ws)) {
-        log(`frame ${typeof frame.type === "string" ? frame.type : "<enc>"} ${raw.length}B host→${to} DROPPED (${rec ? "DEVICE_OFFLINE" : "UNKNOWN_DEVICE"})`);
-        return send(conn.ws, { type: "relay.error", code: rec ? "DEVICE_OFFLINE" : "UNKNOWN_DEVICE", to });
+      // Deliver only through the device's socket bound to THIS host — a phone
+      // talks to one desktop at a time (records are per host+device).
+      let rec = null;
+      for (const r of devices.values()) if (r.deviceId === to && r.hostId === conn.id && isWsOpen(r.ws)) { rec = r; break; }
+      if (!rec) {
+        const boundElsewhere = [...devices.values()].some((r) => r.deviceId === to && isWsOpen(r.ws));
+        const known = deviceRecords(to).length > 0;
+        const code = boundElsewhere ? "DEVICE_NOT_BOUND" : known ? "DEVICE_OFFLINE" : "UNKNOWN_DEVICE";
+        log(`frame ${typeof frame.type === "string" ? frame.type : "<enc>"} ${raw.length}B host→${to} DROPPED (${code})`);
+        return send(conn.ws, { type: "relay.error", code, to });
       }
       // Forward the whole object unchanged (opaque to the relay).
       log(`frame ${typeof frame.type === "string" ? frame.type : "<enc>"} ${raw.length}B host→${to}`);
@@ -369,9 +393,15 @@ function handleDeviceFrame(conn, raw) {
   switch (frame.type) {
     case "hello": {
       const deviceId = str(frame.deviceId, 128);
-      const rec = devices.get(deviceId);
+      const hostId = str(frame.hostId, 64);
+      if (!deviceId) return tryClose(conn.ws, CLOSE_AUTH_FAILED, "AUTH_FAILED");
+      // New clients carry the target hostId; legacy builds (no hostId) match by
+      // token across all of this device's records.
+      const rec = hostId
+        ? devices.get(devKey(hostId, deviceId))
+        : deviceRecords(deviceId).find((r) => r.token && r.token === str(frame.deviceToken, 128));
       if (!rec || !rec.token || rec.token !== str(frame.deviceToken, 128)) {
-        log(`device ${deviceId || "?"} hello rejected (auth failed)`);
+        log(`device ${deviceId} hello rejected (auth failed)`);
         tryClose(conn.ws, CLOSE_AUTH_FAILED, "AUTH_FAILED");
         return;
       }
@@ -383,6 +413,7 @@ function handleDeviceFrame(conn, raw) {
       rec.ws = conn.ws;
       conn.role = "device";
       conn.id = deviceId;
+      conn.authHostId = rec.hostId;
       log(`device ${deviceId} hello ok (host ${rec.hostId})`);
       // Tell the host uplink so it can re-issue a pair.challenge for the
       // signature handshake (S1 relay-uplink consumes this control frame).
@@ -406,22 +437,25 @@ function handleDeviceFrame(conn, raw) {
       // retry works once it reconnects.
       if (!isWsOpen(host?.ws)) return send(conn.ws, { type: "relay.error", code: "HOST_OFFLINE" });
       t.used = true;
-      const existing = devices.get(deviceId);
+      const key = devKey(t.hostId, deviceId);
+      const existing = devices.get(key);
       if (existing && isWsOpen(existing.ws) && existing.ws !== conn.ws) {
         send(existing.ws, { type: "replaced" });
         tryClose(existing.ws, CLOSE_REPLACED, "REPLACED");
         log(`device ${deviceId} REPLACED previous connection (pair.request)`);
       }
-      devices.set(deviceId, { ws: conn.ws, hostId: t.hostId, token: null, status: "pending", name: str(frame.name, 80) || deviceId });
+      devices.set(key, { ws: conn.ws, hostId: t.hostId, deviceId, token: null, status: "pending", name: str(frame.name, 80) || deviceId });
       conn.role = "device";
       conn.id = deviceId;
+      conn.authHostId = t.hostId;
       log(`pair.request ${deviceId} routed to host ${t.hostId}`);
       return send(host.ws, frame); // forward unchanged; S1 uplink maps it into RemoteHost.handleHello
     }
 
     default: {
       if (conn.role !== "device") return send(conn.ws, { type: "relay.error", code: "NOT_AUTHENTICATED" });
-      const rec = devices.get(conn.id);
+      // The connection is bound to the host it authenticated against.
+      const rec = conn.authHostId ? devices.get(devKey(conn.authHostId, conn.id)) : undefined;
       // Pending (not yet approved) sockets may only exchange control frames —
       // except pair.hello, which IS the pairing handshake. Checking `type`
       // inspects routing metadata only, never frame content.
@@ -475,7 +509,7 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 wss.on("connection", (ws) => {
-  const conn = { role: null, id: "", ws };
+  const conn = { role: null, id: "", authHostId: "", ws };
   ws.isAlive = true;
 
   ws.on("pong", () => {

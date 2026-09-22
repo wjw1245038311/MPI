@@ -76,7 +76,7 @@ function UpdatePill() {
   );
 }
 // 临时诊断标记：确认手机端加载的是哪一版构建（扫码排查用，稳定后移除）。
-const BUILD_TAG = "260922b";
+const BUILD_TAG = "260922c";
 
 /** 安卓壳注入的桥（浏览器里不存在）——用来显示「扫码配对」并提供壳版本号。 */
 type ShellBridge = { scanPairQr: () => void; shellVersion?: () => string };
@@ -251,7 +251,7 @@ export default function App() {
         // Request timed out while the socket is still open — the host's uplink may
         // have dropped silently; re-hello forces the relay to re-route + challenge.
         onStaleConnection: () => {
-          if (record.deviceToken && record.deviceId) client.hello(record.deviceId, record.deviceToken);
+          if (record.deviceToken && record.deviceId) client.hello(record.deviceId, record.deviceToken, record.hostId);
         },
       });
       setSession(s);
@@ -302,9 +302,9 @@ export default function App() {
     void storeRef.current.savePairing(touched);
     setPairings((prev) => (prev.some((item) => item.hostId === touched.hostId) ? prev.map((item) => (item.hostId === touched.hostId ? touched : item)) : [...prev, touched]));
     if (!record.deviceToken) return;
-    client.setHelloCreds(identity.deviceId, record.deviceToken);
+    client.setHelloCreds(identity.deviceId, record.deviceToken, record.hostId);
     attachAutoReauth(client, record.hostId, identity, name, (result) => {
-      if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken);
+      if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken, record.hostId);
       void storeRef.current.savePairing({
         ...record,
         deviceToken: result.deviceToken || null,
@@ -382,9 +382,9 @@ export default function App() {
       };
       await storeRef.current.savePairing(record);
       setPairings(await storeRef.current.listPairings());
-      if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken);
+      if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken, payload.hostId);
       attachAutoReauth(client, payload.hostId, identity, device.name, (r) => {
-        if (r.deviceToken) client.setHelloCreds(identity.deviceId, r.deviceToken);
+        if (r.deviceToken) client.setHelloCreds(identity.deviceId, r.deviceToken, payload.hostId);
         void sessionRef.current?.refresh();
         void threadSessionRef.current?.resync().catch(() => {});
       });

@@ -243,6 +243,84 @@ async function main() {
     f = await host1.next();
     assert.deepEqual(f, { from: "device-a", ...up2 }); // re-hello'd socket can forward data
 
+    // --- S0.3b: one phone paired with two hosts — per-host tokens -----------------------------
+    // Regression (2026-09-22): records were keyed by deviceId alone, so the second
+    // host's pairing clobbered the first and its token stopped authenticating.
+    // Records are now keyed by (hostId, deviceId).
+
+    host1.send({ type: "ticket.register", ticket: "tm1", expiresAt: Date.now() + 60_000 });
+    await host1.next();
+    const phoneM = await connect("phoneM");
+    phoneM.send({ type: "pair.request", ticket: "tm1", deviceId: "device-m" });
+    f = await host1.next();
+    assert.equal(f.deviceId, "device-m"); // routed to h1
+    host1.send({ type: "pair.approved", deviceId: "device-m", deviceToken: "tok-m-h1" });
+    await host1.next();
+
+    // The SAME phone pairs with h2 — must not clobber h1's record.
+    host2.send({ type: "ticket.register", ticket: "tm2", expiresAt: Date.now() + 60_000 });
+    await host2.next();
+    const phoneM2 = await connect("phoneM2");
+    phoneM2.send({ type: "pair.request", ticket: "tm2", deviceId: "device-m" });
+    f = await host2.next();
+    assert.equal(f.deviceId, "device-m"); // routed to h2
+    host2.send({ type: "pair.approved", deviceId: "device-m", deviceToken: "tok-m-h2" });
+    await host2.next();
+
+    // Both tokens authenticate against their own host (old code rejected tok-m-h1 here).
+    const phoneM3 = await connect("phoneM3");
+    phoneM3.send({ type: "hello", deviceId: "device-m", deviceToken: "tok-m-h1", hostId: "h1" });
+    f = await phoneM3.next();
+    assert.deepEqual(f, { type: "relay.ok", role: "device", hostId: "h1" });
+    // the relay told h1 that device-m is back online (S1 hook) — consume it
+    f = await host1.nextType("device.online");
+    assert.deepEqual(f, { type: "device.online", deviceId: "device-m" });
+
+    // Drop the stale pair-request socket (h2) so device-m's only live socket is M3's.
+    phoneM2.close(1000, "bye");
+    f = await host2.nextType("offline");
+    assert.deepEqual(f, { type: "offline", who: "device", deviceId: "device-m" });
+
+    // Routing isolation: h2 must not deliver through the socket bound to h1.
+    host2.send({ to: "device-m", ...envelope("projects.list", "s1") });
+    f = await host2.next();
+    assert.equal(f.code, "DEVICE_NOT_BOUND");
+
+    const phoneM4 = await connect("phoneM4");
+    phoneM4.send({ type: "hello", deviceId: "device-m", deviceToken: "tok-m-h2", hostId: "h2" });
+    f = await phoneM4.next();
+    assert.deepEqual(f, { type: "relay.ok", role: "device", hostId: "h2" }); // both records coexist
+
+    // Wrong token for the named host is still rejected (4001).
+    const phoneM5 = await connect("phoneM5");
+    phoneM5.send({ type: "hello", deviceId: "device-m", deviceToken: "tok-m-h1", hostId: "h2" });
+    for (let i = 0; i < 50 && !phoneM5.closed; i++) await sleep(20);
+    assert.equal(phoneM5.closed?.code, 4001);
+
+    // Legacy hello (no hostId) still matches by token — old PWA builds keep working.
+    const phoneM6 = await connect("phoneM6");
+    phoneM6.send({ type: "hello", deviceId: "device-m", deviceToken: "tok-m-h2" });
+    f = await phoneM6.next();
+    assert.deepEqual(f, { type: "relay.ok", role: "device", hostId: "h2" });
+
+    // Revoke is per-host: h1 revoking device-m kicks its socket but leaves h2's pairing intact.
+    host1.send({ type: "device.revoke", deviceId: "device-m" });
+    f = await host1.next();
+    assert.deepEqual(f, { type: "relay.ok", role: "host", removed: true });
+    for (let i = 0; i < 50 && !phoneM3.closed; i++) await sleep(20); // kicked with 4002
+    assert.equal(phoneM3.closed?.code, 4002);
+
+    // h2's pairing survived the revoke — its token still authenticates.
+    const phoneM7 = await connect("phoneM7");
+    phoneM7.send({ type: "hello", deviceId: "device-m", deviceToken: "tok-m-h2", hostId: "h2" });
+    f = await phoneM7.next();
+    assert.deepEqual(f, { type: "relay.ok", role: "device", hostId: "h2" });
+
+    // Tidy up before the offline-event section (consume the resulting notification).
+    phoneM7.close(1000, "bye");
+    f = await host2.nextType("offline");
+    assert.deepEqual(f, { type: "offline", who: "device", deviceId: "device-m" });
+
     // --- S0.2: offline events on peer death -------------------------------------------------
     phoneF.close(1000, "bye"); // device side goes away
     f = await host1.nextType("offline");

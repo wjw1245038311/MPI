@@ -189,7 +189,7 @@ async function main() {
 
     const client2 = new RelayClient({ url, onSend: (raw) => pwaOutboundRaw.push(raw) });
     clients.push(client2);
-    client2.setHelloCreds(identity.deviceId, result.deviceToken);
+    client2.setHelloCreds(identity.deviceId, result.deviceToken, payload.hostId);
     // Subscribe BEFORE connecting so no frame can be missed (same pattern as App.tsx).
     const reResultPromise = reauthenticate(client2, payload.hostId, restored, "test-pwa");
     client2.connect();

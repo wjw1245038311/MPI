@@ -171,7 +171,7 @@ async function main() {
     const pairingRequest = rendererEvents.find(([ch]) => ch === "remote:pairing-request")[1];
     assert.equal(remoteHost.approvePairing(pairingRequest.connectionId), true);
     const result = await resultPromise;
-    client.setHelloCreds(identity.deviceId, result.deviceToken);
+    client.setHelloCreds(identity.deviceId, result.deviceToken, payload.hostId);
 
     // --- S5.1: open thread — snapshot + buffered pre-snapshot events ----------------------
     const ts = new ThreadSession(client, THREAD_ID, { requestTimeoutMs: 3_000 });

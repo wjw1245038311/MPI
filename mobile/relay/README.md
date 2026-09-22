@@ -33,6 +33,9 @@ RELAY_TLS_CERT=/opt/mpi-relay/certs/cert.pem RELAY_TLS_KEY=/opt/mpi-relay/certs/
 RELAY_STATIC_DIR=/var/www/mpi-mobile node index.mjs
 ```
 
+更新中继：`scp mobile/relay/index.mjs root@<ecs>:/opt/mpi-relay/ && ssh root@<ecs> 'systemctl restart mpi-relay'`——
+短暂断连后自愈（host uplink 重连时重新注册并补报已存 token；手机侧 hello 自动重试）。
+
 ## 帧协议（S0 明文骨架）
 
 同一 WSS socket 上按 `type` 区分控制帧与应用数据帧。
@@ -41,18 +44,18 @@ RELAY_STATIC_DIR=/var/www/mpi-mobile node index.mjs
 | --- | --- | --- |
 | `host.register` `{hostId}` | host→relay | 首帧；重复注册替换旧 uplink（旧端收 `replaced` + close 4006） |
 | `ticket.register` `{ticket, expiresAt?}` | host→relay | 配对票据上报，默认 TTL 5min、一次性 |
-| `pair.approved` `{deviceId, deviceToken}` | host→relay | 批准配对：绑定 deviceId↔hostId 并存 token（供 hello 重连） |
-| `device.revoke` `{deviceId}` | host→relay | 撤销设备：删路由，在线端收 `revoked` + close 4002 |
+| `pair.approved` `{deviceId, deviceToken}` | host→relay | 批准配对：存**本主机**对该设备的 token（记录按 host+device 双键——同一台手机可绑多台桌面、各持独立 token；供 hello 重连） |
+| `device.revoke` `{deviceId}` | host→relay | 撤销设备：只删**本主机**的记录，在线端收 `revoked` + close 4002（其它桌面的绑定不受影响） |
 | `push.request` | host→relay | S7 WebPush；S0 回 `PUSH_NOT_CONFIGURED` |
-| `hello` `{deviceId, deviceToken}` | device→relay | 首帧；token 匹配即绑定，替换旧 socket |
-| `pair.request` `{ticket, deviceId, name?}` | device→relay | 首帧；按 ticket 原样转发给对应 host uplink（S1 映射进 RemoteHost.handleHello） |
-| 数据帧（其余一切） | 双向 | device→绑定 host 加明文 `from: "<deviceId>"` 后透传；host→device 必须带明文 `to: "<deviceId>"`，整对象原样透传。pending（未批准）设备只许控制帧 + `pair.hello`（配对握手本身，按 type 放行，不解析内容） |
+| `hello` `{deviceId, deviceToken, hostId?}` | device→relay | 首帧；按 (hostId, deviceId) 查记录、token 匹配即绑定，替换该主机下的旧 socket。旧客户端不带 hostId 时回退为跨该设备全部记录按 token 匹配 |
+| `pair.request` `{ticket, deviceId, name?}` | device→relay | 首帧；按 ticket 原样转发给对应 host uplink（S1 映射进 RemoteHost.handleHello）；只覆盖 (ticket.hostId, deviceId) 这一条记录，不影响其它桌面的绑定 |
+| 数据帧（其余一切） | 双向 | device→绑定 host 加明文 `from: "<deviceId>"` 后透传；host→device 必须带明文 `to: "<deviceId>"`、只经**绑定到本主机**的 socket 投递（设备正连着别的桌面 → `DEVICE_NOT_BOUND`），整对象原样透传。pending（未批准）设备只许控制帧 + `pair.hello`（配对握手本身，按 type 放行，不解析内容） |
 
 relay → 端 的控制回复：`relay.ok` / `relay.error {code}` / `offline {who, hostId|deviceId}` /
 `revoked` / `replaced`；hello 成功后 relay 另向绑定 host uplink 发 `device.online {deviceId}`
 （S1 uplink 据此重发 pair.challenge）。错误码：`INVALID_JSON`、`NO_ROUTE`、`UNKNOWN_DEVICE`、
 `DEVICE_OFFLINE`、`HOST_OFFLINE`、`NOT_AUTHENTICATED`、`TICKET_INVALID`、`TICKET_EXPIRED`、
-`INVALID_TICKET`、`INVALID_TOKEN`、`TICKET_TABLE_FULL`、`PAYLOAD_TOO_LARGE`(2MB)。
+`INVALID_TICKET`、`INVALID_TOKEN`、`TICKET_TABLE_FULL`、`DEVICE_NOT_BOUND`、`PAYLOAD_TOO_LARGE`(2MB)。
 
 心跳：relay 每 `RELAY_PING_MS` ping，连续 `RELAY_DEAD_MS/PING_MS` 次无 pong → terminate；
 socket close 时清路由并向对端发 `offline`。被替换的旧 socket 关闭**不**触发 offline。

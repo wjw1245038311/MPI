@@ -245,7 +245,7 @@ async function part2FullStack() {
     const pairingRequest = rendererEvents.find(([ch]) => ch === "remote:pairing-request")[1];
     assert.equal(remoteHost.approvePairing(pairingRequest.connectionId), true);
     const result = await resultPromise;
-    client.setHelloCreds(identity.deviceId, result.deviceToken);
+    client.setHelloCreds(identity.deviceId, result.deviceToken, payload.hostId);
 
     // --- open the thread (real service subscribe) ---------------------------------
     const ts = new ThreadSession(client, T, { requestTimeoutMs: 3_000 });
