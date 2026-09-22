@@ -50,6 +50,16 @@ android {
     }
 }
 
+tasks.withType<Test>().configureEach {
+    // 中继集成测试（RelayHandshakeTest，M0-6）需要定位仓库根与 node。
+    // repoRoot = mobile/app 的上两级；node 可用 MPI_NODE 覆盖 пути。
+    systemProperty("mpi.repoRoot", rootProject.projectDir.parentFile.parentFile.absolutePath)
+    systemProperty("mpi.nodePath", System.getenv("MPI_NODE") ?: "node")
+    testLogging {
+        events("passed", "failed", "skipped")
+    }
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)
