@@ -1240,10 +1240,21 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         appendDiagLog(`ctx-usage skip local=${localId.slice(-20)} reason=no-remote-id has-usage=1`);
         return;
       }
+      // 顺带补推当前模型：新会话的 JSONL 没有 model_change 条目 → history.model 恒为
+      // null，不推的话手机端 chip 会一直停在「默认模型」。桥已就绪，getState 很便宜。
+      let model: { provider: string; id: string } | null = null;
+      try {
+        const st: any = await bridges.get(localId)?.bridge.getState();
+        if (st?.model && typeof st.model.id === "string") {
+          model = { provider: String(st.model.provider ?? ""), id: st.model.id };
+        }
+      } catch {
+        /* 取不到保持 null，手机端维持原值 */
+      }
       appendDiagLog(
-        `ctx-usage push remote=${remoteThreadId.slice(0, 12)} tokens=${usage.tokens ?? "null"} window=${usage.contextWindow} pct=${usage.percent ?? "null"} est=${usage.estimatedTokens ?? "-"}`,
+        `ctx-usage push remote=${remoteThreadId.slice(0, 12)} tokens=${usage.tokens ?? "null"} window=${usage.contextWindow} pct=${usage.percent ?? "null"} est=${usage.estimatedTokens ?? "-"} model=${model?.id ?? "-"}`,
       );
-      remoteEventHub.publish(remoteThreadId, { kind: "context_usage", data: { ...usage } });
+      remoteEventHub.publish(remoteThreadId, { kind: "context_usage", data: { ...usage, ...(model ? { model } : {}) } });
     } catch (error) {
       // 手机上少一个数字不值得打断回合——静默失败，下次事件再试。
       appendDiagLog(`ctx-usage error local=${localId.slice(-20)} ${error instanceof Error ? error.message : String(error)}`);

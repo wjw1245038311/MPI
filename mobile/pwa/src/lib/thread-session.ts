@@ -365,8 +365,12 @@ export class ThreadSession {
         break;
       }
       case "context_usage": {
-        // 主机在回合结束/压缩结束推送的最新用量（与桌面 ring 同一份数据）。
-        const data = (payload.data || {}) as Partial<RemoteContextUsage>;
+        // 主机在回合结束/压缩结束推送的最新用量（与桌面 ring 同一份数据），
+        // 以及桥就绪后的当前模型补推——新会话 JSONL 没有 model_change 条目，
+        // history.model 恒为 null，不应用这条 chip 会一直停在「默认模型」。
+        const data = (payload.data || {}) as Partial<RemoteContextUsage> & {
+          model?: { provider: string; id: string } | null;
+        };
         if (typeof data.contextWindow === "number") {
           this.patch({
             contextUsage: {
@@ -376,6 +380,9 @@ export class ThreadSession {
               estimatedTokens: typeof data.estimatedTokens === "number" ? data.estimatedTokens : null,
             },
           });
+        }
+        if (data.model && typeof data.model.id === "string") {
+          this.patch({ model: { provider: String(data.model.provider ?? ""), id: data.model.id } });
         }
         break;
       }
