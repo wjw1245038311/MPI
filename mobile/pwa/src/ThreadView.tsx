@@ -726,20 +726,22 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     }
   };
 
-  /** choices 面板发送：followUp（与桌面端同语义——agent 在跑就排队）+ 乐观回显；
-   *  失败时撤掉占位气泡并抛错，面板保留草稿供重发。 */
+  /** choices 面板发送 + 乐观回显；失败时撤掉占位气泡并抛错，面板保留草稿供重发。
+   *  路由与桌面端 sendPrompt 完全一致（store.ts）：agent 在跑 → followUp（排队到回合
+   *  结束再投递，不打断当前任务）；空闲 → prompt（立即开回合）。裸 followUp 发到空闲
+   *  会话只会进 pi 的队列干等下一个回合——真机实测「点发送没反应」就是这个。 */
   const sendChoice = useMemo(() => {
     if (!actions) return undefined;
     return async (text: string): Promise<void> => {
       const echoId = onEcho?.({ text }) || "";
       try {
-        await actions.send(text, "followUp");
+        await actions.send(text, running ? "followUp" : "prompt");
       } catch (error) {
         if (echoId) onEchoDrop?.(echoId);
         throw error;
       }
     };
-  }, [actions, onEcho, onEchoDrop]);
+  }, [actions, onEcho, onEchoDrop, running]);
 
   // ---- T2: image attachments -------------------------------------------------
 
