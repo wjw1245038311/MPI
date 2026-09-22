@@ -76,7 +76,7 @@ function UpdatePill() {
   );
 }
 // 临时诊断标记：确认手机端加载的是哪一版构建（扫码排查用，稳定后移除）。
-const BUILD_TAG = "260915c";
+const BUILD_TAG = "260922a";
 
 /** 安卓壳注入的桥（浏览器里不存在）——用来显示「扫码配对」并提供壳版本号。 */
 type ShellBridge = { scanPairQr: () => void; shellVersion?: () => string };
@@ -567,23 +567,30 @@ export default function App() {
   };
 
   /**
-   * 抽屉开合与安卓返回键：开一层就压一条历史，返回键（popstate）先关二级再关一级。
-   * 壳里的返回键最终落到 WebView 的 goBack()，因此天然衔接这套历史栈。
+   * 抽屉开合与安卓返回键——单条目制（修「添加设备回不了配对页」）：
+   * 任意时刻最多存在一条抽屉历史条目。从关闭态打开 = push；已开的层级之间切换
+   * 只 replaceState 换 hash；关闭（返回键/遮罩/程序化）一律单步 back()，popstate
+   * 统一收口 none。
+   * 原因：go(-2) 这类多步历史跳转在安卓 WebView 里不可靠——点「添加设备」实测要么
+   * 整页重载（自动重连立刻弹回最近设备的主页）、要么弹穿栈后台化；单步 back/goBack
+   * 则被系统返回键反复验证。代价：设备抽屉里按一次返回键两级一起关（原逐级两次）。
    */
   const openDrawer = (level: "projects" | "devices") => {
+    if (drawer === level) return; // 连点头像不得重复压历史条目，否则之后出现「按返回没反应」的死按键
     setDrawer(level);
     // 打开项目抽屉顺手刷一次——桌面新建的会话、手机刚建的会话都不会漏在列表里。
     if (level === "projects") void sessionRef.current?.refresh();
     // 带真实 hash：WebView 的 canGoBack() 只认真正产生历史项的导航，不带 URL 的
-
-    // pushState 在安卓壳里返回键看不到（实测：壳会直接后台化而关不掉抽屉）。
-    window.history.pushState({ drawer: level }, "", `#${level}`);
+    // pushState 在安卓壳里返回键看不到（实测）。
+    // 从关闭态打开 = 新条目；已开的层级之间 = 同一条目换 hash（replaceState 不加条目、不触发 popstate）。
+    if (drawer === "none") window.history.pushState({ drawer: level }, "", `#${level}`);
+    else window.history.replaceState({ drawer: level }, "", `#${level}`);
   };
 
-  /** 关掉所有抽屉（回退正确的历史条数，别连着 back 两次——那是异步的）。 */
+  /** 关掉所有抽屉：单步 back()（go(-2) 多步跳转在安卓 WebView 不可靠，见 openDrawer 注释），popstate 收口 none。 */
   const closeAllDrawers = () => {
-    if (drawer === "devices") window.history.go(-2);
-    else if (drawer === "projects") window.history.back();
+    if (drawer === "none") return;
+    window.history.back();
   };
 
   const closeDrawer = () => {
@@ -592,7 +599,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    const onPopState = () => setDrawer((current) => (current === "devices" ? "projects" : "none"));
+    // 单条目制：弹掉那一条抽屉历史 = 回主页，不再逐级收口。
+    const onPopState = () => setDrawer("none");
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
@@ -874,8 +882,9 @@ export default function App() {
           className="btn primary"
           style={{ marginTop: 12 }}
           onClick={() => {
-            closeAllDrawers();
+            // 先进配对页（同步状态），再关抽屉——即使历史导航出意外，人也已在配对页。
             disconnect();
+            closeAllDrawers();
           }}
         >
           <Plus size={15} /> 添加设备（回到配对页）
