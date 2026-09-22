@@ -218,6 +218,34 @@ button:disabled { opacity: 0.5; cursor: default; }
   font-size: 13.5px;
   font-weight: 600;
 }
+/* 设备名可点重命名：按钮化 + 长名截断（原来会换行把行撑高） */
+.device-name-editable {
+  display: block;
+  max-width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.device-rename {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.device-rename input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 13.5px;
+}
 .link-btn {
   flex: none;
   background: none;

@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RemoteThreadSnapshot, RemoteThreadState } from "../../shared/protocol";
 import ThreadView from "./ThreadView";
-import { ChevronRight, Phone, Plus, Refresh } from "./components/icons";
+import { Check, ChevronRight, Close, Phone, Plus, Refresh } from "./components/icons";
 import DbgOverlay from "./DbgOverlay";
 import { IdbKeyStore } from "./lib/keystore-idb";
 import type { KeyStore, PairingRecord } from "./lib/keystore";
@@ -76,7 +76,7 @@ function UpdatePill() {
   );
 }
 // 临时诊断标记：确认手机端加载的是哪一版构建（扫码排查用，稳定后移除）。
-const BUILD_TAG = "260922a";
+const BUILD_TAG = "260922b";
 
 /** 安卓壳注入的桥（浏览器里不存在）——用来显示「扫码配对」并提供壳版本号。 */
 type ShellBridge = { scanPairQr: () => void; shellVersion?: () => string };
@@ -125,6 +125,11 @@ function relayHostOf(relayUrl: string): string {
   } catch {
     return relayUrl;
   }
+}
+
+/** 设备显示名：本地重命名 > 配对载荷里的桌面机器名 > 短 ID 兜底。 */
+function deviceLabel(item: PairingRecord): string {
+  return item.displayName?.trim() || item.hostName || `主机 ${shortId(item.hostId)}`;
 }
 
 export default function App() {
@@ -566,6 +571,30 @@ export default function App() {
     if (target === hostId) disconnect();
   };
 
+  /** 设备重命名（本地别名）：正在编辑的 hostId + 草稿；提交时空串 = 清除别名用回机器名。 */
+  const [renamingHostId, setRenamingHostId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  const startRename = (item: PairingRecord) => {
+    setRenamingHostId(item.hostId);
+    setRenameDraft(item.displayName ?? item.hostName ?? "");
+  };
+
+  /** 提交前从存储读最新记录再改——避免用行渲染时的旧快照覆盖掉期间更新的字段（如 lastSeenAt）。 */
+  const commitRename = async (targetHostId: string) => {
+    const next = renameDraft.trim().slice(0, 40);
+    setRenamingHostId(null);
+    try {
+      const current = await storeRef.current.getPairing(targetHostId);
+      if (!current) return; // 期间已被移除
+      const updated: PairingRecord = { ...current };
+      if (next) updated.displayName = next;
+      else delete updated.displayName;
+      await storeRef.current.savePairing(updated);
+      setPairings(await storeRef.current.listPairings());
+    } catch { /* 存储不可用时放弃本次重命名 */ }
+  };
+
   /**
    * 抽屉开合与安卓返回键——单条目制（修「添加设备回不了配对页」）：
    * 任意时刻最多存在一条抽屉历史条目。从关闭态打开 = push；已开的层级之间切换
@@ -633,8 +662,7 @@ export default function App() {
   // 会话视图：标题只留会话名（状态/权限已在工具栏 chip 里，重复显示纯属噪声）。
   const headerTitle =
     threadView?.summary?.title ||
-    currentPairing?.hostName ||
-    (hostId ? `主机 ${shortId(hostId)}` : "MPI Mobile");
+    (currentPairing ? deviceLabel(currentPairing) : hostId ? `主机 ${shortId(hostId)}` : "MPI Mobile");
   const headerSubtitle = threadView?.summary
     ? // 副标题用项目名（Qoder 的「环境」位）；状态/权限已在 chip 里，不重复。
       (snap?.projects.find((p) => p.id === threadView.summary?.projectId)?.name ?? "")
@@ -766,7 +794,7 @@ export default function App() {
           <span className="app-logo small" aria-hidden="true">M</span>
           <span className="drawer-head-main">
             <span className="drawer-head-title">
-              {currentPairing?.hostName || (hostId ? `主机 ${shortId(hostId)}` : "未连接")}
+              {currentPairing ? deviceLabel(currentPairing) : hostId ? `主机 ${shortId(hostId)}` : "未连接"}
             </span>
             <span className="hint hint-with-icon">{pairings.length} 台设备 · 点此切换 <ChevronRight size={13} /></span>
           </span>
@@ -848,7 +876,38 @@ export default function App() {
               <div key={`${item.hostId}-${item.pairedAt}`} className={`device-row${item.hostId === hostId ? " current" : ""}`}>
                 <span className="row-icon" aria-hidden="true"><Phone size={15} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="device-name">{item.hostName || `主机 ${shortId(item.hostId)}`}</div>
+                  {renamingHostId === item.hostId ? (
+                    <div className="device-rename">
+                      <input
+                        type="text"
+                        value={renameDraft}
+                        autoFocus
+                        maxLength={40}
+                        spellCheck={false}
+                        placeholder="留空 = 用回机器名"
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void commitRename(item.hostId);
+                          else if (e.key === "Escape") setRenamingHostId(null);
+                        }}
+                      />
+                      <button type="button" className="link-btn" aria-label="确认重命名" onClick={() => void commitRename(item.hostId)}>
+                        <Check size={15} />
+                      </button>
+                      <button type="button" className="link-btn" aria-label="取消重命名" onClick={() => setRenamingHostId(null)}>
+                        <Close size={15} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="device-name device-name-editable"
+                      title="点击重命名"
+                      onClick={() => startRename(item)}
+                    >
+                      {deviceLabel(item)}
+                    </button>
+                  )}
                   <div className="hint">
                     {relayHostOf(item.relayUrl)}
                     {item.lastSeenAt ? ` · 最近 ${relTime(item.lastSeenAt)}` : " · 未连接过"}

@@ -20,6 +20,8 @@ export interface PairingRecord {
   pairedAt: number;
   /** 配对载荷里带来的桌面机器名（旧记录可能没有）；多设备列表用它区分主机。 */
   hostName?: string;
+  /** 手机端本地重命名（显示优先于 hostName，只存本机、不影响桌面端）。空 = 用回机器名。 */
+  displayName?: string;
   /** 最近一次连接时间；多设备列表按它排序、自动重连优先选最近用过的。 */
   lastSeenAt?: number;
 }
