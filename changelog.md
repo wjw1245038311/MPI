@@ -38,6 +38,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run typecheck` + 全量 L1。真机：会话运行中从手机发消息 → 出现「待处理后续」横幅、不报错；等回合结束自动发出；点 ⚡ 可立即插入打断当前任务；点 ✎ 取回重编。mpi-diag.log 可见 `remote prompt busy → queued as followUp`（仅滞后窗口触发时）。
 
+6. **修复手机端「无法新建会话」与「图片看不了」**——两个独立根因：
+   - **新建会话报 `INTERNAL_ERROR: ENOENT … open '[path]'`**：pi 的 newSession 是懒创建——session JSONL 要等第一条消息才落盘。手机点「新建」后 PWA 立即 thread.subscribe，主机走磁盘优先路径（故意不冷启动桥）去 readThreadHistory(尚不存在的文件) → ENOENT。现在该路径对 ENOENT 按空历史处理（新会话本来就没有消息），diag log 记 `remote history not on disk yet → empty`
+   - **图片看不了**：主机下发的 image 块 data 是裸 base64（与 JSONL 一致，无 `data:` 前缀），PWA 直接 `<img src={裸base64}>` 被浏览器当相对 URL 加载失败。现在渲染时补 `data:<mimeType>;base64,` 前缀（已是完整 data URL 的原样使用）
+
+   验证方式：`npm run typecheck` + 全量 L1；复现脚本证实 pi new_session 成功后磁盘无文件、带全部扩展的忠实 spawn 均成功。真机：手机点「新建会话」→ 正常进入空会话可发消息；打开含图片的历史会话 → 图片正常显示。
+
 ## v0.8.0（2026-09-21）
 
 1. **压缩后可见：分隔条 + 「更早的对话」懒加载**——此前上下文压缩后，压缩前的消息在界面里直接消失（pi 按设计只把「摘要+保留区+压缩后」放进活跃上下文，UI 连摘要本身都静默丢弃），只能靠引用信封让 agent 找回原文。现在磁盘全量历史（.jsonl 本就完整保留）可以在 UI 里看到：

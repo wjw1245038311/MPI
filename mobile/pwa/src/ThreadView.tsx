@@ -332,7 +332,12 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
     return <ToolRow block={block} />;
   }
   if (block.type === "image") {
-    return block.data ? <img className="msg-image" src={block.data} alt={block.mimeType || "image"} /> : null;
+    // 主机下发的 data 是裸 base64（无 data: 前缀，与 JSONL 一致）——直接当 src
+    // 会被浏览器解析成相对 URL 而加载失败（真机「图片看不了」的根因）。这里补前缀；
+    // 已是完整 data URL 的原样使用。
+    if (!block.data) return null;
+    const src = block.data.startsWith("data:") ? block.data : `data:${block.mimeType || "image/jpeg"};base64,${block.data}`;
+    return <img className="msg-image" src={src} alt={block.mimeType || "image"} />;
   }
   return <MessageText text={block.text ?? ""} choiceCtx={choiceCtx} />;
 }

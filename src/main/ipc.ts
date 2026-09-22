@@ -140,7 +140,7 @@ import {
   previewWindowMoveEnd,
   previewWindowMoveStart,
 } from "./preview-window";
-import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readEarlierMessages, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, type ThreadSearchHit } from "./session-store";
+import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readEarlierMessages, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, type ThreadHistory, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
 import { emptyTrash, listTrash, moveToTrash, purgeFromTrash, restoreFromTrash } from "./trash-store";
 import {
@@ -1926,7 +1926,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       };
     }
     if (!ref.sessionFile) throw new RemoteProtocolError("NOT_FOUND", "Thread history is not available");
-    const history = await readThreadHistory(ref.sessionFile);
+    let history: ThreadHistory;
+    try {
+      history = await readThreadHistory(ref.sessionFile);
+    } catch (error) {
+      // pi 的 newSession 是懒创建：文件要等第一条消息才落盘。手机端「新建」刚建出的
+      // 会话 sessionFile 已定但文件尚不存在——按空历史处理，而不是报 ENOENT。
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+      appendDiagLog(`remote history not on disk yet → empty (${threadId.slice(0, 12)})`);
+      history = { cwd: null, sessionName: null, model: null, thinkingLevel: null, messages: [], branchMessages: [] };
+    }
     const messages = remoteMessages(history.messages, ref.cwd);
     return {
       id: threadId,
