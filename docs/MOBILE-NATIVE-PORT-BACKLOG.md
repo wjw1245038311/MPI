@@ -103,7 +103,7 @@ schema（`protocol/remote-v1.schema.json`）与 `test:remote` 同步。
 
 | 项 | 缺口 |
 | --- | --- |
-| 首屏示例提示词改成「点即发送」 | 当前是 3 个 QuickAction（刷新/切设备），不是真实示例发送 |
+| ~~首屏示例提示词改成「点即发送」~~ | **作废**（2026-09-24）：首屏会话列表与 3 个 QuickAction 已整体删除，改为「对话即主页」——打开 App 直接进会话、侧栏当会话列表（见 `MOBILE-NATIVE-HANDOFF.md`）。 |
 
 ---
 

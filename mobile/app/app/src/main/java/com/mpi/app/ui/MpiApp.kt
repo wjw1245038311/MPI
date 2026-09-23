@@ -83,6 +83,8 @@ fun MpiApp(container: AppContainer) {
     var diagnosticsOpen by remember { mutableStateOf(false) }
     var scanOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(false) }
+    // 从会话返回时自动展开会话列表（抽屉）——「对话即主页」下它就是会话列表
+    var drawerSignal by remember { mutableStateOf(0) }
 
     // M5：Android 13+ 需要运行时申请通知权限（拒绝也不影响其它功能）
     val notificationPermission = rememberLauncherForActivityResult(
@@ -140,7 +142,12 @@ fun MpiApp(container: AppContainer) {
                 if (state.openThreadId != null && openThread != null) {
                     // 会话页返回键：Sheet 开着 → 先关 Sheet；否则回首屏（§4.4 逐级回退）
                     BackHandler(enabled = true) {
-                        if (state.configSheetOpen) viewModel.closeConfigSheet() else viewModel.closeThread()
+                        if (state.configSheetOpen) {
+                            viewModel.closeConfigSheet()
+                        } else {
+                            viewModel.closeThread()
+                            drawerSignal += 1
+                        }
                     }
                     ThreadScreen(
                         view = openThread,
@@ -150,7 +157,10 @@ fun MpiApp(container: AppContainer) {
                         sending = state.sending,
                         responding = state.responding,
                         respondError = state.respondError,
-                        onBack = viewModel::closeThread,
+                        onBack = {
+                            viewModel.closeThread()
+                            drawerSignal += 1
+                        },
                         onResync = viewModel::resyncThread,
                         onDraftChange = viewModel::updateDraft,
                         onSend = viewModel::sendDraft,
@@ -214,6 +224,7 @@ fun MpiApp(container: AppContainer) {
                         viewModel = viewModel,
                         onOpenHosts = { hostsOpen = true },
                         onOpenSettings = { settingsOpen = true },
+                        openDrawerSignal = drawerSignal,
                     )
                 }
             }
@@ -296,9 +307,16 @@ private fun HomeWithDrawer(
     viewModel: AppViewModel,
     onOpenHosts: () -> Unit,
     onOpenSettings: () -> Unit,
+    /** 大于 0 时自动展开抽屉（从会话返回 = 回到「会话列表」，不用再点一次菜单）。 */
+    openDrawerSignal: Int = 0,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+
+    // 从会话返回时直接弹出会话列表（对话即主页：列表就是抽屉）
+    LaunchedEffect(openDrawerSignal) {
+        if (openDrawerSignal > 0) drawerState.open()
+    }
 
     // 抽屉开着时返回键先关抽屉（§4.4 返回键语义：逐级回退，不直接退出）
     BackHandler(enabled = drawerState.isOpen) {
@@ -346,12 +364,7 @@ private fun HomeWithDrawer(
             onRefresh = viewModel::refresh,
             onReconnect = viewModel::reconnect,
             onOpenHosts = onOpenHosts,
-            onAddHost = viewModel::startAddHost,
             onDismissProblems = viewModel::dismissProblems,
-            onOpenThread = { threadId ->
-                viewModel.openThread(threadId)
-                scope.launch { drawerState.close() }
-            },
         )
     }
 }

@@ -31,6 +31,7 @@ import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.PairingLink
 import com.mpi.app.protocol.PairingLinkException
 import com.mpi.app.protocol.RemotePermission
+import com.mpi.app.protocol.RemoteThreadState
 import com.mpi.app.protocol.createDeviceIdentity
 import com.mpi.app.protocol.randomSeedB64u
 import kotlinx.coroutines.CoroutineScope
@@ -138,6 +139,8 @@ class AppViewModel(
     private val updater: Updater,
     private val threadCache: ThreadCache,
     private val homeCache: HomeCache,
+    /** 通知深链待打开的会话；非空时不要抢自动打开。 */
+    private val pendingThreadOpen: StateFlow<String?>,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(AppUiState())
@@ -151,6 +154,11 @@ class AppViewModel(
     private var threadActions: ThreadActions? = null
     /** 按会话保存的草稿（内存；跨重启持久化留待需要时再说）。 */
     private val drafts = mutableMapOf<String, String>()
+    /**
+     * 「对话即主页」：每次 attach 只自动开一次会话；
+     * 用户自己开过（或通知深链开过）就不再掠。
+     */
+    private var autoOpenedThread = false
     private var unsubscribeProblems: (() -> Unit)? = null
     private val jobs = mutableListOf<Job>()
 
@@ -453,6 +461,8 @@ class AppViewModel(
     fun openThread(threadId: String) {
         val transport = session ?: return
         val requesterRef = requester ?: return
+        // 用户/自动已经进过会话 —— 不再自动打开别的
+        autoOpenedThread = true
         closeThread()
 
         val threadSessionLocal = ThreadSession(
@@ -911,8 +921,24 @@ class AppViewModel(
 
     // ---- 内部 ----
 
+    /**
+     * 「对话即主页」：连上并拿到列表后，自动进**运行中**优先、否则最近更新的那个会话。
+     * 没有首屏会话列表了，所以这一步不能省——否则连上后只看到一片引导。
+     * 只在每次 attach 后做一次；用户自己开/关过会话后不再打扰。
+     */
+    private fun maybeAutoOpenThread(snapshot: HostSnapshot) {
+        if (autoOpenedThread || _ui.value.openThreadId != null) return
+        if (pendingThreadOpen.value != null) return // 通知深链优先
+        if (session == null || requester == null) return
+        val threads = snapshot.allThreads
+        if (threads.isEmpty()) return
+        val target = threads.firstOrNull { it.state == RemoteThreadState.Running } ?: threads.first()
+        openThread(target.id)
+    }
+
     private fun attach(record: PairingRecord) {
         detachSession()
+        autoOpenedThread = false
         val deviceIdentity = identity ?: return
 
         val client = RelayClient(record.relayUrl)
@@ -960,7 +986,10 @@ class AppViewModel(
             }
         }
         jobs += scope.launch {
-            newRepository.snapshot.collect { snapshot -> _ui.update { it.copy(host = snapshot) } }
+            newRepository.snapshot.collect { snapshot ->
+                _ui.update { it.copy(host = snapshot) }
+                maybeAutoOpenThread(snapshot)
+            }
         }
 
         _ui.update { it.copy(activeHostId = record.hostId, problems = emptyList()) }
@@ -1015,6 +1044,7 @@ class AppViewModel(
                         container.updater,
                         container.threadCache,
                         container.homeCache,
+                        container.pendingThreadOpen,
                     ) as T
             }
     }
