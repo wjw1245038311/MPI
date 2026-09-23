@@ -140,6 +140,16 @@ npm test -- relay && npm run test:pwa-pairing
 **测试**：`ThreadCacheTest`（7 项）、`HomeCacheTest`（5 项）、`HostRepositoryTest` 缓存 2 项、
 `ThreadSessionReducerTest` 缓存 3 项（prime / 清标记 / 只对实时快照回调）。
 
+**模拟器烟测（雷电，2026-09-23，走 `mobile-dev-harness` 假主机）已过**
+
+| 步骤 | 结果 |
+| --- | --- |
+| 配对后开会话 → 等快照 | `run-as` 可见 `files/home-cache/*.json` 与 `files/thread-cache/<hosthash>/*.json` 均已写入 |
+| 停中继 → 杀进程重开 | 首页直接显示缓存列表，顶栏「离线 · 显示本地缓存（1 分钟前）」，不白屏 |
+| 离线进会话 | 缓存消息立刻上屏，顶部「离线：显示本地缓存（1 分钟前），正在获取最新内容…」+ 错误横幅带「重新同步」 |
+
+未覆盖：真机手感 / 真实桌面主机下的自更新与长会话体积（仍按 §7 清单真机复验）。
+
 **未做**：真增量（方案 B，协议加 `sinceMessageId`）；缓存只随 subscribe/resync 更新，
 用户读完流式内容又没重开时会落后一次同步（下次打开会刷新）。
 
