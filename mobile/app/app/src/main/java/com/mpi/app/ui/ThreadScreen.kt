@@ -126,11 +126,11 @@ fun ThreadScreen(
     onSteerPending: () -> Unit,
     onReEditPending: () -> Unit,
     onDismissSendError: () -> Unit,
-    sheet: ToolbarSheet?,
+    configSheetOpen: Boolean,
     configBusy: Boolean,
     configError: String?,
-    onOpenSheet: (ToolbarSheet) -> Unit,
-    onDismissSheet: () -> Unit,
+    onOpenConfigSheet: () -> Unit,
+    onDismissConfigSheet: () -> Unit,
     onDismissConfigError: () -> Unit,
     onSetPermission: (RemotePermission) -> Unit,
     onSetModel: (String, String) -> Unit,
@@ -161,12 +161,7 @@ fun ThreadScreen(
             compacting = view.compacting,
             onBack = onBack,
             onOpenSettings = onOpenSettings,
-            modeLabel = taskModeChipLabel(view),
-            onOpenMode = { onOpenSheet(ToolbarSheet.Mode) },
         )
-
-        // 会话级配置 chip 行（§4.4）——权限 / 模式 / 模型 / 上下文用量。
-        ThreadToolbar(view = view, busy = configBusy, onOpen = onOpenSheet)
 
         if (configError != null) {
             Row(
@@ -280,7 +275,7 @@ fun ThreadScreen(
             usageLabel = readContextUsage(view.contextUsage).let { ctx ->
                 if (ctx.hasValue) "${ctx.percent.roundToInt()}%" else "—"
             },
-            onOpenModelContext = { onOpenSheet(ToolbarSheet.Model) },
+            onOpenModelContext = onOpenConfigSheet,
             onSend = onSend,
             onAbort = onAbort,
             onSteerPending = onSteerPending,
@@ -288,13 +283,12 @@ fun ThreadScreen(
             onDismissSendError = onDismissSendError,
         )
 
-        if (sheet != null) {
-            ThreadToolbarSheet(
-                sheet = sheet,
+        if (configSheetOpen) {
+            ConfigSheet(
                 view = view,
                 busy = configBusy,
                 error = configError,
-                onDismiss = onDismissSheet,
+                onDismiss = onDismissConfigSheet,
                 onSetPermission = onSetPermission,
                 onSetModel = onSetModel,
                 onSetMode = onSetMode,
@@ -779,8 +773,6 @@ private fun ThreadTopBar(
     compacting: Boolean,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
-    modeLabel: String,
-    onOpenMode: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
@@ -820,20 +812,7 @@ private fun ThreadTopBar(
         if (running || compacting) {
             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
         }
-        // 模式放设置齿轮旁边（真机诉求）；权限仍在 chip 行
-        TextButton(
-            onClick = onOpenMode,
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-        ) {
-            Text(
-                text = modeLabel,
-                style = MaterialTheme.typography.labelSmall,
-                color = MpiTheme.colors.textDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 84.dp),
-            )
-        }
+        // 模式也已收进配置面板（顶栏只留设置齿轮）
         IconButton(onClick = onOpenSettings) {
             Icon(
                 IconSettings,

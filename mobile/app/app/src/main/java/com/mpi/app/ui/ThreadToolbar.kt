@@ -1,39 +1,33 @@
 package com.mpi.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.mpi.app.data.ThreadView
 import com.mpi.app.protocol.ContextUsage
 import com.mpi.app.protocol.RemotePermission
@@ -42,13 +36,11 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * 会话级配置（§4.4 chip 行）—— 对齐 PWA `ThreadView.tsx` 的 `.thread-toolbar` 与底部 Sheet。
+ * 会话配置面板：模型 / 用量 / 任务模式 / 权限**全部在这里**。
  *
- * 数据早就在 [ThreadView] 里（模型 / 模式 / 权限 / 上下文用量），写操作也已在
- * `ThreadActions` 就绪；这里只补 UI。选择项不占消息区高度，一律走底部 Sheet。
+ * 入口只有一个——输入框按钮行里那个圆钮（显示用量百分比）。所以这个面板必须**短**：
+ * 每项都是一行「标签 + 横向滚动的选项 chip」，不再纵向铺成长列表。
  */
-enum class ToolbarSheet { Permission, Mode, Model }
-
 // ---- 上下文用量口径（纯函数，与桌面端 ring / PWA `lib/context-usage.ts` 一致）----
 
 /** 用量档位：决定颜色与「该不该压缩」的暗示。阈值 60 / 75 / 90。 */
@@ -112,93 +104,11 @@ fun modelChipLabel(view: ThreadView): String {
     return if (short.length > 18) short.take(17) + "…" else short
 }
 
-// ---- chip 行 ----
-
-private enum class ChipTone { Plain, Accent, Warn, Mid, Hi }
-
-@Composable
-fun ThreadToolbar(
-    view: ThreadView,
-    busy: Boolean,
-    onOpen: (ToolbarSheet) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val summary = view.summary ?: return
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(start = 12.dp, end = 12.dp, bottom = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ConfigChip(
-            icon = IconLock,
-            label = if (summary.permission == RemotePermission.Sandbox) "沙盒" else "完整权限",
-            tone = if (summary.permission == RemotePermission.Sandbox) ChipTone.Accent else ChipTone.Plain,
-            enabled = !busy,
-            onClick = { onOpen(ToolbarSheet.Permission) },
-        )
-    }
-}
-
-@Composable
-private fun ConfigChip(
-    icon: ImageVector,
-    label: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    tone: ChipTone = ChipTone.Plain,
-) {
-    val colors = MpiTheme.colors
-    val fg = when (tone) {
-        ChipTone.Plain -> colors.textDim
-        ChipTone.Accent -> MaterialTheme.colorScheme.primary
-        ChipTone.Warn -> CtxWarnFg
-        ChipTone.Mid -> CtxMidFg
-        ChipTone.Hi -> CtxHiFg
-    }
-    val bg = when (tone) {
-        ChipTone.Accent -> colors.accentSoft
-        ChipTone.Warn -> CtxWarnFg.copy(alpha = 0.12f)
-        ChipTone.Mid -> CtxMidFg.copy(alpha = 0.14f)
-        ChipTone.Hi -> CtxHiFg.copy(alpha = 0.14f)
-        ChipTone.Plain -> colors.control
-    }
-
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(bg)
-            .border(1.dp, colors.border, RoundedCornerShape(999.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(13.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = fg,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-// ---- 底部 Sheet ----
-
-// 用量档位配色沿用 PWA `.cfg-chip.ctx.*` 的硬编码值（PWA 侧也不分深浅两套）。
-private val CtxWarnFg = Color(0xFF8A6D1F)
-private val CtxMidFg = Color(0xFFA5531B)
-private val CtxHiFg = Color(0xFFB3261E)
+// ---- 面板 ----
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ThreadToolbarSheet(
-    sheet: ToolbarSheet,
+fun ConfigSheet(
     view: ThreadView,
     busy: Boolean,
     error: String?,
@@ -207,10 +117,12 @@ fun ThreadToolbarSheet(
     onSetModel: (String, String) -> Unit,
     onSetMode: (String) -> Unit,
     onCompact: () -> Unit,
-    /** 重新拉主机快照（刷新当前模型与可选列表）。 */
     onRefresh: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val ctx = readContextUsage(view.contextUsage)
+    val permission = view.summary?.permission ?: RemotePermission.Sandbox
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -219,185 +131,165 @@ fun ThreadToolbarSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(start = 18.dp, end = 18.dp, bottom = 30.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(horizontal = 18.dp)
+                .padding(bottom = 26.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (error != null) {
                 Text(
                     text = error,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.fillMaxWidth(),
                 )
             }
-            when (sheet) {
-                ToolbarSheet.Permission -> PermissionSheet(view, busy, onSetPermission)
-                ToolbarSheet.Mode -> ModeSheet(view, busy, onSetMode)
-                ToolbarSheet.Model -> ModelSheet(view, busy, onSetModel, onCompact, onRefresh)
-            }
-            Spacer(Modifier.height(4.dp))
-        }
-    }
-}
 
-@Composable
-private fun SheetTitle(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        modifier = Modifier.padding(bottom = 2.dp),
-    )
-}
-
-@Composable
-private fun SheetNote(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MpiTheme.colors.textFaint,
-        modifier = Modifier.padding(bottom = 4.dp),
-    )
-}
-
-@Composable
-private fun SheetItem(
-    label: String,
-    note: String? = null,
-    tag: String? = null,
-    active: Boolean = false,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (active) MpiTheme.colors.accentSoft else Color.Transparent)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // 用量：一行搞定（百分比 + 进度 + 压缩入口）
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MpiTheme.colors.textFaint,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
+                    text = "上下文",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MpiTheme.colors.textFaint,
+                    modifier = Modifier.width(78.dp),
                 )
-                if (tag != null) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(MpiTheme.colors.control),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction = (maxOf(2.0, ctx.percent) / 100.0).toFloat().coerceIn(0f, 1f))
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(
+                                when (ctx.band) {
+                                    ContextBand.Low -> MpiTheme.colors.ok
+                                    ContextBand.Warn -> Color(0xFFD6A419)
+                                    ContextBand.Mid -> Color(0xFFE07B39)
+                                    ContextBand.Hi -> Color(0xFFD93025)
+                                },
+                            ),
+                    )
+                }
+                Text(
+                    text = if (ctx.hasValue) "${ctx.percent.roundToInt()}%" else "—",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MpiTheme.colors.textDim,
+                    modifier = Modifier.padding(start = 8.dp).width(34.dp),
+                )
+                TextButton(
+                    onClick = onCompact,
+                    enabled = !busy && !view.compacting && !view.running,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) {
+                    Text(if (view.compacting) "压缩中…" else "压缩", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+
+            // 权限
+            ConfigRow("权限") {
+                OptionChip("沙盒", selected = permission == RemotePermission.Sandbox, enabled = !busy) {
+                    onSetPermission(RemotePermission.Sandbox)
+                }
+                OptionChip("完整权限", selected = permission == RemotePermission.Full, enabled = !busy) {
+                    onSetPermission(RemotePermission.Full)
+                }
+            }
+
+            // 任务模式
+            ConfigRow("模式") {
+                OptionChip("基线", selected = view.taskMode.isNullOrEmpty(), enabled = !busy) { onSetMode("") }
+                view.availableModes.forEach { option ->
+                    OptionChip(
+                        label = option.name,
+                        selected = view.taskMode == option.id,
+                        enabled = !busy,
+                    ) { onSetMode(option.id) }
+                }
+            }
+
+            // 模型
+            ConfigRow("模型") {
+                if (view.availableModels.isEmpty()) {
                     Text(
-                        text = tag,
+                        text = "主机未上报可选模型",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MpiTheme.colors.textFaint,
+                    )
+                } else {
+                    view.availableModels.forEach { option ->
+                        OptionChip(
+                            label = option.name?.takeIf { it.isNotEmpty() } ?: option.id,
+                            selected = view.model?.provider == option.provider && view.model?.id == option.id,
+                            enabled = !busy,
+                        ) { onSetModel(option.provider, option.id) }
+                    }
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = onRefresh,
+                    enabled = !busy,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                ) {
+                    Text("与桌面端同步（刷新）", style = MaterialTheme.typography.labelSmall)
+                }
+                Spacer(Modifier.width(4.dp))
+                if (ctx.isEstimate) {
+                    Text(
+                        text = "用量为压缩后估算",
                         style = MaterialTheme.typography.labelSmall,
                         color = MpiTheme.colors.textFaint,
                     )
                 }
             }
-            if (note != null) {
-                Text(
-                    text = note,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MpiTheme.colors.textFaint,
-                )
-            }
-        }
-        if (active) {
-            Icon(
-                IconCheck,
-                contentDescription = "已选中",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp),
-            )
         }
     }
 }
 
+/** 一行配置：固定宽标签 + 可横向滚动的选项 chip。 */
 @Composable
-private fun PermissionSheet(view: ThreadView, busy: Boolean, onSetPermission: (RemotePermission) -> Unit) {
-    val sandbox = view.summary?.permission != RemotePermission.Full
-    SheetTitle("权限级别")
-    SheetNote("沙盒：写文件 / 执行命令前需要你批准；完整：不再逐条询问。")
-    SheetItem("沙盒（逐条批准）", active = sandbox, enabled = !busy) { onSetPermission(RemotePermission.Sandbox) }
-    SheetItem("完整权限（不询问）", active = !sandbox, enabled = !busy) { onSetPermission(RemotePermission.Full) }
-}
-
-@Composable
-private fun ModeSheet(view: ThreadView, busy: Boolean, onSetMode: (String) -> Unit) {
-    SheetTitle("任务模式")
-    SheetNote("模式同时决定权限与思考等级，并可能注入行为指令（如迭代 / 调研）。")
-    SheetItem(
-        label = "基线",
-        tag = "不注入",
-        active = view.taskMode.isNullOrEmpty(),
-        enabled = !busy,
-    ) { onSetMode("") }
-    if (view.availableModes.isEmpty()) {
-        SheetNote("主机未上报可选模式列表。")
-    } else {
-        view.availableModes.forEach { option ->
-            SheetItem(
-                label = option.name,
-                note = option.summary,
-                tag = if (option.enforceReadonly) "只读" else null,
-                active = view.taskMode == option.id,
-                enabled = !busy,
-            ) { onSetMode(option.id) }
-        }
+private fun ConfigRow(label: String, content: @Composable RowScope.() -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MpiTheme.colors.textFaint,
+            modifier = Modifier.width(78.dp),
+        )
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = content,
+        )
     }
 }
 
 @Composable
-private fun ModelSheet(
-    view: ThreadView,
-    busy: Boolean,
-    onSetModel: (String, String) -> Unit,
-    onCompact: () -> Unit,
-    onRefresh: () -> Unit,
+private fun OptionChip(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
 ) {
-    val ctx = readContextUsage(view.contextUsage)
-    SheetTitle("模型与用量")
-    SheetNote(
-        if (ctx.hasValue) {
-            "当前用量 ${ctx.percent.roundToInt()}%" + (if (ctx.isEstimate) "（压缩后估算）" else "")
-        } else {
-            "主机还没上报这个会话的用量"
-        },
-    )
-    // 压缩入口跟模型放一起：这两个都是“本会话怎么跑”的开关
-    SheetItem(
-        label = if (view.compacting) "压缩中…" else "压缩上下文",
-        note = when {
-            view.running -> "回合进行中"
-            view.compacting -> "请稍候"
-            else -> "≥60% 建议压缩"
-        },
-        enabled = !busy && !view.compacting && !view.running,
-    ) { onCompact() }
-
-    // 桌面端改了模型/模型列表时，手机端不一定立刻收到——给一个手动同步入口
-    SheetItem(
-        label = "与桌面端同步（刷新）",
-        note = "重新读取当前模型与可选列表",
-        enabled = !busy,
-    ) { onRefresh() }
-
-    if (view.availableModels.isEmpty()) {
-        SheetNote("主机未上报可选模型列表。")
-        return
-    }
-    view.availableModels.forEach { option ->
-        val active = view.model?.provider == option.provider && view.model?.id == option.id
-        SheetItem(
-            label = option.name?.takeIf { it.isNotEmpty() } ?: option.id,
-            tag = if (option.reasoning) "思考" else null,
-            active = active,
-            enabled = !busy,
-        ) { onSetModel(option.provider, option.id) }
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (selected) MpiTheme.colors.accentSoft else MpiTheme.colors.control)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) MaterialTheme.colorScheme.primary else MpiTheme.colors.textDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
-
-

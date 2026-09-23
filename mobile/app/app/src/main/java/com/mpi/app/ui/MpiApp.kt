@@ -139,7 +139,7 @@ fun MpiApp(container: AppContainer) {
                 if (state.openThreadId != null && openThread != null) {
                     // 会话页返回键：Sheet 开着 → 先关 Sheet；否则回首屏（§4.4 逐级回退）
                     BackHandler(enabled = true) {
-                        if (state.toolbarSheet != null) viewModel.closeToolbarSheet() else viewModel.closeThread()
+                        if (state.configSheetOpen) viewModel.closeConfigSheet() else viewModel.closeThread()
                     }
                     ThreadScreen(
                         view = openThread,
@@ -190,11 +190,11 @@ fun MpiApp(container: AppContainer) {
                         onSteerPending = viewModel::steerPendingFollowUp,
                         onReEditPending = viewModel::reEditPendingFollowUp,
                         onDismissSendError = viewModel::dismissSendError,
-                        sheet = state.toolbarSheet,
+                        configSheetOpen = state.configSheetOpen,
                         configBusy = state.configBusy,
                         configError = state.configError,
-                        onOpenSheet = viewModel::openToolbarSheet,
-                        onDismissSheet = viewModel::closeToolbarSheet,
+                        onOpenConfigSheet = viewModel::openConfigSheet,
+                        onDismissConfigSheet = viewModel::closeConfigSheet,
                         onDismissConfigError = viewModel::dismissConfigError,
                         onSetPermission = viewModel::setPermission,
                         onSetModel = viewModel::setModel,

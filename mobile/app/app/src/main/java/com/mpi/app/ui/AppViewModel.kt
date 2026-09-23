@@ -73,8 +73,8 @@ data class AppUiState(
     val responding: Boolean = false,
     /** 审批回应失败的原因（卡片不消失，显示在卡片内）。 */
     val respondError: String? = null,
-    /** 打开的会话级配置底部 Sheet（null = 关闭）。 */
-    val toolbarSheet: ToolbarSheet? = null,
+    /** 会话配置面板是否打开（模型/用量/模式/权限都在里面）。 */
+    val configSheetOpen: Boolean = false,
     /** 会话配置写操作进行中（模型切换可能耗时）。 */
     val configBusy: Boolean = false,
     /** 会话配置写操作失败原因（Sheet 内与 chip 行下方都要显示）。 */
@@ -502,7 +502,7 @@ class AppViewModel(
         threadSession?.detach()
         threadSession = null
         threadActions = null
-        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, toolbarSheet = null, configBusy = false, configError = null, pendingFollowUp = null, sendError = null, attachments = emptyList(), attachmentBusy = false, attachmentError = null, recording = false, transcribing = false, voiceError = null) }
+        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, configSheetOpen = false, configBusy = false, configError = null, pendingFollowUp = null, sendError = null, attachments = emptyList(), attachmentBusy = false, attachmentError = null, recording = false, transcribing = false, voiceError = null) }
     }
 
     /** 手动重新同步（错误横幅上的按钮）。 */
@@ -731,10 +731,9 @@ class AppViewModel(
 
     // ---- 会话级配置（§4.4 chip 行）----
 
-    fun openToolbarSheet(sheet: ToolbarSheet) =
-        _ui.update { it.copy(toolbarSheet = sheet, configError = null) }
+    fun openConfigSheet() = _ui.update { it.copy(configSheetOpen = true, configError = null) }
 
-    fun closeToolbarSheet() = _ui.update { it.copy(toolbarSheet = null, configError = null) }
+    fun closeConfigSheet() = _ui.update { it.copy(configSheetOpen = false, configError = null) }
 
     fun dismissConfigError() = _ui.update { it.copy(configError = null) }
 
@@ -761,7 +760,7 @@ class AppViewModel(
         scope.launch {
             try {
                 block(actions)
-                _ui.update { it.copy(configBusy = false, configError = null, toolbarSheet = null) }
+                _ui.update { it.copy(configBusy = false, configError = null, configSheetOpen = false) }
             } catch (error: Exception) {
                 _ui.update { it.copy(configBusy = false, configError = error.message ?: "设置失败") }
             }
