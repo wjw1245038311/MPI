@@ -11,7 +11,6 @@ import com.mpi.app.protocol.createDeviceIdentity
 import com.mpi.app.protocol.decryptFrame
 import com.mpi.app.protocol.deriveAesKey
 import com.mpi.app.protocol.encryptFrame
-import java.util.Base64
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -23,8 +22,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
-import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
-import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -154,19 +151,4 @@ class PairingTest : RelayTestBase() {
         },
         to = deviceId,
     )
-}
-
-// ---- 本测试专用的验签工具 ----
-
-private fun publicKeyFromSpkiPem(pem: String): ByteArray {
-    val base64 = pem.lineSequence().filterNot { it.startsWith("-----") }.joinToString("")
-    val der = Base64.getDecoder().decode(base64)
-    return der.copyOfRange(der.size - 32, der.size)
-}
-
-private fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean {
-    val signer = Ed25519Signer()
-    signer.init(false, Ed25519PublicKeyParameters(publicKey, 0))
-    signer.update(message, 0, message.size)
-    return signer.verifySignature(signature)
 }

@@ -3,6 +3,8 @@ package com.mpi.app.protocol
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 协议 v1 envelope —— 与 mobile/shared/protocol.ts 的 `makeEnvelope` / `parseEnvelope`
@@ -28,7 +30,9 @@ data class RemoteErrorPayload(
 
 @Serializable
 data class RemoteEnvelope(
-    val v: Int = REMOTE_PROTOCOL_VERSION,
+    /** ⚠️ **必填、无默认值**：若给默认值，`encodeDefaults=false` 会把它省略，
+     *  而主机端 parseEnvelope 会因 `v !== 1` 直接报 UNSUPPORTED_VERSION。 */
+    val v: Int,
     val type: String,
     val sessionId: String,
     val sentAt: Long,
@@ -81,17 +85,25 @@ object Envelope {
         if (raw.length > MAX_ENVELOPE_BYTES) {
             throw RemoteProtocolException("PAYLOAD_TOO_LARGE", "Remote message is too large")
         }
+        val element = try {
+            json.parseToJsonElement(raw)
+        } catch (e: Exception) {
+            throw RemoteProtocolException("INVALID_JSON", "Remote message is not valid JSON")
+        }
+        val obj = element as? JsonObject
+            ?: throw RemoteProtocolException("INVALID_REQUEST", "Remote message must be an object")
+
+        // 与 TS 的 parseEnvelope 对齐：**先看版本号**，缺失或不等于 1 都归为版本不符
+        // （TS 里 `value.v !== 1` 对 undefined 同样成立）。
+        val version = obj["v"]?.jsonPrimitive?.content?.toIntOrNull()
+        if (version != REMOTE_PROTOCOL_VERSION) {
+            throw RemoteProtocolException("UNSUPPORTED_VERSION", "Unsupported remote protocol version")
+        }
+
         val envelope = try {
             json.decodeFromString(RemoteEnvelope.serializer(), raw)
         } catch (e: Exception) {
-            // 区分「不是 JSON」与「JSON 但不是合法 envelope」——两者错误码不同
-            if (raw.trimStart().startsWith("{")) {
-                throw RemoteProtocolException("INVALID_REQUEST", "Remote message must be an object: ${e.message}")
-            }
-            throw RemoteProtocolException("INVALID_JSON", "Remote message is not valid JSON")
-        }
-        if (envelope.v != REMOTE_PROTOCOL_VERSION) {
-            throw RemoteProtocolException("UNSUPPORTED_VERSION", "Unsupported remote protocol version")
+            throw RemoteProtocolException("INVALID_REQUEST", "Remote message is malformed: ${e.message}")
         }
         if (envelope.type.isEmpty() || envelope.type.length > 80) {
             throw RemoteProtocolException("INVALID_REQUEST", "Remote message type is invalid")

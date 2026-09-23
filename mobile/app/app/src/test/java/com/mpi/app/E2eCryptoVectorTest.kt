@@ -2,6 +2,7 @@ package com.mpi.app
 
 import com.mpi.app.protocol.Base64Url
 import com.mpi.app.protocol.E2EFrame
+import com.mpi.app.protocol.Envelope
 import com.mpi.app.protocol.X25519
 import com.mpi.app.protocol.createDeviceIdentity
 import com.mpi.app.protocol.deriveAesKey
@@ -9,6 +10,11 @@ import com.mpi.app.protocol.deriveX25519Priv
 import com.mpi.app.protocol.decryptFrame
 import com.mpi.app.protocol.e2eInfoString
 import com.mpi.app.protocol.encryptFrame
+import com.mpi.app.protocol.aesGcmEncrypt
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -99,7 +105,7 @@ class E2eCryptoVectorTest {
     @Test
     fun `decrypts frame produced by the TypeScript implementation`() {
         val key = keyForPinnedVector()
-        val plain = decryptFrame(key, E2EFrame(n = pinnedNonce, c = pinnedCipher))
+        val plain = decryptFrame(key, E2EFrame(e = 1, n = pinnedNonce, c = pinnedCipher))
         assertEquals(plainJson, plain)
     }
 
@@ -130,7 +136,7 @@ class E2eCryptoVectorTest {
         val bytes = Base64Url.decode(pinnedCipher)
         bytes[0] = (bytes[0].toInt() xor 0x01).toByte()
         try {
-            decryptFrame(key, E2EFrame(n = pinnedNonce, c = Base64Url.encode(bytes)))
+            decryptFrame(key, E2EFrame(e = 1, n = pinnedNonce, c = Base64Url.encode(bytes)))
             fail("tampered ciphertext must be rejected")
         } catch (e: Exception) {
             assertTrue(e !is AssertionError)
@@ -143,7 +149,7 @@ class E2eCryptoVectorTest {
         val nonce = Base64Url.decode(pinnedNonce)
         nonce[3] = (nonce[3].toInt() xor 0x80).toByte()
         try {
-            decryptFrame(key, E2EFrame(n = Base64Url.encode(nonce), c = pinnedCipher))
+            decryptFrame(key, E2EFrame(e = 1, n = Base64Url.encode(nonce), c = pinnedCipher))
             fail("wrong nonce must be rejected")
         } catch (e: Exception) {
             assertTrue(e !is AssertionError)
@@ -154,10 +160,71 @@ class E2eCryptoVectorTest {
     fun `invalid nonce length is rejected`() {
         val key = keyForPinnedVector()
         try {
-            decryptFrame(key, E2EFrame(n = Base64Url.encode(ByteArray(11)), c = pinnedCipher))
+            decryptFrame(key, E2EFrame(e = 1, n = Base64Url.encode(ByteArray(11)), c = pinnedCipher))
             fail("nonce must be exactly 12 bytes")
         } catch (e: IllegalArgumentException) {
             assertTrue(e.message!!.contains("nonce"))
+        }
+    }
+
+    // ---- 7. 线格式必须带上版本字段（回归；曾因 encodeDefaults=false 把 e/v 省略）----
+
+    @Test
+    fun `wire format always carries the version fields`() {
+        val key = keyForPinnedVector()
+
+        // 加密帧：PWA 靠 `frame.e === 1` 判定「这是加密帧」，缺了就会被当明文处理
+        val frameJson = Envelope.json.encodeToString(E2EFrame.serializer(), encryptFrame(key, plainJson))
+        assertTrue("加密帧必须带 e=1，实际：$frameJson", frameJson.contains("\"e\":1"))
+        assertTrue(frameJson.contains("\"n\"") && frameJson.contains("\"c\""))
+
+        // 协议 envelope：主机 parseEnvelope 会校验 v === 1
+        val envelopeJson = Envelope.encode(Envelope.make("projects.list", "sess-wire"))
+        assertTrue("envelope 必须带 v=1，实际：$envelopeJson", envelopeJson.contains("\"v\":1"))
+        assertTrue(envelopeJson.contains("\"type\":\"projects.list\""))
+
+        // 可选字段为 null 时不应出现在线格式里（主机把 null 当作非法类型）
+        assertTrue("null 字段不应被序列化：$envelopeJson", !envelopeJson.contains("null"))
+        assertTrue(!envelopeJson.contains("requestId"))
+    }
+
+    @Test
+    fun `envelope round trips through the wire format`() {
+        val original = Envelope.make(
+            type = "thread.prompt",
+            sessionId = "sess-1",
+            payload = buildJsonObject { put("text", "hi") },
+            requestId = "req-9",
+        )
+        val parsed = Envelope.parse(Envelope.encode(original))
+        assertEquals(original.type, parsed.type)
+        assertEquals(original.sessionId, parsed.sessionId)
+        assertEquals(original.requestId, parsed.requestId)
+        assertEquals(original.v, parsed.v)
+        assertEquals("hi", parsed.payload?.jsonObject?.get("text")?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `malformed envelopes are rejected with the same codes as the TypeScript side`() {
+        // 缺 v → UNSUPPORTED_VERSION（TS 侧 v 为 undefined 时同样抛这个）
+        try {
+            Envelope.parse("""{"type":"x","sessionId":"s","sentAt":1}""")
+            fail("缺 v 应被拒绝")
+        } catch (e: com.mpi.app.protocol.RemoteProtocolException) {
+            assertEquals("UNSUPPORTED_VERSION", e.code)
+        }
+        try {
+            Envelope.parse("not json")
+            fail("非 JSON 应被拒绝")
+        } catch (e: com.mpi.app.protocol.RemoteProtocolException) {
+            assertEquals("INVALID_JSON", e.code)
+        }
+        // v 不对
+        try {
+            Envelope.parse("""{"v":2,"type":"x","sessionId":"s","sentAt":1}""")
+            fail("协议版本不符应被拒绝")
+        } catch (e: com.mpi.app.protocol.RemoteProtocolException) {
+            assertEquals("UNSUPPORTED_VERSION", e.code)
         }
     }
 

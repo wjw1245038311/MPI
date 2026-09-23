@@ -112,7 +112,11 @@ abstract class RelayTestBase {
         val lines = LinkedBlockingQueue<String>()
         Thread {
             try {
-                process.inputStream.bufferedReader().forEachLine { lines.put(it) }
+                process.inputStream.bufferedReader().forEachLine {
+                    lines.put(it)
+                    // 中继日志直接打到测试输出：排查「帧被丢在哪一跳」时是唯一线索
+                    println("[relay] $it")
+                }
             } catch (_: Exception) {
                 // 进程退出时读取会抛，忽略
             }

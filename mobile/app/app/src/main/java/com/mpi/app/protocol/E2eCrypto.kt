@@ -46,7 +46,9 @@ fun aesGcmDecrypt(key: ByteArray, ciphertextWithTag: ByteArray, nonce: ByteArray
 
 @Serializable
 data class E2EFrame(
-    val e: Int = E2E_FRAME_VERSION,
+    /** ⚠️ **必填、无默认值**：否则 `e` 会被序列化省略，
+     *  对端（PWA 的 `frame.e === 1`）会把它当明文控制帧，静默走错分支。 */
+    val e: Int,
     /** 12 字节 nonce，base64url。 */
     val n: String,
     /** ciphertext ‖ 16B tag，base64url。 */
@@ -56,7 +58,7 @@ data class E2EFrame(
 /** 加密一段 JSON 明文为加密帧。 */
 fun encryptFrame(key: ByteArray, plaintextJson: String, nonce: ByteArray = randomNonce()): E2EFrame {
     val ciphertext = aesGcmEncrypt(key, plaintextJson.toByteArray(Charsets.UTF_8), nonce)
-    return E2EFrame(n = Base64Url.encode(nonce), c = Base64Url.encode(ciphertext))
+    return E2EFrame(e = E2E_FRAME_VERSION, n = Base64Url.encode(nonce), c = Base64Url.encode(ciphertext))
 }
 
 /** 解密加密帧为明文 JSON；篡改时抛异常。 */
