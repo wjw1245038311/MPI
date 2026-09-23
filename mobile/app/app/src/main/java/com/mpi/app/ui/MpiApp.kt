@@ -85,8 +85,14 @@ fun MpiApp(container: AppContainer) {
                         view = openThread,
                         projectName = state.host.projects
                             .firstOrNull { it.id == openThread.summary?.projectId }?.name,
+                        draft = state.draft,
+                        sending = state.sending,
                         onBack = viewModel::closeThread,
                         onResync = viewModel::resyncThread,
+                        onDraftChange = viewModel::updateDraft,
+                        onSend = viewModel::sendDraft,
+                        onAbort = viewModel::abortThread,
+                        onRetry = viewModel::retrySend,
                     )
                 } else {
                     HomeWithDrawer(

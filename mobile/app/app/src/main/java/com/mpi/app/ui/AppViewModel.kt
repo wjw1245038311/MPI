@@ -14,6 +14,8 @@ import com.mpi.app.data.PairingStage
 import com.mpi.app.data.RelayClient
 import com.mpi.app.data.Requester
 import com.mpi.app.data.SessionState
+import com.mpi.app.data.SendMode
+import com.mpi.app.data.ThreadActions
 import com.mpi.app.data.ThreadSession
 import com.mpi.app.data.ThreadView
 import com.mpi.app.protocol.DeviceIdentity
@@ -51,6 +53,10 @@ data class AppUiState(
     /** 当前打开的会话（null = 在首屏）。 */
     val openThreadId: String? = null,
     val thread: ThreadView? = null,
+    /** 输入框草稿（按会话保存）。 */
+    val draft: String = "",
+    /** 正在发送（避免重复点发送）。 */
+    val sending: Boolean = false,
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -79,6 +85,9 @@ class AppViewModel(
     private var requester: Requester? = null
     private var repository: HostRepository? = null
     private var threadSession: ThreadSession? = null
+    private var threadActions: ThreadActions? = null
+    /** 按会话保存的草稿（内存；跨重启持久化留待需要时再说）。 */
+    private val drafts = mutableMapOf<String, String>()
     private var unsubscribeProblems: (() -> Unit)? = null
     private val jobs = mutableListOf<Job>()
 
@@ -217,7 +226,17 @@ class AppViewModel(
             scope = scope,
         )
         threadSession = threadSessionLocal
-        _ui.update { it.copy(openThreadId = threadId, thread = ThreadView(threadId)) }
+        threadActions = ThreadActions(
+            threadId = threadId,
+            request = { type, payload, tid, timeoutMs -> requesterRef.request(type, payload, threadId = tid, timeoutMs = timeoutMs) },
+        )
+        _ui.update {
+            it.copy(
+                openThreadId = threadId,
+                thread = ThreadView(threadId),
+                draft = drafts[threadId].orEmpty(),
+            )
+        }
 
         jobs += scope.launch {
             threadSessionLocal.view.collect { view -> _ui.update { it.copy(thread = view) } }
@@ -232,14 +251,65 @@ class AppViewModel(
     }
 
     fun closeThread() {
+        _ui.value.openThreadId?.let { drafts[it] = _ui.value.draft }
         threadSession?.detach()
         threadSession = null
-        _ui.update { it.copy(openThreadId = null, thread = null) }
+        threadActions = null
+        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false) }
     }
 
     /** 手动重新同步（错误横幅上的按钮）。 */
     fun resyncThread() {
         scope.launch { runCatching { threadSession?.resync() } }
+    }
+
+    // ---- 发送控制 ----
+
+    fun updateDraft(text: String) {
+        _ui.value.openThreadId?.let { drafts[it] = text }
+        _ui.update { it.copy(draft = text) }
+    }
+
+    /** 发送草稿：空闲走 prompt，运行中走 steer（即「追加指令」）。 */
+    fun sendDraft() {
+        val text = _ui.value.draft.trim()
+        if (text.isEmpty() || _ui.value.sending) return
+        val mode = if (_ui.value.thread?.running == true) SendMode.Steer else SendMode.Prompt
+        send(text, mode)
+    }
+
+    /** 重试一条发送失败的消息（保留原位，不重复上屏）。 */
+    fun retrySend(localId: String) {
+        val text = threadSession?.prepareRetry(localId) ?: return
+        val mode = if (_ui.value.thread?.running == true) SendMode.Steer else SendMode.Prompt
+        send(text, mode)
+    }
+
+    fun abortThread() {
+        val actions = threadActions ?: return
+        scope.launch {
+            runCatching { actions.abort() }.onFailure { error ->
+                _ui.update { it.copy(problems = (it.problems + (error.message ?: "停止失败")).takeLast(MAX_PROBLEMS)) }
+            }
+        }
+    }
+
+    private fun send(text: String, mode: SendMode) {
+        val session = threadSession ?: return
+        val actions = threadActions ?: return
+        // 先乐观上屏（§1.1：点击到视觉反馈 < 100ms），失败再标红留在原位
+        val localId = session.echoUserMessage(text)
+        _ui.value.openThreadId?.let { drafts[it] = "" }
+        _ui.update { it.copy(draft = "", sending = true) }
+        scope.launch {
+            try {
+                actions.send(text, mode)
+                _ui.update { it.copy(sending = false) }
+            } catch (error: Exception) {
+                session.markSendFailed(localId, error.message ?: "发送失败")
+                _ui.update { it.copy(sending = false) }
+            }
+        }
     }
 
     /** 用户显式要求重置本地数据（存储损坏时给出这条路径）。 */
@@ -317,8 +387,10 @@ class AppViewModel(
     }
 
     private fun detachSession() {
+        _ui.value.openThreadId?.let { drafts[it] = _ui.value.draft }
         threadSession?.detach()
         threadSession = null
+        threadActions = null
         _ui.update { it.copy(openThreadId = null, thread = null) }
         unsubscribeProblems?.invoke()
         unsubscribeProblems = null

@@ -64,7 +64,8 @@ class Requester(
      *
      * @param threadId 会话 id；主机从 **envelope** 读它（不是 payload），
      *   会话内的请求必须带上。
-     * @param timeoutMs 覆盖默认超时（例如多 MB 的会话快照要放宽）。
+     * @param timeoutMs 覆盖默认超时（null = 用默认）。例如压缩要读全整个会话再调一次
+     *   LLM，秒级到十几秒都可能，得放宽得多。
      * @return 回应 envelope 的 payload（可能为 null）。
      */
     suspend fun request(
@@ -72,7 +73,7 @@ class Requester(
         payload: JsonElement? = null,
         label: String = type,
         threadId: String? = null,
-        timeoutMs: Long = defaultTimeoutMs,
+        timeoutMs: Long? = null,
     ): JsonElement? {
         val requestId = "req-${++counter}-${randomSuffix()}"
         val envelope = Envelope.make(
@@ -100,12 +101,12 @@ class Requester(
             }
 
             val response = try {
-                withTimeout(timeoutMs) { inbox.receive() }
+                withTimeout(timeoutMs ?: defaultTimeoutMs) { inbox.receive() }
             } catch (e: TimeoutCancellationException) {
                 // 连接还开着却没回应 → 主机侧可能静默掉线，交给上层决定是否重握手
                 if (transport.isOpen()) onStaleConnection?.invoke()
                 throw RequestException(
-                    message = "等待 $label 回应超时（${timeoutMs}ms）",
+                    message = "等待 $label 回应超时（${timeoutMs ?: defaultTimeoutMs}ms）",
                     kind = RequestException.Kind.Timeout,
                     cause = e,
                 )

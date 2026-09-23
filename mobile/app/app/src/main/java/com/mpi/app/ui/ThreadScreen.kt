@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -19,10 +20,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -59,8 +63,14 @@ import kotlinx.coroutines.launch
 fun ThreadScreen(
     view: ThreadView,
     projectName: String?,
+    draft: String,
+    sending: Boolean,
     onBack: () -> Unit,
     onResync: () -> Unit,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onAbort: () -> Unit,
+    onRetry: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -74,7 +84,8 @@ fun ThreadScreen(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
+    // imePadding：输入框随键盘上移（§1.5 风险 5；M2-6 上真机验证手感）
+    Column(modifier = modifier.fillMaxSize().imePadding()) {
         ThreadTopBar(
             title = view.summary?.title?.ifEmpty { null } ?: "会话",
             projectName = projectName,
@@ -115,7 +126,9 @@ fun ThreadScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 10.dp),
                 ) {
-                    items(renderable, key = { it.id }) { message -> MessageRow(message) }
+                    items(renderable, key = { it.id }) { message ->
+                        MessageRow(message, onRetry = onRetry)
+                    }
                 }
             }
 
@@ -125,6 +138,69 @@ fun ThreadScreen(
                     itemCount = renderable.size,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp),
                 )
+            }
+        }
+
+        Composer(
+            draft = draft,
+            onDraftChange = onDraftChange,
+            sending = sending,
+            running = view.running,
+            onSend = onSend,
+            onAbort = onAbort,
+        )
+    }
+}
+
+/**
+ * 底部输入条（§4.4）。
+ *
+ * 运行中时语义自动变为「追加指令」（steer），发送键改成「追加」并额外给出「停止」——
+ * 与桌面端一致，也避免用户在 agent 跑着时误以为自己在开新话题。
+ */
+@Composable
+private fun Composer(
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    sending: Boolean,
+    running: Boolean,
+    onSend: () -> Unit,
+    onAbort: () -> Unit,
+) {
+    Column {
+        HorizontalDivider(color = MpiTheme.colors.border)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MpiTheme.colors.bg)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = onDraftChange,
+                modifier = Modifier.weight(1f),
+                placeholder = {
+                    Text(
+                        text = if (running) "追加指令…" else "说点什么…",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                },
+                maxLines = 5,
+                shape = RoundedCornerShape(14.dp),
+            )
+            if (running) {
+                TextButton(onClick = onAbort) {
+                    Text("停止", color = MpiTheme.colors.err, fontWeight = FontWeight.Medium)
+                }
+            }
+            Button(
+                onClick = onSend,
+                enabled = draft.isNotBlank() && !sending,
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text(if (running) "追加" else "发送")
             }
         }
     }
@@ -194,16 +270,16 @@ private fun ThreadTopBar(
 }
 
 @Composable
-private fun MessageRow(message: ThreadMessage) {
+private fun MessageRow(message: ThreadMessage, onRetry: (String) -> Unit) {
     if (message.role == "user") {
-        UserMessageRow(message)
+        UserMessageRow(message, onRetry)
     } else {
         AssistantMessageRow(message)
     }
 }
 
 @Composable
-private fun UserMessageRow(message: ThreadMessage) {
+private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit) {
     val failed = message.errorMessage != null
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
@@ -231,12 +307,17 @@ private fun UserMessageRow(message: ThreadMessage) {
                 }
             }
             if (failed) {
-                Text(
-                    text = message.errorMessage.orEmpty(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 2.dp, end = 2.dp),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = message.errorMessage.orEmpty(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    TextButton(onClick = { onRetry(message.id) }) {
+                        Text("重试", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
             }
         }
     }

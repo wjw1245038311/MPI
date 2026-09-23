@@ -133,8 +133,7 @@ class ThreadSession(
     }
 
     /** 把某条乐观消息标记为失败（发送失败时保留在原位并给重试，见 §1.1）。 */
-    fun markSendFailed(localId: String, reason: String) {
-        synchronized(lock) {
+    fun markSendFailed(localId: String, reason: String) {        synchronized(lock) {
             _view.value = _view.value.copy(
                 messages = _view.value.messages.map { message ->
                     if (message.id == localId) {
@@ -144,6 +143,27 @@ class ThreadSession(
                     }
                 },
             )
+        }
+    }
+
+    /**
+     * 为重试准备：取出失败消息的文本，并把它重置为「发送中」。
+     * 返回 null 表示找不到该消息或它没有文本。
+     */
+    fun prepareRetry(localId: String): String? {
+        synchronized(lock) {
+            val message = _view.value.messages.firstOrNull { it.id == localId } ?: return null
+            val text = message.blocks
+                .filter { it.type == BlockType.Text }
+                .mapNotNull { it.text }
+                .joinToString("")
+            if (text.isEmpty()) return null
+            _view.value = _view.value.copy(
+                messages = _view.value.messages.map {
+                    if (it.id == localId) it.copy(errorMessage = null, stopReason = null, pending = true) else it
+                },
+            )
+            return text
         }
     }
 

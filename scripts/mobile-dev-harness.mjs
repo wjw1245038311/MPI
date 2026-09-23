@@ -94,6 +94,23 @@ function makeService(responseFor, errorFor) {
         case "thread.resync":
           ctx.send(responseFor(request, { snapshot: snapshotOf(String(request.payload?.threadId ?? "")) }));
           break;
+        // 写操作：真的走一遍租约与写请求（host 侧 assertWriter 在生产代码里）。
+        // 注意：harness 拿不到事件推送通道，所以发出去的消息会停在「发送中…」——
+        // 这是桩的限制，不是客户端的问题。
+        case "thread.claimWrite":
+          ctx.send(responseFor(request, { claimed: true }));
+          break;
+        case "thread.prompt":
+        case "thread.steer":
+        case "thread.followUp":
+        case "thread.abort":
+        case "thread.setModel":
+        case "thread.setMode":
+        case "thread.setPermission":
+        case "ui.respond":
+          log(`  写请求 ${request.type}：${JSON.stringify(request.payload ?? {})}`);
+          ctx.send(responseFor(request, { accepted: true }));
+          break;
         default:
           // 未知类型回错误 envelope —— 客户端把 type 写错了会立刻暴露，
           // 而不是永远等到超时（联调期间靠这条更容易定位问题）。
