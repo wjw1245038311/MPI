@@ -190,15 +190,23 @@ class Updater(private val context: Context) {
     companion object {
         const val MANIFEST_NAME = "mpi-android-native.json"
 
-        /** GitHub 侧：版本与清单放在 Release 的 assets 里（latest 固定 URL）。 */
+        /**
+         * GitHub 侧：清单随仓库走（raw 固定 URL），安装包与增量包放 Release assets。
+         *
+         * 不能用 `releases/latest/download/…`：手机包是 prerelease，latest 不指向它；
+         * 而若改成稳定版又会抢走桌面端自更新的 latest（AGENTS.md 里记过这个坑）。
+         * 所以清单放仓库固定路径，里面的 file / patch.file 是 Release asset 的**绝对 URL**。
+         */
         private const val GITHUB_REPO = "wjw1245038311/MPI"
-        private const val GITHUB_BASE_URL = "https://github.com/$GITHUB_REPO/releases/latest/download"
-        private const val GITHUB_MANIFEST_URL = "$GITHUB_BASE_URL/$MANIFEST_NAME"
+        private const val GITHUB_MANIFEST_URL =
+            "https://raw.githubusercontent.com/$GITHUB_REPO/main/mobile/app/update/$MANIFEST_NAME"
+
+        /** 清单里给相对名时的拼接前缀；GitHub 模式留空（要求绝对 URL，否则走中继兜底）。 */
+        private const val GITHUB_BASE_URL = ""
 
         /** 解析清单；base 是“文件所在目录”，file 为绝对 URL 时直接用。 */
         private fun assetUrl(base: String, file: String): String =
             if (file.startsWith("http://") || file.startsWith("https://")) file else "$base/$file"
-
         /** 当前安装版本比清单里的旧？（纯函数，可测） */
         internal fun isNewer(remote: String, current: String = BuildConfig.VERSION_NAME): Boolean =
             compareVersions(remote, current) > 0
