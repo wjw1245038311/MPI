@@ -3,7 +3,6 @@ package com.mpi.app.data
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.security.KeyStore
-import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -30,9 +29,19 @@ internal object SealedFormat {
     private const val TAG_BITS = 128
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
 
-    fun seal(key: SecretKey, plaintext: ByteArray, iv: ByteArray): ByteArray {
+    /**
+     * 封装。
+     *
+     * ⚠️ **加密时不能自带 IV**：Android Keystore 的 GCM 会直接报
+     * `Caller-provided IV not permitted`（只有解密时才允许传入 IV）。
+     * 所以这里一律让 cipher 自己生成，再从 `cipher.iv` 读回来写进输出。
+     * JVM 与 Android 行为一致，一套代码两边都能跑。
+     */
+    fun seal(key: SecretKey, plaintext: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val iv = cipher.iv
+        require(iv.size == IV_LENGTH) { "意外的 GCM IV 长度：${iv.size}" }
         return iv + cipher.doFinal(plaintext)
     }
 
@@ -50,15 +59,12 @@ internal object SealedFormat {
  * 固定密钥实现 —— 只用于**测试与本地诊断**，不要在真机存储上使用。
  * 它让「封装/解封 + 落盘 + 篡改检测」这套逻辑能脱离 Android 在 JVM 上验证。
  */
-class RawKeySecretBox(key: ByteArray, private val random: SecureRandom = SecureRandom()) : SecretBox {
+class RawKeySecretBox(key: ByteArray) : SecretBox {
     private val secretKey: SecretKey = SecretKeySpec(key, "AES").also {
         require(key.size == 32) { "需要 32 字节 AES-256 密钥" }
     }
 
-    override fun seal(plaintext: ByteArray): ByteArray {
-        val iv = ByteArray(SealedFormat.IV_LENGTH).also { random.nextBytes(it) }
-        return SealedFormat.seal(secretKey, plaintext, iv)
-    }
+    override fun seal(plaintext: ByteArray): ByteArray = SealedFormat.seal(secretKey, plaintext)
 
     override fun open(sealed: ByteArray): ByteArray = SealedFormat.open(secretKey, sealed)
 }
@@ -69,10 +75,7 @@ class RawKeySecretBox(key: ByteArray, private val random: SecureRandom = SecureR
  */
 class AndroidKeystoreSecretBox(private val alias: String = DEFAULT_ALIAS) : SecretBox {
 
-    override fun seal(plaintext: ByteArray): ByteArray {
-        val iv = ByteArray(SealedFormat.IV_LENGTH).also { SecureRandom().nextBytes(it) }
-        return SealedFormat.seal(secretKey(), plaintext, iv)
-    }
+    override fun seal(plaintext: ByteArray): ByteArray = SealedFormat.seal(secretKey(), plaintext)
 
     override fun open(sealed: ByteArray): ByteArray = SealedFormat.open(secretKey(), sealed)
 

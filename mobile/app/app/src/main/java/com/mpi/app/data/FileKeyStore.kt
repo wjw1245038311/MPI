@@ -64,7 +64,7 @@ class FileKeyStore(
     override suspend fun listPairings(): List<PairingRecord> = read().pairings
 
     /** 显式清空本地数据（用户主动要求时调用）。 */
-    suspend fun reset() = mutex.withLock {
+    override suspend fun reset() = mutex.withLock {
         withContext(Dispatchers.IO) {
             file.delete()
             cached = StoreSnapshot()

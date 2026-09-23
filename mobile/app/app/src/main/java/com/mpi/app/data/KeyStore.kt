@@ -55,6 +55,9 @@ interface KeyStore {
     suspend fun deletePairing(hostId: String)
 
     suspend fun listPairings(): List<PairingRecord>
+
+    /** 显式清空本地数据（必须由用户主动确认后调用，见 §1.1「不静默清空」）。 */
+    suspend fun reset()
 }
 
 /** 内存实现：测试与非 Android 环境。 */
@@ -79,4 +82,9 @@ class MemoryKeyStore : KeyStore {
     }
 
     override suspend fun listPairings(): List<PairingRecord> = pairings.values.toList()
+
+    override suspend fun reset() {
+        device = null
+        pairings.clear()
+    }
 }
