@@ -164,6 +164,45 @@ export default function App() {
   };
   const [view, setView] = useState<"pairing" | "home">("pairing");
   const [snap, setSnap] = useState<SessionSnapshot | null>(null);
+
+  // 会话元数据操作（重命名 / 置顶 / 删除）——与原生端长按菜单同能力
+  const [menuThreadId, setMenuThreadId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [threadRenameDraft, setThreadRenameDraft] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [metaBusy, setMetaBusy] = useState(false);
+  const [metaError, setMetaError] = useState<string | null>(null);
+
+  /**
+   * 发一个会话元数据请求。列表里的会话不一定是当前打开的，所以用临时 Requester
+   * 并把 threadId 放在 envelope 上（主机 requiredThread 读的就是它）。
+   * rename/delete 需要写租约（主机 assertWriter），所以先 claimWrite。
+   */
+  const runThreadMeta = async (
+    threadId: string,
+    type: "thread.rename" | "thread.setPinned" | "thread.delete",
+    payload: Record<string, unknown>,
+    claim: boolean,
+  ): Promise<void> => {
+    const client = clientRef.current;
+    if (!client) return;
+    setMetaBusy(true);
+    setMetaError(null);
+    const requester = new Requester(client, { threadId });
+    try {
+      if (claim) await requester.request("thread.claimWrite", {}, "claim");
+      await requester.request(type, payload, type);
+      setMenuThreadId(null);
+      setRenamingId(null);
+      setDeletingId(null);
+      void sessionRef.current?.refresh();
+    } catch (error) {
+      setMetaError(error instanceof Error ? error.message : String(error));
+    } finally {
+      requester.detach();
+      setMetaBusy(false);
+    }
+  };
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
   // P1：新建会话——thread.create 需要 projectId；多项目时先在抽屉里内联选项目。
   const [creatingThread, setCreatingThread] = useState(false);
@@ -833,22 +872,101 @@ export default function App() {
                     </button>
                     {expanded && (
                       threads.length > 0 ? threads.map((thread) => (
-                        <button
-                          type="button"
-                          key={thread.id}
-                          className="thread-row"
-                          onClick={() => {
-                            void openThread(thread.id);
-                            closeAllDrawers();
-                          }}
-                        >
-                          <span className={`badge badge-${thread.state}`}>{THREAD_STATE_LABELS[thread.state]}</span>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div className="thread-title">{thread.title}</div>
-                            {thread.preview && <div className="hint thread-preview">{thread.preview}</div>}
-                          </div>
-                          <span className="hint">{thread.messageCount} 条 · {relTime(thread.updatedAt)}</span>
-                        </button>
+                        <div key={thread.id} className="thread-item">
+                          <button
+                            type="button"
+                            className="thread-row"
+                            onClick={() => {
+                              void openThread(thread.id);
+                              closeAllDrawers();
+                            }}
+                          >
+                            <span className={`badge badge-${thread.state}`}>{THREAD_STATE_LABELS[thread.state]}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div className="thread-title">
+                                {thread.pinned ? "置顶 · " : ""}
+                                {thread.title}
+                              </div>
+                              {thread.preview && <div className="hint thread-preview">{thread.preview}</div>}
+                            </div>
+                            <span className="hint">{thread.messageCount} 条 · {relTime(thread.updatedAt)}</span>
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              className="thread-more"
+                              aria-label="会话操作"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setMetaError(null);
+                                setMenuThreadId(menuThreadId === thread.id ? null : thread.id);
+                                setRenamingId(null);
+                                setDeletingId(null);
+                              }}
+                            >
+                              ⋮
+                            </span>
+                          </button>
+                          {menuThreadId === thread.id && (
+                            <div className="thread-menu" onClick={(event) => event.stopPropagation()}>
+                              {metaError && <div className="thread-menu-error">{metaError}</div>}
+                              {renamingId === thread.id ? (
+                                <div className="thread-menu-row">
+                                  <input
+                                    className="thread-menu-input"
+                                    value={threadRenameDraft}
+                                    autoFocus
+                                    placeholder="会话名称"
+                                    onChange={(event) => setThreadRenameDraft(event.target.value)}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="cp-btn primary"
+                                    disabled={metaBusy || !threadRenameDraft.trim()}
+                                    onClick={() => void runThreadMeta(thread.id, "thread.rename", { name: threadRenameDraft.trim() }, true)}
+                                  >
+                                    保存
+                                  </button>
+                                  <button type="button" className="cp-btn" onClick={() => setRenamingId(null)}>取消</button>
+                                </div>
+                              ) : deletingId === thread.id ? (
+                                <div className="thread-menu-row">
+                                  <span className="hint">删除后可在电脑端回收站恢复</span>
+                                  <button
+                                    type="button"
+                                    className="cp-btn danger"
+                                    disabled={metaBusy}
+                                    onClick={() => void runThreadMeta(thread.id, "thread.delete", {}, true)}
+                                  >
+                                    确认删除
+                                  </button>
+                                  <button type="button" className="cp-btn" onClick={() => setDeletingId(null)}>取消</button>
+                                </div>
+                              ) : (
+                                <div className="thread-menu-row">
+                                  <button
+                                    type="button"
+                                    className="cp-btn"
+                                    onClick={() => {
+                                      setThreadRenameDraft(thread.title);
+                                      setRenamingId(thread.id);
+                                    }}
+                                  >
+                                    重命名
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="cp-btn"
+                                    disabled={metaBusy}
+                                    onClick={() => void runThreadMeta(thread.id, "thread.setPinned", { pinned: !thread.pinned }, false)}
+                                  >
+                                    {thread.pinned ? "取消置顶" : "置顶"}
+                                  </button>
+                                  <button type="button" className="cp-btn danger" onClick={() => setDeletingId(thread.id)}>删除</button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       )) : (
                         <div className="hint" style={{ padding: "6px 12px" }}>暂无会话</div>
                       )
