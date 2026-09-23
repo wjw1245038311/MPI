@@ -161,3 +161,111 @@ val IconMic: ImageVector by lazy {
         moveTo(12f, 17f); lineTo(12f, 21f)
     }
 }
+
+// ---- 设置页分组图标（沿用 24 viewBox / stroke 1.7 / 圆头）----
+
+/** 通知。 */
+val IconBell: ImageVector by lazy {
+    strokeIcon("Bell") {
+        moveTo(5f, 17f); lineTo(7f, 15f); lineTo(7f, 10f)
+        curveTo(7f, 5.5f, 17f, 5.5f, 17f, 10f)
+        lineTo(17f, 15f); lineTo(19f, 17f); close()
+        moveTo(10f, 20f); curveTo(10f, 22f, 14f, 22f, 14f, 20f)
+    }
+}
+
+/** 语言。 */
+val IconGlobe: ImageVector by lazy {
+    strokeIcon("Globe") {
+        moveTo(12f, 3f); curveTo(17f, 3f, 21f, 7f, 21f, 12f)
+        curveTo(21f, 17f, 17f, 21f, 12f, 21f)
+        curveTo(7f, 21f, 3f, 17f, 3f, 12f)
+        curveTo(3f, 7f, 7f, 3f, 12f, 3f); close()
+        moveTo(3f, 12f); lineTo(21f, 12f)
+        moveTo(12f, 3f); curveTo(15f, 7f, 15f, 17f, 12f, 21f)
+        moveTo(12f, 3f); curveTo(9f, 7f, 9f, 17f, 12f, 21f)
+    }
+}
+
+/** 外观（太阳）。 */
+val IconSun: ImageVector by lazy {
+    strokeIcon("Sun") {
+        moveTo(12f, 8f); curveTo(14.2f, 8f, 16f, 9.8f, 16f, 12f)
+        curveTo(16f, 14.2f, 14.2f, 16f, 12f, 16f)
+        curveTo(9.8f, 16f, 8f, 14.2f, 8f, 12f)
+        curveTo(8f, 9.8f, 9.8f, 8f, 12f, 8f); close()
+        moveTo(12f, 2f); lineTo(12f, 4f)
+        moveTo(12f, 20f); lineTo(12f, 22f)
+        moveTo(2f, 12f); lineTo(4f, 12f)
+        moveTo(20f, 12f); lineTo(22f, 12f)
+        moveTo(4.9f, 4.9f); lineTo(6.3f, 6.3f)
+        moveTo(17.7f, 17.7f); lineTo(19.1f, 19.1f)
+        moveTo(4.9f, 19.1f); lineTo(6.3f, 17.7f)
+        moveTo(17.7f, 6.3f); lineTo(19.1f, 4.9f)
+    }
+}
+
+/** 清理缓存（垃圾桶）。 */
+val IconTrash: ImageVector by lazy {
+    strokeIcon("Trash") {
+        moveTo(4f, 6f); lineTo(20f, 6f)
+        moveTo(9f, 6f); lineTo(9f, 4f); lineTo(15f, 4f); lineTo(15f, 6f)
+        moveTo(6f, 6f); lineTo(7f, 20f); lineTo(17f, 20f); lineTo(18f, 6f)
+        moveTo(10f, 10f); lineTo(10f, 17f)
+        moveTo(14f, 10f); lineTo(14f, 17f)
+    }
+}
+
+/** 诊断（盾）。 */
+val IconShield: ImageVector by lazy {
+    strokeIcon("Shield") {
+        moveTo(12f, 3f); lineTo(19f, 6f); lineTo(19f, 12f)
+        curveTo(19f, 17f, 12f, 21f, 12f, 21f)
+        curveTo(12f, 21f, 5f, 17f, 5f, 12f)
+        lineTo(5f, 6f); close()
+    }
+}
+
+/** 关于（信息）。 */
+val IconInfo: ImageVector by lazy {
+    strokeIcon("Info") {
+        moveTo(12f, 3f); curveTo(17f, 3f, 21f, 7f, 21f, 12f)
+        curveTo(21f, 17f, 17f, 21f, 12f, 21f)
+        curveTo(7f, 21f, 3f, 17f, 3f, 12f)
+        curveTo(3f, 7f, 7f, 3f, 12f, 3f); close()
+        moveTo(12f, 11f); lineTo(12f, 16.5f)
+        moveTo(12f, 7.5f); lineTo(12f, 8.2f)
+    }
+}
+
+/** 检查更新（循环箭头）。 */
+val IconRefresh: ImageVector by lazy {
+    strokeIcon("Refresh") {
+        moveTo(20f, 12f); curveTo(20f, 16.4f, 16.4f, 20f, 12f, 20f)
+        curveTo(7.6f, 20f, 4f, 16.4f, 4f, 12f)
+        curveTo(4f, 7.6f, 7.6f, 4f, 12f, 4f)
+        lineTo(16f, 4f)
+        moveTo(14f, 2f); lineTo(16f, 4f); lineTo(14f, 6f)
+    }
+}
+
+/** 退出（门 + 出箭头）。 */
+val IconLogout: ImageVector by lazy {
+    strokeIcon("Logout") {
+        moveTo(10f, 4f); lineTo(5f, 4f); lineTo(5f, 20f); lineTo(10f, 20f)
+        moveTo(14f, 12f); lineTo(21f, 12f)
+        moveTo(18f, 9f); lineTo(21f, 12f); lineTo(18f, 15f)
+    }
+}
+
+/** 文件（附件/文件行）。 */
+val IconFile: ImageVector by lazy {
+    strokeIcon("File") {
+        moveTo(14f, 3f); lineTo(7f, 3f)
+        curveTo(5.9f, 3f, 5f, 3.9f, 5f, 5f)
+        lineTo(5f, 19f); curveTo(5f, 20.1f, 5.9f, 21f, 7f, 21f)
+        lineTo(17f, 21f); curveTo(18.1f, 21f, 19f, 20.1f, 19f, 19f)
+        lineTo(19f, 8f); close()
+        moveTo(14f, 3f); lineTo(14f, 8f); lineTo(19f, 8f)
+    }
+}

@@ -218,6 +218,10 @@ fun MpiApp(container: AppContainer) {
                     onAppearance = container.settingsStore::setAppearance,
                     onFontSize = container.settingsStore::setFontSize,
                     onOpenDiagnostics = { diagnosticsOpen = true },
+                    onRemoveDevice = {
+                        settingsOpen = false
+                        state.activeHostId?.let { hostId -> viewModel.removeHost(hostId) }
+                    },
                     updateInfo = state.updateInfo,
                     updateChecking = state.updateChecking,
                     updateDownloading = state.updateDownloading,
