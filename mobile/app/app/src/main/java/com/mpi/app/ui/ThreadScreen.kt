@@ -586,7 +586,7 @@ private fun Composer(
                     Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(29.dp)
                                 .clip(CircleShape)
                                 .background(if (sending) MpiTheme.colors.control else MpiTheme.colors.send)
                                 .clickable(enabled = !sending, onClick = onSend),
@@ -596,7 +596,7 @@ private fun Composer(
                                 IconSend,
                                 contentDescription = if (running) "发送（排队）" else "发送",
                                 tint = if (sending) MpiTheme.colors.textFaint else MpiTheme.colors.sendFg,
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(15.dp),
                             )
                         }
                     }
