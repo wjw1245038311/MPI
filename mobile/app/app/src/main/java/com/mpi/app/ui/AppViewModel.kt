@@ -21,6 +21,7 @@ import com.mpi.app.data.ThreadView
 import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.PairingLink
 import com.mpi.app.protocol.PairingLinkException
+import com.mpi.app.protocol.RemotePermission
 import com.mpi.app.protocol.createDeviceIdentity
 import com.mpi.app.protocol.randomSeedB64u
 import kotlinx.coroutines.CoroutineScope
@@ -61,6 +62,12 @@ data class AppUiState(
     val responding: Boolean = false,
     /** 审批回应失败的原因（卡片不消失，显示在卡片内）。 */
     val respondError: String? = null,
+    /** 打开的会话级配置底部 Sheet（null = 关闭）。 */
+    val toolbarSheet: ToolbarSheet? = null,
+    /** 会话配置写操作进行中（模型切换可能耗时）。 */
+    val configBusy: Boolean = false,
+    /** 会话配置写操作失败原因（Sheet 内与 chip 行下方都要显示）。 */
+    val configError: String? = null,
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -264,7 +271,7 @@ class AppViewModel(
         threadSession?.detach()
         threadSession = null
         threadActions = null
-        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null) }
+        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, toolbarSheet = null, configBusy = false, configError = null) }
     }
 
     /** 手动重新同步（错误横幅上的按钮）。 */
@@ -319,6 +326,45 @@ class AppViewModel(
                 _ui.update { it.copy(responding = false, respondError = null) }
             } catch (error: Exception) {
                 _ui.update { it.copy(responding = false, respondError = error.message ?: "回应发送失败") }
+            }
+        }
+    }
+
+    // ---- 会话级配置（§4.4 chip 行）----
+
+    fun openToolbarSheet(sheet: ToolbarSheet) =
+        _ui.update { it.copy(toolbarSheet = sheet, configError = null) }
+
+    fun closeToolbarSheet() = _ui.update { it.copy(toolbarSheet = null, configError = null) }
+
+    fun dismissConfigError() = _ui.update { it.copy(configError = null) }
+
+    fun setPermission(permission: RemotePermission) = configAction { it.setPermission(permission) }
+
+    fun setModel(provider: String, modelId: String) = configAction { it.setModel(provider, modelId) }
+
+    fun setMode(modeId: String) = configAction { it.setMode(modeId) }
+
+    /**
+     * 压缩上下文：要读整个会话再调一次 LLM，可能十几秒。界面上的「压缩中」由
+     * compaction_start/end 事件驱动（ThreadView.compacting），这里只负责发请求。
+     */
+    fun compactContext() = configAction { it.compact() }
+
+    /**
+     * 会话级配置写操作的公共外壳：串行化、busy 标记、失败原因留给 UI。
+     * 失败时**不关 Sheet**，这样错误就显示在用户刚点的那个面板里。
+     */
+    private fun configAction(block: suspend (ThreadActions) -> Unit) {
+        val actions = threadActions ?: return
+        if (_ui.value.configBusy) return
+        _ui.update { it.copy(configBusy = true, configError = null) }
+        scope.launch {
+            try {
+                block(actions)
+                _ui.update { it.copy(configBusy = false, configError = null, toolbarSheet = null) }
+            } catch (error: Exception) {
+                _ui.update { it.copy(configBusy = false, configError = error.message ?: "设置失败") }
             }
         }
     }

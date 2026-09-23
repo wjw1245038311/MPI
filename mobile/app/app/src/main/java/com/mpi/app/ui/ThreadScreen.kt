@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import com.mpi.app.data.ThreadView
 import com.mpi.app.protocol.BlockType
 import com.mpi.app.protocol.MessageBlock
+import com.mpi.app.protocol.RemotePermission
 import com.mpi.app.protocol.RemoteThreadState
 import com.mpi.app.protocol.ThreadMessage
 import com.mpi.app.ui.theme.MpiTheme
@@ -74,6 +75,16 @@ fun ThreadScreen(
     onAbort: () -> Unit,
     onRetry: (String) -> Unit,
     onRespond: (kotlinx.serialization.json.JsonObject) -> Unit,
+    sheet: ToolbarSheet?,
+    configBusy: Boolean,
+    configError: String?,
+    onOpenSheet: (ToolbarSheet) -> Unit,
+    onDismissSheet: () -> Unit,
+    onDismissConfigError: () -> Unit,
+    onSetPermission: (RemotePermission) -> Unit,
+    onSetModel: (String, String) -> Unit,
+    onSetMode: (String) -> Unit,
+    onCompact: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -97,6 +108,29 @@ fun ThreadScreen(
             compacting = view.compacting,
             onBack = onBack,
         )
+
+        // 会话级配置 chip 行（§4.4）——权限 / 模式 / 模型 / 上下文用量。
+        ThreadToolbar(view = view, busy = configBusy, onOpen = onOpenSheet)
+
+        if (configError != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MpiTheme.colors.surfaceMuted)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = configError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismissConfigError) { Text("知道了") }
+            }
+        }
 
         if (view.errorBanner != null) {
             Row(
@@ -162,6 +196,20 @@ fun ThreadScreen(
             onSend = onSend,
             onAbort = onAbort,
         )
+
+        if (sheet != null) {
+            ThreadToolbarSheet(
+                sheet = sheet,
+                view = view,
+                busy = configBusy,
+                error = configError,
+                onDismiss = onDismissSheet,
+                onSetPermission = onSetPermission,
+                onSetModel = onSetModel,
+                onSetMode = onSetMode,
+                onCompact = onCompact,
+            )
+        }
     }
 }
 

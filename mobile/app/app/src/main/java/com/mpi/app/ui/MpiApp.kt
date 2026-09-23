@@ -79,8 +79,10 @@ fun MpiApp(container: AppContainer) {
             else -> {
                 val openThread = state.thread
                 if (state.openThreadId != null && openThread != null) {
-                    // 会话页返回键回到首屏（§4.4 逐级回退）
-                    BackHandler(enabled = true) { viewModel.closeThread() }
+                    // 会话页返回键：Sheet 开着 → 先关 Sheet；否则回首屏（§4.4 逐级回退）
+                    BackHandler(enabled = true) {
+                        if (state.toolbarSheet != null) viewModel.closeToolbarSheet() else viewModel.closeThread()
+                    }
                     ThreadScreen(
                         view = openThread,
                         projectName = state.host.projects
@@ -100,6 +102,16 @@ fun MpiApp(container: AppContainer) {
                                 viewModel.respondUi(request.id, response)
                             }
                         },
+                        sheet = state.toolbarSheet,
+                        configBusy = state.configBusy,
+                        configError = state.configError,
+                        onOpenSheet = viewModel::openToolbarSheet,
+                        onDismissSheet = viewModel::closeToolbarSheet,
+                        onDismissConfigError = viewModel::dismissConfigError,
+                        onSetPermission = viewModel::setPermission,
+                        onSetModel = viewModel::setModel,
+                        onSetMode = viewModel::setMode,
+                        onCompact = viewModel::compactContext,
                     )
                 } else {
                     HomeWithDrawer(

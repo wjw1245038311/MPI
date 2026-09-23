@@ -9,7 +9,9 @@
 ## 0. 一句话现状
 
 Kotlin + Compose 的原生安卓端已能**配对 → 看会话列表 → 进会话 → 发消息 → 审批**；
-M0、M1 全部完成，M2 完成 4/6。**有 17 个提交未推送。**
+M0、M1 全部完成，M2 完成 5/6（仅剩真机验收）。**有 20 个提交未推送。**
+
+> PWA 交互细节的移植施工图见 `docs/MOBILE-NATIVE-PORT-BACKLOG.md`（批 1 已完成）。
 
 ---
 
@@ -18,6 +20,7 @@ M0、M1 全部完成，M2 完成 4/6。**有 17 个提交未推送。**
 | 项 | 位置 |
 | --- | --- |
 | 设计基线（先读这个） | `docs/MOBILE-NATIVE-DESIGN.md` |
+| PWA 交互细节移植清单 | `docs/MOBILE-NATIVE-PORT-BACKLOG.md` |
 | 原生工程 | `mobile/app/`（包名 `com.mpi.app`） |
 | 源码 | `mobile/app/app/src/main/java/com/mpi/app/`（53 个 .kt，约 9.3k 行） |
 | 测试 | `mobile/app/app/src/test/java/com/mpi/app/`（112 项） |
@@ -92,18 +95,17 @@ npm test -- relay && npm run test:pwa-pairing
 | M2-2 | ✅ | 会话视图 + 导航（思考折叠、工具行折叠、代码块、粗体） |
 | M2-3 | ✅ | 输入条 + `ThreadActions`（写租约三种情况）+ 失败重试 |
 | M2-4 | ✅ | 审批卡 + diff 预览 + 回答形状 |
-| M2-5 | ⏳ | 配置 chip 行（模型/模式/权限） |
+| M2-5 | ✅ | 配置 chip 行（模型/模式/权限）+ 底部 Sheet + 上下文用量/压缩 |
 | M2-6 | ⏳ | 键盘跟手**真机**验证 + 端到端验收 |
 
 ---
 
 ## 4. 未完成 / 下一步
 
-### M2-5 配置 chip 行
+### M2-5 配置 chip 行（✅ 已完成）
 
-会话页标题下方一排 chip（模型 / 任务模式 / 权限），点击弹选择。
-数据已在 `ThreadView` 里（`model` / `availableModels` / `taskMode` / `availableModes` / `summary.permission`），
-写操作已就绪（`ThreadActions.setModel/setMode/setPermission`）。**这一步基本只是接 UI。**
+会话页标题下方一排 chip（权限 / 任务模式 / 模型 / 上下文用量），点击弹底部 Sheet。
+落在 `ui/ThreadToolbar.kt`；写操作走 `AppViewModel.configAction`；用量口径的纯函数有单测。
 
 ### M2-6 真机验收（需要用户配合）
 
@@ -122,6 +124,13 @@ npm test -- relay && npm run test:pwa-pairing
 ---
 
 ## 5. 未结案问题（重要）
+
+### 5.0 真机第 8 条：手机批准后桌面弹窗不消失 —— ✅ 已修，待真机复验
+
+根因：手机 `ui.respond` 只走主进程 `bridge.respondExtUi`（pi 已继续），但桌面卡片渲染自
+`store.extuiQueue`，那张队列只认本地点击与关闭会话。现已在主进程应答成功后广播
+`pi:extuiResolved`，renderer 收到后收起对应卡片（渠道线程的自动取消走同一通道）。
+⚠️ 改的是 main 进程，**验证需重启桌面端 MPI**（`Ctrl+R` 不够）。
 
 ### 5.1 host→device 帧是否真的会丢 —— **存疑，未结案**
 
@@ -209,7 +218,7 @@ npm test -- relay && npm run test:pwa-pairing
 | 5 | 点进会话 | 消息、工具行、代码块正常 |
 | 6 | 发一句话 | 右侧气泡立刻出现，随后出现回复（**验证 host→device 是否真丢帧**） |
 | 7 | 让 agent 改文件（触发审批） | **审批卡出现在输入条上方，带 diff** |
-| 8 | 点「允许」 | 电脑弹窗消失、agent 继续 |
+| 8 | 点「允许」 | 电脑弹窗消失、agent 继续（✅ 已修，见 §5.0；待复验） |
 
 第 6、7 步是重点。回报时请附：哪步不符预期 + 界面上是否有红色横幅文字（关键线索）。
 
@@ -227,6 +236,6 @@ npm test -- relay && npm run test:pwa-pairing
 
 ## 9. 当前提交与推送状态
 
-- **17 个提交未推送**（`origin/main..HEAD`）：从「原生工程骨架」到「启动图标对齐桌面端」。
+- **20 个提交未推送**（`origin/main..HEAD`）：从「原生工程骨架」到「PWA 交互细节批 1」。
 - 工作区仅 `package.json` 有改动（`piRuntimeVersion` 0.86.1→0.87.0，**不是本工作产生的**，未提交）。
 - 推送前建议：先跑一次全量 `npm test`（项目规则：push main 前必须全量）。
