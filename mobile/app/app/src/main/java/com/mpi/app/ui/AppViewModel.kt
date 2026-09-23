@@ -9,6 +9,7 @@ import com.mpi.app.data.HostRepository
 import com.mpi.app.data.HostSession
 import com.mpi.app.data.HostSnapshot
 import com.mpi.app.data.KeyStore
+import com.mpi.app.data.Notifier
 import com.mpi.app.data.KeyStoreCorruptException
 import com.mpi.app.data.Pairing
 import com.mpi.app.data.PairingRecord
@@ -113,6 +114,7 @@ class AppViewModel(
     private val deviceName: String,
     private val attachmentLoader: AttachmentLoader,
     private val voiceRecorder: VoiceRecorder,
+    private val notifier: Notifier,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(AppUiState())
@@ -285,11 +287,20 @@ class AppViewModel(
         }
 
         jobs += scope.launch {
+            var lastPendingId: String? = null
             threadSessionLocal.view.collect { view ->
                 val wasRunning = _ui.value.thread?.running == true
                 _ui.update { it.copy(thread = view) }
                 // 回合结束（running true→false）：投递暂存的「待处理后续」（与 PWA 同语义）
                 if (wasRunning && !view.running) flushPendingFollowUp()
+                // 审批提醒（M5）：请求出现就通知，消失就撤销
+                val pendingId = view.pendingUi?.id
+                if (pendingId != null && pendingId != lastPendingId) {
+                    notifier.notifyApproval(threadId, view.summary?.title)
+                } else if (pendingId == null && lastPendingId != null) {
+                    notifier.cancelApproval()
+                }
+                lastPendingId = pendingId
             }
         }
         jobs += scope.launch {
@@ -721,6 +732,8 @@ class AppViewModel(
         _ui.update { it.copy(activeHostId = record.hostId, problems = emptyList()) }
         newRepository.start()
         newSession.connect()
+        // M5：起前台服务保活——进程活着，连接与审批提醒才收得到
+        notifier.startLinkService()
 
         // 记住「最近用过」，下次启动自动重连这台
         scope.launch { keyStore.savePairing(record.copy(lastSeenAt = System.currentTimeMillis())) }
@@ -745,6 +758,8 @@ class AppViewModel(
 
     override fun onCleared() {
         detachSession()
+        // 进程级保活随之结束：ViewModel 没了，连接也不在（见 MpiLinkService 的局限说明）
+        notifier.stopLinkService()
         super.onCleared()
     }
 
@@ -762,6 +777,7 @@ class AppViewModel(
                         container.deviceName,
                         container.attachmentLoader,
                         container.voiceRecorder,
+                        container.notifier,
                     ) as T
             }
     }

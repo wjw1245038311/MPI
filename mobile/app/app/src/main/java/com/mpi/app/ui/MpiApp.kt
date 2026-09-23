@@ -1,5 +1,6 @@
 package com.mpi.app.ui
 
+import android.os.Build
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +47,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mpi.app.AppContainer
 import com.mpi.app.data.Appearance
 import com.mpi.app.data.PairingRecord
+import com.mpi.app.data.SessionState
 import com.mpi.app.ui.theme.MpiTheme
 import kotlinx.coroutines.launch
 
@@ -79,6 +82,26 @@ fun MpiApp(container: AppContainer) {
     var settingsOpen by remember { mutableStateOf(false) }
     var diagnosticsOpen by remember { mutableStateOf(false) }
     var scanOpen by remember { mutableStateOf(false) }
+
+    // M5：Android 13+ 需要运行时申请通知权限（拒绝也不影响其它功能）
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // 通知点击的深链：等连接就绪后打开目标会话，再清掉待打开标记
+    val pendingThread by container.pendingThreadOpen.collectAsState()
+    LaunchedEffect(pendingThread, state.session) {
+        val target = pendingThread ?: return@LaunchedEffect
+        if (state.session is SessionState.Connected) {
+            container.pendingThreadOpen.value = null
+            viewModel.openThread(target)
+        }
+    }
     // 已授权时 RequestPermission 会立即回调 true
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),

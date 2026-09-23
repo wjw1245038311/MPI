@@ -6,6 +6,7 @@ import com.mpi.app.data.AndroidKeystoreSecretBox
 import com.mpi.app.data.AttachmentLoader
 import com.mpi.app.data.FileKeyStore
 import com.mpi.app.data.KeyStore
+import com.mpi.app.data.Notifier
 import com.mpi.app.data.SecretBox
 import com.mpi.app.data.SettingsStore
 import com.mpi.app.data.VoiceRecorder
@@ -13,6 +14,7 @@ import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * 手写的依赖容器 —— 不引入 DI 框架（见设计文档 §1.2 减法清单）。
@@ -37,6 +39,12 @@ class AppContainer(context: Context) {
 
     /** 原生录音（语音输入）。 */
     val voiceRecorder: VoiceRecorder = VoiceRecorder()
+
+    /** 本地通知与前台服务（M5）。 */
+    val notifier: Notifier = Notifier(appContext)
+
+    /** 通知点击带来的待打开会话（UI 消费后置空）。 */
+    val pendingThreadOpen = MutableStateFlow<String?>(null)
 
     /** 与 UI 生命周期同长的作用域（会话/仓库/轮询都挂在这里）。 */
     val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

@@ -1,9 +1,11 @@
 package com.mpi.app
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import com.mpi.app.data.Notifier
 import com.mpi.app.ui.BenchmarkScreen
 import com.mpi.app.ui.EXTRA_BENCHMARK
 import com.mpi.app.ui.MpiAppRoot
@@ -23,6 +25,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // 通知点击带来的会话深链（M5）：等连接就绪后由 UI 消费
+        container.pendingThreadOpen.value = intent?.getStringExtra(Notifier.EXTRA_THREAD_ID)
+
         val benchmark = intent?.getBooleanExtra(EXTRA_BENCHMARK, false) == true
         setContent {
             if (benchmark) {
@@ -31,5 +36,12 @@ class MainActivity : ComponentActivity() {
                 MpiAppRoot(container)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // 已在前台/后台时再点通知：更新深链目标（UI 会 collect 到）
+        container.pendingThreadOpen.value = intent.getStringExtra(Notifier.EXTRA_THREAD_ID)
     }
 }
