@@ -1584,6 +1584,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     if (typeof value === "string") return remoteSafeString(value);
     if (Array.isArray(value)) return value.slice(0, 50).map((item) => remoteSafeEventValue(item, depth + 1));
     if (!value || typeof value !== "object") return undefined;
+    // 图片块：事件通道不做大图搬运。base64 会被 remoteSafeString 截成 100k 坏数据，
+    // 手机端解析失败会渲染成「图片无法显示」（真机反馈）。事件里只留 mimeType，
+    // 图片本体走快照（remoteMessages 有 400k 预算，不截断）。
+    if ((value as any).type === "image") {
+      return typeof (value as any).mimeType === "string"
+        ? { type: "image", mimeType: (value as any).mimeType, omitted: true }
+        : { type: "image", omitted: true };
+    }
     const blocked = /(?:^|)(?:cwd|path|file|absolute|command|args|arguments|env|secret|token|authorization|credential|input)$/i;
     const output: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 40)) {

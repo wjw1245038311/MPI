@@ -167,16 +167,25 @@ class ThreadSession(
     /**
      * 乐观回显：点发送后立刻上屏，不等主机回执（§1.1「点击到视觉反馈 < 100ms」）。
      * 主机回执到达时由 [applyEvent] 的 message_start 把这条「转正」，避免重复上屏。
+     *
+     * @param imageBlocks 本地已压好的图片块。**必须由客户端自己上屏**：图片的 base64
+     *   太大，主机在事件通道会把它截断（remoteSafeString 100k），直接渲染会变成坏数据；
+     *   而快照（remoteMessages，400k 预算）不受影响——所以自己发的图先用本地字节显示，
+     *   下次快照时换成主机那份。
      */
-    fun echoUserMessage(text: String): String {
+    fun echoUserMessage(text: String, imageBlocks: List<MessageBlock> = emptyList()): String {
         val id = "u-local-${System.nanoTime()}"
+        val blocks = buildList {
+            if (text.isNotEmpty()) add(MessageBlock(type = BlockType.Text, text = text))
+            addAll(imageBlocks)
+        }
         synchronized(lock) {
             _view.value = _view.value.copy(
                 messages = _view.value.messages + ThreadMessage(
                     id = id,
                     role = "user",
                     pending = true,
-                    blocks = listOf(MessageBlock(type = BlockType.Text, text = text)),
+                    blocks = blocks,
                 ),
             )
         }
@@ -387,12 +396,13 @@ class ThreadSession(
         val role = message.str("role").orEmpty()
         if (role == "user") {
             val text = textOfContent(message["content"])
-            if (text.isEmpty()) return
-            // 先看能不能把本地的乐观回显「转正」，否则同一条消息会上屏两次
+            // 图片消息可能没有文本（image-only）：这时按「最后一条待发用户消息」转正，
+            // 否则那条乐观回显会永远挂在「发送中」。
             val echo = _view.value.messages.lastOrNull { candidate ->
                 candidate.pending && candidate.role == "user" &&
-                    candidate.blocks.any { it.type == BlockType.Text && it.text == text }
+                    (text.isEmpty() || candidate.blocks.any { it.type == BlockType.Text && it.text == text })
             }
+            if (text.isEmpty() && echo == null) return
             if (echo != null) {
                 patch { view ->
                     view.copy(

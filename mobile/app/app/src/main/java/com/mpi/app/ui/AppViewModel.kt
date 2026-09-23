@@ -31,6 +31,8 @@ import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.PairingLink
 import com.mpi.app.protocol.PairingLinkException
 import com.mpi.app.protocol.RemotePermission
+import com.mpi.app.protocol.BlockType
+import com.mpi.app.protocol.MessageBlock
 import com.mpi.app.protocol.RemoteThreadState
 import com.mpi.app.protocol.createDeviceIdentity
 import com.mpi.app.protocol.randomSeedB64u
@@ -820,7 +822,12 @@ class AppViewModel(
             }
         }
         // 先乐观上屏（§1.1：点击到视觉反馈 < 100ms），失败再标红留在原位
-        val localId = session.echoUserMessage(text)
+        // 图片用**本地字节**上屏：事件通道会把大 base64 截断（会变成「图片无法显示」），
+        // 主机那份完整的图由随后的快照替换。
+        val localImageBlocks = pending.filterIsInstance<Attachment.Image>().map { image ->
+            MessageBlock(type = BlockType.Image, data = image.bytesB64, mimeType = image.mimeType)
+        }
+        val localId = session.echoUserMessage(text, localImageBlocks)
         if (clearDraft) {
             _ui.value.openThreadId?.let { drafts[it] = "" }
             _ui.update { it.copy(draft = "", sending = true, sendError = null) }

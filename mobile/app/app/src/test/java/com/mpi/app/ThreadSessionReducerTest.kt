@@ -5,6 +5,7 @@ import com.mpi.app.data.ThreadSession
 import com.mpi.app.data.ThreadView
 import com.mpi.app.protocol.BlockType
 import com.mpi.app.protocol.Envelope
+import com.mpi.app.protocol.MessageBlock
 import com.mpi.app.protocol.RemoteEnvelope
 import com.mpi.app.protocol.RemotePermission
 import java.util.concurrent.CopyOnWriteArrayList
@@ -174,6 +175,44 @@ class ThreadSessionReducerTest {
 
         transport.deliver(event(seq = 1, kind = "config_changed", data = buildJsonObject { put("thinkingLevel", "high") }))
         assertEquals("high", session.view.value.thinkingLevel)
+        session.detach()
+    }
+
+    // ---- 图片回显（本地字节上屏）----
+
+    @Test
+    fun `the local echo carries the image blocks so a sent photo is visible`() = runBlocking {
+        val session = newSession()
+        session.subscribe()
+
+        val id = session.echoUserMessage(
+            text = "看这张",
+            imageBlocks = listOf(
+                MessageBlock(type = BlockType.Image, data = "AAAA", mimeType = "image/jpeg"),
+            ),
+        )
+        val echo = session.view.value.messages.last { it.id == id }
+        assertTrue(echo.pending)
+        assertEquals(listOf(BlockType.Text, BlockType.Image), echo.blocks.map { it.type })
+        assertEquals("AAAA", echo.blocks.last().data)
+        session.detach()
+    }
+
+    @Test
+    fun `an image only message is promoted by a textless message_start`() = runBlocking {
+        val transport = FakeTransport()
+        val session = newSession(transport)
+        session.subscribe()
+
+        val id = session.echoUserMessage(
+            text = "",
+            imageBlocks = listOf(MessageBlock(type = BlockType.Image, data = "AAAA", mimeType = "image/jpeg")),
+        )
+        // 主机的 message_start（图片消息可能没有文本）
+        transport.deliver(event(seq = 1, kind = "message_start", event = messageEvent("user")))
+
+        val echo = session.view.value.messages.last { it.id == id }
+        assertTrue("图片消息也要能转正，否则永远挂着发送中", !echo.pending)
         session.detach()
     }
 
