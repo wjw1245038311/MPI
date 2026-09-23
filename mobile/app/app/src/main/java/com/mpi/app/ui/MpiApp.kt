@@ -351,10 +351,6 @@ private fun DrawerHost(
                 AppDrawerContent(
                     state = state,
                     onOpenHosts = onOpenHosts,
-                    onAddHost = {
-                        scope.launch { drawerState.close() }
-                        viewModel.startAddHost()
-                    },
                     onRefresh = viewModel::refresh,
                     onOpenThread = { threadId ->
                         scope.launch { drawerState.close() }

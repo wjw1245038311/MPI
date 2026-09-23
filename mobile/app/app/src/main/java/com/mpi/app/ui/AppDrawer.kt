@@ -50,7 +50,6 @@ import com.mpi.app.ui.theme.MpiTheme
 fun AppDrawerContent(
     state: AppUiState,
     onOpenHosts: () -> Unit,
-    onAddHost: () -> Unit,
     onRefresh: () -> Unit,
     onOpenThread: (String) -> Unit,
     onNewThread: (String) -> Unit,
@@ -68,6 +67,7 @@ fun AppDrawerContent(
             online = state.session is SessionState.Connected,
             statusLabel = if (state.session is SessionState.Connected) "已连接" else state.session.label(),
             onClick = onOpenHosts,
+            onRefresh = onRefresh,
         )
 
         HorizontalDivider(color = MpiTheme.colors.border)
@@ -121,9 +121,7 @@ fun AppDrawerContent(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            TextButton(onClick = onOpenHosts) { Text("切换设备") }
-            TextButton(onClick = onAddHost) { Text("添加设备") }
-            TextButton(onClick = onRefresh) { Text("刷新") }
+            // 切设备 / 加设备 都在「点头部头像」打开的面板里（重复入口已删）
             TextButton(onClick = onOpenSettings) { Text("设置") }
         }
     }
@@ -236,12 +234,13 @@ private fun DrawerHeader(
     online: Boolean,
     statusLabel: String,
     onClick: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 18.dp),
+            .padding(start = 18.dp, end = 6.dp, top = 18.dp, bottom = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -275,7 +274,10 @@ private fun DrawerHeader(
                 )
             }
         }
-        Text("切换", style = MaterialTheme.typography.labelSmall, color = MpiTheme.colors.textFaint)
+        // 点整行（含头像）= 切换/添加设备；刷新挪到这里（用户要求）
+        TextButton(onClick = onRefresh) {
+            Text("刷新", style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 
