@@ -436,64 +436,20 @@ private fun Composer(
             PendingFollowUpBanner(text = pendingFollowUp, onReEdit = onReEditPending, onSteer = onSteerPending)
         }
 
-        // composer 卡片（对齐 PWA：圆角 + 细边框，输入区无描边）
-        Row(
+        // composer 卡片（对齐套壳版：输入在上、按钮行在下）
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 6.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(MpiTheme.colors.surfaceMuted)
                 .border(1.dp, MpiTheme.colors.border, RoundedCornerShape(16.dp))
-                .padding(horizontal = 6.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Box {
-                IconButton(
-                    onClick = { attachMenuOpen = true },
-                    enabled = !attachmentBusy && attachments.size < 3,
-                    modifier = Modifier.size(44.dp),
-                ) {
-                    if (attachmentBusy) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            IconPlus,
-                            contentDescription = "添加附件",
-                            tint = MpiTheme.colors.textDim,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("拍照") },
-                        onClick = {
-                            attachMenuOpen = false
-                            cameraPermissionForPhoto.launch(android.Manifest.permission.CAMERA)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("相册") },
-                        onClick = {
-                            attachMenuOpen = false
-                            pickImages.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                            )
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("文件") },
-                        onClick = {
-                            attachMenuOpen = false
-                            pickFiles.launch(arrayOf("*/*"))
-                        },
-                    )
-                }
-            }
-            // 无描边输入区（PWA 的 .composer-input）：placeholder 自己画，视觉干净
+            // 输入区：整行、无描边
             Box(
-                modifier = Modifier.weight(1f).padding(horizontal = 6.dp, vertical = 10.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 if (draft.isEmpty()) {
@@ -518,75 +474,129 @@ private fun Composer(
                     maxLines = 6,
                 )
             }
-            when {
-                transcribing -> {
-                    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                    }
-                }
 
-                recording -> {
-                    // 录音中：左取消、右结束（同一位置再点即完成——微信式）
-                    IconButton(onClick = onCancelVoice, modifier = Modifier.size(44.dp)) {
-                        Icon(
-                            IconClose,
-                            contentDescription = "取消录音",
-                            tint = MpiTheme.colors.textDim,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                    IconButton(onClick = onStopVoice, modifier = Modifier.size(44.dp)) {
-                        Icon(
-                            IconMic,
-                            contentDescription = "结束录音并转文字",
-                            tint = MpiTheme.colors.err,
-                            modifier = Modifier.size(22.dp),
-                        )
-                    }
-                }
-
-                else -> {
+            // 按钮行（套壳版 .composer-row）
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Box {
                     IconButton(
-                        onClick = { micPermission.launch(android.Manifest.permission.RECORD_AUDIO) },
-                        enabled = !sending,
-                        modifier = Modifier.size(44.dp),
+                        onClick = { attachMenuOpen = true },
+                        enabled = !attachmentBusy && attachments.size < 3,
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        if (attachmentBusy) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(
+                                IconPlus,
+                                contentDescription = "添加附件",
+                                tint = MpiTheme.colors.textDim,
+                                modifier = Modifier.size(19.dp),
+                            )
+                        }
+                    }
+                    DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("拍照") },
+                            onClick = {
+                                attachMenuOpen = false
+                                cameraPermissionForPhoto.launch(android.Manifest.permission.CAMERA)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("相册") },
+                            onClick = {
+                                attachMenuOpen = false
+                                pickImages.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                )
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("文件") },
+                            onClick = {
+                                attachMenuOpen = false
+                                pickFiles.launch(arrayOf("*/*"))
+                            },
+                        )
+                    }
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                when {
+                    transcribing -> {
+                        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        }
+                    }
+
+                    recording -> {
+                        IconButton(onClick = onCancelVoice, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                IconClose,
+                                contentDescription = "取消录音",
+                                tint = MpiTheme.colors.textDim,
+                                modifier = Modifier.size(19.dp),
+                            )
+                        }
+                        IconButton(onClick = onStopVoice, modifier = Modifier.size(40.dp)) {
+                            Icon(
+                                IconMic,
+                                contentDescription = "结束录音并转文字",
+                                tint = MpiTheme.colors.err,
+                                modifier = Modifier.size(21.dp),
+                            )
+                        }
+                    }
+
+                    else -> {
+                        IconButton(
+                            onClick = { micPermission.launch(android.Manifest.permission.RECORD_AUDIO) },
+                            enabled = !sending,
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(
+                                IconMic,
+                                contentDescription = "语音输入",
+                                tint = MpiTheme.colors.textDim,
+                                modifier = Modifier.size(19.dp),
+                            )
+                        }
+                    }
+                }
+
+                if (running) {
+                    IconButton(onClick = onAbort, enabled = !sending, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            IconStop,
+                            contentDescription = "停止",
+                            tint = MpiTheme.colors.err,
+                            modifier = Modifier.size(19.dp),
+                        )
+                    }
+                }
+
+                val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !sending
+                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(if (canSend) MpiTheme.colors.send else MpiTheme.colors.control)
+                            .clickable(enabled = canSend, onClick = onSend),
+                        contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            IconMic,
-                            contentDescription = "语音输入",
-                            tint = MpiTheme.colors.textDim,
-                            modifier = Modifier.size(20.dp),
+                            IconSend,
+                            contentDescription = if (running) "发送（排队）" else "发送",
+                            tint = if (canSend) MpiTheme.colors.sendFg else MpiTheme.colors.textFaint,
+                            modifier = Modifier.size(18.dp),
                         )
                     }
-                }
-            }
-            if (running) {
-                IconButton(onClick = onAbort, enabled = !sending, modifier = Modifier.size(44.dp)) {
-                    Icon(
-                        IconStop,
-                        contentDescription = "停止",
-                        tint = MpiTheme.colors.err,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-            // 发送：实心圆按钮（PWA .send-btn）；外层 44dp 保住触摸目标大小
-            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-                val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !sending
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(if (canSend) MpiTheme.colors.send else MpiTheme.colors.control)
-                        .clickable(enabled = canSend, onClick = onSend),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        IconSend,
-                        contentDescription = if (running) "发送（排队）" else "发送",
-                        tint = if (canSend) MpiTheme.colors.sendFg else MpiTheme.colors.textFaint,
-                        modifier = Modifier.size(19.dp),
-                    )
                 }
             }
         }
