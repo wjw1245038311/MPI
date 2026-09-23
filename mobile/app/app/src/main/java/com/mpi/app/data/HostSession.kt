@@ -97,6 +97,9 @@ class HostSession(
     private var authJob: Job? = null
     private var reconnectJob: Job? = null
     private var attempt = 0
+
+    /** 认证连续失败次数：网络抖动很常见，不能一次就判「需要重新配对」。 */
+    private var authAttempts = 0
     private var stopped = false
 
     private val unsubscribeFrame = client.onFrame { raw -> handleFrame(raw) }
@@ -313,11 +316,22 @@ class HostSession(
                 )
                 aesKey = result.aesKey
                 attempt = 0
+                authAttempts = 0
                 _state.value = SessionState.Connected(record.hostId)
             } catch (e: PairingException) {
                 aesKey = null
                 if (stopped) return@launch
-                scheduleReconnectOrFail(SessionFailure.AuthFailed, e.message ?: "认证失败")
+                // 网络抖动（超时 / EOF）经常表现为 PairingException。一次失败就判「需要重新配对」
+                // 会让用户被迫手动重连（真机反馈「用着用着掉线」）——先当作可恢复问题重试。
+                authAttempts++
+                if (authAttempts >= AUTH_FAILURE_RETRY_LIMIT) {
+                    scheduleReconnectOrFail(SessionFailure.AuthFailed, e.message ?: "认证失败")
+                } else {
+                    scheduleReconnectOrFail(
+                        SessionFailure.Network,
+                        "认证失败，正在自动重试（第 $authAttempts 次）：${e.message ?: ""}".trim(),
+                    )
+                }
             }
         }
     }
@@ -364,6 +378,9 @@ class HostSession(
          * 也不能无上限重试——真的是令牌失效时，应当尽快让人看到「需要重新配对」。
          */
         const val AUTH_RETRY_LIMIT = 3
+
+        /** 认证请求连续失败多少次才认定为「令牌/密钥真的有问题」——需要重新配对。 */
+        const val AUTH_FAILURE_RETRY_LIMIT = 5
     }
 }
 
