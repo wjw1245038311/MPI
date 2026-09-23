@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标（minSdk 26，所以只需 anydpi-v26 这一份，无需各密度位图）。
+  前景由 scripts/gen-android-icon.mjs 从桌面端图标（resources/icon.png）生成，
+  已处理成「黑色 + alpha」并缩进安全区；底色与桌面图标一致（白）。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

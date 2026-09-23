@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与桌面端图标（resources/icon.png）的底色一致 -->
+    <color name="launcher_background">#FFFFFF</color>
+</resources>
