@@ -1252,6 +1252,8 @@ interface PiStore {
   handleEvent: (threadId: string, event: any) => void;
   handleExtUi: (threadId: string, req: ExtUiRequest) => void;
   respondExtUi: (threadId: string, id: string, payload: Record<string, unknown>) => void;
+  /** 请求已在桌面之外被应答（手机端 ui.respond / 渠道线程自动取消）→ 收起本地卡片。 */
+  resolveExtUiExternally: (id: string, source?: string) => void;
 
   // Inline choice-panel drafts (对话内多题选择). panelKey = `${messageKey}:${segIndex}`.
   setChoiceDraft: (panelKey: string, qIndex: number, answer: ChoiceAnswer | null) => void;
@@ -3185,6 +3187,23 @@ export const useStore = create<PiStore>()((set, get) => {
       })
       .catch(() => {});
     set((s) => ({ extuiQueue: s.extuiQueue.filter((q) => q.request.id !== id) }));
+  },
+
+  /**
+   * 该请求已被**桌面之外**的一方应答（手机端 ui.respond、或渠道线程的自动取消）。
+   * 桌面端的卡片/弹窗只认本地点击，主进程必须显式告知，否则会一直挂着。
+   */
+  resolveExtUiExternally: (id, source) => {
+    const queue = get().extuiQueue;
+    if (!queue.some((q) => String(q.request.id) === String(id))) return;
+    if (source === "remote") {
+      const zh = get().config?.language === "zh";
+      get().pushToast(
+        "info",
+        zh ? "该确认已在手机端处理，卡片已收起" : "Answered on your phone — the card was dismissed",
+      );
+    }
+    set((s) => ({ extuiQueue: s.extuiQueue.filter((q) => String(q.request.id) !== String(id)) }));
   },
 
   setChoiceDraft: (panelKey, qIndex, answer) => {

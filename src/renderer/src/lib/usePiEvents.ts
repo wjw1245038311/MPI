@@ -9,12 +9,19 @@ import { normalizeTaskModes, taskModeName } from "./task-modes";
 export function usePiEvents() {
   const handleEvent = useStore((s) => s.handleEvent);
   const handleExtUi = useStore((s) => s.handleExtUi);
+  const resolveExtUiExternally = useStore((s) => s.resolveExtUiExternally);
   const handleExit = useStore((s) => s.handleExit);
   const handleError = useStore((s) => s.handleError);
 
   useEffect(() => {
     const u1 = window.pi.on.event((p) => handleEvent(p.threadId, p.event));
     const u2 = window.pi.on.extui((p) => handleExtUi(p.threadId, p.request));
+    // 旧 preload 没这个通道 → 跳过而不是中断整个事件接线。
+    const u15 = typeof window.pi.on.extuiResolved === "function"
+      ? window.pi.on.extuiResolved((p) => {
+          if (p?.id) resolveExtUiExternally(String(p.id), p.source);
+        })
+      : () => undefined;
     const u3 = window.pi.on.exit((p) => handleExit(p.threadId, p));
     const u4 = window.pi.on.error((p) => handleError(p.threadId, p.message));
     const u7 = window.pi.on.focusThread((p) => {
@@ -224,6 +231,7 @@ export function usePiEvents() {
       u12();
       u13();
       u14();
+      u15();
     };
-  }, [handleEvent, handleExtUi, handleExit, handleError]);
+  }, [handleEvent, handleExtUi, handleExit, handleError, resolveExtUiExternally]);
 }

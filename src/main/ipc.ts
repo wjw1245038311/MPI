@@ -701,6 +701,7 @@ function createHandle(
           setTimeout(() => {
             try {
               handle.bridge.respondExtUi((r as any).id, { cancelled: true });
+              send("pi:extuiResolved", { threadId: id, id: String((r as any).id ?? ""), source: "auto" });
             } catch (err) {
               console.error("[messaging] mode-switch auto-cancel failed:", err);
             }
@@ -734,6 +735,7 @@ function createHandle(
           setTimeout(() => {
             try {
               handle.bridge.respondExtUi((r as any).id, { cancelled: true });
+              send("pi:extuiResolved", { threadId: id, id: String((r as any).id ?? ""), source: "auto" });
             } catch (err) {
               console.error("[messaging] auto-deny failed:", err);
             }
@@ -2393,6 +2395,10 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       if (!bridge) throw new RemoteProtocolError("DISCONNECTED", "Thread is no longer connected");
       bridge.bridge.respondExtUi(requestId, payload);
       remoteUiRequests.delete(requestId);
+      // 手机端应答后 pi 会继续跑，但桌面端的卡片/弹窗只认本地点击（store.extuiQueue
+      // 只在 respondExtUi / 关闭会话时清理）。这里显式告知 renderer 收起对应 UI，
+      // 否则桌面会一直挂着一张已经失效的确认卡。
+      send("pi:extuiResolved", { threadId: pending.localId, id: requestId, source: "remote" });
       return { ok: true };
     },
     storePushSubscription: async (deviceId, subscription) => {

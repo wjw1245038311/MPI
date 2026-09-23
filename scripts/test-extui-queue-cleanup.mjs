@@ -58,6 +58,32 @@ ok("handleExit only clears the exiting thread's dialogs");
 }
 ok("closeThread clears the closed thread's pending ext-ui dialogs");
 
+// resolveExtUiExternally: a request answered off-desktop (phone ui.respond) must
+// drop exactly that card — desktop cards only ever listened for a local click,
+// so without this the phone approves and the desktop dialog lingers forever.
+{
+  seed("t4", "confirm");
+  useStore.setState((s) => ({
+    extuiQueue: [...s.extuiQueue, { threadId: "t5", request: { id: "req-select", method: "select" } }],
+  }));
+  useStore.getState().resolveExtUiExternally("req-confirm", "remote");
+  const q = useStore.getState().extuiQueue;
+  assert.equal(q.length, 1);
+  assert.equal(q[0].request.id, "req-select");
+  assert.equal(useStore.getState().toasts.length, 1, "phone-driven resolution should toast once");
+  assert.equal(useStore.getState().toasts[0].kind, "info");
+}
+ok("resolveExtUiExternally drops only the answered request");
+
+// Unknown id is a no-op: no toast, queue untouched.
+{
+  seed("t6", "input");
+  useStore.getState().resolveExtUiExternally("req-unknown");
+  assert.equal(useStore.getState().extuiQueue.length, 1);
+  assert.equal(useStore.getState().toasts.length, 0);
+}
+ok("resolveExtUiExternally ignores unknown ids");
+
 console.log(`\n${passed} groups passed`);
 // Toast timers from handleExit would otherwise keep node alive ~5s.
 process.exit(0);

@@ -497,6 +497,9 @@ const api = {
   on: {
     event: (cb: (p: { threadId: string; event: any }) => void) => on("pi:event", cb),
     extui: (cb: (p: { threadId: string; request: any }) => void) => on("pi:extui", cb),
+    // 某个 extui 请求已在桌面之外被应答（手机端 ui.respond / 渠道线程自动取消）——
+    // renderer 据此收起挂着的确认卡片。
+    extuiResolved: (cb: (p: { threadId: string; id: string; source?: string }) => void) => on("pi:extuiResolved", cb),
     exit: (cb: (p: { threadId: string; code: number | null; signal: string | null; stderr: string }) => void) => on("pi:exit", cb),
     error: (cb: (p: { threadId: string; message: string }) => void) => on("pi:error", cb),
     focusThread: (cb: (p: { threadId: string }) => void) => on("app:focus-thread", cb),
