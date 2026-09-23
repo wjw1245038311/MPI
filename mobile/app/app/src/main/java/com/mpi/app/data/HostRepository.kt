@@ -36,6 +36,11 @@ data class HostSnapshot(
      * 「列表少了一块」这种静默降级最容易让人以为数据本来就是空的。
      */
     val partialErrors: List<String> = emptyList(),
+    /**
+     * 当前列表来自本地缓存（本次连接还没刷新成功），值是缓存写入时间。
+     * 刷新成功即置回 null——UI 据此在离线时提示「显示的是本地缓存」。
+     */
+    val cachedAt: Long? = null,
 ) {
     /** 所有项目下的会话，按更新时间倒序——列表 UI 直接用。 */
     val allThreads: List<RemoteThreadSummary>
@@ -56,6 +61,9 @@ class HostRepository(
     private val request: suspend (type: String, payload: JsonElement?) -> JsonElement?,
     private val sessionState: StateFlow<SessionState>,
     private val pollIntervalMs: Long = DEFAULT_POLL_MS,
+    /** 本地缓存（本地缓存 A 方案）；为 null 则退化为纯在线模式。 */
+    private val hostId: String? = null,
+    private val cache: HomeCache? = null,
 ) {
     private val _snapshot = MutableStateFlow(HostSnapshot())
     val snapshot: StateFlow<HostSnapshot> = _snapshot.asStateFlow()
@@ -64,11 +72,18 @@ class HostRepository(
         // 用当前会话状态初始化「在线」：否则没调 start() 时快照会一直是离线的，
         // 轮询也就不会启动（很容易写成“忘了调 start”的静默故障）。
         _snapshot.update { it.copy(online = sessionState.value is SessionState.Connected) }
+        // 先用磁盘上的上一次列表兜底：应用重启 + 断网时首屏不空白
+        if (hostId != null && cache != null) {
+            cache.load(hostId)?.let { cached ->
+                _snapshot.update { cached.snapshot.copy(online = it.online) }
+            }
+        }
     }
 
     private val refreshLock = Mutex()
     private var pollJob: Job? = null
     private var watchJob: Job? = null
+    private var lastCacheWriteAt = 0L
 
     /** 跟随会话状态：连上就自动刷新；掉线就停轮询并标离线。 */
     fun start() {
@@ -142,7 +157,18 @@ class HostRepository(
                 loading = false,
                 error = null,
                 partialErrors = partial.toList(),
+                // 真实列表拿到了，不再处于「显示缓存」状态
+                cachedAt = null,
             )
+        }
+        // 顺手写缓存：下次重启先用它渲染（断网也能看列表）。
+        // 轮询时 refresh 每几秒跑一次，这里节流，避免不停写磁盘。
+        if (hostId != null && cache != null) {
+            val now = System.currentTimeMillis()
+            if (now - lastCacheWriteAt >= CACHE_WRITE_MIN_INTERVAL_MS) {
+                lastCacheWriteAt = now
+                cache.save(hostId, _snapshot.value)
+            }
         }
     }
 
@@ -160,5 +186,8 @@ class HostRepository(
 
     companion object {
         const val DEFAULT_POLL_MS = 5_000L
+
+        /** 首页缓存写入的最小间隔（轮询期间不要每 5 秒写一次盘）。 */
+        const val CACHE_WRITE_MIN_INTERVAL_MS = 60_000L
     }
 }

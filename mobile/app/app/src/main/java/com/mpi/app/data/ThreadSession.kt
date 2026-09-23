@@ -52,10 +52,19 @@ data class ThreadView(
     val compacting: Boolean = false,
     /** 待处理的审批/询问卡；**重连后仍要显示**（主机在等回应，弹窗没关）。 */
     val pendingUi: UiRequest? = null,
+    /**
+     * 当前内容来自本地缓存（尚未拿到实时快照），值是缓存的写入时间。
+     * 实时快照到达后置回 null；离线时一直有值，UI 据此提示「离线：显示本地缓存」。
+     */
+    val cachedAt: Long? = null,
 ) {
     /** 列表要渲染的全部消息（历史 + 流式中）。 */
     val renderable: List<ThreadMessage>
         get() = if (streaming != null) messages + streaming else messages
+
+    /** 正在展示本地缓存（未与主机同步）。 */
+    val showingCached: Boolean
+        get() = cachedAt != null
 }
 
 /**
@@ -79,6 +88,11 @@ class ThreadSession(
     private val scope: CoroutineScope,
     /** 非致命问题上报（丢帧导致的缺口、解密失败等）。 */
     private val onProblem: (String) -> Unit = {},
+    /**
+     * 拿到**实时**快照时的回调（用于写本地缓存）。
+     * 缓存写入失败不该影响会话本身，所以调用方自行吞异常。
+     */
+    private val onSnapshot: (JsonElement) -> Unit = {},
 ) {
     private val _view = MutableStateFlow(ThreadView(threadId = threadId))
     val view: StateFlow<ThreadView> = _view.asStateFlow()
@@ -92,6 +106,35 @@ class ThreadSession(
     private var closing = false
 
     private val unsubscribe = transport.onEnvelope { envelope -> handleEnvelope(envelope) }
+
+    /**
+     * 用本地缓存预热（本地缓存 A 方案）：先渲染缓存内容实现"秒开"，
+     * 随后 [subscribe] 用实时快照替换。缓存解析失败就静默忽略，等价于没有缓存。
+     */
+    fun prime(payload: JsonElement, savedAt: Long) {
+        val snapshot = try {
+            ThreadModels.decodeSnapshot(payload)
+        } catch (_: Exception) {
+            return
+        }
+        synchronized(lock) {
+            _view.value = _view.value.copy(
+                ready = true,
+                summary = snapshot.summary,
+                messages = snapshot.messages,
+                streaming = null,
+                running = snapshot.summary.state == RemoteThreadState.Running,
+                model = snapshot.model,
+                availableModels = snapshot.availableModels,
+                taskMode = snapshot.taskMode,
+                availableModes = snapshot.availableModes,
+                contextUsage = snapshot.contextUsage,
+                cachedAt = savedAt,
+            )
+            // 缓存里的 seq 基线已经过时，实时事件到达时重新建立期望值
+            expectNext = null
+        }
+    }
 
     /** 订阅并取快照。重复调用是安全的（用于重连后重新同步）。 */
     suspend fun subscribe() {
@@ -239,10 +282,14 @@ class ThreadSession(
                 compacting = false,
                 // 待处理审批卡要保留：主机还开着那个弹窗
                 pendingUi = _view.value.pendingUi,
+                // 实时快照到了，不再是"显示缓存"状态
+                cachedAt = null,
             )
             // 重新定位 seq 基线；第一条实时事件会重新建立期望值
             expectNext = null
         }
+        // 拿到的实时快照顺手写缓存（下一次打开就能秒开）
+        payload?.let { runCatching { onSnapshot(it) } }
         for ((seq, event) in buffered) applyEvent(event, seq)
     }
 

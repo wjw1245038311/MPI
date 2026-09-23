@@ -254,4 +254,62 @@ class HostRepositoryTest {
         delay(300)
         assertEquals("离线后必须停止轮询（别无线重试打满主机）", settled, requestCount.get())
     }
+
+    // ---- 本地缓存（本地缓存 A 方案）----
+
+    @Test
+    fun `init loads the cached list before any request`() {
+        val dir = java.nio.file.Files.createTempDirectory("mpi-repo-cache-test").toFile()
+        try {
+            val cache = com.mpi.app.data.HomeCache(dir)
+            cache.save(
+                "host-1",
+                com.mpi.app.data.HostSnapshot(
+                    projects = listOf(com.mpi.app.protocol.RemoteProject("p1", "缓存项目", 1, 100)),
+                ),
+            )
+
+            val repo = HostRepository(
+                scope = scope,
+                request = { _, _ -> null },
+                sessionState = MutableStateFlow<SessionState>(SessionState.Disconnected),
+                hostId = "host-1",
+                cache = cache,
+            )
+
+            val snapshot = repo.snapshot.value
+            assertEquals("缓存项目", snapshot.projects.single().name)
+            assertTrue("要标出这是缓存内容", snapshot.cachedAt != null)
+            assertEquals(0, requestCount.get())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a successful refresh writes the cache and clears the cached flag`() = runBlocking {
+        val dir = java.nio.file.Files.createTempDirectory("mpi-repo-cache-test").toFile()
+        try {
+            val cache = com.mpi.app.data.HomeCache(dir)
+            val repo = HostRepository(
+                scope = scope,
+                request = { type, _ ->
+                    if (type == "projects.list") {
+                        json("""{"projects":[{"id":"p1","name":"P"}]}""")
+                    } else {
+                        json("""{"threads":[]}""")
+                    }
+                },
+                sessionState = sessionState,
+                hostId = "host-1",
+                cache = cache,
+            )
+
+            repo.refresh()
+            assertNull("刷新成功就不该再提示显示缓存", repo.snapshot.value.cachedAt)
+            assertTrue("刷新结果要写回磁盘", cache.load("host-1") != null)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }

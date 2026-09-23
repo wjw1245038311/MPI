@@ -10,7 +10,8 @@
 
 Kotlin + Compose 的原生安卓端已能**配对 → 看会话列表 → 进会话 → 发消息 → 审批**；
 M0/M1/M2 完成（M2-6 键盘跟手待真机确认）；**PWA 交互细节移植（批 1–5）全部落地**；
-**M4 原生能力（附件 / 语音 / 扫码）、M5 通知 + 前台服务、M6 自更新均已实现**。
+**M4 原生能力（附件 / 语音 / 扫码）、M5 通知 + 前台服务、M6 自更新均已实现**；
+**本地缓存（A 方案：会话快照 + 首页列表秒开 / 离线可读）已实现，待真机验收**。
 已随 **v0.9.0** 提交并推送（origin 自建 GitLab + github，含 tag）。
 
 > 施工图：`docs/MOBILE-NATIVE-PORT-BACKLOG.md`（批 1–5 + M4–M6 全部完成）。
@@ -26,8 +27,8 @@ M0/M1/M2 完成（M2-6 键盘跟手待真机确认）；**PWA 交互细节移植
 | 设计基线（先读这个） | `docs/MOBILE-NATIVE-DESIGN.md` |
 | PWA 交互细节移植清单 | `docs/MOBILE-NATIVE-PORT-BACKLOG.md` |
 | 原生工程 | `mobile/app/`（包名 `com.mpi.app`） |
-| 源码 | `mobile/app/app/src/main/java/com/mpi/app/`（53 个 .kt，约 9.3k 行） |
-| 测试 | `mobile/app/app/src/test/java/com/mpi/app/`（112 项） |
+| 源码 | `mobile/app/app/src/main/java/com/mpi/app/`（52 个 .kt，约 11.4k 行） |
+| 测试 | `mobile/app/app/src/test/java/com/mpi/app/`（192 项） |
 | 联调脚本 | `scripts/mobile-dev-harness.mjs` |
 | 图标生成器 | `scripts/gen-android-icon.mjs` |
 | 加密向量生成器 | `scripts/gen-android-vectors.mjs` |
@@ -110,6 +111,37 @@ npm test -- relay && npm run test:pwa-pairing
 
 会话页标题下方一排 chip（权限 / 任务模式 / 模型 / 上下文用量），点击弹底部 Sheet。
 落在 `ui/ThreadToolbar.kt`；写操作走 `AppViewModel.configAction`；用量口径的纯函数有单测。
+
+### 本地缓存 A 方案（✅ 已实现，待真机验收）
+
+解决的问题（用户 2026-09-23 反馈）：打开会话**每次都要等全量快照**（慢、断网打不开）、
+应用重启后首页空白。协议侧 `thread.subscribe` / `thread.resync` **只返回全量快照**，
+主机不存历史事件，所以真增量（方案 B）要三端同改——先做**只改客户端**的 A 方案。
+
+| 交付 | 落点 |
+| --- | --- |
+| 会话快照缓存（按主机 + 会话落盘，原子写、条数/体积上限、损坏即删） | `data/ThreadCache.kt` |
+| 首页列表缓存（projects + threads，重启断网也能看列表） | `data/HomeCache.kt` |
+| 缓存公共工具（id→SHA-256 文件名、原子写） | `data/CacheFiles.kt` |
+| 缓存预热：`prime()` 立刻渲染缓存，`onSnapshot` 在实时快照到达时写缓存 | `data/ThreadSession.kt` + `ThreadView.cachedAt` |
+| 打开会话：先读缓存预热 → 再 `subscribe()` 替换；刷新成功即清 `cachedAt` | `ui/AppViewModel.openThread` |
+| 首页：启动即读缓存，连接中/失败**不再用转圈挡住列表** | `data/HostRepository.kt` + `ui/HomeScreen.kt` |
+| 离线提示：会话页「显示本地缓存（x 分钟前），正在获取最新内容…」；首页「离线 · 显示本地缓存」 | `ui/ThreadScreen.kt` / `ui/HomeScreen.kt` |
+| 移除主机 / 重置本地数据时清缓存 | `AppViewModel.removeHost` / `resetLocalData` |
+
+**行为要点**
+
+- 缓存只是**加速手段，不是数据源**：读坏即删、写失败静默，绝不因缓存打扰用户。
+- 断网/未连上时也能进会话看上次内容，但**必须显式标注**是缓存（§1.1 不静默失败）。
+- 明文存 `filesDir/thread-cache/`、`filesDir/home-cache/`（应用私有，root 外读不到）；
+  配对凭证仍走 Keystore 加密卷，两者不混。
+- 刷新成功才算「最新」；刷新失败保留 `cachedAt`，离线提示继续显示。
+
+**测试**：`ThreadCacheTest`（7 项）、`HomeCacheTest`（5 项）、`HostRepositoryTest` 缓存 2 项、
+`ThreadSessionReducerTest` 缓存 3 项（prime / 清标记 / 只对实时快照回调）。
+
+**未做**：真增量（方案 B，协议加 `sinceMessageId`）；缓存只随 subscribe/resync 更新，
+用户读完流式内容又没重开时会落后一次同步（下次打开会刷新）。
 
 ### M2-6 真机验收（需要用户配合）
 
@@ -223,8 +255,10 @@ npm test -- relay && npm run test:pwa-pairing
 | 6 | 发一句话 | 右侧气泡立刻出现，随后出现回复（**验证 host→device 是否真丢帧**） |
 | 7 | 让 agent 改文件（触发审批） | **审批卡出现在输入条上方，带 diff** |
 | 8 | 点「允许」 | 电脑弹窗消失、agent 继续（✅ 已修，见 §5.0；待复验） |
+| 9 | 退出会话再进（或杀进程重开） | **先立刻显示上次内容**（顶部短暂出现「显示本地缓存」，随后自动消失） |
+| 10 | 开飞行模式后杀进程重开 App | 首页仍有上次的会话列表，顶栏标「离线 · 显示本地缓存」；**不白屏** |
 
-第 6、7 步是重点。回报时请附：哪步不符预期 + 界面上是否有红色横幅文字（关键线索）。
+第 6、7 步是重点。第 9、10 步验本地缓存（A 方案）。回报时请附：哪步不符预期 + 界面上是否有红色横幅文字（关键线索）。
 
 ---
 
@@ -240,6 +274,7 @@ npm test -- relay && npm run test:pwa-pairing
 
 ## 9. 当前提交与推送状态
 
-- **24 个提交未推送**（`origin/main..HEAD`）：从「原生工程骨架」到「PWA 交互细节批 5（设置/诊断）」。
+- `origin/main..HEAD` 有一批未推送提交（从「原生工程骨架」到本次「本地缓存 A 方案」）。
 - 工作区仅 `package.json` 有改动（`piRuntimeVersion` 0.86.1→0.87.0，**不是本工作产生的**，未提交）。
 - 推送前建议：先跑一次全量 `npm test`（项目规则：push main 前必须全量）。
+- 本地缓存 A 方案的提交信息：`feat(android): 会话与首页列表本地缓存（秒开 + 断网可读）`。

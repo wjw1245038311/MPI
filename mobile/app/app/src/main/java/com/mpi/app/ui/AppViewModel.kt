@@ -8,6 +8,7 @@ import com.mpi.app.data.AttachmentLoader
 import com.mpi.app.data.HostRepository
 import com.mpi.app.data.HostSession
 import com.mpi.app.data.HostSnapshot
+import com.mpi.app.data.HomeCache
 import com.mpi.app.data.KeyStore
 import com.mpi.app.data.Notifier
 import com.mpi.app.data.KeyStoreCorruptException
@@ -19,6 +20,7 @@ import com.mpi.app.data.Requester
 import com.mpi.app.data.SessionState
 import com.mpi.app.data.SendMode
 import com.mpi.app.data.ThreadActions
+import com.mpi.app.data.ThreadCache
 import com.mpi.app.data.ThreadSession
 import com.mpi.app.data.ThreadView
 import com.mpi.app.data.UpdateInfo
@@ -134,6 +136,8 @@ class AppViewModel(
     private val voiceRecorder: VoiceRecorder,
     private val notifier: Notifier,
     private val updater: Updater,
+    private val threadCache: ThreadCache,
+    private val homeCache: HomeCache,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(AppUiState())
@@ -237,12 +241,16 @@ class AppViewModel(
 
     fun switchHost(hostId: String) {
         val record = _ui.value.pairings.firstOrNull { it.hostId == hostId } ?: return
-        attach(record)
+        // attach 会读首页缓存（磁盘 IO），放后台线程，别卡主线程
+        scope.launch { attach(record) }
     }
 
     fun removeHost(hostId: String) {
         scope.launch {
             keyStore.deletePairing(hostId)
+            // 配对凭证没了，本地缓存也不该留着（重新配对后看到旧内容会很困惑）
+            threadCache.deleteHost(hostId)
+            homeCache.deleteHost(hostId)
             val pairings = keyStore.listPairings().sortedByDescending { it.sortKey }
             _ui.update { it.copy(pairings = pairings) }
             if (_ui.value.activeHostId == hostId) {
@@ -457,6 +465,11 @@ class AppViewModel(
                     state.copy(problems = (state.problems.filterNot { it == problem } + problem).takeLast(MAX_PROBLEMS))
                 }
             },
+            // 每次拿到实时快照就写本地缓存：下次打开先用它秒开（断网也能看）
+            onSnapshot = { payload ->
+                val hostId = _ui.value.activeHostId
+                if (hostId != null) threadCache.write(hostId, threadId, payload)
+            },
         )
         threadSession = threadSessionLocal
         threadActions = ThreadActions(
@@ -489,6 +502,14 @@ class AppViewModel(
             }
         }
         jobs += scope.launch {
+            // 先用本地缓存预热：立刻上屏（秒开），断网时也看得到上次的内容；
+            // 紧接着 subscribe() 拿实时快照替换（成功即 cachedAt 清空）
+            val hostId = _ui.value.activeHostId
+            if (hostId != null) {
+                threadCache.read(hostId, threadId)?.let { cached ->
+                    threadSessionLocal.prime(cached.payload, cached.savedAt)
+                }
+            }
             runCatching { threadSessionLocal.subscribe() }.onFailure { error ->
                 _ui.update {
                     it.copy(thread = it.thread?.copy(ready = true, errorBanner = error.message ?: "订阅失败"))
@@ -836,6 +857,8 @@ class AppViewModel(
         scope.launch {
             detachSession()
             keyStore.reset()
+            threadCache.clear()
+            homeCache.clear()
             _ui.value = AppUiState()
             initialize()
         }
@@ -901,6 +924,8 @@ class AppViewModel(
             scope = scope,
             request = { type, payload -> newRequester.request(type, payload) },
             sessionState = newSession.state,
+            hostId = record.hostId,
+            cache = homeCache,
         )
 
         session = newSession
@@ -986,6 +1011,8 @@ class AppViewModel(
                         container.voiceRecorder,
                         container.notifier,
                         container.updater,
+                        container.threadCache,
+                        container.homeCache,
                     ) as T
             }
     }

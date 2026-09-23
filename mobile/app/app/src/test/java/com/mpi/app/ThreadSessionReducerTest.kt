@@ -75,11 +75,13 @@ class ThreadSessionReducerTest {
     private fun newSession(
         transport: FakeTransport = FakeTransport(),
         requests: FakeRequests = FakeRequests(SNAPSHOT),
+        onSnapshot: (JsonElement) -> Unit = {},
     ): ThreadSession = ThreadSession(
         threadId = THREAD_ID,
         transport = transport,
         request = requests::request,
         scope = scope,
+        onSnapshot = onSnapshot,
     )
 
     // ---- 快照 ----
@@ -110,6 +112,47 @@ class ThreadSessionReducerTest {
         assertEquals(BlockType.Tool, tool.type)
         assertEquals("工具输出内容", tool.text)
         assertEquals("bash", tool.name)
+        session.detach()
+    }
+
+    // ---- 本地缓存（本地缓存 A 方案）----
+
+    @Test
+    fun `prime renders the cached snapshot immediately`() = runBlocking {
+        val session = newSession()
+        session.prime(Envelope.json.parseToJsonElement(SNAPSHOT), savedAt = 123L)
+
+        val view = session.view.value
+        assertTrue(view.ready)
+        assertTrue(view.showingCached)
+        assertEquals(123L, view.cachedAt)
+        assertEquals(2, view.messages.size)
+        assertEquals("修复登录 bug", view.summary?.title)
+        session.detach()
+    }
+
+    @Test
+    fun `live snapshot clears the cached flag`() = runBlocking {
+        val session = newSession()
+        session.prime(Envelope.json.parseToJsonElement(SNAPSHOT), savedAt = 123L)
+        session.subscribe()
+
+        // 实时快照到达后不得再提示「显示本地缓存」
+        assertNull(session.view.value.cachedAt)
+        session.detach()
+    }
+
+    @Test
+    fun `live snapshot is handed to the cache callback but prime is not`() = runBlocking {
+        val captured = CopyOnWriteArrayList<String>()
+        val session = newSession(onSnapshot = { captured += it.toString() })
+
+        session.prime(Envelope.json.parseToJsonElement(SNAPSHOT), savedAt = 1L)
+        assertEquals(0, captured.size) // 预热不写缓存
+
+        session.subscribe()
+        assertEquals(1, captured.size)
+        assertTrue(captured[0].contains("\"snapshot\""))
         session.detach()
     }
 

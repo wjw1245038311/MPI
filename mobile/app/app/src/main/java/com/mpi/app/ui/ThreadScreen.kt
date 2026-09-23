@@ -205,6 +205,25 @@ fun ThreadScreen(
             }
         }
 
+        if (view.showingCached) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MpiTheme.colors.surfaceMuted)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "离线：显示本地缓存（" + relTime(view.cachedAt!!) + "），正在获取最新内容…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MpiTheme.colors.textDim,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
         Box(Modifier.weight(1f)) {
             when {
                 !view.ready -> CenteredHint(text = "正在载入会话…", loading = true)

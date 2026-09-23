@@ -5,10 +5,12 @@ import android.os.Build
 import com.mpi.app.data.AndroidKeystoreSecretBox
 import com.mpi.app.data.AttachmentLoader
 import com.mpi.app.data.FileKeyStore
+import com.mpi.app.data.HomeCache
 import com.mpi.app.data.KeyStore
 import com.mpi.app.data.Notifier
 import com.mpi.app.data.SecretBox
 import com.mpi.app.data.SettingsStore
+import com.mpi.app.data.ThreadCache
 import com.mpi.app.data.Updater
 import com.mpi.app.data.VoiceRecorder
 import java.io.File
@@ -34,6 +36,12 @@ class AppContainer(context: Context) {
 
     /** 本地界面设置（外观 / 字号）——非敏感，明文存储。 */
     val settingsStore: SettingsStore = SettingsStore(appContext)
+
+    /** 会话快照本地缓存（本地缓存 A 方案）——明文存应用私有目录。 */
+    val threadCache: ThreadCache = ThreadCache(File(appContext.filesDir, ThreadCache.DIR_NAME))
+
+    /** 首页列表本地缓存——明文存应用私有目录。 */
+    val homeCache: HomeCache = HomeCache(File(appContext.filesDir, HomeCache.DIR_NAME))
 
     /** 附件读取（相册 / 文件 → 压缩 + base64）。 */
     val attachmentLoader: AttachmentLoader = AttachmentLoader(appContext)

@@ -4,6 +4,15 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **手机端本地缓存（A 方案）：会话秒开 + 断网可读**——原生安卓端此前打开会话每次都要等主机返回全量快照，慢且断网打不开；应用重启后首页列表也会空白。现在：
+   - 每次拿到 `thread.subscribe`/`thread.resync` 的实时快照就按（主机 + 会话）写入本地缓存；再次打开会话时**先用缓存立刻上屏**（顶部短暂提示「显示本地缓存（x 分钟前），正在获取最新内容…」），随后自动拉实时快照替换
+   - 首页把 `projects.list` + `threads.list` 结果缓存到本地：应用重启即使还没连上/断网，首屏也直接显示上次的会话列表（顶栏标「离线 · 显示本地缓存」），不再被转圈挡住
+   - 缓存是加速手段而非数据源：读坏即删、写失败静默、有单条与总量上限（每主机最多 20 条）；移除主机或重置本地数据时一并清掉
+
+   验证方式：`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（`ThreadCacheTest` 7 项、`HomeCacheTest` 5 项、`HostRepositoryTest` 缓存 2 项、`ThreadSessionReducerTest` 缓存 3 项）。真机：进会话看到内容后退出再进 → 先秒显上次内容；开飞行模式后杀进程重开 App → 首页仍有上次列表并标注离线缓存（详见 `docs/MOBILE-NATIVE-HANDOFF.md` §7 第 9/10 步）。
+
 ## v0.9.0（2026-09-23）
 
 1. **手机端支持 choices 多题选择面板**——此前 agent 在回复里输出的 ```choices 围栏块（桌面端渲染成可点击的多题选择面板），手机上只会当普通代码块把 JSON 原样打印。现在 PWA 对齐桌面端同一契约：

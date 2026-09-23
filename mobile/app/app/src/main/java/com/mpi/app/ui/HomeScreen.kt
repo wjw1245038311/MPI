@@ -100,10 +100,12 @@ fun HomeScreen(
         }
 
         when {
-            session is SessionState.Connecting || session is SessionState.Authenticating ->
+            // 有本地缓存时先渲染列表（秒开），连接状态交给顶栏，不拿转圈挡住一切
+            (session is SessionState.Connecting || session is SessionState.Authenticating) &&
+                host.projects.isEmpty() ->
                 CenteredMessage(loading = true, text = session.label())
 
-            failure != null ->
+            failure != null && host.projects.isEmpty() ->
                 CenteredMessage(text = session.label(), actionLabel = "立即重连", onAction = onReconnect)
 
             host.projects.isEmpty() && !host.loading ->
@@ -156,7 +158,14 @@ private fun TopBar(
                 )
                 Spacer(Modifier.size(5.dp))
                 Text(
-                    text = if (online) "已连接" else state.session.label(),
+                    text = if (online) {
+                        "已连接"
+                    } else if (state.host.cachedAt != null) {
+                        // 断网首屏：列表来自磁盘缓存，必须说明白，不能让人以为是最新的
+                        "离线 · 显示本地缓存（${relTime(state.host.cachedAt!!)}）"
+                    } else {
+                        state.session.label()
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MpiTheme.colors.textDim,
                     maxLines = 1,
