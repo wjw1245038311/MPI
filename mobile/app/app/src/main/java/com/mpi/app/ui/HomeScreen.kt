@@ -1,6 +1,7 @@
 package com.mpi.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -58,6 +59,7 @@ fun HomeScreen(
     onOpenHosts: () -> Unit,
     onAddHost: () -> Unit,
     onDismissProblems: () -> Unit,
+    onOpenThread: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val host = state.host
@@ -116,6 +118,7 @@ fun HomeScreen(
                 onRefresh = onRefresh,
                 onOpenHosts = onOpenHosts,
                 onAddHost = onAddHost,
+                onOpenThread = onOpenThread,
             )
         }
     }
@@ -171,6 +174,7 @@ private fun Content(
     onRefresh: () -> Unit,
     onOpenHosts: () -> Unit,
     onAddHost: () -> Unit,
+    onOpenThread: (String) -> Unit,
 ) {
     val threads = state.host.allThreads
 
@@ -213,6 +217,7 @@ private fun Content(
                 ThreadRow(
                     thread = thread,
                     projectName = state.host.projects.firstOrNull { it.id == thread.projectId }?.name,
+                    onClick = { onOpenThread(thread.id) },
                 )
             }
         }
@@ -295,9 +300,12 @@ private fun WelcomeBlock(deviceName: String, onAction: (QuickAction) -> Unit) {
 }
 
 @Composable
-private fun ThreadRow(thread: RemoteThreadSummary, projectName: String?) {
+private fun ThreadRow(thread: RemoteThreadSummary, projectName: String?, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StateDot(thread.state)

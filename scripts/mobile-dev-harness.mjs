@@ -48,8 +48,7 @@ const projectsOf = () => [
   { id: "proj-demo", name: "Demo 项目", threadCount: 2, updatedAt: now() - 3_600_000 },
 ];
 
-const threadsOf = (projectId) => {
-  if (projectId === "proj-mpi") {
+const threadsOf = (projectId) => {  if (projectId === "proj-mpi") {
     // 每次被问一次就往前走一格：这样能肉眼确认「轮询在跑、列表在刷新」
     pollTick += 1;
     return [
@@ -89,6 +88,12 @@ function makeService(responseFor, errorFor) {
           ctx.send(responseFor(request, { threads: threadsOf(projectId) }));
           break;
         }
+        // 会话快照：内容刻意做得“丰富”（思考块 + 代码块 + 工具块 + 长文本），
+        // 好把手机端的渲染路径一次看全。
+        case "thread.subscribe":
+        case "thread.resync":
+          ctx.send(responseFor(request, { snapshot: snapshotOf(String(request.payload?.threadId ?? "")) }));
+          break;
         default:
           // 未知类型回错误 envelope —— 客户端把 type 写错了会立刻暴露，
           // 而不是永远等到超时（联调期间靠这条更容易定位问题）。
@@ -97,6 +102,72 @@ function makeService(responseFor, errorFor) {
       }
     },
     disconnect: () => log("设备会话结束"),
+  };
+}
+
+function snapshotOf(threadId) {
+  const now = Date.now();
+  return {
+    id: threadId || "t-running",
+    projectId: "proj-mpi",
+    title: "修复登录 bug",
+    preview: "已定位到原因",
+    updatedAt: now,
+    messageCount: 4,
+    state: "idle",
+    permission: "sandbox",
+    cwdName: "MPI",
+    model: { provider: "anthropic", id: "model-x" },
+    availableModels: [
+      { provider: "anthropic", id: "model-x", name: "Model X" },
+      { provider: "openai", id: "model-y", name: "Model Y", reasoning: true },
+    ],
+    thinkingLevel: "low",
+    taskMode: null,
+    availableModes: [
+      { id: "iterate", name: "迭代模式", summary: "沙盒 · 低思考" },
+      { id: "research", name: "调研模式", summary: "只读", enforce: "readonly" },
+    ],
+    contextUsage: { tokens: 12400, contextWindow: 200000, percent: 6.2 },
+    messages: [
+      {
+        id: "m1",
+        role: "user",
+        blocks: [{ type: "text", text: "帮我看下登录失败的问题" }],
+      },
+      {
+        id: "m2",
+        role: "assistant",
+        blocks: [
+          { type: "thinking", text: "先看 auth 模块的会话过期处理，再确认并发下会不会重复清理。" },
+          { type: "text", text: "我先看一下相关文件。\n定位到原因：**会话过期时没有清理本地缓存**。" },
+          {
+            type: "tool",
+            name: "read",
+            args: '{"path":"src/auth/session.ts"}',
+            result: "export function loadSession() {\n  return cache.get('session') ?? null;\n}",
+          },
+          {
+            type: "text",
+            text: "修法如下：\n```ts\nexport function loadSession() {\n  const cached = cache.get('session');\n  if (!cached || isExpired(cached)) {\n    cache.delete('session');\n    return null;\n  }\n  return cached;\n}\n```\n这样就\n不会带着旧 token 重试了。",
+          },
+        ],
+      },
+      {
+        id: "m3",
+        role: "user",
+        blocks: [{ type: "text", text: "顺手把单测补上" }],
+      },
+      {
+        id: "m4",
+        role: "assistant",
+        blocks: [
+          { type: "tool", name: "edit", args: '{"path":"src/auth/session.test.ts"}', result: "已写入 3 个用例" },
+          { type: "text", text: "补了三个用例：未过期、已过期、并发。全部通过。" },
+        ],
+      },
+    ],
+    nextSeq: 0,
   };
 }
 

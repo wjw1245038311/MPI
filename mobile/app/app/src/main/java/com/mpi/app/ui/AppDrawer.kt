@@ -40,6 +40,7 @@ fun AppDrawerContent(
     onOpenHosts: () -> Unit,
     onAddHost: () -> Unit,
     onRefresh: () -> Unit,
+    onOpenThread: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         DrawerHeader(
@@ -89,7 +90,12 @@ fun AppDrawerContent(
                     }
                 } else {
                     items(threads, key = { it.id }) { thread ->
-                        DrawerThreadRow(title = thread.title, state = thread.state, updatedAt = thread.updatedAt)
+                        DrawerThreadRow(
+                            title = thread.title,
+                            state = thread.state,
+                            updatedAt = thread.updatedAt,
+                            onClick = { onOpenThread(thread.id) },
+                        )
                     }
                 }
             }
@@ -165,9 +171,17 @@ private fun StateDotSize(online: Boolean) {
 }
 
 @Composable
-private fun DrawerThreadRow(title: String, state: com.mpi.app.protocol.RemoteThreadState, updatedAt: Long) {
+private fun DrawerThreadRow(
+    title: String,
+    state: com.mpi.app.protocol.RemoteThreadState,
+    updatedAt: Long,
+    onClick: () -> Unit,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StateDot(state, size = 7)

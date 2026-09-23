@@ -62,18 +62,40 @@ fun MpiApp(container: AppContainer) {
                 onReset = viewModel::resetLocalData,
             )
 
-            state.showPairing -> PairingScreen(
-                state = state,
-                onPair = viewModel::pairWithLink,
-                onClearError = viewModel::clearPairingError,
-                onCancel = if (state.pairings.isEmpty()) null else viewModel::cancelAddHost,
-            )
+            state.showPairing -> {
+                // 「添加设备」是二级页：返回键应回到首屏，而不是退出应用（§4.4 逐级回退）
+                val cancelAdd = if (state.pairings.isEmpty()) null else viewModel::cancelAddHost
+                if (cancelAdd != null) {
+                    BackHandler(enabled = true) { cancelAdd() }
+                }
+                PairingScreen(
+                    state = state,
+                    onPair = viewModel::pairWithLink,
+                    onClearError = viewModel::clearPairingError,
+                    onCancel = cancelAdd,
+                )
+            }
 
-            else -> HomeWithDrawer(
-                state = state,
-                viewModel = viewModel,
-                onOpenHosts = { hostsOpen = true },
-            )
+            else -> {
+                val openThread = state.thread
+                if (state.openThreadId != null && openThread != null) {
+                    // 会话页返回键回到首屏（§4.4 逐级回退）
+                    BackHandler(enabled = true) { viewModel.closeThread() }
+                    ThreadScreen(
+                        view = openThread,
+                        projectName = state.host.projects
+                            .firstOrNull { it.id == openThread.summary?.projectId }?.name,
+                        onBack = viewModel::closeThread,
+                        onResync = viewModel::resyncThread,
+                    )
+                } else {
+                    HomeWithDrawer(
+                        state = state,
+                        viewModel = viewModel,
+                        onOpenHosts = { hostsOpen = true },
+                    )
+                }
+            }
         }
     }
 
@@ -120,6 +142,10 @@ private fun HomeWithDrawer(
                         viewModel.startAddHost()
                     },
                     onRefresh = viewModel::refresh,
+                    onOpenThread = { threadId ->
+                        scope.launch { drawerState.close() }
+                        viewModel.openThread(threadId)
+                    },
                 )
             }
         },
@@ -132,6 +158,10 @@ private fun HomeWithDrawer(
             onOpenHosts = onOpenHosts,
             onAddHost = viewModel::startAddHost,
             onDismissProblems = viewModel::dismissProblems,
+            onOpenThread = { threadId ->
+                viewModel.openThread(threadId)
+                scope.launch { drawerState.close() }
+            },
         )
     }
 }

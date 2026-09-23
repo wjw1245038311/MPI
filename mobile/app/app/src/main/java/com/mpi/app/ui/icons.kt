@@ -46,6 +46,13 @@ val IconChevronRight: ImageVector by lazy {
     }
 }
 
+/** 返回。 */
+val IconArrowLeft: ImageVector by lazy {
+    strokeIcon("ArrowLeft") {
+        moveTo(15f, 5f); lineTo(8f, 12f); lineTo(15f, 19f)
+    }
+}
+
 /** 关闭。 */
 val IconClose: ImageVector by lazy {
     strokeIcon("Close") {

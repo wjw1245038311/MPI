@@ -14,6 +14,8 @@ import com.mpi.app.data.PairingStage
 import com.mpi.app.data.RelayClient
 import com.mpi.app.data.Requester
 import com.mpi.app.data.SessionState
+import com.mpi.app.data.ThreadSession
+import com.mpi.app.data.ThreadView
 import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.PairingLink
 import com.mpi.app.protocol.PairingLinkException
@@ -46,6 +48,9 @@ data class AppUiState(
     val storeError: String? = null,
     /** 非致命问题的最近若干条（解密失败等），可关闭。 */
     val problems: List<String> = emptyList(),
+    /** 当前打开的会话（null = 在首屏）。 */
+    val openThreadId: String? = null,
+    val thread: ThreadView? = null,
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -71,7 +76,9 @@ class AppViewModel(
 
     private var identity: DeviceIdentity? = null
     private var session: HostSession? = null
+    private var requester: Requester? = null
     private var repository: HostRepository? = null
+    private var threadSession: ThreadSession? = null
     private var unsubscribeProblems: (() -> Unit)? = null
     private val jobs = mutableListOf<Job>()
 
@@ -195,6 +202,46 @@ class AppViewModel(
 
     fun dismissProblems() = _ui.update { it.copy(problems = emptyList()) }
 
+    // ---- 会话 ----
+
+    /** 打开一个会话：订阅快照并开始接收事件流。 */
+    fun openThread(threadId: String) {
+        val transport = session ?: return
+        val requesterRef = requester ?: return
+        closeThread()
+
+        val threadSessionLocal = ThreadSession(
+            threadId = threadId,
+            transport = transport,
+            request = { type, payload, tid -> requesterRef.request(type, payload, threadId = tid) },
+            scope = scope,
+        )
+        threadSession = threadSessionLocal
+        _ui.update { it.copy(openThreadId = threadId, thread = ThreadView(threadId)) }
+
+        jobs += scope.launch {
+            threadSessionLocal.view.collect { view -> _ui.update { it.copy(thread = view) } }
+        }
+        jobs += scope.launch {
+            runCatching { threadSessionLocal.subscribe() }.onFailure { error ->
+                _ui.update {
+                    it.copy(thread = it.thread?.copy(ready = true, errorBanner = error.message ?: "订阅失败"))
+                }
+            }
+        }
+    }
+
+    fun closeThread() {
+        threadSession?.detach()
+        threadSession = null
+        _ui.update { it.copy(openThreadId = null, thread = null) }
+    }
+
+    /** 手动重新同步（错误横幅上的按钮）。 */
+    fun resyncThread() {
+        scope.launch { runCatching { threadSession?.resync() } }
+    }
+
     /** 用户显式要求重置本地数据（存储损坏时给出这条路径）。 */
     fun resetLocalData() {
         scope.launch {
@@ -236,14 +283,26 @@ class AppViewModel(
 
         session = newSession
         repository = newRepository
+        requester = newRequester
         unsubscribeProblems = newSession.onProblem { problem ->
             _ui.update { state ->
-                state.copy(problems = (state.problems + problem).takeLast(MAX_PROBLEMS))
+                // 同一条问题不重复堆叠（重连循环会把同一句刷好几遍）
+                state.copy(problems = (state.problems.filterNot { it == problem } + problem).takeLast(MAX_PROBLEMS))
             }
         }
 
         jobs += scope.launch {
-            newSession.state.collect { state -> _ui.update { it.copy(session = state) } }
+            newSession.state.collect { state ->
+                _ui.update { it.copy(session = state) }
+                // 重连后重新同步当前会话：断线期间的事件丢了，seq 接不上
+                if (state is SessionState.Connected) {
+                    // 已恢复连接——离线期间的提示已经过时，清掉免得号人
+                    if (_ui.value.problems.isNotEmpty()) _ui.update { it.copy(problems = emptyList()) }
+                    threadSession?.let { open ->
+                        if (open.view.value.ready) scope.launch { runCatching { open.resync() } }
+                    }
+                }
+            }
         }
         jobs += scope.launch {
             newRepository.snapshot.collect { snapshot -> _ui.update { it.copy(host = snapshot) } }
@@ -258,6 +317,9 @@ class AppViewModel(
     }
 
     private fun detachSession() {
+        threadSession?.detach()
+        threadSession = null
+        _ui.update { it.copy(openThreadId = null, thread = null) }
         unsubscribeProblems?.invoke()
         unsubscribeProblems = null
         jobs.forEach { it.cancel() }
@@ -266,6 +328,7 @@ class AppViewModel(
         session?.stop()
         repository = null
         session = null
+        requester = null
     }
 
     override fun onCleared() {
