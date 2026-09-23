@@ -85,6 +85,17 @@ fun MpiApp(container: AppContainer) {
     var searchOpen by remember { mutableStateOf(false) }
     // 从会话返回时自动展开会话列表（抽屉）——「对话即主页」下它就是会话列表
     var drawerSignal by remember { mutableStateOf(0) }
+    // 没有会话可开时自动弹一次抽屉（否则只剩空白）；只弹一次，避免关不掉
+    var emptyListPrompted by remember { mutableStateOf(false) }
+    LaunchedEffect(state.openThreadId, state.host.loading, state.host.projects.size, state.host.allThreads.size) {
+        if (emptyListPrompted) return@LaunchedEffect
+        val nothingToOpen = state.openThreadId == null && !state.host.loading &&
+            state.host.projects.isNotEmpty() && state.host.allThreads.isEmpty()
+        if (nothingToOpen) {
+            emptyListPrompted = true
+            drawerSignal += 1
+        }
+    }
 
     // M5：Android 13+ 需要运行时申请通知权限（拒绝也不影响其它功能）
     val notificationPermission = rememberLauncherForActivityResult(

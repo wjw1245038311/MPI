@@ -102,12 +102,9 @@ fun HomeScreen(
                     onAction = onRefresh,
                 )
 
-            else -> CenteredMessage(
-                text = "会话列表在侧栏里",
-                detail = "点左上角菜单或下面的按钮打开，从里面选一个会话继续",
-                actionLabel = "打开会话列表",
-                onAction = onOpenDrawer,
-            )
+            // 没有会话可开时这里留白——列表就在侧栏（会自动弹出，见 MpiApp），
+            // 再放一块引导面板就是重复（用户反馈「完全多余」）。
+            else -> Unit
         }
     }
 }
