@@ -265,7 +265,21 @@ class HostSession(
     private fun onClosed(closed: RelayState.Closed) {
         aesKey = null
         when (closed.code) {
-            RelayClient.CLOSE_AUTH_FAILED -> fail(SessionFailure.AuthFailed, "中继拒绝认证（令牌已失效）")
+            // 中继重启后路由表为空，而主机的 uplink 还在重新上报已存 token。
+            // 这段窗口内 hello 会被拒（4001）——若一口咬定「必须重新配对」，
+            // 用户就得白白重配一次。所以先当作**可恢复**的连接问题重试几次，
+            // 超出上限才判定为终止性失败。
+            RelayClient.CLOSE_AUTH_FAILED -> {
+                if (attempt < AUTH_RETRY_LIMIT && !stopped) {
+                    attempt++
+                    scheduleReconnectOrFail(
+                        SessionFailure.Network,
+                        "中继暂时拒绝认证（第 $attempt 次重试）",
+                    )
+                } else {
+                    fail(SessionFailure.AuthFailed, "中继拒绝认证（令牌已失效，需要重新配对）")
+                }
+            }
 
             RelayClient.CLOSE_REVOKED -> fail(SessionFailure.Revoked, "桌面端已移除本设备")
 
@@ -341,6 +355,15 @@ class HostSession(
 
         /** 1s → 2s → 5s → 10s → 30s，之后维持 30s。 */
         val DEFAULT_BACKOFF = listOf(1_000L, 2_000L, 5_000L, 10_000L, 30_000L)
+
+        /**
+         * 认证被拒后的重试次数上限。
+         *
+         * 为什么需要：中继是无状态的（重启即丢路由表），而主机 uplink 重连后会补报已存
+         * token。这期间的 4001 是**暂时**的；直接判死会让用户无端重新配对。
+         * 也不能无上限重试——真的是令牌失效时，应当尽快让人看到「需要重新配对」。
+         */
+        const val AUTH_RETRY_LIMIT = 3
     }
 }
 

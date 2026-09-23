@@ -338,6 +338,27 @@ async function main() {
   uplinkRef = uplink;
   uplink.start();
 
+  // 窥视 host→device 的出站帧：排查「事件推不到设备」时，先确认它到底发没发出去、
+  // 发的是密文还是明文（uplink 在没有活跃 E2E 会话时会退化成明文）。
+  try {
+    const WS = (await import("ws")).default;
+    const originalSend = WS.prototype.send;
+    WS.prototype.send = function spiedSend(data, ...rest) {
+      try {
+        const obj = JSON.parse(String(data));
+        if (obj && typeof obj === "object" && typeof obj.to === "string") {
+          log(
+            `→ 出站 to=${obj.to} type=${obj.type ?? "<enc>"} ` +
+              (obj.e === 1 ? `密文 ${String(data).length}B` : `**明文** ${String(data).length}B`),
+          );
+        }
+      } catch { /* 非 JSON 忽略 */ }
+      return originalSend.call(this, data, ...rest);
+    };
+  } catch (error) {
+    log(`（出站窥视未启用：${error.message}）`);
+  }
+
   // 已配对过的设备不会再有 pairing 事件，从主机身份文件里直接取设备 id
   // （模拟事件流需要它；没开 HARNESS_SIMULATE 就无所谓）
   try {

@@ -26,7 +26,18 @@ const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 /** Control frames the relay itself consumes (never forwarded to the host). */
-const CONTROL_TYPES = new Set(["relay.ok", "relay.error", "offline", "pair.request", "device.online"]);
+// `replaced` / `revoked` 是中继发给**旧设备 socket** 的通知（设备被顶替 / 被撤销）。
+// 它们不含 `from`，若不当控制帧处理，会落到下面的数据帧分支、被当成
+// 「来自未知设备的帧」而打出一堆无意义的警告（实测刷了 59 条，全是噪音）。
+const CONTROL_TYPES = new Set([
+  "relay.ok",
+  "relay.error",
+  "offline",
+  "pair.request",
+  "device.online",
+  "replaced",
+  "revoked",
+]);
 
 export type RelayUplinkState = "disabled" | "connecting" | "connected" | "error";
 
@@ -246,7 +257,9 @@ export class RelayUplink implements RelayOutbound {
       const from = typeof msg.from === "string" ? msg.from : "";
       const connectionId = from ? this.deviceToConnection.get(from) : undefined;
       if (!connectionId) {
-        console.warn(`[relay-uplink] dropping frame from unknown device ${from || "?"}`);
+        // 带上帧类型：不带类型的警告在排查时没用（分不清是丢了一个重要请求
+        // 还是中继的 replaced/revoked 通知）
+        console.warn(`[relay-uplink] dropping ${type || "<no-type>"} frame from unknown device ${from || "?"}`);
         return;
       }
       // pair.hello carries the device's X25519 public key — derive the session
