@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -119,6 +120,7 @@ fun SettingsScreen(
                     icon = null,
                     title = "字号",
                     trailing = fontSizeLabel(settings.fontSize),
+                    showDivider = false,
                     onClick = { fontPicker = true },
                 )
             }
@@ -130,6 +132,7 @@ fun SettingsScreen(
                     title = "清理缓存",
                     trailing = cacheNote,
                     showArrow = false,
+                    showDivider = false,
                     onClick = {
                         val freed = clearAppCache(context)
                         cacheNote = if (freed >= 0) "已清理 ${formatBytes(freed)}" else "清理失败"
@@ -163,17 +166,25 @@ fun SettingsScreen(
                         icon = null,
                         title = if (updateDownloading) "下载中…" else "下载并安装 v${updateInfo.version}",
                         trailing = downloadTrailing(updateInfo),
+                        showDivider = false,
                         onClick = if (updateDownloading) null else onInstallUpdate,
                     )
                 }
                 if (updateNote != null) {
-                    SettingsItem(icon = null, title = updateNote, showArrow = false, onClick = onDismissUpdateError)
+                    SettingsItem(
+                        icon = null,
+                        title = updateNote,
+                        showArrow = false,
+                        showDivider = false,
+                        onClick = onDismissUpdateError,
+                    )
                 }
                 if (updateError != null) {
                     SettingsItem(
                         icon = null,
                         title = updateError,
                         showArrow = false,
+                        showDivider = false,
                         onClick = onDismissUpdateError,
                     )
                 }
@@ -186,6 +197,7 @@ fun SettingsScreen(
                     title = "断开并移除本设备",
                     danger = true,
                     showArrow = false,
+                    showDivider = false,
                     onClick = { confirmingRemove = true },
                 )
             }
@@ -262,27 +274,47 @@ fun SettingsScreen(
     }
 }
 
-/** 设置分组卡片（标题可空）。 */
+/** 设置分组卡片（标题可点击折叠）。 */
 @Composable
-private fun SettingsGroup(title: String?, content: @Composable ColumnScope.() -> Unit) {
+private fun SettingsGroup(
+    title: String?,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    var expanded by rememberSaveable(title) { mutableStateOf(true) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         if (title != null) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelSmall,
-                color = MpiTheme.colors.textFaint,
-                modifier = Modifier.padding(start = 6.dp, top = 18.dp, bottom = 6.dp),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(start = 6.dp, end = 6.dp, top = 18.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MpiTheme.colors.textFaint,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    imageVector = if (expanded) IconChevronDown else IconChevronRight,
+                    contentDescription = if (expanded) "折叠" else "展开",
+                    tint = MpiTheme.colors.textFaint,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
         } else {
             Spacer(Modifier.height(18.dp))
         }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .background(MpiTheme.colors.surfaceMuted),
-            content = content,
-        )
+        if (expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MpiTheme.colors.surfaceMuted),
+                content = content,
+            )
+        }
     }
 }
 
@@ -294,48 +326,58 @@ private fun SettingsItem(
     trailing: String? = null,
     danger: Boolean = false,
     showArrow: Boolean = true,
+    /** 底部细分线（分组内最后一项传 false）。 */
+    showDivider: Boolean = true,
     onClick: (() -> Unit)?,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = onClick != null) { onClick?.invoke() }
-            .padding(horizontal = 14.dp, vertical = 15.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (icon != null) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (danger) MpiTheme.colors.err else MpiTheme.colors.textDim,
-                modifier = Modifier.size(19.dp),
-            )
-        } else {
-            Spacer(Modifier.size(19.dp))
-        }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (danger) MpiTheme.colors.err else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-        )
-        if (trailing != null) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = onClick != null) { onClick?.invoke() }
+                .padding(horizontal = 14.dp, vertical = 15.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (danger) MpiTheme.colors.err else MpiTheme.colors.textDim,
+                    modifier = Modifier.size(19.dp),
+                )
+            } else {
+                Spacer(Modifier.size(19.dp))
+            }
             Text(
-                text = trailing,
-                style = MaterialTheme.typography.bodySmall,
-                color = MpiTheme.colors.textFaint,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(end = 2.dp),
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (danger) MpiTheme.colors.err else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
             )
+            if (trailing != null) {
+                Text(
+                    text = trailing,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MpiTheme.colors.textFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(end = 2.dp),
+                )
+            }
+            if (showArrow) {
+                Icon(
+                    imageVector = IconChevronRight,
+                    contentDescription = null,
+                    tint = MpiTheme.colors.textFaint,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
         }
-        if (showArrow) {
-            Icon(
-                imageVector = IconChevronRight,
-                contentDescription = null,
-                tint = MpiTheme.colors.textFaint,
-                modifier = Modifier.size(15.dp),
+        if (showDivider) {
+            HorizontalDivider(
+                color = MpiTheme.colors.border,
+                modifier = Modifier.padding(start = 45.dp),
             )
         }
     }

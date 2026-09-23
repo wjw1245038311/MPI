@@ -296,3 +296,10 @@ val IconSettings: ImageVector by lazy {
         moveTo(16.6f, 7.4f); lineTo(18.2f, 5.8f)
     }
 }
+
+/** 向下尖括号（分组折叠/展开）。 */
+val IconChevronDown: ImageVector by lazy {
+    strokeIcon("ChevronDown") {
+        moveTo(6f, 9f); lineTo(12f, 15f); lineTo(18f, 9f)
+    }
+}
