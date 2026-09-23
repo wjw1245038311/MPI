@@ -99,6 +99,9 @@ fun ThreadScreen(
     onRetry: (String) -> Unit,
     onRespond: (kotlinx.serialization.json.JsonObject) -> Unit,
     onSendChoice: (String) -> Unit,
+    onRenameThread: (String, String) -> Unit,
+    onTogglePinThread: (String, Boolean) -> Unit,
+    onDeleteThread: (String) -> Unit,
     choiceDrafts: Map<String, ChoiceAnswer>,
     onChoiceDraftChange: (String, ChoiceAnswer?) -> Unit,
     onClearChoiceDrafts: (String) -> Unit,
@@ -136,6 +139,7 @@ fun ThreadScreen(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
+    var threadActionsOpen by remember { mutableStateOf(false) }
     val renderable = view.renderable
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
 
@@ -157,6 +161,7 @@ fun ThreadScreen(
             running = view.running,
             compacting = view.compacting,
             onBack = onBack,
+            onMore = { threadActionsOpen = true },
         )
 
         // 会话级配置 chip 行（§4.4）——权限 / 模式 / 模型 / 上下文用量。
@@ -277,6 +282,28 @@ fun ThreadScreen(
             onReEditPending = onReEditPending,
             onDismissSendError = onDismissSendError,
         )
+
+        // 顶栏「⋮」：会话操作（重命名 / 置顶 / 删除）
+        if (threadActionsOpen) {
+            ThreadActionDialog(
+                title = view.summary?.title?.ifEmpty { null } ?: "会话",
+                pinned = view.summary?.pinned == true,
+                busy = false,
+                onDismiss = { threadActionsOpen = false },
+                onRename = { name ->
+                    threadActionsOpen = false
+                    onRenameThread(view.threadId, name)
+                },
+                onTogglePin = { pinned ->
+                    threadActionsOpen = false
+                    onTogglePinThread(view.threadId, pinned)
+                },
+                onDelete = {
+                    threadActionsOpen = false
+                    onDeleteThread(view.threadId)
+                },
+            )
+        }
 
         if (sheet != null) {
             ThreadToolbarSheet(
@@ -773,6 +800,7 @@ private fun ThreadTopBar(
     running: Boolean,
     compacting: Boolean,
     onBack: () -> Unit,
+    onMore: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
@@ -781,7 +809,8 @@ private fun ThreadTopBar(
         IconButton(onClick = onBack) {
             Icon(IconArrowLeft, contentDescription = "返回", tint = MaterialTheme.colorScheme.onSurface)
         }
-        Column(Modifier.weight(1f)) {
+        // 标题最多占「总宽 − 右侧按钮」，超长就省略号（不再顶到右边）
+        Column(Modifier.weight(1f).padding(end = 6.dp)) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
@@ -809,6 +838,16 @@ private fun ThreadTopBar(
         }
         if (running || compacting) {
             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+        }
+        if (onMore != null) {
+            IconButton(onClick = onMore) {
+                Icon(
+                    IconMoreVertical,
+                    contentDescription = "会话操作",
+                    tint = MpiTheme.colors.textDim,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
     }
 }

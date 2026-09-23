@@ -269,3 +269,12 @@ val IconFile: ImageVector by lazy {
         moveTo(14f, 3f); lineTo(14f, 8f); lineTo(19f, 8f)
     }
 }
+
+/** 更多（竖排三点，圆头描边显示为圆点）。 */
+val IconMoreVertical: ImageVector by lazy {
+    strokeIcon("MoreVertical") {
+        moveTo(12f, 5.5f); lineTo(12f, 5.6f)
+        moveTo(12f, 12f); lineTo(12f, 12.1f)
+        moveTo(12f, 18.5f); lineTo(12f, 18.6f)
+    }
+}

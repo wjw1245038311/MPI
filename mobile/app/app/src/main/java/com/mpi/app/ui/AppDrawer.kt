@@ -275,7 +275,7 @@ private fun DrawerThreadRow(
  * 置顶态主机列表不返回，菜单按本端已知状态显示「置顶 / 取消置顶」。
  */
 @Composable
-private fun ThreadActionDialog(
+internal fun ThreadActionDialog(
     title: String,
     pinned: Boolean,
     busy: Boolean,
