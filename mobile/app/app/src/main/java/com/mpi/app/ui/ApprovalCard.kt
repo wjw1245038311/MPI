@@ -29,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -38,6 +39,9 @@ import androidx.compose.ui.unit.sp
 import com.mpi.app.protocol.UiRequest
 import com.mpi.app.ui.theme.MpiTheme
 import kotlinx.serialization.json.JsonObject
+
+/** 审批卡最多占屏高的比例（其余留给消息列表 + 输入条）。 */
+private const val MAX_HEIGHT_FRACTION = 0.5f
 
 /**
  * 审批卡（§4.4 / §6.4）：agent 暂停等回应时停在输入条上方。
@@ -60,13 +64,22 @@ fun ApprovalCard(
 ) {
     var input by remember(request.id) { mutableStateOf(request.prefill.orEmpty()) }
 
+    // 卡片高度上限：审批卡停在输入条上方，若它把整屏占满，消息列表会被挤到 0
+    // （真机反馈：带长 diff 的审批一出现，上面的对话就看不见了）。
+    // 超过时卡片内部滚动——按钮仍可滚到，但列表始终保有空间。
+    val maxHeight = (LocalConfiguration.current.screenHeightDp * MAX_HEIGHT_FRACTION).dp
+    val contentScroll = rememberScrollState()
+
     Surface(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = modifier.fillMaxWidth().heightIn(max = maxHeight).padding(horizontal = 10.dp, vertical = 6.dp),
         shape = RoundedCornerShape(12.dp),
         color = MpiTheme.colors.surfaceMuted,
         tonalElevation = 0.dp,
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            Modifier.padding(12.dp).verticalScroll(contentScroll),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "需要你决定",
@@ -220,7 +233,7 @@ private fun DiffPreview(diff: com.mpi.app.protocol.UiDiff) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 220.dp)
+                .heightIn(max = 150.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(MpiTheme.colors.codeBg)
                 .verticalScroll(vertical)

@@ -35,3 +35,40 @@ class ThreadComposerLogicTest {
         assertEquals("", messageTextOf(message))
     }
 }
+
+/** 工具调用显示/隐藏（本地设置）：只影响展示，不影响复制/choices 口径。 */
+class ThreadVisibilityLogicTest {
+
+    private fun assistant(vararg blocks: MessageBlock) = ThreadMessage(id = "m", role = "assistant", blocks = blocks.toList())
+
+    @Test
+    fun `showing tools returns the list untouched`() {
+        val messages = listOf(assistant(MessageBlock(type = BlockType.Tool, name = "bash")))
+        assertEquals(messages, com.mpi.app.ui.visibleMessages(messages, showToolCalls = true))
+    }
+
+    @Test
+    fun `hiding tools drops tool blocks but keeps the rest`() {
+        val messages = listOf(
+            assistant(
+                MessageBlock(type = BlockType.Thinking, text = "想一下"),
+                MessageBlock(type = BlockType.Tool, name = "bash", text = "结果"),
+                MessageBlock(type = BlockType.Text, text = "说完了"),
+            ),
+        )
+        val visible = com.mpi.app.ui.visibleMessages(messages, showToolCalls = false)
+        assertEquals(1, visible.size)
+        assertEquals(listOf(BlockType.Thinking, BlockType.Text), visible.single().blocks.map { it.type })
+    }
+
+    @Test
+    fun `a message with only tool blocks disappears entirely`() {
+        val messages = listOf(
+            assistant(MessageBlock(type = BlockType.Tool, name = "bash")),
+            assistant(MessageBlock(type = BlockType.Text, text = "有正文")),
+        )
+        val visible = com.mpi.app.ui.visibleMessages(messages, showToolCalls = false)
+        assertEquals(1, visible.size)
+        assertEquals("有正文", visible.single().blocks.single().text)
+    }
+}

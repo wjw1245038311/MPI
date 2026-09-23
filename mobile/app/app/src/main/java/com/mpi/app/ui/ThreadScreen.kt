@@ -104,6 +104,9 @@ fun ThreadScreen(
     onSendChoice: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
+    /** 是否显示工具/终端调用行（本地设置，默认显示）。 */
+    showToolCalls: Boolean,
+    onToggleToolCalls: () -> Unit,
     choiceDrafts: Map<String, ChoiceAnswer>,
     onChoiceDraftChange: (String, ChoiceAnswer?) -> Unit,
     onClearChoiceDrafts: (String) -> Unit,
@@ -136,6 +139,7 @@ fun ThreadScreen(
     onDismissConfigError: () -> Unit,
     onSetPermission: (RemotePermission) -> Unit,
     onSetModel: (String, String) -> Unit,
+    onSetThinking: (String) -> Unit,
     onSetMode: (String) -> Unit,
     onCompact: () -> Unit,
     modifier: Modifier = Modifier,
@@ -143,6 +147,8 @@ fun ThreadScreen(
     val listState = rememberLazyListState()
     val renderable = view.renderable
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
+    // 工具行隐藏时的可见列表（纯函数，可单测）：只影响展示，不影响 allMessages 的状态推导
+    val display = visibleMessages(renderable, showToolCalls)
 
     // 「贴底跟随」记的是**用户意图**：只有用户自己往回滚才取消，内容增长本身不算。
     // 旧写法直接拿 atBottom 当跟随条件：增量事件常早于测量，滚动会停在半路，
@@ -159,11 +165,11 @@ fun ThreadScreen(
     // 内容增长时，只要还在跟随就贴底。key 取「消息数 + 流式内容总长度」：
     // 只看最后一块的长度会漏掉「变的不是最后一块」（如工具结果回填）。
     val streamLength = view.streaming?.blocks?.sumOf { it.text?.length ?: 0 } ?: 0
-    LaunchedEffect(renderable.size, streamLength) {
-        if (following && renderable.isNotEmpty()) {
+    LaunchedEffect(display.size, streamLength) {
+        if (following && display.isNotEmpty()) {
             // 必须用大 offset 真滚到底：scrollToItem(lastIndex) 只是把最后一条的“顶部”
             // 对齐视口，最后一条很长时仍可下滚，atBottom 就永远为 false（按钮不消失）。
-            listState.scrollToItem(renderable.lastIndex, Int.MAX_VALUE)
+            listState.scrollToItem(display.lastIndex, Int.MAX_VALUE)
         }
     }
 
@@ -175,6 +181,8 @@ fun ThreadScreen(
             state = view.summary?.state,
             running = view.running,
             compacting = view.compacting,
+            showToolCalls = showToolCalls,
+            onToggleToolCalls = onToggleToolCalls,
             onBack = onBack,
             onOpenSettings = onOpenSettings,
             onOpenSearch = onOpenSearch,
@@ -243,14 +251,14 @@ fun ThreadScreen(
             when {
                 !view.ready -> CenteredHint(text = "正在载入会话…", loading = true)
 
-                renderable.isEmpty() -> CenteredHint(text = "这个会话还没有消息")
+                display.isEmpty() -> CenteredHint(text = "这个会话还没有消息")
 
                 else -> LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 10.dp),
                 ) {
-                    items(renderable, key = { it.id }) { message ->
+                    items(display, key = { it.id }) { message ->
                         MessageRow(
                             message = message,
                             onRetry = onRetry,
@@ -266,10 +274,10 @@ fun ThreadScreen(
                 }
             }
 
-            if (!atBottom && renderable.isNotEmpty()) {
+            if (!atBottom && display.isNotEmpty()) {
                 ScrollToBottomButton(
                     listState = listState,
-                    itemCount = renderable.size,
+                    itemCount = display.size,
                     // 手动回到底部 = 重新跟随，否则下一条增量又不会自动跟
                     onFollowAgain = { following = true },
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp),
@@ -329,6 +337,7 @@ fun ThreadScreen(
                 onDismiss = onDismissConfigSheet,
                 onSetPermission = onSetPermission,
                 onSetModel = onSetModel,
+                onSetThinking = onSetThinking,
                 onSetMode = onSetMode,
                 onCompact = onCompact,
                 onRefresh = onResync,
@@ -829,6 +838,8 @@ private fun ThreadTopBar(
     state: RemoteThreadState?,
     running: Boolean,
     compacting: Boolean,
+    showToolCalls: Boolean,
+    onToggleToolCalls: () -> Unit,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
@@ -874,6 +885,15 @@ private fun ThreadTopBar(
             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
         }
         // 搜索与设置（截图那种右侧图标组）
+        // 工具行显示开关：终端图标（带斜杠 = 已隐藏），设置会持久化
+        IconButton(onClick = onToggleToolCalls) {
+            Icon(
+                if (showToolCalls) IconTerminal else IconTerminalOff,
+                contentDescription = if (showToolCalls) "隐藏工具调用" else "显示工具调用",
+                tint = if (showToolCalls) MpiTheme.colors.textDim else MpiTheme.colors.textFaint,
+                modifier = Modifier.size(19.dp),
+            )
+        }
         IconButton(onClick = onOpenSearch) {
             Icon(
                 IconSearch,
@@ -896,6 +916,24 @@ private fun ThreadTopBar(
 /** 消息正文（复制用）：只取文本块，工具 / 思考 / 图片不参与。 */
 internal fun messageTextOf(message: ThreadMessage): String =
     message.blocks.filter { it.type == BlockType.Text }.mapNotNull { it.text }.joinToString("\n").trim()
+
+/**
+ * 按「是否显示工具调用」过滤要渲染的消息（纯函数，可单测）：
+ * - 隐藏时丢掉 tool 块；
+ * - 丢掉后完全没有块的消息一并丢掉（否则会留下空白的助手气泡）；
+ * - 只用于展示，调用方仍拿原列表做 choices 面板的状态推导。
+ */
+internal fun visibleMessages(messages: List<ThreadMessage>, showToolCalls: Boolean): List<ThreadMessage> {
+    if (showToolCalls) return messages
+    return messages.mapNotNull { message ->
+        if (message.blocks.none { it.type == BlockType.Tool }) {
+            message
+        } else {
+            val blocks = message.blocks.filterNot { it.type == BlockType.Tool }
+            if (blocks.isEmpty()) null else message.copy(blocks = blocks)
+        }
+    }
+}
 
 @Composable
 private fun MessageRow(

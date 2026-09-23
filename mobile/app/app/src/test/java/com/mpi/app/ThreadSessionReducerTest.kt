@@ -156,6 +156,27 @@ class ThreadSessionReducerTest {
         session.detach()
     }
 
+    @Test
+    fun `snapshot carries the thinking level and its options`() = runBlocking {
+        val session = newSession()
+        session.subscribe()
+
+        assertEquals("low", session.view.value.thinkingLevel)
+        assertEquals(listOf("off", "low", "high"), session.view.value.availableThinkingLevels)
+        session.detach()
+    }
+
+    @Test
+    fun `config changed updates the thinking level`() = runBlocking {
+        val transport = FakeTransport()
+        val session = newSession(transport)
+        session.subscribe()
+
+        transport.deliver(event(seq = 1, kind = "config_changed", data = buildJsonObject { put("thinkingLevel", "high") }))
+        assertEquals("high", session.view.value.thinkingLevel)
+        session.detach()
+    }
+
     // ---- 事件缓冲与 seq ----
 
     @Test
@@ -715,7 +736,7 @@ class ThreadSessionReducerTest {
               "messageCount":2,"state":"idle","permission":"full","cwdName":"MPI",
               "model":{"provider":"anthropic","id":"model-x"},
               "availableModels":[{"provider":"anthropic","id":"model-x","name":"Model X"}],
-              "thinkingLevel":"low","taskMode":null,
+              "thinkingLevel":"low","thinkingLevels":["off","low","high"],"taskMode":null,
               "availableModes":[{"id":"iterate","name":"迭代","summary":"沙盒 · 低思考"}],
               "contextUsage":{"tokens":10,"contextWindow":100,"percent":10},
               "messages":[

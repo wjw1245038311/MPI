@@ -123,6 +123,8 @@ export interface RemoteThreadSnapshot extends RemoteThreadSummary {
   availableModels: RemoteModelOption[];
   skills: RemoteSkill[];
   thinkingLevel: string;
+  /** 当前模型可选的思考档位（如 `["off","low","high"]`）；主机未上报时手机端自行推断。 */
+  thinkingLevels?: string[];
   /** Applied task mode id (null = baseline / no behavioural mode). */
   taskMode?: string | null;
   /** Task-mode presets the host will accept in `thread.setMode`. */

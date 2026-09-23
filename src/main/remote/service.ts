@@ -19,6 +19,8 @@ export interface RemoteBackend {
   createThread(projectId: string, name?: string, permission?: RemotePermission): Promise<RemoteThreadSnapshot>;
   setPermission(threadId: string, permission: RemotePermission): Promise<RemoteThreadSnapshot>;
   setModel(threadId: string, provider: string, modelId: string): Promise<RemoteThreadSnapshot>;
+  /** 设置思考档位（pi RPC `set_thinking_level`）；主机按当前模型可选档位校验。 */
+  setThinking(threadId: string, level: string): Promise<RemoteThreadSnapshot>;
   /** Apply a task-mode preset (bundles permission + thinking + behaviour).
    * Empty modeId clears the mode (back to baseline). */
   setMode(threadId: string, modeId: string): Promise<RemoteThreadSnapshot>;
@@ -189,6 +191,14 @@ export class RemoteService {
         const modeId = typeof payload.modeId === "string" ? payload.modeId.slice(0, 80) : "";
         return responseFor(request, {
           snapshot: await this.backend.setMode(threadId, modeId),
+        });
+      }
+      case "thread.setThinking": {
+        const threadId = this.requiredThread(request);
+        this.assertWriter(threadId, context);
+        const level = this.requiredShortString(payload, "level");
+        return responseFor(request, {
+          snapshot: await this.backend.setThinking(threadId, level),
         });
       }
       case "thread.compact": {

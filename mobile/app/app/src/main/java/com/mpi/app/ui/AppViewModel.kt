@@ -762,6 +762,8 @@ class AppViewModel(
 
     fun setModel(provider: String, modelId: String) = configAction { it.setModel(provider, modelId) }
 
+    fun setThinking(level: String) = configAction { it.setThinking(level) }
+
     fun setMode(modeId: String) = configAction { it.setMode(modeId) }
 
     /**

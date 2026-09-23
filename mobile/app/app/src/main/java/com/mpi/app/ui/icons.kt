@@ -357,3 +357,21 @@ val IconChevronDown: ImageVector by lazy {
         moveTo(6f, 9f); lineTo(12f, 15f); lineTo(18f, 9f)
     }
 }
+
+/** 终端（工具 / bash 调用）：外框 + `>` 提示符 + 光标。 */
+val IconTerminal: ImageVector by lazy {
+    strokeIcon("Terminal") {
+        moveTo(4f, 5f); lineTo(20f, 5f); lineTo(20f, 19f); lineTo(4f, 19f); close()
+        moveTo(8f, 9.5f); lineTo(11f, 12f); lineTo(8f, 14.5f)
+        moveTo(13.5f, 14.5f); lineTo(16.5f, 14.5f)
+    }
+}
+
+/** 终端 + 斜杠：工具调用已隐藏。 */
+val IconTerminalOff: ImageVector by lazy {
+    strokeIcon("TerminalOff") {
+        moveTo(4f, 5f); lineTo(20f, 5f); lineTo(20f, 19f); lineTo(4f, 19f); close()
+        moveTo(8f, 9.5f); lineTo(11f, 12f); lineTo(8f, 14.5f)
+        moveTo(5.5f, 18.5f); lineTo(18.5f, 5.5f)
+    }
+}

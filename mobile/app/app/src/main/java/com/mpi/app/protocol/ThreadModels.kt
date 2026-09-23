@@ -134,6 +134,8 @@ data class ThreadSnapshot(
     val model: ModelRef? = null,
     val availableModels: List<ModelOption> = emptyList(),
     val thinkingLevel: String = "",
+    /** 当前模型可选的思考档位；主机未上报时为空（客户端自行推断）。 */
+    val thinkingLevels: List<String> = emptyList(),
     val taskMode: String? = null,
     val availableModes: List<TaskModeOption> = emptyList(),
     val contextUsage: ContextUsage? = null,
@@ -233,6 +235,7 @@ internal data class ThreadSnapshotDto(
     val model: ModelRefDto? = null,
     val availableModels: List<ModelOptionDto> = emptyList(),
     val thinkingLevel: String = "",
+    val thinkingLevels: List<String> = emptyList(),
     val taskMode: String? = null,
     val availableModes: List<TaskModeDto> = emptyList(),
     val contextUsage: ContextUsageDto? = null,
@@ -290,6 +293,7 @@ object ThreadModels {
         model = model?.takeIf { it.id.isNotEmpty() }?.let { ModelRef(it.provider, it.id) },
         availableModels = availableModels.filter { it.id.isNotEmpty() }.map { ModelOption(it.provider, it.id, it.name, it.reasoning) },
         thinkingLevel = thinkingLevel,
+        thinkingLevels = thinkingLevels.filter { it.isNotBlank() },
         taskMode = taskMode,
         availableModes = availableModes.filter { it.id.isNotEmpty() }
             .map { TaskModeOption(it.id, it.name, it.summary, it.enforce == "readonly") },

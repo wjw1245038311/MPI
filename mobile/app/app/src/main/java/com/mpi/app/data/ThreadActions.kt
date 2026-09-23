@@ -90,6 +90,13 @@ class ThreadActions(
         "setModel",
     )
 
+    /** 思考档位（off / minimal / low / …）。主机按当前模型可选档位校验。 */
+    suspend fun setThinking(level: String): JsonElement? = writeRequest(
+        "thread.setThinking",
+        buildJsonObject { put("level", level) },
+        "setThinking",
+    )
+
     /** modeId 传空串 = 清除模式回到基线。 */
     suspend fun setMode(modeId: String): JsonElement? = writeRequest(
         "thread.setMode",

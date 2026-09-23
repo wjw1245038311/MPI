@@ -2,7 +2,7 @@
 
 > **本文自包含**：新会话读完即可开工，不需要前序上下文。
 > 设计基线在 `docs/MOBILE-NATIVE-DESIGN.md`（选型、IA、视觉、阶段划分都在那里）。
-> 最后更新：2026-09-23。
+> 最后更新：2026-09-24。
 
 ---
 
@@ -153,6 +153,21 @@ npm test -- relay && npm run test:pwa-pairing
 **未做**：真增量（方案 B，协议加 `sinceMessageId`）；缓存只随 subscribe/resync 更新，
 用户读完流式内容又没重开时会落后一次同步（下次打开会刷新）。
 
+### 对话界面修正（✅ 已实现，待真机复验）
+
+| 问题 | 根因 / 改法 | 落点 |
+| --- | --- | --- |
+| 切走再切回会话，模型回退成刷新前 | `thread.subscribe` 的磁盘快照只看 session 文件里的旧模型；已打开的桥才能反映实时切换。改为磁盘快照优先用已打开桥的 model/thinkingLevel（不额外冷启动） | `src/main/ipc.ts` `remoteSnapshot` |
+| 需要改「思考模式」 | 新增 `thread.setThinking`（写租约 + 广播 `config_changed`）；快照新增 `thinkingLevels`（按当前模型 `thinkingLevelMap`） | `src/main/remote/service.ts`、`src/main/ipc.ts`、`protocol/remote-v1.schema.json`、`mobile/shared/protocol.ts` |
+| 工具/终端调用不能隐藏 | 顶栏终端图标（带斜杠 = 隐藏）；`visibleMessages()` 纯函数过滤 tool 块；开关存 `SettingsStore` | `ui/ThreadScreen.kt`、`ui/icons.kt`、`data/SettingsStore.kt` |
+| 长 diff 审批卡把消息列表挤没 | 卡片限高 50% 屏高 + 内部滚动；diff 预览上限 220→150dp | `ui/ApprovalCard.kt` |
+
+**测试**：`ThreadVisibilityLogicTest`（3 项）、`ThinkingLevelLogicTest`（4 项）、
+`ThreadSessionReducerTest` 思考档位 2 项；`npm run typecheck` + `npm test -- relay` 通过。
+模拟器验过：思考行（关/低/高）、工具开关切换、审批卡限高后列表仍可见。
+
+⚠️ **模型回退修复在主进程**，验证需**重启桌面端 MPI**（Ctrl+R 不够）。
+
 ### M2-6 真机验收（需要用户配合）
 
 验收标准：真机完成一轮「看进度 + 发指令 + 批准」+ 键盘无卡顿。
@@ -267,6 +282,9 @@ npm test -- relay && npm run test:pwa-pairing
 | 8 | 点「允许」 | 电脑弹窗消失、agent 继续（✅ 已修，见 §5.0；待复验） |
 | 9 | 退出会话再进（或杀进程重开） | **先立刻显示上次内容**（顶部短暂出现「显示本地缓存」，随后自动消失） |
 | 10 | 开飞行模式后杀进程重开 App | 首页仍有上次的会话列表，顶栏标「离线 · 显示本地缓存」；**不白屏** |
+| 11 | 在配置面板改模型 → 切到别的会话 → 再切回 | 模型仍是刚改的那个（**需先重启桌面端**） |
+| 12 | 配置面板「思考」一行 | 改档位后 chip/面板选中态同步；切走再回不变 |
+| 13 | 顶栏终端图标 | 隐藏后 bash/read/edit 行不再占屏；重启 App 仍保持 |
 
 第 6、7 步是重点。第 9、10 步验本地缓存（A 方案）。回报时请附：哪步不符预期 + 界面上是否有红色横幅文字（关键线索）。
 

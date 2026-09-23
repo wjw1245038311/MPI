@@ -102,3 +102,50 @@ class ThreadToolbarLogicTest {
         assertEquals("abcdefghijklmnopq…", modelChipLabel(long))
     }
 }
+
+/** 思考档位（新增）：主机上报优先，否则按模型 reasoning 推断。 */
+class ThinkingLevelLogicTest {
+
+    private fun view(
+        model: ModelRef? = null,
+        models: List<ModelOption> = emptyList(),
+        hostLevels: List<String> = emptyList(),
+    ) = ThreadView(threadId = "t", model = model, availableModels = models, availableThinkingLevels = hostLevels)
+
+    @Test
+    fun `labels are localized and unknown values pass through`() {
+        assertEquals("关", com.mpi.app.ui.thinkingLevelLabel("off"))
+        assertEquals("中", com.mpi.app.ui.thinkingLevelLabel("medium"))
+        assertEquals("极高", com.mpi.app.ui.thinkingLevelLabel("xhigh"))
+        assertEquals("奇怪档", com.mpi.app.ui.thinkingLevelLabel("奇怪档"))
+    }
+
+    @Test
+    fun `host reported levels win`() {
+        val options = com.mpi.app.ui.thinkingLevelOptions(
+            view(model = ModelRef("p", "m"), hostLevels = listOf("off", "high")),
+        )
+        assertEquals(listOf("off", "high"), options)
+    }
+
+    @Test
+    fun `a non reasoning model only offers off`() {
+        val options = com.mpi.app.ui.thinkingLevelOptions(
+            view(model = ModelRef("p", "m"), models = listOf(ModelOption("p", "m", reasoning = false))),
+        )
+        assertEquals(listOf("off"), options)
+    }
+
+    @Test
+    fun `a reasoning model offers the default ladder`() {
+        val options = com.mpi.app.ui.thinkingLevelOptions(
+            view(model = ModelRef("p", "m"), models = listOf(ModelOption("p", "m", reasoning = true))),
+        )
+        assertEquals(com.mpi.app.ui.DEFAULT_THINKING_LEVELS, options)
+    }
+
+    @Test
+    fun `no model means only off`() {
+        assertEquals(listOf("off"), com.mpi.app.ui.thinkingLevelOptions(view()))
+    }
+}

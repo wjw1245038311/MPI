@@ -113,6 +113,43 @@ fun modelChipLabel(view: ThreadView): String {
     return if (short.length > 18) short.take(17) + "…" else short
 }
 
+// ---- 思考档位（纯函数）----
+
+/** 主机未上报可选档位时的兜底列表（与桌面端 THINK_LEVELS 的前五档一致）。 */
+val DEFAULT_THINKING_LEVELS = listOf("off", "minimal", "low", "medium", "high")
+
+/** 档位中文标签（未知取值原样显示，不隐藏）。 */
+fun thinkingLevelLabel(level: String): String = when (level) {
+    "off" -> "关"
+    "minimal" -> "最低"
+    "low" -> "低"
+    "medium" -> "中"
+    "high" -> "高"
+    "xhigh" -> "极高"
+    "max" -> "最高"
+    else -> level
+}
+
+/** 当前档位文案（chip / 面板标题用）。 */
+fun thinkingLevelChipLabel(view: ThreadView): String {
+    val current = view.thinkingLevel ?: return "思考：—"
+    return "思考：${thinkingLevelLabel(current)}"
+}
+
+/**
+ * 可选思考档位：
+ * 1. 主机上报了就用它（按当前模型的 `thinkingLevelMap` 过滤过，最准）；
+ * 2. 未上报时看当前模型是否支持 reasoning：支持 → 常用五档；
+ * 3. 模型元信息也未知 → 给全量，交给主机校验并返回明确错误（不静默失败）。
+ */
+fun thinkingLevelOptions(view: ThreadView): List<String> {
+    if (view.availableThinkingLevels.isNotEmpty()) return view.availableThinkingLevels
+    val model = view.model ?: return listOf("off")
+    val option = view.availableModels.firstOrNull { it.provider == model.provider && it.id == model.id }
+        ?: return DEFAULT_THINKING_LEVELS
+    return if (option.reasoning) DEFAULT_THINKING_LEVELS else listOf("off")
+}
+
 // ---- 面板 ----
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -124,6 +161,7 @@ fun ConfigSheet(
     onDismiss: () -> Unit,
     onSetPermission: (RemotePermission) -> Unit,
     onSetModel: (String, String) -> Unit,
+    onSetThinking: (String) -> Unit,
     onSetMode: (String) -> Unit,
     onCompact: () -> Unit,
     onRefresh: () -> Unit,
@@ -291,6 +329,19 @@ fun ConfigSheet(
                             }
                         }
                     }
+                }
+            }
+
+            // 思考档位（模型下面：与桌面端同一组概念）
+            ConfigRow("思考") {
+                val levels = thinkingLevelOptions(view)
+                val current = view.thinkingLevel
+                levels.forEach { level ->
+                    OptionChip(
+                        label = thinkingLevelLabel(level),
+                        selected = current == level,
+                        enabled = !busy,
+                    ) { onSetThinking(level) }
                 }
             }
 

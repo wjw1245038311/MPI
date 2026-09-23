@@ -118,6 +118,7 @@ function makeService(responseFor, errorFor, makeEnvelope) {
         case "thread.abort":
         case "thread.setModel":
         case "thread.setMode":
+        case "thread.setThinking":
         case "thread.setPermission":
         case "ui.respond":
           log(`  写请求 ${request.type}：${JSON.stringify(request.payload ?? {})}`);
@@ -245,6 +246,7 @@ function snapshotOf(threadId) {  const now = Date.now();
       { provider: "openai", id: "model-y", name: "Model Y", reasoning: true },
     ],
     thinkingLevel: "low",
+    thinkingLevels: ["off", "low", "high"],
     taskMode: null,
     availableModes: [
       { id: "iterate", name: "迭代模式", summary: "沙盒 · 低思考" },

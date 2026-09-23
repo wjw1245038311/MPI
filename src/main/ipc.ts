@@ -1052,6 +1052,21 @@ async function gatherThread(bridge: PiBridge, threadId: string, permission: Perm
   };
 }
 
+/**
+ * 当前桥可用的思考档位（pi `get_available_thinking_levels` 返回 `{ levels }`）。
+ * 失败或为空时不报字段 —— 手机端会按模型 `reasoning` 自行推断一个保守列表。
+ */
+async function bridgeThinkingLevels(bridge: any): Promise<string[] | undefined> {
+  try {
+    const res: any = await bridge.getAvailableThinkingLevels();
+    const raw = Array.isArray(res?.levels) ? res.levels : Array.isArray(res) ? res : [];
+    const clean = raw.filter((level: unknown): level is string => typeof level === "string" && level.length > 0);
+    return clean.length ? clean : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Resolve visible user/assistant messages on the active entry branch to their
  * stable session ids. Walking parent links avoids targeting an identically
  * worded reply that belongs to an inactive branch. */
@@ -1907,6 +1922,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         availableModels: configuredModels,
         skills: [],
         thinkingLevel: "off",
+        thinkingLevels: ["off"],
         taskMode: null,
         availableModes: remoteModeOptions(),
         contextUsage: null,
@@ -1931,6 +1947,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         availableModels: remoteModelOptions([...modelArray(gathered.models), ...configuredModels]),
         skills: remoteSkills(gathered.commands, ref.cwd),
         thinkingLevel: gathered.thinkingLevel || "off",
+        thinkingLevels: await bridgeThinkingLevels(live.bridge),
         taskMode: gathered.taskMode ?? null,
         availableModes: remoteModeOptions(),
         contextUsage: await threadContextUsage(live.getId(), compactionEstimates.get(live.getId()) ?? null),
@@ -1950,6 +1967,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       history = { cwd: null, sessionName: null, model: null, thinkingLevel: null, messages: [], branchMessages: [] };
     }
     const messages = remoteMessages(history.messages, ref.cwd);
+    // 已打开的桥能直接给出真实用量与实时配置（不额外冷启动）。
+    // 这里必须优先用桥的状态：否则手机切完模型后重新 subscribe（只走磁盘快照）
+    // 会拿回 session 文件里的旧模型 —— 就是「切走再切回来变回刷新前」的根因。
+    const open = ref.localId ? bridges.get(ref.localId) : undefined;
+    const openState: any = open ? await open.bridge.getState().catch(() => null) : null;
     return {
       id: threadId,
       projectId: ref.projectId,
@@ -1960,18 +1982,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       state: remoteState(false, messages.length > 0),
       permission,
       cwdName: basename(ref.cwd) || ref.cwd,
-      model: history.model,
+      model: openState?.model ?? history.model,
       availableModels: configuredModels,
       skills: [],
-      thinkingLevel: history.thinkingLevel || "off",
+      thinkingLevel: openState?.thinkingLevel || history.thinkingLevel || "off",
+      thinkingLevels: open ? await bridgeThinkingLevels(open.bridge) : undefined,
       taskMode: ref.sessionFile ? (getConfig().threadTaskModes || {})[threadUuidFromSessionFile(ref.sessionFile) ?? ""] ?? null : null,
       availableModes: remoteModeOptions(),
-      // 已打开的桥能直接给出真实用量（不额外冷启动）；没开则为 null，
-      // 手机端先显示「—」，随后由 warmThread 推的 context_usage 补上。
-      contextUsage: await (async () => {
-        const open = ref.localId ? bridges.get(ref.localId) : undefined;
-        return open ? threadContextUsage(open.getId(), compactionEstimates.get(open.getId()) ?? null) : null;
-      })(),
+      contextUsage: open ? await threadContextUsage(open.getId(), compactionEstimates.get(open.getId()) ?? null) : null,
       messages,
       nextSeq: 0,
     };
@@ -2287,6 +2305,25 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       const allowed = models.some((model) => model.provider === provider && model.id === modelId);
       if (!allowed) throw new RemoteProtocolError("MODEL_UNAVAILABLE", "That model is not available on the MPI host");
       await handle.bridge.setModel(provider, modelId);
+      return remoteSnapshot(threadId, { live: true });
+    },
+    setThinking: async (threadId, level) => {
+      const ref = await remoteThread(threadId);
+      const handle = await ensureRemoteBridge(ref);
+      const levels = (await bridgeThinkingLevels(handle.bridge)) ?? ["off"];
+      if (!levels.includes(level)) {
+        throw new RemoteProtocolError(
+          "THINKING_UNAVAILABLE",
+          `That thinking level is not available for the current model (available: ${levels.join(", ")})`,
+        );
+      }
+      await handle.bridge.setThinkingLevel(level);
+      // 与桌面/其它手机同步（publishThreadConfigChange 同时走 remoteEventHub 与 IPC）
+      publishThreadConfigChange(
+        { remoteThreadId: remoteIdForSession(ref.sessionFile) ?? threadId, sessionFile: ref.sessionFile },
+        { thinkingLevel: level },
+        "remote",
+      );
       return remoteSnapshot(threadId, { live: true });
     },
     setMode: async (threadId, modeId) => {

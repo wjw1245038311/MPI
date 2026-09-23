@@ -56,6 +56,8 @@ enum class FontSize(val scale: Float) {
 data class AppSettings(
     val appearance: Appearance = Appearance.System,
     val fontSize: FontSize = FontSize.Normal,
+    /** 会话视图是否显示工具（bash/read/edit…）调用行。默认显示。 */
+    val showToolCalls: Boolean = true,
 )
 
 /**
@@ -82,14 +84,21 @@ class SettingsStore(context: Context) {
         _settings.value = read()
     }
 
+    fun setShowToolCalls(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_TOOL_CALLS, value).apply()
+        _settings.value = read()
+    }
+
     private fun read(): AppSettings = AppSettings(
         appearance = Appearance.fromStored(prefs.getString(KEY_APPEARANCE, null)),
         fontSize = FontSize.fromStored(prefs.getString(KEY_FONT_SIZE, null)),
+        showToolCalls = prefs.getBoolean(KEY_SHOW_TOOL_CALLS, true),
     )
 
     companion object {
         private const val PREFS_NAME = "mpi-settings"
         private const val KEY_APPEARANCE = "appearance"
         private const val KEY_FONT_SIZE = "fontSize"
+        private const val KEY_SHOW_TOOL_CALLS = "showToolCalls"
     }
 }

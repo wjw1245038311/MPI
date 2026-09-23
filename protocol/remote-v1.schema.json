@@ -11,6 +11,7 @@
     "thread.claimWrite",
     "thread.setPermission",
     "thread.setModel",
+    "thread.setThinking",
     "thread.subscribe",
     "thread.resync",
     "thread.prompt",

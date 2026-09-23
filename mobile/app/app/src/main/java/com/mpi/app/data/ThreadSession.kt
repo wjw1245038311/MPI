@@ -46,6 +46,10 @@ data class ThreadView(
     val errorBanner: String? = null,
     val model: ModelRef? = null,
     val availableModels: List<ModelOption> = emptyList(),
+    /** 当前思考档位（off / minimal / …；null = 主机未上报）。 */
+    val thinkingLevel: String? = null,
+    /** 当前模型可选的思考档位（主机上报；空 = 客户端自行推断）。 */
+    val availableThinkingLevels: List<String> = emptyList(),
     val taskMode: String? = null,
     val availableModes: List<TaskModeOption> = emptyList(),
     val contextUsage: ContextUsage? = null,
@@ -126,6 +130,8 @@ class ThreadSession(
                 running = snapshot.summary.state == RemoteThreadState.Running,
                 model = snapshot.model,
                 availableModels = snapshot.availableModels,
+                thinkingLevel = snapshot.thinkingLevel.ifEmpty { null },
+                availableThinkingLevels = snapshot.thinkingLevels,
                 taskMode = snapshot.taskMode,
                 availableModes = snapshot.availableModes,
                 contextUsage = snapshot.contextUsage,
@@ -274,6 +280,8 @@ class ThreadSession(
                 errorBanner = null,
                 model = snapshot.model,
                 availableModels = snapshot.availableModels,
+                thinkingLevel = snapshot.thinkingLevel.ifEmpty { null },
+                availableThinkingLevels = snapshot.thinkingLevels,
                 taskMode = snapshot.taskMode,
                 availableModes = snapshot.availableModes,
                 contextUsage = snapshot.contextUsage,
@@ -466,6 +474,11 @@ class ThreadSession(
                     view.summary
                 },
                 model = if (hasModel) newModel else view.model,
+                thinkingLevel = if (data.containsKey("thinkingLevel")) {
+                    data["thinkingLevel"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }
+                } else {
+                    view.thinkingLevel
+                },
                 taskMode = if (data.containsKey("taskMode")) {
                     data["taskMode"]?.jsonPrimitive?.contentOrNull
                 } else {

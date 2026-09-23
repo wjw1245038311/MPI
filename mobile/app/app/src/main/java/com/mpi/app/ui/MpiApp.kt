@@ -164,6 +164,10 @@ fun MpiApp(container: AppContainer) {
                         onSendChoice = viewModel::sendChoice,
                         onOpenSettings = { settingsOpen = true },
                         onOpenSearch = { searchOpen = true },
+                        showToolCalls = settings.showToolCalls,
+                        onToggleToolCalls = {
+                            container.settingsStore.setShowToolCalls(!settings.showToolCalls)
+                        },
                         choiceDrafts = state.choiceDrafts,
                         onChoiceDraftChange = viewModel::setChoiceDraft,
                         onClearChoiceDrafts = viewModel::clearChoiceDrafts,
@@ -200,6 +204,7 @@ fun MpiApp(container: AppContainer) {
                         onDismissConfigError = viewModel::dismissConfigError,
                         onSetPermission = viewModel::setPermission,
                         onSetModel = viewModel::setModel,
+                        onSetThinking = viewModel::setThinking,
                         onSetMode = viewModel::setMode,
                         onCompact = viewModel::compactContext,
                     )
