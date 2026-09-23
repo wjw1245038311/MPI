@@ -12,16 +12,25 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -210,21 +219,77 @@ fun ConfigSheet(
                 }
             }
 
-            // 模型
-            ConfigRow("模型") {
-                if (view.availableModels.isEmpty()) {
-                    Text(
-                        text = "主机未上报可选模型",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MpiTheme.colors.textFaint,
-                    )
-                } else {
-                    view.availableModels.forEach { option ->
-                        OptionChip(
-                            label = option.name?.takeIf { it.isNotEmpty() } ?: option.id,
-                            selected = view.model?.provider == option.provider && view.model?.id == option.id,
-                            enabled = !busy,
-                        ) { onSetModel(option.provider, option.id) }
+            // 模型：下拉（模型多了横向划不方便）
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "模型",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MpiTheme.colors.textFaint,
+                    modifier = Modifier.width(78.dp),
+                )
+                var modelMenuOpen by remember { mutableStateOf(false) }
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(MpiTheme.colors.control)
+                            .clickable(enabled = !busy) { modelMenuOpen = true }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = modelChipLabel(view),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MpiTheme.colors.textDim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 170.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            imageVector = IconChevronDown,
+                            contentDescription = null,
+                            tint = MpiTheme.colors.textFaint,
+                            modifier = Modifier.size(13.dp),
+                        )
+                    }
+                    DropdownMenu(expanded = modelMenuOpen, onDismissRequest = { modelMenuOpen = false }) {
+                        if (view.availableModels.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("主机未上报可选模型") },
+                                onClick = { modelMenuOpen = false },
+                            )
+                        } else {
+                            view.availableModels.forEach { option ->
+                                val selected = view.model?.provider == option.provider && view.model?.id == option.id
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = option.name?.takeIf { it.isNotEmpty() } ?: option.id,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.widthIn(max = 210.dp),
+                                            )
+                                            if (selected) {
+                                                Spacer(Modifier.width(6.dp))
+                                                Icon(
+                                                    imageVector = IconCheck,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(14.dp),
+                                                )
+                                            }
+                                        }
+                                    },
+                                    onClick = {
+                                        modelMenuOpen = false
+                                        onSetModel(option.provider, option.id)
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
