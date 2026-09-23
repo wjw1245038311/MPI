@@ -801,8 +801,8 @@ private fun ThreadTopBar(
                 Text(
                     text = buildString {
                         if (!projectName.isNullOrEmpty()) append("$projectName · ")
-                        append(state?.label() ?: "状态未知")
-                        if (running) append(" · 运行中")
+                        // 运行中就不再说「空闲」——两个状态并排会显得自相矛盾
+                        if (running) append("运行中") else append(state?.label() ?: "状态未知")
                         if (compacting) append(" · 压缩中")
                     },
                     style = MaterialTheme.typography.labelSmall,
