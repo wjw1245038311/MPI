@@ -60,6 +60,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -99,9 +100,7 @@ fun ThreadScreen(
     onRetry: (String) -> Unit,
     onRespond: (kotlinx.serialization.json.JsonObject) -> Unit,
     onSendChoice: (String) -> Unit,
-    onRenameThread: (String, String) -> Unit,
-    onTogglePinThread: (String, Boolean) -> Unit,
-    onDeleteThread: (String) -> Unit,
+    onOpenSettings: () -> Unit,
     choiceDrafts: Map<String, ChoiceAnswer>,
     onChoiceDraftChange: (String, ChoiceAnswer?) -> Unit,
     onClearChoiceDrafts: (String) -> Unit,
@@ -139,7 +138,6 @@ fun ThreadScreen(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
-    var threadActionsOpen by remember { mutableStateOf(false) }
     val renderable = view.renderable
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
 
@@ -161,7 +159,7 @@ fun ThreadScreen(
             running = view.running,
             compacting = view.compacting,
             onBack = onBack,
-            onMore = { threadActionsOpen = true },
+            onOpenSettings = onOpenSettings,
         )
 
         // 会话级配置 chip 行（§4.4）——权限 / 模式 / 模型 / 上下文用量。
@@ -282,28 +280,6 @@ fun ThreadScreen(
             onReEditPending = onReEditPending,
             onDismissSendError = onDismissSendError,
         )
-
-        // 顶栏「⋮」：会话操作（重命名 / 置顶 / 删除）
-        if (threadActionsOpen) {
-            ThreadActionDialog(
-                title = view.summary?.title?.ifEmpty { null } ?: "会话",
-                pinned = view.summary?.pinned == true,
-                busy = false,
-                onDismiss = { threadActionsOpen = false },
-                onRename = { name ->
-                    threadActionsOpen = false
-                    onRenameThread(view.threadId, name)
-                },
-                onTogglePin = { pinned ->
-                    threadActionsOpen = false
-                    onTogglePinThread(view.threadId, pinned)
-                },
-                onDelete = {
-                    threadActionsOpen = false
-                    onDeleteThread(view.threadId)
-                },
-            )
-        }
 
         if (sheet != null) {
             ThreadToolbarSheet(
@@ -800,7 +776,7 @@ private fun ThreadTopBar(
     running: Boolean,
     compacting: Boolean,
     onBack: () -> Unit,
-    onMore: (() -> Unit)? = null,
+    onOpenSettings: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
@@ -809,13 +785,14 @@ private fun ThreadTopBar(
         IconButton(onClick = onBack) {
             Icon(IconArrowLeft, contentDescription = "返回", tint = MaterialTheme.colorScheme.onSurface)
         }
-        // 标题最多占「总宽 − 右侧按钮」，超长就省略号（不再顶到右边）
+        // 标题最多占屏幕宽度的一半，超出用省略号（真机反馈的诉求）
         Column(Modifier.weight(1f).padding(end = 6.dp)) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = (LocalConfiguration.current.screenWidthDp / 2).dp),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (state != null) {
@@ -839,15 +816,13 @@ private fun ThreadTopBar(
         if (running || compacting) {
             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
         }
-        if (onMore != null) {
-            IconButton(onClick = onMore) {
-                Icon(
-                    IconMoreVertical,
-                    contentDescription = "会话操作",
-                    tint = MpiTheme.colors.textDim,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
+        IconButton(onClick = onOpenSettings) {
+            Icon(
+                IconSettings,
+                contentDescription = "设置",
+                tint = MpiTheme.colors.textDim,
+                modifier = Modifier.size(19.dp),
+            )
         }
     }
 }

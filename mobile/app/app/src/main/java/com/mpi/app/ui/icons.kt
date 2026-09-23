@@ -278,3 +278,21 @@ val IconMoreVertical: ImageVector by lazy {
         moveTo(12f, 18.5f); lineTo(12f, 18.6f)
     }
 }
+
+/** 设置（齿轮：中心圆 + 8 个短齿）。 */
+val IconSettings: ImageVector by lazy {
+    strokeIcon("Settings") {
+        moveTo(12f, 8.6f); curveTo(13.9f, 8.6f, 15.4f, 10.1f, 15.4f, 12f)
+        curveTo(15.4f, 13.9f, 13.9f, 15.4f, 12f, 15.4f)
+        curveTo(10.1f, 15.4f, 8.6f, 13.9f, 8.6f, 12f)
+        curveTo(8.6f, 10.1f, 10.1f, 8.6f, 12f, 8.6f); close()
+        moveTo(12f, 3.2f); lineTo(12f, 5.4f)
+        moveTo(12f, 18.6f); lineTo(12f, 20.8f)
+        moveTo(3.2f, 12f); lineTo(5.4f, 12f)
+        moveTo(18.6f, 12f); lineTo(20.8f, 12f)
+        moveTo(5.8f, 5.8f); lineTo(7.4f, 7.4f)
+        moveTo(16.6f, 16.6f); lineTo(18.2f, 18.2f)
+        moveTo(5.8f, 18.2f); lineTo(7.4f, 16.6f)
+        moveTo(16.6f, 7.4f); lineTo(18.2f, 5.8f)
+    }
+}

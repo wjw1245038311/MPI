@@ -161,9 +161,7 @@ fun MpiApp(container: AppContainer) {
                             }
                         },
                         onSendChoice = viewModel::sendChoice,
-                        onRenameThread = viewModel::renameThread,
-                        onTogglePinThread = viewModel::setThreadPinned,
-                        onDeleteThread = viewModel::deleteThread,
+                        onOpenSettings = { settingsOpen = true },
                         choiceDrafts = state.choiceDrafts,
                         onChoiceDraftChange = viewModel::setChoiceDraft,
                         onClearChoiceDrafts = viewModel::clearChoiceDrafts,
