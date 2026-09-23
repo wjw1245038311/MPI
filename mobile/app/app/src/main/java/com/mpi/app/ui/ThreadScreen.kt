@@ -812,7 +812,9 @@ private fun ThreadTopBar(
                 )
             }
         }
-        if (running || compacting) {
+        // 只在压缩中显示转圈：运行中状态行已经有「运行中」文字，
+        // 再放一个圈用户不知道它干嘛的（真机反馈）。
+        if (compacting) {
             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
         }
         // 搜索与设置（截图那种右侧图标组）
