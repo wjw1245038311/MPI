@@ -140,12 +140,6 @@ fun ThreadToolbar(
             enabled = !busy,
             onClick = { onOpen(ToolbarSheet.Permission) },
         )
-        ConfigChip(
-            icon = IconSpark,
-            label = taskModeChipLabel(view),
-            enabled = !busy,
-            onClick = { onOpen(ToolbarSheet.Mode) },
-        )
     }
 }
 
