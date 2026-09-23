@@ -52,6 +52,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -143,9 +144,23 @@ fun ThreadScreen(
     val renderable = view.renderable
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
 
-    // 内容增长时仅在「本来就在底部」的前提下跟随
-    LaunchedEffect(renderable.size, view.streaming?.blocks?.lastOrNull()?.text?.length) {
-        if (renderable.isNotEmpty() && atBottom) {
+    // 「贴底跟随」记的是**用户意图**：只有用户自己往回滚才取消，内容增长本身不算。
+    // 旧写法直接拿 atBottom 当跟随条件：增量事件常早于测量，滚动会停在半路，
+    // 此后 canScrollForward 一直为 true → 永远不再跟随，必须手动拖到底（真机反馈）。
+    // 改成意图态后，每次增量都会再贴一次底，偶发半路停住也能自愈。
+    var following by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress to listState.lastScrolledBackward }
+            .collect { (scrolling, backward) ->
+                following = nextFollowing(following, scrolling, backward, listState.canScrollForward)
+            }
+    }
+
+    // 内容增长时，只要还在跟随就贴底。key 取「消息数 + 流式内容总长度」：
+    // 只看最后一块的长度会漏掉「变的不是最后一块」（如工具结果回填）。
+    val streamLength = view.streaming?.blocks?.sumOf { it.text?.length ?: 0 } ?: 0
+    LaunchedEffect(renderable.size, streamLength) {
+        if (following && renderable.isNotEmpty()) {
             // 必须用大 offset 真滚到底：scrollToItem(lastIndex) 只是把最后一条的“顶部”
             // 对齐视口，最后一条很长时仍可下滚，atBottom 就永远为 false（按钮不消失）。
             listState.scrollToItem(renderable.lastIndex, Int.MAX_VALUE)
@@ -255,6 +270,8 @@ fun ThreadScreen(
                 ScrollToBottomButton(
                     listState = listState,
                     itemCount = renderable.size,
+                    // 手动回到底部 = 重新跟随，否则下一条增量又不会自动跟
+                    onFollowAgain = { following = true },
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp),
                 )
             }
@@ -758,10 +775,29 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
     }
 }
 
+/**
+ * 会话视图滚动的跟随决策（纯函数，可单测）。
+ *
+ * - 用户主动往回滚（正在滚动且方向向后）→ 停止跟随，不把正在阅读的人拽走。
+ * - 只要处于最底（没有可滚动余量）→ 恢复跟随（手动拖到底也能重新跟上）。
+ * - 其余情况保持现状：内容增长本身不算用户意图，不能因此取消跟随。
+ */
+internal fun nextFollowing(
+    current: Boolean,
+    scrolling: Boolean,
+    scrolledBackward: Boolean,
+    canScrollForward: Boolean,
+): Boolean = when {
+    scrolling && scrolledBackward -> false
+    !canScrollForward -> true
+    else -> current
+}
+
 @Composable
 private fun ScrollToBottomButton(
     listState: androidx.compose.foundation.lazy.LazyListState,
     itemCount: Int,
+    onFollowAgain: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -772,6 +808,7 @@ private fun ScrollToBottomButton(
             .background(MpiTheme.colors.surfaceMuted)
             .border(1.dp, MpiTheme.colors.border, CircleShape)
             .clickable {
+                onFollowAgain()
                 scope.launch { if (itemCount > 0) listState.scrollToItem(itemCount - 1, Int.MAX_VALUE) }
             },
         contentAlignment = Alignment.Center,
