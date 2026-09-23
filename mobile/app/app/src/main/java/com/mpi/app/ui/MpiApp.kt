@@ -212,6 +212,13 @@ fun MpiApp(container: AppContainer) {
                     onAppearance = container.settingsStore::setAppearance,
                     onFontSize = container.settingsStore::setFontSize,
                     onOpenDiagnostics = { diagnosticsOpen = true },
+                    updateInfo = state.updateInfo,
+                    updateChecking = state.updateChecking,
+                    updateDownloading = state.updateDownloading,
+                    updateError = state.updateError,
+                    onCheckUpdate = { viewModel.checkUpdate(manual = true) },
+                    onInstallUpdate = viewModel::downloadAndInstallUpdate,
+                    onDismissUpdateError = viewModel::dismissUpdateError,
                     onClose = { settingsOpen = false },
                 )
             }
@@ -309,6 +316,7 @@ private fun HomeWithDrawer(
                 viewModel.openThread(threadId)
                 scope.launch { drawerState.close() }
             },
+            onUpdateDownload = viewModel::downloadAndInstallUpdate,
         )
     }
 }

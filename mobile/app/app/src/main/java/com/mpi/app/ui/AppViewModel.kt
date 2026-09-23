@@ -21,6 +21,8 @@ import com.mpi.app.data.SendMode
 import com.mpi.app.data.ThreadActions
 import com.mpi.app.data.ThreadSession
 import com.mpi.app.data.ThreadView
+import com.mpi.app.data.UpdateInfo
+import com.mpi.app.data.Updater
 import com.mpi.app.data.VoiceRecorder
 import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.PairingLink
@@ -94,6 +96,12 @@ data class AppUiState(
     val transcribing: Boolean = false,
     /** 语音输入失败原因（可关闭）。 */
     val voiceError: String? = null,
+    /** 有可用新版本（null = 已是最新或未检查）。 */
+    val updateInfo: UpdateInfo? = null,
+    val updateChecking: Boolean = false,
+    val updateDownloading: Boolean = false,
+    /** 检查/下载/安装失败或提示（可关闭）。 */
+    val updateError: String? = null,
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -115,6 +123,7 @@ class AppViewModel(
     private val attachmentLoader: AttachmentLoader,
     private val voiceRecorder: VoiceRecorder,
     private val notifier: Notifier,
+    private val updater: Updater,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(AppUiState())
@@ -250,6 +259,53 @@ class AppViewModel(
     fun clearPairingError() = _ui.update { it.copy(pairingError = null) }
 
     fun dismissProblems() = _ui.update { it.copy(problems = emptyList()) }
+
+    // ---- 自更新（M6）----
+
+    /**
+     * 检查更新。manual=true 时失败了要说清楚（用户主动点的）；
+     * 自动检查静默——没更新就是没更新，不该弹任何东西。
+     */
+    fun checkUpdate(manual: Boolean) {
+        val relay = _ui.value.activeHost?.relayUrl
+        if (relay.isNullOrBlank() || _ui.value.updateChecking) return
+        _ui.update { it.copy(updateChecking = true, updateError = null) }
+        scope.launch {
+            val info = updater.check(relay)
+            _ui.update { state ->
+                when {
+                    info != null -> state.copy(updateChecking = false, updateInfo = info, updateError = null)
+                    manual -> state.copy(
+                        updateChecking = false,
+                        updateInfo = null,
+                        updateError = "已是最新版本（v${com.mpi.app.BuildConfig.VERSION_NAME}）",
+                    )
+                    else -> state.copy(updateChecking = false)
+                }
+            }
+        }
+    }
+
+    /** 下载并调起系统安装器。 */
+    fun downloadAndInstallUpdate() {
+        val info = _ui.value.updateInfo ?: return
+        if (_ui.value.updateDownloading) return
+        _ui.update { it.copy(updateDownloading = true, updateError = null) }
+        scope.launch {
+            updater.download(info)
+                .onSuccess { file ->
+                    _ui.update { it.copy(updateDownloading = false) }
+                    runCatching { updater.install(file) }.onFailure { error ->
+                        _ui.update { it.copy(updateError = error.message ?: "无法调起安装器") }
+                    }
+                }
+                .onFailure { error ->
+                    _ui.update { it.copy(updateDownloading = false, updateError = error.message ?: "下载失败") }
+                }
+        }
+    }
+
+    fun dismissUpdateError() = _ui.update { it.copy(updateError = null) }
 
     /** UI 侧上报配对问题（扫码结果不是配对码 / 相机权限被拒）——不静默。 */
     fun reportPairingError(message: String) = _ui.update { it.copy(pairingError = message) }
@@ -713,8 +769,14 @@ class AppViewModel(
         }
 
         jobs += scope.launch {
+            var autoCheckedUpdate = false
             newSession.state.collect { state ->
                 _ui.update { it.copy(session = state) }
+                // 连上后自动检查一次更新（静默；M6）
+                if (state is SessionState.Connected && !autoCheckedUpdate) {
+                    autoCheckedUpdate = true
+                    checkUpdate(manual = false)
+                }
                 // 重连后重新同步当前会话：断线期间的事件丢了，seq 接不上
                 if (state is SessionState.Connected) {
                     // 已恢复连接——离线期间的提示已经过时，清掉免得号人
@@ -778,6 +840,7 @@ class AppViewModel(
                         container.attachmentLoader,
                         container.voiceRecorder,
                         container.notifier,
+                        container.updater,
                     ) as T
             }
     }

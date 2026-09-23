@@ -30,6 +30,7 @@ import com.mpi.app.BuildConfig
 import com.mpi.app.data.AppSettings
 import com.mpi.app.data.Appearance
 import com.mpi.app.data.FontSize
+import com.mpi.app.data.UpdateInfo
 import com.mpi.app.ui.theme.MpiTheme
 
 /** 外观模式的显示名。 */
@@ -58,6 +59,13 @@ fun SettingsScreen(
     onAppearance: (Appearance) -> Unit,
     onFontSize: (FontSize) -> Unit,
     onOpenDiagnostics: () -> Unit,
+    updateInfo: UpdateInfo?,
+    updateChecking: Boolean,
+    updateDownloading: Boolean,
+    updateError: String?,
+    onCheckUpdate: () -> Unit,
+    onInstallUpdate: () -> Unit,
+    onDismissUpdateError: () -> Unit,
     onClose: () -> Unit,
 ) {
     BackHandler(enabled = true) { onClose() }
@@ -93,6 +101,24 @@ fun SettingsScreen(
 
             SectionTitle("关于")
             SettingsRow(label = "MPI 手机端", note = "版本 ${BuildConfig.VERSION_NAME}", onClick = null)
+            SettingsRow(
+                label = if (updateChecking) "检查更新中…" else "检查更新",
+                note = updateInfo?.let { "发现新版本 v${it.version}" },
+                onClick = if (updateChecking) null else onCheckUpdate,
+            )
+            if (updateInfo != null) {
+                SettingsRow(
+                    label = if (updateDownloading) "下载中…" else "下载并安装 v${updateInfo.version}",
+                    note = "安装时系统会询问是否允许安装未知应用",
+                    onClick = if (updateDownloading) null else onInstallUpdate,
+                )
+            }
+            if (updateError != null) {
+                SettingsRow(
+                    label = updateError,
+                    onClick = onDismissUpdateError,
+                )
+            }
             Spacer(Modifier.size(24.dp))
         }
     }

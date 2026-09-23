@@ -117,7 +117,7 @@ PWA `ChoicePanel.tsx` + `lib/choice-block.ts`（提交 `e1b6018` / `3a6021b`）�
 | 图片 / 文件附件 | ✅ | `Attachments.kt`（降采样 ≤1280px + JPEG 质量循环 ≤280KB；文件 ≤6MB）+ composer 附件菜单 + 缩略图 chips。拍照入口待加（需 FileProvider） |
 | 语音输入 | ✅ | 原生 `AudioRecord`（PCM16 16k mono，音频源逐级回退）→ WAV → `stt.transcribe` → 文本追加到输入框 |
 | 扫码配对 | ✅ | CameraX 预览 + ML Kit bundled 条码识别（离线可用、无需 GMS）；配对页新增「扫码配对」入口 |
-| APK 自更新 / 新版本浮条 | ⏳ | M6 |
+| APK 自更新 / 新版本浮条 | ✅ | 读中继 `mpi-android-native.json` → 版本比较 → 下载 + sha256 校验 → FileProvider → 系统安装器；首页「有新版本」浮条（构建号：版本号随 APK，见设计文档 §1.3 #4，不需要 build hash 防旧页面） |
 | 前台服务与通知 | ✅ | `MpiLinkService`（前台服务仅保活）+ 审批本地通知（点击直达会话）；不做通知栏就地批准（v2） |
 
 ---
