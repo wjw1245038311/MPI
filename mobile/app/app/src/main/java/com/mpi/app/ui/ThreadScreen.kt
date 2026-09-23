@@ -43,6 +43,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -55,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -434,13 +436,17 @@ private fun Composer(
             PendingFollowUpBanner(text = pendingFollowUp, onReEdit = onReEditPending, onSteer = onSteerPending)
         }
 
+        // composer 卡片（对齐 PWA：圆角 + 细边框，输入区无描边）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MpiTheme.colors.bg)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(MpiTheme.colors.surfaceMuted)
+                .border(1.dp, MpiTheme.colors.border, RoundedCornerShape(16.dp))
+                .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Box {
                 IconButton(
@@ -485,23 +491,33 @@ private fun Composer(
                     )
                 }
             }
-            OutlinedTextField(
-                value = draft,
-                onValueChange = onDraftChange,
-                modifier = Modifier.weight(1f),
-                placeholder = {
+            // 无描边输入区（PWA 的 .composer-input）：placeholder 自己画，视觉干净
+            Box(
+                modifier = Modifier.weight(1f).padding(horizontal = 6.dp, vertical = 10.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (draft.isEmpty()) {
                     Text(
                         text = when {
                             running && pendingFollowUp != null -> "再排一条…"
                             running -> "输入插话…发送后排队，任务完成时自动发出"
                             else -> "说点什么…"
                         },
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MpiTheme.colors.textFaint,
                     )
-                },
-                maxLines = 5,
-                shape = RoundedCornerShape(14.dp),
-            )
+                }
+                BasicTextField(
+                    value = draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    maxLines = 6,
+                )
+            }
             when {
                 transcribing -> {
                     Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
@@ -554,21 +570,24 @@ private fun Composer(
                     )
                 }
             }
-            IconButton(
-                onClick = onSend,
-                enabled = (draft.isNotBlank() || attachments.isNotEmpty()) && !sending,
-                modifier = Modifier.size(44.dp),
-            ) {
-                Icon(
-                    IconSend,
-                    contentDescription = if (running) "发送（排队）" else "发送",
-                    tint = if ((draft.isNotBlank() || attachments.isNotEmpty()) && !sending) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MpiTheme.colors.textFaint
-                    },
-                    modifier = Modifier.size(22.dp),
-                )
+            // 发送：实心圆按钮（PWA .send-btn）；外层 44dp 保住触摸目标大小
+            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !sending
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(if (canSend) MpiTheme.colors.send else MpiTheme.colors.control)
+                        .clickable(enabled = canSend, onClick = onSend),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        IconSend,
+                        contentDescription = if (running) "发送（排队）" else "发送",
+                        tint = if (canSend) MpiTheme.colors.sendFg else MpiTheme.colors.textFaint,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
             }
         }
     }

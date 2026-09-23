@@ -742,7 +742,7 @@ class AppViewModel(
         }
     }
 
-    private fun send(text: String, mode: SendMode, clearDraft: Boolean = true) {
+    private fun send(text: String, mode: SendMode, clearDraft: Boolean = true, retried: Boolean = false) {
         val session = threadSession ?: return
         val actions = threadActions ?: return
         // 附件：图片与文件分别按协议形状打包（主机端会逐项校验）
@@ -776,8 +776,16 @@ class AppViewModel(
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
                 _ui.update { it.copy(sending = false, attachments = emptyList()) }
             } catch (error: Exception) {
-                session.markSendFailed(localId, error.message ?: "发送失败")
                 val raw = error.message.orEmpty()
+                // 主机正忙（agent 在跑，或状态滞后让 prompt 撞上忙）：回退成 followUp 排队，
+                // 而不是报「发送失败」——PWA 修过同一个问题（a22bd2b）。
+                if (!retried && mode != SendMode.FollowUp && isBusyError(raw)) {
+                    session.prepareRetry(localId)
+                    _ui.update { it.copy(sending = false) }
+                    send(text, SendMode.FollowUp, clearDraft = false, retried = true)
+                    return@launch
+                }
+                session.markSendFailed(localId, error.message ?: "发送失败")
                 _ui.update {
                     it.copy(
                         sending = false,
@@ -790,6 +798,12 @@ class AppViewModel(
                 }
             }
         }
+    }
+
+    /** 主机忙（写租约被占 / pi 在跑）——发送可回退为排队。 */
+    private fun isBusyError(message: String): Boolean {
+        val lower = message.lowercase()
+        return lower.contains("busy") || message.contains(ThreadActions.THREAD_BUSY)
     }
 
     /** 用户显式要求重置本地数据（存储损坏时给出这条路径）。 */
