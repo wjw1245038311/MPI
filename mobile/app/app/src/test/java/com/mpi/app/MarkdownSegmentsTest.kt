@@ -41,6 +41,7 @@ class MarkdownSegmentsTest {
             when (it) {
                 is Segment.Body -> it.text
                 is Segment.Code -> it.text
+                is Segment.Choice -> ""
             }
         }
         assertTrue("半截代码内容要保留", all.contains("const a = 1;"))

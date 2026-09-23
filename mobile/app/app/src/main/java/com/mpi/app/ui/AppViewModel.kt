@@ -333,6 +333,18 @@ class AppViewModel(
 
     fun dismissSendError() = _ui.update { it.copy(sendError = null) }
 
+    /**
+     * 提交 choices 面板的选择（已是完整的组合消息）。
+     * 路由与桌面端 sendPrompt 一致：运行中 → followUp（排队）；空闲 → prompt。
+     * 不清输入框草稿（用户可能正写着别的内容）。
+     */
+    fun sendChoice(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || _ui.value.sending) return
+        val mode = if (_ui.value.thread?.running == true) SendMode.FollowUp else SendMode.Prompt
+        send(trimmed, mode, clearDraft = false)
+    }
+
     /** 回合结束（running true→false）：自动投递暂存的「待处理后续」。 */
     private fun flushPendingFollowUp() {
         val text = _ui.value.pendingFollowUp ?: return
@@ -424,13 +436,18 @@ class AppViewModel(
         }
     }
 
-    private fun send(text: String, mode: SendMode) {
+    private fun send(text: String, mode: SendMode, clearDraft: Boolean = true) {
         val session = threadSession ?: return
         val actions = threadActions ?: return
         // 先乐观上屏（§1.1：点击到视觉反馈 < 100ms），失败再标红留在原位
         val localId = session.echoUserMessage(text)
-        _ui.value.openThreadId?.let { drafts[it] = "" }
-        _ui.update { it.copy(draft = "", sending = true, sendError = null) }
+        if (clearDraft) {
+            _ui.value.openThreadId?.let { drafts[it] = "" }
+            _ui.update { it.copy(draft = "", sending = true, sendError = null) }
+        } else {
+            // choices 面板的发送不该清掉用户正在输入的草稿
+            _ui.update { it.copy(sending = true, sendError = null) }
+        }
         scope.launch {
             try {
                 actions.send(text, mode)

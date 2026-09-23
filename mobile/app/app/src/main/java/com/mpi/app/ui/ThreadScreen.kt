@@ -81,6 +81,7 @@ fun ThreadScreen(
     onAbort: () -> Unit,
     onRetry: (String) -> Unit,
     onRespond: (kotlinx.serialization.json.JsonObject) -> Unit,
+    onSendChoice: (String) -> Unit,
     pendingFollowUp: String?,
     sendError: String?,
     onSteerPending: () -> Unit,
@@ -175,7 +176,13 @@ fun ThreadScreen(
                     contentPadding = PaddingValues(vertical = 10.dp),
                 ) {
                     items(renderable, key = { it.id }) { message ->
-                        MessageRow(message, onRetry = onRetry)
+                        MessageRow(
+                            message = message,
+                            onRetry = onRetry,
+                            allMessages = renderable,
+                            finalized = message.id != view.streaming?.id,
+                            onSendChoice = onSendChoice,
+                        )
                     }
                 }
             }
@@ -457,7 +464,13 @@ internal fun messageTextOf(message: ThreadMessage): String =
     message.blocks.filter { it.type == BlockType.Text }.mapNotNull { it.text }.joinToString("\n").trim()
 
 @Composable
-private fun MessageRow(message: ThreadMessage, onRetry: (String) -> Unit) {
+private fun MessageRow(
+    message: ThreadMessage,
+    onRetry: (String) -> Unit,
+    allMessages: List<ThreadMessage>,
+    finalized: Boolean,
+    onSendChoice: (String) -> Unit,
+) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val text = messageTextOf(message)
@@ -471,7 +484,14 @@ private fun MessageRow(message: ThreadMessage, onRetry: (String) -> Unit) {
     if (message.role == "user") {
         UserMessageRow(message, onRetry, onCopy = copy)
     } else {
-        AssistantMessageRow(message, onCopy = copy, copyable = text.isNotEmpty())
+        AssistantMessageRow(
+            message = message,
+            onCopy = copy,
+            copyable = text.isNotEmpty(),
+            allMessages = allMessages,
+            finalized = finalized,
+            onSendChoice = onSendChoice,
+        )
     }
 }
 
@@ -526,7 +546,14 @@ private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit, on
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AssistantMessageRow(message: ThreadMessage, onCopy: () -> Unit, copyable: Boolean) {
+private fun AssistantMessageRow(
+    message: ThreadMessage,
+    onCopy: () -> Unit,
+    copyable: Boolean,
+    allMessages: List<ThreadMessage>,
+    finalized: Boolean,
+    onSendChoice: (String) -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -552,7 +579,18 @@ private fun AssistantMessageRow(message: ThreadMessage, onCopy: () -> Unit, copy
                     BlockType.Thinking -> ThinkingBlockRow(block, key = "${message.id}-think-$index")
                     BlockType.Image -> ImageBlockHint(block)
                     BlockType.Text -> if (!block.text.isNullOrBlank()) {
-                        MessageText(block.text)
+                        // 定稿的 assistant 文本才认 choices 面板（流式中间态仍按代码块）
+                        if (finalized) {
+                            ChoiceAwareText(
+                                text = block.text,
+                                messageId = message.id,
+                                allMessages = allMessages,
+                                language = "zh",
+                                onSendChoice = onSendChoice,
+                            )
+                        } else {
+                            MessageText(block.text)
+                        }
                     }
                 }
             }

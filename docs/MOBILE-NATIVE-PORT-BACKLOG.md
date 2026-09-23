@@ -11,7 +11,7 @@
 
 ## 0. 一句话现状
 
-- **批 1、批 2 已完成**（配置 chip/Sheet：批 1；输入区：批 2）。
+- **批 1、批 2、批 3 已完成**。
 - 批 2–5 未做；批 6 依赖原生能力阶段（M4/M5/M6），不属本次欠账。
 
 **原则**：只做 PWA 已验证过的交互，不新设计；视觉一律用桌面端同名令牌；不引 UI / 图标库。
@@ -56,14 +56,22 @@
 
 ---
 
-## 3. 批次 3 多题选择面板（未做）
+## 3. 批次 3 ✅ 多题选择面板
 
-PWA `ChoicePanel.tsx` + `lib/choice-block.ts`（提交 `e1b6018` / `3a6021b`）。
+PWA `ChoicePanel.tsx` + `lib/choice-block.ts`（提交 `e1b6018` / `3a6021b`）的 Compose 移植。
 
-- agent 在回复里输出 choices 围栏 → 手机端渲染成**可点选面板**（多题、单选/多选）。
-- 点选后走 `thread.prompt` / `thread.followUp`（按运行态路由，空闲时裸 followUp 会卡在 pi 队列）。
-- 「其它」自由输入、草稿 localStorage 持久化、围栏容错。
-- 原生现状：❌ 完全没有。设计文档也未列，属真正漏掉的一项。
+| 交付 | 落点 |
+| --- | --- |
+| 解析：```choices 围栏（严格 + 截第一个完整 JSON 两级降级） | `ChoiceLogic.parseChoiceBlockData` / `parseChoiceBodyLoose` |
+| 围栏级容错：粘行闭合 / 漏写闭合 / 解析失败降级代码块 + 提示 | `withChoiceSegments` |
+| 回复构造与解析（`我的选择：\n1. 题 → 选项`） | `buildChoiceReplyText` / `parseChoiceReply` |
+| 面板状态从会话记录推导（pending / answered / superseded） | `deriveChoicePanelState` |
+| UI：每题选项 + 「其它」自由输入 + 「发送选择」 | `ChoicePanel.kt` |
+| 发送路由：运行中 → followUp，空闲 → prompt；不清用户草稿 | `AppViewModel.sendChoice` |
+
+**测试**：`ChoiceLogicTest`（17 项）。
+
+**已知简化**：草稿只在会话内存（PWA 用 localStorage），重进会话点选会丢。
 
 ---
 

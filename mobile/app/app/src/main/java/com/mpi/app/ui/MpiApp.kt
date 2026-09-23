@@ -102,6 +102,7 @@ fun MpiApp(container: AppContainer) {
                                 viewModel.respondUi(request.id, response)
                             }
                         },
+                        onSendChoice = viewModel::sendChoice,
                         pendingFollowUp = state.pendingFollowUp,
                         sendError = state.sendError,
                         onSteerPending = viewModel::steerPendingFollowUp,

@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mpi.app.protocol.ThreadMessage
 import com.mpi.app.ui.theme.MpiTheme
 
 /**
@@ -35,9 +36,17 @@ import com.mpi.app.ui.theme.MpiTheme
 @Composable
 fun MessageText(text: String, modifier: Modifier = Modifier, color: androidx.compose.ui.graphics.Color? = null) {
     val segments = remember(text) { parseSegments(text) }
-    val bodyColor = color ?: MaterialTheme.colorScheme.onSurface
+    RenderSegments(segments, color ?: MaterialTheme.colorScheme.onSurface, modifier)
+}
 
-    Column(modifier = modifier.fillMaxWidth()) {
+/** 渲染一组段（choices 段由 [ChoiceAwareText] 负责，这里跳过）。 */
+@Composable
+internal fun RenderSegments(
+    segments: List<Segment>,
+    bodyColor: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth()) {
         for (segment in segments) {
             when (segment) {
                 is Segment.Code -> {
@@ -57,6 +66,13 @@ fun MessageText(text: String, modifier: Modifier = Modifier, color: androidx.com
                         ),
                         color = bodyColor,
                     )
+                    if (segment.choiceWarn) {
+                        Text(
+                            text = "choices 面板解析失败，按代码显示",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MpiTheme.colors.textFaint,
+                        )
+                    }
                 }
 
                 is Segment.Body -> if (segment.text.isNotBlank()) {
@@ -66,17 +82,33 @@ fun MessageText(text: String, modifier: Modifier = Modifier, color: androidx.com
                         color = bodyColor,
                     )
                 }
+
+                is Segment.Choice -> Unit
             }
         }
     }
 }
 
 internal sealed interface Segment {
-    /** 围栏代码块（去掉 ``` 行）。 */
-    data class Code(val text: String) : Segment
+    /**
+     * 围栏代码块（去掉 ``` 行）。
+     *
+     * @param lang 围栏语言（如 `choices` / `ts`），无则 null。
+     * @param closed 是否闭合；false = 流式中或模型漏写闭合围栏。
+     * @param choiceWarn choices 围栏解析失败（降级为代码块，由调用方提示）。
+     */
+    data class Code(
+        val text: String,
+        val lang: String? = null,
+        val closed: Boolean = true,
+        val choiceWarn: Boolean = false,
+    ) : Segment
 
     /** 普通正文（可能含行内代码）。 */
     data class Body(val text: String) : Segment
+
+    /** 合法的 choices 围栏 → 交互面板（批 3）。 */
+    data class Choice(val data: ChoiceBlockData) : Segment
 }
 
 /** 按 ``` 围栏切分；未闭合的围栏按正文处理（流式过程中很常见）。 */
@@ -85,10 +117,12 @@ internal fun parseSegments(text: String): List<Segment> {
     val segments = mutableListOf<Segment>()
     val buffer = StringBuilder()
     var inCode = false
+    var codeLang: String? = null
     val code = StringBuilder()
 
     for (line in text.split("\n")) {
-        val isFence = line.trimStart().startsWith("```")
+        val trimmed = line.trimStart()
+        val isFence = trimmed.startsWith("```")
         when {
             isFence && !inCode -> {
                 if (buffer.isNotEmpty()) {
@@ -96,12 +130,14 @@ internal fun parseSegments(text: String): List<Segment> {
                     buffer.clear()
                 }
                 inCode = true
+                codeLang = trimmed.removePrefix("```").trim().takeIf { it.isNotEmpty() }
             }
 
             isFence && inCode -> {
-                segments += Segment.Code(code.toString().trimEnd('\n'))
+                segments += Segment.Code(code.toString().trimEnd('\n'), lang = codeLang, closed = true)
                 code.clear()
                 inCode = false
+                codeLang = null
             }
 
             inCode -> code.append(line).append('\n')
@@ -109,9 +145,10 @@ internal fun parseSegments(text: String): List<Segment> {
         }
     }
 
-    // 未闭合：代码内容退回正文，避免半截内容消失
+    // 未闭合（流式中很常见）：保留为未闭合代码段——内容绝不消失，
+    // 定稿后可被 withChoiceSegments 的容错接住。
     if (inCode) {
-        buffer.append("```\n").append(code)
+        segments += Segment.Code(code.toString().trimEnd('\n'), lang = codeLang, closed = false)
     }
     if (buffer.isNotEmpty()) segments += Segment.Body(buffer.toString().trimEnd('\n'))
     if (segments.isEmpty()) segments += Segment.Body(text)
@@ -160,6 +197,38 @@ private fun inlineStyled(
             }
 
             else -> withStyle(SpanStyle(color = baseColor)) { append(token.text) }
+        }
+    }
+}
+
+/**
+ * 带 choices 面板的文本渲染（批 3）：合法的 ```choices 围栏升级为可点选面板。
+ * 只有 assistant 的**定稿**消息才走这里（流式中间态仍按代码块显示）。
+ */
+@Composable
+fun ChoiceAwareText(
+    text: String,
+    messageId: String,
+    allMessages: List<ThreadMessage>,
+    language: String,
+    onSendChoice: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    color: androidx.compose.ui.graphics.Color? = null,
+) {
+    val segments = remember(text) { withChoiceSegments(parseSegments(text), finalized = true) }
+    val bodyColor = color ?: MaterialTheme.colorScheme.onSurface
+    Column(modifier.fillMaxWidth()) {
+        for (segment in segments) {
+            if (segment is Segment.Choice) {
+                ChoicePanel(
+                    data = segment.data,
+                    state = deriveChoicePanelState(allMessages, messageId, segment.data),
+                    language = language,
+                    onSend = onSendChoice,
+                )
+            } else {
+                RenderSegments(listOf(segment), bodyColor)
+            }
         }
     }
 }
