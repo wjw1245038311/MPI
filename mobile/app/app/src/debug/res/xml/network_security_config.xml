@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  **仅 debug 构建**使用（放在 src/debug 下，release 不会带上）。
+
+  为什么需要：Android 9（API 28）起默认禁止明文流量，而本地联调用的
+  `scripts/mobile-dev-harness.mjs` 起的是明文 `ws://`（没有 TLS）。
+  生产环境的中继是 `wss://`，release 构建仍按系统默认**禁止明文**——
+  这条放宽只影响自己机器上的调试包。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
