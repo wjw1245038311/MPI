@@ -34,7 +34,7 @@ import org.bouncycastle.crypto.signers.Ed25519Signer
  * 特别是「先 pair.approved 把 token 注册给中继，再回 pair.accepted」
  * （漏掉前一步，后续 hello 重认证会被中继拒绝：relay 记录里 token 仍为 null）。
  */
-internal class FakeHost(
+class FakeHost(
     private val client: RelayClient,
     private val hostId: String,
     private val deviceToken: String,
@@ -96,10 +96,27 @@ internal class FakeHost(
     }
 
     /** 主机 → 设备：一条加密协议帧。 */
-    fun sendEncrypted(type: String, payload: JsonElement? = null, sessionId: String = "sess-host"): Boolean {
+    fun sendEncrypted(
+        type: String,
+        payload: JsonElement? = null,
+        sessionId: String = "sess-host",
+        requestId: String? = null,
+    ): Boolean = sendToDevice(
+        Envelope.make(
+            type = type,
+            sessionId = sessionId,
+            payload = payload,
+            requestId = requestId,
+        ),
+    )
+
+    /** 主机 → 设备：针对某个请求的**错误**回应（envelope 带 error）。 */
+    fun sendErrorResult(request: RemoteEnvelope, code: String, message: String): Boolean =
+        sendToDevice(Envelope.errorFor(request, code, message))
+
+    private fun sendToDevice(envelope: RemoteEnvelope): Boolean {
         val key = aesKey ?: return false
         val target = deviceId ?: return false
-        val envelope = Envelope.make(type = type, sessionId = sessionId, payload = payload)
         val frame = encryptFrame(key, Envelope.encode(envelope))
         val withTarget = buildJsonObject {
             put("e", frame.e)
@@ -120,6 +137,10 @@ internal class FakeHost(
             }
             found!!
         }
+
+    /** 收下一条设备帧（不筛 type）——用于请求/响应场景。 */
+    suspend fun nextReceived(timeoutMs: Long = FRAME_TIMEOUT_MS): RemoteEnvelope =
+        withTimeout(timeoutMs) { received.receive() }
 
     // ---- 内部 ----
 
@@ -230,7 +251,7 @@ internal class FakeHost(
 }
 
 /** 测试侧的加密帧小工具（判定与生产代码保持一致）。 */
-internal object EncryptedFrames {
+object EncryptedFrames {
     fun isEncrypted(obj: JsonObject): Boolean =
         obj["e"]?.jsonPrimitive?.content == "1" && obj.containsKey("n") && obj.containsKey("c")
 
@@ -241,13 +262,13 @@ internal object EncryptedFrames {
     }.getOrNull()
 }
 
-internal fun publicKeyFromSpkiPem(pem: String): ByteArray {
+fun publicKeyFromSpkiPem(pem: String): ByteArray {
     val base64 = pem.lineSequence().filterNot { it.startsWith("-----") }.joinToString("")
     val der = Base64.getDecoder().decode(base64)
     return der.copyOfRange(der.size - 32, der.size)
 }
 
-internal fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean {
+fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean {
     val signer = Ed25519Signer()
     signer.init(false, Ed25519PublicKeyParameters(publicKey, 0))
     signer.update(message, 0, message.size)

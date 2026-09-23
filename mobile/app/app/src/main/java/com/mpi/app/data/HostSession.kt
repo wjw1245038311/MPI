@@ -4,17 +4,14 @@ import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.E2EFrame
 import com.mpi.app.protocol.Envelope
 import com.mpi.app.protocol.RemoteEnvelope
-import com.mpi.app.protocol.RemoteProtocolException
 import com.mpi.app.protocol.decryptFrame
 import com.mpi.app.protocol.encryptFrame
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
@@ -66,8 +63,13 @@ sealed interface SessionState {
 /**
  * 主机会话（M1-2）：连中继 → 重认证 → 建立 E2E 收发通道 → 断线自动重连。
  *
- * 分层：本类只管「一条到主机的加密通道」；请求/响应配对在 Requester（M1-3），
- * 业务数据在 HostSession 之上（M1-4）。
+ * 分层：本类只管「一条到主机的加密通道」；请求/响应配对在 [Requester]，
+ * 业务数据在更上层。
+ *
+ * **事件发布方式**：入站 envelope 与「非致命问题」都用**同步注册的回调**，
+ * 而不是 `SharedFlow`——因为 [Requester] 必须先注册等待者、再发请求，
+ * 而 SharedFlow 的订阅是异步的（M1-2 已因此丢过帧）。UI 层需要 Flow 时，
+ * 在自己的 ViewModel 里做一次适配即可。
  *
  * 重连语义（对齐 PWA 的 attachAutoReauth）：
  * - 每次 socket 打开都重走一次挑战应答——中继重启后路由会丢，必须重新 hello；
@@ -81,25 +83,13 @@ class HostSession(
     private val deviceName: String,
     private val scope: CoroutineScope,
     private val backoffMs: List<Long> = DEFAULT_BACKOFF,
-) {
+) : RequestTransport {
+
     private val _state = MutableStateFlow<SessionState>(SessionState.Disconnected)
     val state: StateFlow<SessionState> = _state.asStateFlow()
 
-    /**
-     * 解密后的入站协议 envelope（业务层订阅它）。
-     *
-     * ⚠️ **无 replay**：没有订阅者时帧会被丢弃（与 PWA 的 RelayClient 一致）。
-     * 所以调用方必须**先订阅、再触发流量**；靠“发了再订阅”会偶发丢帧。
-     */
-    private val _incoming = MutableSharedFlow<RemoteEnvelope>(extraBufferCapacity = 256)
-    val incoming: SharedFlow<RemoteEnvelope> = _incoming.asSharedFlow()
-
-    /**
-     * 不需要中断会话、但用户/开发者应当知道的问题（解密失败、意外明文帧等）。
-     * 单独一条流而不是混进 [state]，避免每次小问题都让界面闪一下错误态。
-     */
-    private val _problems = MutableSharedFlow<String>(extraBufferCapacity = 64)
-    val problems: SharedFlow<String> = _problems.asSharedFlow()
+    private val envelopeListeners = CopyOnWriteArrayList<(RemoteEnvelope) -> Unit>()
+    private val problemListeners = CopyOnWriteArrayList<(String) -> Unit>()
 
     @Volatile
     private var aesKey: ByteArray? = null
@@ -112,6 +102,21 @@ class HostSession(
     private val unsubscribeFrame = client.onFrame { raw -> handleFrame(raw) }
 
     private val unsubscribeState = client.onState { relayState -> handleRelayState(relayState) }
+
+    /** 订阅解密后的入站 envelope。**同步注册**，返回取消订阅的函数。 */
+    override fun onEnvelope(listener: (RemoteEnvelope) -> Unit): () -> Unit {
+        envelopeListeners += listener
+        return { envelopeListeners -= listener }
+    }
+
+    /**
+     * 订阅「不需要中断会话、但用户/开发者应当知道的问题」（解密失败、意外明文帧等）。
+     * 单独一条通道而不是混进 [state]，避免每次小问题都让界面闪一下错误态。
+     */
+    fun onProblem(listener: (String) -> Unit): () -> Unit {
+        problemListeners += listener
+        return { problemListeners -= listener }
+    }
 
     /** 建立连接；后续断线由内部自动重连（除非是终止性失败）。 */
     fun connect() {
@@ -131,6 +136,8 @@ class HostSession(
         authJob?.cancel()
         unsubscribeFrame()
         unsubscribeState()
+        envelopeListeners.clear()
+        problemListeners.clear()
         aesKey = null
         client.close()
         _state.value = SessionState.Disconnected
@@ -140,27 +147,31 @@ class HostSession(
     val isAuthenticated: Boolean
         get() = aesKey != null && _state.value is SessionState.Connected
 
-    /**
-     * 发送一条加密 envelope。返回 false 表示通道未就绪或队列已满。
-     */
+    override fun isOpen(): Boolean = client.isOpen()
+
+    /** 发送一条已构建的 envelope（[Requester] 用这条）。 */
+    override fun sendEnvelope(envelope: RemoteEnvelope): Boolean {
+        val key = aesKey ?: return false
+        val frame = encryptFrame(key, Envelope.encode(envelope))
+        return client.send(Envelope.json.encodeToString(E2EFrame.serializer(), frame))
+    }
+
+    /** 便捷发送：按字段构建再发。 */
     fun sendEnvelope(
         type: String,
         sessionId: String = DEFAULT_SESSION_ID,
         payload: JsonElement? = null,
         requestId: String? = null,
         threadId: String? = null,
-    ): Boolean {
-        val key = aesKey ?: return false
-        val envelope = Envelope.make(
+    ): Boolean = sendEnvelope(
+        Envelope.make(
             type = type,
             sessionId = sessionId,
             payload = payload,
             requestId = requestId,
             threadId = threadId,
-        )
-        val frame = encryptFrame(key, Envelope.encode(envelope))
-        return client.send(Envelope.json.encodeToString(E2EFrame.serializer(), frame))
-    }
+        ),
+    )
 
     /** 重新握手（中继重启、或长时间无响应时由上层触发）。 */
     fun reauthenticate() {
@@ -193,7 +204,7 @@ class HostSession(
                 reportProblem("解密或解析失败（密钥不匹配或数据被篡改）：${e.message}")
                 return
             }
-            _incoming.tryEmit(envelope)
+            envelopeListeners.forEach { runCatching { it(envelope) } }
             return
         }
 
@@ -321,7 +332,7 @@ class HostSession(
     }
 
     private fun reportProblem(message: String) {
-        _problems.tryEmit(message)
+        problemListeners.forEach { runCatching { it(message) } }
     }
 
     companion object {

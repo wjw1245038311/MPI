@@ -78,6 +78,20 @@ object Envelope {
     fun encode(envelope: RemoteEnvelope): String = json.encodeToString(RemoteEnvelope.serializer(), envelope)
 
     /**
+     * 针对某个请求构造「失败」回应（对照 TS 的 `errorFor`）：
+     * type 用 `<请求 type>.result`，并回带同一个 requestId。
+     */
+    fun errorFor(request: RemoteEnvelope, code: String, message: String): RemoteEnvelope = RemoteEnvelope(
+        v = REMOTE_PROTOCOL_VERSION,
+        type = "${request.type}.result",
+        sessionId = request.sessionId,
+        sentAt = System.currentTimeMillis(),
+        requestId = request.requestId,
+        threadId = request.threadId,
+        error = RemoteErrorPayload(code = code, message = message),
+    )
+
+    /**
      * 解析并校验；不合法时抛 [RemoteProtocolException]。
      * 校验项与 TS 的 parseEnvelope 一一对应（错误码也相同）。
      */
