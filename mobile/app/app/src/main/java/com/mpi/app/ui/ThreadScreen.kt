@@ -580,22 +580,25 @@ private fun Composer(
                     }
                 }
 
-                val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !sending
-                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(if (canSend) MpiTheme.colors.send else MpiTheme.colors.control)
-                            .clickable(enabled = canSend, onClick = onSend),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            IconSend,
-                            contentDescription = if (running) "发送（排队）" else "发送",
-                            tint = if (canSend) MpiTheme.colors.sendFg else MpiTheme.colors.textFaint,
-                            modifier = Modifier.size(18.dp),
-                        )
+                val hasContent = draft.isNotBlank() || attachments.isNotEmpty()
+                // 空输入时不显示发送键（只留附件 + 麦克风），有内容才出现——套壳版之外更清爽的做法
+                if (hasContent) {
+                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(if (sending) MpiTheme.colors.control else MpiTheme.colors.send)
+                                .clickable(enabled = !sending, onClick = onSend),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                IconSend,
+                                contentDescription = if (running) "发送（排队）" else "发送",
+                                tint = if (sending) MpiTheme.colors.textFaint else MpiTheme.colors.sendFg,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
             }
