@@ -249,6 +249,9 @@ class AppViewModel(
 
     fun dismissProblems() = _ui.update { it.copy(problems = emptyList()) }
 
+    /** UI 侧上报配对问题（扫码结果不是配对码 / 相机权限被拒）——不静默。 */
+    fun reportPairingError(message: String) = _ui.update { it.copy(pairingError = message) }
+
     // ---- 会话 ----
 
     /** 打开一个会话：订阅快照并开始接收事件流。 */
@@ -450,7 +453,6 @@ class AppViewModel(
 
     /** UI 侧发现问题（如麦克风权限被拒）时上报——统一走同一条错误展示。 */
     fun reportVoiceError(message: String) = _ui.update { it.copy(voiceError = message) }
-
     private fun loadAttachment(block: () -> Result<Attachment>) {
         if (_ui.value.attachmentBusy) return
         if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {

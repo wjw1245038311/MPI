@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,6 +49,7 @@ fun PairingScreen(
     onPair: (String) -> Unit,
     onClearError: () -> Unit,
     onCancel: (() -> Unit)?,
+    onScan: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     var link by remember { mutableStateOf("") }
@@ -102,6 +104,17 @@ fun PairingScreen(
             shape = RoundedCornerShape(12.dp),
         ) {
             Text(if (busy) "配对中…" else "开始配对")
+        }
+
+        if (onScan != null && !busy) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onScan,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text("扫码配对")
+            }
         }
 
         if (busy) {

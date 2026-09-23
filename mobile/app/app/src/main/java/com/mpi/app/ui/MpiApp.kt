@@ -39,6 +39,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mpi.app.AppContainer
 import com.mpi.app.data.Appearance
@@ -76,6 +78,13 @@ fun MpiApp(container: AppContainer) {
     val settings by container.settingsStore.settings.collectAsState()
     var settingsOpen by remember { mutableStateOf(false) }
     var diagnosticsOpen by remember { mutableStateOf(false) }
+    var scanOpen by remember { mutableStateOf(false) }
+    // 已授权时 RequestPermission 会立即回调 true
+    val cameraPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) scanOpen = true else viewModel.reportPairingError("没有相机权限，无法扫码")
+    }
 
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize()) {
@@ -98,6 +107,7 @@ fun MpiApp(container: AppContainer) {
                     onPair = viewModel::pairWithLink,
                     onClearError = viewModel::clearPairingError,
                     onCancel = cancelAdd,
+                    onScan = { cameraPermission.launch(android.Manifest.permission.CAMERA) },
                 )
             }
 
@@ -187,6 +197,17 @@ fun MpiApp(container: AppContainer) {
                     state = state,
                     deviceName = container.deviceName,
                     onClose = { diagnosticsOpen = false },
+                )
+            }
+            if (scanOpen) {
+                ScanScreen(
+                    onResult = { raw ->
+                        scanOpen = false
+                        val link = normalizePairLink(raw)
+                        if (link != null) viewModel.pairWithLink(link)
+                        else viewModel.reportPairingError("这不是配对二维码")
+                    },
+                    onCancel = { scanOpen = false },
                 )
             }
         }
