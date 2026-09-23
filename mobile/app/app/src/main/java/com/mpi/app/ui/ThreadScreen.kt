@@ -371,8 +371,6 @@ private fun Composer(
     var attachMenuOpen by remember { mutableStateOf(false) }
 
     Column {
-        HorizontalDivider(color = MpiTheme.colors.border)
-
         if (attachmentError != null) {
             Row(
                 modifier = Modifier
@@ -412,7 +410,6 @@ private fun Composer(
         if (attachments.isNotEmpty()) {
             AttachmentBar(attachments = attachments, onRemove = onRemoveAttachment)
         }
-
         // 发送 / 停止失败贴输入框显示（PWA 语义）：这里才是手指所在的位置。
         if (sendError != null) {
             Row(
@@ -750,7 +747,7 @@ private fun ScrollToBottomButton(
     val scope = rememberCoroutineScope()
     Box(
         modifier = modifier
-            .size(38.dp)
+            .size(30.dp)
             .clip(CircleShape)
             .background(MpiTheme.colors.surfaceMuted)
             .border(1.dp, MpiTheme.colors.border, CircleShape)
@@ -763,7 +760,7 @@ private fun ScrollToBottomButton(
             IconDown,
             contentDescription = "回到底部",
             tint = MpiTheme.colors.textDim,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(14.dp),
         )
     }
 }
