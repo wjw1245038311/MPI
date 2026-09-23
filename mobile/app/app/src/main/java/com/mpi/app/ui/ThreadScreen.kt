@@ -1021,8 +1021,13 @@ private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit, on
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Column {
-                    message.blocks.filter { it.type == BlockType.Text }.forEach { block ->
-                        MessageText(block.text.orEmpty(), color = MaterialTheme.colorScheme.onSurface)
+                    // 用户消息也要渲染图片块（之前只滤 Text，自己发的图直接看不见——真机反馈）
+                    message.blocks.forEach { block ->
+                        when (block.type) {
+                            BlockType.Text -> MessageText(block.text.orEmpty(), color = MaterialTheme.colorScheme.onSurface)
+                            BlockType.Image -> ImageBlock(block)
+                            else -> Unit
+                        }
                     }
                     if (message.pending) {
                         Text(
