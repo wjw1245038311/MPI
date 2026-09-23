@@ -32,7 +32,7 @@ class UpdaterLogicTest {
     fun `manifest parsing needs version and file and builds the relay url`() {
         val json =
             """{"version":"0.4.0","file":"mpi-android-native-0.4.0.apk","size":123,"sha256":"AB12","github":"https://example.com/x.apk"}"""
-        val info = Updater.parseManifest(json, "https://relay.example.com")
+        val info = Updater.parseManifest(json, "https://relay.example.com/download")
         assertEquals("0.4.0", info?.version)
         assertEquals("https://relay.example.com/download/mpi-android-native-0.4.0.apk", info?.url)
         assertEquals(123L, info?.size)
@@ -53,7 +53,7 @@ class UpdaterLogicTest {
     fun `patch field is parsed and gated by the base version`() {
         val json =
             """{"version":"0.6.0","file":"mpi-android-native-0.6.0.apk","size":100,"sha256":"AB","patch":{"from":"0.5.9","file":"p.bin","size":40,"sha256":"CD"}}"""
-        val info = Updater.parseManifest(json, "https://relay.example.com")!!
+        val info = Updater.parseManifest(json, "https://relay.example.com/download")!!
         assertEquals("0.5.9", info.patch?.from)
         assertEquals("https://relay.example.com/download/p.bin", info.patch?.url)
         assertEquals(40L, info.patch?.size)

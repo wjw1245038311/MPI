@@ -83,26 +83,38 @@ class Updater(private val context: Context) {
         .trimEnd('/')
         .takeIf { it.startsWith("http") }
 
-    /** 有更新时返回信息，否则 null。 */
+    /** 有更新时返回信息。优先 GitHub Release（用户要求），中继作兜底。 */
     suspend fun check(relayUrl: String): UpdateCheckResult = withContext(Dispatchers.IO) {
-        val origin = httpOrigin(relayUrl)
-            ?: return@withContext UpdateCheckResult.Failed("没有可用的中继地址")
+        val sources = buildList {
+            add(GITHUB_MANIFEST_URL to GITHUB_BASE_URL)
+            httpOrigin(relayUrl)?.let { origin -> add("$origin/download/$MANIFEST_NAME" to "$origin/download") }
+        }
+        var lastReason = "没有可用的更新源"
+        for ((manifestUrl, base) in sources) {
+            when (val result = fetchManifest(manifestUrl, base)) {
+                is UpdateCheckResult.Failed -> lastReason = result.reason
+                else -> return@withContext result
+            }
+        }
+        UpdateCheckResult.Failed(lastReason)
+    }
+
+    private fun fetchManifest(manifestUrl: String, base: String): UpdateCheckResult =
         runCatching {
-            val request = Request.Builder().url("$origin/download/$MANIFEST_NAME").build()
+            val request = Request.Builder().url(manifestUrl).build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    return@use UpdateCheckResult.Failed("中继上没有更新清单（HTTP ${response.code}）")
+                    return@use UpdateCheckResult.Failed("没找到更新清单（HTTP ${response.code}）")
                 }
                 val body = response.body?.string()
-                    ?: return@use UpdateCheckResult.Failed("中继返回了空清单")
-                val info = parseManifest(body, origin)
+                    ?: return@use UpdateCheckResult.Failed("更新清单是空的")
+                val info = parseManifest(body, base)
                     ?: return@use UpdateCheckResult.Failed("更新清单格式不正确")
                 if (isNewer(info.version)) UpdateCheckResult.Available(info) else UpdateCheckResult.UpToDate
             }
         }.getOrElse { error ->
-            UpdateCheckResult.Failed("连不上中继：${error.message ?: "未知错误"}")
+            UpdateCheckResult.Failed("连接失败：${error.message ?: "未知错误"}")
         }
-    }
 
     /**
      * 优先走增量（基线匹配时），失败自动回退完整包；成功返回可安装的文件。
@@ -178,11 +190,20 @@ class Updater(private val context: Context) {
     companion object {
         const val MANIFEST_NAME = "mpi-android-native.json"
 
+        /** GitHub 侧：版本与清单放在 Release 的 assets 里（latest 固定 URL）。 */
+        private const val GITHUB_REPO = "wjw1245038311/MPI"
+        private const val GITHUB_BASE_URL = "https://github.com/$GITHUB_REPO/releases/latest/download"
+        private const val GITHUB_MANIFEST_URL = "$GITHUB_BASE_URL/$MANIFEST_NAME"
+
+        /** 解析清单；base 是“文件所在目录”，file 为绝对 URL 时直接用。 */
+        private fun assetUrl(base: String, file: String): String =
+            if (file.startsWith("http://") || file.startsWith("https://")) file else "$base/$file"
+
         /** 当前安装版本比清单里的旧？（纯函数，可测） */
         internal fun isNewer(remote: String, current: String = BuildConfig.VERSION_NAME): Boolean =
             compareVersions(remote, current) > 0
 
-        internal fun parseManifest(body: String, origin: String): UpdateInfo? {
+        internal fun parseManifest(body: String, base: String): UpdateInfo? {
             val obj = runCatching { Json.parseToJsonElement(body) as? JsonObject }.getOrNull() ?: return null
             val version = (obj["version"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             val file = (obj["file"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
@@ -198,7 +219,7 @@ class Updater(private val context: Context) {
                     UpdatePatch(
                         from = from,
                         file = patchFile,
-                        url = "$origin/download/$patchFile",
+                        url = assetUrl(base, patchFile),
                         size = (p["size"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
                         sha256 = (p["sha256"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
                     )
@@ -208,7 +229,7 @@ class Updater(private val context: Context) {
             return UpdateInfo(
                 version = version,
                 file = file,
-                url = "$origin/download/$file",
+                url = assetUrl(base, file),
                 size = (obj["size"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
                 sha256 = (obj["sha256"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
                 github = (obj["github"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() },
