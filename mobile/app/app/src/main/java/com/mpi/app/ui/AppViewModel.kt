@@ -104,8 +104,6 @@ data class AppUiState(
     val updateError: String? = null,
     /** 会话元数据操作（重命名 / 置顶 / 删除）进行中。 */
     val threadActionBusy: Boolean = false,
-    /** 本端已知的置顶会话（列表不返回标记，只在本次运行内记）。 */
-    val pinnedThreadIds: Set<String> = emptySet(),
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -338,12 +336,8 @@ class AppViewModel(
                     threadId = threadId,
                 )
             }.onSuccess {
-                _ui.update { state ->
-                    state.copy(
-                        threadActionBusy = false,
-                        pinnedThreadIds = if (pinned) state.pinnedThreadIds + threadId else state.pinnedThreadIds - threadId,
-                    )
-                }
+                // 置顶态由主机在列表里如实返回，本地不再维护影子状态
+                _ui.update { it.copy(threadActionBusy = false) }
                 repository?.refresh()
             }.onFailure { error ->
                 val message = error.message ?: "置顶失败"

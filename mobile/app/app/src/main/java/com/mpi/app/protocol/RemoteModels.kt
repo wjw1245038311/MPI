@@ -69,6 +69,8 @@ data class RemoteThreadSummary(
     val messageCount: Int,
     val state: RemoteThreadState,
     val permission: RemotePermission,
+    /** 是否置顶（主机上报；旧主机不返回时按未置顶处理）。 */
+    val pinned: Boolean = false,
 )
 
 // ---- 线格式 DTO（除 id 外都有默认值，容忍主机端字段增删）----
@@ -91,6 +93,7 @@ internal data class ThreadSummaryDto(
     val messageCount: Int = 0,
     val state: String = "",
     val permission: String = "",
+    val pinned: Boolean = false,
 )
 
 object RemoteModels {
@@ -119,6 +122,7 @@ object RemoteModels {
                 messageCount = dto.messageCount,
                 state = RemoteThreadState.fromWire(dto.state),
                 permission = RemotePermission.fromWire(dto.permission),
+                pinned = dto.pinned,
             )
         }
     }

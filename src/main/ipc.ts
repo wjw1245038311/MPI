@@ -2052,6 +2052,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     async (projectId: string) => remoteProject(projectId),
     async (projectId: string) => {
       const project = await remoteProject(projectId);
+      // 置顶态：手机端菜单要显示「置顶 / 取消置顶」，列表就得如实上报
+      const pinnedSet = new Set((getConfig().pinnedThreads || []).map((path) => path.toLowerCase()));
       return Promise.all(project.threads.map(async (thread) => {
         // Keep the id returned by thread.create stable after its in-memory
         // draft is promoted to a real session file.
@@ -2075,6 +2077,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
           messageCount: thread.messageCount,
           state,
           permission: resolvePermission(thread.file, undefined),
+          pinned: pinnedSet.has(thread.file.toLowerCase()),
         };
       }));
     },

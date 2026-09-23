@@ -82,6 +82,8 @@ export interface RemoteThreadSummary {
   messageCount: number;
   state: RemoteThreadState;
   permission: RemotePermission;
+  /** 是否置顶（手机端菜单据此显示「置顶 / 取消置顶」）。 */
+  pinned?: boolean;
 }
 
 export interface RemoteMessage {

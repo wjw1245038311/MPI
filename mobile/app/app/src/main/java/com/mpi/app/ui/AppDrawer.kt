@@ -53,8 +53,6 @@ fun AppDrawerContent(
     onOpenThread: (String) -> Unit,
     onNewThread: (String) -> Unit,
     onOpenSettings: () -> Unit,
-    /** 本端已知的置顶会话（列表不返回标记）。 */
-    pinnedIds: Set<String> = emptySet(),
     onRename: (String, String) -> Unit = { _, _ -> },
     onTogglePin: (String, Boolean) -> Unit = { _, _ -> },
     onDelete: (String) -> Unit = {},
@@ -130,6 +128,7 @@ fun AppDrawerContent(
                                 title = thread.title,
                                 state = thread.state,
                                 updatedAt = thread.updatedAt,
+                                pinned = thread.pinned,
                                 onClick = { onOpenThread(thread.id) },
                                 onLongClick = { menuFor = thread },
                             )
@@ -155,7 +154,7 @@ fun AppDrawerContent(
     menuFor?.let { thread ->
         ThreadActionDialog(
             title = thread.title.ifEmpty { "(无标题)" },
-            pinned = pinnedIds.contains(thread.id),
+            pinned = thread.pinned,
             busy = false,
             onDismiss = { menuFor = null },
             onRename = { name ->
@@ -237,6 +236,7 @@ private fun DrawerThreadRow(
     title: String,
     state: com.mpi.app.protocol.RemoteThreadState,
     updatedAt: Long,
+    pinned: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -257,9 +257,9 @@ private fun DrawerThreadRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${state.label()} · ${relTime(updatedAt)}",
+                text = if (pinned) "置顶 · ${state.label()} · ${relTime(updatedAt)}" else "${state.label()} · ${relTime(updatedAt)}",
                 style = MaterialTheme.typography.labelSmall,
-                color = MpiTheme.colors.textFaint,
+                color = if (pinned) MaterialTheme.colorScheme.primary else MpiTheme.colors.textFaint,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

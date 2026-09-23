@@ -91,7 +91,8 @@ PWA `ChoicePanel.tsx` + `lib/choice-block.ts`（提交 `e1b6018` / `3a6021b`）�
 服务层校验（rename 名字非空且 ≤120、pinned 必须 boolean、delete/rename 要写租约）；
 删除**复用桌面端同一份** `deleteSessionThreadByFile`（停桥 → 回收站 → 清理 config 与手机端映射）。
 schema（`protocol/remote-v1.schema.json`）与 `test:remote` 同步。
-原生端：抽屉会话长按 → 重命名 / 置顶 / 删除（删除二次确认并说明可恢复）。
+原生端：抽屉会话长按 → 重命名 / 置顶 / 删除（删除二次确认并说明可恢复）；
+主机 `threads.list` 如实返回 `pinned`，抽屉显示「置顶」前缀，菜单据此切换。
 
 **PWA 端尚未接入**（协议向后兼容，不影响现有功能）——需要时再补。
 
