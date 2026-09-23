@@ -2,6 +2,7 @@ package com.mpi.app.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,8 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -59,6 +60,8 @@ fun AppDrawerContent(
     onDelete: (String) -> Unit = {},
 ) {
     var menuFor by remember { mutableStateOf<RemoteThreadSummary?>(null) }
+    // 项目折叠态：一次只展开一个（与 PWA `expandedProjectId` 同语义），默认全收起
+    var expandedProjectId by remember { mutableStateOf<String?>(null) }
     Column(modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
         DrawerHeader(
             deviceName = state.activeHost?.shownName ?: "未选择主机",
@@ -79,7 +82,8 @@ fun AppDrawerContent(
 
         LazyColumn(
             modifier = Modifier.weight(1f, fill = false),
-            contentPadding = PaddingValues(vertical = 8.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             val projects = state.host.projects
             if (projects.isEmpty()) {
@@ -88,53 +92,26 @@ fun AppDrawerContent(
                         text = "暂无项目",
                         style = MaterialTheme.typography.bodySmall,
                         color = MpiTheme.colors.textFaint,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 10.dp),
                     )
                 }
             }
+            val now = System.currentTimeMillis()
             projects.forEach { project ->
-                item(key = "project-${project.id}") {
-                    Text(
-                        text = project.name.ifEmpty { project.id },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MpiTheme.colors.textFaint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 4.dp),
-                    )
-                }
                 val threads = state.host.threadsByProject[project.id].orEmpty()
-                if (threads.isEmpty()) {
-                    item(key = "empty-${project.id}") {
-                        Text(
-                            text = "（暂无会话）",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MpiTheme.colors.textFaint,
-                            modifier = Modifier.padding(start = 18.dp, bottom = 4.dp),
-                        )
-                    }
-                } else {
-                    val now = System.currentTimeMillis()
-                    drawerDayGroups(threads, now).forEach { (label, groupThreads) ->
-                        item(key = "day-${project.id}-$label") {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MpiTheme.colors.textFaint,
-                                modifier = Modifier.padding(start = 18.dp, top = 8.dp, bottom = 2.dp),
-                            )
-                        }
-                        items(groupThreads, key = { it.id }) { thread ->
-                            DrawerThreadRow(
-                                title = thread.title,
-                                state = thread.state,
-                                updatedAt = thread.updatedAt,
-                                pinned = thread.pinned,
-                                onClick = { onOpenThread(thread.id) },
-                                onLongClick = { menuFor = thread },
-                            )
-                        }
-                    }
+                val expanded = expandedProjectId == project.id
+                item(key = "project-${project.id}") {
+                    DrawerProjectCard(
+                        name = project.name.ifEmpty { project.id },
+                        // 与 PWA 同一口径：项目行的「N 会话 · 相对时间」
+                        hint = projectRowHint(project.threadCount, project.updatedAt, now),
+                        expanded = expanded,
+                        onToggle = { expandedProjectId = if (expanded) null else project.id },
+                        threads = if (expanded) threads else emptyList(),
+                        now = now,
+                        onOpenThread = onOpenThread,
+                        onLongClick = { menuFor = it },
+                    )
                 }
             }
         }
@@ -171,6 +148,85 @@ fun AppDrawerContent(
                 onDelete(thread.id)
             },
         )
+    }
+}
+
+/**
+ * 项目卡片（抽屉第一层）：项目名 + 「N 会话 · 相对时间」，点击展开该项目下的会话。
+ *
+ * 对齐 PWA `App.tsx` 的 `.project` / `.project-row`：有边框圆角卡片，展开后
+ * 会话行用分隔线挂在同一张卡片里；展开态由调用方（单一 `expandedProjectId`）控制。
+ * 项目内仍按【今天 / 昨天 / 更早】分小标题（原生保留的细化，不影响收起态观感）。
+ */
+@Composable
+private fun DrawerProjectCard(
+    name: String,
+    hint: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    threads: List<RemoteThreadSummary>,
+    now: Long,
+    onOpenThread: (String) -> Unit,
+    onLongClick: (RemoteThreadSummary) -> Unit,
+) {
+    val shape = RoundedCornerShape(10.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(MpiTheme.colors.surfaceMuted)
+            .border(1.dp, MpiTheme.colors.border, shape),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 12.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.size(8.dp))
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MpiTheme.colors.textFaint,
+                maxLines = 1,
+            )
+        }
+        if (expanded) {
+            HorizontalDivider(color = MpiTheme.colors.border)
+            if (threads.isEmpty()) {
+                Text(
+                    text = "（暂无会话）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MpiTheme.colors.textFaint,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                )
+            } else {
+                drawerDayGroups(threads, now).forEach { (label, groupThreads) ->
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MpiTheme.colors.textFaint,
+                        modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 2.dp),
+                    )
+                    groupThreads.forEach { thread ->
+                        DrawerThreadRow(
+                            title = thread.title,
+                            state = thread.state,
+                            updatedAt = thread.updatedAt,
+                            pinned = thread.pinned,
+                            onClick = { onOpenThread(thread.id) },
+                            onLongClick = { onLongClick(thread) },
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -245,7 +301,7 @@ private fun DrawerThreadRow(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 18.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StateDot(state, size = 7)
@@ -400,7 +456,11 @@ private fun NewThreadEntry(
     }
 }
 
-// ---- 会话时间分组（纯函数，可单测） -----------------------------------------
+// ---- 抽屉分组（纯函数，可单测） ---------------------------------------------
+
+/** 项目行右侧文案：与 PWA `App.tsx` 的 `{threadCount} 会话 · {relTime}` 完全一致。 */
+internal fun projectRowHint(threadCount: Int, updatedAt: Long, now: Long = System.currentTimeMillis()): String =
+    "$threadCount 会话 · ${relTime(updatedAt, now)}"
 
 /** 会话落在「今天 / 昨天 / 更早」（按本地日历日，不用 24h 差值以免跨零点错位）。 */
 internal fun dayBucketLabel(updatedAt: Long, now: Long): String {

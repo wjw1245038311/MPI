@@ -303,7 +303,11 @@ private fun HomeWithDrawer(
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet(drawerContainerColor = MpiTheme.colors.bg) {
+            // 抽屉宽度：手机上一手能回到对话（用户要求最多占屏宽 2/3）
+            ModalDrawerSheet(
+                modifier = Modifier.fillMaxWidth(2f / 3f),
+                drawerContainerColor = MpiTheme.colors.bg,
+            ) {
                 AppDrawerContent(
                     state = state,
                     onOpenHosts = onOpenHosts,

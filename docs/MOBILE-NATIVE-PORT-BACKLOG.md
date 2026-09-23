@@ -81,10 +81,12 @@ PWA `ChoicePanel.tsx` + `lib/choice-block.ts`（提交 `e1b6018` / `3a6021b`）�
 | 交付 | 落点 |
 | --- | --- |
 | 设备重命名（本地别名，内联改名） | `MpiApp.HostRow` + `AppViewModel.renameHost` |
-| 抽屉会话分组：今天 / 昨天 / 更早（本地日历日） | `AppDrawer.dayBucketLabel` / `drawerDayGroups` |
+| 抽屉第一层改**项目卡片**：项目名 +「N 会话 · 相对时间」，点击展开该项目下的会话（原生对齐 PWA `.project` / `.project-row`；一次只展开一个） | `AppDrawer.DrawerProjectCard` + `projectRowHint` |
+| 项目内会话仍按【今天 / 昨天 / 更早】分小标题（本地日历日） | `AppDrawer.dayBucketLabel` / `drawerDayGroups` |
 | 抽屉「新建会话」入口（单项目直建；多项目内联选择；请求中禁用） | `AppDrawer.NewThreadEntry` + `AppViewModel.createThread` |
+| 抽屉宽度 = 屏宽 2/3（原先 `ModalDrawerSheet` 默认 360dp 在手机上近满屏，回对话要点遮罩；PWA 是 `min(320px, 86vw)`，这里按用户要求取 2/3） | `MpiApp.HomeWithDrawer` |
 
-**测试**：`AppDrawerTest`（4 项，含跨零点不误判）。
+**测试**：`AppDrawerTest`（5 项：项目行文案 + 时间分桶 + 跨零点不误判）。
 
 ### 协议扩展 ✅（会话重命名 / 置顶 / 删除）
 

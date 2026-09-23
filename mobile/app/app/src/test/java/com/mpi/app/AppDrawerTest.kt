@@ -5,6 +5,7 @@ import com.mpi.app.protocol.RemoteThreadState
 import com.mpi.app.protocol.RemoteThreadSummary
 import com.mpi.app.ui.dayBucketLabel
 import com.mpi.app.ui.drawerDayGroups
+import com.mpi.app.ui.projectRowHint
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.util.Calendar
@@ -32,6 +33,13 @@ class AppDrawerTest {
         cal.set(Calendar.SECOND, 0)
         cal.set(Calendar.MILLISECOND, 0)
         return cal.timeInMillis
+    }
+
+    @Test
+    fun `project row hint matches the PWA wording`() {
+        val now = noon(0)
+        assertEquals("11 会话 · 刚刚", projectRowHint(11, now - 30_000, now))
+        assertEquals("3 会话 · 1 小时前", projectRowHint(3, now - 3_600_000, now))
     }
 
     @Test
