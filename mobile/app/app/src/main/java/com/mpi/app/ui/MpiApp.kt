@@ -87,12 +87,19 @@ fun MpiApp(container: AppContainer) {
                             .firstOrNull { it.id == openThread.summary?.projectId }?.name,
                         draft = state.draft,
                         sending = state.sending,
+                        responding = state.responding,
+                        respondError = state.respondError,
                         onBack = viewModel::closeThread,
                         onResync = viewModel::resyncThread,
                         onDraftChange = viewModel::updateDraft,
                         onSend = viewModel::sendDraft,
                         onAbort = viewModel::abortThread,
                         onRetry = viewModel::retrySend,
+                        onRespond = { response ->
+                            openThread.pendingUi?.let { request ->
+                                viewModel.respondUi(request.id, response)
+                            }
+                        },
                     )
                 } else {
                     HomeWithDrawer(

@@ -77,6 +77,8 @@ class ThreadSession(
     private val transport: RequestTransport,
     private val request: suspend (type: String, payload: JsonElement?, threadId: String?) -> JsonElement?,
     private val scope: CoroutineScope,
+    /** 非致命问题上报（丢帧导致的缺口、解密失败等）。 */
+    private val onProblem: (String) -> Unit = {},
 ) {
     private val _view = MutableStateFlow(ThreadView(threadId = threadId))
     val view: StateFlow<ThreadView> = _view.asStateFlow()
@@ -202,7 +204,9 @@ class ThreadSession(
             if (seq > 0 && expected != null) {
                 if (seq < expected) return // 重复/过期，忽略
                 if (seq > expected) {
-                    // 缺了一段 —— 立即重新同步，绝不带着缺口继续渲染
+                    // 缺了一段 —— 立即重新同步，绝不带着缺口继续渲染。
+                    // 同时上报：静默 resync 会把「丢帧」这类问题掩盖掉。
+                    onProblem("事件流有缺口（期望 $expected，收到 $seq），已重新同步")
                     scope.launch { runCatching { resync() } }
                     return
                 }

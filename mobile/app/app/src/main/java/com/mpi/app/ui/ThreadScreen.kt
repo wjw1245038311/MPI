@@ -65,12 +65,15 @@ fun ThreadScreen(
     projectName: String?,
     draft: String,
     sending: Boolean,
+    responding: Boolean,
+    respondError: String?,
     onBack: () -> Unit,
     onResync: () -> Unit,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onAbort: () -> Unit,
     onRetry: (String) -> Unit,
+    onRespond: (kotlinx.serialization.json.JsonObject) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -139,6 +142,16 @@ fun ThreadScreen(
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp),
                 )
             }
+        }
+
+        // 审批卡停在输入条上方：agent 此刻停住等回应，而用户可能正在上面翻上下文
+        view.pendingUi?.let { request ->
+            ApprovalCard(
+                request = request,
+                responding = responding,
+                error = respondError,
+                onRespond = onRespond,
+            )
         }
 
         Composer(

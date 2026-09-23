@@ -57,6 +57,10 @@ data class AppUiState(
     val draft: String = "",
     /** 正在发送（避免重复点发送）。 */
     val sending: Boolean = false,
+    /** 正在提交审批回应。 */
+    val responding: Boolean = false,
+    /** 审批回应失败的原因（卡片不消失，显示在卡片内）。 */
+    val respondError: String? = null,
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -224,6 +228,11 @@ class AppViewModel(
             transport = transport,
             request = { type, payload, tid -> requesterRef.request(type, payload, threadId = tid) },
             scope = scope,
+            onProblem = { problem ->
+                _ui.update { state ->
+                    state.copy(problems = (state.problems.filterNot { it == problem } + problem).takeLast(MAX_PROBLEMS))
+                }
+            },
         )
         threadSession = threadSessionLocal
         threadActions = ThreadActions(
@@ -255,7 +264,7 @@ class AppViewModel(
         threadSession?.detach()
         threadSession = null
         threadActions = null
-        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false) }
+        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null) }
     }
 
     /** 手动重新同步（错误横幅上的按钮）。 */
@@ -290,6 +299,26 @@ class AppViewModel(
         scope.launch {
             runCatching { actions.abort() }.onFailure { error ->
                 _ui.update { it.copy(problems = (it.problems + (error.message ?: "停止失败")).takeLast(MAX_PROBLEMS)) }
+            }
+        }
+    }
+
+    /**
+     * 提交审批回应。失败时**不收起卡片**——回应没送到就等于 agent 还停着，
+     * 这时候把卡片收掉会让人以为已经批准了。
+     */
+    fun respondUi(requestId: String, response: kotlinx.serialization.json.JsonObject) {
+        val actions = threadActions ?: return
+        val session = threadSession ?: return
+        if (_ui.value.responding) return
+        _ui.update { it.copy(responding = true, respondError = null) }
+        scope.launch {
+            try {
+                actions.respondUi(requestId, response)
+                session.markUiResponded(requestId)
+                _ui.update { it.copy(responding = false, respondError = null) }
+            } catch (error: Exception) {
+                _ui.update { it.copy(responding = false, respondError = error.message ?: "回应发送失败") }
             }
         }
     }

@@ -22,7 +22,7 @@
  * 按回车（或输入 l）= 再发一张票据（票据一次性，重复配对要新的）。
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { register } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,14 @@ register(new URL("./electron-stub-loader.mjs", import.meta.url));
 const PORT = Number(process.env.RELAY_PORT || 9001);
 const OUT_DIR = join(ROOT, "tempfile", "mobile-harness");
 const USER_DATA = join(OUT_DIR, "userdata");
+/** 订阅会话后推一段模拟事件流（流式 + 审批卡）。HARNESS_SIMULATE=1 开启。 */
+const SIMULATE = process.env.HARNESS_SIMULATE === "1";
+/** 模拟流只推一次（resync/重连会反复触发）。 */
+let simulated = false;
+
+/** 已知设备 id（从配对/上线事件里拓下来），推事件时要用。 */
+let knownDeviceId = null;
+let uplinkRef = null;
 
 const log = (...args) => console.log(new Date().toISOString().slice(11, 19), "[harness]", ...args);
 
@@ -75,7 +83,7 @@ const threadsOf = (projectId) => {  if (projectId === "proj-mpi") {
   return [];
 };
 
-function makeService(responseFor, errorFor) {
+function makeService(responseFor, errorFor, makeEnvelope) {
   return {
     handle: async (request, ctx) => {
       log(`← ${request.type}${request.threadId ? ` threadId=${request.threadId}` : ""}`);
@@ -93,6 +101,10 @@ function makeService(responseFor, errorFor) {
         case "thread.subscribe":
         case "thread.resync":
           ctx.send(responseFor(request, { snapshot: snapshotOf(String(request.payload?.threadId ?? "")) }));
+          if (SIMULATE) {
+            // 不 await：不能阻塞响应
+            void simulateEvents(makeEnvelope, String(request.payload?.threadId ?? ""));
+          }
           break;
         // 写操作：真的走一遍租约与写请求（host 侧 assertWriter 在生产代码里）。
         // 注意：harness 拿不到事件推送通道，所以发出去的消息会停在「发送中…」——
@@ -122,8 +134,73 @@ function makeService(responseFor, errorFor) {
   };
 }
 
-function snapshotOf(threadId) {
-  const now = Date.now();
+/**
+ * 订阅后推一段模拟事件流（仅 HARNESS_SIMULATE=1）。
+ *
+ * 走 `uplink.sendToDevice` —— 与真实主机推事件是同一条路（含 E2E 加密），
+ * 所以能真实验证流式渲染与审批卡（而不只是看单测）。
+ */
+async function simulateEvents(makeEnvelope, threadId) {
+  if (simulated) return;
+  const uplink = uplinkRef;
+  const deviceId = knownDeviceId;
+  if (!uplink || !deviceId) {
+    log("（模拟事件跳过：还没有已知设备 id）");
+    return;
+  }
+  simulated = true;
+  let seq = 0;
+  const push = (kind, data) => {
+    seq += 1;
+    const envelope = makeEnvelope("thread.event", "sess-harness", { kind, data }, { threadId, seq });
+    uplink.sendToDevice(deviceId, JSON.stringify(envelope));
+  };
+
+  await sleep(400);
+  push("agent_start");
+  push("message_start", { event: { message: { role: "assistant" } } });
+  for (let i = 0; i < 40; i++) {
+    push("message_update", { event: { assistantMessageEvent: { type: "text_delta", delta: "流式输出片段 " } } });
+    await sleep(40);
+  }
+  push("message_update", {
+    event: { assistantMessageEvent: { type: "toolcall_start", toolCall: { id: "call-demo", name: "read" } } },
+  });
+  await sleep(500);
+  push("tool_execution_end", { event: { toolCallId: "call-demo", result: { content: "已读取 src/auth/session.ts（42 行）" } } });
+  await sleep(300);
+  push("ui.request", {
+    request: {
+      id: `ui-demo-${Date.now()}`,
+      method: "select",
+      title: "写入 src/auth/session.ts",
+      message: "会话过期时需要清理本地缓存，允许改动这个文件吗？",
+      options: ["仅允许本次", "本会话总是允许", "拒绝"],
+      diff: {
+        path: "src/auth/session.ts",
+        added: 6,
+        removed: 2,
+        hunks: [
+          "--- a/src/auth/session.ts",
+          "+++ b/src/auth/session.ts",
+          "@@ -1,4 +1,8 @@",
+          " export function loadSession() {",
+          "-  return cache.get('session');",
+          "+  const cached = cache.get('session');",
+          "+  if (!cached || isExpired(cached)) {",
+          "+    cache.delete('session');",
+          "+    return null;",
+          "+  }",
+          "+  return cached;",
+          " }",
+        ].join("\n"),
+      },
+    },
+  });
+  log("模拟事件流推送完毕（含一条审批请求）");
+}
+
+function snapshotOf(threadId) {  const now = Date.now();
   return {
     id: threadId || "t-running",
     projectId: "proj-mpi",
@@ -231,7 +308,7 @@ async function main() {
   process.env.MPI_TEST_USER_DATA = USER_DATA;
   const { RemoteHost } = await import("../src/main/remote/host.ts");
   const { RelayUplink } = await import("../src/main/remote/relay-uplink.ts");
-  const { responseFor, errorFor } = await import("../mobile/shared/protocol.ts");
+  const { responseFor, errorFor, makeEnvelope } = await import("../mobile/shared/protocol.ts");
 
   const host = new RemoteHost({
     userDataDir: USER_DATA,
@@ -239,10 +316,11 @@ async function main() {
     stunUrls: [],
     sendToRenderer: (channel, payload) => {
       if (channel === "remote:pairing-request" || channel === "remote:pairing-auto-approved") {
+        if (payload?.deviceId) knownDeviceId = payload.deviceId;
         log(`桌面事件 ${channel}：device=${payload?.deviceId ?? "?"} name=${payload?.deviceName ?? "?"}`);
       }
     },
-    service: makeService(responseFor, errorFor),
+    service: makeService(responseFor, errorFor, makeEnvelope),
   });
   host.start();
   log(`主机身份：${host.getStatus().hostId}`);
@@ -257,7 +335,21 @@ async function main() {
     getHost: () => host,
   });
   host.setRelay(uplink);
+  uplinkRef = uplink;
   uplink.start();
+
+  // 已配对过的设备不会再有 pairing 事件，从主机身份文件里直接取设备 id
+  // （模拟事件流需要它；没开 HARNESS_SIMULATE 就无所谓）
+  try {
+    const identity = JSON.parse(readFileSync(join(USER_DATA, "remote-identity.json"), "utf8"));
+    const trusted = Array.isArray(identity?.trustedDevices) ? identity.trustedDevices : [];
+    if (trusted.length && trusted[0]?.deviceId) {
+      knownDeviceId = trusted[0].deviceId;
+      log(`已知设备（来自主机身份文件）：${knownDeviceId}`);
+    }
+  } catch {
+    // 没有文件就等配对事件，不影响正常联调
+  }
 
   for (let i = 0; i < 100 && uplink.getStatus().state !== "connected"; i++) await sleep(50);
   log(`uplink 状态：${uplink.getStatus().state}`);
