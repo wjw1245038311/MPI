@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
 
 /** 配对进行中的状态（null = 没在配对）。 */
 data class PairingUi(
@@ -72,6 +74,8 @@ data class AppUiState(
     val pendingFollowUp: String? = null,
     /** 发送 / 停止失败文案（贴输入框显示，不静默失败）。 */
     val sendError: String? = null,
+    /** 正在新建会话的项目 id（非 null = 进行中，用于禁用重复点击）。 */
+    val creatingThread: String? = null,
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -480,6 +484,39 @@ class AppViewModel(
     }
 
     // ---- 数据 ----
+
+    /**
+     * 新建会话（`thread.create`）→ 刷新列表并直接进入该会话。
+     * 主机返回的是新会话快照，取其 id 即可打开（列表刷新失败也不影响进入）。
+     */
+    fun createThread(projectId: String) {
+        val requesterRef = requester ?: return
+        if (_ui.value.creatingThread != null) return
+        _ui.update { it.copy(creatingThread = projectId) }
+        scope.launch {
+            try {
+                val result = requesterRef.request(
+                    "thread.create",
+                    kotlinx.serialization.json.buildJsonObject {
+                        put("projectId", projectId)
+                    },
+                )
+                repository?.refresh()
+                val snapshot = (result as? kotlinx.serialization.json.JsonObject)
+                    ?.get("snapshot") as? kotlinx.serialization.json.JsonObject
+                val id = (snapshot?.get("id") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                _ui.update { it.copy(creatingThread = null) }
+                if (!id.isNullOrEmpty()) openThread(id)
+            } catch (error: Exception) {
+                _ui.update {
+                    it.copy(
+                        creatingThread = null,
+                        problems = (it.problems + (error.message ?: "新建会话失败")).takeLast(MAX_PROBLEMS),
+                    )
+                }
+            }
+        }
+    }
 
     fun refresh() {
         scope.launch { repository?.refresh() }

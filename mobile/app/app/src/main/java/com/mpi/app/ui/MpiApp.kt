@@ -18,6 +18,7 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -139,6 +140,7 @@ fun MpiApp(container: AppContainer) {
                 hostsOpen = false
             },
             onRemove = viewModel::removeHost,
+            onRename = viewModel::renameHost,
             onAdd = {
                 hostsOpen = false
                 viewModel.startAddHost()
@@ -176,6 +178,10 @@ private fun HomeWithDrawer(
                     onOpenThread = { threadId ->
                         scope.launch { drawerState.close() }
                         viewModel.openThread(threadId)
+                    },
+                    onNewThread = { projectId ->
+                        scope.launch { drawerState.close() }
+                        viewModel.createThread(projectId)
                     },
                 )
             }
@@ -265,6 +271,7 @@ private fun HostsDialog(
     onDismiss: () -> Unit,
     onSwitch: (String) -> Unit,
     onRemove: (String) -> Unit,
+    onRename: (String, String) -> Unit,
     onAdd: () -> Unit,
 ) {
     AlertDialog(
@@ -278,6 +285,7 @@ private fun HostsDialog(
                         active = record.hostId == state.activeHostId,
                         onSwitch = { onSwitch(record.hostId) },
                         onRemove = { onRemove(record.hostId) },
+                        onRename = { name -> onRename(record.hostId, name) },
                     )
                 }
             }
@@ -293,27 +301,55 @@ private fun HostRow(
     active: Boolean,
     onSwitch: () -> Unit,
     onRemove: () -> Unit,
+    onRename: (String) -> Unit,
 ) {
+    var editing by remember(record.hostId) { mutableStateOf(false) }
+    var draftName by remember(record.hostId) { mutableStateOf(record.shownName) }
+
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(
-            modifier = Modifier.weight(1f).clickable(onClick = onSwitch),
-        ) {
-            Text(
-                text = record.shownName + if (active) "（当前）" else "",
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+        if (editing) {
+            OutlinedTextField(
+                value = draftName,
+                onValueChange = { draftName = it },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                placeholder = { Text("设备显示名", style = MaterialTheme.typography.bodySmall) },
             )
-            Text(
-                text = record.lastSeenAt?.let { "最近 ${relTime(it)}" } ?: "未连接过",
-                style = MaterialTheme.typography.labelSmall,
-                color = MpiTheme.colors.textFaint,
-            )
+            TextButton(
+                onClick = {
+                    editing = false
+                    onRename(draftName.trim())
+                },
+                enabled = draftName.isNotBlank(),
+            ) { Text("保存") }
+            TextButton(
+                onClick = {
+                    editing = false
+                    draftName = record.shownName
+                },
+            ) { Text("取消") }
+        } else {
+            Column(
+                modifier = Modifier.weight(1f).clickable(onClick = onSwitch),
+            ) {
+                Text(
+                    text = record.shownName + if (active) "（当前）" else "",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = record.lastSeenAt?.let { "最近 ${relTime(it)}" } ?: "未连接过",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MpiTheme.colors.textFaint,
+                )
+            }
+            TextButton(onClick = { editing = true }) { Text("改名") }
+            TextButton(onClick = onRemove) { Text("移除") }
         }
-        TextButton(onClick = onRemove) { Text("移除") }
     }
 }
