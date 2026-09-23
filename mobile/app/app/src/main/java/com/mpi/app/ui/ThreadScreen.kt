@@ -277,12 +277,10 @@ fun ThreadScreen(
             onDismissVoiceError = onDismissVoiceError,
             pendingFollowUp = pendingFollowUp,
             sendError = sendError,
-            modelLabel = view.summary?.let { modelChipLabel(view) } ?: "默认模型",
-            contextLabel = readContextUsage(view.contextUsage).let { ctx ->
+            usageLabel = readContextUsage(view.contextUsage).let { ctx ->
                 if (ctx.hasValue) "${ctx.percent.roundToInt()}%" else "—"
             },
-            onOpenModelSheet = { onOpenSheet(ToolbarSheet.Model) },
-            onOpenContextSheet = { onOpenSheet(ToolbarSheet.Context) },
+            onOpenModelContext = { onOpenSheet(ToolbarSheet.Model) },
             onSend = onSend,
             onAbort = onAbort,
             onSteerPending = onSteerPending,
@@ -337,10 +335,9 @@ private fun Composer(
     onDismissVoiceError: () -> Unit,
     pendingFollowUp: String?,
     sendError: String?,
-    modelLabel: String,
-    contextLabel: String,
-    onOpenModelSheet: () -> Unit,
-    onOpenContextSheet: () -> Unit,
+    /** 用量百分比（显示在圆钮里）；模型 / 压缩 / 刷新共用同一个面板入口。 */
+    usageLabel: String,
+    onOpenModelContext: () -> Unit,
     onSend: () -> Unit,
     onAbort: () -> Unit,
     onSteerPending: () -> Unit,
@@ -496,19 +493,19 @@ private fun Composer(
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Box {
-                    IconButton(
+                    RoundIconButton(
                         onClick = { attachMenuOpen = true },
                         enabled = !attachmentBusy && attachments.size < 3,
-                        modifier = Modifier.size(40.dp),
+                        background = MpiTheme.colors.control,
                     ) {
                         if (attachmentBusy) {
-                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                         } else {
                             Icon(
                                 IconPlus,
                                 contentDescription = "添加附件",
                                 tint = MpiTheme.colors.textDim,
-                                modifier = Modifier.size(19.dp),
+                                modifier = Modifier.size(17.dp),
                             )
                         }
                     }
@@ -541,106 +538,69 @@ private fun Composer(
 
                 Spacer(Modifier.weight(1f))
 
-                // 模型 + 用量（从顶部 chip 行挪进来：离拇指更近，也不占标题区）
-                TextButton(
-                    onClick = onOpenModelSheet,
-                    enabled = !sending,
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-                ) {
-                    Text(
-                        text = modelLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 130.dp),
-                    )
-                }
-                TextButton(
-                    onClick = onOpenContextSheet,
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-                ) {
-                    Text(
-                        text = contextLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MpiTheme.colors.textFaint,
-                    )
-                }
-
                 Spacer(Modifier.weight(1f))
+
+                // 按钮行统一成圆形按钮（真机诉求：＋ / 话筒 / 发送 大小要均衡）
+                // 模型 + 用量合成一个圆钮，放在话筒左边
+                RoundIconButton(
+                    onClick = onOpenModelContext,
+                    background = MpiTheme.colors.control,
+                ) {
+                    Text(
+                        text = usageLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MpiTheme.colors.textDim,
+                        maxLines = 1,
+                    )
+                }
 
                 when {
                     transcribing -> {
-                        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        RoundIconButton(onClick = {}, enabled = false, background = MpiTheme.colors.control) {
+                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                         }
                     }
 
                     recording -> {
-                        IconButton(onClick = onCancelVoice, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                IconClose,
-                                contentDescription = "取消录音",
-                                tint = MpiTheme.colors.textDim,
-                                modifier = Modifier.size(19.dp),
-                            )
+                        RoundIconButton(onClick = onCancelVoice, background = MpiTheme.colors.control) {
+                            Icon(IconClose, contentDescription = "取消录音", tint = MpiTheme.colors.textDim, modifier = Modifier.size(17.dp))
                         }
-                        IconButton(onClick = onStopVoice, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                IconMic,
-                                contentDescription = "结束录音并转文字",
-                                tint = MpiTheme.colors.err,
-                                modifier = Modifier.size(21.dp),
-                            )
+                        RoundIconButton(onClick = onStopVoice, background = MpiTheme.colors.control) {
+                            Icon(IconMic, contentDescription = "结束录音并转文字", tint = MpiTheme.colors.err, modifier = Modifier.size(17.dp))
                         }
                     }
 
                     else -> {
-                        IconButton(
+                        RoundIconButton(
                             onClick = { micPermission.launch(android.Manifest.permission.RECORD_AUDIO) },
                             enabled = !sending,
-                            modifier = Modifier.size(40.dp),
+                            background = MpiTheme.colors.control,
                         ) {
-                            Icon(
-                                IconMic,
-                                contentDescription = "语音输入",
-                                tint = MpiTheme.colors.textDim,
-                                modifier = Modifier.size(19.dp),
-                            )
+                            Icon(IconMic, contentDescription = "语音输入", tint = MpiTheme.colors.textDim, modifier = Modifier.size(17.dp))
                         }
                     }
                 }
 
                 if (running) {
-                    IconButton(onClick = onAbort, enabled = !sending, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            IconStop,
-                            contentDescription = "停止",
-                            tint = MpiTheme.colors.err,
-                            modifier = Modifier.size(19.dp),
-                        )
+                    RoundIconButton(onClick = onAbort, enabled = !sending, background = MpiTheme.colors.control) {
+                        Icon(IconStop, contentDescription = "停止", tint = MpiTheme.colors.err, modifier = Modifier.size(16.dp))
                     }
                 }
 
                 val hasContent = draft.isNotBlank() || attachments.isNotEmpty()
-                // 空输入时不显示发送键（只留附件 + 麦克风），有内容才出现——套壳版之外更清爽的做法
+                // 空输入时不显示发送键，有内容才出现
                 if (hasContent) {
-                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                        Box(
-                            modifier = Modifier
-                                .size(29.dp)
-                                .clip(CircleShape)
-                                .background(if (sending) MpiTheme.colors.control else MpiTheme.colors.send)
-                                .clickable(enabled = !sending, onClick = onSend),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                IconSend,
-                                contentDescription = if (running) "发送（排队）" else "发送",
-                                tint = if (sending) MpiTheme.colors.textFaint else MpiTheme.colors.sendFg,
-                                modifier = Modifier.size(15.dp),
-                            )
-                        }
+                    RoundIconButton(
+                        onClick = onSend,
+                        enabled = !sending,
+                        background = if (sending) MpiTheme.colors.control else MpiTheme.colors.send,
+                    ) {
+                        Icon(
+                            IconSend,
+                            contentDescription = if (running) "发送（排队）" else "发送",
+                            tint = if (sending) MpiTheme.colors.textFaint else MpiTheme.colors.sendFg,
+                            modifier = Modifier.size(16.dp),
+                        )
                     }
                 }
             }
@@ -1187,5 +1147,30 @@ private fun CenteredHint(text: String, loading: Boolean = false) {
             Spacer(Modifier.height(10.dp))
         }
         Text(text, style = MaterialTheme.typography.bodySmall, color = MpiTheme.colors.textDim)
+    }
+}
+
+/**
+ * 统一的圆形按钮（真机诉求：输入框那排按钮大小要均衡）。
+ * 外层 40dp 保住触摸目标，内层 32dp 圆是视觉尺寸。
+ */
+@Composable
+private fun RoundIconButton(
+    onClick: () -> Unit,
+    background: androidx.compose.ui.graphics.Color,
+    enabled: Boolean = true,
+    content: @Composable () -> Unit,
+) {
+    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(background)
+                .clickable(enabled = enabled, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            content()
+        }
     }
 }

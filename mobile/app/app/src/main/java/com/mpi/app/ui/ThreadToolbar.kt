@@ -47,7 +47,7 @@ import kotlin.math.roundToInt
  * 数据早就在 [ThreadView] 里（模型 / 模式 / 权限 / 上下文用量），写操作也已在
  * `ThreadActions` 就绪；这里只补 UI。选择项不占消息区高度，一律走底部 Sheet。
  */
-enum class ToolbarSheet { Permission, Mode, Model, Context }
+enum class ToolbarSheet { Permission, Mode, Model }
 
 // ---- 上下文用量口径（纯函数，与桌面端 ring / PWA `lib/context-usage.ts` 一致）----
 
@@ -234,8 +234,7 @@ fun ThreadToolbarSheet(
             when (sheet) {
                 ToolbarSheet.Permission -> PermissionSheet(view, busy, onSetPermission)
                 ToolbarSheet.Mode -> ModeSheet(view, busy, onSetMode)
-                ToolbarSheet.Model -> ModelSheet(view, busy, onSetModel, onRefresh)
-                ToolbarSheet.Context -> ContextSheet(view, busy, onCompact)
+                ToolbarSheet.Model -> ModelSheet(view, busy, onSetModel, onCompact, onRefresh)
             }
             Spacer(Modifier.height(4.dp))
         }
@@ -356,15 +355,36 @@ private fun ModelSheet(
     view: ThreadView,
     busy: Boolean,
     onSetModel: (String, String) -> Unit,
+    onCompact: () -> Unit,
     onRefresh: () -> Unit,
 ) {
-    SheetTitle("选择模型")
+    val ctx = readContextUsage(view.contextUsage)
+    SheetTitle("模型与用量")
+    SheetNote(
+        if (ctx.hasValue) {
+            "当前用量 ${ctx.percent.roundToInt()}%" + (if (ctx.isEstimate) "（压缩后估算）" else "")
+        } else {
+            "主机还没上报这个会话的用量"
+        },
+    )
+    // 压缩入口跟模型放一起：这两个都是“本会话怎么跑”的开关
+    SheetItem(
+        label = if (view.compacting) "压缩中…" else "压缩上下文",
+        note = when {
+            view.running -> "回合进行中"
+            view.compacting -> "请稍候"
+            else -> "≥60% 建议压缩"
+        },
+        enabled = !busy && !view.compacting && !view.running,
+    ) { onCompact() }
+
     // 桌面端改了模型/模型列表时，手机端不一定立刻收到——给一个手动同步入口
     SheetItem(
         label = "与桌面端同步（刷新）",
         note = "重新读取当前模型与可选列表",
         enabled = !busy,
     ) { onRefresh() }
+
     if (view.availableModels.isEmpty()) {
         SheetNote("主机未上报可选模型列表。")
         return
@@ -380,80 +400,4 @@ private fun ModelSheet(
     }
 }
 
-@Composable
-private fun ContextSheet(view: ThreadView, busy: Boolean, onCompact: () -> Unit) {
-    val ctx = readContextUsage(view.contextUsage)
-    SheetTitle("上下文用量")
-    if (ctx.hasValue) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(MpiTheme.colors.control),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(fraction = (maxOf(2.0, ctx.percent) / 100.0).toFloat().coerceIn(0f, 1f))
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(
-                        when (ctx.band) {
-                            ContextBand.Low -> MpiTheme.colors.ok
-                            ContextBand.Warn -> Color(0xFFD6A419)
-                            ContextBand.Mid -> Color(0xFFE07B39)
-                            ContextBand.Hi -> Color(0xFFD93025)
-                        },
-                    ),
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "${formatTokens(ctx.used)} / ${formatTokens(ctx.total)} tokens",
-                style = MaterialTheme.typography.bodySmall,
-                color = MpiTheme.colors.textDim,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = String.format(Locale.US, "%.1f%%", ctx.percent),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
-                color = when (ctx.band) {
-                    ContextBand.Low -> MaterialTheme.colorScheme.onSurface
-                    ContextBand.Warn -> CtxWarnFg
-                    ContextBand.Mid -> CtxMidFg
-                    ContextBand.Hi -> CtxHiFg
-                },
-            )
-        }
-        if (ctx.isEstimate) {
-            SheetNote("压缩后的估算值——下次回复后更新为实际值。")
-        }
-    } else {
-        SheetNote("主机还没上报这个会话的上下文用量（模型未知或会话太新）。")
-    }
-    SheetNote("≥60% 就该压缩：把早期对话总结成摘要，腾出窗口又不丢关键信息。${if (view.compacting) "（正在压缩…）" else ""}")
-    SheetItem(
-        label = if (view.compacting) "压缩中…" else "压缩上下文",
-        note = when {
-            view.running -> "回合进行中"
-            view.compacting -> "请稍候"
-            else -> "压缩后自动刷新用量"
-        },
-        enabled = !busy && !view.compacting && !view.running,
-    ) { onCompact() }
-    if (view.compacting) {
-        Row(
-            modifier = Modifier.padding(start = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
-            Text("压缩中…", style = MaterialTheme.typography.labelSmall, color = MpiTheme.colors.textFaint)
-        }
-    }
-    Spacer(Modifier.width(1.dp))
-}
+
