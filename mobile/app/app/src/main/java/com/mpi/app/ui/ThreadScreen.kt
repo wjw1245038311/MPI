@@ -77,6 +77,7 @@ import com.mpi.app.protocol.RemoteThreadState
 import com.mpi.app.protocol.ThreadMessage
 import com.mpi.app.ui.theme.MpiTheme
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * 会话视图（§4.4）：顶栏 + 消息流。
@@ -274,6 +275,12 @@ fun ThreadScreen(
             onDismissVoiceError = onDismissVoiceError,
             pendingFollowUp = pendingFollowUp,
             sendError = sendError,
+            modelLabel = view.summary?.let { modelChipLabel(view) } ?: "默认模型",
+            contextLabel = readContextUsage(view.contextUsage).let { ctx ->
+                if (ctx.hasValue) "${ctx.percent.roundToInt()}%" else "—"
+            },
+            onOpenModelSheet = { onOpenSheet(ToolbarSheet.Model) },
+            onOpenContextSheet = { onOpenSheet(ToolbarSheet.Context) },
             onSend = onSend,
             onAbort = onAbort,
             onSteerPending = onSteerPending,
@@ -292,6 +299,7 @@ fun ThreadScreen(
                 onSetModel = onSetModel,
                 onSetMode = onSetMode,
                 onCompact = onCompact,
+                onRefresh = onResync,
             )
         }
     }
@@ -327,6 +335,10 @@ private fun Composer(
     onDismissVoiceError: () -> Unit,
     pendingFollowUp: String?,
     sendError: String?,
+    modelLabel: String,
+    contextLabel: String,
+    onOpenModelSheet: () -> Unit,
+    onOpenContextSheet: () -> Unit,
     onSend: () -> Unit,
     onAbort: () -> Unit,
     onSteerPending: () -> Unit,
@@ -523,6 +535,34 @@ private fun Composer(
                             },
                         )
                     }
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                // 模型 + 用量（从顶部 chip 行挪进来：离拇指更近，也不占标题区）
+                TextButton(
+                    onClick = onOpenModelSheet,
+                    enabled = !sending,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                ) {
+                    Text(
+                        text = modelLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 130.dp),
+                    )
+                }
+                TextButton(
+                    onClick = onOpenContextSheet,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                ) {
+                    Text(
+                        text = contextLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MpiTheme.colors.textFaint,
+                    )
                 }
 
                 Spacer(Modifier.weight(1f))

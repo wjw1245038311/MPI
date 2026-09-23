@@ -124,7 +124,6 @@ fun ThreadToolbar(
     modifier: Modifier = Modifier,
 ) {
     val summary = view.summary ?: return
-    val ctx = readContextUsage(view.contextUsage)
 
     Row(
         modifier = modifier
@@ -146,24 +145,6 @@ fun ThreadToolbar(
             label = taskModeChipLabel(view),
             enabled = !busy,
             onClick = { onOpen(ToolbarSheet.Mode) },
-        )
-        ConfigChip(
-            icon = IconModel,
-            label = if (busy) "切换中…" else modelChipLabel(view),
-            enabled = !busy,
-            onClick = { onOpen(ToolbarSheet.Model) },
-        )
-        ConfigChip(
-            icon = IconGauge,
-            label = if (ctx.hasValue) "${ctx.percent.roundToInt()}%" else "—",
-            tone = when (ctx.band) {
-                ContextBand.Low -> ChipTone.Plain
-                ContextBand.Warn -> ChipTone.Warn
-                ContextBand.Mid -> ChipTone.Mid
-                ContextBand.Hi -> ChipTone.Hi
-            },
-            enabled = true,
-            onClick = { onOpen(ToolbarSheet.Context) },
         )
     }
 }
@@ -232,6 +213,8 @@ fun ThreadToolbarSheet(
     onSetModel: (String, String) -> Unit,
     onSetMode: (String) -> Unit,
     onCompact: () -> Unit,
+    /** 重新拉主机快照（刷新当前模型与可选列表）。 */
+    onRefresh: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -257,7 +240,7 @@ fun ThreadToolbarSheet(
             when (sheet) {
                 ToolbarSheet.Permission -> PermissionSheet(view, busy, onSetPermission)
                 ToolbarSheet.Mode -> ModeSheet(view, busy, onSetMode)
-                ToolbarSheet.Model -> ModelSheet(view, busy, onSetModel)
+                ToolbarSheet.Model -> ModelSheet(view, busy, onSetModel, onRefresh)
                 ToolbarSheet.Context -> ContextSheet(view, busy, onCompact)
             }
             Spacer(Modifier.height(4.dp))
@@ -375,8 +358,19 @@ private fun ModeSheet(view: ThreadView, busy: Boolean, onSetMode: (String) -> Un
 }
 
 @Composable
-private fun ModelSheet(view: ThreadView, busy: Boolean, onSetModel: (String, String) -> Unit) {
+private fun ModelSheet(
+    view: ThreadView,
+    busy: Boolean,
+    onSetModel: (String, String) -> Unit,
+    onRefresh: () -> Unit,
+) {
     SheetTitle("选择模型")
+    // 桌面端改了模型/模型列表时，手机端不一定立刻收到——给一个手动同步入口
+    SheetItem(
+        label = "与桌面端同步（刷新）",
+        note = "重新读取当前模型与可选列表",
+        enabled = !busy,
+    ) { onRefresh() }
     if (view.availableModels.isEmpty()) {
         SheetNote("主机未上报可选模型列表。")
         return
