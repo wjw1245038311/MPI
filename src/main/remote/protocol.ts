@@ -16,6 +16,10 @@ export const REMOTE_REQUEST_TYPES = [
   "thread.steer",
   "thread.followUp",
   "thread.abort",
+  // 会话列表的元数据操作（手机端长按菜单用）
+  "thread.rename",
+  "thread.setPinned",
+  "thread.delete",
   // Device-scoped (no threadId / write lease): the phone records a voice memo
   // in-browser and asks the host to transcribe it via the local STT endpoint.
   "stt.transcribe",

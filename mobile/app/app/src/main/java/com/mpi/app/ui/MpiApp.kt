@@ -300,6 +300,10 @@ private fun HomeWithDrawer(
                         scope.launch { drawerState.close() }
                         onOpenSettings()
                     },
+                    pinnedIds = state.pinnedThreadIds,
+                    onRename = viewModel::renameThread,
+                    onTogglePin = viewModel::setThreadPinned,
+                    onDelete = viewModel::deleteThread,
                 )
             }
         },

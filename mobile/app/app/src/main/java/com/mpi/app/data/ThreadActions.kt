@@ -57,6 +57,24 @@ class ThreadActions(
 
     suspend fun abort(): JsonElement? = writeRequest("thread.abort", buildJsonObject { }, "abort")
 
+    /** 重命名会话（需要写租约）。 */
+    suspend fun renameThread(name: String): JsonElement? = writeRequest(
+        "thread.rename",
+        buildJsonObject { put("name", name) },
+        "rename",
+    )
+
+    /** 置顶 / 取消置顶（配置级操作，不需要写租约）。 */
+    suspend fun setPinned(pinned: Boolean): JsonElement? = request(
+        "thread.setPinned",
+        buildJsonObject { put("pinned", pinned) },
+        threadId,
+        null,
+    )
+
+    /** 删除会话（主机把它移入回收站；需要写租约）。 */
+    suspend fun deleteThread(): JsonElement? = writeRequest("thread.delete", buildJsonObject { }, "delete")
+
     suspend fun setPermission(permission: RemotePermission): JsonElement? = writeRequest(
         "thread.setPermission",
         buildJsonObject { put("permission", if (permission == RemotePermission.Full) "full" else "sandbox") },

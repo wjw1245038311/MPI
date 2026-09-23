@@ -85,11 +85,20 @@ PWA `ChoicePanel.tsx` + `lib/choice-block.ts`（提交 `e1b6018` / `3a6021b`）�
 
 **测试**：`AppDrawerTest`（4 项，含跨零点不误判）。
 
-### 未做（需要新协议，不属纯 UI）
+### 协议扩展 ✅（会话重命名 / 置顶 / 删除）
+
+主机端新增 `thread.rename` / `thread.setPinned` / `thread.delete`：
+服务层校验（rename 名字非空且 ≤120、pinned 必须 boolean、delete/rename 要写租约）；
+删除**复用桌面端同一份** `deleteSessionThreadByFile`（停桥 → 回收站 → 清理 config 与手机端映射）。
+schema（`protocol/remote-v1.schema.json`）与 `test:remote` 同步。
+原生端：抽屉会话长按 → 重命名 / 置顶 / 删除（删除二次确认并说明可恢复）。
+
+**PWA 端尚未接入**（协议向后兼容，不影响现有功能）——需要时再补。
+
+### 未做
 
 | 项 | 缺口 |
 | --- | --- |
-| 会话项长按：重命名 / 置顶 / 删除 | `src/main/remote/protocol.ts` **没有** thread.rename / pin / delete；要主机 + PWA + 原生三端同改 + 测试 |
 | 首屏示例提示词改成「点即发送」 | 当前是 3 个 QuickAction（刷新/切设备），不是真实示例发送 |
 
 ---

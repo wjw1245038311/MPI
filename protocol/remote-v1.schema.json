@@ -17,6 +17,11 @@
     "thread.steer",
     "thread.followUp",
     "thread.abort",
+    "thread.setMode",
+    "thread.compact",
+    "thread.rename",
+    "thread.setPinned",
+    "thread.delete",
     "file.tree",
     "file.preview",
     "ui.respond"

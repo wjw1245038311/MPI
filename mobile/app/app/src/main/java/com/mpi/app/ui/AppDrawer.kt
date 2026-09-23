@@ -1,7 +1,9 @@
 package com.mpi.app.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,9 +16,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,7 +53,13 @@ fun AppDrawerContent(
     onOpenThread: (String) -> Unit,
     onNewThread: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    /** 本端已知的置顶会话（列表不返回标记）。 */
+    pinnedIds: Set<String> = emptySet(),
+    onRename: (String, String) -> Unit = { _, _ -> },
+    onTogglePin: (String, Boolean) -> Unit = { _, _ -> },
+    onDelete: (String) -> Unit = {},
 ) {
+    var menuFor by remember { mutableStateOf<RemoteThreadSummary?>(null) }
     Column(modifier = Modifier.fillMaxWidth()) {
         DrawerHeader(
             deviceName = state.activeHost?.shownName ?: "未选择主机",
@@ -121,6 +131,7 @@ fun AppDrawerContent(
                                 state = thread.state,
                                 updatedAt = thread.updatedAt,
                                 onClick = { onOpenThread(thread.id) },
+                                onLongClick = { menuFor = thread },
                             )
                         }
                     }
@@ -138,6 +149,28 @@ fun AppDrawerContent(
             TextButton(onClick = onRefresh) { Text("刷新") }
             TextButton(onClick = onOpenSettings) { Text("设置") }
         }
+    }
+
+    // 长按会话 → 重命名 / 置顶 / 删除（手机端的会话管理入口）
+    menuFor?.let { thread ->
+        ThreadActionDialog(
+            title = thread.title.ifEmpty { "(无标题)" },
+            pinned = pinnedIds.contains(thread.id),
+            busy = false,
+            onDismiss = { menuFor = null },
+            onRename = { name ->
+                menuFor = null
+                onRename(thread.id, name)
+            },
+            onTogglePin = { pinned ->
+                menuFor = null
+                onTogglePin(thread.id, pinned)
+            },
+            onDelete = {
+                menuFor = null
+                onDelete(thread.id)
+            },
+        )
     }
 }
 
@@ -198,17 +231,19 @@ private fun StateDotSize(online: Boolean) {
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DrawerThreadRow(
     title: String,
     state: com.mpi.app.protocol.RemoteThreadState,
     updatedAt: Long,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -229,6 +264,80 @@ private fun DrawerThreadRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+/**
+ * 会话长按菜单：重命名 / 置顶 / 删除。
+ *
+ * 删除走主机回收站（可恢复），所以文案里要如实说明——不让用户以为不可逆。
+ * 置顶态主机列表不返回，菜单按本端已知状态显示「置顶 / 取消置顶」。
+ */
+@Composable
+private fun ThreadActionDialog(
+    title: String,
+    pinned: Boolean,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onRename: (String) -> Unit,
+    onTogglePin: (Boolean) -> Unit,
+    onDelete: () -> Unit,
+) {
+    var renaming by remember(title) { mutableStateOf(false) }
+    var confirmingDelete by remember(title) { mutableStateOf(false) }
+    var draft by remember(title) { mutableStateOf(title) }
+
+    when {
+        renaming -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("重命名会话") },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("会话名称", style = MaterialTheme.typography.bodySmall) },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onRename(draft) }, enabled = draft.isNotBlank() && !busy) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        )
+
+        confirmingDelete -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("删除会话？") },
+            text = { Text("会话会移入电脑上的回收站，可在桌面端设置「数据管理」里恢复。") },
+            confirmButton = {
+                TextButton(onClick = onDelete, enabled = !busy) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        )
+
+        else -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column(Modifier.fillMaxWidth()) {
+                    TextButton(onClick = { renaming = true }, modifier = Modifier.fillMaxWidth()) { Text("重命名") }
+                    TextButton(onClick = { onTogglePin(!pinned) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (pinned) "取消置顶" else "置顶")
+                    }
+                    TextButton(
+                        onClick = { confirmingDelete = true },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("删除", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+        )
     }
 }
 

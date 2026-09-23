@@ -14,6 +14,11 @@ assert.match(JSON.stringify(schema.$defs.remoteSkill), /skill:/);
 
 const protocol = readFileSync(resolve(root, "src", "main", "remote", "protocol.ts"), "utf8");
 assert.match(protocol, /"thread\.setModel"/);
+// 会话元数据操作（手机端长按菜单）：协议 + 主机实现都要在
+assert.match(protocol, /"thread\.rename"/);
+assert.match(protocol, /"thread\.setPinned"/);
+assert.match(protocol, /"thread\.delete"/);
+assert.match(schema["x-request-types"].join("\n"), /thread\.setPinned/);
 assert.match(protocol, /interface RemoteModelOption/);
 assert.match(protocol, /interface RemoteSkill/);
 assert.match(protocol, /interface RemoteFileArtifact/);
@@ -23,6 +28,10 @@ assert.match(desktopIpc, /availableModels: remoteModelOptions/);
 assert.match(desktopIpc, /skills: remoteSkills/);
 assert.match(desktopIpc, /MODEL_UNAVAILABLE/);
 assert.match(desktopIpc, /lastReplyIndex/);
+// 会话元数据操作（手机端长按菜单）：主机端与删除实现共用一份
+assert.match(desktopIpc, /deleteSessionThreadByFile/);
+assert.match(desktopIpc, /renameThread: async/);
+assert.match(desktopIpc, /setThreadPinned: async/);
 assert.match(desktopIpc, /remotePathFromArgs\(block\.arguments\)/);
 assert.match(desktopIpc, /readRemotePreview\(target\)/);
 assert.match(desktopIpc, /\["text", "markdown", "html", "image", "xlsx"\]/);

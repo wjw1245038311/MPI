@@ -102,6 +102,10 @@ data class AppUiState(
     val updateDownloading: Boolean = false,
     /** 检查/下载/安装失败或提示（可关闭）。 */
     val updateError: String? = null,
+    /** 会话元数据操作（重命名 / 置顶 / 删除）进行中。 */
+    val threadActionBusy: Boolean = false,
+    /** 本端已知的置顶会话（列表不返回标记，只在本次运行内记）。 */
+    val pinnedThreadIds: Set<String> = emptySet(),
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -306,6 +310,89 @@ class AppViewModel(
     }
 
     fun dismissUpdateError() = _ui.update { it.copy(updateError = null) }
+
+    // ---- 会话元数据操作（长按菜单）----
+
+    /** 重命名会话。主机要求写租约，所以先 claim 再发。 */
+    fun renameThread(threadId: String, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty() || _ui.value.threadActionBusy) return
+        runThreadAction(
+            claim = threadId,
+            type = "thread.rename",
+            payload = kotlinx.serialization.json.buildJsonObject { put("name", trimmed) },
+            threadId = threadId,
+            failure = "重命名失败",
+        )
+    }
+
+    /** 置顶 / 取消置顶（不需要写租约）。 */
+    fun setThreadPinned(threadId: String, pinned: Boolean) {
+        if (_ui.value.threadActionBusy) return
+        _ui.update { it.copy(threadActionBusy = true) }
+        scope.launch {
+            runCatching {
+                requester?.request(
+                    "thread.setPinned",
+                    kotlinx.serialization.json.buildJsonObject { put("pinned", pinned) },
+                    threadId = threadId,
+                )
+            }.onSuccess {
+                _ui.update { state ->
+                    state.copy(
+                        threadActionBusy = false,
+                        pinnedThreadIds = if (pinned) state.pinnedThreadIds + threadId else state.pinnedThreadIds - threadId,
+                    )
+                }
+                repository?.refresh()
+            }.onFailure { error ->
+                val message = error.message ?: "置顶失败"
+                // 复用首页的问题横幅：手机端没有 toast，静默失败是硬规矩禁止的
+                _ui.update { it.copy(threadActionBusy = false, problems = (it.problems + message).takeLast(MAX_PROBLEMS)) }
+            }
+        }
+    }
+
+    /** 删除会话（主机移入回收站；正在看这个会话就先关掉）。 */
+    fun deleteThread(threadId: String) {
+        if (_ui.value.threadActionBusy) return
+        runThreadAction(
+            claim = threadId,
+            type = "thread.delete",
+            payload = kotlinx.serialization.json.buildJsonObject { },
+            threadId = threadId,
+            failure = "删除失败",
+            onSuccess = { if (_ui.value.openThreadId == threadId) closeThread() },
+        )
+    }
+
+    /** 元数据写操作的公共外壳：可选先拿写租约 → 发请求 → 刷新列表。 */
+    private fun runThreadAction(
+        claim: String?,
+        type: String,
+        payload: kotlinx.serialization.json.JsonObject,
+        threadId: String,
+        failure: String,
+        onSuccess: () -> Unit = {},
+    ) {
+        val requesterRef = requester ?: return
+        _ui.update { it.copy(threadActionBusy = true) }
+        scope.launch {
+            runCatching {
+                if (claim != null) {
+                    requesterRef.request("thread.claimWrite", kotlinx.serialization.json.buildJsonObject { }, threadId = claim)
+                }
+                requesterRef.request(type, payload, threadId = threadId)
+            }.onSuccess {
+                _ui.update { it.copy(threadActionBusy = false) }
+                onSuccess()
+                repository?.refresh()
+            }.onFailure { error ->
+                val message = error.message ?: failure
+                _ui.update { it.copy(threadActionBusy = false, problems = (it.problems + message).takeLast(MAX_PROBLEMS)) }
+            }
+        }
+    }
 
     /** UI 侧上报配对问题（扫码结果不是配对码 / 相机权限被拒）——不静默。 */
     fun reportPairingError(message: String) = _ui.update { it.copy(pairingError = message) }

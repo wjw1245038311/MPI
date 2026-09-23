@@ -30,6 +30,12 @@ export interface RemoteBackend {
   steer(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
   followUp(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
   abort(threadId: string): Promise<unknown>;
+  /** 重命名会话（pi RPC `set_session_name`）。 */
+  renameThread(threadId: string, name: string): Promise<unknown>;
+  /** 置顶 / 取消置顶（写 config.pinnedThreads；草稿会话不可置顶）。 */
+  setThreadPinned(threadId: string, pinned: boolean): Promise<unknown>;
+  /** 删除会话（与桌面端同一实现：停桥 → 移入回收站 → 清理 config）。 */
+  deleteThread(threadId: string): Promise<unknown>;
   fileTree(projectId: string, relativePath?: string): Promise<unknown>;
   filePreview(projectId: string, relativePath: string): Promise<unknown>;
   respondUi(threadId: string, requestId: string, payload: Record<string, unknown>): Promise<unknown>;
@@ -236,6 +242,26 @@ export class RemoteService {
         const threadId = this.requiredThread(request);
         this.assertWriter(threadId, context);
         return responseFor(request, await this.backend.abort(threadId));
+      }
+      case "thread.rename": {
+        const threadId = this.requiredThread(request);
+        this.assertWriter(threadId, context);
+        const name = this.requiredString(payload, "name").trim();
+        if (!name || name.length > 120) throw new RemoteProtocolError("INVALID_REQUEST", "name is invalid");
+        return responseFor(request, await this.backend.renameThread(threadId, name));
+      }
+      case "thread.setPinned": {
+        const threadId = this.requiredThread(request);
+        if (typeof payload.pinned !== "boolean") {
+          throw new RemoteProtocolError("INVALID_REQUEST", "pinned must be a boolean");
+        }
+        return responseFor(request, await this.backend.setThreadPinned(threadId, payload.pinned));
+      }
+      case "thread.delete": {
+        const threadId = this.requiredThread(request);
+        // 破坏性操作要写租约：别的设备正在操作这个会话时不要抢着删
+        this.assertWriter(threadId, context);
+        return responseFor(request, await this.backend.deleteThread(threadId));
       }
       case "file.tree":
         return responseFor(request, await this.backend.fileTree(this.requiredString(payload, "projectId"), this.optionalString(payload, "relativePath")));

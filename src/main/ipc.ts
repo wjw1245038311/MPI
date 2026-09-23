@@ -2380,6 +2380,30 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     steer: (threadId, text, images, files) => threadService.steer(threadId, text, images, files),
     followUp: (threadId, text, images, files) => threadService.followUp(threadId, text, images, files),
     abort: (threadId) => threadService.abort(threadId),
+    renameThread: async (threadId, name) => {
+      const ref = await remoteThread(threadId);
+      const handle = await ensureRemoteBridge(ref);
+      await handle.bridge.setSessionName(name);
+      return { ok: true };
+    },
+    setThreadPinned: async (threadId, pinned) => {
+      const ref = await remoteThread(threadId);
+      if (!ref.sessionFile) throw new RemoteProtocolError("INVALID_REQUEST", "草稿会话不能置顶");
+      const cfg = getConfig();
+      const target = ref.sessionFile.toLowerCase();
+      const next = (cfg.pinnedThreads || []).filter((path) => path.toLowerCase() !== target);
+      // 新置顶追加到列表末尾，保留既有手动顺序（与桌面 app:setThreadPinned 一致）
+      if (pinned) next.push(ref.sessionFile);
+      updateConfig({ pinnedThreads: next });
+      invalidateRemoteProjects();
+      return { ok: true, pinned };
+    },
+    deleteThread: async (threadId) => {
+      const ref = await remoteThread(threadId);
+      if (!ref.sessionFile) throw new RemoteProtocolError("INVALID_REQUEST", "草稿会话不能删除");
+      // 复用桌面端同一实现：停桥 → 回收站 → 清理 config 与手机端映射
+      return deleteSessionThreadByFile(ref.sessionFile, { cwd: ref.cwd });
+    },
     compact: async (threadId, instructions) => {
       const ref = await remoteThread(threadId);
       const handle = await ensureRemoteBridge(ref);
@@ -4065,12 +4089,14 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
     return readEarlierMessages(requested);
   });
 
-  ipcMain.handle(
-    "thread:delete",
-    async (_e, args: { file?: string; title?: string; cwd?: string } | string) => {
-      const meta = typeof args === "string" ? {} : (args || {});
-      const target = assertDeletableSessionFile(typeof meta.file === "string" ? meta.file : "");
-
+  /**
+   * 删除一个会话（按 session file）：停桥 → 移入回收站/永久删除 → 清理 config
+   * 与手机端映射。桌面「删除会话」与手机端 `thread.delete` 共用这一份实现。
+   */
+  async function deleteSessionThreadByFile(
+    target: string,
+    meta: { title?: string; cwd?: string },
+  ): Promise<{ ok: true; config: unknown; trashed: boolean }> {
     // Stop every local bridge that points at this session before unlinking it;
     // otherwise a live Pi process can recreate or continue writing the file.
     for (const [id, handle] of Array.from(bridges.entries())) {
@@ -4130,7 +4156,16 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
     invalidateRemoteProjects();
     send("pi:projects-changed", { sessionFile: target });
     return { ok: true, config, trashed };
-  });
+  }
+
+  ipcMain.handle(
+    "thread:delete",
+    async (_e, args: { file?: string; title?: string; cwd?: string } | string) => {
+      const meta = typeof args === "string" ? {} : (args || {});
+      const target = assertDeletableSessionFile(typeof meta.file === "string" ? meta.file : "");
+      return deleteSessionThreadByFile(target, meta);
+    },
+  );
 
   ipcMain.handle("trash:list", () => listTrash());
 
