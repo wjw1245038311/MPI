@@ -10,8 +10,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 
 /**
@@ -121,9 +123,15 @@ private val MpiTypography = Typography().let { base ->
 @Composable
 fun MpiTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    /** 字号缩放（设置 → 字号三档）；与系统字体缩放相乘，不覆盖用户的系统偏好。 */
+    fontScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
-    CompositionLocalProvider(LocalMpiColors provides if (darkTheme) DarkMpiColors else LightMpiColors) {
+    val density = LocalDensity.current
+    CompositionLocalProvider(
+        LocalMpiColors provides if (darkTheme) DarkMpiColors else LightMpiColors,
+        LocalDensity provides Density(density.density, density.fontScale * fontScale),
+    ) {
         MaterialTheme(
             colorScheme = if (darkTheme) DarkScheme else LightScheme,
             typography = MpiTypography,

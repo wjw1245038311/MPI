@@ -6,7 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.mpi.app.ui.BenchmarkScreen
 import com.mpi.app.ui.EXTRA_BENCHMARK
-import com.mpi.app.ui.MpiApp
+import com.mpi.app.ui.MpiAppRoot
 import com.mpi.app.ui.theme.MpiTheme
 
 /**
@@ -25,8 +25,10 @@ class MainActivity : ComponentActivity() {
 
         val benchmark = intent?.getBooleanExtra(EXTRA_BENCHMARK, false) == true
         setContent {
-            MpiTheme {
-                if (benchmark) BenchmarkScreen() else MpiApp(container)
+            if (benchmark) {
+                MpiTheme { BenchmarkScreen() }
+            } else {
+                MpiAppRoot(container)
             }
         }
     }

@@ -6,6 +6,7 @@ import com.mpi.app.data.AndroidKeystoreSecretBox
 import com.mpi.app.data.FileKeyStore
 import com.mpi.app.data.KeyStore
 import com.mpi.app.data.SecretBox
+import com.mpi.app.data.SettingsStore
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +26,9 @@ class AppContainer(context: Context) {
         file = File(appContext.filesDir, FileKeyStore.FILE_NAME),
         secretBox = secretBox,
     )
+
+    /** 本地界面设置（外观 / 字号）——非敏感，明文存储。 */
+    val settingsStore: SettingsStore = SettingsStore(appContext)
 
     /** 与 UI 生命周期同长的作用域（会话/仓库/轮询都挂在这里）。 */
     val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

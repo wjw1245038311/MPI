@@ -1,7 +1,9 @@
 package com.mpi.app.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.activity.compose.BackHandler
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mpi.app.AppContainer
+import com.mpi.app.data.Appearance
 import com.mpi.app.data.PairingRecord
 import com.mpi.app.ui.theme.MpiTheme
 import kotlinx.coroutines.launch
@@ -48,13 +51,34 @@ import kotlinx.coroutines.launch
  *
  * 存储损坏时**不自动重置**——清用户数据必须是显式且二次确认的动作。
  */
+/**
+ * 根组件：读本地设置（外观 / 字号）并注入主题，再交给 [MpiApp]。
+ * 主题三选与字号三档都在这里生效——设置页只负责改值。
+ */
+@Composable
+fun MpiAppRoot(container: AppContainer) {
+    val settings by container.settingsStore.settings.collectAsState()
+    val dark = when (settings.appearance) {
+        Appearance.System -> isSystemInDarkTheme()
+        Appearance.Light -> false
+        Appearance.Dark -> true
+    }
+    MpiTheme(darkTheme = dark, fontScale = settings.fontSize.scale) {
+        MpiApp(container)
+    }
+}
+
 @Composable
 fun MpiApp(container: AppContainer) {
     val viewModel: AppViewModel = viewModel(factory = AppViewModel.factory(container))
     val state by viewModel.ui.collectAsState()
     var hostsOpen by remember { mutableStateOf(false) }
+    val settings by container.settingsStore.settings.collectAsState()
+    var settingsOpen by remember { mutableStateOf(false) }
+    var diagnosticsOpen by remember { mutableStateOf(false) }
 
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize()) {
         when {
             state.initializing -> LoadingScreen()
 
@@ -125,8 +149,28 @@ fun MpiApp(container: AppContainer) {
                         state = state,
                         viewModel = viewModel,
                         onOpenHosts = { hostsOpen = true },
+                        onOpenSettings = { settingsOpen = true },
                     )
                 }
+            }
+        }
+
+            // 全屏覆盖层（设置 / 诊断）——不占抽屉，返回键逐级关闭
+            if (settingsOpen) {
+                SettingsScreen(
+                    settings = settings,
+                    onAppearance = container.settingsStore::setAppearance,
+                    onFontSize = container.settingsStore::setFontSize,
+                    onOpenDiagnostics = { diagnosticsOpen = true },
+                    onClose = { settingsOpen = false },
+                )
+            }
+            if (diagnosticsOpen) {
+                DiagnosticsScreen(
+                    state = state,
+                    deviceName = container.deviceName,
+                    onClose = { diagnosticsOpen = false },
+                )
             }
         }
     }
@@ -154,6 +198,7 @@ private fun HomeWithDrawer(
     state: AppUiState,
     viewModel: AppViewModel,
     onOpenHosts: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -182,6 +227,10 @@ private fun HomeWithDrawer(
                     onNewThread = { projectId ->
                         scope.launch { drawerState.close() }
                         viewModel.createThread(projectId)
+                    },
+                    onOpenSettings = {
+                        scope.launch { drawerState.close() }
+                        onOpenSettings()
                     },
                 )
             }

@@ -48,6 +48,7 @@ fun AppDrawerContent(
     onRefresh: () -> Unit,
     onOpenThread: (String) -> Unit,
     onNewThread: (String) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         DrawerHeader(
@@ -135,6 +136,7 @@ fun AppDrawerContent(
             TextButton(onClick = onOpenHosts) { Text("切换设备") }
             TextButton(onClick = onAddHost) { Text("添加设备") }
             TextButton(onClick = onRefresh) { Text("刷新") }
+            TextButton(onClick = onOpenSettings) { Text("设置") }
         }
     }
 }
