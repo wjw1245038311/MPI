@@ -109,7 +109,9 @@ fun SettingsScreen(
                     trailing = "在系统设置里管理",
                     onClick = { openAppNotificationSettings(context) },
                 )
-                SettingsItem(icon = IconGlobe, title = "语言", trailing = "中文", onClick = null)
+                // 「语言」条目已删：原生端全量中文硬编码，没有任何可选项，
+                // 放着只会是个点了没反应的箭头（用户反馈）。要真做 zh/en 得先把
+                // 所有界面文案外置，属大改动，需要时再开。
                 SettingsItem(
                     icon = IconSun,
                     title = "外观",
