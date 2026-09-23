@@ -56,18 +56,25 @@ fun ChoicePanel(
     state: ChoicePanelState,
     language: String,
     onSend: (String) -> Unit,
+    /** 外部草稿读取（未作答时用；切走会话再回来仍保留）。 */
+    draftFor: (Int) -> ChoiceAnswer?,
+    onDraftChange: (Int, ChoiceAnswer?) -> Unit,
+    onClearDrafts: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val zh = language == "zh"
     val frozen = state !is ChoicePanelState.Pending
 
-    val answers = remember(data) { mutableStateMapOf<Int, ChoiceAnswer>() }
     val otherText = remember(data) { mutableStateMapOf<Int, String>() }
     var otherOpen by remember(data) { mutableStateOf(-1) }
     var sending by remember(data) { mutableStateOf(false) }
     var showMissing by remember(data) { mutableStateOf(false) }
 
-    val effective: Map<Int, ChoiceAnswer> = if (state is ChoicePanelState.Answered) state.answers else answers
+    val effective: Map<Int, ChoiceAnswer> = if (state is ChoicePanelState.Answered) {
+        state.answers
+    } else {
+        data.questions.indices.mapNotNull { index -> draftFor(index)?.let { index to it } }.toMap()
+    }
     // 发送失败（乐观回显被撤）→ 状态回到 Pending，按钮要能再点
     LaunchedEffect(state) { if (state is ChoicePanelState.Pending) sending = false }
 
@@ -97,7 +104,7 @@ fun ChoicePanel(
                         selected = current is ChoiceAnswer.Option && current.label == option.label,
                         frozen = frozen,
                     ) {
-                        answers[qi] = ChoiceAnswer.Option(option.label)
+                        onDraftChange(qi, ChoiceAnswer.Option(option.label))
                         otherOpen = -1
                     }
                 }
@@ -141,7 +148,7 @@ fun ChoicePanel(
                             onClick = {
                                 val text = otherText[qi].orEmpty().trim()
                                 if (text.isNotEmpty()) {
-                                    answers[qi] = ChoiceAnswer.Other(text)
+                                    onDraftChange(qi, ChoiceAnswer.Other(text))
                                     otherOpen = -1
                                 }
                             },
@@ -182,6 +189,8 @@ fun ChoicePanel(
                     sending = true
                     val list = data.questions.indices.map { effective[it] }
                     onSend(buildChoiceReplyText(data.questions, list, language))
+                    // 发出去了就不再是草稿（乐观回显后状态会变成 answered，草稿留着也无意义）
+                    onClearDrafts()
                 },
                 enabled = !sending,
                 shape = RoundedCornerShape(10.dp),

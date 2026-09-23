@@ -71,7 +71,8 @@ PWA `ChoicePanel.tsx` + `lib/choice-block.ts`（提交 `e1b6018` / `3a6021b`）�
 
 **测试**：`ChoiceLogicTest`（17 项）。
 
-**已知简化**：草稿只在会话内存（PWA 用 localStorage），重进会话点选会丢。
+**草稿**：已提升到 ViewModel（key = `threadId|messageId|blockIndex|questionIndex`），
+切走会话再回来不丢勾选；进程重启会丢（PWA 用 localStorage 可留 7 天）。
 
 ---
 
@@ -124,7 +125,7 @@ schema（`protocol/remote-v1.schema.json`）与 `test:remote` 同步。
 
 | 项 | 状态 | 说明 |
 | --- | --- | --- |
-| 图片 / 文件附件 | ✅ | `Attachments.kt`（降采样 ≤1280px + JPEG 质量循环 ≤280KB；文件 ≤6MB）+ composer 附件菜单 + 缩略图 chips。拍照入口待加（需 FileProvider） |
+| 图片 / 文件附件 | ✅ | `Attachments.kt`（降采样 ≤1280px + JPEG 质量循环 ≤280KB；文件 ≤6MB）+ composer 附件菜单（拍照 / 相册 / 文件）+ 缩略图 chips；拍照走 FileProvider + 系统相机 |
 | 语音输入 | ✅ | 原生 `AudioRecord`（PCM16 16k mono，音频源逐级回退）→ WAV → `stt.transcribe` → 文本追加到输入框 |
 | 扫码配对 | ✅ | CameraX 预览 + ML Kit bundled 条码识别（离线可用、无需 GMS）；配对页新增「扫码配对」入口 |
 | APK 自更新 / 新版本浮条 | ✅ | 读中继 `mpi-android-native.json` → 版本比较 → 下载 + sha256 校验 → FileProvider → 系统安装器；首页「有新版本」浮条（构建号：版本号随 APK，见设计文档 §1.3 #4，不需要 build hash 防旧页面） |

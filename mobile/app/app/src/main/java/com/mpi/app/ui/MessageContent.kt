@@ -208,23 +208,32 @@ private fun inlineStyled(
 @Composable
 fun ChoiceAwareText(
     text: String,
+    threadId: String,
     messageId: String,
     allMessages: List<ThreadMessage>,
     language: String,
     onSendChoice: (String) -> Unit,
+    /** 未发送的勾选草稿（key = threadId|messageId|blockIndex|questionIndex）。 */
+    drafts: Map<String, ChoiceAnswer>,
+    onDraftChange: (String, ChoiceAnswer?) -> Unit,
+    onClearDrafts: (String) -> Unit,
     modifier: Modifier = Modifier,
     color: androidx.compose.ui.graphics.Color? = null,
 ) {
     val segments = remember(text) { withChoiceSegments(parseSegments(text), finalized = true) }
     val bodyColor = color ?: MaterialTheme.colorScheme.onSurface
     Column(modifier.fillMaxWidth()) {
-        for (segment in segments) {
+        segments.forEachIndexed { index, segment ->
             if (segment is Segment.Choice) {
+                val prefix = "$threadId|$messageId|$index"
                 ChoicePanel(
                     data = segment.data,
                     state = deriveChoicePanelState(allMessages, messageId, segment.data),
                     language = language,
                     onSend = onSendChoice,
+                    draftFor = { questionIndex -> drafts["$prefix|$questionIndex"] },
+                    onDraftChange = { questionIndex, answer -> onDraftChange("$prefix|$questionIndex", answer) },
+                    onClearDrafts = { onClearDrafts(prefix) },
                 )
             } else {
                 RenderSegments(listOf(segment), bodyColor)

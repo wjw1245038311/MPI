@@ -161,11 +161,17 @@ fun MpiApp(container: AppContainer) {
                             }
                         },
                         onSendChoice = viewModel::sendChoice,
+                        choiceDrafts = state.choiceDrafts,
+                        onChoiceDraftChange = viewModel::setChoiceDraft,
+                        onClearChoiceDrafts = viewModel::clearChoiceDrafts,
                         attachments = state.attachments,
                         attachmentBusy = state.attachmentBusy,
                         attachmentError = state.attachmentError,
                         onPickImage = viewModel::addImageAttachment,
                         onPickFile = viewModel::addFileAttachment,
+                        onAttachmentPermissionDenied = {
+                            viewModel.reportAttachmentError("没有相机权限，无法拍照")
+                        },
                         onRemoveAttachment = viewModel::removeAttachment,
                         onDismissAttachmentError = viewModel::dismissAttachmentError,
                         recording = state.recording,

@@ -95,11 +95,15 @@ fun ThreadScreen(
     onRetry: (String) -> Unit,
     onRespond: (kotlinx.serialization.json.JsonObject) -> Unit,
     onSendChoice: (String) -> Unit,
+    choiceDrafts: Map<String, ChoiceAnswer>,
+    onChoiceDraftChange: (String, ChoiceAnswer?) -> Unit,
+    onClearChoiceDrafts: (String) -> Unit,
     attachments: List<Attachment>,
     attachmentBusy: Boolean,
     attachmentError: String?,
     onPickImage: (Uri) -> Unit,
     onPickFile: (Uri) -> Unit,
+    onAttachmentPermissionDenied: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
     onDismissAttachmentError: () -> Unit,
     recording: Boolean,
@@ -210,6 +214,10 @@ fun ThreadScreen(
                             allMessages = renderable,
                             finalized = message.id != view.streaming?.id,
                             onSendChoice = onSendChoice,
+                            threadId = view.threadId,
+                            drafts = choiceDrafts,
+                            onDraftChange = onChoiceDraftChange,
+                            onClearDrafts = onClearChoiceDrafts,
                         )
                     }
                 }
@@ -244,6 +252,7 @@ fun ThreadScreen(
             attachmentError = attachmentError,
             onPickImage = onPickImage,
             onPickFile = onPickFile,
+            onAttachmentPermissionDenied = onAttachmentPermissionDenied,
             onRemoveAttachment = onRemoveAttachment,
             onDismissAttachmentError = onDismissAttachmentError,
             recording = recording,
@@ -296,6 +305,7 @@ private fun Composer(
     attachmentError: String?,
     onPickImage: (Uri) -> Unit,
     onPickFile: (Uri) -> Unit,
+    onAttachmentPermissionDenied: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
     onDismissAttachmentError: () -> Unit,
     recording: Boolean,
@@ -315,6 +325,33 @@ private fun Composer(
     onDismissSendError: () -> Unit,
 ) {
     // 相册（Android 13+ 系统照片选择器，无需权限）/ 任意文件
+    // 拍照：写一个 cacheDir 文件 → FileProvider 交给系统相机 → 结果 URI 回本应用
+    val context = LocalContext.current
+    var photoUri by remember { mutableStateOf<Uri?>(null) }
+    val takePicture = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture(),
+    ) { ok ->
+        val uri = photoUri
+        photoUri = null
+        if (ok && uri != null) onPickImage(uri)
+    }
+
+    fun launchPhoto() {
+        val file = java.io.File(context.cacheDir, "mpi-photo-${System.currentTimeMillis()}.jpg")
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
+        photoUri = uri
+        takePicture.launch(uri)
+    }
+
+    // 已声明 CAMERA 权限时，系统相机会要求它已授予
+    val cameraPermissionForPhoto = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) launchPhoto() else onAttachmentPermissionDenied() }
+
     val pickImages = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(3),
     ) { uris -> uris.forEach(onPickImage) }
@@ -419,6 +456,13 @@ private fun Composer(
                     }
                 }
                 DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("拍照") },
+                        onClick = {
+                            attachMenuOpen = false
+                            cameraPermissionForPhoto.launch(android.Manifest.permission.CAMERA)
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("相册") },
                         onClick = {
@@ -735,6 +779,10 @@ private fun MessageRow(
     allMessages: List<ThreadMessage>,
     finalized: Boolean,
     onSendChoice: (String) -> Unit,
+    threadId: String,
+    drafts: Map<String, ChoiceAnswer>,
+    onDraftChange: (String, ChoiceAnswer?) -> Unit,
+    onClearDrafts: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -756,6 +804,10 @@ private fun MessageRow(
             allMessages = allMessages,
             finalized = finalized,
             onSendChoice = onSendChoice,
+            threadId = threadId,
+            drafts = drafts,
+            onDraftChange = onDraftChange,
+            onClearDrafts = onClearDrafts,
         )
     }
 }
@@ -818,6 +870,10 @@ private fun AssistantMessageRow(
     allMessages: List<ThreadMessage>,
     finalized: Boolean,
     onSendChoice: (String) -> Unit,
+    threadId: String,
+    drafts: Map<String, ChoiceAnswer>,
+    onDraftChange: (String, ChoiceAnswer?) -> Unit,
+    onClearDrafts: (String) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -848,10 +904,14 @@ private fun AssistantMessageRow(
                         if (finalized) {
                             ChoiceAwareText(
                                 text = block.text,
+                                threadId = threadId,
                                 messageId = message.id,
                                 allMessages = allMessages,
                                 language = "zh",
                                 onSendChoice = onSendChoice,
+                                drafts = drafts,
+                                onDraftChange = onDraftChange,
+                                onClearDrafts = onClearDrafts,
                             )
                         } else {
                             MessageText(block.text)

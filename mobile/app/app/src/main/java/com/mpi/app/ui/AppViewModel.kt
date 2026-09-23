@@ -104,6 +104,11 @@ data class AppUiState(
     val updateError: String? = null,
     /** 会话元数据操作（重命名 / 置顶 / 删除）进行中。 */
     val threadActionBusy: Boolean = false,
+    /**
+     * choices 面板的未发送草稿（key = "threadId|messageId|blockIndex|questionIndex"）。
+     * 提升到 ViewModel：切走会话再回来时不丢勾选（PWA 用 localStorage，比这里更久）。
+     */
+    val choiceDrafts: Map<String, ChoiceAnswer> = emptyMap(),
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -360,6 +365,23 @@ class AppViewModel(
         )
     }
 
+    // ---- choices 面板草稿 ----
+
+    fun setChoiceDraft(key: String, answer: ChoiceAnswer?) {
+        _ui.update { state ->
+            val next = state.choiceDrafts.toMutableMap()
+            if (answer == null) next.remove(key) else next[key] = answer
+            state.copy(choiceDrafts = next)
+        }
+    }
+
+    /** 发送成功后清掉该面板的草稿（前缀 = threadId|messageId|blockIndex）。 */
+    fun clearChoiceDrafts(prefix: String) {
+        _ui.update { state ->
+            state.copy(choiceDrafts = state.choiceDrafts.filterKeys { !it.startsWith(prefix) })
+        }
+    }
+
     /** 元数据写操作的公共外壳：可选先拿写租约 → 发请求 → 刷新列表。 */
     private fun runThreadAction(
         claim: String?,
@@ -540,6 +562,9 @@ class AppViewModel(
     }
 
     fun dismissAttachmentError() = _ui.update { it.copy(attachmentError = null) }
+
+    /** UI 侧上报附件问题（拍照权限被拒等）——复用同一条错误展示。 */
+    fun reportAttachmentError(message: String) = _ui.update { it.copy(attachmentError = message) }
 
     // ---- 语音输入（M4 原生能力）----
 
