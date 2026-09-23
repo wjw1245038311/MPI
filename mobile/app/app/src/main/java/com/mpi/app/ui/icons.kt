@@ -150,3 +150,14 @@ val IconEdit: ImageVector by lazy {
         moveTo(4f, 20f); lineTo(4f, 16f); lineTo(15f, 5f); lineTo(19f, 9f); lineTo(8f, 20f); close()
     }
 }
+
+/** 麦克风（语音输入）。 */
+val IconMic: ImageVector by lazy {
+    strokeIcon("Mic") {
+        moveTo(9f, 11f); lineTo(9f, 6f)
+        curveTo(9f, 3.3f, 15f, 3.3f, 15f, 6f)
+        lineTo(15f, 11f); curveTo(15f, 13.7f, 9f, 13.7f, 9f, 11f); close()
+        moveTo(5f, 11f); curveTo(5f, 19f, 19f, 19f, 19f, 11f)
+        moveTo(12f, 17f); lineTo(12f, 21f)
+    }
+}

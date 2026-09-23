@@ -1,10 +1,16 @@
 package com.mpi.app.ui
 
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,10 +27,13 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +52,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -51,6 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mpi.app.data.Attachment
 import com.mpi.app.data.ThreadView
 import com.mpi.app.protocol.BlockType
 import com.mpi.app.protocol.MessageBlock
@@ -82,6 +95,21 @@ fun ThreadScreen(
     onRetry: (String) -> Unit,
     onRespond: (kotlinx.serialization.json.JsonObject) -> Unit,
     onSendChoice: (String) -> Unit,
+    attachments: List<Attachment>,
+    attachmentBusy: Boolean,
+    attachmentError: String?,
+    onPickImage: (Uri) -> Unit,
+    onPickFile: (Uri) -> Unit,
+    onRemoveAttachment: (Int) -> Unit,
+    onDismissAttachmentError: () -> Unit,
+    recording: Boolean,
+    transcribing: Boolean,
+    voiceError: String?,
+    onStartVoice: () -> Unit,
+    onStopVoice: () -> Unit,
+    onCancelVoice: () -> Unit,
+    onVoicePermissionDenied: () -> Unit,
+    onDismissVoiceError: () -> Unit,
     pendingFollowUp: String?,
     sendError: String?,
     onSteerPending: () -> Unit,
@@ -211,6 +239,21 @@ fun ThreadScreen(
             onDraftChange = onDraftChange,
             sending = sending,
             running = view.running,
+            attachments = attachments,
+            attachmentBusy = attachmentBusy,
+            attachmentError = attachmentError,
+            onPickImage = onPickImage,
+            onPickFile = onPickFile,
+            onRemoveAttachment = onRemoveAttachment,
+            onDismissAttachmentError = onDismissAttachmentError,
+            recording = recording,
+            transcribing = transcribing,
+            voiceError = voiceError,
+            onStartVoice = onStartVoice,
+            onStopVoice = onStopVoice,
+            onCancelVoice = onCancelVoice,
+            onVoicePermissionDenied = onVoicePermissionDenied,
+            onDismissVoiceError = onDismissVoiceError,
             pendingFollowUp = pendingFollowUp,
             sendError = sendError,
             onSend = onSend,
@@ -248,6 +291,21 @@ private fun Composer(
     onDraftChange: (String) -> Unit,
     sending: Boolean,
     running: Boolean,
+    attachments: List<Attachment>,
+    attachmentBusy: Boolean,
+    attachmentError: String?,
+    onPickImage: (Uri) -> Unit,
+    onPickFile: (Uri) -> Unit,
+    onRemoveAttachment: (Int) -> Unit,
+    onDismissAttachmentError: () -> Unit,
+    recording: Boolean,
+    transcribing: Boolean,
+    voiceError: String?,
+    onStartVoice: () -> Unit,
+    onStopVoice: () -> Unit,
+    onCancelVoice: () -> Unit,
+    onVoicePermissionDenied: () -> Unit,
+    onDismissVoiceError: () -> Unit,
     pendingFollowUp: String?,
     sendError: String?,
     onSend: () -> Unit,
@@ -256,8 +314,61 @@ private fun Composer(
     onReEditPending: () -> Unit,
     onDismissSendError: () -> Unit,
 ) {
+    // 相册（Android 13+ 系统照片选择器，无需权限）/ 任意文件
+    val pickImages = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(3),
+    ) { uris -> uris.forEach(onPickImage) }
+    val pickFiles = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris -> uris.forEach(onPickFile) }
+    // 已授权时 RequestPermission 会立即回调 true，无需先查权限
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) onStartVoice() else onVoicePermissionDenied() }
+    var attachMenuOpen by remember { mutableStateOf(false) }
+
     Column {
         HorizontalDivider(color = MpiTheme.colors.border)
+
+        if (attachmentError != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MpiTheme.colors.bg)
+                    .padding(start = 12.dp, end = 4.dp, top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = attachmentError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismissAttachmentError) { Text("知道了") }
+            }
+        }
+
+        if (voiceError != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MpiTheme.colors.bg)
+                    .padding(start = 12.dp, end = 4.dp, top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = voiceError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismissVoiceError) { Text("知道了") }
+            }
+        }
+
+        if (attachments.isNotEmpty()) {
+            AttachmentBar(attachments = attachments, onRemove = onRemoveAttachment)
+        }
 
         // 发送 / 停止失败贴输入框显示（PWA 语义）：这里才是手指所在的位置。
         if (sendError != null) {
@@ -288,8 +399,44 @@ private fun Composer(
                 .background(MpiTheme.colors.bg)
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            Box {
+                IconButton(
+                    onClick = { attachMenuOpen = true },
+                    enabled = !attachmentBusy && attachments.size < 3,
+                    modifier = Modifier.size(44.dp),
+                ) {
+                    if (attachmentBusy) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            IconPlus,
+                            contentDescription = "添加附件",
+                            tint = MpiTheme.colors.textDim,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("相册") },
+                        onClick = {
+                            attachMenuOpen = false
+                            pickImages.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("文件") },
+                        onClick = {
+                            attachMenuOpen = false
+                            pickFiles.launch(arrayOf("*/*"))
+                        },
+                    )
+                }
+            }
             OutlinedTextField(
                 value = draft,
                 onValueChange = onDraftChange,
@@ -307,6 +454,48 @@ private fun Composer(
                 maxLines = 5,
                 shape = RoundedCornerShape(14.dp),
             )
+            when {
+                transcribing -> {
+                    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    }
+                }
+
+                recording -> {
+                    // 录音中：左取消、右结束（同一位置再点即完成——微信式）
+                    IconButton(onClick = onCancelVoice, modifier = Modifier.size(44.dp)) {
+                        Icon(
+                            IconClose,
+                            contentDescription = "取消录音",
+                            tint = MpiTheme.colors.textDim,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    IconButton(onClick = onStopVoice, modifier = Modifier.size(44.dp)) {
+                        Icon(
+                            IconMic,
+                            contentDescription = "结束录音并转文字",
+                            tint = MpiTheme.colors.err,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
+
+                else -> {
+                    IconButton(
+                        onClick = { micPermission.launch(android.Manifest.permission.RECORD_AUDIO) },
+                        enabled = !sending,
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        Icon(
+                            IconMic,
+                            contentDescription = "语音输入",
+                            tint = MpiTheme.colors.textDim,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            }
             if (running) {
                 IconButton(onClick = onAbort, enabled = !sending, modifier = Modifier.size(44.dp)) {
                     Icon(
@@ -319,13 +508,13 @@ private fun Composer(
             }
             IconButton(
                 onClick = onSend,
-                enabled = draft.isNotBlank() && !sending,
+                enabled = (draft.isNotBlank() || attachments.isNotEmpty()) && !sending,
                 modifier = Modifier.size(44.dp),
             ) {
                 Icon(
                     IconSend,
                     contentDescription = if (running) "发送（排队）" else "发送",
-                    tint = if (draft.isNotBlank() && !sending) {
+                    tint = if ((draft.isNotBlank() || attachments.isNotEmpty()) && !sending) {
                         MaterialTheme.colorScheme.primary
                     } else {
                         MpiTheme.colors.textFaint
@@ -393,6 +582,82 @@ private fun PendingFollowUpBanner(text: String, onReEdit: () -> Unit, onSteer: (
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(end = 8.dp, start = 12.dp),
         )
+    }
+}
+
+/** 待发送附件条（图片显缩略图、文件显名字）——每个都带移除按钮。 */
+@Composable
+private fun AttachmentBar(attachments: List<Attachment>, onRemove: (Int) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MpiTheme.colors.bg)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        attachments.forEachIndexed { index, attachment ->
+            AttachmentChip(attachment = attachment, onRemove = { onRemove(index) })
+        }
+    }
+}
+
+@Composable
+private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
+    Box(Modifier.size(54.dp)) {
+        when (attachment) {
+            is Attachment.Image -> {
+                // 已压缩到 ≤280KB，解码成缩略图不会爆内存（最多 3 张）
+                val bitmap = remember(attachment.bytesB64) {
+                    runCatching {
+                        val bytes = android.util.Base64.decode(attachment.bytesB64, android.util.Base64.NO_WRAP)
+                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                    }.getOrNull()
+                }
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap,
+                        contentDescription = "图片附件",
+                        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(MpiTheme.colors.control))
+                }
+            }
+
+            is Attachment.File -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MpiTheme.colors.surfaceMuted)
+                        .padding(5.dp),
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text("文件", style = MaterialTheme.typography.labelSmall, color = MpiTheme.colors.textFaint)
+                    Text(
+                        text = attachment.name,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(18.dp)
+                .clip(CircleShape)
+                .background(Color(0xCC000000))
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("×", color = Color.White, fontSize = 12.sp)
+        }
     }
 }
 

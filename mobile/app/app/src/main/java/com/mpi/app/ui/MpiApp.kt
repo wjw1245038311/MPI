@@ -128,6 +128,23 @@ fun MpiApp(container: AppContainer) {
                             }
                         },
                         onSendChoice = viewModel::sendChoice,
+                        attachments = state.attachments,
+                        attachmentBusy = state.attachmentBusy,
+                        attachmentError = state.attachmentError,
+                        onPickImage = viewModel::addImageAttachment,
+                        onPickFile = viewModel::addFileAttachment,
+                        onRemoveAttachment = viewModel::removeAttachment,
+                        onDismissAttachmentError = viewModel::dismissAttachmentError,
+                        recording = state.recording,
+                        transcribing = state.transcribing,
+                        voiceError = state.voiceError,
+                        onStartVoice = viewModel::startRecording,
+                        onStopVoice = viewModel::stopRecording,
+                        onCancelVoice = viewModel::cancelRecording,
+                        onVoicePermissionDenied = {
+                            viewModel.reportVoiceError("没有麦克风权限，无法语音输入")
+                        },
+                        onDismissVoiceError = viewModel::dismissVoiceError,
                         pendingFollowUp = state.pendingFollowUp,
                         sendError = state.sendError,
                         onSteerPending = viewModel::steerPendingFollowUp,

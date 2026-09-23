@@ -3,6 +3,8 @@ package com.mpi.app.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.mpi.app.AppContainer
+import com.mpi.app.data.Attachment
+import com.mpi.app.data.AttachmentLoader
 import com.mpi.app.data.HostRepository
 import com.mpi.app.data.HostSession
 import com.mpi.app.data.HostSnapshot
@@ -18,6 +20,7 @@ import com.mpi.app.data.SendMode
 import com.mpi.app.data.ThreadActions
 import com.mpi.app.data.ThreadSession
 import com.mpi.app.data.ThreadView
+import com.mpi.app.data.VoiceRecorder
 import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.PairingLink
 import com.mpi.app.protocol.PairingLinkException
@@ -31,7 +34,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /** 配对进行中的状态（null = 没在配对）。 */
@@ -76,6 +81,18 @@ data class AppUiState(
     val sendError: String? = null,
     /** 正在新建会话的项目 id（非 null = 进行中，用于禁用重复点击）。 */
     val creatingThread: String? = null,
+    /** 待发送的附件（最多 3 个，图片已压缩）。 */
+    val attachments: List<Attachment> = emptyList(),
+    /** 正在读取/压缩附件。 */
+    val attachmentBusy: Boolean = false,
+    /** 附件读取失败原因（可关闭）。 */
+    val attachmentError: String? = null,
+    /** 正在录音（原生 AudioRecord）。 */
+    val recording: Boolean = false,
+    /** 正在把录音送去识别。 */
+    val transcribing: Boolean = false,
+    /** 语音输入失败原因（可关闭）。 */
+    val voiceError: String? = null,
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -94,6 +111,8 @@ class AppViewModel(
     private val keyStore: KeyStore,
     private val scope: CoroutineScope,
     private val deviceName: String,
+    private val attachmentLoader: AttachmentLoader,
+    private val voiceRecorder: VoiceRecorder,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(AppUiState())
@@ -284,7 +303,7 @@ class AppViewModel(
         threadSession?.detach()
         threadSession = null
         threadActions = null
-        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, toolbarSheet = null, configBusy = false, configError = null, pendingFollowUp = null, sendError = null) }
+        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, toolbarSheet = null, configBusy = false, configError = null, pendingFollowUp = null, sendError = null, attachments = emptyList(), attachmentBusy = false, attachmentError = null, recording = false, transcribing = false, voiceError = null) }
     }
 
     /** 手动重新同步（错误横幅上的按钮）。 */
@@ -307,10 +326,12 @@ class AppViewModel(
      */
     fun sendDraft() {
         val text = _ui.value.draft.trim()
-        if (text.isEmpty() || _ui.value.sending) return
+        val hasAttachments = _ui.value.attachments.isNotEmpty()
+        if ((text.isEmpty() && !hasAttachments) || _ui.value.sending) return
         _ui.update { it.copy(sendError = null) }
         if (_ui.value.thread?.running == true) {
-            if (_ui.value.pendingFollowUp == null) {
+            // 暂存只支持文本；带附件时直接排队（避免附件在暂存态里丢失）
+            if (_ui.value.pendingFollowUp == null && !hasAttachments) {
                 _ui.value.openThreadId?.let { drafts[it] = "" }
                 _ui.update { it.copy(pendingFollowUp = text, draft = "") }
                 return
@@ -347,6 +368,112 @@ class AppViewModel(
         if (trimmed.isEmpty() || _ui.value.sending) return
         val mode = if (_ui.value.thread?.running == true) SendMode.FollowUp else SendMode.Prompt
         send(trimmed, mode, clearDraft = false)
+    }
+
+    // ---- 附件（M4 原生能力）----
+
+    /** 相册/相机选到的图片：压缩后加入待发送附件。 */
+    fun addImageAttachment(uri: android.net.Uri) = loadAttachment { attachmentLoader.loadImage(uri) }
+
+    /** 文件选择器选到的文件：原样读入（≤6MB）。 */
+    fun addFileAttachment(uri: android.net.Uri) = loadAttachment { attachmentLoader.loadFile(uri) }
+
+    fun removeAttachment(index: Int) {
+        _ui.update { state ->
+            if (index !in state.attachments.indices) {
+                state
+            } else {
+                state.copy(attachments = state.attachments.filterIndexed { i, _ -> i != index })
+            }
+        }
+    }
+
+    fun dismissAttachmentError() = _ui.update { it.copy(attachmentError = null) }
+
+    // ---- 语音输入（M4 原生能力）----
+
+    /** 开始录音（调用方保证已拿到 RECORD_AUDIO 权限）。 */
+    fun startRecording() {
+        if (_ui.value.recording) return
+        voiceRecorder.start()
+            .onSuccess { _ui.update { it.copy(recording = true, voiceError = null) } }
+            .onFailure { error ->
+                _ui.update { it.copy(recording = false, voiceError = error.message ?: "无法启动录音") }
+            }
+    }
+
+    /** 结束录音 → 送 STT → 识别文本追加到输入框。 */
+    fun stopRecording() {
+        if (!_ui.value.recording) return
+        _ui.update { it.copy(recording = false, transcribing = true, voiceError = null) }
+        scope.launch {
+            val audioB64 = voiceRecorder.stop().getOrElse { error ->
+                _ui.update { it.copy(transcribing = false, voiceError = error.message ?: "录音失败") }
+                return@launch
+            }
+            val requesterRef = requester
+            if (requesterRef == null) {
+                _ui.update { it.copy(transcribing = false, voiceError = "连接已断开") }
+                return@launch
+            }
+            try {
+                val response = requesterRef.request(
+                    "stt.transcribe",
+                    kotlinx.serialization.json.buildJsonObject {
+                        put("audioB64", audioB64)
+                        put("sampleRate", VoiceRecorder.SAMPLE_RATE)
+                    },
+                )
+                val text = (response as? JsonObject)
+                    ?.get("text")?.jsonPrimitive?.contentOrNull.orEmpty().trim()
+                if (text.isEmpty()) {
+                    _ui.update { it.copy(transcribing = false, voiceError = "没有识别到内容") }
+                } else {
+                    _ui.update { state ->
+                        val merged = if (state.draft.isBlank()) text else state.draft.trimEnd() + " " + text
+                        state.openThreadId?.let { drafts[it] = merged }
+                        state.copy(draft = merged, transcribing = false, voiceError = null)
+                    }
+                }
+            } catch (error: Exception) {
+                _ui.update { it.copy(transcribing = false, voiceError = error.message ?: "语音识别失败") }
+            }
+        }
+    }
+
+    fun cancelRecording() {
+        _ui.update { it.copy(recording = false) }
+        voiceRecorder.cancel()
+    }
+
+    fun dismissVoiceError() = _ui.update { it.copy(voiceError = null) }
+
+    /** UI 侧发现问题（如麦克风权限被拒）时上报——统一走同一条错误展示。 */
+    fun reportVoiceError(message: String) = _ui.update { it.copy(voiceError = message) }
+
+    private fun loadAttachment(block: () -> Result<Attachment>) {
+        if (_ui.value.attachmentBusy) return
+        if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
+            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
+            return
+        }
+        _ui.update { it.copy(attachmentBusy = true, attachmentError = null) }
+        scope.launch {
+            block()
+                .onSuccess { attachment ->
+                    // 连续点选时可能撞上限，这里再兜一次
+                    _ui.update { state ->
+                        if (state.attachments.size >= MAX_ATTACHMENTS) {
+                            state.copy(attachmentBusy = false, attachmentError = "最多 $MAX_ATTACHMENTS 个附件")
+                        } else {
+                            state.copy(attachmentBusy = false, attachments = state.attachments + attachment)
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    _ui.update { it.copy(attachmentBusy = false, attachmentError = error.message ?: "添加附件失败") }
+                }
+        }
     }
 
     /** 回合结束（running true→false）：自动投递暂存的「待处理后续」。 */
@@ -443,6 +570,22 @@ class AppViewModel(
     private fun send(text: String, mode: SendMode, clearDraft: Boolean = true) {
         val session = threadSession ?: return
         val actions = threadActions ?: return
+        // 附件：图片与文件分别按协议形状打包（主机端会逐项校验）
+        val pending = _ui.value.attachments
+        val images = pending.filterIsInstance<Attachment.Image>().map { image ->
+            kotlinx.serialization.json.buildJsonObject {
+                put("type", "image")
+                put("data", image.bytesB64)
+                put("mimeType", image.mimeType)
+            }
+        }
+        val files = pending.filterIsInstance<Attachment.File>().map { file ->
+            kotlinx.serialization.json.buildJsonObject {
+                put("name", file.name)
+                put("data", file.bytesB64)
+                if (file.mimeType != null) put("mimeType", file.mimeType)
+            }
+        }
         // 先乐观上屏（§1.1：点击到视觉反馈 < 100ms），失败再标红留在原位
         val localId = session.echoUserMessage(text)
         if (clearDraft) {
@@ -454,8 +597,9 @@ class AppViewModel(
         }
         scope.launch {
             try {
-                actions.send(text, mode)
-                _ui.update { it.copy(sending = false) }
+                actions.send(text, mode, images, files)
+                // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
+                _ui.update { it.copy(sending = false, attachments = emptyList()) }
             } catch (error: Exception) {
                 session.markSendFailed(localId, error.message ?: "发送失败")
                 val raw = error.message.orEmpty()
@@ -604,12 +748,19 @@ class AppViewModel(
 
     companion object {
         private const val MAX_PROBLEMS = 5
+        private const val MAX_ATTACHMENTS = 3
 
         fun factory(container: AppContainer): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    AppViewModel(container.keyStore, container.scope, container.deviceName) as T
+                    AppViewModel(
+                        container.keyStore,
+                        container.scope,
+                        container.deviceName,
+                        container.attachmentLoader,
+                        container.voiceRecorder,
+                    ) as T
             }
     }
 }
