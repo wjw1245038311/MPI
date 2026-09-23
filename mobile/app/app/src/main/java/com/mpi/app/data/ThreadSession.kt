@@ -318,14 +318,14 @@ class ThreadSession(
             }
 
             "tool_execution_start" -> {
-                event?.str("toolCallId")?.let { id -> markTool(id, running = true) }
+                event?.str("toolCallId")?.let { id -> markTool(id, running = true, name = event.str("toolName")) }
             }
 
             "tool_execution_end" -> {
                 val id = event?.str("toolCallId")
                 if (id != null) {
                     val result = textOfContent((event["result"] as? JsonObject)?.get("content"))
-                    markTool(id, running = false, text = result, isError = event.bool("isError"))
+                    markTool(id, running = false, text = result, isError = event.bool("isError"), name = event.str("toolName"))
                 }
             }
 
@@ -485,14 +485,27 @@ class ThreadSession(
 
             "toolcall_start", "toolcall_end" -> {
                 flushDeltas()
+                val contentIndex = ame["contentIndex"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+                // pi 的 toolcall_start 只给 partial.content[contentIndex].id（不给 toolCall）；
+                // toolcall_end 才给 toolCall.id。两边都要看，否则开始时只能用占位 id。
                 val toolCall = ame["toolCall"] as? JsonObject
-                val id = toolCall?.str("id")?.takeIf { it.isNotEmpty() }
-                    ?: ame["contentIndex"]?.jsonPrimitive?.contentOrNull?.let { "tc-$it" }
-                    ?: return
-                val name = toolCall?.str("name")?.takeIf { it.isNotEmpty() } ?: "tool"
-                val argsText = summarizeArgs(toolCall?.get("arguments"))
+                val partialBlock = contentIndex?.let { index ->
+                    ((ame["partial"] as? JsonObject)?.get("content") as? kotlinx.serialization.json.JsonArray)
+                        ?.getOrNull(index) as? JsonObject
+                }
+                val realId = toolCall?.str("id")?.takeIf { it.isNotEmpty() }
+                    ?: partialBlock?.str("id")?.takeIf { it.isNotEmpty() }
+                val placeholder = contentIndex?.let { "$PLACEHOLDER_TOOL_ID_PREFIX$it" }
+                val id = realId ?: placeholder ?: return
+                val name = toolCall?.str("name")?.takeIf { it.isNotEmpty() }
+                    ?: partialBlock?.str("name")?.takeIf { it.isNotEmpty() }
+                    ?: "tool"
+                val argsText = summarizeArgs(toolCall?.get("arguments") ?: partialBlock?.get("arguments"))
                 upsertToolBlockInStreaming(
                     id = id,
+                    // 占位 id：当真 id 出现时，把同一个 contentIndex 的占位块改名而不是新建
+                    placeholderId = placeholder?.takeIf { realId != null && it != realId },
+                    contentIndex = contentIndex,
                     name = name,
                     argsText = argsText,
                     running = ame.str("type") == "toolcall_start",
@@ -544,19 +557,44 @@ class ThreadSession(
         }
     }
 
-    private fun markTool(id: String, running: Boolean? = null, text: String? = null, isError: Boolean = false) {
-        val patchFn: (MessageBlock) -> MessageBlock = { block ->
-            if (block.type == BlockType.Tool && block.id == id) {
-                block.copy(
-                    running = running ?: block.running,
-                    text = text ?: block.text,
-                    isError = isError || block.isError,
-                )
-            } else {
-                block
-            }
-        }
+    private fun markTool(
+        id: String,
+        running: Boolean? = null,
+        text: String? = null,
+        isError: Boolean = false,
+        name: String? = null,
+    ) {
+        // 双路径匹配：先按 toolCallId（正常路径，靠 contentIndex 合并已经把 id 对齐）；
+        // 再退回「同名且唯一」的运行中工具块——覆盖流中断导致 toolcall_end 没来、
+        // 块名还停在占位 id 的情况，否则那一行会永远转圈（真机反馈的「一直在执行中」）。
         patch { view ->
+            var claimed = false
+            val patchFn: (MessageBlock) -> MessageBlock = { block ->
+                if (block.type != BlockType.Tool) {
+                    block
+                } else if (block.id == id) {
+                    claimed = true
+                    block.copy(
+                        running = running ?: block.running,
+                        text = text ?: block.text,
+                        isError = isError || block.isError,
+                    )
+                } else if (
+                    !claimed && name != null && block.name == name &&
+                    block.running && (block.id?.startsWith(PLACEHOLDER_TOOL_ID_PREFIX) == true)
+                ) {
+                    claimed = true
+                    // 把占位块认领到真 id，后续事件才能命中
+                    block.copy(
+                        id = id,
+                        running = running ?: block.running,
+                        text = text ?: block.text,
+                        isError = isError || block.isError,
+                    )
+                } else {
+                    block
+                }
+            }
             view.copy(
                 messages = view.messages.map { it.copy(blocks = it.blocks.map(patchFn)) },
                 streaming = view.streaming?.let { it.copy(blocks = it.blocks.map(patchFn)) },
@@ -564,29 +602,50 @@ class ThreadSession(
         }
     }
 
-    private fun upsertToolBlockInStreaming(id: String, name: String, argsText: String?, running: Boolean) {
+    private fun upsertToolBlockInStreaming(
+        id: String,
+        placeholderId: String? = null,
+        contentIndex: Int? = null,
+        name: String,
+        argsText: String?,
+        running: Boolean,
+    ) {
         patch { view ->
             val streaming = view.streaming ?: ThreadMessage(id = "a-$id", role = "assistant")
-            val index = streaming.blocks.indexOfFirst { it.type == BlockType.Tool && it.id == id }
-            val blocks = if (index >= 0) {
-                val existing = streaming.blocks[index]
-                streaming.blocks.toMutableList().also {
+            val blocks = streaming.blocks
+            // 定位顺序：真 id → contentIndex（占位块）→ 占位 id。
+            // 把占位块**改名合并**到真 id，而不是新建一个——否则每次工具调用都会多出
+            // 一行永远转圈的「tool」，真正拿到结果的是另一行（真机反馈的那个 bug）。
+            var index = blocks.indexOfFirst { it.type == BlockType.Tool && it.id == id }
+            if (index < 0 && contentIndex != null) {
+                index = blocks.indexOfFirst { it.type == BlockType.Tool && it.contentIndex == contentIndex }
+            }
+            if (index < 0 && placeholderId != null) {
+                index = blocks.indexOfFirst { it.type == BlockType.Tool && it.id == placeholderId }
+            }
+            val next = if (index >= 0) {
+                val existing = blocks[index]
+                blocks.toMutableList().also {
                     it[index] = existing.copy(
+                        id = id,
                         name = name,
                         argsText = argsText ?: existing.argsText,
+                        contentIndex = contentIndex ?: existing.contentIndex,
+                        // toolcall_end 不主动清 running：收口交给 tool_execution_end
                         running = if (running) true else existing.running,
                     )
                 }
             } else {
-                streaming.blocks + MessageBlock(
+                blocks + MessageBlock(
                     type = BlockType.Tool,
                     id = id,
                     name = name,
                     argsText = argsText,
                     running = running,
+                    contentIndex = contentIndex,
                 )
             }
-            view.copy(streaming = streaming.copy(blocks = blocks))
+            view.copy(streaming = streaming.copy(blocks = next))
         }
     }
 
@@ -619,6 +678,9 @@ class ThreadSession(
     companion object {
         /** 增量合并间隔（§1.5 预算 #3：约每 60ms 一帧）。 */
         const val FLUSH_INTERVAL_MS = 60L
+
+        /** `toolcall_start` 没拿到真 id 时给工具块用的占位 id 前缀。 */
+        const val PLACEHOLDER_TOOL_ID_PREFIX = "tc-"
     }
 }
 

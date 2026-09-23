@@ -49,6 +49,15 @@ data class MessageBlock(
     val id: String? = null,
     /** 工具是否以失败结束。 */
     val isError: Boolean = false,
+    /**
+     * 工具块在助消息内容数组中的下标（仅流式期间有意义）。
+     *
+     * pi 的 `toolcall_start` 只带 `partial.content[contentIndex]`（带 id），不带 `toolCall`；
+     * `toolcall_end` 才带 `toolCall.id`。所以开始时只能用 `tc-<contentIndex>` 占位 id，
+     * 靠这个下标把占位块**改名合并**到真 id——否则同一次调用会留下两个块
+     * （一个永远「执行中」的占位块 + 一个真正拿到结果的块）。
+     */
+    val contentIndex: Int? = null,
 )
 
 data class MessageArtifact(

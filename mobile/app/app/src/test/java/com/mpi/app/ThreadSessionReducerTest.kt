@@ -357,6 +357,88 @@ class ThreadSessionReducerTest {
         session.detach()
     }
 
+    @Test
+    fun `a toolcall whose start omits the id merges into one block on end`() = runBlocking {
+        val transport = FakeTransport()
+        val session = newSession(transport)
+        session.subscribe()
+
+        // pi 真实形状：toolcall_start 只给 partial.content[contentIndex].id（不给 toolCall）
+        transport.deliver(event(seq = 1, kind = "message_start", event = messageEvent("assistant")))
+        transport.deliver(toolCallStartPartial(seq = 2, contentIndex = 0, id = "call-1", name = "bash"))
+        transport.deliver(toolCallEnd(seq = 3, contentIndex = 0, id = "call-1", name = "bash"))
+        transport.deliver(
+            event(seq = 4, kind = "tool_execution_start", event = buildJsonObject { put("toolCallId", "call-1") }),
+        )
+        transport.deliver(
+            event(
+                seq = 5,
+                kind = "tool_execution_end",
+                event = buildJsonObject {
+                    put("toolCallId", "call-1")
+                    put("isError", false)
+                    put("result", buildJsonObject { put("content", "执行结果") })
+                },
+            ),
+        )
+
+        val tools = session.view.value.streaming!!.blocks.filter { it.type == BlockType.Tool }
+        // 旧实现会在这里留下两块：一块永远转圈的「tool」+ 一块拿到结果的「bash」
+        assertEquals("同一次调用只能有一个工具块", 1, tools.size)
+        assertEquals("bash", tools.single().name)
+        assertEquals("执行结果", tools.single().text)
+        assertTrue("结束后不应还在运行", !tools.single().running)
+        session.detach()
+    }
+
+    @Test
+    fun `a placeholder block is renamed when the real id shows up later`() = runBlocking {
+        val transport = FakeTransport()
+        val session = newSession(transport)
+        session.subscribe()
+
+        // 极端：start 既无 toolCall 也无 partial，只剩 contentIndex
+        transport.deliver(event(seq = 1, kind = "message_start", event = messageEvent("assistant")))
+        transport.deliver(toolCallStartPartial(seq = 2, contentIndex = 1, id = null, name = null))
+        transport.deliver(toolCallEnd(seq = 3, contentIndex = 1, id = "call-9", name = "read"))
+
+        val tools = session.view.value.streaming!!.blocks.filter { it.type == BlockType.Tool }
+        assertEquals(1, tools.size)
+        assertEquals("call-9", tools.single().id)
+        assertEquals("read", tools.single().name)
+        session.detach()
+    }
+
+    @Test
+    fun `tool execution end claims a leftover placeholder by name`() = runBlocking {
+        val transport = FakeTransport()
+        val session = newSession(transport)
+        session.subscribe()
+
+        // 流中断：toolcall_end 没来，块名停在占位 id；tool_execution_end 带真 id 到达
+        transport.deliver(event(seq = 1, kind = "message_start", event = messageEvent("assistant")))
+        transport.deliver(toolCallStartPartial(seq = 2, contentIndex = 0, id = null, name = "bash"))
+        transport.deliver(
+            event(
+                seq = 3,
+                kind = "tool_execution_end",
+                event = buildJsonObject {
+                    put("toolCallId", "call-7")
+                    put("toolName", "bash")
+                    put("isError", false)
+                    put("result", buildJsonObject { put("content", "结果") })
+                },
+            ),
+        )
+
+        val tools = session.view.value.streaming!!.blocks.filter { it.type == BlockType.Tool }
+        assertEquals(1, tools.size)
+        assertEquals("call-7", tools.single().id)
+        assertEquals("结果", tools.single().text)
+        assertTrue("结束后不应还在运行", !tools.single().running)
+        session.detach()
+    }
+
     // ---- 审批卡 ----
 
     @Test
@@ -554,6 +636,53 @@ class ThreadSessionReducerTest {
                 "assistantMessageEvent",
                 buildJsonObject {
                     put("type", "toolcall_start")
+                    put("toolCall", buildJsonObject { put("id", id); put("name", name) })
+                },
+            )
+        },
+    )
+
+    /** pi 真实形状：toolcall_start 只带 `partial.content[contentIndex]`。id/name 可为 null（没解析出来）。 */
+    private fun toolCallStartPartial(seq: Int, contentIndex: Int, id: String?, name: String?) = event(
+        seq = seq,
+        kind = "message_update",
+        event = buildJsonObject {
+            put(
+                "assistantMessageEvent",
+                buildJsonObject {
+                    put("type", "toolcall_start")
+                    put("contentIndex", contentIndex)
+                    put(
+                        "partial",
+                        buildJsonObject {
+                            put(
+                                "content",
+                                buildJsonArray {
+                                    add(
+                                        buildJsonObject {
+                                            put("type", "toolCall")
+                                            if (id != null) put("id", id)
+                                            if (name != null) put("name", name)
+                                        },
+                                    )
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+        },
+    )
+
+    private fun toolCallEnd(seq: Int, contentIndex: Int, id: String, name: String) = event(
+        seq = seq,
+        kind = "message_update",
+        event = buildJsonObject {
+            put(
+                "assistantMessageEvent",
+                buildJsonObject {
+                    put("type", "toolcall_end")
+                    put("contentIndex", contentIndex)
                     put("toolCall", buildJsonObject { put("id", id); put("name", name) })
                 },
             )

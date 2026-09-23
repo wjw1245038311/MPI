@@ -164,10 +164,38 @@ async function simulateEvents(makeEnvelope, threadId) {
     await sleep(40);
   }
   push("message_update", {
-    event: { assistantMessageEvent: { type: "toolcall_start", toolCall: { id: "call-demo", name: "read" } } },
+    // 真实形状（openai-compatible/deepseek 等）：toolcall_start **只带 partial**，不带 toolCall；
+    // 而且 id 可能是空串（id 本身也在流里）。旧版这里直接给了 toolCall.id，掩盖了
+    // 「占位 id → 真 id」未合并导致的重复工具块 bug（见 ThreadSession.upsertToolBlockInStreaming）。
+    event: {
+      assistantMessageEvent: {
+        type: "toolcall_start",
+        contentIndex: 0,
+        partial: { content: [{ type: "toolCall", id: "", name: "bash", arguments: {} }] },
+      },
+    },
   });
+  await sleep(400);
+  // 流结束才带出真 id（arguments 已被主机侧隐私过滤掉，这里也不发）
+  push("message_update", {
+    event: {
+      assistantMessageEvent: {
+        type: "toolcall_end",
+        contentIndex: 0,
+        toolCall: { id: "call-demo", name: "bash", arguments: {} },
+      },
+    },
+  });
+  await sleep(300);
+  push("tool_execution_start", { event: { toolCallId: "call-demo", toolName: "bash" } });
   await sleep(500);
-  push("tool_execution_end", { event: { toolCallId: "call-demo", result: { content: "已读取 src/auth/session.ts（42 行）" } } });
+  push("tool_execution_end", {
+    event: {
+      toolCallId: "call-demo",
+      toolName: "bash",
+      result: { content: "已读取 src/auth/session.ts（42 行）" },
+    },
+  });
   await sleep(300);
   push("ui.request", {
     request: {
