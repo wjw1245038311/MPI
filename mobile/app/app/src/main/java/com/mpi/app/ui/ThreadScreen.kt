@@ -1,7 +1,10 @@
 package com.mpi.app.ui
 
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +43,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,6 +81,11 @@ fun ThreadScreen(
     onAbort: () -> Unit,
     onRetry: (String) -> Unit,
     onRespond: (kotlinx.serialization.json.JsonObject) -> Unit,
+    pendingFollowUp: String?,
+    sendError: String?,
+    onSteerPending: () -> Unit,
+    onReEditPending: () -> Unit,
+    onDismissSendError: () -> Unit,
     sheet: ToolbarSheet?,
     configBusy: Boolean,
     configError: String?,
@@ -193,8 +204,13 @@ fun ThreadScreen(
             onDraftChange = onDraftChange,
             sending = sending,
             running = view.running,
+            pendingFollowUp = pendingFollowUp,
+            sendError = sendError,
             onSend = onSend,
             onAbort = onAbort,
+            onSteerPending = onSteerPending,
+            onReEditPending = onReEditPending,
+            onDismissSendError = onDismissSendError,
         )
 
         if (sheet != null) {
@@ -225,18 +241,47 @@ private fun Composer(
     onDraftChange: (String) -> Unit,
     sending: Boolean,
     running: Boolean,
+    pendingFollowUp: String?,
+    sendError: String?,
     onSend: () -> Unit,
     onAbort: () -> Unit,
+    onSteerPending: () -> Unit,
+    onReEditPending: () -> Unit,
+    onDismissSendError: () -> Unit,
 ) {
     Column {
         HorizontalDivider(color = MpiTheme.colors.border)
+
+        // 发送 / 停止失败贴输入框显示（PWA 语义）：这里才是手指所在的位置。
+        if (sendError != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MpiTheme.colors.bg)
+                    .padding(start = 12.dp, end = 4.dp, top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = sendError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismissSendError) { Text("知道了") }
+            }
+        }
+
+        if (pendingFollowUp != null) {
+            PendingFollowUpBanner(text = pendingFollowUp, onReEdit = onReEditPending, onSteer = onSteerPending)
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MpiTheme.colors.bg)
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             OutlinedTextField(
                 value = draft,
@@ -244,7 +289,11 @@ private fun Composer(
                 modifier = Modifier.weight(1f),
                 placeholder = {
                     Text(
-                        text = if (running) "追加指令…" else "说点什么…",
+                        text = when {
+                            running && pendingFollowUp != null -> "再排一条…"
+                            running -> "输入插话…发送后排队，任务完成时自动发出"
+                            else -> "说点什么…"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 },
@@ -252,18 +301,91 @@ private fun Composer(
                 shape = RoundedCornerShape(14.dp),
             )
             if (running) {
-                TextButton(onClick = onAbort) {
-                    Text("停止", color = MpiTheme.colors.err, fontWeight = FontWeight.Medium)
+                IconButton(onClick = onAbort, enabled = !sending, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        IconStop,
+                        contentDescription = "停止",
+                        tint = MpiTheme.colors.err,
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
             }
-            Button(
+            IconButton(
                 onClick = onSend,
                 enabled = draft.isNotBlank() && !sending,
-                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.size(44.dp),
             ) {
-                Text(if (running) "追加" else "发送")
+                Icon(
+                    IconSend,
+                    contentDescription = if (running) "发送（排队）" else "发送",
+                    tint = if (draft.isNotBlank() && !sending) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MpiTheme.colors.textFaint
+                    },
+                    modifier = Modifier.size(22.dp),
+                )
             }
         }
+    }
+}
+
+/**
+ * 「待处理后续」横幅（PWA `.pending-fu`）：运行中发送的内容先暂存，回合结束后自动投递。
+ * 两个动作：✎ 取回输入框重编，⚡ 立即插入（steer，打断当前回合马上处理）。
+ */
+@Composable
+private fun PendingFollowUpBanner(text: String, onReEdit: () -> Unit, onSteer: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MpiTheme.colors.surfaceMuted)
+            .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(MpiTheme.colors.ok))
+            Spacer(Modifier.size(6.dp))
+            Text(
+                text = "待处理后续",
+                style = MaterialTheme.typography.labelSmall,
+                color = MpiTheme.colors.textDim,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = "· 当前任务完成后自动发送",
+                style = MaterialTheme.typography.labelSmall,
+                color = MpiTheme.colors.textFaint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(start = 4.dp),
+            )
+            IconButton(onClick = onReEdit, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    IconEdit,
+                    contentDescription = "重新编辑",
+                    tint = MpiTheme.colors.textDim,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            IconButton(onClick = onSteer, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    IconSpark,
+                    contentDescription = "立即插入",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(end = 8.dp, start = 12.dp),
+        )
     }
 }
 
@@ -330,20 +452,38 @@ private fun ThreadTopBar(
     }
 }
 
+/** 消息正文（复制用）：只取文本块，工具 / 思考 / 图片不参与。 */
+internal fun messageTextOf(message: ThreadMessage): String =
+    message.blocks.filter { it.type == BlockType.Text }.mapNotNull { it.text }.joinToString("\n").trim()
+
 @Composable
 private fun MessageRow(message: ThreadMessage, onRetry: (String) -> Unit) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val text = messageTextOf(message)
+    // 手机上选中文本很难，复制整条反而常用（PWA 的长按复制语义）。
+    val copy: () -> Unit = {
+        if (text.isNotEmpty()) {
+            clipboard.setText(AnnotatedString(text))
+            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+        }
+    }
     if (message.role == "user") {
-        UserMessageRow(message, onRetry)
+        UserMessageRow(message, onRetry, onCopy = copy)
     } else {
-        AssistantMessageRow(message)
+        AssistantMessageRow(message, onCopy = copy, copyable = text.isNotEmpty())
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit) {
+private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit, onCopy: () -> Unit) {
     val failed = message.errorMessage != null
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = {}, onLongClick = onCopy)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.End,
     ) {
         Column(horizontalAlignment = Alignment.End) {
@@ -384,10 +524,14 @@ private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AssistantMessageRow(message: ThreadMessage) {
+private fun AssistantMessageRow(message: ThreadMessage, onCopy: () -> Unit, copyable: Boolean) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = {}, onLongClick = onCopy)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Box(
@@ -418,6 +562,22 @@ private fun AssistantMessageRow(message: ThreadMessage) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
+            }
+            // 可见的复制入口（长按不够好发现，PWA 两种都留）
+            if (copyable) {
+                TextButton(
+                    onClick = onCopy,
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                ) {
+                    Icon(
+                        IconCopy,
+                        contentDescription = null,
+                        tint = MpiTheme.colors.textFaint,
+                        modifier = Modifier.size(13.dp),
+                    )
+                    Spacer(Modifier.size(4.dp))
+                    Text("复制", style = MaterialTheme.typography.labelSmall, color = MpiTheme.colors.textFaint)
+                }
             }
         }
     }

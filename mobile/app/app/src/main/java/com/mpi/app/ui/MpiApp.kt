@@ -102,6 +102,11 @@ fun MpiApp(container: AppContainer) {
                                 viewModel.respondUi(request.id, response)
                             }
                         },
+                        pendingFollowUp = state.pendingFollowUp,
+                        sendError = state.sendError,
+                        onSteerPending = viewModel::steerPendingFollowUp,
+                        onReEditPending = viewModel::reEditPendingFollowUp,
+                        onDismissSendError = viewModel::dismissSendError,
                         sheet = state.toolbarSheet,
                         configBusy = state.configBusy,
                         configError = state.configError,

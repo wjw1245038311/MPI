@@ -11,7 +11,7 @@
 
 ## 0. 一句话现状
 
-- **批 1 已完成**（对话页配置 chip 行 + 底部 Sheet + 上下文用量/压缩）。
+- **批 1、批 2 已完成**（配置 chip/Sheet：批 1；输入区：批 2）。
 - 批 2–5 未做；批 6 依赖原生能力阶段（M4/M5/M6），不属本次欠账。
 
 **原则**：只做 PWA 已验证过的交互，不新设计；视觉一律用桌面端同名令牌；不引 UI / 图标库。
@@ -40,20 +40,19 @@
 
 ---
 
-## 2. 批次 2 输入区打磨（未做）
+## 2. 批次 2 ✅ 输入区打磨
 
 对齐 PWA `ThreadView.tsx` 的 composer（提交 `4e81d10` / `49f1d32` / `aaeb0b0` / `a22bd2b`）。
 
-| 细节 | PWA 做法 | 原生现状 |
-| --- | --- | --- |
-| 「待处理后续」横幅 | 运行中发送 → 存为待发，横幅显示内容 + 「重新编辑」「立即插入」两个动作 | ❌ 无（运行中直接 steer，没有待发态） |
-| 输入框 placeholder 语义 | 录音中 / 运行中（插话，排队）/ 空闲，三种文案 | 部分（有「追加指令…」） |
-| 发送 / 停止按钮图标化 | ➤ / ■ 图标按钮，运行中右侧是停止 | ❌ 纯文字按钮 |
-| 错误贴着输入框 | 发送错误显示在 composer 上方（手指位置） | 部分（在消息区上方横幅） |
-| 回车发送、Shift+Enter 换行 | 有 | ❌ 未处理 |
-| 长按复制整条消息（600ms） | 有（手机选中文本难，复制整条常用） | ❌ 无 |
-| 消息操作行「复制」按钮 | 有（长按不够好发现） | ❌ 无 |
-| 附件 / 录音常驻按钮 | 有 | ❌ 属批 6（M4） |
+| 细节 | 落点 |
+| --- | --- |
+| 「待处理后续」：运行中发送 → 本地暂存，回合结束自动投递；横幅可 ✎ 取回重编 / ⚡ 立即插入（steer）；已有暂存时再发 → followUp 排队 | `AppViewModel.sendDraft/flushPendingFollowUp/steerPendingFollowUp/reEditPendingFollowUp` + `PendingFollowUpBanner` |
+| 输入框 placeholder 三态（录音中 / 运行中排队 / 空闲） | `Composer` |
+| 发送 / 停止改图标按钮 | `IconSend` / `IconStop` |
+| 发送 / 停止失败贴输入框（`THREAD_BUSY` 翻译成人话） | `AppUiState.sendError` |
+| 长按复制整条 + assistant 可见「复制」按钮 | `ThreadScreen.MessageRow` / `messageTextOf` |
+
+**测试**：`ThreadComposerLogicTest`（复制文本口径）。
 
 ---
 

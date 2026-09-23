@@ -68,6 +68,10 @@ data class AppUiState(
     val configBusy: Boolean = false,
     /** 会话配置写操作失败原因（Sheet 内与 chip 行下方都要显示）。 */
     val configError: String? = null,
+    /** 运行中发送 → 本地暂存为「待处理后续」（null = 无）；回合结束后自动投递。 */
+    val pendingFollowUp: String? = null,
+    /** 发送 / 停止失败文案（贴输入框显示，不静默失败）。 */
+    val sendError: String? = null,
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
@@ -255,7 +259,12 @@ class AppViewModel(
         }
 
         jobs += scope.launch {
-            threadSessionLocal.view.collect { view -> _ui.update { it.copy(thread = view) } }
+            threadSessionLocal.view.collect { view ->
+                val wasRunning = _ui.value.thread?.running == true
+                _ui.update { it.copy(thread = view) }
+                // 回合结束（running true→false）：投递暂存的「待处理后续」（与 PWA 同语义）
+                if (wasRunning && !view.running) flushPendingFollowUp()
+            }
         }
         jobs += scope.launch {
             runCatching { threadSessionLocal.subscribe() }.onFailure { error ->
@@ -271,7 +280,7 @@ class AppViewModel(
         threadSession?.detach()
         threadSession = null
         threadActions = null
-        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, toolbarSheet = null, configBusy = false, configError = null) }
+        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, toolbarSheet = null, configBusy = false, configError = null, pendingFollowUp = null, sendError = null) }
     }
 
     /** 手动重新同步（错误横幅上的按钮）。 */
@@ -283,21 +292,58 @@ class AppViewModel(
 
     fun updateDraft(text: String) {
         _ui.value.openThreadId?.let { drafts[it] = text }
-        _ui.update { it.copy(draft = text) }
+        _ui.update { it.copy(draft = text, sendError = null) }
     }
 
-    /** 发送草稿：空闲走 prompt，运行中走 steer（即「追加指令」）。 */
+    /**
+     * 发送草稿（对齐 PWA 语义）：
+     * - 空闲 → prompt（立即开回合）
+     * - 运行中且无暂存 → 存为「待处理后续」，回合结束自动投递
+     * - 运行中且已有暂存 → 本条 followUp 进 pi 队列（再排一条）
+     */
     fun sendDraft() {
         val text = _ui.value.draft.trim()
         if (text.isEmpty() || _ui.value.sending) return
-        val mode = if (_ui.value.thread?.running == true) SendMode.Steer else SendMode.Prompt
-        send(text, mode)
+        _ui.update { it.copy(sendError = null) }
+        if (_ui.value.thread?.running == true) {
+            if (_ui.value.pendingFollowUp == null) {
+                _ui.value.openThreadId?.let { drafts[it] = "" }
+                _ui.update { it.copy(pendingFollowUp = text, draft = "") }
+                return
+            }
+            send(text, SendMode.FollowUp)
+            return
+        }
+        send(text, SendMode.Prompt)
+    }
+
+    /** ⚡「立即插入」：把暂存的后续打断当前回合马上发（steer）。 */
+    fun steerPendingFollowUp() {
+        val text = _ui.value.pendingFollowUp ?: return
+        _ui.update { it.copy(pendingFollowUp = null) }
+        send(text, SendMode.Steer)
+    }
+
+    /** ✎ 取回输入框重新编辑。 */
+    fun reEditPendingFollowUp() {
+        val text = _ui.value.pendingFollowUp ?: return
+        _ui.value.openThreadId?.let { drafts[it] = text }
+        _ui.update { it.copy(pendingFollowUp = null, draft = text) }
+    }
+
+    fun dismissSendError() = _ui.update { it.copy(sendError = null) }
+
+    /** 回合结束（running true→false）：自动投递暂存的「待处理后续」。 */
+    private fun flushPendingFollowUp() {
+        val text = _ui.value.pendingFollowUp ?: return
+        _ui.update { it.copy(pendingFollowUp = null) }
+        send(text, SendMode.Prompt)
     }
 
     /** 重试一条发送失败的消息（保留原位，不重复上屏）。 */
     fun retrySend(localId: String) {
         val text = threadSession?.prepareRetry(localId) ?: return
-        val mode = if (_ui.value.thread?.running == true) SendMode.Steer else SendMode.Prompt
+        val mode = if (_ui.value.thread?.running == true) SendMode.FollowUp else SendMode.Prompt
         send(text, mode)
     }
 
@@ -305,7 +351,16 @@ class AppViewModel(
         val actions = threadActions ?: return
         scope.launch {
             runCatching { actions.abort() }.onFailure { error ->
-                _ui.update { it.copy(problems = (it.problems + (error.message ?: "停止失败")).takeLast(MAX_PROBLEMS)) }
+                val raw = error.message.orEmpty()
+                _ui.update {
+                    it.copy(
+                        sendError = if (raw.startsWith(ThreadActions.THREAD_BUSY)) {
+                            "该会话正被其他设备操作，无法停止。"
+                        } else {
+                            "停止失败：$raw"
+                        },
+                    )
+                }
             }
         }
     }
@@ -375,14 +430,24 @@ class AppViewModel(
         // 先乐观上屏（§1.1：点击到视觉反馈 < 100ms），失败再标红留在原位
         val localId = session.echoUserMessage(text)
         _ui.value.openThreadId?.let { drafts[it] = "" }
-        _ui.update { it.copy(draft = "", sending = true) }
+        _ui.update { it.copy(draft = "", sending = true, sendError = null) }
         scope.launch {
             try {
                 actions.send(text, mode)
                 _ui.update { it.copy(sending = false) }
             } catch (error: Exception) {
                 session.markSendFailed(localId, error.message ?: "发送失败")
-                _ui.update { it.copy(sending = false) }
+                val raw = error.message.orEmpty()
+                _ui.update {
+                    it.copy(
+                        sending = false,
+                        sendError = if (raw.startsWith(ThreadActions.THREAD_BUSY)) {
+                            "该会话正被其他设备操作，请稍后再试。"
+                        } else {
+                            "发送失败：$raw"
+                        },
+                    )
+                }
             }
         }
     }

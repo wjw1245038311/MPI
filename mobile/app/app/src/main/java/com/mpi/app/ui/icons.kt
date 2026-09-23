@@ -128,3 +128,25 @@ val IconDown: ImageVector by lazy {
         moveTo(6f, 13f); lineTo(12f, 19f); lineTo(18f, 13f)
     }
 }
+
+/** 发送（上箭头）。 */
+val IconSend: ImageVector by lazy {
+    strokeIcon("Send") {
+        moveTo(12f, 19f); lineTo(12f, 5f)
+        moveTo(5f, 12f); lineTo(12f, 5f); lineTo(19f, 12f)
+    }
+}
+
+/** 停止（方块）。 */
+val IconStop: ImageVector by lazy {
+    strokeIcon("Stop") {
+        moveTo(7f, 7f); lineTo(17f, 7f); lineTo(17f, 17f); lineTo(7f, 17f); close()
+    }
+}
+
+/** 铅笔（取回「待处理后续」重新编辑）。 */
+val IconEdit: ImageVector by lazy {
+    strokeIcon("Edit") {
+        moveTo(4f, 20f); lineTo(4f, 16f); lineTo(15f, 5f); lineTo(19f, 9f); lineTo(8f, 20f); close()
+    }
+}
