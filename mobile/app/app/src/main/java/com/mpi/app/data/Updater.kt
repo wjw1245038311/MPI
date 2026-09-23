@@ -16,6 +16,15 @@ import kotlinx.serialization.json.contentOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
+/** 增量包信息（清单里的 `patch` 字段）：只对 `from` 这一版有效。 */
+data class UpdatePatch(
+    val from: String,
+    val file: String,
+    val url: String,
+    val size: Long,
+    val sha256: String,
+)
+
 data class UpdateInfo(
     val version: String,
     val file: String,
@@ -23,7 +32,13 @@ data class UpdateInfo(
     val size: Long,
     val sha256: String,
     val github: String?,
-)
+    /** 有增量包时不为 null；是否可用还要看 `from` 是否等于当前安装版本。 */
+    val patch: UpdatePatch? = null,
+) {
+    /** 本机能否走增量（基线版本必须正好等于当前安装版本）。 */
+    fun patchUsable(currentVersion: String = BuildConfig.VERSION_NAME): Boolean =
+        patch != null && patch.from == currentVersion
+}
 
 /**
  * 语义化版本比较（纯函数，可测）：a > b 返回正数。
@@ -44,17 +59,20 @@ internal fun compareVersions(a: String, b: String): Int {
 /**
  * 自更新（M6）：读中继静态清单 → 比对版本 → 下载 → 校验 sha256 → 调系统安装器。
  *
- * 清单文件名 `mpi-android-native.json`（与旧壳的 `mpi-android.json` 区分），
- * 字段与旧壳保持一致：version / file / size / sha256 / publishedAt / github。
+ * 清单文件名 `mpi-android-native.json`（与旧壳的 `mpi-android.json` 区分），字段：
+ * `version / file / size / sha256 / publishedAt / github`，以及可选的
+ * `patch: { from, file, size, sha256 }`——命中基线时只下增量包，用 [ApkPatch]
+ * 与**已安装的 APK** 合并，再核对完整包的 sha256。
  *
- * 中继不可达、清单缺失、版本不比当前新 —— 一律**静默降级**（不弹错误）：
- * 更新检查是加分项，不该打扰正常使用（§1.1 的例外：这里没有用户触发的失败）。
+ * 链路里任何一环不成立（基线不匹配、patch 下载失败、合并失败、校验不符）都
+ * **自动回退下载完整包**——增量只是省流量，绝不能因此装不上。
+ * 中继不可达 / 清单缺失 / 版本不新 → 静默降级（更新检查是加分项）。
  */
 class Updater(private val context: Context) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
     /** wss://host → https://host（中继的静态目录与信令同源）。 */
@@ -78,24 +96,18 @@ class Updater(private val context: Context) {
         }.getOrNull()
     }
 
-    /** 下载并校验；成功返回可安装的文件。 */
-    suspend fun download(info: UpdateInfo): Result<File> = withContext(Dispatchers.IO) {
+    /**
+     * 优先走增量（基线匹配时），失败自动回退完整包；成功返回可安装的文件。
+     * 返回值第二项告诉调用方走的是哪条路（用于界面提示）。
+     */
+    suspend fun download(info: UpdateInfo): Result<DownloadResult> = withContext(Dispatchers.IO) {
         runCatching {
-            val target = File(context.cacheDir, "update-${info.version}.apk")
-            val request = Request.Builder().url(info.url).build()
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) error("下载失败（HTTP ${response.code}）")
-                val body = response.body ?: error("下载失败：没有响应内容")
-                target.outputStream().use { out -> body.byteStream().copyTo(out) }
+            if (info.patchUsable()) {
+                val viaPatch = runCatching { downloadViaPatch(info, info.patch!!) }
+                viaPatch.getOrNull()?.let { return@runCatching DownloadResult(it, viaPatch = true) }
+                // 增量失败（基线不符/下载坏/合并失败/校验不符）→ 落回全量
             }
-            if (info.sha256.isNotEmpty()) {
-                val actual = sha256Of(target)
-                if (!actual.equals(info.sha256, ignoreCase = true)) {
-                    target.delete()
-                    error("安装包校验失败，请重试")
-                }
-            }
-            target
+            DownloadResult(downloadFull(info), viaPatch = false)
         }
     }
 
@@ -107,6 +119,52 @@ class Updater(private val context: Context) {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
+    }
+
+    // ---- 内部 ----
+
+    private fun downloadFull(info: UpdateInfo): File {
+        val target = File(context.cacheDir, "update-${info.version}.apk")
+        fetchTo(info.url, target)
+        if (info.sha256.isNotEmpty()) {
+            val actual = sha256Of(target)
+            if (!actual.equals(info.sha256, ignoreCase = true)) {
+                target.delete()
+                error("安装包校验失败，请重试")
+            }
+        }
+        return target
+    }
+
+    private fun downloadViaPatch(info: UpdateInfo, patch: UpdatePatch): File {
+        val patchFile = File(context.cacheDir, "patch-${info.version}.bin")
+        fetchTo(patch.url, patchFile)
+        try {
+            val patchBytes = patchFile.readBytes()
+            if (patch.sha256.isNotEmpty() && !sha256Of(patchBytes).equals(patch.sha256, ignoreCase = true)) {
+                error("增量包校验失败")
+            }
+            // 当前已安装的 APK（增量基线）
+            val installed = File(context.applicationInfo.sourceDir).readBytes()
+            val merged = ApkPatch.apply(installed, patchBytes)
+            if (info.sha256.isNotEmpty() && !sha256Of(merged).equals(info.sha256, ignoreCase = true)) {
+                error("合并结果校验失败")
+            }
+            val target = File(context.cacheDir, "update-${info.version}.apk")
+            target.writeBytes(merged)
+            return target
+        } finally {
+            patchFile.delete()
+        }
+    }
+
+    private fun fetchTo(url: String, target: File) {
+        val request = Request.Builder().url(url).build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("下载失败（HTTP ${response.code}）")
+            val body = response.body ?: error("下载失败：没有响应内容")
+            target.outputStream().use { out -> body.byteStream().copyTo(out) }
+        }
     }
 
     companion object {
@@ -121,6 +179,24 @@ class Updater(private val context: Context) {
             val version = (obj["version"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             val file = (obj["file"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             if (version.isEmpty() || file.isEmpty()) return null
+
+            val patchObj = obj["patch"] as? JsonObject
+            val patch = patchObj?.let { p ->
+                val from = (p["from"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                val patchFile = (p["file"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                if (from.isEmpty() || patchFile.isEmpty()) {
+                    null
+                } else {
+                    UpdatePatch(
+                        from = from,
+                        file = patchFile,
+                        url = "$origin/download/$patchFile",
+                        size = (p["size"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
+                        sha256 = (p["sha256"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+                    )
+                }
+            }
+
             return UpdateInfo(
                 version = version,
                 file = file,
@@ -128,6 +204,7 @@ class Updater(private val context: Context) {
                 size = (obj["size"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
                 sha256 = (obj["sha256"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
                 github = (obj["github"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() },
+                patch = patch,
             )
         }
 
@@ -143,5 +220,14 @@ class Updater(private val context: Context) {
             }
             return digest.digest().joinToString("") { "%02x".format(it) }
         }
+
+        internal fun sha256Of(bytes: ByteArray): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            digest.update(bytes)
+            return digest.digest().joinToString("") { "%02x".format(it) }
+        }
     }
 }
+
+/** 下载结果：文件 + 是否走了增量（界面据此提示）。 */
+data class DownloadResult(val file: File, val viaPatch: Boolean)

@@ -61,7 +61,6 @@ fun HomeScreen(
     onAddHost: () -> Unit,
     onDismissProblems: () -> Unit,
     onOpenThread: (String) -> Unit,
-    onUpdateDownload: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val host = state.host
@@ -74,16 +73,6 @@ fun HomeScreen(
             onRefresh = onRefresh,
             onOpenHosts = onOpenHosts,
         )
-
-        // 有新版本（M6）：自动检查过一次后常驻，直到用户装完新版
-        state.updateInfo?.let { update ->
-            Banner(
-                text = "有新版本 v${update.version} · 当前 v${com.mpi.app.BuildConfig.VERSION_NAME}",
-                tone = Tone.Info,
-                actionLabel = if (state.updateDownloading) "下载中…" else "更新",
-                onAction = if (state.updateDownloading) null else onUpdateDownload,
-            )
-        }
 
         if (state.problems.isNotEmpty()) {
             Banner(

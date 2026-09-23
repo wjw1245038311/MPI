@@ -226,6 +226,7 @@ fun MpiApp(container: AppContainer) {
                     updateChecking = state.updateChecking,
                     updateDownloading = state.updateDownloading,
                     updateError = state.updateError,
+                    updateNote = state.updateNote,
                     onCheckUpdate = { viewModel.checkUpdate(manual = true) },
                     onInstallUpdate = viewModel::downloadAndInstallUpdate,
                     onDismissUpdateError = viewModel::dismissUpdateError,
@@ -329,7 +330,6 @@ private fun HomeWithDrawer(
                 viewModel.openThread(threadId)
                 scope.launch { drawerState.close() }
             },
-            onUpdateDownload = viewModel::downloadAndInstallUpdate,
         )
     }
 }

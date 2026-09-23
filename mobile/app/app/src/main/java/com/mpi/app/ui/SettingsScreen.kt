@@ -82,6 +82,7 @@ fun SettingsScreen(
     updateChecking: Boolean,
     updateDownloading: Boolean,
     updateError: String?,
+    updateNote: String?,
     onCheckUpdate: () -> Unit,
     onInstallUpdate: () -> Unit,
     onDismissUpdateError: () -> Unit,
@@ -161,9 +162,12 @@ fun SettingsScreen(
                     SettingsItem(
                         icon = null,
                         title = if (updateDownloading) "下载中…" else "下载并安装 v${updateInfo.version}",
-                        trailing = formatBytes(updateInfo.size),
+                        trailing = downloadTrailing(updateInfo),
                         onClick = if (updateDownloading) null else onInstallUpdate,
                     )
+                }
+                if (updateNote != null) {
+                    SettingsItem(icon = null, title = updateNote, showArrow = false, onClick = onDismissUpdateError)
                 }
                 if (updateError != null) {
                     SettingsItem(
@@ -363,6 +367,14 @@ private fun clearAppCache(context: Context): Long {
 private fun File.sizeSafe(): Long = runCatching {
     if (isDirectory) walkBottomUp().filter { it.isFile }.sumOf { it.length() } else length()
 }.getOrDefault(0L)
+
+/** 「下载并安装」右侧提示：能走增量时显示「增量 x（全量 y）」。 */
+internal fun downloadTrailing(info: UpdateInfo, currentVersion: String = BuildConfig.VERSION_NAME): String =
+    if (info.patchUsable(currentVersion)) {
+        "增量 ${formatBytes(info.patch!!.size)}（全量 ${formatBytes(info.size)}）"
+    } else {
+        formatBytes(info.size)
+    }
 
 /** 1.5 MB / 820 KB / 512 B。 */
 internal fun formatBytes(bytes: Long): String {

@@ -102,6 +102,8 @@ data class AppUiState(
     val updateDownloading: Boolean = false,
     /** 检查/下载/安装失败或提示（可关闭）。 */
     val updateError: String? = null,
+    /** 成功走增量时的提示。 */
+    val updateNote: String? = null,
     /** 会话元数据操作（重命名 / 置顶 / 删除）进行中。 */
     val threadActionBusy: Boolean = false,
     /**
@@ -300,9 +302,14 @@ class AppViewModel(
         _ui.update { it.copy(updateDownloading = true, updateError = null) }
         scope.launch {
             updater.download(info)
-                .onSuccess { file ->
-                    _ui.update { it.copy(updateDownloading = false) }
-                    runCatching { updater.install(file) }.onFailure { error ->
+                .onSuccess { result ->
+                    _ui.update {
+                        it.copy(
+                            updateDownloading = false,
+                            updateNote = if (result.viaPatch) "已用增量包（省流量）" else null,
+                        )
+                    }
+                    runCatching { updater.install(result.file) }.onFailure { error ->
                         _ui.update { it.copy(updateError = error.message ?: "无法调起安装器") }
                     }
                 }
@@ -312,7 +319,7 @@ class AppViewModel(
         }
     }
 
-    fun dismissUpdateError() = _ui.update { it.copy(updateError = null) }
+    fun dismissUpdateError() = _ui.update { it.copy(updateError = null, updateNote = null) }
 
     // ---- 会话元数据操作（长按菜单）----
 
