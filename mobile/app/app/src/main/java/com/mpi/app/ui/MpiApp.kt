@@ -82,6 +82,7 @@ fun MpiApp(container: AppContainer) {
     var settingsOpen by remember { mutableStateOf(false) }
     var diagnosticsOpen by remember { mutableStateOf(false) }
     var scanOpen by remember { mutableStateOf(false) }
+    var searchOpen by remember { mutableStateOf(false) }
 
     // M5：Android 13+ 需要运行时申请通知权限（拒绝也不影响其它功能）
     val notificationPermission = rememberLauncherForActivityResult(
@@ -162,6 +163,7 @@ fun MpiApp(container: AppContainer) {
                         },
                         onSendChoice = viewModel::sendChoice,
                         onOpenSettings = { settingsOpen = true },
+                        onOpenSearch = { searchOpen = true },
                         choiceDrafts = state.choiceDrafts,
                         onChoiceDraftChange = viewModel::setChoiceDraft,
                         onClearChoiceDrafts = viewModel::clearChoiceDrafts,
@@ -239,6 +241,16 @@ fun MpiApp(container: AppContainer) {
                     state = state,
                     deviceName = container.deviceName,
                     onClose = { diagnosticsOpen = false },
+                )
+            }
+            if (searchOpen) {
+                SearchScreen(
+                    threads = state.host.allThreads,
+                    projectNameOf = { projectId ->
+                        state.host.projects.firstOrNull { it.id == projectId }?.name
+                    },
+                    onOpenThread = { threadId -> viewModel.openThread(threadId) },
+                    onClose = { searchOpen = false },
                 )
             }
             if (scanOpen) {

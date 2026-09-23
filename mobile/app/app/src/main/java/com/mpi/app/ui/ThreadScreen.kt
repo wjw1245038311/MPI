@@ -102,6 +102,7 @@ fun ThreadScreen(
     onRespond: (kotlinx.serialization.json.JsonObject) -> Unit,
     onSendChoice: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenSearch: () -> Unit,
     choiceDrafts: Map<String, ChoiceAnswer>,
     onChoiceDraftChange: (String, ChoiceAnswer?) -> Unit,
     onClearChoiceDrafts: (String) -> Unit,
@@ -161,6 +162,7 @@ fun ThreadScreen(
             compacting = view.compacting,
             onBack = onBack,
             onOpenSettings = onOpenSettings,
+            onOpenSearch = onOpenSearch,
         )
 
         if (configError != null) {
@@ -773,6 +775,7 @@ private fun ThreadTopBar(
     compacting: Boolean,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenSearch: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
@@ -812,7 +815,15 @@ private fun ThreadTopBar(
         if (running || compacting) {
             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
         }
-        // 模式也已收进配置面板（顶栏只留设置齿轮）
+        // 搜索与设置（截图那种右侧图标组）
+        IconButton(onClick = onOpenSearch) {
+            Icon(
+                IconSearch,
+                contentDescription = "搜索",
+                tint = MpiTheme.colors.textDim,
+                modifier = Modifier.size(19.dp),
+            )
+        }
         IconButton(onClick = onOpenSettings) {
             Icon(
                 IconSettings,
@@ -954,7 +965,7 @@ private fun AssistantMessageRow(
                 when (block.type) {
                     BlockType.Tool -> ToolBlockRow(block, key = "${message.id}-tool-$index")
                     BlockType.Thinking -> ThinkingBlockRow(block, key = "${message.id}-think-$index")
-                    BlockType.Image -> ImageBlockHint(block)
+                    BlockType.Image -> ImageBlock(block)
                     BlockType.Text -> if (!block.text.isNullOrBlank()) {
                         // 定稿的 assistant 文本才认 choices 面板（流式中间态仍按代码块）
                         if (finalized) {
@@ -1104,14 +1115,39 @@ private fun ThinkingBlockRow(block: MessageBlock, key: String) {
     }
 }
 
-/** 图片块渲染属 M4（图片输入/渲染一起做）；这里只提示存在，避免静默丢失。 */
+/**
+ * 消息里的图片块：把 base64 / data URL 解成 Bitmap 直接显示。
+ *
+ * 解码失败（数据截断、格式不支持）时给一行明确提示，**不静默丢掉**。
+ */
 @Composable
-private fun ImageBlockHint(block: MessageBlock) {
-    Text(
-        text = "［图片${block.mimeType?.let { " · $it" } ?: ""}（手机端渲染待 M4）］",
-        style = MaterialTheme.typography.labelSmall,
-        color = MpiTheme.colors.textFaint,
-    )
+private fun ImageBlock(block: MessageBlock) {
+    val bitmap = remember(block.data) {
+        runCatching {
+            val raw = block.data
+            if (raw.isNullOrEmpty()) return@runCatching null
+            val base64 = if (raw.startsWith("data:")) raw.substringAfter(',', raw) else raw
+            val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        }.getOrNull()
+    }
+
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap,
+            contentDescription = "图片",
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp)),
+            contentScale = ContentScale.Fit,
+        )
+    } else {
+        Text(
+            text = "［图片无法显示${block.mimeType?.let { " · $it" } ?: ""}］",
+            style = MaterialTheme.typography.labelSmall,
+            color = MpiTheme.colors.textFaint,
+        )
+    }
 }
 
 @Composable

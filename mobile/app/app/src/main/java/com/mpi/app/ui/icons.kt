@@ -1,6 +1,7 @@
 package com.mpi.app.ui
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -279,23 +280,76 @@ val IconMoreVertical: ImageVector by lazy {
     }
 }
 
-/** 设置（齿轮：中心圆 + 8 个短齿）。 */
+/** 实心图标底座（fill + 可选 EvenOdd，用来挖内孔）。 */
+private fun fillIcon(
+    name: String,
+    fillType: PathFillType = PathFillType.NonZero,
+    block: PathBuilder.() -> Unit,
+): ImageVector =
+    ImageVector.Builder(
+        name = name,
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).path(
+        fill = SolidColor(Color.Black),
+        pathFillType = fillType,
+        pathBuilder = block,
+    ).build()
+
+/** 四段贝塞尔近似圆（实心图标内部用）。 */
+private fun PathBuilder.circlePath(cx: Float, cy: Float, r: Float) {
+    val k = r * 0.5523f
+    moveTo(cx, cy - r)
+    curveTo(cx + k, cy - r, cx + r, cy - k, cx + r, cy)
+    curveTo(cx + r, cy + k, cx + k, cy + r, cx, cy + r)
+    curveTo(cx - k, cy + r, cx - r, cy + k, cx - r, cy)
+    curveTo(cx - r, cy - k, cx - k, cy - r, cx, cy - r)
+    close()
+}
+
+/** 设置（实心齿轮：8 个齿 + 中心孔）。 */
 val IconSettings: ImageVector by lazy {
-    strokeIcon("Settings") {
-        moveTo(12f, 8.6f); curveTo(13.9f, 8.6f, 15.4f, 10.1f, 15.4f, 12f)
-        curveTo(15.4f, 13.9f, 13.9f, 15.4f, 12f, 15.4f)
-        curveTo(10.1f, 15.4f, 8.6f, 13.9f, 8.6f, 12f)
-        curveTo(8.6f, 10.1f, 10.1f, 8.6f, 12f, 8.6f); close()
-        moveTo(12f, 3.2f); lineTo(12f, 5.4f)
-        moveTo(12f, 18.6f); lineTo(12f, 20.8f)
-        moveTo(3.2f, 12f); lineTo(5.4f, 12f)
-        moveTo(18.6f, 12f); lineTo(20.8f, 12f)
-        moveTo(5.8f, 5.8f); lineTo(7.4f, 7.4f)
-        moveTo(16.6f, 16.6f); lineTo(18.2f, 18.2f)
-        moveTo(5.8f, 18.2f); lineTo(7.4f, 16.6f)
-        moveTo(16.6f, 7.4f); lineTo(18.2f, 5.8f)
+    fillIcon("Settings", PathFillType.EvenOdd) {
+        val cx = 12f
+        val cy = 12f
+        val inner = 6.2f
+        val outer = 8.9f
+        var first = true
+        for (i in 0 until 8) {
+            for (offsetDeg in intArrayOf(-20, -11, 11, 20)) {
+                val radius = if (offsetDeg == -20 || offsetDeg == 20) inner else outer
+                val rad = Math.toRadians((i * 45 + offsetDeg).toDouble())
+                val x = cx + (radius * Math.cos(rad)).toFloat()
+                val y = cy + (radius * Math.sin(rad)).toFloat()
+                if (first) {
+                    moveTo(x, y)
+                    first = false
+                } else {
+                    lineTo(x, y)
+                }
+            }
+        }
+        close()
+        circlePath(cx, cy, 3.1f)
     }
 }
+
+/** 搜索（实心放大镜：镜片环 + 手柄）。 */
+val IconSearch: ImageVector by lazy {
+    fillIcon("Search", PathFillType.EvenOdd) {
+        circlePath(11f, 11f, 5.6f)
+        circlePath(11f, 11f, 3.9f)
+        moveTo(15.3f, 13.9f)
+        lineTo(20.6f, 19.2f)
+        lineTo(19.2f, 20.6f)
+        lineTo(13.9f, 15.3f)
+        close()
+    }
+}
+
+
 
 /** 向下尖括号（分组折叠/展开）。 */
 val IconChevronDown: ImageVector by lazy {
