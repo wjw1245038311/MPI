@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -70,7 +71,7 @@ fun SettingsScreen(
 ) {
     BackHandler(enabled = true) { onClose() }
     Surface(color = MpiTheme.colors.bg, modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())) {
             ScreenHeader(title = "设置", onBack = onClose)
             HorizontalDivider(color = MpiTheme.colors.border)
 
@@ -137,7 +138,7 @@ fun DiagnosticsScreen(
 ) {
     BackHandler(enabled = true) { onClose() }
     Surface(color = MpiTheme.colors.bg, modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())) {
             ScreenHeader(title = "诊断", onBack = onClose)
             HorizontalDivider(color = MpiTheme.colors.border)
 

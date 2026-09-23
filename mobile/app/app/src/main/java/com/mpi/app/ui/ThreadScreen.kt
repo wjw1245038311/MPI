@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -138,12 +140,14 @@ fun ThreadScreen(
     // 内容增长时仅在「本来就在底部」的前提下跟随
     LaunchedEffect(renderable.size, view.streaming?.blocks?.lastOrNull()?.text?.length) {
         if (renderable.isNotEmpty() && atBottom) {
-            listState.scrollToItem(renderable.lastIndex)
+            // 必须用大 offset 真滚到底：scrollToItem(lastIndex) 只是把最后一条的“顶部”
+            // 对齐视口，最后一条很长时仍可下滚，atBottom 就永远为 false（按钮不消失）。
+            listState.scrollToItem(renderable.lastIndex, Int.MAX_VALUE)
         }
     }
 
-    // imePadding：输入框随键盘上移（§1.5 风险 5；M2-6 上真机验证手感）
-    Column(modifier = modifier.fillMaxSize().imePadding()) {
+    // safeDrawingPadding：同时避让状态栏（截图里标题被时间压住）、手势条与键盘
+    Column(modifier = modifier.fillMaxSize().safeDrawingPadding()) {
         ThreadTopBar(
             title = view.summary?.title?.ifEmpty { null } ?: "会话",
             projectName = projectName,
@@ -712,11 +716,23 @@ private fun ScrollToBottomButton(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    TextButton(
-        modifier = modifier,
-        onClick = { scope.launch { if (itemCount > 0) listState.scrollToItem(itemCount - 1) } },
+    Box(
+        modifier = modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(MpiTheme.colors.surfaceMuted)
+            .border(1.dp, MpiTheme.colors.border, CircleShape)
+            .clickable {
+                scope.launch { if (itemCount > 0) listState.scrollToItem(itemCount - 1, Int.MAX_VALUE) }
+            },
+        contentAlignment = Alignment.Center,
     ) {
-        Text("回到底部", style = MaterialTheme.typography.labelSmall)
+        Icon(
+            IconDown,
+            contentDescription = "回到底部",
+            tint = MpiTheme.colors.textDim,
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 

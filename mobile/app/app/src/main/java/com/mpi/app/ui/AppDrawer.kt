@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -58,7 +59,7 @@ fun AppDrawerContent(
     onDelete: (String) -> Unit = {},
 ) {
     var menuFor by remember { mutableStateOf<RemoteThreadSummary?>(null) }
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
         DrawerHeader(
             deviceName = state.activeHost?.shownName ?: "未选择主机",
             online = state.session is SessionState.Connected,
