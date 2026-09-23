@@ -22,6 +22,7 @@ import com.mpi.app.data.ThreadActions
 import com.mpi.app.data.ThreadSession
 import com.mpi.app.data.ThreadView
 import com.mpi.app.data.UpdateInfo
+import com.mpi.app.data.UpdateCheckResult
 import com.mpi.app.data.Updater
 import com.mpi.app.data.VoiceRecorder
 import com.mpi.app.protocol.DeviceIdentity
@@ -277,20 +278,38 @@ class AppViewModel(
      */
     fun checkUpdate(manual: Boolean) {
         val relay = _ui.value.activeHost?.relayUrl
-        if (relay.isNullOrBlank() || _ui.value.updateChecking) return
+        if (relay.isNullOrBlank()) {
+            // 用户主动点的：没连上电脑也要说一声，不能点了没反应
+            if (manual) _ui.update { it.copy(updateError = "还没有连接电脑，先配对再检查更新") }
+            return
+        }
+        if (_ui.value.updateChecking) return
         _ui.update { it.copy(updateChecking = true, updateError = null) }
         scope.launch {
-            val info = updater.check(relay)
-            _ui.update { state ->
-                when {
-                    info != null -> state.copy(updateChecking = false, updateInfo = info, updateError = null)
-                    manual -> state.copy(
-                        updateChecking = false,
-                        updateInfo = null,
-                        updateError = "已是最新版本（v${com.mpi.app.BuildConfig.VERSION_NAME}）",
-                    )
-                    else -> state.copy(updateChecking = false)
-                }
+            when (val result = updater.check(relay)) {
+                is UpdateCheckResult.Available ->
+                    _ui.update { it.copy(updateChecking = false, updateInfo = result.info, updateError = null) }
+
+                UpdateCheckResult.UpToDate ->
+                    _ui.update {
+                        it.copy(
+                            updateChecking = false,
+                            updateInfo = null,
+                            updateError = if (manual) {
+                                "已是最新版本（v${com.mpi.app.BuildConfig.VERSION_NAME}）"
+                            } else {
+                                null
+                            },
+                        )
+                    }
+
+                is UpdateCheckResult.Failed ->
+                    _ui.update {
+                        it.copy(
+                            updateChecking = false,
+                            updateError = if (manual) "检查更新失败：${result.reason}" else null,
+                        )
+                    }
             }
         }
     }

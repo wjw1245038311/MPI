@@ -84,16 +84,24 @@ class Updater(private val context: Context) {
         .takeIf { it.startsWith("http") }
 
     /** 有更新时返回信息，否则 null。 */
-    suspend fun check(relayUrl: String): UpdateInfo? = withContext(Dispatchers.IO) {
-        val origin = httpOrigin(relayUrl) ?: return@withContext null
+    suspend fun check(relayUrl: String): UpdateCheckResult = withContext(Dispatchers.IO) {
+        val origin = httpOrigin(relayUrl)
+            ?: return@withContext UpdateCheckResult.Failed("没有可用的中继地址")
         runCatching {
             val request = Request.Builder().url("$origin/download/$MANIFEST_NAME").build()
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@use null
-                val body = response.body?.string() ?: return@use null
-                parseManifest(body, origin)?.takeIf { isNewer(it.version) }
+                if (!response.isSuccessful) {
+                    return@use UpdateCheckResult.Failed("中继上没有更新清单（HTTP ${response.code}）")
+                }
+                val body = response.body?.string()
+                    ?: return@use UpdateCheckResult.Failed("中继返回了空清单")
+                val info = parseManifest(body, origin)
+                    ?: return@use UpdateCheckResult.Failed("更新清单格式不正确")
+                if (isNewer(info.version)) UpdateCheckResult.Available(info) else UpdateCheckResult.UpToDate
             }
-        }.getOrNull()
+        }.getOrElse { error ->
+            UpdateCheckResult.Failed("连不上中继：${error.message ?: "未知错误"}")
+        }
     }
 
     /**
@@ -231,3 +239,13 @@ class Updater(private val context: Context) {
 
 /** 下载结果：文件 + 是否走了增量（界面据此提示）。 */
 data class DownloadResult(val file: File, val viaPatch: Boolean)
+
+/**
+ * 检查更新结果。**不合并“没更新”与“拿不到清单”**——前者是正常结果，
+ * 后者必须告诉用户原因（§1.1：用户主动点的操作不能静默失败）。
+ */
+sealed interface UpdateCheckResult {
+    data class Available(val info: UpdateInfo) : UpdateCheckResult
+    data object UpToDate : UpdateCheckResult
+    data class Failed(val reason: String) : UpdateCheckResult
+}
