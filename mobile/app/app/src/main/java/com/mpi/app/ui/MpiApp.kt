@@ -215,6 +215,8 @@ fun MpiApp(container: AppContainer) {
                             onDismissVoiceError = viewModel::dismissVoiceError,
                             pendingFollowUp = state.pendingFollowUp,
                             sendError = state.sendError,
+                            sendNote = state.sendNote,
+                            onDismissSendNote = viewModel::dismissSendNote,
                             onSteerPending = viewModel::steerPendingFollowUp,
                             onReEditPending = viewModel::reEditPendingFollowUp,
                             onDismissSendError = viewModel::dismissSendError,

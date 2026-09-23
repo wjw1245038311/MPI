@@ -53,6 +53,20 @@ data class PairingUi(
     val stage: PairingStage = PairingStage.Connecting,
 )
 
+/**
+ * 主机把本条**回退成 followUp 排队**时的提示（纯函数，可单测）。
+ *
+ * 手机端的 running 状态滞后于主机：裸 prompt 撞上运行中的回合会被 pi 拒绝，
+ * 主机自动回退 followUp 并把 `queuedAs: "followUp"` 随响应带回。不提示的话，
+ * 气泡会一直停在「发送中…」，看上去像卡死了（真机反馈）。
+ */
+internal fun queuedNoteOf(response: kotlinx.serialization.json.JsonElement?): String? =
+    if ((response as? JsonObject)?.get("queuedAs")?.jsonPrimitive?.contentOrNull == "followUp") {
+        "当前任务还在跑，这条已排队，跑完自动发送"
+    } else {
+        null
+    }
+
 data class AppUiState(
     val initializing: Boolean = true,
     val pairings: List<PairingRecord> = emptyList(),
@@ -88,6 +102,8 @@ data class AppUiState(
     val pendingFollowUp: String? = null,
     /** 发送 / 停止失败文案（贴输入框显示，不静默失败）。 */
     val sendError: String? = null,
+    /** 主机把本条回退成 followUp 排队时的说明（非错误，只是告知为什么气泡还在发送中）。 */
+    val sendNote: String? = null,
     /** 正在新建会话的项目 id（非 null = 进行中，用于禁用重复点击）。 */
     val creatingThread: String? = null,
     /** 待发送的附件（最多 3 个，图片已压缩）。 */
@@ -453,6 +469,9 @@ class AppViewModel(
             }
         }
     }
+
+    /** 知道了：收起「已排队」提示。 */
+    fun dismissSendNote() = _ui.update { it.copy(sendNote = null) }
 
     /** UI 侧上报配对问题（扫码结果不是配对码 / 相机权限被拒）——不静默。 */
     fun reportPairingError(message: String) = _ui.update { it.copy(pairingError = message) }
@@ -830,16 +849,18 @@ class AppViewModel(
         val localId = session.echoUserMessage(text, localImageBlocks)
         if (clearDraft) {
             _ui.value.openThreadId?.let { drafts[it] = "" }
-            _ui.update { it.copy(draft = "", sending = true, sendError = null) }
+            _ui.update { it.copy(draft = "", sending = true, sendError = null, sendNote = null) }
         } else {
             // choices 面板的发送不该清掉用户正在输入的草稿
-            _ui.update { it.copy(sending = true, sendError = null) }
+            _ui.update { it.copy(sending = true, sendError = null, sendNote = null) }
         }
         scope.launch {
             try {
-                actions.send(text, mode, images, files)
+                val result = actions.send(text, mode, images, files)
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
-                _ui.update { it.copy(sending = false, attachments = emptyList()) }
+                _ui.update {
+                    it.copy(sending = false, attachments = emptyList(), sendNote = queuedNoteOf(result))
+                }
             } catch (error: Exception) {
                 val raw = error.message.orEmpty()
                 // 主机正忙（agent 在跑，或状态滞后让 prompt 撞上忙）：回退成 followUp 排队，

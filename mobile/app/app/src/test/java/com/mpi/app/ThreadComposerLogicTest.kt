@@ -72,3 +72,26 @@ class ThreadVisibilityLogicTest {
         assertEquals("有正文", visible.single().blocks.single().text)
     }
 }
+
+/** 主机把发送回退成「排队」时的提示口径（真机反馈：气泡永远停「发送中」）。 */
+class QueuedSendNoteTest {
+
+    private fun json(text: String) = com.mpi.app.protocol.Envelope.json.parseToJsonElement(text)
+
+    @Test
+    fun `queued as followUp produces a note`() {
+        val note = com.mpi.app.ui.queuedNoteOf(json("""{"ok":true,"queuedAs":"followUp"}"""))
+        assertEquals(true, note != null && note.contains("排队"))
+    }
+
+    @Test
+    fun `a normal accept produces no note`() {
+        assertEquals(null, com.mpi.app.ui.queuedNoteOf(json("""{"ok":true}""")))
+        assertEquals(null, com.mpi.app.ui.queuedNoteOf(null))
+    }
+
+    @Test
+    fun `an unknown queuedAs value is ignored`() {
+        assertEquals(null, com.mpi.app.ui.queuedNoteOf(json("""{"queuedAs":"steer"}""")))
+    }
+}

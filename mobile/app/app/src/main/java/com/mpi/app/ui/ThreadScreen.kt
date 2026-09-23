@@ -128,6 +128,9 @@ fun ThreadScreen(
     onDismissVoiceError: () -> Unit,
     pendingFollowUp: String?,
     sendError: String?,
+    /** 主机回退成排队时的说明（非错误；气泡仍会停在「发送中」直到 pi 投递）。 */
+    sendNote: String?,
+    onDismissSendNote: () -> Unit,
     onSteerPending: () -> Unit,
     onReEditPending: () -> Unit,
     onDismissSendError: () -> Unit,
@@ -318,6 +321,8 @@ fun ThreadScreen(
             onDismissVoiceError = onDismissVoiceError,
             pendingFollowUp = pendingFollowUp,
             sendError = sendError,
+            sendNote = sendNote,
+            onDismissSendNote = onDismissSendNote,
             usageLabel = readContextUsage(view.contextUsage).let { ctx ->
                 if (ctx.hasValue) "${ctx.percent.roundToInt()}%" else "—"
             },
@@ -376,6 +381,9 @@ private fun Composer(
     onDismissVoiceError: () -> Unit,
     pendingFollowUp: String?,
     sendError: String?,
+    /** 主机回退成排队时的说明（非错误）。 */
+    sendNote: String?,
+    onDismissSendNote: () -> Unit,
     /** 用量百分比（显示在圆钮里）；模型 / 压缩 / 刷新共用同一个面板入口。 */
     usageLabel: String,
     onOpenModelContext: () -> Unit,
@@ -466,6 +474,24 @@ private fun Composer(
             AttachmentBar(attachments = attachments, onRemove = onRemoveAttachment)
         }
         // 发送 / 停止失败贴输入框显示（PWA 语义）：这里才是手指所在的位置。
+        if (sendNote != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MpiTheme.colors.bg)
+                    .padding(start = 12.dp, end = 4.dp, top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = sendNote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MpiTheme.colors.textDim,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismissSendNote) { Text("知道了") }
+            }
+        }
+
         if (sendError != null) {
             Row(
                 modifier = Modifier
