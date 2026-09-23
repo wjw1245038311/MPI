@@ -18,7 +18,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -28,23 +31,32 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.mpi.app.data.SessionFailure
 import com.mpi.app.data.SessionState
 import com.mpi.app.protocol.RemoteThreadState
 import com.mpi.app.protocol.RemoteThreadSummary
 import com.mpi.app.ui.theme.MpiTheme
 
+/** 首屏快捷动作。M2 起会被「输入框 + 示例提示词」取代（§4.3）。 */
+enum class QuickAction(val label: String) {
+    CheckRunning("看看桌面上在跑什么"),
+    SwitchHost("换一台设备"),
+    AddHost("添加设备"),
+}
+
 /**
- * 首页（M1-5a：先把「能看见列表」做对；欢迎区/抽屉/图标见 M1-5b）。
+ * 首屏（§4.3）：顶栏 + 欢迎区 + 快捷动作 + 最近会话（扁平、按更新时间倒序）。
  *
- * 失败态一律给「原因 + 一个可操作按钮」（§1.1）；空态给引导，不留白屏。
+ * 抽屉里才是「按项目浏览」。首屏扁平是刻意的——千问的首屏也是「最近会话」，
+ * 而不是先让人选项目。
  */
 @Composable
 fun HomeScreen(
     state: AppUiState,
+    onOpenDrawer: () -> Unit,
     onRefresh: () -> Unit,
     onReconnect: () -> Unit,
     onOpenHosts: () -> Unit,
+    onAddHost: () -> Unit,
     onDismissProblems: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -52,7 +64,12 @@ fun HomeScreen(
     val session = state.session
 
     Column(modifier = modifier.fillMaxSize()) {
-        TopBar(state = state, onRefresh = onRefresh, onOpenHosts = onOpenHosts)
+        TopBar(
+            state = state,
+            onOpenDrawer = onOpenDrawer,
+            onRefresh = onRefresh,
+            onOpenHosts = onOpenHosts,
+        )
 
         if (state.problems.isNotEmpty()) {
             Banner(
@@ -70,67 +87,57 @@ fun HomeScreen(
             )
         }
 
-        // 终止性失败：重试没意义，必须重新配对
         val failure = (session as? SessionState.Failed)?.reason
         if (failure != null && failure.isTerminal) {
-            Banner(
-                text = session.label(),
-                tone = Tone.Error,
-                actionLabel = "添加设备",
-                onAction = onOpenHosts,
-            )
+            Banner(text = session.label(), tone = Tone.Error, actionLabel = "添加设备", onAction = onOpenHosts)
         }
 
         if (host.error != null) {
-            Banner(
-                text = host.error,
-                tone = Tone.Error,
-                actionLabel = "重试",
-                onAction = onRefresh,
-            )
+            Banner(text = host.error, tone = Tone.Error, actionLabel = "重试", onAction = onRefresh)
         }
 
         when {
-            // 认证中/连接中：给进度而不是空白
-            session is SessionState.Connecting || session is SessionState.Authenticating -> {
+            session is SessionState.Connecting || session is SessionState.Authenticating ->
                 CenteredMessage(loading = true, text = session.label())
-            }
 
-            // 非终止性失败（网络/中继）：可重试，且会自动重连
-            failure != null -> {
-                CenteredMessage(
-                    text = session.label(),
-                    actionLabel = "立即重连",
-                    onAction = onReconnect,
-                )
-            }
+            failure != null ->
+                CenteredMessage(text = session.label(), actionLabel = "立即重连", onAction = onReconnect)
 
-            host.projects.isEmpty() && !host.loading -> {
+            host.projects.isEmpty() && !host.loading ->
                 CenteredMessage(
                     text = "这台电脑上还没有项目",
                     detail = "在电脑上打开一个项目后回到这里刷新",
                     actionLabel = "刷新",
                     onAction = onRefresh,
                 )
-            }
 
-            else -> ThreadList(state = state, onRefresh = onRefresh)
+            else -> Content(
+                state = state,
+                onRefresh = onRefresh,
+                onOpenHosts = onOpenHosts,
+                onAddHost = onAddHost,
+            )
         }
     }
 }
 
 @Composable
-private fun TopBar(state: AppUiState, onRefresh: () -> Unit, onOpenHosts: () -> Unit) {
+private fun TopBar(
+    state: AppUiState,
+    onOpenDrawer: () -> Unit,
+    onRefresh: () -> Unit,
+    onOpenHosts: () -> Unit,
+) {
     val online = state.session is SessionState.Connected
     Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(10.dp).clip(CircleShape)
-                .background(if (online) MpiTheme.colors.ok else MpiTheme.colors.textFaint),
-        )
-        Spacer(Modifier.size(8.dp))
+        IconButton(onClick = onOpenDrawer) {
+            Icon(IconMenu, contentDescription = "打开抽屉", tint = MaterialTheme.colorScheme.onSurface)
+        }
         Column(Modifier.weight(1f)) {
             Text(
                 text = state.activeHost?.shownName ?: "未选择主机",
@@ -138,13 +145,20 @@ private fun TopBar(state: AppUiState, onRefresh: () -> Unit, onOpenHosts: () -> 
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = if (online) "已连接" else state.session.label(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MpiTheme.colors.textDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(7.dp).clip(CircleShape)
+                        .background(if (online) MpiTheme.colors.ok else MpiTheme.colors.textFaint),
+                )
+                Spacer(Modifier.size(5.dp))
+                Text(
+                    text = if (online) "已连接" else state.session.label(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MpiTheme.colors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         TextButton(onClick = onRefresh) { Text("刷新") }
         TextButton(onClick = onOpenHosts) { Text("主机") }
@@ -152,52 +166,65 @@ private fun TopBar(state: AppUiState, onRefresh: () -> Unit, onOpenHosts: () -> 
 }
 
 @Composable
-private fun ThreadList(state: AppUiState, onRefresh: () -> Unit) {
-    val host = state.host
-    val showProjectHeaders = host.projects.size > 1
+private fun Content(
+    state: AppUiState,
+    onRefresh: () -> Unit,
+    onOpenHosts: () -> Unit,
+    onAddHost: () -> Unit,
+) {
+    val threads = state.host.allThreads
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 24.dp),
+        contentPadding = PaddingValues(bottom = 28.dp),
     ) {
-        host.projects.forEach { project ->
-            val threads = host.threadsByProject[project.id].orEmpty()
-            if (threads.isEmpty() && !showProjectHeaders) return@forEach
+        item(key = "welcome") {
+            WelcomeBlock(
+                deviceName = state.activeHost?.shownName ?: "你好",
+                onAction = { action ->
+                    when (action) {
+                        QuickAction.CheckRunning -> onRefresh()
+                        QuickAction.SwitchHost -> onOpenHosts()
+                        QuickAction.AddHost -> onAddHost()
+                    }
+                },
+            )
+        }
 
-            if (showProjectHeaders) {
-                item(key = "project-${project.id}") {
-                    Text(
-                        text = project.name.ifEmpty { project.id },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MpiTheme.colors.textFaint,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 6.dp),
-                    )
-                }
+        if (threads.isEmpty()) {
+            item(key = "no-threads") {
+                Text(
+                    text = "这台电脑上还没有会话",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MpiTheme.colors.textFaint,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                )
             }
-
+        } else {
+            item(key = "recent-header") {
+                Text(
+                    text = "最近会话",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MpiTheme.colors.textFaint,
+                    modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 6.dp),
+                )
+            }
             items(threads, key = { it.id }) { thread ->
-                ThreadRow(thread)
-            }
-
-            if (threads.isEmpty()) {
-                item(key = "empty-${project.id}") {
-                    Text(
-                        text = "（暂无会话）",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MpiTheme.colors.textFaint,
-                        modifier = Modifier.padding(start = 16.dp, bottom = 6.dp),
-                    )
-                }
+                ThreadRow(
+                    thread = thread,
+                    projectName = state.host.projects.firstOrNull { it.id == thread.projectId }?.name,
+                )
             }
         }
 
-        if (host.hasRunning) {
+        if (state.host.hasRunning) {
             item(key = "polling-note") {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    modifier = Modifier.fillMaxWidth().padding(18.dp),
                     horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                    CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.size(8.dp))
                     Text(
                         "有会话正在运行，列表自动刷新中",
@@ -211,9 +238,66 @@ private fun ThreadList(state: AppUiState, onRefresh: () -> Unit) {
 }
 
 @Composable
-private fun ThreadRow(thread: RemoteThreadSummary) {
+private fun WelcomeBlock(deviceName: String, onAction: (QuickAction) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "M",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Spacer(Modifier.size(10.dp))
+            Text(
+                text = "你好，$deviceName",
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+        // 3 条快捷动作 —— 数量刻意少（§7 避坑 #4：千问 15 个胶囊是被批评的减法对象）
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickAction.entries.forEach { action ->
+                Surface(
+                    onClick = { onAction(action) },
+                    shape = RoundedCornerShape(10.dp),
+                    color = MpiTheme.colors.surfaceMuted,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = action.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Icon(
+                            IconChevronRight,
+                            contentDescription = null,
+                            tint = MpiTheme.colors.textFaint,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThreadRow(thread: RemoteThreadSummary, projectName: String?) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StateDot(thread.state)
@@ -225,13 +309,13 @@ private fun ThreadRow(thread: RemoteThreadSummary) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            val subtitle = buildString {
-                append(thread.state.label())
-                if (thread.messageCount > 0) append(" · ${thread.messageCount} 条")
-                append(" · ${relTime(thread.updatedAt)}")
-            }
             Text(
-                text = subtitle,
+                text = buildString {
+                    if (!projectName.isNullOrEmpty()) append("$projectName · ")
+                    append(thread.state.label())
+                    if (thread.messageCount > 0) append(" · ${thread.messageCount} 条")
+                    append(" · ${relTime(thread.updatedAt)}")
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MpiTheme.colors.textDim,
                 maxLines = 1,
@@ -242,15 +326,15 @@ private fun ThreadRow(thread: RemoteThreadSummary) {
 }
 
 @Composable
-private fun StateDot(state: RemoteThreadState) {
+fun StateDot(state: RemoteThreadState, size: Int = 8) {
     val color = when (state) {
         RemoteThreadState.Running -> MpiTheme.colors.ok
         RemoteThreadState.Error -> MpiTheme.colors.err
-        RemoteThreadState.Unknown -> MpiTheme.colors.textFaint
-        RemoteThreadState.Draft, RemoteThreadState.Disconnected -> MpiTheme.colors.textFaint
         RemoteThreadState.Idle -> MpiTheme.colors.borderStrong
+        RemoteThreadState.Draft, RemoteThreadState.Disconnected, RemoteThreadState.Unknown ->
+            MpiTheme.colors.textFaint
     }
-    Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+    Box(Modifier.size(size.dp).clip(CircleShape).background(color))
 }
 
 @Composable
@@ -298,7 +382,7 @@ private fun Banner(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .padding(horizontal = 14.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(MpiTheme.colors.surfaceMuted)
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -311,9 +395,7 @@ private fun Banner(
             modifier = Modifier.weight(1f),
         )
         if (actionLabel != null && onAction != null) {
-            TextButton(onClick = onAction) {
-                Text(actionLabel, fontWeight = FontWeight.Medium)
-            }
+            TextButton(onClick = onAction) { Text(actionLabel, fontWeight = FontWeight.Medium) }
         }
     }
 }

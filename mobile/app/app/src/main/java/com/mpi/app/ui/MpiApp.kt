@@ -14,15 +14,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,10 +35,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.BackHandler
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mpi.app.AppContainer
 import com.mpi.app.data.PairingRecord
 import com.mpi.app.ui.theme.MpiTheme
+import kotlinx.coroutines.launch
 
 /**
  * 应用根组件：按状态在「初始化 / 存储损坏 / 配对 / 首页」之间切换。
@@ -62,12 +69,10 @@ fun MpiApp(container: AppContainer) {
                 onCancel = if (state.pairings.isEmpty()) null else viewModel::cancelAddHost,
             )
 
-            else -> HomeScreen(
+            else -> HomeWithDrawer(
                 state = state,
-                onRefresh = viewModel::refresh,
-                onReconnect = viewModel::reconnect,
+                viewModel = viewModel,
                 onOpenHosts = { hostsOpen = true },
-                onDismissProblems = viewModel::dismissProblems,
             )
         }
     }
@@ -85,6 +90,48 @@ fun MpiApp(container: AppContainer) {
                 hostsOpen = false
                 viewModel.startAddHost()
             },
+        )
+    }
+}
+
+@Composable
+private fun HomeWithDrawer(
+    state: AppUiState,
+    viewModel: AppViewModel,
+    onOpenHosts: () -> Unit,
+) {
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    // 抽屉开着时返回键先关抽屉（§4.4 返回键语义：逐级回退，不直接退出）
+    BackHandler(enabled = drawerState.isOpen) {
+        scope.launch { drawerState.close() }
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(drawerContainerColor = MpiTheme.colors.bg) {
+                AppDrawerContent(
+                    state = state,
+                    onOpenHosts = onOpenHosts,
+                    onAddHost = {
+                        scope.launch { drawerState.close() }
+                        viewModel.startAddHost()
+                    },
+                    onRefresh = viewModel::refresh,
+                )
+            }
+        },
+    ) {
+        HomeScreen(
+            state = state,
+            onOpenDrawer = { scope.launch { drawerState.open() } },
+            onRefresh = viewModel::refresh,
+            onReconnect = viewModel::reconnect,
+            onOpenHosts = onOpenHosts,
+            onAddHost = viewModel::startAddHost,
+            onDismissProblems = viewModel::dismissProblems,
         )
     }
 }
