@@ -1056,6 +1056,7 @@ function UserMessageNav({
   scrollRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const navRef = useRef<HTMLElement>(null);
+  const railRef = useRef<HTMLDivElement>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const hideTimer = useRef<number | null>(null);
   // 「选中」节点：视口中心线（偏上）之下最近的用户消息组。
@@ -1087,6 +1088,21 @@ function UserMessageNav({
       if (raf) cancelAnimationFrame(raf);
     };
   }, [groups.length, scrollRef]);
+
+  // 圆点条限高（最多 ~10 个，防长会话误触）：当前节点变化时把它滚进可见区。
+  // 手动调 rail.scrollTop 而不是 scrollIntoView——后者可能连带滚动外层 .chat-scroll。
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail || !activeKey) return;
+    const dot = Array.from(rail.querySelectorAll<HTMLElement>("[data-dot-key]")).find(
+      (d) => d.dataset.dotKey === activeKey,
+    );
+    if (!dot) return;
+    const r = dot.getBoundingClientRect();
+    const rr = rail.getBoundingClientRect();
+    if (r.top < rr.top) rail.scrollTop -= rr.top - r.top;
+    else if (r.bottom > rr.bottom) rail.scrollTop += r.bottom - rr.bottom;
+  }, [activeKey]);
 
   const showPanel = () => {
     if (hideTimer.current) {
@@ -1121,13 +1137,14 @@ function UserMessageNav({
         if (!navRef.current?.contains(event.relatedTarget as Node | null)) scheduleHide();
       }}
     >
-      <div className="user-message-nav-scroll">
+      <div className="user-message-nav-scroll" ref={railRef}>
         {groups.map((group, index) => {
           const preview = userMessagePreview(group, language);
           return (
             <button
               key={group.key}
               type="button"
+              data-dot-key={group.key}
               className={`user-message-nav-dot${group.key === activeKey ? " active" : ""}`}
               aria-label={zh ? `跳转到第 ${index + 1} 条用户消息：${preview}` : `Jump to user message ${index + 1}: ${preview}`}
               title={preview}

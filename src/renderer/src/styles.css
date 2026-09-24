@@ -879,8 +879,9 @@ body.sidebar-resizing * {
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  /* 30 dots: 30 * 18px + 29 * 3px + 2px padding. */
-  max-height: 629px;
+  /* 限高 ~10 个圆点（防长会话误触）：10 * 18px + 9 * 3px + 2px padding。
+     超出的部分仍可内部滚动，悬停面板保留全量列表。 */
+  max-height: 209px;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 1px;
