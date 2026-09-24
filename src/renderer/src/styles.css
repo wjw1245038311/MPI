@@ -994,8 +994,11 @@ body.sidebar-resizing * {
 }
 /* 长会话快切：视口外的消息组跳过渲染（content-visibility），进入视口才真正
    构建 DOM/跑 markdown。`auto` 记住每组上次渲染高度，重进后滚动条位置稳定；
-   首次未渲染前用固定值估算（用户消息短 / assistant 组含折叠工具卡）。 */
-.messages > .msg.user,
+   首次未渲染前用固定值估算（assistant 组含折叠工具卡）。 */
+/* ⚠ .msg.user 不能加：它的操作条（.msg-user-actions）悬挂在行底边下方 1px，
+   content-visibility 会把溢出区域连绘制带命中一起裁掉 → hover 按钮不可见
+   （2026-09-24 真机实测：cv:auto 时 elementFromPoint 穿透、截图只剩 3px 残线；
+   cv:visible 时正常）。用户消息 DOM 很小，不跳过的性能损失可忽略。 */
 .messages > .msg.custom {
   content-visibility: auto;
   contain-intrinsic-size: auto 96px;
