@@ -35,6 +35,7 @@ MPI-USER-MANUAL.md
 
 # Secrets and logs
 .gh-token
+.ecs-pwd
 .env
 .env.*
 !.env.example
