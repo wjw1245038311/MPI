@@ -12,6 +12,11 @@ Kotlin + Compose 的原生安卓端已能**配对 → 看会话列表 → 进会
 M0/M1/M2 完成（M2-6 键盘跟手待真机确认）；**PWA 交互细节移植（批 1–5）全部落地**；
 **M4 原生能力（附件 / 语音 / 扫码）、M5 通知 + 前台服务、M6 自更新均已实现**；
 **本地缓存（A 方案：会话快照 + 首页列表秒开 / 离线可读）已实现，待真机验收**。
+
+> **2026-09-24 远程链路三处根因已修复并真机验证**：桌面端重启 / 链路抖动后手机端能
+> **自愈**——① 手机端重连后重新订阅（0.5.34）；② 主机按**真实序列化长度**把历史快照
+> 裁到手机端 2MB 硬上限以内；③ 中继按进程级 `bootId` 识别「主机真重启」并让设备
+> 重连重认证。取证与结论见 **§5.1**（含验证步骤 §7 第 16–18 步）。
 已随 **v0.9.0** 提交并推送（origin 自建 GitLab + github，含 tag）。
 
 > 施工图：`docs/MOBILE-NATIVE-PORT-BACKLOG.md`（批 1–5 + M4–M6 全部完成）。
@@ -32,8 +37,10 @@ M0/M1/M2 完成（M2-6 键盘跟手待真机确认）；**PWA 交互细节移植
 | 联调脚本 | `scripts/mobile-dev-harness.mjs` |
 | 图标生成器 | `scripts/gen-android-icon.mjs` |
 | 加密向量生成器 | `scripts/gen-android-vectors.mjs` |
-| 本地 APK | `mobile/app/publish/MPI-Android-Native-0.1.0.apk`（+ `.sha256`） |
-| Seafile 分发 | `E:\Seafile\wei_jw2\我的资料库\Agent\MPI-Android-Native-0.1.0.apk`（哈希已核验） |
+| 本地 APK | `mobile/app/publish/MPI-Android-Native-<版本>.apk`（+ `.sha256`）；当前 **0.5.34** |
+| Seafile 分发 | `E:\Seafile\wei_jw2\我的资料库\Agent\MPI-Android-Native-<版本>.apk`（哈希已核验） |
+| 中继（线上） | aliyun-ecs `100.67.5.31`：systemd **`mpi-relay.service`**，代码 `/opt/mpi-relay/index.mjs`，静态托管 `/var/www/mpi-mobile`（PWA + APK/清单） |
+| 中继（本地联调） | `scripts/mobile-dev-harness.mjs`（默认 `RELAY_PORT=9001`） |
 | 旧 WebView 壳（冻结） | `android/`，包名 `com.mpi.remote` |
 
 > ⚠️ 别混淆：`android/` 是**旧壳**（冻结维护，只修 bug）；`mobile/app/` 是**新原生版**。两者可并存安装。
@@ -207,15 +214,28 @@ npm test -- relay && npm run test:pwa-pairing
 `pi:extuiResolved`，renderer 收到后收起对应卡片（渠道线程的自动取消走同一通道）。
 ⚠️ 改的是 main 进程，**验证需重启桌面端 MPI**（`Ctrl+R` 不够）。
 
-### 5.1 host→device 帧是否真的会丢 —— **存疑，未结案**
+### 5.1 host→device 帧「到不了设备」—— ✅ **已结案**（2026-09-24，三处独立根因）
 
-联调 harness 推事件流时观察到「帧到不了设备」，但**未能证实是真缺陷**：
+真机症状的演进是：「气泡卡发送中」→「整条消息（含助手回复）一起晚到」→「订阅失败 +
+约 10s 一轮的重连风暴」。定位手段是给主机加三类**取证日志**（`mpi-diag.log`：
+`remote-conn` 连接开关 / `remote-req` 手机请求 / `remote-pub … subs=` 事件发布时的
+订阅者数），再用它们对齐两端时间线。
 
-- 已用回归测试证明**归约器处理该序列正确**（`ThreadEventReplayTest`）；
-- 我自己的测量时序足以解释现象（旧应用实例触发了模拟流 → 随即被 force-stop，
-  帧发给了正在拆除的 socket）；harness 的一次性 `simulated` 标志又阻止了新实例重放。
+| # | 根因 | 关键证据 | 修复 |
+| --- | --- | --- | --- |
+| 1 | 手机端**重连后不重新订阅**：主机按 `connectionId` 记订阅，连接一断就清空；而重连路径调的是 `resync`（只拉快照、**不注册订阅**），`subscribe` 只在打开会话时调过一次 | 重连后只有 `remote-req resync`，一次 `subscribe` 都没有；发消息时 `remote-pub … subs=0` | `ThreadSession` 记 `subscribed` 状态；`resync()` 未订阅时改走订阅（一次往返既补订阅又拿快照）；发送前 `ensureSubscribed()` 兜底；重连回调去重。**进 0.5.34** |
+| 2 | 主机历史下发预算 6MB，而手机端 `Envelope.parse` 对**解密后的内层 envelope** 有 2MB 硬上限 → 超限**整帧被丢** | `remote-history … bytes=2023207`；手机端抛 `PAYLOAD_TOO_LARGE` | 预算改为由硬上限推导（2MB − 400KB），并新增**按真实 JSON 序列化长度**兜底裁剪（估算不计转义，实测差 ~7%）；diag 行加 `encoded=` |
+| 3 | 中继在设备重复 `hello`（重新认证会再发一次）时**无条件**告主机 `device.online`；主机收到就关掉并重建逻辑连接 → 订阅与写租约一起被清，而手机的传输层（对着中继）没断、**完全无感知** | 日志里 43 次 `relay-device-replaced` 刷屏 | 中继：只在设备 socket **真的换了**时才通知主机（R1）；`host.register` 带进程级 `bootId`，bootId 变了（= 主机进程真重启）才把该主机的在线设备用 **4007** 关掉，让它们重连重认证（R2'） |
 
-**结论：需要接真实桌面端复核**（见 §7 清单第 6/7 步）。已顺带修掉两条相关真问题：
+第 2、3 条还解释了「为什么桌面端一重启，手机就必须手动重开」：主机重启后内存里的
+E2E 会话密钥已消失，**必须重新握手**；而中继不会主动重播在线设备、手机的 socket 又没断，
+于是它永远不会重连——现在改成中继主动让设备重连，走客户端已经跑通的
+「断线→重连→hello→挑战→认证」老路。
+
+**真机已验证**（§7 第 16–18 步）：桌面端重启 + 手机全程不碰 → 手机数秒内自己重连、
+重认证、重新订阅；随后发消息 `subs=1`。
+
+**顺带修掉的两条相关真问题**（保留在此备查）：
 
 1. 中继重启后 4001 被立即判死 → 已改为 3 次重试（`HostSession.AUTH_RETRY_LIMIT`）；
 2. `replaced`/`revoked` 不含 `from` 被当数据帧丢弃并刷警告（实测 59 条）→ 已纳入
@@ -238,6 +258,9 @@ npm test -- relay && npm run test:pwa-pairing
 | **Android Keystore 不允许自带 IV** | `Caller-provided IV not permitted`；本地存储完全不可用 | 加密时**不传 IV**，由系统生成后读 `cipher.iv`；解密仍传 IV。见 `SecretBox.SealedFormat` |
 | **Android 9+ 默认禁明文流量** | 联调直接连不上（`CLEARTEXT communication not permitted`） | `src/debug/res/xml/network_security_config.xml` **只在 debug** 放开；release 保持禁止 |
 | 蓝牙/图标：包名与旧壳并存 | — | 已天然支持，无需处理 |
+| **快照超手机端 2MB 硬上限** | 订阅/同步**整帧被丢**，UI 只报「订阅失败」，还会触发 ~10s 一轮重连风暴 | 主机按**真实序列化长度**裁剪到硬上限以内；`remoteMessageSize` 只是估算，不可作为硬保证。见 §5.1 第 2 条 |
+| **重连后订阅被清、手机无感知** | 「气泡卡发送中」「整条消息一起晚到」 | 重连后必须**重新 `thread.subscribe`**（`resync` 只拉快照、不注册订阅）。见 §5.1 第 1 条 |
+| **中继重复 hello 触发主机重建连接** | 主机连接被反复重建，订阅静默丢失、`subs=0` | 中继改成按「设备 socket 是否变化」+ 主机 `bootId` 判新旧；旧主机构建不带 bootId 时按「没变」处理（向后兼容）。见 §5.1 第 3 条 |
 
 **教训**：这三类问题单测全绿也发现不了。**每步都上模拟器烟测**这条规矩不要省。
 
@@ -301,6 +324,9 @@ npm test -- relay && npm run test:pwa-pairing
 | 13 | 顶栏终端图标 | 隐藏后 bash/read/edit 行不再占屏；重启 App 仍保持 |
 | 14 | 打开 App（已配对） | **直接进最近的会话**（有运行中的就进那个），不再出现首屏列表 |
 | 15 | 在会话里按返回键 | **自动弹出侧栏**（项目卡片 → 会话），而不是回到一个空列表 |
+| 16 | **桌面端重启之后，手机端什么都不要做**，等约 10 秒再从手机发一条 | 消息正常发出、正常回显；**不需要重开手机 App、不需要重扫码** |
+| 17 | 看主机 `%APPDATA%/MPI Dev/logs/mpi-diag.log` | 出现新的 `remote-conn open` + `remote-req subscribe`，且发消息时是 `remote-pub … subs=1`（不是 0）；`remote-history … encoded=` 应 **< 1600000** |
+| 18 | 看中继日志（`journalctl -u mpi-relay`） | 出现新代码独有的 `host … registered (fresh process → reconnecting N device socket(s))` |
 
 第 6、7 步是重点。第 9、10 步验本地缓存（A 方案）。回报时请附：哪步不符预期 + 界面上是否有红色横幅文字（关键线索）。
 
@@ -318,7 +344,15 @@ npm test -- relay && npm run test:pwa-pairing
 
 ## 9. 当前提交与推送状态
 
-- `origin/main..HEAD` 有一批未推送提交（从「原生工程骨架」到本次「本地缓存 A 方案」）。
-- 工作区仅 `package.json` 有改动（`piRuntimeVersion` 0.86.1→0.87.0，**不是本工作产生的**，未提交）。
-- 推送前建议：先跑一次全量 `npm test`（项目规则：push main 前必须全量）。
-- 本地缓存 A 方案的提交信息：`feat(android): 会话与首页列表本地缓存（秒开 + 断网可读）`。
+- 本轮（2026-09-24）已推送：**远程链路三处根因修复**（§5.1）+ 链路取证日志 + 中继
+  R1/R2' + 手机端版本号 0.5.34。目标：`origin`（自建 GitLab，SSH 2222）与 `github`，均为 `main`。
+- 推送前跑了**全量** `npm test`（本次跨 `src/main/**` + `mobile/relay/**` + `mobile/app/**`，
+  按 `AGENTS.md` 属「大改动」）。**已知既有失败**（与本轮改动无关）：CI `Tests` 工作流的
+  `@noble/*` 模块缺失（`pwa-*` / `e2e-crypto` / `webpush`）、memory 套件需要本地 embedding 服务、
+  `pool-write` 仅卡性能阈值。
+- 手机端 **0.5.34**（versionCode 39）分发：Seafile `Agent\MPI-Android-Native-0.5.34.apk`、
+  GitHub Release `android-v0.5.34`（prerelease，含增量包）、本地 `mobile/app/publish/`。
+- 中继已部署到 aliyun-ecs 并重启验证（`/healthz` + 真实握手）：
+  回滚备份 `/opt/mpi-relay/index.mjs.bak-20260924-094603`。
+- 已知小瑕疵（不影响功能）：重连后**有时会连发两次完全相同的 `remote-req subscribe`**
+  （两条路径各自发起订阅），白拉一次 ~1.5MB 快照，后续可合并。
