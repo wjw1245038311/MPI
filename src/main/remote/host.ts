@@ -11,6 +11,7 @@ import {
 } from "./protocol";
 import { deviceIdFor, fingerprintFor, loadOrCreateIdentity, saveIdentity, signText, verifyText, type HostIdentity, type TrustedRemoteDevice } from "./identity";
 import { RemoteService } from "./service";
+import { appendDiagLog } from "../diag-log";
 
 /**
  * Transport sink for the mobile cloud relay uplink (docs/MOBILE-DESIGN.md §5).
@@ -267,6 +268,10 @@ export class RemoteHost {
    * authentication (and the PWA learns the connection id used in signatures). */
   transportOpened(connectionId: string, sessionId?: string, relayDeviceId?: string): void {
     const connection = this.getOrCreateConnection(connectionId, sessionId);
+    // 取证：手机链路建立时刻（真机「整条消息一起晚到」排查用）
+    appendDiagLog(
+      `remote-conn open id=${connectionId.slice(0, 24)} transport=${relayDeviceId ? "relay" : "webrtc"} device=${relayDeviceId || connection.deviceId || "-"}`,
+    );
     if (relayDeviceId) {
       connection.viaRelay = true;
       connection.deviceIdHint = relayDeviceId;
@@ -312,6 +317,8 @@ export class RemoteHost {
   transportClosed(connectionId: string, reason = "transport-closed"): void {
     const connection = this.connections.get(connectionId);
     if (!connection) return;
+    // 取证：手机链路断开时刻与原因（relay-device-offline = 中继认为手机掉线）
+    appendDiagLog(`remote-conn closed id=${connectionId.slice(0, 24)} reason=${reason}`);
     const shouldReopenForReconnect = connection.authenticated && this.isReconnectFailure(reason);
     this.options.service.disconnect(connectionId);
     this.connections.delete(connectionId);

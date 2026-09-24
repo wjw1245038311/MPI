@@ -11,6 +11,7 @@ import {
   type RemoteThreadEventPayload,
   type RemoteThreadSnapshot,
 } from "./protocol";
+import { appendDiagLog } from "../diag-log";
 
 export interface RemoteBackend {
   listProjects(): Promise<unknown>;
@@ -149,6 +150,9 @@ export class RemoteService {
       case "thread.get":
         return responseFor(request, { snapshot: await this.backend.getThread(this.requiredThread(request)) });
       case "thread.resync":
+        appendDiagLog(
+          `remote-req resync conn=${context.connectionId.slice(0, 24)} thread=${this.requiredThread(request).slice(0, 12)}`,
+        );
         return responseFor(request, { snapshot: await this.backend.getThread(this.requiredThread(request), { live: true }) });
       case "thread.create":
         return responseFor(request, {
@@ -209,6 +213,8 @@ export class RemoteService {
       }
       case "thread.subscribe": {
         const threadId = this.requiredThread(request);
+        // 取证：手机订阅/重订阅时刻（它与 remote-conn open/closed 一起能定位事件丢失窗口）
+        appendDiagLog(`remote-req subscribe conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)}`);
         const existing = this.subscriptions.get(context.connectionId) || new Map<string, () => void>();
         existing.get(threadId)?.();
         const unsubscribe = this.backend.subscribeThread(threadId, (event) => {
@@ -231,6 +237,9 @@ export class RemoteService {
       case "thread.steer":
       case "thread.followUp": {
         const threadId = this.requiredThread(request);
+        appendDiagLog(
+          `remote-req ${request.type} conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)}`,
+        );
         this.assertWriter(threadId, context);
         // Image-only messages are legal (phone composer): empty text is fine
         // as long as at least one image rides along.

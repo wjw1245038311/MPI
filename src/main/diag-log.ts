@@ -35,8 +35,18 @@ export function diagLogPath(): string {
 
 let writer: ((line: string) => void) | null = null;
 
-/** Append one line to the diagnostic log (lazy init on first use). */
+/**
+ * Append one line to the diagnostic log (lazy init on first use).
+ *
+ * 整体再兜一层 try：初始化路径用了 `electron.app`，纯 Node 环境（单元测试
+ * 直接 import `remote/service`、`remote/host` 等模块）拿不到 app，
+ * `diagLogPath()` 会抛——诊断日志绝不能因此影响主流程。
+ */
 export function appendDiagLog(line: string): void {
-  if (!writer) writer = createDiagLogWriter(diagLogPath());
-  writer(line);
+  try {
+    if (!writer) writer = createDiagLogWriter(diagLogPath());
+    writer(line);
+  } catch {
+    /* 没有 electron app（测试）或磁盘不可写：静默跳过 */
+  }
 }

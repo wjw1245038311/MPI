@@ -2555,6 +2555,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     if (channel === "pi:event") {
       const piEvent = (payload as any).event || {};
       event = { kind: String(piEvent.type || "agent.event"), data: { event: remoteSafeEventValue(piEvent) as Record<string, unknown> } };
+      // 取证：回合关键事件的发布时刻 + 当时的订阅者数。
+      // 真机反馈「气泡卡发送中 / 整条消息包括回复一起晚到」——subs=0 即说明
+      // 手机此刻不在订阅状态，事件被静默丢弃（只能靠重连后的 resync 快照补齐）。
+      if (piEvent.type === "agent_start" || (piEvent.type === "message_start" && piEvent.message?.role === "user")) {
+        const role = piEvent.message?.role ? `(${piEvent.message.role})` : "";
+        const text = piEvent.message?.role === "user" ? String(piEvent.message?.content?.[0]?.text ?? "") : "";
+        appendDiagLog(
+          `remote-pub ${piEvent.type}${role} thread=${threadId.slice(0, 12)} subs=${remoteEventHub.subscriberCount(threadId)}${text ? ` len=${text.length}` : ""}`,
+        );
+      }
     } else if (channel === "pi:extui") {
       const request = (payload as any).request || {};
       // §4.5：write/edit 审批能取到新旧内容时附 unified diff（best-effort，永不阻塞）。
