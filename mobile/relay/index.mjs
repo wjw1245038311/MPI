@@ -186,6 +186,9 @@ const CLOSE_TOO_LARGE = 4003;
 const CLOSE_BAD_FIRST_FRAME = 4004;
 const CLOSE_HEARTBEAT_TIMEOUT = 4005;
 const CLOSE_REPLACED = 4006;
+/** 主机进程换了（真重启）：该主机的设备必须重连重认证——主机内存里的 E2E 会话
+ * 密钥已随进程消失，旧连接上的设备再怎么发主机也解不开。见 host.register 的 bootId。 */
+const CLOSE_HOST_RESTARTED = 4007;
 
 // --- routing table ---------------------------------------------------------------
 /** hostId -> { ws } */
@@ -405,7 +408,13 @@ function handleDeviceFrame(conn, raw) {
         tryClose(conn.ws, CLOSE_AUTH_FAILED, "AUTH_FAILED");
         return;
       }
-      if (isWsOpen(rec.ws) && rec.ws !== conn.ws) {
+      // R1：同一个 socket 重复 hello（例如设备端重新认证时又发一次 hello）不改变路由，
+      // 就不要再通知主机——主机收到 device.online 会关掉并重建**逻辑连接**，把订阅与写
+      // 租约一起清空，而设备的传输层（对着中继的这条 WS）根本没断、完全感知不到。
+      // 2026-09-24 真机取证：就是这么把手机端的会话订阅静默清掉，之后所有实时事件
+      // 被主机丢弃（diag `remote-pub … subs=0`）。
+      const socketChanged = rec.ws !== conn.ws;
+      if (socketChanged && isWsOpen(rec.ws)) {
         send(rec.ws, { type: "replaced" });
         tryClose(rec.ws, CLOSE_REPLACED, "REPLACED");
         log(`device ${deviceId} REPLACED previous connection`);
@@ -414,11 +423,12 @@ function handleDeviceFrame(conn, raw) {
       conn.role = "device";
       conn.id = deviceId;
       conn.authHostId = rec.hostId;
-      log(`device ${deviceId} hello ok (host ${rec.hostId})`);
+      log(`device ${deviceId} hello ok (host ${rec.hostId}${socketChanged ? "" : ", same socket → no host re-announce"})`);
       // Tell the host uplink so it can re-issue a pair.challenge for the
       // signature handshake (S1 relay-uplink consumes this control frame).
+      // 只有真的换了 socket 才需要——主机必须给新连接发一次新验收。
       const host = hosts.get(rec.hostId);
-      if (isWsOpen(host?.ws)) send(host.ws, { type: "device.online", deviceId });
+      if (socketChanged && isWsOpen(host?.ws)) send(host.ws, { type: "device.online", deviceId });
       return send(conn.ws, { type: "relay.ok", role: "device", hostId: rec.hostId });
     }
 
@@ -533,16 +543,31 @@ wss.on("connection", (ws) => {
       if (type === "host.register") {
         const hostId = str(frame.hostId, 64);
         if (!hostId) return tryClose(ws, CLOSE_BAD_FIRST_FRAME, "BAD_FIRST_FRAME");
-        const existing = hosts.get(hostId);
+        const bootId = str(frame.bootId, 64);
+        const previous = hosts.get(hostId);
+        const existing = previous;
         if (existing && isWsOpen(existing.ws)) {
           log(`host ${hostId} replaced`);
           send(existing.ws, { type: "replaced" });
           tryClose(existing.ws, CLOSE_REPLACED, "REPLACED");
         }
-        hosts.set(hostId, { ws });
+        hosts.set(hostId, { ws, bootId });
         conn.role = "host";
         conn.id = hostId;
-        log(`host ${hostId} registered`);
+        // R2'：bootId 变了 = 主机**进程**真的重启了（uplink 网络抖动不会换 bootId）。
+        // 主机内存里的会话密钥已随进程消失，旧连接上的设备再发也解不开——必须让它们
+        // 重连重认证，走客户端已经跑通的「断线→重连→hello→挑战→认证」老路。
+        // 没有 bootId 的老主机构建按「没变」处理：部署期不制造额外的重连 churn。
+        const freshProcess = !!bootId && bootId !== (previous?.bootId ?? null);
+        let kicked = 0;
+        if (freshProcess) {
+          for (const rec of devices.values()) {
+            if (rec.hostId !== hostId || !isWsOpen(rec.ws)) continue;
+            tryClose(rec.ws, CLOSE_HOST_RESTARTED, "HOST_RESTARTED");
+            kicked += 1;
+          }
+        }
+        log(`host ${hostId} registered${freshProcess ? ` (fresh process → reconnecting ${kicked} device socket(s))` : ""}`);
         send(ws, { type: "relay.ok", role: "host" });
       } else if (type === "hello" || type === "pair.request") {
         handleDeviceFrame(conn, raw);

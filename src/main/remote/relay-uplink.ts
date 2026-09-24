@@ -70,6 +70,14 @@ export class RelayUplink implements RelayOutbound {
   private stopped = true;
   /** deviceId → relay connection id (relay-<b64url>). */
   private readonly deviceToConnection = new Map<string, string>();
+  /**
+   * 本进程的启动标识，随每一帧 host.register 上报。
+   *
+   * 中继靠它区分「主机进程真重启了」与「只是 uplink 网络抖了一下重连」：
+   * 前者必须让该主机的设备重连重认证（主机内存里的 E2E 会话密钥已随进程消失），
+   * 后者不该制造额外的重连 churn。
+   */
+  private readonly bootId = randomBytes(12).toString("base64url");
   /** deviceId → E2E session: key derived at pair.hello, activated once pair.accepted is sent. */
   private readonly e2eSessions = new Map<string, { key: Buffer; active: boolean }>();
   /** In-memory mirror of the token file. */
@@ -224,7 +232,7 @@ export class RelayUplink implements RelayOutbound {
       this.retryCount = 0;
       this.setState("connected", null);
       try {
-        ws.send(JSON.stringify({ type: "host.register", hostId: this.options.hostId }));
+        ws.send(JSON.stringify({ type: "host.register", hostId: this.options.hostId, bootId: this.bootId }));
       } catch { /* ignore */ }
       // Re-register device tokens so `hello` re-auth works after a relay restart.
       for (const [deviceId, token] of Object.entries(this.loadTokens())) {

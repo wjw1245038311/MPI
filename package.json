@@ -34,6 +34,7 @@
     "test:markdown": "node --experimental-strip-types scripts/test-markdown-autolink.mjs",
     "test:slugs": "node scripts/test-markdown-slug.mjs",
     "test:relay-s0": "node scripts/test-relay-s0.mjs",
+    "test:relay-device-lifecycle": "node scripts/test-relay-device-lifecycle.mjs",
     "test:relay-uplink": "node --experimental-transform-types scripts/test-relay-uplink.mjs",
     "test:pwa-shared": "node --experimental-strip-types scripts/test-pwa-shared.mjs",
     "test:pwa-pairing": "node --experimental-transform-types scripts/test-pwa-pairing.mjs",
