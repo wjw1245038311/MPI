@@ -141,20 +141,25 @@ async function main() {
   for (const item of uploaded) console.log(`✓ ${item.name} (${item.size} bytes)`);
 
   // 生成清单（file 用 Release asset 的绝对 URL）
+  // `file` 同时写绝对 URL：这是 App `Updater.parseManifest` 的**既定契约**
+  // （它只读 `file`，再拼 base；GitHub 模式 base 为空 → 相对名会变成
+  //  `/mpi-….apk` → Android 报 “no scheme”）。详见 2026-09-24 的真机报错。
+  const apkUrl = `${base}/${apkAsset}`;
+  const patchUrl = patchAsset ? `${base}/${patchAsset}` : null;
   const manifest = {
     version,
-    file: apkAsset,
-    url: `${base}/${apkAsset}`,
+    file: apkUrl,
+    url: apkUrl,
     size: statSync(apkLocal).size,
     sha256: sha256Upper(apkLocal),
     publishedAt: new Date().toISOString().slice(0, 10),
     github: "",
-    ...(patchAsset
+    ...(patchAsset && patchUrl
       ? {
           patch: {
             from: patchFrom,
-            file: patchAsset,
-            url: `${base}/${patchAsset}`,
+            file: patchUrl,
+            url: patchUrl,
             size: statSync(patchLocal).size,
             sha256: sha256Upper(patchLocal),
           },

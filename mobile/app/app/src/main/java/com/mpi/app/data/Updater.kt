@@ -215,19 +215,24 @@ class Updater(private val context: Context) {
             val obj = runCatching { Json.parseToJsonElement(body) as? JsonObject }.getOrNull() ?: return null
             val version = (obj["version"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             val file = (obj["file"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
-            if (version.isEmpty() || file.isEmpty()) return null
+            // `url` 优先（部分生成方只把绝对地址写在 url 里）；没有再回退 base + file。
+            // 两者都是相对名时会拼出 “/xx.apk”，OkHttp 会报 “no scheme”——那是清单写错，
+            // 不是客户端该静默掉的事，这里把错误留给调用方展示。
+            val urlField = (obj["url"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            if (version.isEmpty() || (file.isEmpty() && urlField.isEmpty())) return null
 
             val patchObj = obj["patch"] as? JsonObject
             val patch = patchObj?.let { p ->
                 val from = (p["from"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
                 val patchFile = (p["file"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
-                if (from.isEmpty() || patchFile.isEmpty()) {
+                val patchUrlField = (p["url"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                if (from.isEmpty() || (patchFile.isEmpty() && patchUrlField.isEmpty())) {
                     null
                 } else {
                     UpdatePatch(
                         from = from,
                         file = patchFile,
-                        url = assetUrl(base, patchFile),
+                        url = resolveAsset(base, patchUrlField, patchFile),
                         size = (p["size"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
                         sha256 = (p["sha256"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
                     )
@@ -237,13 +242,18 @@ class Updater(private val context: Context) {
             return UpdateInfo(
                 version = version,
                 file = file,
-                url = assetUrl(base, file),
+                url = resolveAsset(base, urlField, file),
                 size = (obj["size"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
                 sha256 = (obj["sha256"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
                 github = (obj["github"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() },
                 patch = patch,
             )
         }
+
+        /** `url` 是绝对地址就用它，否则用 base + file（两者都是相对名 → 留给 OkHttp 报 no scheme）。 */
+        private fun resolveAsset(base: String, urlField: String, file: String): String =
+            if (urlField.startsWith("http://") || urlField.startsWith("https://")) urlField
+            else assetUrl(base, file.ifEmpty { urlField })
 
         internal fun sha256Of(file: File): String {
             val digest = MessageDigest.getInstance("SHA-256")

@@ -29,6 +29,23 @@ class UpdaterLogicTest {
     }
 
     @Test
+    fun `an absolute file is used as-is even when base is empty`() {
+        // GitHub 清单的形状（base 为空）：file/url 都得是绝对地址，否则 Android 报 no scheme。
+        val json =
+            """{"version":"0.5.33","file":"https://github.com/o/r/releases/download/android-v0.5.33/a.apk","url":"https://github.com/o/r/releases/download/android-v0.5.33/a.apk","size":9,"sha256":"X","patch":{"from":"0.5.32","file":"https://github.com/o/r/releases/download/android-v0.5.33/p.patch","url":"https://github.com/o/r/releases/download/android-v0.5.33/p.patch"}}"""
+        val info = Updater.parseManifest(json, "")
+        assertEquals("https://github.com/o/r/releases/download/android-v0.5.33/a.apk", info?.url)
+        assertEquals("https://github.com/o/r/releases/download/android-v0.5.33/p.patch", info?.patch?.url)
+    }
+
+    @Test
+    fun `an absolute url field wins over a relative file`() {
+        val json =
+            """{"version":"0.5.33","file":"a.apk","url":"https://cdn.example.com/a.apk"}"""
+        assertEquals("https://cdn.example.com/a.apk", Updater.parseManifest(json, "")?.url)
+    }
+
+    @Test
     fun `manifest parsing needs version and file and builds the relay url`() {
         val json =
             """{"version":"0.4.0","file":"mpi-android-native-0.4.0.apk","size":123,"sha256":"AB12","github":"https://example.com/x.apk"}"""
