@@ -1,16 +1,16 @@
 {
-  "version": "0.5.33",
-  "file": "https://github.com/wjw1245038311/MPI/releases/download/android-v0.5.33/mpi-android-native-0.5.33.apk",
-  "url": "https://github.com/wjw1245038311/MPI/releases/download/android-v0.5.33/mpi-android-native-0.5.33.apk",
-  "size": 28654569,
-  "sha256": "1AFCE3CE99638731E49FF0A91F89F060681CE6CA304232D73768CF0CA91ADEB7",
+  "version": "0.5.34",
+  "file": "https://github.com/wjw1245038311/MPI/releases/download/android-v0.5.34/mpi-android-native-0.5.34.apk",
+  "url": "https://github.com/wjw1245038311/MPI/releases/download/android-v0.5.34/mpi-android-native-0.5.34.apk",
+  "size": 28670953,
+  "sha256": "F4FF5C29466C5BE2CDAE8EB3C2824886A71AB72319B833524E588A5466BAA0E9",
   "publishedAt": "2026-09-24",
   "github": "",
   "patch": {
-    "from": "0.5.32",
-    "file": "https://github.com/wjw1245038311/MPI/releases/download/android-v0.5.33/mpi-android-native-0.5.32-to-0.5.33.patch",
-    "url": "https://github.com/wjw1245038311/MPI/releases/download/android-v0.5.33/mpi-android-native-0.5.32-to-0.5.33.patch",
-    "size": 15049816,
-    "sha256": "092B726F10B2391FC78247C11B5CF75FF9A77767F77405BBD89108FA27FA23CA"
+    "from": "0.5.33",
+    "file": "https://github.com/wjw1245038311/MPI/releases/download/android-v0.5.34/mpi-android-native-0.5.33-to-0.5.34.patch",
+    "url": "https://github.com/wjw1245038311/MPI/releases/download/android-v0.5.34/mpi-android-native-0.5.33-to-0.5.34.patch",
+    "size": 15053814,
+    "sha256": "C62FA0926C787E004F0F64F46DA073C9AFAC73D3B9579BE015C6483B21493D03"
   }
 }

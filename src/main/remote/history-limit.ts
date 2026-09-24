@@ -13,7 +13,7 @@ import type { RemoteMessage } from "./protocol";
  *
  * ⚠️ 这不是"用户能看到多少"——一个回合里 agent 可能产生上百条 toolResult，
  * 它们会被 remoteMessages() 折叠进同一个 assistant 回合。2026-09-16 真机取证：
- * total=400 原始条目 → rendered=17 条会话消息，用户「往上拉两三页就不行」。
+ * total=400 原始条目 → rendered=17 条会话消息，用户「往上拉两页就不行」。
  * 所以这里要放宽（只为控制解析成本），能拉多远由 MAX_RENDERED_MESSAGES 决定。
  */
 export const MAX_REMOTE_RAW_MESSAGES = 6000;
@@ -21,8 +21,30 @@ export const MAX_REMOTE_RAW_MESSAGES = 6000;
 /** 下发到手机的会话条目上限——**这个才是"能往上拉多远"**。 */
 export const MAX_RENDERED_MESSAGES = 300;
 
-/** 单次历史响应的净字节预算（正文 + 图片估算）；超了从最旧的开始丢。 */
-export const REMOTE_HISTORY_BYTE_BUDGET = 6_000_000;
+/**
+ * 手机端「解密后的内层 envelope」硬上限，与
+ * `mobile/app/.../protocol/Envelope.kt` 的 `MAX_ENVELOPE_BYTES` 一致。
+ *
+ * ⚠️ 这个值不能只顾 relay 的 32MB 传输上限：手机在 `Envelope.parse` 里对解密的
+ * 明文 envelope 长度做硬校验，**超了一律抛 PAYLOAD_TOO_LARGE 丢帧**。
+ * 2026-09-24 真机取证：历史涨到 2.02MB 后，`thread.subscribe` 的响应每一条都被
+ * 手机丢掉 → 请求 10s 超时（`Requester.defaultTimeoutMs`）→ UI 报「订阅失败」→
+ * `onStaleConnection` 触发重握手 → 主机 `relay-device-replaced` → 订阅被清 → 手机
+ * 再订阅……形成 ~10s 一轮的重连风暴。
+ */
+export const MAX_INNER_ENVELOPE_BYTES = 2_000_000;
+
+/** 给 envelope 其它字段（sessionId/model/thinkingLevels…）与 JSON 转义留的余量。 */
+export const SNAPSHOT_HEADROOM_BYTES = 400_000;
+
+/**
+ * 单次历史响应的净字节预算（估算值，用于快速预裁）。
+ *
+ * 必须**低于**手机端硬上限并留出余量；`remoteMessageSize` 只是个估算
+ * （不计 JSON 转义与字段名），真正的硬保证由 [trimRemoteHistoryByEncodedSize]
+ * 用实际序列化长度完成。
+ */
+export const REMOTE_HISTORY_BYTE_BUDGET = MAX_INNER_ENVELOPE_BYTES - SNAPSHOT_HEADROOM_BYTES;
 
 /** 估算单条消息下发后的字节数（正文长度 + 图片 base64 长度 + 固定开销）。 */
 export function remoteMessageSize(message: RemoteMessage): number {
@@ -48,6 +70,30 @@ export function trimRemoteHistory(
   let total = sizes.reduce((sum, size) => sum + size, 0);
   let start = 0;
   while (start < messages.length - 1 && total > budget) {
+    total -= sizes[start];
+    start += 1;
+  }
+  return start === 0 ? messages : messages.slice(start);
+}
+
+/**
+ * 按**真实序列化长度**兜底裁剪——这是「单帧一定进得了手机端上限」的硬保证。
+ *
+ * 为什么不能只靠 [trimRemoteHistory]：`remoteMessageSize` 是估算，不计 JSON 转义
+ * （代码/多行文本里的换行、引号会翻倍）、字段名与 envelope 其它字段。2026-09-24
+ * 真机事故就是估算 2.02MB 而实际 envelope 更大，手机整帧丢弃。
+ *
+ * 从最旧的开始丢（至少保留最后一条）。复杂度 O(总字节)：每条只 stringify 一次。
+ */
+export function trimRemoteHistoryByEncodedSize(
+  messages: RemoteMessage[],
+  limit = MAX_INNER_ENVELOPE_BYTES - SNAPSHOT_HEADROOM_BYTES,
+): RemoteMessage[] {
+  if (messages.length <= 1) return messages;
+  const sizes = messages.map((message) => JSON.stringify(message).length + 1); // +1 = 数组逗号
+  let total = sizes.reduce((sum, size) => sum + size, 0) + 2; // +2 = []
+  let start = 0;
+  while (start < messages.length - 1 && total > limit) {
     total -= sizes[start];
     start += 1;
   }

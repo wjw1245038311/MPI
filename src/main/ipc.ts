@@ -8,7 +8,7 @@ import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-up
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { appendDiagLog } from "./diag-log";
-import { capRenderedHistory, MAX_REMOTE_RAW_MESSAGES, remoteMessageSize, trimRemoteHistory } from "./remote/history-limit";
+import { capRenderedHistory, MAX_REMOTE_RAW_MESSAGES, remoteMessageSize, trimRemoteHistory, trimRemoteHistoryByEncodedSize } from "./remote/history-limit";
 import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
 import { listTests, readScenarioHistory, readScenarioResult, runLogicTest, runScenarioCase } from "./test-runner";
 import { getDevReleaseLogWindow, openChangelogWindow, openDevReleaseLogWindow } from "./standalone-windows";
@@ -1779,11 +1779,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       });
     });
     flushAssistantRound();
-    const trimmed = trimRemoteHistory(capRenderedHistory(output));
+    // 两道裁剪：先按估算快速预裁，再按**真实序列化长度**兜底——
+    // 手机端 Envelope.parse 对解密后的内层 envelope 有 2MB 硬上限，超了一律丢帧
+    // （2026-09-24 真机：订阅响应被丢 → 10s 超时 → 重握手 → 重连风暴）。
+    const trimmed = trimRemoteHistoryByEncodedSize(trimRemoteHistory(capRenderedHistory(output)));
     // 取证：手机端「往上拉不动」到底是主机只发了这么多，还是界面没渲染。
-    // diag 日志里看 remote-history 行的 sent/total/bytes 即可判定。
+    // diag 日志里看 remote-history 行的 sent/total/bytes/encoded 即可判定。
+    const estimated = trimmed.reduce((sum, m) => sum + remoteMessageSize(m), 0);
+    const encoded = JSON.stringify(trimmed).length;
     appendDiagLog(
-      `remote-history total=${source.length} rendered=${output.length} sent=${trimmed.length} bytes=${trimmed.reduce((sum, m) => sum + remoteMessageSize(m), 0)}`,
+      `remote-history total=${source.length} rendered=${output.length} sent=${trimmed.length} bytes=${estimated} encoded=${encoded}`,
     );
     return trimmed;
   }
