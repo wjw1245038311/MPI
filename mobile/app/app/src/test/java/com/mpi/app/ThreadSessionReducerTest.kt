@@ -104,6 +104,92 @@ class ThreadSessionReducerTest {
         session.detach()
     }
 
+    // ---- 订阅恢复（重连自愈）----
+    // 真机踩过：主机按 connectionId 记订阅，连接断开时旧订阅被清掉；只 resync
+    // （拉快照）会漏掉注册，之后所有实时事件都被主机静默丢弃——diag 里能看到
+    // `remote-pub … subs=0`，表现为「气泡卡发送中 / 整条消息包括回复一起晚到」。
+
+    @Test
+    fun `resync registers the subscription when not subscribed yet`() = runBlocking {
+        val requests = FakeRequests(SNAPSHOT)
+        val session = newSession(requests = requests)
+
+        session.resync()
+
+        // 未订阅 → 直接走 subscribe：一次往返既补订阅又拿快照
+        assertEquals(listOf("thread.subscribe"), requests.calls.toList())
+        assertTrue(session.view.value.ready)
+        assertEquals("修复登录 bug", session.view.value.summary?.title)
+        session.detach()
+    }
+
+    @Test
+    fun `resync uses thread resync once subscribed`() = runBlocking {
+        val requests = FakeRequests(SNAPSHOT)
+        val session = newSession(requests = requests)
+
+        session.subscribe()
+        session.resync()
+
+        assertEquals(listOf("thread.subscribe", "thread.resync"), requests.calls.toList())
+        session.detach()
+    }
+
+    @Test
+    fun `resync re-registers after the connection is invalidated`() = runBlocking {
+        val requests = FakeRequests(SNAPSHOT)
+        val session = newSession(requests = requests)
+
+        session.subscribe()
+        session.invalidateSubscription() // 重连：新连接上没有旧订阅
+        session.resync()
+
+        assertEquals(listOf("thread.subscribe", "thread.subscribe"), requests.calls.toList())
+        session.detach()
+    }
+
+    @Test
+    fun `ensureSubscribed is a no-op when already subscribed`() = runBlocking {
+        val requests = FakeRequests(SNAPSHOT)
+        val session = newSession(requests = requests)
+
+        session.subscribe()
+        session.ensureSubscribed()
+
+        assertEquals(listOf("thread.subscribe"), requests.calls.toList())
+        session.detach()
+    }
+
+    @Test
+    fun `ensureSubscribed registers when not subscribed`() = runBlocking {
+        val requests = FakeRequests(SNAPSHOT)
+        val session = newSession(requests = requests)
+
+        session.ensureSubscribed()
+
+        assertEquals(listOf("thread.subscribe"), requests.calls.toList())
+        assertTrue(session.view.value.ready)
+        session.detach()
+    }
+
+    @Test
+    fun `ensureSubscribed reports a problem but never throws`() = runBlocking {
+        val problems = CopyOnWriteArrayList<String>()
+        val session = ThreadSession(
+            threadId = THREAD_ID,
+            transport = FakeTransport(),
+            request = { _, _, _ -> throw IllegalStateException("network down") },
+            scope = scope,
+            onProblem = { problems += it },
+        )
+
+        session.ensureSubscribed() // 订阅丢不该阻断发送路径
+
+        assertEquals(1, problems.size)
+        assertTrue(problems.single().contains("订阅恢复失败"))
+        session.detach()
+    }
+
     @Test
     fun `tool blocks in history read their result as the body`() = runBlocking {
         val session = newSession()

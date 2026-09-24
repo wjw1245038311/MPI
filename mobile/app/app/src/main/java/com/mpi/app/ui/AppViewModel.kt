@@ -170,6 +170,8 @@ class AppViewModel(
     private var repository: HostRepository? = null
     private var threadSession: ThreadSession? = null
     private var threadActions: ThreadActions? = null
+    /** 重连后的会话重同步 Job（合并多次 Connected 回调，避免重复拉全量快照）。 */
+    private var reconnectSyncJob: Job? = null
     /** 按会话保存的草稿（内存；跨重启持久化留待需要时再说）。 */
     private val drafts = mutableMapOf<String, String>()
     /**
@@ -551,6 +553,8 @@ class AppViewModel(
 
     fun closeThread() {
         _ui.value.openThreadId?.let { drafts[it] = _ui.value.draft }
+        reconnectSyncJob?.cancel()
+        reconnectSyncJob = null
         threadSession?.detach()
         threadSession = null
         threadActions = null
@@ -855,6 +859,9 @@ class AppViewModel(
             _ui.update { it.copy(sending = true, sendError = null, sendNote = null) }
         }
         scope.launch {
+            // 兜底：正在对话时保证订阅在（重连后漏订阅会让主机把事件全丢）。
+            // 已订阅时是纯本地判断，零往返。
+            runCatching { session.ensureSubscribed() }
             try {
                 val result = actions.send(text, mode, images, files)
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
@@ -1003,12 +1010,19 @@ class AppViewModel(
                     autoCheckedUpdate = true
                     checkUpdate(manual = false)
                 }
-                // 重连后重新同步当前会话：断线期间的事件丢了，seq 接不上
+                // 重连后重新同步当前会话：断线期间的事件丢了，seq 接不上。
+                // **必须重注册订阅**：主机按 connectionId 记订阅，连接断开时已经清掉，
+                // 只 resync（拉快照）会让之后所有实时事件被主机静默丢弃——真机表现为
+                // 「气泡卡发送中 / 整条消息包括回复一起晚到」（diag 里 `remote-pub … subs=0`）。
                 if (state is SessionState.Connected) {
                     // 已恢复连接——离线期间的提示已经过时，清掉免得号人
                     if (_ui.value.problems.isNotEmpty()) _ui.update { it.copy(problems = emptyList()) }
                     threadSession?.let { open ->
-                        if (open.view.value.ready) scope.launch { runCatching { open.resync() } }
+                        open.invalidateSubscription()
+                        // 重连回调可能连着多次（日志里见过 3 次），合并成一次，别重复拉全量快照
+                        if (reconnectSyncJob?.isActive != true) {
+                            reconnectSyncJob = scope.launch { runCatching { open.resync() } }
+                        }
                     }
                 }
             }

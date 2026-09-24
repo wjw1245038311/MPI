@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -109,6 +111,21 @@ class ThreadSession(
     private val respondedUiIds = mutableSetOf<String>()
     private var closing = false
 
+    /**
+     * 订阅/同步互斥：重连自愈、发送兜底、seq 缺口补齐都可能并发触发，
+     * 串行化避免两次 `applySnapshot` 交错写 view（也会重复拉全量快照）。
+     */
+    private val syncLock = Mutex()
+
+    /**
+     * 当前连接上是否已注册订阅。
+     *
+     * 主机按 **connectionId** 记订阅，`transportClosed` 时会把它清掉——
+     * 所以重连（新连接）之后必须重新注册，否则实时事件会被主机静默丢弃。
+     */
+    @Volatile
+    private var subscribed = false
+
     private val unsubscribe = transport.onEnvelope { envelope -> handleEnvelope(envelope) }
 
     /**
@@ -144,24 +161,77 @@ class ThreadSession(
 
     /** 订阅并取快照。重复调用是安全的（用于重连后重新同步）。 */
     suspend fun subscribe() {
-        val payload = try {
-            request("thread.subscribe", threadIdPayload(), threadId)
-        } catch (e: Exception) {
-            _view.value = _view.value.copy(ready = true, errorBanner = e.message ?: "订阅失败")
-            throw e
+        syncLock.withLock {
+            val payload = try {
+                request("thread.subscribe", threadIdPayload(), threadId)
+            } catch (e: Exception) {
+                _view.value = _view.value.copy(ready = true, errorBanner = e.message ?: "订阅失败")
+                throw e
+            }
+            subscribed = true
+            applySnapshot(payload)
         }
-        applySnapshot(payload)
     }
 
-    /** 重新同步（seq 缺口或重连后）。 */
-    suspend fun resync() {
-        val payload = try {
-            request("thread.resync", threadIdPayload(), threadId)
-        } catch (e: Exception) {
-            _view.value = _view.value.copy(errorBanner = e.message ?: "同步失败")
-            throw e
+    /**
+     * 重连后调用：新连接在主机侧没有订阅（旧连接断开时已被清掉），标记失效，
+     * 让下一次 [resync] / [ensureSubscribed] 重新注册。
+     */
+    fun invalidateSubscription() {
+        subscribed = false
+    }
+
+    /**
+     * 确保当前连接上已注册订阅（幂等）。
+     *
+     * 真机踩过：主机按 connectionId 记订阅，重连后旧订阅被清掉，而 [resync] 只拉
+     * 快照不注册——只 resync 的话之后所有实时事件都被主机静默丢弃（diag 里能看到
+     * `remote-pub … subs=0`），表现为「气泡卡发送中 / 整条消息包括回复一起晚到」。
+     *
+     * @return 本次**刚补上**订阅时返回它携带的快照（调用方可直接应用，省一次往返）；
+     *   已订阅时返回 null（不发请求）。
+     */
+    private suspend fun ensureSubscribedLocked(): JsonElement? {
+        if (subscribed) return null
+        val payload = request("thread.subscribe", threadIdPayload(), threadId)
+        subscribed = true
+        return payload
+    }
+
+    /**
+     * 发送路径的兜底：正在对话时保证订阅在（已订阅时零开销）。
+     * 失败只经 [onProblem] 上报，**不阻断发送**——订阅丢不该让用户发不出消息。
+     */
+    suspend fun ensureSubscribed() {
+        syncLock.withLock {
+            try {
+                ensureSubscribedLocked()?.let { applySnapshot(it) }
+            } catch (e: Exception) {
+                onProblem("订阅恢复失败：${e.message ?: "未知错误"}")
+            }
         }
-        applySnapshot(payload)
+    }
+
+    /**
+     * 重新同步（seq 缺口或重连后）。
+     *
+     * **未订阅时直接走订阅**：它带回的快照就是最新的，既不漏注册又省一次往返
+     * （重连自愈的关键路径）。已订阅时才走 `thread.resync`，保住 live 快照语义。
+     */
+    suspend fun resync() {
+        syncLock.withLock {
+            try {
+                ensureSubscribedLocked()?.let { fresh ->
+                    applySnapshot(fresh)
+                    return@withLock
+                }
+                val payload = request("thread.resync", threadIdPayload(), threadId)
+                applySnapshot(payload)
+            } catch (e: Exception) {
+                _view.value = _view.value.copy(errorBanner = e.message ?: "同步失败")
+                throw e
+            }
+        }
     }
 
     /**
@@ -239,6 +309,7 @@ class ThreadSession(
 
     fun detach() {
         closing = true
+        subscribed = false
         flushJob?.cancel()
         unsubscribe()
     }
