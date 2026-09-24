@@ -107,11 +107,15 @@ export function Chat() {
   const streaming = thread?.streaming;
   const count = (thread?.messages.length || 0) + (streaming ? 1 : 0);
 
-  // 「活跃输入」跟踪：区分真实上滚手势与布局引起的 scrollTop 位移。
-  // content-visibility 高度解析 / 浏览器钳制会在无用户输入时产生微小上移，
-  // 若按方向检测解除跟随，发送消息后就会「不自动滚、要手动下滚一下」。
+  // 「活跃输入」跟踪：区分真实滚动手势与布局引起的 scrollTop 位移。
+  // content-visibility 高度解析 / 浏览器钳制会在无用户输入时产生微小位移，
+  // 若按方向检测解除/恢复跟随，发送消息后就会「不自动滚、要手动下滚一下」。
+  // 三类证据：滚动条拖拽（pointerdown）、滚动键（上下方向都算，覆盖键重复）、
+  // 滚轮——wheel 事件本身不带 pointerdown，其滚动事件滞后一帧才到
+  // handleUserScroll，用时间窗归因。
   const pointerDownRef = useRef(false);
   const keyScrollUntilRef = useRef(0);
+  const wheelScrollUntilRef = useRef(0);
   useEffect(() => {
     const onPointerDown = () => { pointerDownRef.current = true; };
     const onPointerUp = () => { pointerDownRef.current = false; };
@@ -119,7 +123,10 @@ export function Chat() {
       // 输入框里的按键（打字）不算滚动意图。
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (e.key === "PageUp" || e.key === "Home" || e.key === "ArrowUp") {
+      if (
+        e.key === "PageUp" || e.key === "Home" || e.key === "ArrowUp" ||
+        e.key === "PageDown" || e.key === "End" || e.key === "ArrowDown"
+      ) {
         keyScrollUntilRef.current = performance.now() + 400; // 覆盖键重复产生的后续滚动事件
       }
     };
@@ -143,9 +150,11 @@ export function Chat() {
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el);
     // 距离只用于「重新武装」跟随（用户滚回底部附近），绝不用于解除：
     // 任何真实上滚输入（滚轮/滚动条/键盘）都会先被方向检测捕获
-    // （handleWheelUp / handleUserScroll 的上移分支）。而 stick=true 时距离
+    // （handleWheel / handleUserScroll 的上移分支）。而 stick=true 时距离
     // 单独超出跟随带只可能来自布局变化——content-visibility 高度解析 +
     // 浏览器滚动锚定产生的非用户位移，按距离解除会把流式跟随无声杀死。
+    // 注意：本函数只在「有活跃输入」或程序化同步（stick 已为 true）时被调用；
+    // 无输入的布局位移走 handleUserScroll 的只记录分支，不经过这里重新武装。
     if (!stickRef.current && near) stickRef.current = true;
     setAtBottom(near);
   };
@@ -155,9 +164,19 @@ export function Chat() {
   // that gap let stale bottom positions get re-applied over an in-progress
   // scroll-up. Scrolling down is left to the scroll event, which re-arms
   // follow once we're back inside the near-bottom band (half viewport).
-  const handleWheelUp = (e: ReactWheelEvent<HTMLDivElement>) => {
+  const handleWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
+    // 滚轮不产生 pointerdown：它引发的滚动事件到达 handleUserScroll 时已查不到
+    // 「活跃输入」，必须靠这个时间窗归因（200ms ≈ 覆盖掉帧下的多帧延迟 +
+    // 连续滚动的微停顿；比按键窗口短——滚轮没有自动重复）。上下方向都记：
+    // 下翻回带内同样要靠它重新武装跟随。
+    wheelScrollUntilRef.current = performance.now() + 200;
     if (e.deltaY < 0) stickRef.current = false;
   };
+
+  const hasScrollGesture = () =>
+    pointerDownRef.current ||
+    performance.now() < keyScrollUntilRef.current ||
+    performance.now() < wheelScrollUntilRef.current;
 
   // Direction-aware scroll handler. Any upward movement — wheel, scrollbar
   // drag, or keys — is a read-history gesture and pauses follow, even for
@@ -165,23 +184,35 @@ export function Chat() {
   // check re-armed on the very next event, so slow drags / single wheel ticks
   // within half a viewport got yanked back down by content growth). Downward
   // movement re-arms via rememberScrollPosition once we're back in the band.
+  // 无「活跃输入」的位移（任一方向）= 布局位移：只记录位置，绝不改变跟随。
+  // 关键场景：滚轮上翻自己的滚动事件就落在这里——wheel 不带 pointerdown，
+  // 若按旧逻辑在带内重新武装，底部是思考块时高频 delta 会把每次上翻都拽回
+  // 底部（「很难向上拉动」）。
   const handleUserScroll = () => {
     const el = scrollRef.current;
     if (!el || !activeThreadId) return;
     const prev = lastScrollTopRef.current;
     const cur = el.scrollTop;
     lastScrollTopRef.current = cur;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el);
     if (prev !== null && cur < prev - 1) {
-      // 滚轮上翻已在 handleWheelUp 同步解除；这里只处理滚动条拖拽/键盘等
-      // 需要「活跃输入」佐证的来源。无活跃输入的上移 = 布局位移，不解除。
-      const userGesture = pointerDownRef.current || performance.now() < keyScrollUntilRef.current;
-      if (!userGesture) {
-        rememberScrollPosition();
+      // Upward. With gesture evidence: read-history intent, release follow.
+      // Without: layout shift — record only, never re-arm or release.
+      if (!hasScrollGesture()) {
+        scrollPositionsRef.current.set(activeThreadId, cur);
+        setAtBottom(near);
         return;
       }
       stickRef.current = false;
       scrollPositionsRef.current.set(activeThreadId, cur);
-      setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el));
+      setAtBottom(near);
+      return;
+    }
+    // Non-upward. Re-arm only on user-driven movement back into the band —
+    // layout-induced downward shifts must not override a released follow.
+    if (!hasScrollGesture()) {
+      scrollPositionsRef.current.set(activeThreadId, cur);
+      setAtBottom(near);
       return;
     }
     rememberScrollPosition();
@@ -751,7 +782,7 @@ export function Chat() {
       ) : (
         <>
           <div className="chat-stage">
-            <div className="chat-scroll" ref={scrollRef} onScroll={handleUserScroll} onWheel={handleWheelUp}>
+            <div className="chat-scroll" ref={scrollRef} onScroll={handleUserScroll} onWheel={handleWheel}>
           <div className={`messages${searchingDim ? " searching" : ""}`}>
             {headGroups.map((g) =>
               g.role === "compaction" ? (
@@ -807,6 +838,9 @@ export function Chat() {
             className="jump-latest"
             title={language === "zh" ? "跳转到最新消息" : "Jump to latest"}
             onClick={() => {
+              // 显式恢复跟随：平滑滚动期间 pointerup 早已触发，其下移事件查不到
+              // 「活跃输入」，不能依赖滚动事件重新武装（同 jumpToUserMessage）。
+              stickRef.current = true;
               const el = scrollRef.current;
               if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
             }}
