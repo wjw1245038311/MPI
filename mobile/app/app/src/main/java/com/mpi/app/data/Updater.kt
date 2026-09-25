@@ -100,16 +100,18 @@ class Updater(private val context: Context) {
     /**
      * 有更新时返回信息。
      *
-     * 源顺序：**中继优先，GitHub 兜底**（2026-09-26 调换）。
+     * **源顺序与短路规则是一对，不能只改一边**：
      *
-     * 为什么不再 GitHub 优先：
-     *  · 开发期的主渠道是「中继清单 + Seafile 下载」（自建；手机实测 6MB/s）；
-     *    而 GitHub 在部分网络下要等到超时才失败，把「检测更新」拖得很慢；
-     *  · 中继那份清单的 `url` 已指向 Seafile，所以开发期**一次都不碰 GitHub**。
+     * · 源顺序：**中继优先，GitHub 仅当它不可达时兜底**。中继是自建的，清单只有 1KB；
+     *   开发期的主渠道也在那里（清单的 `url` 指向 Seifile 分享链，手机实测 6MB/s）。
+     * · 短路：拿到**任何非 Failed 的结果（Available / UpToDate）就立即返回**。
+     *   曾经改成「UpToDate 也继续问下一个源」，结果每次「已是最新」都要再等 GitHub
+     *   超时（实测 ~10s，有时直接 time out）——UI 上就成了「点了没反应」。
      *
-     * 为什么 `UpToDate` 不能立即 return（旧实现就错在这里）：
-     *  · 发布期中继那份清单可能是旧的 → 它答 UpToDate；旧实现就此返回，**永远看不到 GitHub
-     *    上的新版**。现在只在拿到 `Available` 时立即采用，`UpToDate` 则继续看下一个源。
+     * ⚠️ 代价与配套约定：把中继当权威源，就要求**它的清单不能陈旧**——
+     *   所以 `scripts/publish-android-github.mjs`（正式发布）也必须把清单推到中继，
+     *   与 `scripts/dev-publish-android.mjs` 一致。只写 GitHub 那份的话，客户端以中继
+     *   为权威就会漏更新。
      */
     suspend fun check(relayUrl: String): UpdateCheckResult = withContext(Dispatchers.IO) {
         val sources = buildList {
@@ -117,16 +119,15 @@ class Updater(private val context: Context) {
             add(GITHUB_MANIFEST_URL to GITHUB_BASE_URL)
         }
         var lastReason = "没有可用的更新源"
-        var sawUpToDate = false
         for ((manifestUrl, base) in sources) {
             when (val result = fetchManifest(manifestUrl, base)) {
+                // 这个源不行（拿不到 / 格式错）→ 试下一个
                 is UpdateCheckResult.Failed -> lastReason = result.reason
-                is UpdateCheckResult.UpToDate -> sawUpToDate = true // 这一源没新版，但别的源可能有
-                else -> return@withContext result                    // Available：立即采用
+                // 首个非失败的结果即为权威（中继优先）→ 立即采用，不再等其它源
+                else -> return@withContext result
             }
         }
-        // 所有源都访完：只要有一个答「没新版」就算没新版；否则报最后一个错因。
-        if (sawUpToDate) UpdateCheckResult.UpToDate else UpdateCheckResult.Failed(lastReason)
+        UpdateCheckResult.Failed(lastReason)
     }
 
     private fun fetchManifest(manifestUrl: String, base: String): UpdateCheckResult =

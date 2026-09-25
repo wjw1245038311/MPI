@@ -18,6 +18,7 @@
 // 增量基线版本：默认按 `mpi-android-native-<from>-to-<version>.patch` 的文件名推断，
 // 也可用 `--from 0.5.17` 指定。
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { resolve, join, dirname } from "node:path";
 
@@ -171,6 +172,29 @@ async function main() {
   console.log(`\n清单已写入：${MANIFEST_PATH}`);
   console.log("⚠️ 记得 commit + push 它（App 从 raw 固定路径读）：");
   console.log(`   https://raw.githubusercontent.com/${REPO}/main/mobile/app/update/mpi-android-native.json`);
+
+  // 同步到中继的 /download/。
+  // **这一步不是可选的**：客户端 Updater.check() 把**中继当权威源**（中继优先且拿到结果就
+  // 短路，不再问 GitHub——否则每次「已是最新」都要等 GitHub 超时 ~10s）。所以中继那份陈旧
+  // 就等于客户端漏更新。scripts/dev-publish-android.mjs 也是同样的约定。
+  await pushManifestToRelay();
+}
+
+/** 把清单放到中继静态目录（scp 到临时名再 mv，避免客户端读到写一半的文件）。 */
+async function pushManifestToRelay() {
+  const host = process.env.MPI_RELAY_HOST || "root@100.67.5.31";
+  const dir = "/var/www/mpi-mobile/download";
+  const tmp = `${dir}/mpi-native.tmp`;
+  console.log(`\n同步清单到中继（${host}:${dir}）…`);
+  const scp = spawnSync("scp", ["-o", "BatchMode=yes", MANIFEST_PATH, `${host}:${tmp}`], { stdio: "inherit" });
+  if (scp.status !== 0) {
+    // 不静默：不同步等于客户端收不到这次更新
+    console.error("⚠️ 清单未能同步到中继（scp 失败）。客户端以中继为权威源，**必须**补上：");
+    console.error(`   scp "${MANIFEST_PATH}" ${host}:${tmp} && ssh ${host} 'mv ${tmp} ${dir}/mpi-android-native.json'`);
+    return;
+  }
+  const mv = spawnSync("ssh", ["-o", "BatchMode=yes", host, `mv ${tmp} ${dir}/mpi-android-native.json`], { stdio: "inherit" });
+  console.log(mv.status === 0 ? "   ✓ 中继清单已就位" : "   ⚠️ 中继上 mv 失败，请手动替换（见上）");
 }
 
 function readdirSafe(dir) {
