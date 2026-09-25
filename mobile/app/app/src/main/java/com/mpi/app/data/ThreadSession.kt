@@ -791,6 +791,9 @@ class ThreadSession(
     }
 
     private fun patch(transform: (ThreadView) -> ThreadView) {
+        // 会话已切走（detach 置 closing）：迟到的事件/快照不得再改状态。
+        // 这是防线之二——UI 侧还有「不是当前会话就别回写」的校验（见 AppViewModel 的收集器）。
+        if (closing) return
         synchronized(lock) { _view.value = transform(_view.value) }
     }
 

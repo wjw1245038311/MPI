@@ -221,6 +221,13 @@ class AppViewModel(
      * 用户自己开过（或通知深链开过）就不再掠。
      */
     private var autoOpenedThread = false
+    /**
+     * 切会话串行化：用户/新建的打开与「自动打开」不能互相插队。
+     *
+     * 用户报的「运行中会话在跑时，新建会话会莫名跳回运行中那条」：
+     * autoOpen 先判 openThreadId==null、再 openThread（check-then-act，中间可被插入）。
+     */
+    private val openLock = Any()
     private var unsubscribeProblems: (() -> Unit)? = null
     private val jobs = mutableListOf<Job>()
 
@@ -523,7 +530,12 @@ class AppViewModel(
     // ---- 会话 ----
 
     /** 打开一个会话：订阅快照并开始接收事件流。 */
+    /** 切会话统一入口：与「自动打开」串行化，避免两者并发时界面被抢回运行中的会话。 */
     fun openThread(threadId: String) {
+        synchronized(openLock) { openThreadLocked(threadId) }
+    }
+
+    private fun openThreadLocked(threadId: String) {
         val transport = session ?: return
         val requesterRef = requester ?: return
         // 用户/自动已经进过会话 —— 不再自动打开别的
@@ -564,6 +576,10 @@ class AppViewModel(
         jobs += scope.launch {
             var lastPendingId: String? = null
             threadSessionLocal.view.collect { view ->
+                // ⚠️ 陈旧会话不得回写 UI：切走后这条会话只是 detach()，它的收集器还活着，
+                // 而 chunk 内的 subscribe() 迟到响应仍会 patch 它自己的 view 并触发这里——
+                // 不拦的话会把界面扳回旧会话（真机现象：新建会话后莫名跳到运行中的那条）。
+                if (threadSession !== threadSessionLocal) return@collect
                 val wasRunning = _ui.value.thread?.running == true
                 _ui.update { it.copy(thread = view) }
                 // 回合结束（running true→false）：投递暂存的「待处理后续」（与 PWA 同语义）
@@ -1194,13 +1210,18 @@ class AppViewModel(
      * 只在每次 attach 后做一次；用户自己开/关过会话后不再打扰。
      */
     private fun maybeAutoOpenThread(snapshot: HostSnapshot) {
-        if (autoOpenedThread || _ui.value.openThreadId != null) return
-        if (pendingThreadOpen.value != null) return // 通知深链优先
-        if (session == null || requester == null) return
-        val threads = snapshot.allThreads
-        if (threads.isEmpty()) return
-        val target = threads.firstOrNull { it.state == RemoteThreadState.Running } ?: threads.first()
-        openThread(target.id)
+        synchronized(openLock) {
+            if (autoOpenedThread || _ui.value.openThreadId != null) return
+            if (pendingThreadOpen.value != null) return // 通知深链优先
+            if (session == null || requester == null) return
+            val threads = snapshot.allThreads
+            if (threads.isEmpty()) return
+            val target = threads.firstOrNull { it.state == RemoteThreadState.Running } ?: threads.first()
+            // 先消费掉「每次 attach 只自动开一次」的机会再动手：
+            // 否则它与用户新建会话并发时，会晚一步把界面抢回运行中那条。
+            autoOpenedThread = true
+            openThreadLocked(target.id)
+        }
     }
 
     private fun attach(record: PairingRecord) {
