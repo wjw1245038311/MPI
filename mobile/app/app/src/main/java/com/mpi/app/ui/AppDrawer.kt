@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -19,6 +20,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,7 +57,6 @@ fun AppDrawerContent(
     onRefresh: () -> Unit,
     onOpenThread: (String) -> Unit,
     onNewThread: (String) -> Unit,
-    onOpenSettings: () -> Unit,
     onRename: (String, String) -> Unit = { _, _ -> },
     onTogglePin: (String, Boolean) -> Unit = { _, _ -> },
     onDelete: (String) -> Unit = {},
@@ -72,17 +75,20 @@ fun AppDrawerContent(
 
         HorizontalDivider(color = MpiTheme.colors.border)
 
-        NewThreadEntry(
-            projects = state.host.projects,
-            creating = state.creatingThread,
-            onNewThread = onNewThread,
+        // 面板主体 = 近期会话列表。顶部的「新建会话」条与底部的「设置」都去掉了：
+        // 设置已有入口（会话页右上角），新建改到底部悬浮气泡（见 NewThreadPill）。
+        Text(
+            text = "近期会话",
+            style = MaterialTheme.typography.labelSmall,
+            color = MpiTheme.colors.textFaint,
+            modifier = Modifier.padding(start = 18.dp, top = 12.dp, bottom = 2.dp),
         )
 
-        HorizontalDivider(color = MpiTheme.colors.border)
-
+        Box(modifier = Modifier.weight(1f)) {
         LazyColumn(
-            modifier = Modifier.weight(1f, fill = false),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxSize(),
+            // 底部留出悬浮气泡的高度，最后一个会话不会被压住
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 92.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             val projects = state.host.projects
@@ -114,15 +120,13 @@ fun AppDrawerContent(
                     )
                 }
             }
-        }
-
-        HorizontalDivider(color = MpiTheme.colors.border)
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            // 切设备 / 加设备 都在「点头部头像」打开的面板里（重复入口已删）
-            TextButton(onClick = onOpenSettings) { Text("设置") }
+            }
+            NewThreadPill(
+                projects = state.host.projects,
+                creating = state.creatingThread,
+                onNewThread = onNewThread,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
+            )
         }
     }
 
@@ -401,58 +405,57 @@ internal fun ThreadActionDialog(
 }
 
 /**
- * 抽屉「新建会话」入口：单项目直接建；多项目先内联选项目。
- * 新建按钮在请求进行中禁用，避免连点建出多条空会话。
+ * 面板底部居中的悬浮气泡：新建对话（参考设计图）。
+ *
+ * 单一项目直接新建；多项目时弹一个小菜单选项目——与原来那条「新建会话」条同一套行为，
+ * 只是从顶部搬到下面、变成跟手的圆形气泡。
  */
 @Composable
-private fun NewThreadEntry(
+private fun NewThreadPill(
     projects: List<RemoteProject>,
     creating: String?,
     onNewThread: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     if (projects.isEmpty()) return
     var choosing by remember { mutableStateOf(false) }
     val busy = creating != null
+    val shape = RoundedCornerShape(999.dp)
 
-    if (projects.size == 1 && !choosing) {
-        TextButton(
-            onClick = { onNewThread(projects.first().id) },
-            enabled = !busy,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+    Box(modifier) {
+        Row(
+            modifier = Modifier
+                .shadow(8.dp, shape)
+                .clip(shape)
+                .background(MpiTheme.colors.bg)
+                .clickable(enabled = !busy) {
+                    if (projects.size == 1) onNewThread(projects.first().id) else choosing = true
+                }
+                .padding(horizontal = 20.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(IconPlus, contentDescription = null, modifier = Modifier.size(15.dp))
-            Spacer(Modifier.size(6.dp))
-            Text(if (busy) "新建中…" else "新建会话")
+            Icon(
+                imageVector = IconNewChat,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.size(9.dp))
+            Text(
+                text = if (busy) "新建中…" else "新建对话",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
         }
-        return
-    }
-
-    Column(Modifier.fillMaxWidth()) {
-        TextButton(
-            onClick = { choosing = !choosing },
-            enabled = !busy,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
-        ) {
-            Icon(IconPlus, contentDescription = null, modifier = Modifier.size(15.dp))
-            Spacer(Modifier.size(6.dp))
-            Text(if (busy) "新建中…" else "新建会话（选择项目）")
-        }
-        if (choosing) {
+        DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }) {
             projects.forEach { project ->
-                TextButton(
+                DropdownMenuItem(
+                    text = { Text(project.name.ifEmpty { project.id }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     onClick = {
                         choosing = false
                         onNewThread(project.id)
                     },
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth().padding(start = 22.dp, end = 8.dp),
-                ) {
-                    Text(
-                        text = project.name.ifEmpty { project.id },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                )
             }
         }
     }

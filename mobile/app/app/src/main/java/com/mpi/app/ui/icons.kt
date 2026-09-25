@@ -165,6 +165,22 @@ val IconMic: ImageVector by lazy {
 
 // ---- 设置页分组图标（沿用 24 viewBox / stroke 1.7 / 圆头）----
 
+/** 新建对话（气泡 + 加号）：用在左侧面板底部那个悬浮气泡上。 */
+val IconNewChat: ImageVector by lazy {
+    strokeIcon("NewChat") {
+        // 气泡本体（左下带小尾巴的圆角矩形）
+        moveTo(9.5f, 5.5f); lineTo(4.5f, 5.5f)
+        curveTo(3.4f, 5.5f, 3f, 6.1f, 3f, 7.1f)
+        lineTo(3f, 15.1f); curveTo(3f, 16.1f, 3.4f, 16.7f, 4.5f, 16.7f)
+        lineTo(6f, 16.7f); lineTo(6f, 20f); lineTo(9.8f, 16.7f)
+        lineTo(14.5f, 16.7f); curveTo(15.6f, 16.7f, 16f, 16.1f, 16f, 15.1f)
+        lineTo(16f, 13f)
+        // 加号
+        moveTo(17.5f, 4.2f); lineTo(17.5f, 10.2f)
+        moveTo(14.5f, 7.2f); lineTo(20.5f, 7.2f)
+    }
+}
+
 /**
  * 即时语音（声波）：语音对话模式开着时替掉话筒图标——一眼看出「现在是连续对话模式」，
  * 点它退出。

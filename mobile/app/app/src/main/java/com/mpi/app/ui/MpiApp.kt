@@ -378,10 +378,6 @@ private fun DrawerHost(
                         scope.launch { drawerState.close() }
                         viewModel.createThread(projectId)
                     },
-                    onOpenSettings = {
-                        scope.launch { drawerState.close() }
-                        onOpenSettings()
-                    },
                     onRename = viewModel::renameThread,
                     onTogglePin = viewModel::setThreadPinned,
                     onDelete = viewModel::deleteThread,
