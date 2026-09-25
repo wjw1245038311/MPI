@@ -46,6 +46,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -989,6 +990,22 @@ class AppViewModel(
                 Notifier.turnCompleteSpeech(settings.voiceSpeechContent, title, reply),
                 allowDuringCall = settings.speakDuringCall,
             )
+        }
+    }
+
+    /**
+     * 诊断页的「测试通知」：**12 秒后**发一条与「对话完成」同渠道的测试通知。
+     *
+     * 为什么要延迟：得给用户时间切到后台 / 熄屏——只有那样测的才是「后台能不能弹」，
+     * 前台弹一条只能说明渠道没被关。通知状态（权限 + 渠道）本身在诊断页有单独一行。
+     */
+    fun testNotification() {
+        _ui.update {
+            it.copy(lastTurnNotify = "测试通知已安排：12 秒后弹出（现在切后台或熄屏等着）")
+        }
+        scope.launch {
+            delay(12_000)
+            notifier.notifyTest("测试通知 · 判定依据 ${AppVisibility.detail()}")
         }
     }
 

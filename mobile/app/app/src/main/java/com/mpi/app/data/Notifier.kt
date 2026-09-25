@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.mpi.app.MainActivity
 
 /**
@@ -87,6 +88,26 @@ class Notifier(private val context: Context) {
         if (threadId != null && threadId != turnThreadId) return
         turnThreadId = null
         runCatching { manager?.cancel(TURN_NOTIFICATION_ID) }
+    }
+
+    /**
+     * 诊断用：发一条与「对话完成」**同渠道**的测试通知。
+     *
+     * 延迟交给调用方控制（AppViewModel.testNotification 会等十几秒）——只有给用户时间
+     * 切到后台 / 熄屏，测的才是「后台能不能弹」，而不是「前台能不能弹」。
+     */
+    fun notifyTest(body: String) = notifyTurnComplete("", "测试通知", body)
+
+    /** 诊断用：通知总开关 + 「对话完成」渠道状态（收不到通知最常见的两个原因）。 */
+    fun diagnostics(): String {
+        val enabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+        val channel = manager?.getNotificationChannel(CHANNEL_TURN)
+        val channelState = when {
+            channel == null -> "「对话完成」渠道缺失"
+            channel.importance == NotificationManager.IMPORTANCE_NONE -> "「对话完成」渠道被关"
+            else -> "「对话完成」渠道正常"
+        }
+        return if (enabled) "系统通知已开启 · $channelState" else "系统通知被关闭（设置 → 应用 → MPI → 通知）"
     }
 
     fun startLinkService() {

@@ -521,6 +521,9 @@ internal fun formatBytes(bytes: Long): String {
 fun DiagnosticsScreen(
     state: AppUiState,
     deviceName: String,
+    /** 「对话完成」通知的可用性（系统开关 + 渠道）——由调用方查好后传入。 */
+    notificationStatus: String,
+    onTestNotification: () -> Unit,
     onClose: () -> Unit,
 ) {
     BackHandler(enabled = true) { onClose() }
@@ -548,6 +551,20 @@ fun DiagnosticsScreen(
                 "完成通知",
                 state.lastTurnNotify ?: "还没判定过（回合结束时才有）",
             )
+            DiagRow("通知通道", notificationStatus)
+            // 测试通知：延时发，用户才有时间切后台/熄屏——测的就是真实场景
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "测试通知",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MpiTheme.colors.textFaint,
+                )
+                TextButton(onClick = onTestNotification) { Text("12 秒后弹一条") }
+            }
             DiagRow(
                 "前后台标记",
                 "${if (AppVisibility.isForegroundNow()) "现在算前台（会跳过通知）" else "现在算后台（会发通知）"}（" +

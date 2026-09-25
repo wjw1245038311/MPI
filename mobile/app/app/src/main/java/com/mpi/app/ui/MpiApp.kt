@@ -302,6 +302,8 @@ fun MpiApp(container: AppContainer) {
                 DiagnosticsScreen(
                     state = state,
                     deviceName = container.deviceName,
+                    notificationStatus = remember { container.notifier.diagnostics() },
+                    onTestNotification = viewModel::testNotification,
                     onClose = { diagnosticsOpen = false },
                 )
             }
