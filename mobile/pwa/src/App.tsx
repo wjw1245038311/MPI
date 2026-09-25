@@ -132,6 +132,28 @@ function deviceLabel(item: PairingRecord): string {
   return item.displayName?.trim() || item.hostName || `主机 ${shortId(item.hostId)}`;
 }
 
+/** 与 styles.css 的宽屏断点一致（@media (min-width: 1024px)）。 */
+const WIDE_QUERY = "(min-width: 1024px)";
+
+/**
+ * 是否处于宽屏布局。
+ *
+ * 宽屏下 `.drawer` 被 CSS 变成常驻侧栏（position: static），但 `aria-hidden`
+ * 仍按「抽屉是否打开」算 → 侧栏对读屏器不可见。这里单独判定，只影响无障碍语义，
+ * 不参与任何布局（布局全在 CSS 里）。
+ */
+function useIsWide(): boolean {
+  const [wide, setWide] = useState(() => window.matchMedia(WIDE_QUERY).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(WIDE_QUERY);
+    const onChange = (event: MediaQueryListEvent) => setWide(event.matches);
+    setWide(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return wide;
+}
+
 export default function App() {
   const storeRef = useRef<KeyStore>(new IdbKeyStore());
   const clientRef = useRef<RelayClient | null>(null);
@@ -150,6 +172,8 @@ export default function App() {
   const currentPairing = pairings.find((item) => item.hostId === hostId) ?? null;
   /** 飞书式层级：一级抽屉（项目/会话）、二级抽屉（设备）。 */
   const [drawer, setDrawer] = useState<"none" | "projects" | "devices">("none");
+  /** 宽屏下侧栏常驻，不再算「关闭」——仅供 aria-hidden 用，不影响布局。 */
+  const isWide = useIsWide();
   const drawerRef = useRef(drawer);
   drawerRef.current = drawer;
   const [connState, setConnState] = useState("idle");
@@ -828,7 +852,7 @@ export default function App() {
       {/* 飞书式层级：主页是对话 → 头像开一级抽屉（项目/会话）→ 再往左二级抽屉（设备） */}
       {drawer !== "none" && <div className="drawer-backdrop" onClick={closeDrawer} />}
 
-      <aside className={`drawer${drawer !== "none" ? " open" : ""}`} aria-hidden={drawer === "none"}>
+      <aside className={`drawer${drawer !== "none" ? " open" : ""}`} aria-hidden={drawer === "none" && !isWide}>
         <button type="button" className="drawer-head" onClick={() => openDrawer("devices")}>
           <span className="app-logo small" aria-hidden="true">M</span>
           <span className="drawer-head-main">

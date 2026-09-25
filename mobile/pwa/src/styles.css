@@ -712,3 +712,82 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .thread-menu-error { color: #d93025; font-size: 12px; }
 .cp-btn.danger { color: #d93025; border-color: color-mix(in srgb, #d93025 40%, var(--border)); }
+
+/* ========================================================================
+   平板档（768–1023px）：仍是单栏 + overlay 抽屉，只把居中列放宽，
+   让代码块与工具输出不至于在平板上横向折行。
+   —— 必须写在≥1024px 块**之前**：两块只差 max-width，靠源序决定胜负。
+   ======================================================================== */
+@media (min-width: 768px) and (max-width: 1023.98px) {
+  .app { max-width: 760px; }
+}
+
+/* ========================================================================
+   宽屏布局（≥1024px）：会话列表从 overlay 抽屉变常驻左侧栏，主区成为网格第二列。
+   —— 只重排外层（.app / .drawer / .app-main），内层垂直高度链
+      （app-main → thread-view → thread-scroll）保持原样，
+      见 scripts/test-pwa-layout.mjs 的承重规则契约。
+   —— 手机端（<1024px）行为完全不变。
+   ======================================================================== */
+@media (min-width: 1024px) {
+  .app {
+    display: grid;
+    /* 侧栏宽度：随视口按比例（26%），钳在 260–360px。
+       不能用 max-content —— .thread-preview 的 40ch（≈260px）会把轨道钉死在 505px，
+       且与视口无关（1024 下占 49%）。 */
+    grid-template-columns: clamp(260px, 26vw, 360px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  /* 顶栏只压在主区上（侧栏自己带 logo + 设备名，跨满两列会重复一个 M） */
+  .app-header {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 12px 18px 10px;
+  }
+  /* 40px 占位是给安卓壳右上角 ⋮ 用的，浏览器里纯属浪费 */
+  .header-spacer { display: none; }
+  /* 头像按钮（开项目抽屉）在侧栏常驻后变得重复：侧栏已有可点的 drawer-head */
+  .avatar-btn { display: none; }
+
+  /* 主区：网格第二列；宽度交给内层约束，避免长行 */
+  .app-main {
+    grid-column: 2;
+    grid-row: 2;
+    padding: 0 24px 16px;
+    min-height: 0;
+  }
+  /* 阅读宽度：会话视图与卡片类内容统一限宽居中 */
+  .thread-view,
+  .app-main > .card,
+  .app-main > .chat-empty { max-width: 900px; margin-inline: auto; }
+
+  /* 抽屉 → 常驻侧栏（不再是浮层，不参与 transform 动画）；跨满两行 = 桌面端的整列侧栏 */
+  .drawer {
+    position: static;
+    grid-column: 1;
+    grid-row: 1 / 3;
+    width: auto;
+    transform: none;
+    box-shadow: none;
+    padding: 12px 10px 16px;
+    min-height: 0;
+  }
+  .drawer-backdrop { display: none; }
+
+  /* 二级抽屉（设备切换）保持浮层语义，压在侧栏之上 */
+  .drawer.drawer-secondary {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(320px, 86vw);
+    z-index: 42;
+    transform: translateX(-102%);
+    box-shadow: var(--shadow-md);
+  }
+  .drawer.drawer-secondary.open { transform: none; }
+}
