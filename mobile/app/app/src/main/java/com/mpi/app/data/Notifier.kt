@@ -159,6 +159,50 @@ class Notifier(private val context: Context) {
             phoneInitiated: Boolean,
         ): Boolean = enabled && phoneInitiated && !foreground
 
+        /** 播报里回复摘要最多念多少字——再长就只剩吵了。 */
+        private const val SPEECH_MAX = 60
+
+        /** ``` 围栏代码块：念出来毫无意义（会是「反引号反引号反引号…」）。 */
+        private val FENCED_CODE = Regex("```[\\s\\S]*?```")
+
+        /**
+         * 语音播报稿（纯函数，可单测）：按设置念**固定语**或**回复摘要**。
+         *
+         * 摘要先去掉代码围栏、压平空白、截短——念出来才像人话；摘要为空时退回固定语。
+         */
+        internal fun turnCompleteSpeech(
+            content: VoiceSpeechContent,
+            threadTitle: String?,
+            reply: String?,
+        ): String {
+            val title = threadTitle?.trim().orEmpty()
+            val prefix = if (title.isEmpty()) "" else "「${title.take(40)}」"
+            val fixed = if (prefix.isEmpty()) "回复已完成" else "$prefix 回复已完成"
+            if (content == VoiceSpeechContent.Fixed) return fixed
+            val spoken = flatten(reply?.replace(FENCED_CODE, " "))
+            if (spoken.isEmpty()) return fixed
+            val excerpt = if (spoken.length <= SPEECH_MAX) spoken else "${spoken.take(SPEECH_MAX - 1)}…"
+            return if (prefix.isEmpty()) excerpt else "$prefix $excerpt"
+        }
+
+        /**
+         * 诊断用：这一回合为什么发/没发（纯函数，可单测）。
+         *
+         * 专治「设了却没收到通知」——三个判定条件直接摊在诊断页上，不用猜。
+         */
+        internal fun turnNotifyReason(
+            enabled: Boolean,
+            foreground: Boolean,
+            phoneInitiated: Boolean,
+            spoke: Boolean,
+        ): String = when {
+            !enabled -> "跳过：设置里已关闭"
+            !phoneInitiated -> "跳过：回合由电脑端发起"
+            foreground -> "跳过：App 在前台"
+            spoke -> "已通知 + 语音"
+            else -> "已通知"
+        }
+
         private fun flatten(value: String?): String = value?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
 
         private fun clip(text: String): String = if (text.length <= 80) text else "${text.take(79)}…"

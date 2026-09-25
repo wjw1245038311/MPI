@@ -49,6 +49,7 @@ import com.mpi.app.data.Appearance
 import com.mpi.app.data.FontSize
 import com.mpi.app.data.SessionState
 import com.mpi.app.data.UpdateInfo
+import com.mpi.app.data.VoiceSpeechContent
 import com.mpi.app.ui.theme.MpiTheme
 import java.io.File
 
@@ -66,6 +67,12 @@ internal fun fontSizeLabel(size: FontSize): String = when (size) {
     FontSize.Large -> "大"
 }
 
+/** 播报内容的显示名。 */
+internal fun voiceContentLabel(content: VoiceSpeechContent): String = when (content) {
+    VoiceSpeechContent.Fixed -> "固定语"
+    VoiceSpeechContent.Reply -> "回复摘要"
+}
+
 /**
  * 设置页（对齐 Qoder 的分组卡片风格）：左侧图标 + 标题 + 右侧「当前值 / 箭头」。
  *
@@ -78,6 +85,8 @@ fun SettingsScreen(
     onAppearance: (Appearance) -> Unit,
     onFontSize: (FontSize) -> Unit,
     onNotifyOnTurnComplete: (Boolean) -> Unit,
+    onSpeakTurnComplete: (Boolean) -> Unit,
+    onVoiceContent: (VoiceSpeechContent) -> Unit,
     onOpenDiagnostics: () -> Unit,
     onRemoveDevice: () -> Unit,
     updateInfo: UpdateInfo?,
@@ -93,6 +102,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     var appearancePicker by remember { mutableStateOf(false) }
     var fontPicker by remember { mutableStateOf(false) }
+    var voiceContentPicker by remember { mutableStateOf(false) }
     var confirmingRemove by remember { mutableStateOf(false) }
     var cacheNote by remember { mutableStateOf<String?>(null) }
 
@@ -117,6 +127,21 @@ fun SettingsScreen(
                     title = "对话完成后通知",
                     trailing = if (settings.notifyOnTurnComplete) "开（仅后台）" else "关",
                     onClick = { onNotifyOnTurnComplete(!settings.notifyOnTurnComplete) },
+                )
+                // 语音只念固定语（「<会话标题>回复已完成」），不念回复正文——代码/符号念出来不好听。
+                // 触发条件与上一条完全一致；引擎/中文语音包缺失时静默降级为「只发通知」。
+                SettingsItem(
+                    icon = IconMic,
+                    title = "完成后语音播报",
+                    trailing = if (settings.speakTurnComplete) "念一句" else "关",
+                    onClick = { onSpeakTurnComplete(!settings.speakTurnComplete) },
+                )
+                // 念什么：固定语最不打扰；回复摘要信息多，但会先去代码围栏、压平空白再截短。
+                SettingsItem(
+                    icon = null,
+                    title = "播报内容",
+                    trailing = voiceContentLabel(settings.voiceSpeechContent),
+                    onClick = { voiceContentPicker = true },
                 )
                 // 「语言」条目已删：原生端全量中文硬编码，没有任何可选项，
                 // 放着只会是个点了没反应的箭头（用户反馈）。要真做 zh/en 得先把
@@ -215,6 +240,35 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(28.dp))
         }
+    }
+
+    if (voiceContentPicker) {
+        AlertDialog(
+            onDismissRequest = { voiceContentPicker = false },
+            title = { Text("播报内容") },
+            text = {
+                Column {
+                    VoiceSpeechContent.entries.forEach { content ->
+                        TextButton(
+                            onClick = {
+                                onVoiceContent(content)
+                                voiceContentPicker = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = if (settings.voiceSpeechContent == content) {
+                                    "✓ ${voiceContentLabel(content)}"
+                                } else {
+                                    voiceContentLabel(content)
+                                },
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { voiceContentPicker = false }) { Text("关闭") } },
+        )
     }
 
     if (appearancePicker) {
@@ -467,6 +521,10 @@ fun DiagnosticsScreen(
                     "${it.messages.size} 条消息 · ${if (it.ready) "已就绪" else "载入中"}" +
                         (it.summary?.state?.let { s -> " · ${s.label()}" } ?: "")
                 } ?: "未打开",
+            )
+            DiagRow(
+                "完成通知",
+                state.lastTurnNotify ?: "还没判定过（回合结束时才有）",
             )
             DiagRow(
                 "最近问题",

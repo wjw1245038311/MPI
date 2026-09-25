@@ -53,6 +53,32 @@ enum class FontSize(val scale: Float) {
     }
 }
 
+/**
+ * 「对话完成」语音播报念什么。
+ *
+ * 固定语短、不吵；回复摘要信息多，但代码/符号念出来不好听——播报前会先去掉代码围栏、
+ * 压平空白、再截短。默认固定语（最不打扰）。
+ */
+enum class VoiceSpeechContent {
+    Fixed,
+    Reply,
+    ;
+
+    val wire: String
+        get() = when (this) {
+            Fixed -> "fixed"
+            Reply -> "reply"
+        }
+
+    companion object {
+        /** 未知取值回到「固定语」。 */
+        fun fromStored(value: String?): VoiceSpeechContent = when (value) {
+            "reply" -> Reply
+            else -> Fixed
+        }
+    }
+}
+
 data class AppSettings(
     val appearance: Appearance = Appearance.System,
     val fontSize: FontSize = FontSize.Normal,
@@ -65,6 +91,15 @@ data class AppSettings(
      * 前台盯着屏幕看、以及桌面发起的回合都不打扰（判定见 `Notifier.shouldNotifyTurnComplete`）。
      */
     val notifyOnTurnComplete: Boolean = true,
+    /**
+     * 「对话完成」时**念一句**（系统 TTS，固定语，不是念回复正文）。默认开。
+     *
+     * 触发条件与 [notifyOnTurnComplete] 完全一致（仅后台/锁屏 + 仅手机发起的回合）；
+     * 引擎缺失 / 中文语音包没装时静默降级为「只发通知」。
+     */
+    val speakTurnComplete: Boolean = true,
+    /** 播报念什么：固定语 / 回复摘要（仅在 [speakTurnComplete] 开着时有意义）。 */
+    val voiceSpeechContent: VoiceSpeechContent = VoiceSpeechContent.Fixed,
 )
 
 /**
@@ -101,11 +136,23 @@ class SettingsStore(context: Context) {
         _settings.value = read()
     }
 
+    fun setSpeakTurnComplete(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SPEAK_TURN_COMPLETE, value).apply()
+        _settings.value = read()
+    }
+
+    fun setVoiceSpeechContent(value: VoiceSpeechContent) {
+        prefs.edit().putString(KEY_VOICE_SPEECH_CONTENT, value.wire).apply()
+        _settings.value = read()
+    }
+
     private fun read(): AppSettings = AppSettings(
         appearance = Appearance.fromStored(prefs.getString(KEY_APPEARANCE, null)),
         fontSize = FontSize.fromStored(prefs.getString(KEY_FONT_SIZE, null)),
         showToolCalls = prefs.getBoolean(KEY_SHOW_TOOL_CALLS, true),
         notifyOnTurnComplete = prefs.getBoolean(KEY_NOTIFY_TURN_COMPLETE, true),
+        speakTurnComplete = prefs.getBoolean(KEY_SPEAK_TURN_COMPLETE, true),
+        voiceSpeechContent = VoiceSpeechContent.fromStored(prefs.getString(KEY_VOICE_SPEECH_CONTENT, null)),
     )
 
     companion object {
@@ -114,5 +161,7 @@ class SettingsStore(context: Context) {
         private const val KEY_FONT_SIZE = "fontSize"
         private const val KEY_SHOW_TOOL_CALLS = "showToolCalls"
         private const val KEY_NOTIFY_TURN_COMPLETE = "notifyOnTurnComplete"
+        private const val KEY_SPEAK_TURN_COMPLETE = "speakTurnComplete"
+        private const val KEY_VOICE_SPEECH_CONTENT = "voiceSpeechContent"
     }
 }

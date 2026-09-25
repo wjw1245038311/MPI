@@ -253,6 +253,8 @@ fun MpiApp(container: AppContainer) {
                     onAppearance = container.settingsStore::setAppearance,
                     onFontSize = container.settingsStore::setFontSize,
                     onNotifyOnTurnComplete = container.settingsStore::setNotifyOnTurnComplete,
+                    onSpeakTurnComplete = container.settingsStore::setSpeakTurnComplete,
+                    onVoiceContent = container.settingsStore::setVoiceSpeechContent,
                     onOpenDiagnostics = { diagnosticsOpen = true },
                     onRemoveDevice = {
                         settingsOpen = false

@@ -1,6 +1,7 @@
 package com.mpi.app
 
 import com.mpi.app.data.Notifier
+import com.mpi.app.data.VoiceSpeechContent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -50,6 +51,44 @@ class NotifierLogicTest {
     @Test
     fun `long turn complete text is truncated`() {
         assertEquals("${"x".repeat(79)}…", Notifier.turnCompleteText("x".repeat(100)))
+    }
+
+    @Test
+    fun `speech fixed content is short and never reads the reply`() {
+        assertEquals(
+            "「修复登录 bug」 回复已完成",
+            Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, "修复登录 bug", "一大段回复正文"),
+        )
+        assertEquals("回复已完成", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, null, null))
+    }
+
+    @Test
+    fun `speech reply content drops code fences and the long one is clipped`() {
+        val reply = "已经改好了：\n```kotlin\nval x = 1\n```\n下次不会再这样。"
+        assertEquals(
+            "「部署」 已经改好了： 下次不会再这样。",
+            Notifier.turnCompleteSpeech(VoiceSpeechContent.Reply, "部署", reply),
+        )
+        val spoken = Notifier.turnCompleteSpeech(VoiceSpeechContent.Reply, null, "字".repeat(100))
+        assertEquals(60, spoken.length)
+        assertTrue(spoken.endsWith("…"))
+    }
+
+    @Test
+    fun `speech falls back to the fixed line when nothing is left to read`() {
+        assertEquals("回复已完成", Notifier.turnCompleteSpeech(VoiceSpeechContent.Reply, null, "   "))
+        assertEquals("回复已完成", Notifier.turnCompleteSpeech(VoiceSpeechContent.Reply, null, null))
+        // 只有代码：去掉围栏后什么都不剩 → 退回固定语
+        assertEquals("回复已完成", Notifier.turnCompleteSpeech(VoiceSpeechContent.Reply, null, "```js\ncode()\n```"))
+    }
+
+    @Test
+    fun `turn notify reason names the blocking condition`() {
+        assertEquals("已通知", Notifier.turnNotifyReason(enabled = true, foreground = false, phoneInitiated = true, spoke = false))
+        assertEquals("已通知 + 语音", Notifier.turnNotifyReason(enabled = true, foreground = false, phoneInitiated = true, spoke = true))
+        assertEquals("跳过：设置里已关闭", Notifier.turnNotifyReason(enabled = false, foreground = false, phoneInitiated = true, spoke = false))
+        assertEquals("跳过：回合由电脑端发起", Notifier.turnNotifyReason(enabled = true, foreground = false, phoneInitiated = false, spoke = false))
+        assertEquals("跳过：App 在前台", Notifier.turnNotifyReason(enabled = true, foreground = true, phoneInitiated = true, spoke = false))
     }
 
     @Test

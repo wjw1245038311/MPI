@@ -21,6 +21,7 @@ import com.mpi.app.data.Requester
 import com.mpi.app.data.SessionState
 import com.mpi.app.data.SendMode
 import com.mpi.app.data.SettingsStore
+import com.mpi.app.data.Speaker
 import com.mpi.app.data.ThreadActions
 import com.mpi.app.data.ThreadCache
 import com.mpi.app.data.ThreadSession
@@ -83,6 +84,11 @@ data class AppUiState(
     val storeError: String? = null,
     /** 非致命问题的最近若干条（解密失败等），可关闭。 */
     val problems: List<String> = emptyList(),
+    /**
+     * 最近一次「对话完成」通知的判定结果（诊断页展示）。
+     * 例如「已通知 + 语音」/「跳过：App 在前台」——「设了却没收到」一类问题不用猜。
+     */
+    val lastTurnNotify: String? = null,
     /** 当前打开的会话（null = 在首屏）。 */
     val openThreadId: String? = null,
     val thread: ThreadView? = null,
@@ -157,6 +163,7 @@ class AppViewModel(
     private val attachmentLoader: AttachmentLoader,
     private val voiceRecorder: VoiceRecorder,
     private val notifier: Notifier,
+    private val speaker: Speaker,
     private val updater: Updater,
     private val threadCache: ThreadCache,
     private val homeCache: HomeCache,
@@ -754,20 +761,38 @@ class AppViewModel(
     }
 
     /**
-     * 手机发起的回合在后台跑完 → 系统通知（点通知直达该会话）。
+     * 手机发起的回合在后台跑完 → 系统通知（点它直达该会话）+ 可选语音播报。
      *
      * 三个条件缺一不发（纯函数判定见 [Notifier.shouldNotifyTurnComplete]）：设置开着、
      * **不在前台**（盯着屏幕看时不打扰）、本回合是**手机发起**的（桌面发起的不响）。
-     * 不管发不发，标记都在这里消费掉，避免下一个回合误报。
+     * 不管发不发，标记都在这里消费掉，避免下一个回合误报；判定结果写进诊断页。
      */
     private fun notifyTurnComplete(threadId: String, view: ThreadView) {
         val phoneInitiated = phoneTurnStarted
         phoneTurnStarted = false
-        val enabled = settingsStore.settings.value.notifyOnTurnComplete
-        if (!Notifier.shouldNotifyTurnComplete(enabled, AppVisibility.foreground, phoneInitiated)) return
+        val settings = settingsStore.settings.value
+        val notify = Notifier.shouldNotifyTurnComplete(
+            enabled = settings.notifyOnTurnComplete,
+            foreground = AppVisibility.foreground,
+            phoneInitiated = phoneInitiated,
+        )
+        val spoke = notify && settings.speakTurnComplete
+        _ui.update {
+            it.copy(
+                lastTurnNotify = Notifier.turnNotifyReason(
+                    enabled = settings.notifyOnTurnComplete,
+                    foreground = AppVisibility.foreground,
+                    phoneInitiated = phoneInitiated,
+                    spoke = spoke,
+                ),
+            )
+        }
+        if (!notify) return
+        val title = view.summary?.title
         // 回复摘要优先（与桌面端完成卡片同源）；出错时 [Notifier.turnCompleteText] 改用错误文案
         val reply = view.messages.lastOrNull { it.role == "assistant" }?.let { messageTextOf(it) }
-        notifier.notifyTurnComplete(threadId, view.summary?.title, Notifier.turnCompleteText(reply, view.errorBanner))
+        notifier.notifyTurnComplete(threadId, title, Notifier.turnCompleteText(reply, view.errorBanner))
+        if (spoke) speaker.speak(Notifier.turnCompleteSpeech(settings.voiceSpeechContent, title, reply))
     }
 
     /** 重试一条发送失败的消息（保留原位，不重复上屏）。 */
@@ -1123,6 +1148,7 @@ class AppViewModel(
                         container.attachmentLoader,
                         container.voiceRecorder,
                         container.notifier,
+                        container.speaker,
                         container.updater,
                         container.threadCache,
                         container.homeCache,

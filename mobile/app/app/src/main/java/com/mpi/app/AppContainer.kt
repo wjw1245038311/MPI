@@ -10,6 +10,7 @@ import com.mpi.app.data.KeyStore
 import com.mpi.app.data.Notifier
 import com.mpi.app.data.SecretBox
 import com.mpi.app.data.SettingsStore
+import com.mpi.app.data.Speaker
 import com.mpi.app.data.ThreadCache
 import com.mpi.app.data.Updater
 import com.mpi.app.data.VoiceRecorder
@@ -51,6 +52,9 @@ class AppContainer(context: Context) {
 
     /** 本地通知与前台服务（M5）。 */
     val notifier: Notifier = Notifier(appContext)
+
+    /** 语音播报（对话完成念一句，系统 TTS；失败静默降级）。 */
+    val speaker: Speaker = Speaker(appContext)
 
     /** 自更新（M6）：读中继清单、下载、调安装器。 */
     val updater: Updater = Updater(appContext)
