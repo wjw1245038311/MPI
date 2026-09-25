@@ -77,6 +77,7 @@ fun SettingsScreen(
     settings: AppSettings,
     onAppearance: (Appearance) -> Unit,
     onFontSize: (FontSize) -> Unit,
+    onNotifyOnTurnComplete: (Boolean) -> Unit,
     onOpenDiagnostics: () -> Unit,
     onRemoveDevice: () -> Unit,
     updateInfo: UpdateInfo?,
@@ -108,6 +109,14 @@ fun SettingsScreen(
                     title = "通知",
                     trailing = "在系统设置里管理",
                     onClick = { openAppNotificationSettings(context) },
+                )
+                // 「对话完成」提醒：只在**后台/锁屏**且回合是**手机自己发起**时发。
+                // 前台盯着屏幕看回复时不打扰；桌面发起的回合也不响（用户确认的口径）。
+                SettingsItem(
+                    icon = IconCheck,
+                    title = "对话完成后通知",
+                    trailing = if (settings.notifyOnTurnComplete) "开（仅后台）" else "关",
+                    onClick = { onNotifyOnTurnComplete(!settings.notifyOnTurnComplete) },
                 )
                 // 「语言」条目已删：原生端全量中文硬编码，没有任何可选项，
                 // 放着只会是个点了没反应的箭头（用户反馈）。要真做 zh/en 得先把

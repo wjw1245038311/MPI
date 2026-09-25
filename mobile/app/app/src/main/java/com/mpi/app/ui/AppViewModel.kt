@@ -3,6 +3,7 @@ package com.mpi.app.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.mpi.app.AppContainer
+import com.mpi.app.AppVisibility
 import com.mpi.app.data.Attachment
 import com.mpi.app.data.AttachmentLoader
 import com.mpi.app.data.HostRepository
@@ -19,6 +20,7 @@ import com.mpi.app.data.RelayClient
 import com.mpi.app.data.Requester
 import com.mpi.app.data.SessionState
 import com.mpi.app.data.SendMode
+import com.mpi.app.data.SettingsStore
 import com.mpi.app.data.ThreadActions
 import com.mpi.app.data.ThreadCache
 import com.mpi.app.data.ThreadSession
@@ -149,6 +151,7 @@ data class AppUiState(
  */
 class AppViewModel(
     private val keyStore: KeyStore,
+    private val settingsStore: SettingsStore,
     private val scope: CoroutineScope,
     private val deviceName: String,
     private val attachmentLoader: AttachmentLoader,
@@ -170,6 +173,11 @@ class AppViewModel(
     private var repository: HostRepository? = null
     private var threadSession: ThreadSession? = null
     private var threadActions: ThreadActions? = null
+    /**
+     * 本回合是**手机自己发起**的吗？发送成功后置起，回合结束时消费掉。
+     * 「对话完成」通知只对手机发起的回合发——桌面发起的没必要响（见 [notifyTurnComplete]）。
+     */
+    private var phoneTurnStarted = false
     /** 重连后的会话重同步 Job（合并多次 Connected 回调，避免重复拉全量快照）。 */
     private var reconnectSyncJob: Job? = null
     /** 按会话保存的草稿（内存；跨重启持久化留待需要时再说）。 */
@@ -523,7 +531,12 @@ class AppViewModel(
                 val wasRunning = _ui.value.thread?.running == true
                 _ui.update { it.copy(thread = view) }
                 // 回合结束（running true→false）：投递暂存的「待处理后续」（与 PWA 同语义）
-                if (wasRunning && !view.running) flushPendingFollowUp()
+                if (wasRunning && !view.running) {
+                    // 顺序不能反：先判定通知（它会消费 phoneTurnStarted），
+                    // 再 flushPendingFollowUp()——后者内部的 send() 会把标记重新置起。
+                    notifyTurnComplete(threadId, view)
+                    flushPendingFollowUp()
+                }
                 // 审批提醒（M5）：请求出现就通知，消失就撤销
                 val pendingId = view.pendingUi?.id
                 if (pendingId != null && pendingId != lastPendingId) {
@@ -740,6 +753,23 @@ class AppViewModel(
         send(text, SendMode.Prompt)
     }
 
+    /**
+     * 手机发起的回合在后台跑完 → 系统通知（点通知直达该会话）。
+     *
+     * 三个条件缺一不发（纯函数判定见 [Notifier.shouldNotifyTurnComplete]）：设置开着、
+     * **不在前台**（盯着屏幕看时不打扰）、本回合是**手机发起**的（桌面发起的不响）。
+     * 不管发不发，标记都在这里消费掉，避免下一个回合误报。
+     */
+    private fun notifyTurnComplete(threadId: String, view: ThreadView) {
+        val phoneInitiated = phoneTurnStarted
+        phoneTurnStarted = false
+        val enabled = settingsStore.settings.value.notifyOnTurnComplete
+        if (!Notifier.shouldNotifyTurnComplete(enabled, AppVisibility.foreground, phoneInitiated)) return
+        // 回复摘要优先（与桌面端完成卡片同源）；出错时 [Notifier.turnCompleteText] 改用错误文案
+        val reply = view.messages.lastOrNull { it.role == "assistant" }?.let { messageTextOf(it) }
+        notifier.notifyTurnComplete(threadId, view.summary?.title, Notifier.turnCompleteText(reply, view.errorBanner))
+    }
+
     /** 重试一条发送失败的消息（保留原位，不重复上屏）。 */
     fun retrySend(localId: String) {
         val text = threadSession?.prepareRetry(localId) ?: return
@@ -871,6 +901,8 @@ class AppViewModel(
             runCatching { session.ensureSubscribed() }
             try {
                 val result = actions.send(text, mode, images, files)
+                // 手机发起的回合：跑完时（且不在前台）给一条完成通知——见 notifyTurnComplete()
+                phoneTurnStarted = true
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
                 _ui.update {
                     it.copy(sending = false, attachments = emptyList(), sendNote = queuedNoteOf(result))
@@ -1085,6 +1117,7 @@ class AppViewModel(
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
                     AppViewModel(
                         container.keyStore,
+                        container.settingsStore,
                         container.scope,
                         container.deviceName,
                         container.attachmentLoader,

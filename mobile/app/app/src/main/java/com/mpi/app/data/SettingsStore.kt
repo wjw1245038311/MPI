@@ -58,6 +58,13 @@ data class AppSettings(
     val fontSize: FontSize = FontSize.Normal,
     /** 会话视图是否显示工具（bash/read/edit…）调用行。默认显示。 */
     val showToolCalls: Boolean = true,
+    /**
+     * 手机发起的回合在**后台/锁屏**跑完时发系统通知。默认开。
+     *
+     * 手机上「发完就揣起来」是主场景，不给提示根本不知道跑完没有；
+     * 前台盯着屏幕看、以及桌面发起的回合都不打扰（判定见 `Notifier.shouldNotifyTurnComplete`）。
+     */
+    val notifyOnTurnComplete: Boolean = true,
 )
 
 /**
@@ -89,10 +96,16 @@ class SettingsStore(context: Context) {
         _settings.value = read()
     }
 
+    fun setNotifyOnTurnComplete(value: Boolean) {
+        prefs.edit().putBoolean(KEY_NOTIFY_TURN_COMPLETE, value).apply()
+        _settings.value = read()
+    }
+
     private fun read(): AppSettings = AppSettings(
         appearance = Appearance.fromStored(prefs.getString(KEY_APPEARANCE, null)),
         fontSize = FontSize.fromStored(prefs.getString(KEY_FONT_SIZE, null)),
         showToolCalls = prefs.getBoolean(KEY_SHOW_TOOL_CALLS, true),
+        notifyOnTurnComplete = prefs.getBoolean(KEY_NOTIFY_TURN_COMPLETE, true),
     )
 
     companion object {
@@ -100,5 +113,6 @@ class SettingsStore(context: Context) {
         private const val KEY_APPEARANCE = "appearance"
         private const val KEY_FONT_SIZE = "fontSize"
         private const val KEY_SHOW_TOOL_CALLS = "showToolCalls"
+        private const val KEY_NOTIFY_TURN_COMPLETE = "notifyOnTurnComplete"
     }
 }

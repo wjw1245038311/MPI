@@ -44,4 +44,17 @@ class MainActivity : ComponentActivity() {
         // 已在前台/后台时再点通知：更新深链目标（UI 会 collect 到）
         container.pendingThreadOpen.value = intent.getStringExtra(Notifier.EXTRA_THREAD_ID)
     }
+
+    // 前后台标记（驱动「对话完成」通知只在后台发）——见 AppVisibility。
+    override fun onStart() {
+        super.onStart()
+        AppVisibility.foreground = true
+        // 人都回到 App 了，挂着那条「回复已完成」没意义
+        container.notifier.cancelTurnComplete()
+    }
+
+    override fun onStop() {
+        AppVisibility.foreground = false
+        super.onStop()
+    }
 }

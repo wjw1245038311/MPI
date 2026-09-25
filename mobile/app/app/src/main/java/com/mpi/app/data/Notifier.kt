@@ -54,6 +54,30 @@ class Notifier(private val context: Context) {
         runCatching { manager?.cancel(APPROVAL_NOTIFICATION_ID) }
     }
 
+    /**
+     * 手机发起的回合在后台跑完：普通优先级、点击直达该会话。
+     *
+     * 只由 AppViewModel 在「设置开着 + 不在前台 + 本回合是手机发起」时调用
+     * （判定见 [shouldNotifyTurnComplete]）——前台盯着屏幕时不打扰。
+     */
+    fun notifyTurnComplete(threadId: String, threadTitle: String?, body: String) {
+        val notification = NotificationCompat.Builder(context, CHANNEL_TURN)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle(turnCompleteTitle(threadTitle))
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(openAppIntent(threadId))
+            .build()
+        runCatching { manager?.notify(TURN_NOTIFICATION_ID, notification) }
+    }
+
+    /** 回到前台（或用户已看过）就没必要再挂着完成通知。 */
+    fun cancelTurnComplete() {
+        runCatching { manager?.cancel(TURN_NOTIFICATION_ID) }
+    }
+
     fun startLinkService() {
         MpiLinkService.start(context)
     }
@@ -84,14 +108,19 @@ class Notifier(private val context: Context) {
         val approval = NotificationChannel(CHANNEL_APPROVAL, "审批提醒", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "有操作需要你批准时提醒"
         }
-        runCatching { manager?.createNotificationChannels(listOf(service, approval)) }
+        val turn = NotificationChannel(CHANNEL_TURN, "对话完成", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            description = "手机发起的对话在后台跑完时提醒"
+        }
+        runCatching { manager?.createNotificationChannels(listOf(service, approval, turn)) }
     }
 
     companion object {
         const val CHANNEL_SERVICE = "mpi-service"
         const val CHANNEL_APPROVAL = "mpi-approval"
+        const val CHANNEL_TURN = "mpi-turn"
         const val FOREGROUND_NOTIFICATION_ID = 1001
         const val APPROVAL_NOTIFICATION_ID = 1002
+        const val TURN_NOTIFICATION_ID = 1003
         const val EXTRA_THREAD_ID = "mpi.threadId"
 
         /** 通知正文（纯函数，可单测）：带会话标题时给上下文，标题过长截断。 */
@@ -100,5 +129,38 @@ class Notifier(private val context: Context) {
             if (title.isEmpty()) return "有会话正在等待批准"
             return "「${title.take(40)}」正在等待批准"
         }
+
+        /** 完成通知标题（纯函数，可单测）。 */
+        internal fun turnCompleteTitle(threadTitle: String?): String {
+            val title = threadTitle?.trim().orEmpty()
+            return if (title.isEmpty()) "MPI 回复已完成" else "「${title.take(40)}」回复已完成"
+        }
+
+        /**
+         * 完成通知正文（纯函数，可单测）：出错优先报错（失败更需要知道），
+         * 否则给回复摘要；都没有就兑底一句。换行压成空格，长文本截断。
+         */
+        internal fun turnCompleteText(reply: String?, error: String? = null): String {
+            val failure = flatten(error)
+            if (failure.isNotEmpty()) return "出错：${clip(failure)}"
+            val text = flatten(reply)
+            return if (text.isEmpty()) "回复已完成" else clip(text)
+        }
+
+        /**
+         * 该不该发「对话完成」通知（纯函数，可单测）。
+         *
+         * 三个都成立才发：设置开着、App **不在前台**（盯着屏幕看时不打扰）、
+         * 且这个回合是**手机自己发起**的（桌面发起的不该响）。
+         */
+        internal fun shouldNotifyTurnComplete(
+            enabled: Boolean,
+            foreground: Boolean,
+            phoneInitiated: Boolean,
+        ): Boolean = enabled && phoneInitiated && !foreground
+
+        private fun flatten(value: String?): String = value?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+
+        private fun clip(text: String): String = if (text.length <= 80) text else "${text.take(79)}…"
     }
 }
