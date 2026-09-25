@@ -83,20 +83,36 @@ class Updater(private val context: Context) {
         .trimEnd('/')
         .takeIf { it.startsWith("http") }
 
-    /** 有更新时返回信息。优先 GitHub Release（用户要求），中继作兜底。 */
+    /**
+     * 有更新时返回信息。
+     *
+     * 源顺序：**中继优先，GitHub 兜底**（2026-09-26 调换）。
+     *
+     * 为什么不再 GitHub 优先：
+     *  · 开发期的主渠道是「中继清单 + Seafile 下载」（自建；手机实测 6MB/s）；
+     *    而 GitHub 在部分网络下要等到超时才失败，把「检测更新」拖得很慢；
+     *  · 中继那份清单的 `url` 已指向 Seafile，所以开发期**一次都不碰 GitHub**。
+     *
+     * 为什么 `UpToDate` 不能立即 return（旧实现就错在这里）：
+     *  · 发布期中继那份清单可能是旧的 → 它答 UpToDate；旧实现就此返回，**永远看不到 GitHub
+     *    上的新版**。现在只在拿到 `Available` 时立即采用，`UpToDate` 则继续看下一个源。
+     */
     suspend fun check(relayUrl: String): UpdateCheckResult = withContext(Dispatchers.IO) {
         val sources = buildList {
-            add(GITHUB_MANIFEST_URL to GITHUB_BASE_URL)
             httpOrigin(relayUrl)?.let { origin -> add("$origin/download/$MANIFEST_NAME" to "$origin/download") }
+            add(GITHUB_MANIFEST_URL to GITHUB_BASE_URL)
         }
         var lastReason = "没有可用的更新源"
+        var sawUpToDate = false
         for ((manifestUrl, base) in sources) {
             when (val result = fetchManifest(manifestUrl, base)) {
                 is UpdateCheckResult.Failed -> lastReason = result.reason
-                else -> return@withContext result
+                is UpdateCheckResult.UpToDate -> sawUpToDate = true // 这一源没新版，但别的源可能有
+                else -> return@withContext result                    // Available：立即采用
             }
         }
-        UpdateCheckResult.Failed(lastReason)
+        // 所有源都访完：只要有一个答「没新版」就算没新版；否则报最后一个错因。
+        if (sawUpToDate) UpdateCheckResult.UpToDate else UpdateCheckResult.Failed(lastReason)
     }
 
     private fun fetchManifest(manifestUrl: String, base: String): UpdateCheckResult =
