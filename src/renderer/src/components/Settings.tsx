@@ -3268,10 +3268,12 @@ export function Settings() {
                           setMmModelId("");
                           void saveMemoryModel(v);
                         } else {
+                          // 只记本地状态，不写配置：mode "model" 必须 provider+model 齐全才能落盘
+                          // （saveMemoryModel("model") 缺参会退化成 mode:"none"，把下拉框弹回「不设置」）。
+                          // 真正保存发生在第二个下拉框选完型号时。
                           setMmMode("model");
                           setMmProvider(v);
                           setMmModelId("");
-                          void saveMemoryModel("model");
                         }
                       }}
                     >
