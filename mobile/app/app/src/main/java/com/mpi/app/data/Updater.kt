@@ -75,6 +75,20 @@ class Updater(private val context: Context) {
         .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * 拉**清单**专用的客户端：小超时。
+     *
+     * 为什么必须与 [client] 分开：上面那个 120s 的 readTimeout 是给 27MB 的 APK 下载留的，
+     * 而清单只有 1KB。共用它意味着——只要某个源（典型是 GitHub）连上了却一直不回数据，
+     * 「检测更新」就要干等最多 120 秒；而卡住期间 `updateChecking = true`，用户再点只会
+     * 命中 `if (updateChecking) return` 静默返回，现象就是**点了完全没反应**。
+     * 所以清单一律 8 秒封顶：某个源慢就换下一个，不再拖住整个 UI。
+     */
+    private val manifestClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .build()
+
     /** wss://host → https://host（中继的静态目录与信令同源）。 */
     fun httpOrigin(relayUrl: String): String? = relayUrl
         .trim()
@@ -118,7 +132,7 @@ class Updater(private val context: Context) {
     private fun fetchManifest(manifestUrl: String, base: String): UpdateCheckResult =
         runCatching {
             val request = Request.Builder().url(manifestUrl).build()
-            client.newCall(request).execute().use { response ->
+            manifestClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     return@use UpdateCheckResult.Failed("没找到更新清单（HTTP ${response.code}）")
                 }
