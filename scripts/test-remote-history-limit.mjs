@@ -22,6 +22,7 @@ const {
   capRenderedHistory,
   prepareRemoteHistory,
   remoteMessageSize,
+  settleToolsOutsideRunningTurn,
   shrinkToBudget,
   trimRemoteHistory,
   trimRemoteHistoryByEncodedSize,
@@ -69,15 +70,19 @@ function escapingMessage(index, bodyLength) {
 }
 
 {
-  // 200 条 × 20KB ≈ 4MB：远超上限，必须剪到限制内。
-  const messages = Array.from({ length: 200 }, (_, i) => message(i, 20_000));
+  // 造出 ≈ 3× 上限的量，必然要剪。
+  // 自校准：以前硬编码「200 条 × 20KB ≈ 4MB：远超上限」，上限从 1.6MB 提到 7.6MB
+  // 之后那个 fixture 就不再超限、测试静默失效了。预算变了这里不用动。
+  const per = 20_000;
+  const count = Math.ceil((ENCODED_LIMIT * 3) / per);
+  const messages = Array.from({ length: count }, (_, i) => message(i, per));
   const trimmed = trimRemoteHistoryByEncodedSize(messages);
 
   assert.ok(trimmed.length < messages.length, "超限时必须丢最旧的");
   assert.ok(JSON.stringify(trimmed).length <= ENCODED_LIMIT, "裁剪后必须进得了限制");
   // 保留的是**最新的**那一批
-  assert.equal(trimmed[trimmed.length - 1].id, "m-199");
-  assert.equal(trimmed[0].id, `m-${200 - trimmed.length}`);
+  assert.equal(trimmed[trimmed.length - 1].id, `m-${count - 1}`);
+  assert.equal(trimmed[0].id, `m-${count - trimmed.length}`);
 }
 
 {
@@ -87,21 +92,33 @@ function escapingMessage(index, bodyLength) {
 }
 
 {
-  // 估算说没问题、但转义后真实超限——这正是事故形态，兜底必须抓住
-  const messages = Array.from({ length: 88 }, (_, i) => escapingMessage(i, 20_000));
+  // 估算说没问题、但转义后真实超限——这正是事故形态，兜底必须抓住。
+  // 自校准：由**实测膨胀比**推条数（让真实编码总量 ≈ 1.2× 预算），
+  // 只要膨胀比 > 1/1.2 就能同时满足「估算不超、真实超」两个前提。
+  // 实测该 fixture 的膨胀比约 1.48（转义把 \n / " / \\ / \t 各变成两个字符）。
+  const probe = escapingMessage(0, 20_000);
+  const estimateOne = remoteMessageSize(probe);
+  const encodedOne = JSON.stringify(probe).length + 1;
+  const count = Math.max(1, Math.floor((ENCODED_LIMIT / encodedOne) * 1.2));
+  const messages = Array.from({ length: count }, (_, i) => escapingMessage(i, 20_000));
   assert.ok(
     messages.reduce((sum, m) => sum + remoteMessageSize(m), 0) < ENCODED_LIMIT,
     "前提：估算值本身没超（否则测不到转义导致的超限）",
+  );
+  assert.ok(
+    JSON.stringify(messages).length > ENCODED_LIMIT,
+    "前提：真实序列化长度确实超了（转义膨胀）",
   );
   const trimmed = trimRemoteHistoryByEncodedSize(messages);
   assert.ok(JSON.stringify(trimmed).length <= ENCODED_LIMIT, "转义膨胀也必须被兜住");
 }
 
 {
-  // 单条就超限：至少保留最后一条（空历史比超预算更糟）
-  const messages = [message(0, 10), message(1, 5_000_000)];
+  // 单条就超限：至少保留最后一条（空历史比超预算更糟）。
+  // 自校准：用「1.5× 预算」而不是硬编码 5MB——后者在上限提到 7.6MB 后就不再超限了。
+  const messages = [message(0, 10), message(1, Math.ceil(ENCODED_LIMIT * 1.5))];
   const trimmed = trimRemoteHistoryByEncodedSize(messages);
-  assert.equal(trimmed.length, 1);
+  assert.equal(trimmed.length, 1, "单条自己就超预算时也必须保留它（空历史更糟）");
   assert.equal(trimmed[0].id, "m-1");
 }
 
@@ -183,6 +200,48 @@ function escapingMessage(index, bodyLength) {
       MAX_INNER_ENVELOPE_BYTES <= CLIENT_MAX_ENVELOPE_BYTES,
       `主机上限(${MAX_INNER_ENVELOPE_BYTES}) 不得超过客户端上限(${CLIENT_MAX_ENVELOPE_BYTES})`,
     );
+  }
+}
+
+// --- 快照兜底：回合不在跑时收口工具块 -----------------------------------------
+//
+// 为什么要它：`remoteMessages` 对没有 toolResult 的 toolCall 一律标 `running: true`。
+// 被**中断**的工具（用户点停止 / 进程退出）永远不会落 toolResult → 远程视图每次重载
+// 都显示一行永远转圈的工具。真机数据里已存在实例（2026-09-23 那会话的 entry#821）。
+
+{
+  const toolMsg = (id, running) => ({ id, role: "assistant", blocks: [{ type: "tool", id, name: "bash", running }] });
+
+  // 1) 线程正在跑 → **一个字节都不能改**（工具确实可能真在途）
+  {
+    const running = [toolMsg("a", true)];
+    assert.equal(
+      settleToolsOutsideRunningTurn(running, "running"),
+      running,
+      "state=running 时必须原样返回（不得误清正在执行中的工具）",
+    );
+  }
+
+  // 2) 回合已结束 → 收口（这正是被中断的工具会永远转圈的修法）
+  {
+    const input = [toolMsg("a", true), { id: "t", role: "assistant", blocks: [{ type: "text", text: "hi" }] }];
+    for (const state of ["idle", "draft", "error"]) {
+      const out = settleToolsOutsideRunningTurn(input, state);
+      assert.equal(out[0].blocks[0].running, false, `state=${state} 时应收口在跑的工具块`);
+      assert.equal(out[1].blocks[0].type, "text", "非工具块不受影响");
+    }
+    assert.equal(input[0].blocks[0].running, true, "只改副本，不动调用方对象");
+  }
+
+  // 3) 没有在跑的工具时不做无谓复制（返回同一引用）
+  {
+    const clean = [toolMsg("a", false)];
+    assert.equal(settleToolsOutsideRunningTurn(clean, "idle"), clean, "无需改动时返回原数组（避免无谓渲染）");
+  }
+
+  // 4) 空数组安全
+  {
+    assert.deepEqual(settleToolsOutsideRunningTurn([], "idle"), []);
   }
 }
 

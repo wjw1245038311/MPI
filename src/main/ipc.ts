@@ -8,7 +8,7 @@ import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-up
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { appendDiagLog } from "./diag-log";
-import { MAX_REMOTE_RAW_MESSAGES, prepareRemoteHistory, remoteMessageSize } from "./remote/history-limit";
+import { MAX_REMOTE_RAW_MESSAGES, prepareRemoteHistory, remoteMessageSize, settleToolsOutsideRunningTurn } from "./remote/history-limit";
 import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
 import { listTests, readScenarioHistory, readScenarioResult, runLogicTest, runScenarioCase } from "./test-runner";
 import { getDevReleaseLogWindow, openChangelogWindow, openDevReleaseLogWindow } from "./standalone-windows";
@@ -1950,6 +1950,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     if (live) {
       const gathered: any = await gatherThread(live.bridge, live.getId(), live.permission);
       const messages = remoteMessages(gathered.messages, ref.cwd);
+      const state = remoteState(!!gathered.isStreaming, messages.length > 0);
       return {
         id: threadId,
         projectId: ref.projectId,
@@ -1957,7 +1958,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         preview: messages.find((message) => message.role === "user")?.text?.slice(0, 160) || "",
         updatedAt: Date.now(),
         messageCount: messages.filter((message) => message.role === "user" || message.role === "assistant").length,
-        state: remoteState(!!gathered.isStreaming, messages.length > 0),
+        state,
         permission: toRemotePermission(live.permission),
         cwdName: basename(ref.cwd) || ref.cwd,
         model: gathered.model || null,
@@ -1968,7 +1969,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         taskMode: gathered.taskMode ?? null,
         availableModes: remoteModeOptions(),
         contextUsage: await threadContextUsage(live.getId(), compactionEstimates.get(live.getId()) ?? null),
-        messages,
+        // 回合不在跑 → 不可能还有在飞的工具；把被中断、永远等不到 toolResult 的那行收口
+        messages: settleToolsOutsideRunningTurn(messages, state),
         nextSeq: 0,
       };
     }
@@ -1989,6 +1991,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     // 会拿回 session 文件里的旧模型 —— 就是「切走再切回来变回刷新前」的根因。
     const open = ref.localId ? bridges.get(ref.localId) : undefined;
     const openState: any = open ? await open.bridge.getState().catch(() => null) : null;
+    // 磁盘快照永远不可能是「running」（remoteState(false, …)）→ 一律收口：
+    // 被中断的工具在文件里没有 toolResult，不收口就会在远程视图里永远转圈。
+    const state = remoteState(false, messages.length > 0);
     return {
       id: threadId,
       projectId: ref.projectId,
@@ -1996,7 +2001,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       preview: messages.find((message) => message.role === "user")?.text?.slice(0, 160) || "",
       updatedAt: Date.now(),
       messageCount: messages.filter((message) => message.role === "user" || message.role === "assistant").length,
-      state: remoteState(false, messages.length > 0),
+      state,
       permission,
       cwdName: basename(ref.cwd) || ref.cwd,
       model: openState?.model ?? history.model,
@@ -2007,7 +2012,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       taskMode: ref.sessionFile ? (getConfig().threadTaskModes || {})[threadUuidFromSessionFile(ref.sessionFile) ?? ""] ?? null : null,
       availableModes: remoteModeOptions(),
       contextUsage: open ? await threadContextUsage(open.getId(), compactionEstimates.get(open.getId()) ?? null) : null,
-      messages,
+      messages: settleToolsOutsideRunningTurn(messages, state),
       nextSeq: 0,
     };
   }

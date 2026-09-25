@@ -22,17 +22,19 @@ export const MAX_REMOTE_RAW_MESSAGES = 6000;
 export const MAX_RENDERED_MESSAGES = 300;
 
 /**
- * 手机端「解密后的内层 envelope」硬上限，与
- * `mobile/app/.../protocol/Envelope.kt` 的 `MAX_ENVELOPE_BYTES` 一致。
+ * 客户端「解密后的内层 envelope」硬上限。
  *
- * ⚠️ 这个值不能只顾 relay 的 32MB 传输上限：手机在 `Envelope.parse` 里对解密的
- * 明文 envelope 长度做硬校验，**超了一律抛 PAYLOAD_TOO_LARGE 丢帧**。
- * 2026-09-24 真机取证：历史涨到 2.02MB 后，`thread.subscribe` 的响应每一条都被
- * 手机丢掉 → 请求 10s 超时（`Requester.defaultTimeoutMs`）→ UI 报「订阅失败」→
- * `onStaleConnection` 触发重握手 → 主机 `relay-device-replaced` → 订阅被清 → 手机
- * 再订阅……形成 ~10s 一轮的重连风暴。
+ * 2026-09-25 从 2MB 提到 **8MB**（A′ 第 3 步）：先把两侧客户端都提到 8MB 并确认可用
+ * （见 [CLIENT_MAX_ENVELOPE_BYTES]），最后才改这里。此刻 net 预算从 1.6MB 变成 7.6MB，
+ * 那个 899 条会话（完整约 2.05MB）因此**不再被裁剪**。
+ *
+ * ⚠️ 这个值不能超过客户端愿接受的上限：客户端在 `Envelope.parse` 里对解密的明文
+ * envelope 做硬校验，**超了一律抛 PAYLOAD_TOO_LARGE 丢帧**。2026-09-24 真机取证：
+ * 历史涨到 2.02MB 后，`thread.subscribe` 的响应每一条都被手机丢掉 → 10s 超时 →
+ * 重握手 → 订阅被清 → 再订阅……形成 ~10s 一轮的重连风暴。
+ * `scripts/test-remote-history-limit.mjs` 断言本条 ≤ 客户端实际值。
  */
-export const MAX_INNER_ENVELOPE_BYTES = 2_000_000;
+export const MAX_INNER_ENVELOPE_BYTES = 8_000_000;
 
 /** 给 envelope 其它字段（sessionId/model/thinkingLevels…）与 JSON 转义留的余量。 */
 export const SNAPSHOT_HEADROOM_BYTES = 400_000;
@@ -170,6 +172,31 @@ export function shrinkToBudget<T extends RemoteMessage>(messages: T[], limit: nu
     total += sizes[slot.index] - before;
   }
   return copy;
+}
+
+/**
+ * 快照兜底：**回合不在进行中**时，把工具块的 `running` 一律清掉。
+ *
+ * 为什么需要：`remoteMessages` 对没有 toolResult 的 toolCall 一律标 `running: true`。
+ * 若该工具是被**中断**的（用户点停止 / 进程退出），toolResult 永远不会落到会话文件里，
+ * 于是远程视图**每次重载都会显示一行永远转圈的工具**。真机数据里已存在实例：
+ * 2026-09-23 那个 1755 条会话的 entry#821（孤儿 toolCall，位于会话中间）。
+ *
+ * 只在 `state !== "running"` 时清：线程正在跑时工具确实可能真在途，不能乱清。
+ * （等价于「只有正在跑的回合才可能有在飞的工具」这个不变量。）
+ */
+export function settleToolsOutsideRunningTurn<T extends RemoteMessage>(messages: T[], state: string): T[] {
+  if (state === "running") return messages;
+  let touched = false;
+  const out = messages.map((message) => {
+    if (!message.blocks?.some((block) => block.type === "tool" && block.running)) return message;
+    touched = true;
+    return {
+      ...message,
+      blocks: message.blocks.map((block) => (block.type === "tool" && block.running ? { ...block, running: false } : block)),
+    };
+  });
+  return touched ? out : messages;
 }
 
 /**
