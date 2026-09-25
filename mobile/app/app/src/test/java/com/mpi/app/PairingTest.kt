@@ -120,6 +120,10 @@ class PairingTest : RelayTestBase() {
         assertEquals("主机应能解开设备加密的帧", plain, decryptFrame(hostKey, encryptFrame(result.aesKey, plain)))
 
         // ---- 重认证：同一静态身份派生出同一把密钥，无需重新协商 ----
+        // 先断掉旧 socket：R1（relay de40857）之后，**同 socket 重复 hello 不再通知主机**
+        // （否则主机会重建逻辑连接、清空订阅与写租约，而设备感知不到 → 静默丢事件，09-24 真机事故）。
+        // 因此生产上的恢复路径是「断线 → 新 socket → hello → 主机发挑战」，这里照此模拟。
+        deviceClient.close()
         val reauth = Pairing.reauthenticate(deviceClient, hostId, identity, deviceToken, "测试手机")
         assertEquals("重认证应拿到同一 deviceToken", deviceToken, reauth.deviceToken)
         assertArrayEquals("重认证后的会话密钥应与首次相同（确定性派生）", result.aesKey, reauth.aesKey)
