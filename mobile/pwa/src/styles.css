@@ -763,10 +763,27 @@ button:disabled { opacity: 0.5; cursor: default; }
     padding: 0 24px 16px;
     min-height: 0;
   }
-  /* 阅读宽度：会话视图与卡片类内容统一限宽居中 */
+  /* 对话列：**按比例自适应**，不写死像素。
+     原因：固定上限在这个项目里反复出错——900 是在 1440 定的，到 4K@150%（主区 2152）
+     只剩 42%，看起来就是「对话区缩水」。
+     规则：占主区 68%，两端兜底：
+       · 下限 900：窄屏（1024 下主区约 710）时被 width:100% 接管，填满主区
+       · 上限 1600：4K@100%（主区 3432）封顶，不至把正文拉成一行 200 字符
+     实测：主区 710 → 710（填满）｜2152 → 1463｜3432 → 1600 */
   .thread-view,
   .app-main > .card,
-  .app-main > .chat-empty { max-width: 900px; margin-inline: auto; }
+  .app-main > .chat-empty {
+    width: 100%;
+    max-width: max(900px, min(68%, 1600px));
+    margin-inline: auto;
+  }
+
+  /* 只有「正文」需要固定的可读上限（约 80–100 字符/行）——它**不跟着屏宽放大**，
+     这是生理限制，不是布局问题。代码块 / 工具输出不受此限，吃满对话列。 */
+  .msg-text,
+  .msg-thinking pre { max-width: 1000px; }
+  /* 用户气泡原为 max-width: 85%（相对列宽）——列宽后 85% 会太大，加个绝对上限。 */
+  .message.user { max-width: min(85%, 900px); }
 
   /* 抽屉 → 常驻侧栏（不再是浮层，不参与 transform 动画）；跨满两行 = 桌面端的整列侧栏 */
   .drawer {
