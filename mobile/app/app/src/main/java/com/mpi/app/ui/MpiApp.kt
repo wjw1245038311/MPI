@@ -34,8 +34,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -362,6 +365,9 @@ private fun DrawerHost(
     // 真机三轮反馈：手势一旦放在抽屉内部，左划总被抽屉接走 → 弹出左侧会话列表。
     val nodePanel = rememberNodePanelState(NODE_PANEL_WIDTH)
     val sessionOpen = state.openThreadId != null && state.thread != null
+    // 贴边起手要用到的两个量：边缘条宽度（px）与下面 systemGestureExclusion 的矩形。
+    val density = LocalDensity.current
+    val edgePx = with(density) { NODE_PANEL_EDGE.toPx() }
 
     // 打开侧栏（会话列表）：会话页返回键、主页菜单、「从会话回来」都走它
     val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
@@ -380,7 +386,23 @@ private fun DrawerHost(
         drawerState = drawerState,
         // 手势就挂在这一层 = 抽屉的祖先：Initial（根 → 叶）时最先拿到事件，横向拖动消费后
         // 抽屉在后面的 Main 阶段看不到它。只在会话页开着时启用，其它页面不拦右边缘。
-        modifier = Modifier.edgeSwipeNodePanel(swipeNodePanel && sessionOpen, NODE_PANEL_EDGE, nodePanel),
+        //
+        // systemGestureExclusion：Android 手势导航默认把屏幕最外 ~20-24dp 划给**系统返回手势**，
+        // App 在那条缝里收不到 event——「贴边缘拉出」要成立，得先把这条边缘申请回来。
+        // 系统会对排除区做限制（沿边缘最多 ~200dp），能拿回多少算多少；拿不回的部分由
+        // edgeSwipeNodePanel 里「屏幕右半边起手也算」的兜底接住。API 29 以下无手势导航，无影响。
+        modifier = Modifier
+            .systemGestureExclusion { coordinates ->
+                // 坐标是本节点的局部坐标：只把右侧 edgePx 宽的一条申请为排除区
+                val size = coordinates.size
+                Rect(
+                    left = size.width - edgePx,
+                    top = 0f,
+                    right = size.width.toFloat(),
+                    bottom = size.height.toFloat(),
+                )
+            }
+            .edgeSwipeNodePanel(swipeNodePanel && sessionOpen, NODE_PANEL_EDGE, nodePanel),
         drawerContent = {
             // 抽屉宽度：手机上一手能回到对话（用户要求最多占屏宽 2/3）
             ModalDrawerSheet(
