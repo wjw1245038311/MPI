@@ -129,9 +129,11 @@ internal fun Modifier.edgeSwipeNodePanel(
     if (!enabled) return this
     return pointerInput(enabled, edgeWidth) {
         val edgePx = edgeWidth.toPx()
+        // 方向判定用**系统 touch slop**（≈8dp 起），而不是某个固定像素：固定 16px 比手指
+        // 起手时的抖动量还小，一次轻微横移就会被判成「横向拖拽」，之后所有 move 全被吃掉
+        // ——真机表现就是「右边没法下拉」（列表在这块区域再也滚不动）。
+        val touchSlop = viewConfiguration.touchSlop
         awaitEachGesture {
-            var total = 0f
-            var decided = false
             // ⚠️ 必须在 **Initial 阶段**拿事件并在拖动时 consume：
             // 外层是 Material 的 ModalNavigationDrawer，它的拖拽在 Main 阶段且**不区分方向**
             // （左拖也会把左侧会话列表拉出来 ✗ 真机反馈「左右划都弹左侧面板」）。
@@ -139,6 +141,8 @@ internal fun Modifier.edgeSwipeNodePanel(
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             if (down.position.x < size.width - edgePx) return@awaitEachGesture
             val tracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
+            var total = 0f
+            var dragging = false
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -146,17 +150,17 @@ internal fun Modifier.edgeSwipeNodePanel(
                 tracker.addPosition(change.uptimeMillis, change.position)
                 val dx = change.position.x - down.position.x
                 val dy = change.position.y - down.position.y
-                if (!decided) {
-                    if (abs(dx) < SLOP_PX && abs(dy) < SLOP_PX) continue
-                    // 纵向为主：还给列表去滚，我们彻底退出这次手势
-                    if (abs(dy) > abs(dx)) break
-                    decided = true
+                if (!dragging) {
+                    // 「谁先过 touch slop 谁赢」：纵向先过 = 用户在滚列表——**此前一个事件都
+                    // 没消费过**，直接退出还给 LazyColumn；横向先过才算拉面板。
+                    if (abs(dy) > touchSlop && abs(dy) > abs(dx)) break
+                    if (abs(dx) > touchSlop && abs(dx) > abs(dy)) dragging = true else continue
                 }
                 state.dragBy(dx - total)
                 total = dx
                 change.consume()
             }
-            if (decided) state.settle(tracker.calculateVelocity().x)
+            if (dragging) state.settle(tracker.calculateVelocity().x)
         }
     }
 }
@@ -191,55 +195,62 @@ internal fun NodePanelLayer(
             )
         }
 
-        Column(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                // 展开后也能从右边缘往回拖收起（同一个 state，+delta 方向自然往回走）
-                .edgeSwipeNodePanel(swipeEnabled, NODE_PANEL_EDGE, state)
-                .offset { IntOffset((panelWidthPx + state.offset).roundToInt(), 0) }
-                .width(panelWidth)
-                .fillMaxHeight()
-                .background(MpiTheme.colors.surfaceMuted),
-        ) {
-            // 收起时完全不compose 里面的内容：否则长会话的节点列表会在屏外白白重组
-            if (progress <= 0.01f) return@Column
-            val activeId = nodes.lastOrNull { it.index <= activeIndex() }?.id
-            Text(
-                text = "会话节点（${nodes.size}）",
-                style = MaterialTheme.typography.labelMedium,
-                color = MpiTheme.colors.textDim,
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 6.dp),
-            )
-            if (nodes.isEmpty()) {
+        // 收起时整块 Column 都不挂载（不只是内部内容）：面板视觉上被 offset 推出了屏幕，
+        // 但它上面挂的 pointerInput 命中区域是按**修饰符外层**算的——留在屏幕右侧就是一块
+        // 看不见的「占位区」，会把消息区右侧的纵向滚动与点击一起吃掉
+        // （真机反馈：「右边没法下拉」「右侧点不中输入」）。
+        // 拖动第一帧 progress 就 > 0，所以出现时机没有可感知的延迟。
+        if (progress > 0.01f) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    // ⚠️ offset 必须在 edgeSwipeNodePanel **之前**：offset 只平移它内层的内容，
+                    // 挂在它外层的话 pointerInput 的命中区域不会跟着移出屏幕。
+                    .offset { IntOffset((panelWidthPx + state.offset).roundToInt(), 0) }
+                    // 展开后也能从右边缘往回拖收起（同一个 state，+delta 方向自然往回走）
+                    .edgeSwipeNodePanel(swipeEnabled, NODE_PANEL_EDGE, state)
+                    .width(panelWidth)
+                    .fillMaxHeight()
+                    .background(MpiTheme.colors.surfaceMuted),
+            ) {
+                val activeId = nodes.lastOrNull { it.index <= activeIndex() }?.id
                 Text(
-                    text = "还没有你的发言",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MpiTheme.colors.textFaint,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    text = "会话节点（${nodes.size}）",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MpiTheme.colors.textDim,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 6.dp),
                 )
-            } else {
-                LazyColumn(Modifier.fillMaxSize()) {
-                    itemsIndexed(nodes, key = { _, node -> node.id }) { ordinal, node ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(if (node.id == activeId) MpiTheme.colors.accentSoft else Color.Transparent)
-                                .clickable { onJump(node) }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                        ) {
-                            Text(
-                                text = "${ordinal + 1}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MpiTheme.colors.textFaint,
-                                modifier = Modifier.width(22.dp),
-                            )
-                            Text(
-                                text = node.preview,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                if (nodes.isEmpty()) {
+                    Text(
+                        text = "还没有你的发言",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MpiTheme.colors.textFaint,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                } else {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        itemsIndexed(nodes, key = { _, node -> node.id }) { ordinal, node ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(if (node.id == activeId) MpiTheme.colors.accentSoft else Color.Transparent)
+                                    .clickable { onJump(node) }
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                            ) {
+                                Text(
+                                    text = "${ordinal + 1}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MpiTheme.colors.textFaint,
+                                    modifier = Modifier.width(22.dp),
+                                )
+                                Text(
+                                    text = node.preview,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
@@ -268,6 +279,3 @@ internal val NODE_PANEL_EDGE = 16.dp
 
 /** 面板宽度。 */
 internal val NODE_PANEL_WIDTH = 268.dp
-
-/** 起手判定阈值（px，约等于 touch slop 的两倍，避免抖动）。 */
-private const val SLOP_PX = 16f
