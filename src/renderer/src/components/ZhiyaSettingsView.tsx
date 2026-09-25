@@ -128,11 +128,11 @@ export function ZhiyaSettingsView({ zh }: { zh: boolean }) {
   return (
     <div className="zhiya-view">
       <div className="zhiya-settings-sec">
-        <div className="mempool-sub">{zh ? "母版目录（git 真相源）" : "Master directory"}</div>
+        <div className="mempool-sub">{zh ? "母版目录" : "Master directory"}</div>
         <div className="zhiya-dim">
           {zh
-            ? "人物画像 / 协作约定 / 工作空间的根目录；留空 = 自动探测。换电脑 clone 后设一次即可。"
-            : "Root of persona / agreement / workspace; empty = auto-detect. Set once after cloning on a new machine."}
+            ? "人物画像 / 协作约定 / 工作空间是三个配置 md，首次安装会放在默认目录（~/.pi/agent/zhiya）。母版目录是可选的 git 源：设置后这三个文件从那里同步；留空 = 自动探测。"
+            : "Persona / agreement / workspace are three config md files; on first install they live in the default dir (~/.pi/agent/zhiya). The master dir is an optional git source — when set, these files sync from there. Empty = auto-detect."}
         </div>
         <div className="zhiya-setting-row">
           <code>{masterDir || (zh ? "（未探测到）" : "(not found)")}</code>
