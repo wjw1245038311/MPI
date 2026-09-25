@@ -20,16 +20,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -74,10 +71,6 @@ internal class NodePanelState(
     var offset by mutableFloatStateOf(0f)
         private set
 
-    /** 正在拖动（手指按着）——指示器只在此时出现（安卓边缘手势那种「动态生成」）。 */
-    var dragging by mutableStateOf(false)
-        internal set
-
     private var settleJob: Job? = null
 
     /** 展开进度 0..1（面板位移 / 透明度都按它算）。 */
@@ -85,12 +78,10 @@ internal class NodePanelState(
 
     fun dragBy(delta: Float) {
         settleJob?.cancel()
-        dragging = true
         offset = (offset + delta).coerceIn(-panelWidthPx, 0f)
     }
 
     fun settle(velocity: Float) {
-        dragging = false
         val open = offset < -panelWidthPx * OPEN_FRACTION || velocity < -FLING_VELOCITY
         animateTo(if (open) -panelWidthPx else 0f)
     }
@@ -200,30 +191,6 @@ internal fun NodePanelLayer(
             )
         }
 
-        // 跟手指示器：**只在拖动时**出现，贴在面板左缘一起走——
-        // 就是安卓系统边缘手势那种「动态生成」的箭头，而不是一个常驻按钮。
-        if (state.dragging) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .offset {
-                        val edge = -INDICATOR_SIZE.toPx() - 6.dp.toPx()
-                        IntOffset((panelWidthPx + state.offset).roundToInt() + edge.roundToInt(), 0)
-                    }
-                    .size(INDICATOR_SIZE)
-                    .clip(CircleShape)
-                    .background(MpiTheme.colors.control.copy(alpha = 0.92f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = IconChevronRight,
-                    contentDescription = null,
-                    tint = MpiTheme.colors.textDim,
-                    modifier = Modifier.size(14.dp).rotate(180f),
-                )
-            }
-        }
-
         Column(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -298,9 +265,6 @@ internal fun userMessageNodes(messages: List<ThreadMessage>): List<UserNode> =
 
 /** 右边缘起手区宽度（越窄越不容易误触；“最边缘向着中间划” ≈ 16dp）。 */
 internal val NODE_PANEL_EDGE = 16.dp
-
-/** 拖动时那个跟手指示器的直径。 */
-private val INDICATOR_SIZE = 34.dp
 
 /** 面板宽度。 */
 internal val NODE_PANEL_WIDTH = 268.dp
