@@ -259,6 +259,9 @@ fun ThreadScreen(
         }
 
         if (view.showingCached) {
+            // 简洁一句：一个圈圈 + 「加载中…」就够。
+            // 之前写「离线：显示本地缓存（刚刚），正在获取最新内容…」——信息量给足了，
+            // 但没人需要读这一句（用户反馈：标题下面话太多）。
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -268,11 +271,16 @@ fun ThreadScreen(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(13.dp),
+                    strokeWidth = 2.dp,
+                    color = MpiTheme.colors.textDim,
+                )
                 Text(
-                    text = "离线：显示本地缓存（" + relTime(view.cachedAt!!) + "），正在获取最新内容…",
+                    text = "加载中…",
                     style = MaterialTheme.typography.bodySmall,
                     color = MpiTheme.colors.textDim,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.padding(start = 8.dp),
                 )
             }
         }

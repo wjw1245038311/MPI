@@ -163,13 +163,34 @@ class ThreadSession(
     suspend fun subscribe() {
         syncLock.withLock {
             val payload = try {
-                request("thread.subscribe", threadIdPayload(), threadId)
+                requestWhenReady("thread.subscribe", threadIdPayload(), threadId)
             } catch (e: Exception) {
-                _view.value = _view.value.copy(ready = true, errorBanner = e.message ?: "订阅失败")
+                _view.value = _view.value.copy(ready = true, errorBanner = friendlyError(e))
                 throw e
             }
             subscribed = true
             applySnapshot(payload)
+        }
+    }
+
+    /**
+     * 等认证就绪再发请求（只对 `NotReady`——「连接未就绪」——重试，约 15s）。
+     *
+     * 为什么需要：App 一起来就自动开会话（还先铺本地缓存），而此刻 E2E 认证可能还没跑完
+     * ——请求会立刻以 NotReady 失败。真机现象：启动后那条「无法发送 thread.subscribe 请求
+     * （连接未就绪）」横幅一直挂着，得手动「重新同步」或重启 App 才恢复（2026-09-26 反馈）。
+     * 这里有限重试，认证一完成就自动接上；真的超时了才把错误冒给上层。
+     */
+    private suspend fun requestWhenReady(type: String, payload: JsonElement, threadId: String): JsonElement? {
+        var attempt = 0
+        while (true) {
+            try {
+                return request(type, payload, threadId)
+            } catch (e: RequestException) {
+                if (e.kind != RequestException.Kind.NotReady || attempt >= READY_RETRY_LIMIT) throw e
+                attempt++
+                delay(READY_RETRY_INTERVAL_MS)
+            }
         }
     }
 
@@ -204,7 +225,7 @@ class ThreadSession(
      */
     private suspend fun ensureSubscribedLocked(): JsonElement? {
         if (subscribed) return null
-        val payload = request("thread.subscribe", threadIdPayload(), threadId)
+        val payload = requestWhenReady("thread.subscribe", threadIdPayload(), threadId)
         subscribed = true
         return payload
     }
@@ -236,7 +257,7 @@ class ThreadSession(
                     applySnapshot(fresh)
                     return@withLock
                 }
-                val payload = request("thread.resync", threadIdPayload(), threadId)
+                val payload = requestWhenReady("thread.resync", threadIdPayload(), threadId)
                 applySnapshot(payload)
             } catch (e: Exception) {
                 _view.value = _view.value.copy(errorBanner = e.message ?: "同步失败")
@@ -823,6 +844,10 @@ class ThreadSession(
 
         /** `toolcall_start` 没拿到真 id 时给工具块用的占位 id 前缀。 */
         const val PLACEHOLDER_TOOL_ID_PREFIX = "tc-"
+
+        /** 等认证就绪的重试上限与间隔（500ms × 30 ≈ 15s）。 */
+        private const val READY_RETRY_LIMIT = 30
+        private const val READY_RETRY_INTERVAL_MS = 500L
     }
 }
 
@@ -830,3 +855,17 @@ private fun JsonObject.str(key: String): String? = this[key]?.jsonPrimitive?.con
 
 private fun JsonObject.bool(key: String): Boolean =
     this[key]?.jsonPrimitive?.contentOrNull == "true"
+
+/**
+ * 给用户看的错误文案（纯函数，可单测）：协议层的句子（「无法发送 thread.subscribe 请求
+ * （连接未就绪）」）只适合排查，界面上说人话。
+ */
+internal fun friendlyError(e: Throwable): String {
+    if (e is RequestException && e.kind == RequestException.Kind.NotReady) {
+        return "连接还没准备好，会继续自动重试"
+    }
+    if (e is RequestException && e.kind == RequestException.Kind.Timeout) {
+        return "等主机回应超时，可点「重新同步」再试"
+    }
+    return e.message ?: "加载失败"
+}

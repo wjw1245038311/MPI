@@ -612,7 +612,13 @@ class AppViewModel(
             }
             runCatching { threadSessionLocal.subscribe() }.onFailure { error ->
                 _ui.update {
-                    it.copy(thread = it.thread?.copy(ready = true, errorBanner = error.message ?: "订阅失败"))
+                    // 会话自己已经写过一句人话的错误横幅（friendlyError），不要用协议原文盖掉它
+                    val current = it.thread
+                    if (!current?.errorBanner.isNullOrBlank()) {
+                        it
+                    } else {
+                        it.copy(thread = current?.copy(ready = true, errorBanner = error.message ?: "订阅失败"))
+                    }
                 }
             }
         }
@@ -1224,6 +1230,9 @@ class AppViewModel(
             if (autoOpenedThread || _ui.value.openThreadId != null) return
             if (pendingThreadOpen.value != null) return // 通知深链优先
             if (session == null || requester == null) return
+            // 认证没完成就开会话 = 必吃 NotReady（「连接未就绪」）——等它就绪后再开。
+            // 上面的 autoOpenedThread 在这里**不消费**，所以认证完成后仍会开一次。
+            if (session?.isAuthenticated != true) return
             val threads = snapshot.allThreads
             if (threads.isEmpty()) return
             val target = threads.firstOrNull { it.state == RemoteThreadState.Running } ?: threads.first()
@@ -1280,6 +1289,8 @@ class AppViewModel(
                 if (state is SessionState.Connected) {
                     // 已恢复连接——离线期间的提示已经过时，清掉免得号人
                     if (_ui.value.problems.isNotEmpty()) _ui.update { it.copy(problems = emptyList()) }
+                    // 认证前被跳过的「自动开一次会话」在这里补上（那时 session 还没就绪）
+                    repository?.snapshot?.value?.let { maybeAutoOpenThread(it) }
                     threadSession?.let { open ->
                         open.invalidateSubscription()
                         // 重连回调可能连着多次（日志里见过 3 次），合并成一次，别重复拉全量快照
