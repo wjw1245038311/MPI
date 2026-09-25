@@ -20,6 +20,9 @@ import { HostSession, type SessionSnapshot } from "./lib/session";
 import { Requester } from "./lib/requester";
 import { ThreadActions } from "./lib/thread-actions";
 import { ThreadSession, type ThreadView as ThreadViewState } from "./lib/thread-session";
+import { SnapshotCache } from "./lib/snapshot-cache";
+import { ThreadCache } from "./lib/thread-cache";
+import { IdbStore } from "./lib/thread-cache-idb";
 import { ensureBrowserPush } from "./lib/webpush";
 import { currentBundleName, isUpdateAvailable } from "./lib/update-watch";
 
@@ -132,6 +135,10 @@ function deviceLabel(item: PairingRecord): string {
   return item.displayName?.trim() || item.hostName || `主机 ${shortId(item.hostId)}`;
 }
 
+/** 内存里最多留几份会话快照（切回来先用它撑界面，不再白屏「加载会话…」）。
+ *  单份实测 0.3–1.6 MB 级别，5 份足够覆盖日常来回切。 */
+const SNAPSHOT_CACHE_LIMIT = 5;
+
 /** 与 styles.css 的宽屏断点一致（@media (min-width: 1024px)）。 */
 const WIDE_QUERY = "(min-width: 1024px)";
 
@@ -239,6 +246,27 @@ export default function App() {
   const [threadSession, setThreadSession] = useState<ThreadSession | null>(null);
   const threadSessionRef = useRef<ThreadSession | null>(null);
   threadSessionRef.current = threadSession;
+  /**
+   * 两层会话快照缓存：切走**不丢内容**，切回来先用它撑起界面，再由 open() 的实时
+   * 快照替换。
+   *   - 内存（Tier 1）：命中是**同步**的，来回切零延迟；
+   *   - IndexedDB（Tier 2）：刷新 / 冷启动 / 离线之后仍然在。
+   * 见 lib/snapshot-cache.ts 与 lib/thread-cache.ts。
+   *
+   * 延迟创建（而非 `useRef(new …)`）：App 每来一个流式 delta 就重渲染一次，写在
+   * useRef 参数里的构造调用会跟着跑，白造对象。
+   */
+  const cacheRef = useRef<{ memory: SnapshotCache<RemoteThreadSnapshot>; persistent: ThreadCache } | null>(null);
+  if (!cacheRef.current) {
+    cacheRef.current = {
+      memory: new SnapshotCache<RemoteThreadSnapshot>(SNAPSHOT_CACHE_LIMIT),
+      persistent: new ThreadCache(new IdbStore()),
+    };
+  }
+  const snapshotCache = cacheRef.current;
+  /** 正在打开的会话：种子要从 IndexedDB 异步取，期间防重入（深链 / 通知点击 /
+   *  自动打开 / 手动点击可能在同一个窗口里各触发一次）。 */
+  const openingRef = useRef<string | null>(null);
   const [threadView, setThreadView] = useState<ThreadViewState | null>(null);
   /** 返回键握手用：closeThread 在后面定义，用 ref 打破引用顺序。 */
   const closeThreadRef = useRef<(() => void) | null>(null);
@@ -272,6 +300,9 @@ export default function App() {
     setThreadView(threadSession.getSnapshot());
     return threadSession.subscribe(setThreadView);
   }, [threadSession]);
+
+  // 卸载时只清内存层：IndexedDB 层是按主机持久化的，那正是「刷新后还在」的那份。
+  useEffect(() => () => snapshotCache.memory.clear(), [snapshotCache]);
 
   /** S7 WebPush：订阅 + 经加密通道上报 host（best-effort，失败不影响主流程）。 */
   const setupWebPush = (client: RelayClient, relayWsUrl: string) => {
@@ -494,22 +525,71 @@ export default function App() {
    * is hidden while a thread is open, so no double-open guard is needed. */
   const openThread = async (threadId: string) => {
     const client = clientRef.current;
-    if (!client) return;
-    setOpenThreadId(threadId);
+    const host = hostId;
+    if (!client || !host) return;
+    if (openingRef.current === threadId) return;
+    openingRef.current = threadId;
     try {
-      const ts = new ThreadSession(client, threadId);
+      // 切换会话（而不是返回列表）时，先把上一个会话与它的发送控件摘掉：
+      //   · 否则它们的 frame/state 监听会一直挂在 client 上（每切一次泄漏一组）；
+      //   · 而且旧 actions 的 threadId 还是上一会话，若它晚到地写回 state，
+      //     会把消息发到错误的会话上。
+      threadActionsRef.current?.detach();
+      threadSessionRef.current?.detach();
+      setThreadActions(null);
+      // 先取种子（**不碰 UI 状态**），拿到后与 setThreadSession 一起提交——否则中间
+      // 会有一帧「openThreadId 已切、threadView 还是上一个会话」，闪错内容。
+      // 内存层同步命中；没有才落到 IndexedDB（读 + JSON 解析，大会话十几毫秒）。
+      const seeded = snapshotCache.memory.get(threadId)
+        ?? await snapshotCache.persistent
+          .read(host, threadId)
+          .then((hit) => (hit ? { payload: hit.snapshot, savedAt: hit.savedAt } : null));
+
+      const ts = new ThreadSession(client, threadId, {
+        // 每次拿到实时快照就更新两层缓存：下次切回来（内存）/ 下次冷启动（IndexedDB）
+        // 才有东西可铺。
+        onSnapshot: (snapshot) => {
+          snapshotCache.memory.set(threadId, snapshot);
+          // 持久化推到下一轮宏任务：stringify + IDB 写不该卡在「快照上屏」这一帧里。
+          window.setTimeout(() => {
+            void snapshotCache.persistent.write(host, threadId, snapshot);
+          }, 0);
+        },
+      });
+      if (seeded) ts.applyCachedSnapshot(seeded.payload, seeded.savedAt);
+
+      setOpenThreadId(threadId);
       setThreadSession(ts);
-      await ts.open();
-      // S6: send control becomes available once the snapshot is in.
-      setUiError(null);
-      setThreadActions(new ThreadActions(client, threadId));
-    } catch (e) {
-      // open() failed — go back to the list and surface the error there.
-      const ts = threadSessionRef.current as ThreadSession | null; // re-read: TS narrowing is stale across awaits
-      ts?.detach();
-      setThreadSession(null);
-      setOpenThreadId(null);
-      setError(e instanceof Error ? e.message : String(e));
+      try {
+        await ts.open();
+        // 种子要异步取、open() 又要一次网络往返，期间用户完全可能已切到别的会话：
+        // 只有「自己仍是最后一次发起的那次打开」才装发送控件（openingRef 是同步标记，
+        // 不受 React 渲染时机影响）。
+        if (openingRef.current !== threadId) return;
+        // S6: send control becomes available once the snapshot is in.
+        setUiError(null);
+        setThreadActions(new ThreadActions(client, threadId));
+      } catch (e) {
+        // 有缓存内容可看时**不要把界面拆掉**：主机没开 / 中继不通时，缓存正是唯一能看的
+        // 东西——而这恰是 Tier 2 存在的意义（刷新后打开、主机其实还没起）。
+        // 提示行会停在「正在获取最新内容…」，与实际情况相符；链路恢复后由发送前的
+        // ensureSubscribed() 补订阅。发送控件照常装上，让发不出去时报出真实错误，
+        // 而不是静默无反应。
+        if (seeded && openingRef.current === threadId) {
+          setThreadActions(new ThreadActions(client, threadId));
+          return;
+        }
+        // 没有缓存可看 —— 退回列表并把错因拱到那里。
+        ts.detach();
+        if (openingRef.current === threadId) {
+          setThreadSession(null);
+          setOpenThreadId(null);
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      }
+    } finally {
+      // 只清自己持有的标记：否则会把后一个会话的标记一并抹掉，它就不装发送控件了。
+      if (openingRef.current === threadId) openingRef.current = null;
     }
   };
   openThreadRef.current = openThread;
@@ -599,6 +679,8 @@ export default function App() {
   const disconnect = () => {
     threadActionsRef.current?.detach();
     threadSessionRef.current?.detach();
+    // 只清内存层：IndexedDB 层是按 hostId 键控的，那正是「下次打开仍然快」的那份。
+    snapshotCache.memory.clear();
     setThreadActions(null);
     setUiError(null);
     sessionRef.current?.detach();
@@ -620,6 +702,7 @@ export default function App() {
   const switchHost = (record: PairingRecord) => {
     if (record.hostId === hostId) return;
     closeThread();
+    snapshotCache.memory.clear(); // 内存层只按 threadId 键控，换主机后必须作废（IDB 按 hostId 隔离，留着）
     setError(null);
     void (async () => {
       const device = await storeRef.current.getDevice();
@@ -631,6 +714,8 @@ export default function App() {
   const removeHost = async (target: string) => {
     await storeRef.current.deletePairing(target);
     setPairings(await storeRef.current.listPairings());
+    // 撤销这台的配对：它在本机留下的快照缓存也该一并清掉（对齐原生 ThreadCache.deleteHost）。
+    void snapshotCache.persistent.deleteHost(target);
     if (target === hostId) disconnect();
   };
 

@@ -68,6 +68,9 @@ export interface ThreadView {
   contextUsage: RemoteContextUsage | null;
   /** 压缩进行中（compaction_start…end）。手机端压缩按钮据此转圈。 */
   compacting: boolean;
+  /** 本地缓存的快照时间戳（毫秒）；null = 当前内容来自主机实时快照。
+   *  对齐原生端 ThreadSession.cachedAt / isCached。 */
+  cachedAt: number | null;
   /** S6.3: pending ui.request (approval card). Survives resync — the host keeps
    * the dialog open while the agent is paused, so a reconnect must re-show it. */
   pendingUi: RemoteUiRequest | null;
@@ -76,6 +79,14 @@ export interface ThreadView {
 export interface ThreadSessionOptions {
   requestTimeoutMs?: number;
   onStaleConnection?: () => void;
+  /**
+   * 每次成功应用一份**实时**快照（thread.subscribe / thread.resync）时回调，
+   * 用于把它写进本地缓存（Tier 1 内存 / Tier 2 IndexedDB）。
+   *
+   * **只对实时快照回调**：由缓存播种（applyCachedSnapshot）不会回调，否则会把
+   * 缓存自己又写回去、并刷掉真实的 savedAt。
+   */
+  onSnapshot?: (snapshot: RemoteThreadSnapshot) => void;
 }
 
 type Listener = (view: ThreadView) => void;
@@ -150,14 +161,17 @@ export class ThreadSession {
   private echoSeq = 0;
   private readonly detachFrame: () => void;
   private readonly detachState: () => void;
+  /** 实时快照的落地回调（写本地缓存用），见 ThreadSessionOptions.onSnapshot。 */
+  private readonly onSnapshot?: (snapshot: RemoteThreadSnapshot) => void;
 
   constructor(
     client: RelayClient,
     threadId: string,
     options: ThreadSessionOptions = {},
   ) {
-    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], taskMode: null, availableModes: [], contextUsage: null, compacting: false, pendingUi: null };
+    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], taskMode: null, availableModes: [], contextUsage: null, compacting: false, cachedAt: null, pendingUi: null };
     this.client = client;
+    this.onSnapshot = options.onSnapshot;
     // threadId goes on the ENVELOPE (host's requiredThread reads it there); the
     // payload copy below is kept for compatibility with simpler test fakes.
     this.requester = new Requester(client, { requestTimeoutMs: options.requestTimeoutMs, onStaleConnection: options.onStaleConnection, threadId });
@@ -324,7 +338,28 @@ export class ThreadSession {
     this.applyEvent(payload, seq);
   }
 
+  /** 实时快照（thread.subscribe / thread.resync）：先落地再回调缓存写入，
+   *  并把「显示的是缓存」标记清空。 */
   private applySnapshot(snapshot: RemoteThreadSnapshot): void {
+    this.applySnapshotCore(snapshot, null);
+    try {
+      this.onSnapshot?.(snapshot);
+    } catch { /* 缓存写入失败绝不能影响主流程 */ }
+  }
+
+  /**
+   * 用本地缓存的快照先撑起界面（Tier 1 内存 / Tier 2 IndexedDB），随后由 open()
+   * 的实时快照替换（成功即 cachedAt 清空）。
+   *
+   * 与原生端 ThreadSession.applyCached 同一取舍：缓存里的 seq 基线已过时，
+   * applySnapshotCore 会把 expectNext 置 null，让首个实时事件重建基线。
+   * 不触发 onSnapshot —— 否则会把缓存自己又写回去、并刷掉真实的 savedAt。
+   */
+  applyCachedSnapshot(snapshot: RemoteThreadSnapshot, savedAt: number): void {
+    this.applySnapshotCore(snapshot, savedAt);
+  }
+
+  private applySnapshotCore(snapshot: RemoteThreadSnapshot, cachedAt: number | null): void {
     const summary: RemoteThreadSummary = {
       id: snapshot.id,
       projectId: snapshot.projectId,
@@ -355,6 +390,7 @@ export class ThreadSession {
       // 快照到达即认为压缩不在进行中：真在压缩的话后续 compaction_end 会再纠正，
       // 而漏掉一个 end 事件会让按钮永远转圈。
       compacting: false,
+      cachedAt,
       pendingUi: this.view.pendingUi, // a pending approval survives the resync
     });
     // Re-arm seq tracking: the fresh snapshot makes subsequent events lossless on

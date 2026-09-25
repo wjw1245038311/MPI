@@ -381,6 +381,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .thread-toolbar .back-btn { width: 30px; height: 30px; font-size: 15px; }
 .thread-toolbar .badge { flex: none; }
 .thread-head { display: flex; align-items: center; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+/* 「内容来自本地缓存」提示（Tier 1 内存快照 / Tier 2 持久缓存）：
+   flex:none——高度链上不能是可伸缩项，否则会和消息区抢高度。 */
+.cached-hint { flex: none; margin: 0; }
 .back-btn { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; padding: 0; font-size: 16px; flex: none; }
 
 .thread-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 2px; min-height: 120px; }

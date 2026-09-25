@@ -32,6 +32,15 @@ interface PickedFile {
 const formatSize = (bytes: number): string =>
   bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)}MB` : `${Math.max(1, Math.round(bytes / 1024))}KB`;
 
+/** 缓存快照的「多久以前」（与 App.tsx 里会话列表的写法一致）。 */
+function relTime(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 45_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.max(1, Math.round(diff / 60_000))} 分钟前`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} 小时前`;
+  return `${Math.round(diff / 86_400_000)} 天前`;
+}
+
 /** Minimal inline icons for the composer (no icon dependency in the PWA). */
 function IconPlus() {
   return (
@@ -1089,6 +1098,12 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
           </>
         )}
       </div>
+
+      {/* 内容来自本地缓存时的提示（对齐原生 ThreadScreen「离线：显示本地缓存…」）：
+          切回来不再白屏，但要知道这眼看到的是旧内容。 */}
+      {view.cachedAt !== null && (
+        <p className="hint cached-hint">本地缓存（{relTime(view.cachedAt)}）· 正在获取最新内容…</p>
+      )}
 
       {!view.ready ? (
         <p className="hint">加载会话…</p>

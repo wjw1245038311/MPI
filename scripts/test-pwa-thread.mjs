@@ -66,6 +66,7 @@ async function main() {
     const { parsePairingLink, runPairing, attachAutoReauth } = await import("../mobile/pwa/src/lib/pairing.ts");
     const { RelayClient } = await import("../mobile/pwa/src/lib/relay-client.ts");
     const { ThreadSession } = await import("../mobile/pwa/src/lib/thread-session.ts");
+    const { SnapshotCache } = await import("../mobile/pwa/src/lib/snapshot-cache.ts");
     const { makeEnvelope, responseFor } = await import("../mobile/shared/protocol.ts");
 
     // --- fake host service: scripted thread events ------------------------------------
@@ -271,6 +272,46 @@ async function main() {
       assert.equal(tsIdle.getSnapshot().ready, true);
       off();
       tsIdle.detach();
+    }
+
+    // --- P1 Tier 1：本地缓存播种（切回来先出内容，不再白屏「加载会话…」） --------------
+    {
+      const cache = new SnapshotCache(5);
+      const seen = [];
+      const tsCached = new ThreadSession(client, THREAD_ID, {
+        requestTimeoutMs: 3_000,
+        onSnapshot: (snapshot) => {
+          seen.push(snapshot);
+          cache.set(THREAD_ID, snapshot);
+        },
+      });
+
+      // 模拟「上次看过的快照」：open() 之前先把它铺上。
+      const cachedPayload = makeSnapshot("idle");
+      const savedAt = Date.now() - 5 * 60_000;
+      tsCached.applyCachedSnapshot(cachedPayload, savedAt);
+
+      let seeded = tsCached.getSnapshot();
+      assert.equal(seeded.ready, true, "缓存播种后立即可渲染（不必等网络往返）");
+      assert.equal(seeded.cachedAt, savedAt, "cachedAt 记录缓存时间（UI 靠它显示「本地缓存（x 分钟前）」）");
+      assert.deepEqual(seeded.messages.map((m) => m.id), ["m1", "m2"], "缓存快照的历史被渲染出来");
+      assert.equal(seen.length, 0, "播种不触发 onSnapshot——否则会把缓存自己写回去并刷掉真实 savedAt");
+
+      await tsCached.open();
+      seeded = tsCached.getSnapshot();
+      assert.equal(seeded.cachedAt, null, "实时快照到达后清掉缓存标记（内容已是最新）");
+      assert.ok(seen.length >= 1, "实时快照触发 onSnapshot，缓存得以更新（下次切回来才有东西可铺）");
+      // 实时回合是快照响应之后异步到达的，所以要等（与上面主流程同一写法）。
+      await waitFor(
+        () => tsCached.getSnapshot().messages.some((m) => m.role === "assistant" && m.blocks.some((b) => b.text === "Hello!")),
+        "播种过的会话照样能收到实时流并完成归约",
+      );
+      assert.deepEqual(
+        tsCached.getSnapshot().messages.filter((m) => m.id === "m1" || m.id === "m2").map((m) => m.id),
+        ["m1", "m2"],
+        "先播种再被实时快照替换，历史不重复",
+      );
+      tsCached.detach();
     }
 
     console.log("pwa-thread tests passed");
