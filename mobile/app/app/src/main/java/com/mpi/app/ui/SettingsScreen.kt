@@ -89,6 +89,7 @@ fun SettingsScreen(
     onSpeakTurnComplete: (Boolean) -> Unit,
     onVoiceContent: (VoiceSpeechContent) -> Unit,
     onSpeakDuringCall: (Boolean) -> Unit,
+    onSwipeNodePanel: (Boolean) -> Unit,
     onOpenDiagnostics: () -> Unit,
     onRemoveDevice: () -> Unit,
     updateInfo: UpdateInfo?,
@@ -167,6 +168,18 @@ fun SettingsScreen(
                     trailing = fontSizeLabel(settings.fontSize),
                     showDivider = false,
                     onClick = { fontPicker = true },
+                )
+            }
+
+            // ---- 会话 ----
+            SettingsGroup("会话") {
+                // 与「右划拉出会话列表」互为镜像：左划打开会话节点面板（桌面端的用户消息导航）。
+                SettingsItem(
+                    icon = null,
+                    title = "左划打开会话节点",
+                    trailing = if (settings.swipeNodePanel) "开" else "关",
+                    showDivider = false,
+                    onClick = { onSwipeNodePanel(!settings.swipeNodePanel) },
                 )
             }
 

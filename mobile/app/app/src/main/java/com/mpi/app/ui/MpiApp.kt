@@ -217,6 +217,7 @@ fun MpiApp(container: AppContainer) {
                             voiceChat = state.voiceChat,
                             voiceChatText = state.voiceChatText,
                             onStopVoiceChat = viewModel::stopVoiceChat,
+                            swipeNodePanel = settings.swipeNodePanel,
                             pendingFollowUp = state.pendingFollowUp,
                             sendError = state.sendError,
                             sendNote = state.sendNote,
@@ -260,6 +261,7 @@ fun MpiApp(container: AppContainer) {
                     onSpeakTurnComplete = container.settingsStore::setSpeakTurnComplete,
                     onVoiceContent = container.settingsStore::setVoiceSpeechContent,
                     onSpeakDuringCall = container.settingsStore::setSpeakDuringCall,
+                    onSwipeNodePanel = container.settingsStore::setSwipeNodePanel,
                     onOpenDiagnostics = { diagnosticsOpen = true },
                     onRemoveDevice = {
                         settingsOpen = false

@@ -13,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,13 +30,16 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -140,6 +145,8 @@ fun ThreadScreen(
     /** 语音模式下最近一句识别到的文本（显示在状态条里）。 */
     voiceChatText: String?,
     onStopVoiceChat: () -> Unit,
+    /** 左划打开「会话节点」面板（设置项；关掉就完全不做这个手势）。 */
+    swipeNodePanel: Boolean,
     pendingFollowUp: String?,
     sendError: String?,
     /** 主机回退成排队时的说明（非错误；气泡仍会停在「发送中」直到 pi 投递）。 */
@@ -166,6 +173,13 @@ fun ThreadScreen(
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
     // 工具行隐藏时的可见列表（纯函数，可单测）：只影响展示，不影响 allMessages 的状态推导
     val display = visibleMessages(renderable, showToolCalls)
+
+    // ---- 会话节点（左划面板）----
+    // 节点 = 用户消息（与桌面端左侧用户消息导航同口径）；索引按 display 算，可直接定位滚动。
+    val nodes = userMessageNodes(display)
+    var nodePanelOpen by remember { mutableStateOf(false) }
+    val jumpScope = rememberCoroutineScope()
+    val swipeThreshold = with(LocalDensity.current) { 64.dp.toPx() }
 
     // 「贴底跟随」记的是**用户意图**：只有用户自己往回滚才取消，内容增长本身不算。
     // 旧写法直接拿 atBottom 当跟随条件：增量事件常早于测量，滚动会停在半路，
@@ -264,7 +278,11 @@ fun ThreadScreen(
             }
         }
 
-        Box(Modifier.weight(1f)) {
+        Box(
+            Modifier
+                .weight(1f)
+                .swipeLeftToOpenNodePanel(swipeNodePanel, swipeThreshold) { nodePanelOpen = true },
+        ) {
             when {
                 !view.ready -> CenteredHint(text = "正在载入会话…", loading = true)
 
@@ -289,6 +307,20 @@ fun ThreadScreen(
                         )
                     }
                 }
+            }
+
+            if (nodePanelOpen) {
+                NodePanel(
+                    nodes = nodes,
+                    // 只在这里读滚动位置（面板开着才读，不会让整个会话页随滚动重组）
+                    activeIndex = listState.firstVisibleItemIndex,
+                    onJump = { node ->
+                        nodePanelOpen = false
+                        val index = display.indexOfFirst { it.id == node.id }
+                        if (index >= 0) jumpScope.launch { listState.animateScrollToItem(index) }
+                    },
+                    onClose = { nodePanelOpen = false },
+                )
             }
 
             if (!atBottom && display.isNotEmpty()) {
@@ -990,6 +1022,110 @@ private fun ThreadTopBar(
 internal fun messageTextOf(message: ThreadMessage): String =
     message.blocks.filter { it.type == BlockType.Text }.mapNotNull { it.text }.joinToString("\n").trim()
 
+/**
+ * 左划打开会话节点面板。
+ *
+ * 用 `detectHorizontalDragGestures`：与消息列表的**纵向滚动**天然分工（按主轴方向判定），
+ * 不抢滚动；与已有的「右划拉出会话列表」也不冲突（方向相反）。
+ */
+private fun Modifier.swipeLeftToOpenNodePanel(
+    enabled: Boolean,
+    threshold: Float,
+    onOpen: () -> Unit,
+): Modifier = if (!enabled) this else pointerInput(enabled) {
+    var total = 0f
+    detectHorizontalDragGestures(
+        onDragStart = { total = 0f },
+        onDragCancel = { total = 0f },
+        onDragEnd = {
+            if (total <= -threshold) onOpen()
+            total = 0f
+        },
+    ) { _, dragAmount -> total += dragAmount }
+}
+
+/** 会话节点：一条用户消息（跳转锚点）。[index] = 在传入列表里的下标，用于滚动定位。 */
+internal data class UserNode(val id: String, val index: Int, val preview: String)
+
+/**
+ * 提取「会话节点」列表（纯函数，可单测）：每条**用户消息**一个节点——与桌面端左侧
+ * 用户消息导航（参考 Qwen 网页版）同口径；手机上一条用户消息就是一个回合，不再分组。
+ * 跳过乐观回显（pending）：它还没落到主机，跳过去没有意义。
+ */
+internal fun userMessageNodes(messages: List<ThreadMessage>): List<UserNode> =
+    messages.mapIndexedNotNull { index, message ->
+        if (message.role != "user" || message.pending) return@mapIndexedNotNull null
+        val text = messageTextOf(message).replace(Regex("\\s+"), " ").trim()
+        UserNode(id = message.id, index = index, preview = text.ifEmpty { "（图片/附件）" }.take(60))
+    }
+
+/**
+ * 会话节点面板（从右侧划入，不压暗消息：方便边看边跳）。
+ *
+ * 「当前节点」= 视口里可见的最后一条用户消息（桌面端用的是 45% 中心线，手机上用"首个可见项"
+ * 同义且更简单）——它高亮，其余普通。
+ */
+@Composable
+private fun NodePanel(
+    nodes: List<UserNode>,
+    activeIndex: Int,
+    onJump: (UserNode) -> Unit,
+    onClose: () -> Unit,
+) {
+    val activeId = nodes.lastOrNull { it.index <= activeIndex }?.id
+    Box(Modifier.fillMaxSize()) {
+        // 点空白关掉
+        Box(Modifier.fillMaxSize().clickable(onClick = onClose))
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(268.dp)
+                .background(MpiTheme.colors.surfaceMuted),
+        ) {
+            Text(
+                text = "会话节点（${nodes.size}）",
+                style = MaterialTheme.typography.labelMedium,
+                color = MpiTheme.colors.textDim,
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 6.dp),
+            )
+            if (nodes.isEmpty()) {
+                Text(
+                    text = "还没有你的发言",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MpiTheme.colors.textFaint,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    itemsIndexed(nodes, key = { _, node -> node.id }) { ordinal, node ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (node.id == activeId) MpiTheme.colors.accentSoft else androidx.compose.ui.graphics.Color.Transparent)
+                                .clickable { onJump(node) }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                text = "${ordinal + 1}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MpiTheme.colors.textFaint,
+                                modifier = Modifier.width(22.dp),
+                            )
+                            Text(
+                                text = node.preview,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 /**
  * 按「是否显示工具调用」过滤要渲染的消息（纯函数，可单测）：
  * - 隐藏时丢掉 tool 块；
