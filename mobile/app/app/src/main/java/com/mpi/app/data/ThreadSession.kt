@@ -419,16 +419,16 @@ class ThreadSession(
 
             "message_end" -> handleMessageEnd(event)
 
-            "agent_settled" -> patch { it.copy(running = false) }
+            "agent_settled" -> settleTurn()
 
             "thread.error" -> {
                 val message = data?.str("message") ?: "远程错误"
-                patch { it.copy(errorBanner = message, running = false) }
+                settleTurn(errorBanner = message)
             }
 
             "thread.exit" -> {
                 val code = data?.get("code")?.jsonPrimitive?.contentOrNull
-                patch { it.copy(errorBanner = "进程已退出${code?.let { "（code $it）" } ?: ""}", running = false) }
+                settleTurn(errorBanner = "进程已退出${code?.let { "（code $it）" } ?: ""}")
             }
 
             "permission_changed" -> {
@@ -744,6 +744,40 @@ class ThreadSession(
     }
 
     // ---- 工具 ----
+
+    /**
+     * 回合收口：结束视图级 running，并把**还标着「运行中」的工具块**一并关掉。
+     *
+     * 为什么需要：工具启动后若回合被**中断**（用户点停止）或进程退出，`tool_execution_end`
+     * 可能永远不来 → 那一行工具永远转圈（「一直在执行中」）。`agent_settled` 是「本回合
+     * 彻底结束」的权威信号，此后不可能还有工具在跑，所以在这里收口是安全的。
+     *
+     * ⚠️ 不能用 `message_end`：assistant 消息结束时工具**尚未执行**（`tool_execution_*`
+     * 在其后发生），在那里清会把正在跑的工具误标成完成。
+     *
+     * 与 PWA 的 ThreadSession.settleTurn 保持同构。
+     */
+    private fun settleTurn(errorBanner: String? = null) {
+        val close: (ThreadMessage) -> ThreadMessage = { message ->
+            if (message.blocks.none { it.type == BlockType.Tool && it.running }) {
+                message
+            } else {
+                message.copy(
+                    blocks = message.blocks.map { block ->
+                        if (block.type == BlockType.Tool && block.running) block.copy(running = false) else block
+                    },
+                )
+            }
+        }
+        patch { view ->
+            view.copy(
+                errorBanner = errorBanner ?: view.errorBanner,
+                running = false,
+                messages = view.messages.map(close),
+                streaming = view.streaming?.let(close),
+            )
+        }
+    }
 
     private fun patch(transform: (ThreadView) -> ThreadView) {
         synchronized(lock) { _view.value = transform(_view.value) }

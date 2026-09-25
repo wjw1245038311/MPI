@@ -120,8 +120,37 @@ async function main() {
               const send = (kind, data) => setTimeout(() => ctx.send(makeEnvelope("thread.event", request.sessionId, { kind, data }, { threadId: THREAD_ID, seq: ++seqCounter })), 0);
               send("message_update", { event: { assistantMessageEvent: { type: "text_delta", delta: "Hel" } } });
               send("message_update", { event: { assistantMessageEvent: { type: "text_delta", delta: "lo!" } } });
-              send("message_update", { event: { assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, toolCall: { id: "tc1", name: "bash", arguments: { command: "ls" } } } } });
-              send("tool_execution_end", { event: { toolCallId: "tc1", result: { content: "file.txt\n" }, isError: false } });
+              // ⚠️ 这里必须用**真实**的 pi 事件形状：`toolcall_start` **只带
+              // `partial.content[contentIndex]`，没有 `toolCall` 字段**（见 pi-ai 的
+              // AssistantMessageEvent 定义），`toolcall_end` 才给权威 toolCall。
+              // 旧 fake 在 start 上直接给 `toolCall`，把一个真实存在的 bug 藏了起来——
+              // 拼包器只看 `ame.toolCall`，于是 start 拿不到真 id → 用 `tc-0` 占位 +
+              // 名字写成字面量 "tool"；等 end 拿来真 id 又新建一个块，留下一个
+              // **永远转圈的幽灵**（2026-09-25 真机截图：一行「tool」在转、紧跟一行「bash ✓」）。
+              //
+              // 三个工具调用分别覆盖三重防线：
+              //   ① bash：start 的 partial 就带真 id（正常路径）
+              //   ② read：start 不带 id → 占位 tc-1；end 才给真 id → 必须**改名合并**
+              //   ③ glob：只有 start（占位）+ tool_execution_end，**没有 toolcall_end**
+              //      → 必须靠「同名且在跑的占位块」认领（否则永远转圈）
+              //   ④ write：只 start、**永不收尾**（模拟回合被中断：用户点停止 /
+              //      进程退出，tool_execution_end 永远不来）→ 只能靠 agent_settled 兜底
+              // partial 是「到目前为止的完整 AssistantMessage」：content 数组会随块增长，
+              // 新块就在 contentIndex 那个位置上（所以下标 1/2 要先把前面的位置铺上）。
+              const part = (index, id, name, args) => ({
+                content: Array.from({ length: index + 1 }, (_, i) =>
+                  i === index ? { type: "toolCall", ...(id ? { id } : {}), name, arguments: args } : { type: "text", text: "" },
+                ),
+              });
+              send("message_update", { event: { assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: part(0, "call_1", "bash", {}) } } });
+              send("message_update", { event: { assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall: { id: "call_1", name: "bash", arguments: { command: "ls" } }, partial: part(0, "call_1", "bash", { command: "ls" }) } } });
+              send("tool_execution_end", { event: { toolCallId: "call_1", toolName: "bash", result: { content: "file.txt\n" }, isError: false } });
+              send("message_update", { event: { assistantMessageEvent: { type: "toolcall_start", contentIndex: 1, partial: part(1, undefined, "read", {}) } } });
+              send("message_update", { event: { assistantMessageEvent: { type: "toolcall_end", contentIndex: 1, toolCall: { id: "call_2", name: "read", arguments: { path: "a.txt" } }, partial: part(1, "call_2", "read", { path: "a.txt" }) } } });
+              send("tool_execution_end", { event: { toolCallId: "call_2", toolName: "read", result: { content: "hello\n" }, isError: false } });
+              send("message_update", { event: { assistantMessageEvent: { type: "toolcall_start", contentIndex: 2, partial: part(2, undefined, "glob", {}) } } });
+              send("tool_execution_end", { event: { toolCallId: "call_3", toolName: "glob", result: { content: "x.ts\n" }, isError: false } });
+              send("message_update", { event: { assistantMessageEvent: { type: "toolcall_start", contentIndex: 3, partial: part(3, "call_4", "write", {}) } } });
               send("message_end", { event: { message: { role: "assistant", stopReason: "stop" } } });
               send("agent_settled", {});
             }
@@ -204,14 +233,32 @@ async function main() {
     assert.equal(liveAssistant.role, "assistant");
     assert.deepEqual(
       liveAssistant.blocks.map((b) => b.type),
-      ["text", "tool"],
-      "blocks in arrival order",
+      ["text", "tool", "tool", "tool", "tool"],
+      "blocks in arrival order（四个工具调用各一个块）",
     );
     assert.equal(liveAssistant.blocks[0].text, "Hello!", "text deltas accumulated");
-    const toolBlock = liveAssistant.blocks[1];
-    assert.equal(toolBlock.name, "bash");
-    assert.equal(toolBlock.running, false, "tool block finalized by tool_execution_end");
-    assert.ok((toolBlock.text || "").includes("file.txt"), "tool result captured");
+    // 幽灵块守卫：绝不能出现名字停在字面量 "tool"、还在转圈的占位块。
+    const ghost = liveAssistant.blocks.find((b) => b.type === "tool" && b.running);
+    assert.equal(ghost, undefined, `不允许有永远转圈的工具块（实际: ${JSON.stringify(ghost)}）`);
+    assert.equal(
+      liveAssistant.blocks.some((b) => b.type === "tool" && b.name === "tool"),
+      false,
+      "工具名不能停在占位值 \"tool\"（toolcall_start 要从 partial.content[contentIndex] 取真名）",
+    );
+    const [bashBlock, readBlock, globBlock] = liveAssistant.blocks.filter((b) => b.type === "tool");
+    assert.equal(bashBlock.name, "bash");
+    assert.equal(bashBlock.running, false, "tool block finalized by tool_execution_end");
+    assert.ok((bashBlock.text || "").includes("file.txt"), "tool result captured");
+    assert.equal(readBlock.name, "read", "占位 id 在 toolcall_end 拿到真 id 后被改名合并（不新建块）");
+    assert.ok((readBlock.text || "").includes("hello"), "第二个工具的 result 落在同一个块上");
+    assert.equal(globBlock.name, "glob", "没有 toolcall_end 时也要靠同名在跑的占位块认领到真 id");
+    assert.equal(globBlock.running, false, "认领后能被 tool_execution_end 收口（否则永远转圈）");
+    // ④ 回合被中断：write 只发了 start、永远等不到 tool_execution_end。
+    //    它是 message_end 时被快照进 messages 的，所以必须由 agent_settled 收口——
+    //    而 agent_settled 要同时管 streaming 与已落地消息（否则重开页面/重同步又转圈）。
+    const writeBlock = liveAssistant.blocks.filter((b) => b.type === "tool")[3];
+    assert.equal(writeBlock.name, "write");
+    assert.equal(writeBlock.running, false, "回合结束（agent_settled）时必须收口还在跑的工具块");
 
     // --- snapshot carries task mode + mode catalog -----------------------------------
     assert.equal(view.taskMode, "iterate", "snapshot taskMode lands in the view");

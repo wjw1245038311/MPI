@@ -290,6 +290,29 @@ export class ThreadSession {
     }
   }
 
+  /**
+   * 回合收口：结束视图级 running，并把**还标着「运行中」的工具块**一并关掉。
+   *
+   * 为什么需要：工具启动后若回合被**中断**（用户点停止）或进程退出，`tool_execution_end`
+   * 可能永远不来 → 那一行工具永远转圈（「一直在执行中」）。`agent_settled` 是「本回合彻底
+   * 结束」的权威信号，此后不可能还有工具在跑，所以在这里收口是安全的。
+   *
+   * ⚠️ 不能用 `message_end`：assistant 消息结束时工具**尚未执行**（`tool_execution_*`
+   * 在其后发生），在那里清会把正在跑的工具误标成完成。
+   */
+  private settleTurn(extra: Partial<ThreadView> = {}): void {
+    const close = (message: ViewMessage): ViewMessage => {
+      if (!message.blocks.some((b) => b.type === "tool" && b.running)) return message;
+      return { ...message, blocks: message.blocks.map((b) => (b.type === "tool" && b.running ? { ...b, running: false } : b)) };
+    };
+    this.patch({
+      ...extra,
+      running: false,
+      messages: this.view.messages.map(close),
+      streaming: this.view.streaming ? close(this.view.streaming) : null,
+    });
+  }
+
   /** Call after ui.respond succeeds — dedupes re-pushes and clears the card. */
   markUiResponded(requestId: string): void {
     this.respondedUiIds.add(requestId);
@@ -435,13 +458,17 @@ export class ThreadSession {
       }
       case "tool_execution_start": {
         const id = typeof ev.toolCallId === "string" ? ev.toolCallId : "";
-        if (id) this.markTool(id, { running: true });
+        if (id) this.markTool(id, { running: true }, pickString(ev.toolName));
         break;
       }
       case "tool_execution_end": {
         const id = typeof ev.toolCallId === "string" ? ev.toolCallId : "";
         if (!id) break;
-        this.markTool(id, { running: false, text: textOfContent(ev.result?.content), isError: !!ev.isError });
+        this.markTool(
+          id,
+          { running: false, text: textOfContent(ev.result?.content), isError: !!ev.isError },
+          pickString(ev.toolName),
+        );
         break;
       }
       case "message_end": {
@@ -457,16 +484,16 @@ export class ThreadSession {
         break;
       }
       case "agent_settled":
-        this.patch({ running: false });
+        this.settleTurn();
         break;
       case "thread.error": {
         const message = typeof payload.data?.message === "string" ? (payload.data.message as string) : "remote error";
-        this.patch({ errorBanner: message, running: false });
+        this.settleTurn({ errorBanner: message });
         break;
       }
       case "thread.exit": {
         const code = payload.data?.code;
-        this.patch({ errorBanner: `process exited${typeof code === "number" ? ` (code ${code})` : ""}`, running: false });
+        this.settleTurn({ errorBanner: `process exited${typeof code === "number" ? ` (code ${code})` : ""}` });
         break;
       }
       case "permission_changed": {
@@ -555,11 +582,37 @@ export class ThreadSession {
     } else if (ame.type === "thinking_delta" && typeof ame.delta === "string") {
       blocks = appendToLast(blocks, "thinking", ame.delta);
     } else if (ame.type === "toolcall_start" || ame.type === "toolcall_end") {
-      const id = (typeof ame.toolCall?.id === "string" && ame.toolCall.id) || (typeof ame.contentIndex === "number" ? `tc-${ame.contentIndex}` : undefined);
+      const contentIndex = typeof ame.contentIndex === "number" ? ame.contentIndex : undefined;
+      // pi 的 `toolcall_start` **只带 `partial.content[contentIndex]`，不带 `toolCall`**
+      // （见 pi-ai 的 AssistantMessageEvent 定义）；`toolcall_end` 才给权威 `toolCall`。
+      // 两边都要看，否则开始时只能拿占位 id + 名字写成字面量 "tool"——而 `toolcall_end`
+      // 换来真 id 后会被当成另一个块，留下一个永远转圈的幽灵
+      // （2026-09-25 真机截图：一行「tool」在转、紧接着一行「bash ✓」）。
+      const fromEvent = (ame.toolCall || undefined) as Record<string, any> | undefined;
+      const partialContent = (ame.partial as Record<string, any> | undefined)?.content;
+      const fromPartial =
+        contentIndex !== undefined && Array.isArray(partialContent)
+          ? (partialContent[contentIndex] as Record<string, any> | undefined)
+          : undefined;
+      const realId = pickString(fromEvent?.id) ?? pickString(fromPartial?.id);
+      const placeholder = contentIndex === undefined ? undefined : `${TOOL_PLACEHOLDER_PREFIX}${contentIndex}`;
+      const id = realId ?? placeholder;
       if (!id) return;
-      const name = typeof ame.toolCall?.name === "string" && ame.toolCall.name ? ame.toolCall.name : "tool";
-      const argsText = summarizeArgs(ame.toolCall?.arguments);
-      blocks = upsertToolBlock(blocks, id, { name, ...(argsText ? { argsText } : {}), ...(ame.type === "toolcall_start" ? { running: true } : {}) });
+      const name = pickString(fromEvent?.name) ?? pickString(fromPartial?.name) ?? "tool";
+      const argsText = summarizeArgs(fromEvent?.arguments ?? fromPartial?.arguments);
+      // 真 id 与本 contentIndex 的占位块不同 → 改名合并，而不是新建
+      const renameFrom = realId && placeholder && placeholder !== realId ? placeholder : undefined;
+      blocks = upsertToolBlock(
+        blocks,
+        id,
+        {
+          name,
+          ...(argsText ? { argsText } : {}),
+          // `toolcall_end` 不主动清 running：收口交给 `tool_execution_end`（与原生端一致）
+          ...(ame.type === "toolcall_start" ? { running: true } : {}),
+        },
+        renameFrom,
+      );
     } else {
       return; // toolcall_delta and others — v1 keeps the last known state
     }
@@ -567,11 +620,37 @@ export class ThreadSession {
     if (blocks !== s.blocks) this.patch({ streaming: { ...s, blocks } });
   }
 
-  private markTool(id: string, patch: Partial<ViewBlock>): void {
-    const apply = (message: ViewMessage): ViewMessage => ({
-      ...message,
-      blocks: message.blocks.map((b) => (b.type === "tool" && b.id === id ? { ...b, ...patch } : b)),
-    });
+  /**
+   * 更新工具块状态。**双路径匹配**（与原生 ThreadSession.markTool 同一套）：
+   *   ① 按 `toolCallId`（正常路径，contentIndex 合并已经把 id 对齐）；
+   *   ② 退回「**同名**且在跑且 id 还停在占位值」的块，把它**认领**到真 id。
+   *      覆盖流中断导致 `toolcall_end` 没来、块 id 一直停在 `tc-` 的情况——
+   *      没有这层，那一行会永远转圈（真机反馈的「一直在执行中」）。
+   */
+  private markTool(id: string, patch: Partial<ViewBlock>, toolName?: string): void {
+    const apply = (message: ViewMessage): ViewMessage => {
+      let claimed = false;
+      const blocks = message.blocks.map((b) => {
+        if (b.type !== "tool") return b;
+        if (b.id === id) {
+          claimed = true;
+          return { ...b, ...patch };
+        }
+        if (
+          !claimed &&
+          toolName !== undefined &&
+          b.name === toolName &&
+          b.running &&
+          typeof b.id === "string" &&
+          b.id.startsWith(TOOL_PLACEHOLDER_PREFIX)
+        ) {
+          claimed = true; // 占位块认领到真 id，后续事件才能命中
+          return { ...b, ...patch, id };
+        }
+        return b;
+      });
+      return { ...message, blocks };
+    };
     this.patch({
       messages: this.view.messages.map(apply),
       streaming: this.view.streaming ? apply(this.view.streaming) : null,
@@ -621,8 +700,28 @@ function appendToLast(blocks: ViewBlock[], type: "text" | "thinking", delta: str
   return [...blocks, { type, text: delta }];
 }
 
-function upsertToolBlock(blocks: ViewBlock[], id: string, patch: Partial<ViewBlock>): ViewBlock[] {
-  const index = blocks.findIndex((b) => b.type === "tool" && b.id === id);
-  if (index >= 0) return [...blocks.slice(0, index), { ...blocks[index], ...patch }, ...blocks.slice(index + 1)];
+/** 取非空字符串字段：pi 事件的字段经常缺省或为空串（id/name 都靠它区分「有值」与「空壳」）。 */
+function pickString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** `toolcall_start` 没拿到真 id 时给工具块用的占位 id 前缀（与原生 ThreadSession 一致）。 */
+const TOOL_PLACEHOLDER_PREFIX = "tc-";
+
+/**
+ * 插入或更新一个工具块。
+ *
+ * `renameFrom`：**占位 id → 真 id 的合并**。pi 的 `toolcall_start` 只带
+ * `partial.content[contentIndex]`（**没有 `toolCall` 字段**），拿不到真 id 时只能用
+ * `tc-<contentIndex>` 占位；`toolcall_end` 才带来权威 `toolCall`。不做这一步合并，
+ * 真 id 到达时会被当成**另一个块**，留下一个 id 停在占位值、永远转圈的幽灵（真机反馈）。
+ */
+function upsertToolBlock(blocks: ViewBlock[], id: string, patch: Partial<ViewBlock>, renameFrom?: string): ViewBlock[] {
+  let index = blocks.findIndex((b) => b.type === "tool" && b.id === id);
+  if (index < 0 && renameFrom) index = blocks.findIndex((b) => b.type === "tool" && b.id === renameFrom);
+  if (index >= 0) {
+    // 合并：认领后统一用真 id（后续 tool_execution_* 才能命中）
+    return [...blocks.slice(0, index), { ...blocks[index], ...patch, id }, ...blocks.slice(index + 1)];
+  }
   return [...blocks, { type: "tool", id, running: true, ...patch }];
 }
