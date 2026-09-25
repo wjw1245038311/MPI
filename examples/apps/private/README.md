@@ -9,6 +9,12 @@
 |---|---|---|
 | `examples/apps/<id>/` | **公开示例**（如 `local-voice`），可被他人参考 | ✅ 入库 |
 | `examples/apps/private/<id>/` | **私有应用**，含个人环境细节 | ❌ 不入库（本目录除本 README 外全部被 `.gitignore` 忽略） |
+| `MyWorkspace/Software/<name>/`（仓库外） | **运行体类**私有应用/服务：如带守护进程、日志、pid、开机自启的（与 `Software/lms-relay/` 同类）。约定：绿色（便携）软件运行目录 | — （本来就不在仓库内） |
+
+> 💡 怎么选：只往仓库里搬 **能独立打包的 app 源码**；若这东西还要**长期常驻运行**（守护进程 / 日志 / 自启），
+> 就把“运行体”放在仓库外的 `Software/<name>/`，插件源码可随手放在它的子目录（如 `Software/<name>/mpi-app/`），
+> 避免被 `git clean -xdf` 连带删掉（见下文风险 2）。
+> 实例：`Software/ecs443-tunnel/`（443 隧道提速：脚本 + 看门狗 + 自启 + `mpi-app/` 插件）。
 
 根 `.gitignore` 的相关规则：
 
