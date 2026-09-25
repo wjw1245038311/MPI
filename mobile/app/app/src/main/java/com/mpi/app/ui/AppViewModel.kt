@@ -946,9 +946,13 @@ class AppViewModel(
         val settings = settingsStore.settings.value
         // 语音模式自己会播报回复，完成通知/播报一律让路（否则一句回复念两遍）
         val inVoiceChat = _ui.value.voiceChat != null
+        // ⚠️ 不能用缓存的 AppVisibility.foreground：熄屏/锁屏在部分 ROM 上不一定立刻走到
+        // onPause，缓存值会停在 true，于是后台跑完的回合被当成「用户正看着」→ 通知静默不发
+        // （真机症状：对话完成无通知，诊断却报「跳过：App 在前台」）。实时判定 + 屏幕/锁屏。
+        val foregroundNow = AppVisibility.isForegroundNow()
         val notify = !inVoiceChat && Notifier.shouldNotifyTurnComplete(
             enabled = settings.notifyOnTurnComplete,
-            foreground = AppVisibility.foreground,
+            foreground = foregroundNow,
             phoneInitiated = phoneInitiated,
         )
         val voiceEnabled = settings.speakTurnComplete
@@ -961,14 +965,17 @@ class AppViewModel(
                 lastTurnNotify = if (inVoiceChat) {
                     "跳过：语音模式中（由语音模式播报）"
                 } else {
+                    // 带上判定依据与时刻：下次「设了却没收到通知」时不用再猜是哪个信号拦的
+                    val stamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                        .format(java.util.Date())
                     Notifier.turnNotifyReason(
                         enabled = settings.notifyOnTurnComplete,
-                        foreground = AppVisibility.foreground,
+                        foreground = foregroundNow,
                         phoneInitiated = phoneInitiated,
                         voiceEnabled = voiceEnabled,
                         inCall = inCall,
                         speakDuringCall = settings.speakDuringCall,
-                    )
+                    ) + "（${AppVisibility.detail()} · $stamp）"
                 },
             )
         }

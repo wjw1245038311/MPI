@@ -28,6 +28,12 @@ class AppContainer(context: Context) {
 
     private val appContext: Context = context.applicationContext
 
+    init {
+        // 前后台判定要实时查屏幕/锁屏状态（见 AppVisibility）——在这里把 Context 交给它，
+        // 避免在静态对象里硬持有一个 Application 引用又不初始化。
+        AppVisibility.attach(appContext)
+    }
+
     val secretBox: SecretBox = AndroidKeystoreSecretBox()
 
     val keyStore: KeyStore = FileKeyStore(

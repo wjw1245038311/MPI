@@ -550,7 +550,8 @@ fun DiagnosticsScreen(
             )
             DiagRow(
                 "前后台标记",
-                "${if (AppVisibility.foreground) "前台（会跳过通知）" else "后台"}（${AppVisibility.lastChange}）",
+                "${if (AppVisibility.isForegroundNow()) "现在算前台（会跳过通知）" else "现在算后台（会发通知）"}（" +
+                    "${AppVisibility.detail()} · ${AppVisibility.lastChange}）",
             )
             DiagRow(
                 "最近问题",
