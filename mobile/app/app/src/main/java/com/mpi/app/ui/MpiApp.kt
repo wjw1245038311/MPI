@@ -171,9 +171,10 @@ fun MpiApp(container: AppContainer) {
                     state = state,
                     viewModel = viewModel,
                     openDrawerSignal = drawerSignal,
+                    swipeNodePanel = settings.swipeNodePanel,
                     onOpenHosts = { hostsOpen = true },
                     onOpenSettings = { settingsOpen = true },
-                ) { openDrawer, drawerOpen ->
+                ) { openDrawer, drawerOpen, nodePanel ->
                     val openThread = state.thread
                     if (state.openThreadId != null && openThread != null) {
                         BackHandler(enabled = !drawerOpen) {
@@ -233,6 +234,7 @@ fun MpiApp(container: AppContainer) {
                             voiceChatText = state.voiceChatText,
                             onStopVoiceChat = viewModel::stopVoiceChat,
                             swipeNodePanel = settings.swipeNodePanel,
+                            nodePanel = nodePanel,
                             pendingFollowUp = state.pendingFollowUp,
                             sendError = state.sendError,
                             sendNote = state.sendNote,
@@ -347,12 +349,19 @@ private fun DrawerHost(
     state: AppUiState,
     viewModel: AppViewModel,
     openDrawerSignal: Int,
+    /** 左划拉出「会话节点」面板（设置项）。 */
+    swipeNodePanel: Boolean,
     onOpenHosts: () -> Unit,
     onOpenSettings: () -> Unit,
-    content: @Composable (openDrawer: () -> Unit, drawerOpen: Boolean) -> Unit,
+    content: @Composable (openDrawer: () -> Unit, drawerOpen: Boolean, nodePanel: NodePanelState) -> Unit,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    // 「会话节点」面板的状态就放在这一层：手势必须挂在 ModalNavigationDrawer **外面**，
+    // 配合 Initial 阶段（根 → 叶）才能压过抽屉自带的手势。
+    // 真机三轮反馈：手势一旦放在抽屉内部，左划总被抽屉接走 → 弹出左侧会话列表。
+    val nodePanel = rememberNodePanelState(NODE_PANEL_WIDTH)
+    val sessionOpen = state.openThreadId != null && state.thread != null
 
     // 打开侧栏（会话列表）：会话页返回键、主页菜单、「从会话回来」都走它
     val openDrawer: () -> Unit = { scope.launch { drawerState.open() } }
@@ -369,6 +378,9 @@ private fun DrawerHost(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        // 手势就挂在这一层 = 抽屉的祖先：Initial（根 → 叶）时最先拿到事件，横向拖动消费后
+        // 抽屉在后面的 Main 阶段看不到它。只在会话页开着时启用，其它页面不拦右边缘。
+        modifier = Modifier.edgeSwipeNodePanel(swipeNodePanel && sessionOpen, NODE_PANEL_EDGE, nodePanel),
         drawerContent = {
             // 抽屉宽度：手机上一手能回到对话（用户要求最多占屏宽 2/3）
             ModalDrawerSheet(
@@ -394,7 +406,7 @@ private fun DrawerHost(
             }
         },
     ) {
-        content(openDrawer, drawerState.isOpen)
+        content(openDrawer, drawerState.isOpen, nodePanel)
     }
 }
 

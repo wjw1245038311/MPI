@@ -63,7 +63,7 @@ import kotlinx.coroutines.launch
  * 同处一条命中链，这里只消费横向拖拽，纵向滚动照旧归列表；叠窄条会把那条缝里的滚动吃掉。
  */
 @Stable
-internal class NodePanelState(
+class NodePanelState(
     private val scope: CoroutineScope,
     private val panelWidthPx: Float,
 ) {
@@ -119,8 +119,10 @@ internal fun rememberNodePanelState(panelWidth: Dp): NodePanelState {
 /**
  * 右边缘左划 → 跟手拉出节点面板（对齐系统「边缘返回」那种手感：边缘起手、跟手、无把手）。
  *
- * 只消费**横向**拖拽：起手不在右边缘、或方向真是纵向的、或别人已经在处理这次手势，
- * 一律不碰（交给列表滚动 / 别人）。
+ * 只消费**横向**拖拽：起手不在右边缘、或方向真是纵向的，一律不碰（交给列表滚动）。
+ *
+ * **挂载位置很关键**：必须挂在 `ModalNavigationDrawer` 外面（见 DrawerHost），配合 Initial
+ * 阶段才能压过抽屉自带的手势——否则左划会被抽屉接走、弹出左侧会话列表（真机三轮反馈）。
  *
  * ⚠️ 方向判定必须「横向松、纵向严」（2026-09-26 真机反复反馈「面板根本划不出来」）：
  * 手指从最右边缘往中间划时**天然带纵向分量**，只要要求「横向必须先过 touchSlop 且大于纵向」，
@@ -134,38 +136,42 @@ internal fun Modifier.edgeSwipeNodePanel(
 ): Modifier {
     if (!enabled) return this
     return pointerInput(enabled, edgeWidth) {
-        val edgePx = edgeWidth.toPx()
         val touchSlop = viewConfiguration.touchSlop
         val horizontalTrigger = touchSlop * 0.6f
         val verticalGiveUp = touchSlop * 2f
         awaitEachGesture {
-            // ⚠️ 必须用 **Main 阶段**，而不是 Initial（这里踩过两次坑，别再改回去）：
-            //   · Main 的派发顺序是「叶 → 根」：本节点挂在消息区 Box 上，位于 LazyColumn 之上、
-            //     Material 的 ModalNavigationDrawer 之下——顺序是「LazyColumn → 我们 → 抽屉」。
-            //   · 纵向滚动：LazyColumn 先消费 → 我们检测到 consumed 立即退出（列表照旧能滚）；
-            //   · 横向拖拽：LazyColumn 不碰 → 我们消费 → 抽屉（更靠根）在 Main 阶段看到
-            //     consumed，不会再抢走（真机反馈「左划弹出来的是左侧会话列表」就是它抢的）。
-            //   · Initial 是「根 → 叶」，抽屉那头先跑——实测抢不过它（e49f4c5 当时改成 Initial
-            //     是走错了方向）。
-            // down 也用 requireUnconsumed = false：真正决定「要不要插手」的是下面每一帧的
-            // change.isConsumed 检查，不依赖 down 此刻是否已被消费（某些子节点会在按下时就消费）。
-            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
-            if (down.position.x < size.width - edgePx) return@awaitEachGesture
+            // ⚠️ 必须用 **Initial 阶段**，而且本手势必须挂在 **ModalNavigationDrawer 外面**
+            // （调用点在 DrawerHost 的 Modifier 上）——这两个条件缺一不可（真机踩了三轮）：
+            //   · Initial 是「根 → 叶」：我们作为抽屉的祖先先处理，横向拖动一旦在这个阶段
+            //     消费掉，抽屉在后面的 Main 阶段就看不到这次拖动了；
+            //   · 反过来放 Main 必输：Main 是「叶 → 根」，抽屉是子节点、先拿到事件；
+            //   · 挂在消息区 Box（抽屉内部）也必输：Initial 阶段抽屉那侧先跑。
+            // 纵向判断只依赖自己的位移、**不消费任何事件**，所以 LazyColumn 在 Main 阶段照旧能滚。
+            // down 用 requireUnconsumed = false：我们不抢点击，只抢「明确左划」那一下。
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            // 起手区 = 「最右 edgeWidth」与「**屏幕右半边**」中更宽的那个。
+            // 为什么不用真正的边缘（曾用 16/24dp，真机三轮都划不出来）：Android 手势导航把屏幕
+            // 最外 ~20-24dp 划给了系统返回手势，App 在那条缝里**收不到** event；而人手能稳定落下的
+            // 位置也在边缘往里 1cm 左右。放宽不会抢走左侧列表——方向判定只认**向左**，
+            // 向右的拖动整个还给抽屉（右划=左侧会话列表，左划=右侧节点面板，与桌面端一致）。
+            val leftBound = minOf(size.width - edgeWidth.toPx(), size.width * 0.5f)
+            if (down.position.x < leftBound) return@awaitEachGesture
             val tracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
             var total = 0f
             var dragging = false
             while (true) {
-                val event = awaitPointerEvent(PointerEventPass.Main)
+                val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
-                // 别人（LazyColumn 滚动、按钮点击）已经在处理这次手势：不插手
+                // 别人（已跑完的更外层）已经在处理这次手势：不插手
                 if (!dragging && change.isConsumed) break
                 tracker.addPosition(change.uptimeMillis, change.position)
                 val dx = change.position.x - down.position.x
                 val dy = change.position.y - down.position.y
                 if (!dragging) {
                     if (abs(dx) > horizontalTrigger && abs(dx) > abs(dy) * 0.6f) {
-                        dragging = true
+                        // 只认**向左** = 拉出右侧节点面板；向右是抽屉的（左侧会话列表）
+                        if (dx < 0f) dragging = true else break
                     } else if (abs(dy) > verticalGiveUp) {
                         // 纵向明显主导 = 用户在滚列表：**此前一个事件都没消费过**，直接放行
                         break
@@ -292,8 +298,15 @@ internal fun userMessageNodes(messages: List<ThreadMessage>): List<UserNode> =
         UserNode(id = message.id, index = index, preview = text.ifEmpty { "（图片/附件）" }.take(60))
     }
 
-/** 右边缘起手区宽度（对齐系统边缘手势的量级：约 24dp）。 */
-internal val NODE_PANEL_EDGE = 24.dp
+/**
+ * 右边缘起手区宽度。
+ *
+ * ⚠️ 别调小到「真正的边缘」（曾用 16dp/24dp，真机根本划不出来）：Android 手势导航把屏幕最外
+ * ~20-24dp 划给了系统返回手势，App 在那条缝里**收不到** event；而人手能稳定落下的位置也在
+ * 边缘往里 1cm 左右。64dp 既盖住系统返回区、也留出手指的容错，同时不至于把「代码块横向
+ * 滚动」这类正常操作抢走。
+ */
+internal val NODE_PANEL_EDGE = 64.dp
 
 /** 面板宽度。 */
 internal val NODE_PANEL_WIDTH = 268.dp

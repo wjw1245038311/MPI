@@ -147,6 +147,9 @@ fun ThreadScreen(
     onStopVoiceChat: () -> Unit,
     /** 左划打开「会话节点」面板（设置项；关掉就完全不做这个手势）。 */
     swipeNodePanel: Boolean,
+    /** 会话节点面板状态：**手势挂在 DrawerHost 的抽屉外层**（才能压过抽屉自带的手势），
+     *  面板本体仍在这里渲染与滚动定位。 */
+    nodePanel: NodePanelState,
     pendingFollowUp: String?,
     sendError: String?,
     /** 主机回退成排队时的说明（非错误；气泡仍会停在「发送中」直到 pi 投递）。 */
@@ -177,7 +180,6 @@ fun ThreadScreen(
     // ---- 会话节点（右边缘左划拉出）----
     // 节点 = 用户消息（与桌面端左侧用户消息导航同口径）；索引按 display 算，可直接定位滚动。
     val nodes = userMessageNodes(display)
-    val nodePanel = rememberNodePanelState(NODE_PANEL_WIDTH)
     val jumpScope = rememberCoroutineScope()
 
     // 「贴底跟随」记的是**用户意图**：只有用户自己往回滚才取消，内容增长本身不算。
@@ -285,11 +287,7 @@ fun ThreadScreen(
             }
         }
 
-        Box(
-            Modifier
-                .weight(1f)
-                .edgeSwipeNodePanel(swipeNodePanel, NODE_PANEL_EDGE, nodePanel),
-        ) {
+        Box(Modifier.weight(1f)) {
             when {
                 !view.ready -> CenteredHint(text = "正在载入会话…", loading = true)
 
