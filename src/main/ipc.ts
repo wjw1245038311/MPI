@@ -8,7 +8,7 @@ import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-up
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { appendDiagLog } from "./diag-log";
-import { MAX_REMOTE_RAW_MESSAGES, prepareRemoteHistory, remoteMessageSize, settleToolsOutsideRunningTurn } from "./remote/history-limit";
+import { MAX_REMOTE_RAW_MESSAGES, applyIncrementalSnapshot, prepareRemoteHistory, remoteMessageSize, settleToolsOutsideRunningTurn } from "./remote/history-limit";
 import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
 import { listTests, readScenarioHistory, readScenarioResult, runLogicTest, runScenarioCase } from "./test-runner";
 import { getDevReleaseLogWindow, openChangelogWindow, openDevReleaseLogWindow } from "./standalone-windows";
@@ -1917,7 +1917,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
   }
 
-  async function remoteSnapshot(threadId: string, options: { live?: boolean } = {}): Promise<RemoteThreadSnapshot> {
+  async function remoteSnapshot(threadId: string, options: { live?: boolean; haveMessageId?: string } = {}): Promise<RemoteThreadSnapshot> {
     const ref = await remoteThread(threadId);
     const configuredModels = configuredRemoteModelOptions();
     const permission = toRemotePermission(ref.sessionFile ? resolvePermission(ref.sessionFile, ref.permission) : (ref.permission || "sandbox"));
@@ -2292,7 +2292,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   const remoteBackend: RemoteBackend = {
     listProjects: () => projectService.list(),
     listThreads: (projectId) => projectService.listThreads(projectId),
-    getThread: (threadId, options) => remoteSnapshot(threadId, options),
+    // 唯一给手机的入口：带锚点就只回新增（增量快照），否则全量。
+    // 放在这里而不是 remoteSnapshot 内部：内部还有几个只给桌面/内部用的调用点（setModel 等），
+    // 它们不该受影响。
+    getThread: async (threadId, options) =>
+      applyIncrementalSnapshot(await remoteSnapshot(threadId, options), options?.haveMessageId),
     createThread: (projectId, name, permission) => threadService.create(projectId, name, permission),
     setPermission: async (threadId, permission) => {
       const ref = await remoteThread(threadId);

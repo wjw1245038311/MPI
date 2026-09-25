@@ -17,7 +17,9 @@ const {
   MAX_INNER_ENVELOPE_BYTES,
   MAX_RENDERED_MESSAGES,
   REMOTE_HISTORY_BYTE_BUDGET,
+  REMOTE_SNAPSHOT_BYTE_BUDGET,
   SHRINK_MARKER,
+  applyIncrementalSnapshot,
   SNAPSHOT_HEADROOM_BYTES,
   capRenderedHistory,
   prepareRemoteHistory,
@@ -245,4 +247,40 @@ function escapingMessage(index, bodyLength) {
   }
 }
 
+// ---- 增量快照（2026-09-26）------------------------------------------------------
+// 真机：一条大会话每次 subscribe 都重传 ~2MB（rendered=99 sent=99 bytes=1.97MB），
+// 手机侧撞 10s 超时 → 被误判成「连接陈旧」→ 重认证风暴。带上锚点后只回新增。
+{
+  const messages = [
+    { id: "m1", role: "user", blocks: [{ type: "text", text: "一" }] },
+    { id: "m2", role: "assistant", blocks: [{ type: "text", text: "二" }] },
+    { id: "m3", role: "user", blocks: [{ type: "text", text: "三" }] },
+  ];
+  const full = { id: "t1", messages, nextSeq: 0 };
+
+  // 1) 带锚点：回**锚点及其之后**（锚点要重发，它在主机侧可能又长完了），并打上 incremental
+  const delta = applyIncrementalSnapshot(full, "m2");
+  assert.equal(delta.incremental, true, "带锚点应标记为增量");
+  assert.deepEqual(delta.messages.map((m) => m.id), ["m2", "m3"], "回锚点及其之后");
+  assert.deepEqual(full.messages.map((m) => m.id), ["m1", "m2", "m3"], "不动入参对象");
+
+  // 2) 锚点已经是最新：只回锚点自己（客户端 id 覆盖即可，不会产生重复）
+  const upToDate = applyIncrementalSnapshot(full, "m3");
+  assert.equal(upToDate.incremental, true);
+  assert.deepEqual(upToDate.messages.map((m) => m.id), ["m3"], "已最新 → 只回锚点");
+
+  // 3) 锚点不在窗口里（被裁掉/会话被重写/首次打开）：老实回全量
+  const unknown = applyIncrementalSnapshot(full, "m-unknown");
+  assert.deepEqual(unknown.messages.map((m) => m.id), ["m1", "m2", "m3"], "锚点找不到 → 全量");
+  assert.equal(unknown.incremental, undefined, "全量不带增量标记");
+  assert.equal(applyIncrementalSnapshot(full, undefined).incremental, undefined, "没带锚点 → 全量");
+
+  // 4) 软预算必须比硬上限小得多（它才是「每次订阅发多少」的默认值）
+  assert.ok(
+    REMOTE_SNAPSHOT_BYTE_BUDGET < REMOTE_HISTORY_BYTE_BUDGET / 3,
+    `快照软预算(${REMOTE_SNAPSHOT_BYTE_BUDGET}) 应远小于硬上限(${REMOTE_HISTORY_BYTE_BUDGET})`,
+  );
+}
+
 console.log("remote history limit checks passed");
+

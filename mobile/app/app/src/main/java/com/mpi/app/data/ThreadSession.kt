@@ -390,8 +390,13 @@ class ThreadSession(
             _view.value = _view.value.copy(
                 ready = true,
                 summary = snapshot.summary,
-                // 快照是权威历史：残留的乐观占位一并丢弃
-                messages = snapshot.messages,
+                // 全量快照是权威历史：残留的乐观占位一并丢弃；
+                // 增量快照（incremental）只带新增（含锚点那条），按 id 合并，别把本地已有历史丢掉。
+                messages = if (snapshot.incremental) {
+                    mergeIncremental(_view.value.messages, snapshot.messages)
+                } else {
+                    snapshot.messages
+                },
                 streaming = null,
                 running = snapshot.summary.state == RemoteThreadState.Running,
                 errorBanner = null,
@@ -413,8 +418,9 @@ class ThreadSession(
             // 重新定位 seq 基线；第一条实时事件会重新建立期望值
             expectNext = null
         }
-        // 拿到的实时快照顺手写缓存（下一次打开就能秒开）
-        payload?.let { runCatching { onSnapshot(it) } }
+        // 拿到的实时快照顺手写缓存（下一次打开就能秒开）。
+        // **增量不写**：缓存要的是「一份完整历史」，塞进增量会让下次 prime 只铺出个片段。
+        if (!snapshot.incremental) payload?.let { runCatching { onSnapshot(it) } }
         for ((seq, event) in buffered) applyEvent(event, seq)
     }
 
@@ -824,7 +830,16 @@ class ThreadSession(
     }
 
     private fun threadIdPayload(): JsonElement =
-        kotlinx.serialization.json.buildJsonObject { put("threadId", threadId) }
+        kotlinx.serialization.json.buildJsonObject {
+            put("threadId", threadId)
+            // 增量快照锚点：本地已经有到哪一条（乐观占位不算，主机不认识它们的 id）。
+            // 主机在窗口里找得到就只回锚点及其之后（通常几十字节），找不到就回全量。
+            lastKnownMessageId()?.let { put("haveMessageId", it) }
+        }
+
+    /** 本地已有的最后一条「主机也认识」的消息 id（乐观回显 pending 不算）。 */
+    private fun lastKnownMessageId(): String? =
+        _view.value.messages.lastOrNull { !it.pending }?.id?.takeIf { it.isNotEmpty() }
 
     private fun textOfContent(content: JsonElement?): String {
         when (content) {
@@ -883,4 +898,23 @@ internal fun friendlyError(e: Throwable): String {
         return "等主机回应超时，可点「重新同步」再试"
     }
     return e.message ?: "加载失败"
+}
+
+/**
+ * 合并增量快照（纯函数，可单测）。
+ *
+ * 主机带 `incremental` 回来时只给了「锚点那条及其之后」：
+ * - **同 id 以新到达的为准**——锚点那条可能在主机侧又长完了/被收口，不覆盖就会永远停在旧版本；
+ * - 新 id 追加；
+ * - 本地乐观占位（pending，主机不认识）保持原样。
+ */
+internal fun mergeIncremental(
+    current: List<ThreadMessage>,
+    incoming: List<ThreadMessage>,
+): List<ThreadMessage> {
+    if (incoming.isEmpty()) return current
+    val byId = incoming.associateBy { it.id }
+    val merged = current.map { byId[it.id] ?: it }
+    val known = current.mapTo(HashSet()) { it.id }
+    return merged + incoming.filterNot { it.id in known }
 }

@@ -140,6 +140,8 @@ data class ThreadSnapshot(
     val availableModes: List<TaskModeOption> = emptyList(),
     val contextUsage: ContextUsage? = null,
     val messages: List<ThreadMessage> = emptyList(),
+    /** true = 只带新增（含锚点那条），按 id 合并而不是整体替换。 */
+    val incremental: Boolean = false,
     val nextSeq: Int = 0,
 )
 
@@ -240,6 +242,7 @@ internal data class ThreadSnapshotDto(
     val availableModes: List<TaskModeDto> = emptyList(),
     val contextUsage: ContextUsageDto? = null,
     val messages: List<MessageDto> = emptyList(),
+    val incremental: Boolean = false,
     val nextSeq: Int = 0,
 )
 
@@ -299,6 +302,7 @@ object ThreadModels {
             .map { TaskModeOption(it.id, it.name, it.summary, it.enforce == "readonly") },
         contextUsage = contextUsage?.let { ContextUsage(it.tokens, it.contextWindow, it.percent, it.estimatedTokens) },
         messages = messages.map { it.toDomain() },
+        incremental = incremental,
         nextSeq = nextSeq,
     )
 

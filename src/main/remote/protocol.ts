@@ -147,6 +147,11 @@ export interface RemoteThreadSnapshot extends RemoteThreadSummary {
    * carries the post-compaction estimate. */
   contextUsage?: RemoteContextUsage | null;
   messages: RemoteMessage[];
+  /**
+   * true = `messages` 只是**新增部分**（客户端带了锚点 haveMessageId，主机在窗口里找到了它）。
+   * 客户端应把消息**追加**到已有列表，而不是整体替换。缺省/undefined = 全量快照。
+   */
+  incremental?: boolean;
   nextSeq: number;
 }
 

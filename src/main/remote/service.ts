@@ -16,7 +16,7 @@ import { appendDiagLog } from "../diag-log";
 export interface RemoteBackend {
   listProjects(): Promise<unknown>;
   listThreads(projectId: string): Promise<unknown>;
-  getThread(threadId: string, options?: { live?: boolean }): Promise<RemoteThreadSnapshot>;
+  getThread(threadId: string, options?: { live?: boolean; haveMessageId?: string }): Promise<RemoteThreadSnapshot>;
   createThread(projectId: string, name?: string, permission?: RemotePermission): Promise<RemoteThreadSnapshot>;
   setPermission(threadId: string, permission: RemotePermission): Promise<RemoteThreadSnapshot>;
   setModel(threadId: string, provider: string, modelId: string): Promise<RemoteThreadSnapshot>;
@@ -147,12 +147,22 @@ export class RemoteService {
       case "threads.list":
         return responseFor(request, { threads: await this.backend.listThreads(this.requiredString(payload, "projectId")) });
       case "thread.get":
-        return responseFor(request, { snapshot: await this.backend.getThread(this.requiredThread(request)) });
+        return responseFor(request, {
+          snapshot: await this.backend.getThread(this.requiredThread(request), {
+            haveMessageId: this.optionalString(payload, "haveMessageId"),
+          }),
+        });
       case "thread.resync":
         appendDiagLog(
           `remote-req resync conn=${context.connectionId.slice(0, 24)} thread=${this.requiredThread(request).slice(0, 12)}`,
         );
-        return responseFor(request, { snapshot: await this.backend.getThread(this.requiredThread(request), { live: true }) });
+        return responseFor(request, {
+          snapshot: await this.backend.getThread(this.requiredThread(request), {
+            live: true,
+            // 客户端本地已有到哪条：有就只回新增（增量快照，见 history-limit.ts）
+            haveMessageId: this.optionalString(payload, "haveMessageId"),
+          }),
+        });
       case "thread.create":
         return responseFor(request, {
           snapshot: await this.backend.createThread(
@@ -227,7 +237,10 @@ export class RemoteService {
         // Opening a thread is deliberately history-first. Starting a cold Pi
         // bridge here can take several seconds and can exceed the mobile
         // request timeout. A later resync uses the live bridge when needed.
-        const snapshot = await this.backend.getThread(threadId);
+        const snapshot = await this.backend.getThread(threadId, {
+          // 开会话时若带着本地缓存锚点，主机只回新增（不会每次重传整段历史）
+          haveMessageId: this.optionalString(payload, "haveMessageId"),
+        });
         // 但历史快照拿不到上下文用量（那是桥里的 pi 状态）。于是不阻塞响应地预热：
         // 桥就绪后主机推 context_usage，手机端的用量 chip 就有数了（此前一直是「—」）。
         void this.backend.warmThread?.(threadId).catch(() => {});

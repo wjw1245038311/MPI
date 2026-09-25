@@ -48,6 +48,19 @@ export const SNAPSHOT_HEADROOM_BYTES = 400_000;
  */
 export const REMOTE_HISTORY_BYTE_BUDGET = MAX_INNER_ENVELOPE_BYTES - SNAPSHOT_HEADROOM_BYTES;
 
+/**
+ * 快照软预算（比上面的硬上限小得多）。
+ *
+ * 为什么需要：原预算 = 8MB − 400KB ≈ 7.6MB，是随 envelope 上限从 2MB 提到 8MB 时
+ * 一起放宽的「防丢帧硬保证」。但它同时当了「每次订阅发多少」的默认值——2026-09-26
+ * 真机：一条大会话每次 subscribe 都发 ~2MB（rendered=99 sent=99 bytes=1.97MB），
+ * 手机侧撞 10s 请求超时 → 误判为「连接陈旧」→ 重认证风暴。
+ *
+ * 增量快照（客户端带 haveMessageId）是治本；这里是**兼底**：首次/全量下发也不超 2MB，
+ * 而 8MB 那层硬保证仍由 [trimRemoteHistoryByEncodedSize] 的默认值守着。
+ */
+export const REMOTE_SNAPSHOT_BYTE_BUDGET = 2_000_000;
+
 /** 估算单条消息下发后的字节数（正文长度 + 图片 base64 长度 + 固定开销）。 */
 export function remoteMessageSize(message: RemoteMessage): number {
   let size = 200;
@@ -63,7 +76,29 @@ export function capRenderedHistory(messages: RemoteMessage[]): RemoteMessage[] {
   return messages.length > MAX_RENDERED_MESSAGES ? messages.slice(-MAX_RENDERED_MESSAGES) : messages;
 }
 
-/** 从最旧的开始丢，直到总量进预算（**至少保留最后一条**——空历史比超预算更糟）。 */
+/**
+ * 增量快照：客户端说「我已经有到 haveMessageId 这条了」，就只回它后面的部分。
+ *
+ * 找不到锚点（那条已被裁出窗口 / 会话被重写 / 首次打开）就老老实实回全量——客户端按
+ * `incremental` 决定是追加还是整体替换，两边都不会错。
+ *
+ * 为什么值得做：会话大起来之后，热订阅（锁屏回来、切会话回来、resync 补缺）每次重传
+ * 全量代价很大（真机实测 1.97MB/次，中继链路十几秒）；带上锚点后通常只剩几十字节。
+ */
+export function applyIncrementalSnapshot<T extends { messages: { id: string }[]; incremental?: boolean }>(
+  snapshot: T,
+  haveMessageId: string | undefined,
+): T {
+  if (!haveMessageId) return snapshot;
+  const index = snapshot.messages.findIndex((message) => message.id === haveMessageId);
+  if (index < 0) return snapshot; // 锚点不在窗口里 → 回全量
+  // **连锚点那条一起回**：它在主机侧可能又长完了/被收口了，客户端按 id 覆盖才不会永远停在旧版本。
+  const tail = snapshot.messages.slice(index);
+  return { ...snapshot, messages: tail, incremental: true };
+}
+
+/**
+ * 从最旧的开始丢，直到总量进预算（**至少保留最后一条**——空历史比超预算更糟）。 */
 export function trimRemoteHistory(
   messages: RemoteMessage[],
   budget = REMOTE_HISTORY_BYTE_BUDGET,
@@ -213,7 +248,7 @@ export function settleToolsOutsideRunningTurn<T extends RemoteMessage>(messages:
  */
 export function prepareRemoteHistory(
   messages: RemoteMessage[],
-  limit = REMOTE_HISTORY_BYTE_BUDGET,
+  limit = REMOTE_SNAPSHOT_BYTE_BUDGET,
   rawLimit = MAX_RENDERED_MESSAGES,
 ): RemoteMessage[] {
   const stage1 = messages.length > rawLimit ? messages.slice(-rawLimit) : messages;

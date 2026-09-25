@@ -239,7 +239,7 @@ export class ThreadSession {
     if (this.subscribed) return;
     this.awaitingSnapshot = true;
     try {
-      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.subscribe", { threadId: this.view.threadId }, "subscribe", SNAPSHOT_TIMEOUT_MS);
+      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.subscribe", { threadId: this.view.threadId, haveMessageId: this.lastKnownMessageId() }, "subscribe", SNAPSHOT_TIMEOUT_MS);
       if (!payload?.snapshot) throw new Error("thread.subscribe returned no snapshot");
       // 先置位再应用快照：applySnapshot 会 flush 缓冲事件，那一刻起已算已订阅。
       this.subscribed = true;
@@ -295,7 +295,7 @@ export class ThreadSession {
     this.awaitingSnapshot = true;
     this.patch({ ready: false });
     try {
-      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.resync", { threadId: this.view.threadId }, "resync", SNAPSHOT_TIMEOUT_MS);
+      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.resync", { threadId: this.view.threadId, haveMessageId: this.lastKnownMessageId() }, "resync", SNAPSHOT_TIMEOUT_MS);
       if (!payload?.snapshot) throw new Error("thread.resync returned no snapshot");
       this.applySnapshot(payload.snapshot);
     } catch (error) {
@@ -382,9 +382,20 @@ export class ThreadSession {
    *  并把「显示的是缓存」标记清空。 */
   private applySnapshot(snapshot: RemoteThreadSnapshot): void {
     this.applySnapshotCore(snapshot, null);
+    // 增量不写缓存：缓存要的是「一份完整历史」，塞进增量会让下次播种只铺出个片段。
+    if (snapshot.incremental) return;
     try {
       this.onSnapshot?.(snapshot);
     } catch { /* 缓存写入失败绝不能影响主流程 */ }
+  }
+
+  /**
+   * 本地已有的最后一条「主机也认识」的消息 id（乐观回显 pending 不算）——
+   * 增量快照的锚点：主机在窗口里找得到就只回锚点及其之后。
+   */
+  private lastKnownMessageId(): string | undefined {
+    const local = this.view.messages.filter((m) => !m.pending);
+    return local.length ? local[local.length - 1].id : undefined;
   }
 
   /**
@@ -418,7 +429,11 @@ export class ThreadSession {
       ready: true,
       summary,
       // 快照是权威历史：残余的乐观占位一律丢弃（主机此时一定已经有了这条消息）。
-      messages: snapshot.messages.map(mapRemoteMessage),
+      // 全量：快照是权威历史，残余的乐观占位一律丢弃（主机此时一定已经有了这条消息）。
+      // 增量：只带锚点及其之后 —— 按 id 合并，不能把本地已有历史丢掉。
+      messages: snapshot.incremental
+        ? mergeIncremental(this.view.messages, snapshot.messages.map(mapRemoteMessage))
+        : snapshot.messages.map(mapRemoteMessage),
       streaming: null,
       running: snapshot.state === "running",
       errorBanner: null,
@@ -743,4 +758,20 @@ function upsertToolBlock(blocks: ViewBlock[], id: string, patch: Partial<ViewBlo
     return [...blocks.slice(0, index), { ...blocks[index], ...patch, id }, ...blocks.slice(index + 1)];
   }
   return [...blocks, { type: "tool", id, running: true, ...patch }];
+}
+
+/**
+ * 合并增量快照（纯函数，可单测）。
+ *
+ * 主机带 `incremental` 回来时只给了「锚点那条及其之后」：
+ * - **同 id 以新到达的为准**——锚点那条可能在主机侧又长完了/被收口，不覆盖就会永远停在旧版本；
+ * - 新 id 追加；
+ * - 本地乐观占位（pending，主机不认识）保持原样。
+ */
+export function mergeIncremental<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+  if (!incoming.length) return current;
+  const byId = new Map(incoming.map((m) => [m.id, m] as const));
+  const merged = current.map((m) => byId.get(m.id) ?? m);
+  const known = new Set(current.map((m) => m.id));
+  return [...merged, ...incoming.filter((m) => !known.has(m.id))];
 }
