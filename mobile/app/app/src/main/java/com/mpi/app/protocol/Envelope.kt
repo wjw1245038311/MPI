@@ -16,8 +16,17 @@ import kotlinx.serialization.json.jsonPrimitive
 
 const val REMOTE_PROTOCOL_VERSION = 1
 
-/** 中继单帧上限，与 relay 的 MAX_FRAME_BYTES 一致。 */
-const val MAX_ENVELOPE_BYTES = 2_000_000
+/**
+ * 客户端能接受的**解密后内层 envelope** 长度上限（字符数）。
+ *
+ * 与桌面侧 `src/main/remote/protocol.ts` 的 `MAX_ENVELOPE_BYTES` 必须一致。
+ *
+ * 2026-09-25 从 2MB 提到 8MB。原注释写"与 relay 的 MAX_FRAME_BYTES 一致"是**错的**：
+ * 中继是 32MB（加密帧），差 16 倍；传输层从来不是瓶颈，2MB 只是客户端自己的遗留值。
+ * 提高它是为了不再因字节预算而裁掉历史。
+ * **升级顺序**：先客户端（本行 + PWA），确认可用后再提主机侧 history-limit.ts。
+ */
+const val MAX_ENVELOPE_BYTES = 8_000_000
 
 /** 协议层错误；[code] 与 TS 侧 RemoteProtocolError.code 对应。 */
 class RemoteProtocolException(val code: String, message: String) : Exception(message)

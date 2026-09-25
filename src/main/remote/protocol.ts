@@ -1,5 +1,18 @@
 export const REMOTE_PROTOCOL_VERSION = 1 as const;
 
+/**
+ * 客户端能接受的**解密后内层 envelope** 长度上限（UTF-16 码元数）。
+ *
+ * 与 `mobile/app/.../protocol/Envelope.kt` 的 `MAX_ENVELOPE_BYTES` 必须一致
+ * （scripts/test-remote-history-limit.mjs 守着这条）。
+ *
+ * 2026-09-25 从 2MB 提到 8MB：中继实际允许 32MB（加密帧），传输层从来不是瓶颈，
+ * 2MB 只是客户端自己写死的遗留值。提高上限是为了不再因为字节预算而裁掉历史。
+ * **升级顺序**（避免主机发出客户端接不住的帧）：先把两侧客户端提到 8MB，确认可用后
+ * 再把主机侧 `history-limit.ts` 的 `MAX_INNER_ENVELOPE_BYTES` 也提上去。
+ */
+export const MAX_ENVELOPE_BYTES = 8_000_000;
+
 export const REMOTE_REQUEST_TYPES = [
   "projects.list",
   "threads.list",
@@ -242,7 +255,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function parseEnvelope(raw: string | unknown): RemoteEnvelope {
   let value: unknown = raw;
   if (typeof raw === "string") {
-    if (raw.length > 2_000_000) throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", "Remote message is too large");
+    if (raw.length > MAX_ENVELOPE_BYTES) throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", "Remote message is too large");
     try {
       value = JSON.parse(raw);
     } catch {
