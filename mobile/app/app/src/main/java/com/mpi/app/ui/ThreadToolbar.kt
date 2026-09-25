@@ -190,7 +190,7 @@ fun ConfigSheet(
                 )
             }
 
-            // 用量：一行搞定（百分比 + 进度 + 压缩入口）
+            // 用量：百分比 + 进度 + 压缩入口（具体 token 数在下一行，见下）
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "上下文",
@@ -233,6 +233,18 @@ fun ConfigSheet(
                 ) {
                     Text(if (view.compacting) "压缩中…" else "压缩", style = MaterialTheme.typography.labelSmall)
                 }
+            }
+
+            // 具体值：只给百分比看不出「还剩多少窗口」，临近压缩阈值时尤其需要。
+            // 口径与 PWA `formatTokens(used) / formatTokens(total) tokens` 一致
+            // （含压缩后估算的回退值；估算提示在下方那行）。
+            if (ctx.hasValue) {
+                Text(
+                    text = "${formatTokens(ctx.used)} / ${formatTokens(ctx.total)} tokens",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MpiTheme.colors.textFaint,
+                    modifier = Modifier.padding(start = 78.dp),
+                )
             }
 
             // 权限
