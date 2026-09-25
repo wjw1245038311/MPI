@@ -1246,19 +1246,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
    */
   const publishThreadContextUsage = async (localId: string): Promise<void> => {
     try {
-      const usage = await threadContextUsage(localId, compactionEstimates.get(localId) ?? null);
-      if (!usage) {
-        appendDiagLog(`ctx-usage skip local=${localId.slice(-20)} reason=no-stats`);
-        return;
-      }
       const sessionFile = localId.endsWith(".jsonl") ? localId : null;
       const remoteThreadId = sessionFile ? remoteIdForSessionHook?.(sessionFile) : null;
       if (!remoteThreadId) {
-        appendDiagLog(`ctx-usage skip local=${localId.slice(-20)} reason=no-remote-id has-usage=1`);
+        appendDiagLog(`ctx-usage skip local=${localId.slice(-20)} reason=no-remote-id`);
         return;
       }
-      // 顺带补推当前模型：新会话的 JSONL 没有 model_change 条目 → history.model 恒为
-      // null，不推的话手机端 chip 会一直停在「默认模型」。桥已就绪，getState 很便宜。
+      // 模型补推**必须先于 usage 的早退**：冷启动 / 新会话经常还没有 stats，早退会把模型
+      // 补推一起吞掉 → 手机 chip 停在磁盘快照里的旧模型，要手动刷新才同步
+      // （2026-09-25 真机：「每次完全重启显示的还是要之前配置的模型」的根因）。
+      // 桥已就绪，getState 很便宜。
       let model: { provider: string; id: string } | null = null;
       try {
         const st: any = await bridges.get(localId)?.bridge.getState();
@@ -1267,6 +1264,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         }
       } catch {
         /* 取不到保持 null，手机端维持原值 */
+      }
+      // 模型与用量无关，走 config_changed（与桌面/agent 切模型的广播同一条通道）；
+      // 「没有 stats」不该连坐模型，否则就是「重启后要刷一下」的那个洞。
+      if (model) publishThreadConfigChange({ remoteThreadId, sessionFile }, { model }, "agent");
+      const usage = await threadContextUsage(localId, compactionEstimates.get(localId) ?? null);
+      if (!usage) {
+        appendDiagLog(`ctx-usage skip local=${localId.slice(-20)} reason=no-stats model=${model?.id ?? "-"}`);
+        return;
       }
       appendDiagLog(
         `ctx-usage push remote=${remoteThreadId.slice(0, 12)} tokens=${usage.tokens ?? "null"} window=${usage.contextWindow} pct=${usage.percent ?? "null"} est=${usage.estimatedTokens ?? "-"} model=${model?.id ?? "-"}`,
@@ -2327,6 +2332,19 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       const allowed = models.some((model) => model.provider === provider && model.id === modelId);
       if (!allowed) throw new RemoteProtocolError("MODEL_UNAVAILABLE", "That model is not available on the MPI host");
       await handle.bridge.setModel(provider, modelId);
+      // 同步到其它端（桌面 / 其它手机）：与 setThinking / setMode / 桌面端 thread:setModel 一致。
+      // 只 return 响应快照的话只有发起端知道，别的端 chip 会停在旧值到下次 resync；
+      // 而发起端当年也拿不到（原生端不消费返回值）→ 表现为「切了没反应」。
+      const modelState: any = await handle.bridge.getState().catch(() => null);
+      publishThreadConfigChange(
+        { remoteThreadId: remoteIdForSession(ref.sessionFile) ?? threadId, sessionFile: ref.sessionFile },
+        {
+          model: { provider, id: modelId },
+          // Pi 会按新模型的 thinkingLevelMap 夹紧档位，带上生效值免得别的端停在旧档
+          ...(modelState?.thinkingLevel ? { thinkingLevel: modelState.thinkingLevel } : {}),
+        },
+        "remote",
+      );
       return remoteSnapshot(threadId, { live: true });
     },
     setThinking: async (threadId, level) => {
