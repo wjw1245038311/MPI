@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.core.content.FileProvider
 import com.mpi.app.BuildConfig
 import java.io.File
+import java.net.URI
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -89,13 +90,6 @@ class Updater(private val context: Context) {
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
-    /** wss://host → https://host（中继的静态目录与信令同源）。 */
-    fun httpOrigin(relayUrl: String): String? = relayUrl
-        .trim()
-        .replace(Regex("^wss://", RegexOption.IGNORE_CASE), "https://")
-        .replace(Regex("^ws://", RegexOption.IGNORE_CASE), "http://")
-        .trimEnd('/')
-        .takeIf { it.startsWith("http") }
 
     /**
      * 有更新时返回信息。
@@ -107,6 +101,9 @@ class Updater(private val context: Context) {
      * · 短路：拿到**任何非 Failed 的结果（Available / UpToDate）就立即返回**。
      *   曾经改成「UpToDate 也继续问下一个源」，结果每次「已是最新」都要再等 GitHub
      *   超时（实测 ~10s，有时直接 time out）——UI 上就成了「点了没反应」。
+     * · 反向短路：中继**应答了却给不出清单**（HTTP 4xx / 内容不是清单）＝ 路径或资产配错，
+     *   不是「源不可达」。这时再问 GitHub 只会白等 8–20s，还会把配置错误伪装成「网络慢」。
+     *   2026-09-25 教训：`httpOrigin` 没剥 `/ws` → 中继每次都 404 → 检查一直静默走 GitHub。
      *
      * ⚠️ 代价与配套约定：把中继当权威源，就要求**它的清单不能陈旧**——
      *   所以 `scripts/publish-android-github.mjs`（正式发布）也必须把清单推到中继，
@@ -115,19 +112,28 @@ class Updater(private val context: Context) {
      */
     suspend fun check(relayUrl: String): UpdateCheckResult = withContext(Dispatchers.IO) {
         val sources = buildList {
-            httpOrigin(relayUrl)?.let { origin -> add("$origin/download/$MANIFEST_NAME" to "$origin/download") }
-            add(GITHUB_MANIFEST_URL to GITHUB_BASE_URL)
+            httpOrigin(relayUrl)?.let { origin ->
+                add(Triple("中继", "$origin/download/$MANIFEST_NAME", "$origin/download"))
+            }
+            add(Triple("GitHub", GITHUB_MANIFEST_URL, GITHUB_BASE_URL))
         }
-        var lastReason = "没有可用的更新源"
-        for ((manifestUrl, base) in sources) {
+        val failures = mutableListOf<String>()
+        for ((label, manifestUrl, base) in sources) {
             when (val result = fetchManifest(manifestUrl, base)) {
-                // 这个源不行（拿不到 / 格式错）→ 试下一个
-                is UpdateCheckResult.Failed -> lastReason = result.reason
+                is UpdateCheckResult.Failed -> {
+                    // 失败信息带上「哪个源 + 为什么」，而不是只留最后一条——
+                    // 否则「中继 404 + GitHub 超时」在界面上只剩一句 timeout，查不出根因。
+                    failures += "$label：${result.reason}"
+                    // 源应答过却给不出清单（4xx / 内容不是清单）＝ 终止性失败，不再兜底（见上方注释）
+                    if (result.answered) {
+                        return@withContext UpdateCheckResult.Failed(failures.joinToString("；"))
+                    }
+                }
                 // 首个非失败的结果即为权威（中继优先）→ 立即采用，不再等其它源
                 else -> return@withContext result
             }
         }
-        UpdateCheckResult.Failed(lastReason)
+        UpdateCheckResult.Failed(failures.joinToString("；").ifEmpty { "没有可用的更新源" })
     }
 
     private fun fetchManifest(manifestUrl: String, base: String): UpdateCheckResult =
@@ -135,12 +141,16 @@ class Updater(private val context: Context) {
             val request = Request.Builder().url(manifestUrl).build()
             manifestClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    return@use UpdateCheckResult.Failed("没找到更新清单（HTTP ${response.code}）")
+                    // 4xx：这个源上确实没有这个资产（路径/配置错）→ 应答过，属终止性失败；
+                    // 5xx：服务端临时故障 → 允许兜底问下一个源。
+                    val answered = response.code in 400..499
+                    return@use UpdateCheckResult.Failed("没找到更新清单（HTTP ${response.code}）", answered)
                 }
                 val body = response.body?.string()
-                    ?: return@use UpdateCheckResult.Failed("更新清单是空的")
+                    ?: return@use UpdateCheckResult.Failed("更新清单是空的", answered = true)
+                // 拿到了内容但不是清单（典型：中继把未知路径兜底成 index.html）→ 也是应答过
                 val info = parseManifest(body, base)
-                    ?: return@use UpdateCheckResult.Failed("更新清单格式不正确")
+                    ?: return@use UpdateCheckResult.Failed("更新清单格式不正确", answered = true)
                 if (isNewer(info.version)) UpdateCheckResult.Available(info) else UpdateCheckResult.UpToDate
             }
         }.getOrElse { error ->
@@ -220,6 +230,26 @@ class Updater(private val context: Context) {
 
     companion object {
         const val MANIFEST_NAME = "mpi-android-native.json"
+
+        /**
+         * 中继的 WS 端点 → **HTTP origin**（只保留 `scheme://host[:port]`，路径一律去掉）。
+         *
+         * ⚠️ 必须剥路径。配对载荷里给的是 WS 端点，形如
+         * `wss://aliyun-ecs.tail38d5a.ts.net:9443/ws`；只换协议不剥路径的话，清单地址会变成
+         * `/ws/download/mpi-android-native.json` → 中继回 404 → 该源判失败 → **静默掉到
+         * GitHub**（被墙时 20s 超时）。2026-09-25 真机症状正是「检查更新总是慢/超时」——
+         * 也就是说「中继优先」从上线起一次都没真正生效过。（纯函数，可测）
+         */
+        internal fun httpOrigin(relayUrl: String): String? {
+            val http = relayUrl.trim()
+                .replace(Regex("^wss://", RegexOption.IGNORE_CASE), "https://")
+                .replace(Regex("^ws://", RegexOption.IGNORE_CASE), "http://")
+            if (!http.startsWith("http", ignoreCase = true)) return null
+            return runCatching {
+                val uri = URI(http)
+                uri.authority?.let { "${uri.scheme}://$it" }
+            }.getOrNull()
+        }
 
         /**
          * GitHub 侧：清单随仓库走（raw 固定 URL），安装包与增量包放 Release assets。
@@ -317,5 +347,10 @@ data class DownloadResult(val file: File, val viaPatch: Boolean)
 sealed interface UpdateCheckResult {
     data class Available(val info: UpdateInfo) : UpdateCheckResult
     data object UpToDate : UpdateCheckResult
-    data class Failed(val reason: String) : UpdateCheckResult
+
+    /**
+     * @param answered 该源**确实应答了 HTTP**（4xx，或内容根本不是清单），而不是连不上。
+     *   用来区分「路径/资产配错（终止性，别再兜底）」与「源不可达（可以换下一个源）」。
+     */
+    data class Failed(val reason: String, val answered: Boolean = false) : UpdateCheckResult
 }

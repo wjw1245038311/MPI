@@ -29,6 +29,27 @@ class UpdaterLogicTest {
     }
 
     @Test
+    fun `relay origin keeps host and port but drops the websocket path`() {
+        // 配对载荷给的是 WS 端点（wss://host:9443/ws）。带路径拼清单地址会变成
+        // /ws/download/... → 中继回 404 → 静默掉到 GitHub（2026-09-25 真机「检查更新总是慢/超时」的根因）。
+        assertEquals("https://aliyun-ecs.example:9443", Updater.httpOrigin("wss://aliyun-ecs.example:9443/ws"))
+        assertEquals("http://host:8080", Updater.httpOrigin("ws://host:8080/ws"))
+        assertEquals("https://host", Updater.httpOrigin("https://host/ws/"))
+        assertEquals("https://host:9443", Updater.httpOrigin("  WSS://host:9443/ws  "))
+        assertNull(Updater.httpOrigin(""))
+        assertNull(Updater.httpOrigin("host:9443/ws"))
+    }
+
+    @Test
+    fun `relay manifest url never contains the websocket path`() {
+        val origin = Updater.httpOrigin("wss://aliyun-ecs.example:9443/ws")!!
+        assertEquals(
+            "https://aliyun-ecs.example:9443/download/${Updater.MANIFEST_NAME}",
+            "$origin/download/${Updater.MANIFEST_NAME}",
+        )
+    }
+
+    @Test
     fun `an absolute file is used as-is even when base is empty`() {
         // GitHub 清单的形状（base 为空）：file/url 都得是绝对地址，否则 Android 报 no scheme。
         val json =
