@@ -46,7 +46,7 @@ export interface RemoteBackend {
   storePushSubscription(deviceId: string, subscription: RemotePushSubscription): Promise<unknown>;
   /** Transcribe a phone voice memo (base64 WAV) via the local STT endpoint. */
   sttTranscribe(audioB64: string, sampleRate: number): Promise<{ text: string }>;
-  subscribeThread(threadId: string, listener: (event: RemoteThreadEventPayload) => void): () => void;
+  subscribeThread(threadId: string, listener: (event: RemoteThreadEventPayload, seq: number) => void): () => void;
   /** 后台预热会话（手机打开会话时调用）：让主机在后台建立/复用 pi 桥，
    * 就绪后由主机推送 context_usage。**绝不能 await**——冷启动桥可能超过手机端
    * 请求超时（subscribe 注释里记过这个坑）。 */
@@ -93,7 +93,6 @@ export class RemoteService {
   private readonly subscriptions = new Map<string, Map<string, () => void>>();
   private readonly claims = new Map<string, Claim>();
   private readonly requests = new Map<string, RemoteEnvelope>();
-  private readonly sequences = new Map<string, number>();
   /** Writer-lease duration; injectable so tests don't wait the real 30s. */
   private readonly leaseMs: number;
 
@@ -217,9 +216,10 @@ export class RemoteService {
         appendDiagLog(`remote-req subscribe conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)}`);
         const existing = this.subscriptions.get(context.connectionId) || new Map<string, () => void>();
         existing.get(threadId)?.();
-        const unsubscribe = this.backend.subscribeThread(threadId, (event) => {
-          const seq = (this.sequences.get(threadId) || 0) + 1;
-          this.sequences.set(threadId, seq);
+        const unsubscribe = this.backend.subscribeThread(threadId, (event, seq) => {
+          // seq 由 RemoteEventHub 按线程统一分配（每个事件一次，对所有订阅者
+          // 相同值）——绝不能在这里自己递增，否则多设备同时看一个会话时，
+          // 各自的序号会交错，客户端把每个事件都当成缺号，疯狂 resync。
           context.send(makeEnvelope("thread.event", request.sessionId, event, { threadId, seq }));
         });
         existing.set(threadId, unsubscribe);

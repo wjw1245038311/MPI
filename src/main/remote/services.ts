@@ -1,10 +1,30 @@
 import type { RemoteFileInput, RemoteImageInput, RemotePermission, RemoteThreadEventPayload, RemoteThreadSnapshot } from "./protocol";
 
-export class RemoteEventHub {
-  private readonly listeners = new Map<string, Set<(event: RemoteThreadEventPayload) => void>>();
+/**
+ * 线程事件订阅者。**第二个参数是该事件的线程序号**（见 [RemoteEventHub.publish]）。
+ * 只关心事件本身的订阅者（如消息通道）可以只声明第一个参数。
+ */
+export type RemoteThreadEventListener = (event: RemoteThreadEventPayload, seq: number) => void;
 
-  subscribe(threadId: string, listener: (event: RemoteThreadEventPayload) => void): () => void {
-    const entries = this.listeners.get(threadId) || new Set<(event: RemoteThreadEventPayload) => void>();
+export class RemoteEventHub {
+  private readonly listeners = new Map<string, Set<RemoteThreadEventListener>>();
+
+  /**
+   * 每线程的事件序号。
+   *
+   * **必须在这里递增，不能在订阅者回调里递增。**一个事件会被 fan-out 给该线程的
+   * 所有订阅者，序号属于「事件」本身。曾经把它写在每个连接的订阅回调内，后果是：
+   * N 个订阅者时，同一个事件触发 N 次递增，各自拿到 seq=1 / 2 / … N，于是每个
+   * 订阅者看到的都是等差序列（步长 N）→ 客户端把**每一个事件**都判成「缺号」→
+   * 触发 `thread.resync` → 而 resync 先把 `ready` 置 false，消息区被打回「加载中」
+   * → 下一个事件又缺号……变成无限 resync 风暴（同时开手机端 + 桌面网页看同一个
+   * 会话即可复现，主机 diag 日志表现为 subs=2 与成串 remote-req resync）。
+   * 客户端假设的语义是「per-thread counter, monotonic across subscribers」。
+   */
+  private readonly sequences = new Map<string, number>();
+
+  subscribe(threadId: string, listener: RemoteThreadEventListener): () => void {
+    const entries = this.listeners.get(threadId) || new Set<RemoteThreadEventListener>();
     entries.add(listener);
     this.listeners.set(threadId, entries);
     return () => {
@@ -14,7 +34,14 @@ export class RemoteEventHub {
   }
 
   publish(threadId: string, event: RemoteThreadEventPayload): void {
-    for (const listener of this.listeners.get(threadId) || []) listener(event);
+    const entries = this.listeners.get(threadId);
+    // 无人订阅时保持原有语义：静默丢弃，且**不推进序号**（客户端每次
+    // applySnapshot 后都会用首个实时事件重建基线，所以推进与否都安全；
+    // 保持原样是为了不在无人订阅的时段白白消耗序号）。
+    if (!entries || entries.size === 0) return;
+    const seq = (this.sequences.get(threadId) || 0) + 1;
+    this.sequences.set(threadId, seq);
+    for (const listener of entries) listener(event, seq);
   }
 
   /**
@@ -31,6 +58,7 @@ export class RemoteEventHub {
 
   clear(): void {
     this.listeners.clear();
+    this.sequences.clear();
   }
 }
 export class ProjectService {

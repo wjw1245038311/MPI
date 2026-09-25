@@ -53,6 +53,7 @@
     "test:compactions": "node --experimental-strip-types scripts/test-compaction-stats.mjs",
     "test:earlier-history": "node --experimental-strip-types scripts/test-earlier-history.mjs",
     "test:remote-history": "node --experimental-strip-types scripts/test-remote-history-limit.mjs",
+    "test:remote-seq": "node --experimental-transform-types scripts/test-remote-seq.mjs",
     "test:ltm-newthread": "node --experimental-strip-types scripts/test-ltm-newthread.mjs",
     "test:toolargs": "node --experimental-strip-types scripts/test-tool-args.mjs",
     "test:permission": "node scripts/test-permission-gate.mjs",
