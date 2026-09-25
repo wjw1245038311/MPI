@@ -84,11 +84,24 @@ class NotifierLogicTest {
 
     @Test
     fun `turn notify reason names the blocking condition`() {
-        assertEquals("已通知", Notifier.turnNotifyReason(enabled = true, foreground = false, phoneInitiated = true, spoke = false))
-        assertEquals("已通知 + 语音", Notifier.turnNotifyReason(enabled = true, foreground = false, phoneInitiated = true, spoke = true))
-        assertEquals("跳过：设置里已关闭", Notifier.turnNotifyReason(enabled = false, foreground = false, phoneInitiated = true, spoke = false))
-        assertEquals("跳过：回合由电脑端发起", Notifier.turnNotifyReason(enabled = true, foreground = false, phoneInitiated = false, spoke = false))
-        assertEquals("跳过：App 在前台", Notifier.turnNotifyReason(enabled = true, foreground = true, phoneInitiated = true, spoke = false))
+        fun reason(
+            enabled: Boolean = true,
+            foreground: Boolean = false,
+            phoneInitiated: Boolean = true,
+            voice: Boolean = true,
+            inCall: Boolean = false,
+        ) = Notifier.turnNotifyReason(enabled, foreground, phoneInitiated, voice, inCall)
+
+        assertEquals("已通知 + 语音", reason())
+        assertEquals("跳过：设置里已关闭", reason(enabled = false))
+        assertEquals("跳过：回合由电脑端发起", reason(phoneInitiated = false))
+        assertEquals("跳过：App 在前台", reason(foreground = true))
+        assertEquals("已通知", reason(voice = false))
+        // 微信/运营商通话中：系统会把媒体音/TTS 压掉 → 跳过播报，但通知照发
+        assertEquals("已通知（通话中，未播报）", reason(inCall = true))
+        // 前面几个条件优先级更高（那时连通知都不发）
+        assertEquals("跳过：App 在前台", reason(foreground = true, inCall = true))
+        assertEquals("跳过：设置里已关闭", reason(enabled = false, inCall = true))
     }
 
     @Test

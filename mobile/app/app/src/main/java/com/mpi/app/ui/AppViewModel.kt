@@ -925,7 +925,10 @@ class AppViewModel(
             foreground = AppVisibility.foreground,
             phoneInitiated = phoneInitiated,
         )
-        val spoke = notify && settings.speakTurnComplete
+        val voiceEnabled = settings.speakTurnComplete
+        // 通话中（含微信 VoIP）系统会把 TTS 压掉，念了也是白念，还可能被通话对方听到 → 跳过
+        val inCall = speaker.inCall()
+        val spoke = notify && voiceEnabled && !inCall
         _ui.update {
             it.copy(
                 lastTurnNotify = if (inVoiceChat) {
@@ -935,7 +938,8 @@ class AppViewModel(
                         enabled = settings.notifyOnTurnComplete,
                         foreground = AppVisibility.foreground,
                         phoneInitiated = phoneInitiated,
-                        spoke = spoke,
+                        voiceEnabled = voiceEnabled,
+                        inCall = inCall,
                     )
                 },
             )

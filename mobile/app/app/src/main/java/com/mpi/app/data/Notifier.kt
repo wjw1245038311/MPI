@@ -208,19 +208,23 @@ class Notifier(private val context: Context) {
         /**
          * 诊断用：这一回合为什么发/没发（纯函数，可单测）。
          *
-         * 专治「设了却没收到通知」——三个判定条件直接摊在诊断页上，不用猜。
+         * 专治「设了却没收到通知」——判定条件直接摊在诊断页上，不用猜。
+         * [voiceEnabled] = 语音播报开关；[inCall] = 当时是否在通话（含微信这类 VoIP：
+         * 系统会把媒体音/TTS 压掉，所以跳过播报，但**通知照发**）。
          */
         internal fun turnNotifyReason(
             enabled: Boolean,
             foreground: Boolean,
             phoneInitiated: Boolean,
-            spoke: Boolean,
+            voiceEnabled: Boolean,
+            inCall: Boolean,
         ): String = when {
             !enabled -> "跳过：设置里已关闭"
             !phoneInitiated -> "跳过：回合由电脑端发起"
             foreground -> "跳过：App 在前台"
-            spoke -> "已通知 + 语音"
-            else -> "已通知"
+            !voiceEnabled -> "已通知"
+            inCall -> "已通知（通话中，未播报）"
+            else -> "已通知 + 语音"
         }
 
         private fun flatten(value: String?): String = value?.replace(Regex("\\s+"), " ")?.trim().orEmpty()

@@ -1,6 +1,7 @@
 package com.mpi.app.data
 
 import android.content.Context
+import android.media.AudioManager
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
@@ -26,12 +27,22 @@ class Speaker(context: Context) {
     /** 当前这句播完要回调谁（语音模式靠它接着听）。 */
     private var doneCallback: (() -> Unit)? = null
 
-    /** 念一句。引擎没就绪就先排队，永远不抛。[onDone] 在本句播完（或出错）时回调。 */
-    fun speak(text: String, onDone: (() -> Unit)? = null) {
+    /**
+     * 念一句。引擎没就绪就先排队，永远不抛。[onDone] 在本句播完（或出错）时回调。
+     *
+     * @return true = 已提交播报；false = 被跳过（空文本 / 通话中）。
+     */
+    fun speak(text: String, onDone: (() -> Unit)? = null): Boolean {
         val value = text.trim()
         if (value.isEmpty()) {
             runCatching { onDone?.invoke() }
-            return
+            return false
+        }
+        // 通话中（含微信这类 VoIP）：系统会把媒体音压掉或改路由到听筒，念了也听不到，
+        // 而且可能被通话对方听见 → 直接跳过（通知照发）。onDone 要回调，否则语音模式会干等。
+        if (inCall()) {
+            runCatching { onDone?.invoke() }
+            return false
         }
         val current: TextToSpeech?
         synchronized(this) {
@@ -41,11 +52,23 @@ class Speaker(context: Context) {
             current = engine
             if (!ready) {
                 pending = value to onDone
-                return
+                return true
             }
             doneCallback = onDone
         }
         runCatching { current?.speak(value, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID) }
+        return true
+    }
+
+    /**
+     * 当前是否在通话（含微信/钉钉这类 VoIP）。
+     *
+     * 读 AudioManager.mode 不需要任何权限：MODE_IN_CALL = 运营商通话，
+     * MODE_IN_COMMUNICATION = VoIP 通话。
+     */
+    fun inCall(): Boolean {
+        val audio = appContext.getSystemService(AudioManager::class.java) ?: return false
+        return audio.mode == AudioManager.MODE_IN_CALL || audio.mode == AudioManager.MODE_IN_COMMUNICATION
     }
 
     /** 立即停掉当前播报（退出语音模式 / 用户说话打断）。 */
