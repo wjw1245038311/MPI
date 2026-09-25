@@ -177,6 +177,16 @@ class Notifier(private val context: Context) {
         private val FENCED_CODE = Regex("```[\\s\\S]*?```")
 
         /**
+         * 要念出来的回复正文（纯函数，可单测）：去掉 ``` 围栏代码块、压平空白、截短。
+         * 语音模式的连续对话与「播报内容=回复摘要」都用它，口径一致。
+         */
+        internal fun spokenReply(reply: String?, max: Int): String {
+            val spoken = flatten(reply?.replace(FENCED_CODE, " "))
+            if (spoken.isEmpty()) return ""
+            return if (spoken.length <= max) spoken else "${spoken.take(max - 1)}…"
+        }
+
+        /**
          * 语音播报稿（纯函数，可单测）：按设置念**固定语**或**回复摘要**。
          *
          * 摘要先去掉代码围栏、压平空白、截短——念出来才像人话；摘要为空时退回固定语。
@@ -190,9 +200,8 @@ class Notifier(private val context: Context) {
             val prefix = if (title.isEmpty()) "" else "「${title.take(40)}」"
             val fixed = if (prefix.isEmpty()) "回复已完成" else "$prefix 回复已完成"
             if (content == VoiceSpeechContent.Fixed) return fixed
-            val spoken = flatten(reply?.replace(FENCED_CODE, " "))
-            if (spoken.isEmpty()) return fixed
-            val excerpt = if (spoken.length <= SPEECH_MAX) spoken else "${spoken.take(SPEECH_MAX - 1)}…"
+            val excerpt = spokenReply(reply, SPEECH_MAX)
+            if (excerpt.isEmpty()) return fixed
             return if (prefix.isEmpty()) excerpt else "$prefix $excerpt"
         }
 

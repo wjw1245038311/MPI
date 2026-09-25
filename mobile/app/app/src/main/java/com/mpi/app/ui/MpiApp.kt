@@ -209,6 +209,7 @@ fun MpiApp(container: AppContainer) {
                             onStartVoice = viewModel::startRecording,
                             onStopVoice = viewModel::stopRecording,
                             onCancelVoice = viewModel::cancelRecording,
+                            onStartVoiceChat = viewModel::startVoiceChat,
                             onVoicePermissionDenied = {
                                 viewModel.reportVoiceError("没有麦克风权限，无法语音输入")
                             },
@@ -276,6 +277,15 @@ fun MpiApp(container: AppContainer) {
                     state = state,
                     deviceName = container.deviceName,
                     onClose = { diagnosticsOpen = false },
+                )
+            }
+            // 语音对话模式浮层（最后画 = 盖在设置/搜索之上）
+            state.voiceChat?.let { voiceChat ->
+                VoiceChatOverlay(
+                    state = voiceChat,
+                    lastText = state.voiceChatText,
+                    error = state.voiceError,
+                    onStop = viewModel::stopVoiceChat,
                 )
             }
             if (searchOpen) {

@@ -11,6 +11,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +33,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -77,6 +83,7 @@ import com.mpi.app.protocol.RemotePermission
 import com.mpi.app.protocol.RemoteThreadState
 import com.mpi.app.protocol.ThreadMessage
 import com.mpi.app.ui.theme.MpiTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -124,6 +131,8 @@ fun ThreadScreen(
     onStartVoice: () -> Unit,
     onStopVoice: () -> Unit,
     onCancelVoice: () -> Unit,
+    /** 长按麦克风 3 秒：进入语音对话模式（阶段 1）。 */
+    onStartVoiceChat: () -> Unit,
     onVoicePermissionDenied: () -> Unit,
     onDismissVoiceError: () -> Unit,
     pendingFollowUp: String?,
@@ -317,6 +326,7 @@ fun ThreadScreen(
             onStartVoice = onStartVoice,
             onStopVoice = onStopVoice,
             onCancelVoice = onCancelVoice,
+            onStartVoiceChat = onStartVoiceChat,
             onVoicePermissionDenied = onVoicePermissionDenied,
             onDismissVoiceError = onDismissVoiceError,
             pendingFollowUp = pendingFollowUp,
@@ -377,6 +387,7 @@ private fun Composer(
     onStartVoice: () -> Unit,
     onStopVoice: () -> Unit,
     onCancelVoice: () -> Unit,
+    onStartVoiceChat: () -> Unit,
     onVoicePermissionDenied: () -> Unit,
     onDismissVoiceError: () -> Unit,
     pendingFollowUp: String?,
@@ -428,9 +439,18 @@ private fun Composer(
         ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris -> uris.forEach(onPickFile) }
     // 已授权时 RequestPermission 会立即回调 true，无需先查权限
+    // 长按 3 秒的语音模式：与普通点击共用同一个权限申请，用一个标记区分拿到权限后干什么
+    var pendingVoiceChat by remember { mutableStateOf(false) }
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { granted -> if (granted) onStartVoice() else onVoicePermissionDenied() }
+    ) { granted ->
+        if (granted) {
+            if (pendingVoiceChat) onStartVoiceChat() else onStartVoice()
+        } else {
+            onVoicePermissionDenied()
+        }
+        pendingVoiceChat = false
+    }
     var attachMenuOpen by remember { mutableStateOf(false) }
 
     Column {
@@ -642,8 +662,13 @@ private fun Composer(
                             onClick = { micPermission.launch(android.Manifest.permission.RECORD_AUDIO) },
                             enabled = !sending,
                             background = MpiTheme.colors.control,
+                            // 长按 3 秒 → 语音对话模式（与点一下的「语音输入」区分开）
+                            onLongHold = {
+                                pendingVoiceChat = true
+                                micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                            },
                         ) {
-                            Icon(IconMic, contentDescription = "语音输入", tint = MpiTheme.colors.textDim, modifier = Modifier.size(17.dp))
+                            Icon(IconMic, contentDescription = "语音输入（长按 3 秒进入语音对话）", tint = MpiTheme.colors.textDim, modifier = Modifier.size(17.dp))
                         }
                     }
                 }
@@ -1301,18 +1326,55 @@ private fun RoundIconButton(
     onClick: () -> Unit,
     background: androidx.compose.ui.graphics.Color,
     enabled: Boolean = true,
+    /**
+     * 长按 3 秒的入口（语音对话模式）；null = 不做长按手势（就是点一下）。
+     *
+     * 不用 `detectTapGestures(onLongPress=…)`：那是系统长按时长（~0.4s），而用户要 3 秒——
+     * 这个时长才能把「长按进语音模式」与「点一下录音」干净分开。
+     */
+    onLongHold: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
+    val haptic = LocalHapticFeedback.current
+    // 计时器跑在普通协程里：指针事件作用域是「受限挂起」，不能在里面调 withTimeout
+    // （编译器会直接报 Restricted suspending functions…）。
+    val holdScope = rememberCoroutineScope()
+    var holdFired by remember { mutableStateOf(false) }
+    val interaction: Modifier = if (onLongHold == null) {
+        Modifier.clickable(enabled = enabled, onClick = onClick)
+    } else {
+        Modifier.pointerInput(enabled) {
+            if (!enabled) return@pointerInput
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                holdFired = false
+                val timer = holdScope.launch {
+                    delay(LONG_HOLD_MS)
+                    holdFired = true
+                    // 3 秒到：震一下再进语音模式（手感上「按够了」）
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongHold()
+                }
+                val up = waitForUpOrCancellation()
+                timer.cancel()
+                // 松手早于 3 秒 = 普通点击；否则长按已生效，不能再当点击
+                if (up != null && !holdFired) onClick()
+            }
+        }
+    }
     Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
         Box(
             modifier = Modifier
                 .size(32.dp)
                 .clip(CircleShape)
                 .background(background)
-                .clickable(enabled = enabled, onClick = onClick),
+                .then(interaction),
             contentAlignment = Alignment.Center,
         ) {
             content()
         }
     }
 }
+
+/** 长按进入语音模式的时长（用户指定 3 秒）。 */
+private const val LONG_HOLD_MS = 3_000L

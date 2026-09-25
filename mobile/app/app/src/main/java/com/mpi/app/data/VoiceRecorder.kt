@@ -66,11 +66,17 @@ class VoiceRecorder {
     /** 录制中（UI 用来切换按钮态）。 */
     val isRecording: Boolean get() = running
 
-    fun start(): Result<Unit> = synchronized(lock) {
+    /**
+     * 开始录音。
+     *
+     * @param onLevel 每帧回调一次归一化音量（0..1）——语音模式用它做静音判定。
+     *   回调在**录音线程**上执行，必须轻量且线程安全（异常会被吞掉，不影响录音）。
+     */
+    fun start(onLevel: ((Double) -> Unit)? = null): Result<Unit> = synchronized(lock) {
         if (running) return Result.success(Unit)
         var last = "无法启动录音"
         for (source in SOURCES) {
-            val outcome = tryStart(source)
+            val outcome = tryStart(source, onLevel)
             if (outcome.isSuccess) return outcome
             last = outcome.exceptionOrNull()?.message ?: last
         }
@@ -109,7 +115,7 @@ class VoiceRecorder {
         return out?.toByteArray() ?: ByteArray(0)
     }
 
-    private fun tryStart(source: Int): Result<Unit> {
+    private fun tryStart(source: Int, onLevel: ((Double) -> Unit)?): Result<Unit> {
         val min = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
@@ -149,19 +155,20 @@ class VoiceRecorder {
         record = recorder
         buffer = out
         running = true
-        thread = Thread({ readLoop(recorder, out) }, "mpi-voice-record").also {
+        thread = Thread({ readLoop(recorder, out, onLevel) }, "mpi-voice-record").also {
             it.isDaemon = true
             it.start()
         }
         return Result.success(Unit)
     }
 
-    private fun readLoop(recorder: AudioRecord, out: ByteArrayOutputStream) {
+    private fun readLoop(recorder: AudioRecord, out: ByteArrayOutputStream, onLevel: ((Double) -> Unit)?) {
         val chunk = ByteArray(4096)
         while (running) {
             val n = runCatching { recorder.read(chunk, 0, chunk.size) }.getOrDefault(-1)
             if (n > 0) {
                 synchronized(lock) { if (running) out.write(chunk, 0, n) }
+                onLevel?.let { callback -> runCatching { callback(pcm16Rms(chunk, 0, n)) } }
             } else if (n < 0) {
                 break
             }

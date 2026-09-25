@@ -2,6 +2,7 @@ package com.mpi.app.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import android.os.SystemClock
 import com.mpi.app.AppContainer
 import com.mpi.app.AppVisibility
 import com.mpi.app.data.Attachment
@@ -29,6 +30,8 @@ import com.mpi.app.data.ThreadView
 import com.mpi.app.data.UpdateInfo
 import com.mpi.app.data.UpdateCheckResult
 import com.mpi.app.data.Updater
+import com.mpi.app.data.VoiceActivityGate
+import com.mpi.app.data.VoiceGateDecision
 import com.mpi.app.data.VoiceRecorder
 import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.PairingLink
@@ -39,13 +42,19 @@ import com.mpi.app.protocol.MessageBlock
 import com.mpi.app.protocol.RemoteThreadState
 import com.mpi.app.protocol.createDeviceIdentity
 import com.mpi.app.protocol.randomSeedB64u
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.coroutineContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -70,6 +79,14 @@ internal fun queuedNoteOf(response: kotlinx.serialization.json.JsonElement?): St
         null
     }
 
+/**
+ * 语音对话模式的状态（浮层据此显示进度）。
+ *
+ * 阶段 1 是**半双工**：听 → 转写 → 等回复 → 播报 → 再听；播报时不停录，
+ * 所以不做打断（打断需要回声消除，留阶段 2）。
+ */
+enum class VoiceChatState { Listening, Transcribing, Thinking, Speaking }
+
 data class AppUiState(
     val initializing: Boolean = true,
     val pairings: List<PairingRecord> = emptyList(),
@@ -82,6 +99,12 @@ data class AppUiState(
     val addingHost: Boolean = false,
     /** 本地存储损坏：需要用户显式决定是否重置（绝不静默清空）。 */
     val storeError: String? = null,
+    /**
+     * 语音对话模式（null = 未开启）。开启时长按麦克风 3 秒进入。
+     */
+    val voiceChat: VoiceChatState? = null,
+    /** 语音模式下最近一句识别到的文本（浮层显示，让你确认「它听懂了吗」）。 */
+    val voiceChatText: String? = null,
     /** 非致命问题的最近若干条（解密失败等），可关闭。 */
     val problems: List<String> = emptyList(),
     /**
@@ -185,6 +208,10 @@ class AppViewModel(
      * 「对话完成」通知只对手机发起的回合发——桌面发起的没必要响（见 [notifyTurnComplete]）。
      */
     private var phoneTurnStarted = false
+    /** 语音对话模式的循环 Job（null = 未运行）。 */
+    private var voiceChatJob: Job? = null
+    /** 语音模式里「回合结束」的握手：视图收集器 settle 时唤醒它。 */
+    private var voiceSettle: CompletableDeferred<Unit>? = null
     /** 重连后的会话重同步 Job（合并多次 Connected 回调，避免重复拉全量快照）。 */
     private var reconnectSyncJob: Job? = null
     /** 按会话保存的草稿（内存；跨重启持久化留待需要时再说）。 */
@@ -541,8 +568,10 @@ class AppViewModel(
                 _ui.update { it.copy(thread = view) }
                 // 回合结束（running true→false）：投递暂存的「待处理后续」（与 PWA 同语义）
                 if (wasRunning && !view.running) {
-                    // 顺序不能反：先判定通知（它会消费 phoneTurnStarted），
-                    // 再 flushPendingFollowUp()——后者内部的 send() 会把标记重新置起。
+                    // 顺序不能反：先唤醒语音循环（它自己会播报回复），再判定完成通知——
+                    // 判定里因「语音模式中」跳过，避免一句回复念两遍。
+                    voiceSettle?.complete(Unit)
+                    voiceSettle = null
                     notifyTurnComplete(threadId, view)
                     flushPendingFollowUp()
                 }
@@ -574,6 +603,8 @@ class AppViewModel(
     }
 
     fun closeThread() {
+        // 语音模式挂在这条会话上：离开会话就退，否则循环会在没会话时白等到超时
+        stopVoiceChat()
         _ui.value.openThreadId?.let { drafts[it] = _ui.value.draft }
         reconnectSyncJob?.cancel()
         reconnectSyncJob = null
@@ -730,6 +761,120 @@ class AppViewModel(
 
     /** UI 侧发现问题（如麦克风权限被拒）时上报——统一走同一条错误展示。 */
     fun reportVoiceError(message: String) = _ui.update { it.copy(voiceError = message) }
+
+    // ---- 语音对话模式（阶段 1：半双工连续对话）----
+
+    /**
+     * 长按麦克风 3 秒进入：循环「听（静音自动收尾）→ 转写 → 发送 → 播报 → 再听」。
+     *
+     * 为什么是半双工：播报时若继续录音，会把 TTS 自己的声音录进去；回声消除（AEC）
+     * 留阶段 2。退出：再长按一次或点浮层上的「结束」；会话被关掉也会自动退（Job 取消）。
+     */
+    fun startVoiceChat() {
+        if (_ui.value.voiceChat != null) return
+        if (threadSession == null || threadActions == null) return
+        voiceChatJob = scope.launch {
+            var failures = 0
+            _ui.update { it.copy(voiceChat = VoiceChatState.Listening, voiceChatText = null, voiceError = null) }
+            try {
+                while (isActive) {
+                    val transcript = listenOnce()
+                    if (transcript == null) {
+                        // 静音/识别失败不算致命，但连续几次就说明链路有问题，别死循环
+                        if (++failures >= VOICE_MAX_FAILURES) {
+                            _ui.update { it.copy(voiceError = "连续几次没识别到内容，已退出语音模式") }
+                            break
+                        }
+                        continue
+                    }
+                    failures = 0
+                    _ui.update { it.copy(voiceChat = VoiceChatState.Thinking, voiceChatText = transcript) }
+                    if (!awaitReply(transcript)) break
+                    val reply = voiceReplyText()
+                    if (reply.isNotEmpty()) {
+                        _ui.update { it.copy(voiceChat = VoiceChatState.Speaking) }
+                        speakAndWait(reply)
+                    }
+                    if (isActive) _ui.update { it.copy(voiceChat = VoiceChatState.Listening) }
+                }
+            } finally {
+                voiceSettle = null
+                withContext(NonCancellable) {
+                    voiceRecorder.cancel()
+                    speaker.stop()
+                }
+                _ui.update { it.copy(voiceChat = null) }
+            }
+        }
+    }
+
+    fun stopVoiceChat() {
+        voiceChatJob?.cancel()
+        voiceChatJob = null
+    }
+
+    /** 录一段（静音或超长自动收尾）→ 送 STT。null = 没听清 / 失败。 */
+    private suspend fun listenOnce(): String? {
+        val gate = VoiceActivityGate()
+        val finished = CompletableDeferred<Unit>()
+        val startedAt = SystemClock.elapsedRealtime()
+        val started = voiceRecorder.start { rms ->
+            val elapsed = SystemClock.elapsedRealtime() - startedAt
+            if (gate.onFrame(rms, elapsed) == VoiceGateDecision.Finish && !finished.isCompleted) {
+                finished.complete(Unit)
+            }
+        }
+        if (started.isFailure) {
+            _ui.update { it.copy(voiceError = started.exceptionOrNull()?.message ?: "无法启动录音") }
+            return null
+        }
+        // 静音判定 / 兼底时长先到者；用户退出会直接取消整个协程
+        withTimeoutOrNull(VoiceActivityGate.DEFAULT_MAX_MS + 2_000L) { finished.await() }
+        if (!coroutineContext.isActive) return null
+        val audioB64 = voiceRecorder.stop().getOrElse { return null }
+        _ui.update { it.copy(voiceChat = VoiceChatState.Transcribing) }
+        val requesterRef = requester ?: return null
+        return try {
+            val response = requesterRef.request(
+                "stt.transcribe",
+                kotlinx.serialization.json.buildJsonObject {
+                    put("audioB64", audioB64)
+                    put("sampleRate", VoiceRecorder.SAMPLE_RATE)
+                },
+            )
+            (response as? JsonObject)?.get("text")?.jsonPrimitive?.contentOrNull.orEmpty().trim().ifEmpty { null }
+        } catch (error: Exception) {
+            _ui.update { it.copy(voiceError = error.message ?: "语音识别失败") }
+            null
+        }
+    }
+
+    /** 发送这一句并等回合结束（settle 由视图收集器唤醒）。false = 超时/被取消。 */
+    private suspend fun awaitReply(transcript: String): Boolean {
+        val settled = CompletableDeferred<Unit>()
+        voiceSettle = settled
+        send(transcript, SendMode.Prompt, clearDraft = false)
+        val ok = withTimeoutOrNull(VOICE_REPLY_TIMEOUT_MS) { settled.await() } != null
+        voiceSettle = null
+        if (!ok && coroutineContext.isActive) _ui.update { it.copy(voiceError = "等回复超时，已退出语音模式") }
+        return ok && coroutineContext.isActive
+    }
+
+    /** 要念的回复正文：出错优先报错；空回复返回空串（直接回到「在听」）。 */
+    private fun voiceReplyText(): String {
+        val view = _ui.value.thread ?: return ""
+        val error = view.errorBanner
+        if (!error.isNullOrBlank()) return "出错了：${error.take(80)}"
+        val reply = view.messages.lastOrNull { it.role == "assistant" }?.let { messageTextOf(it) }
+        return Notifier.spokenReply(reply, VOICE_SPEAK_MAX_CHARS)
+    }
+
+    /** 播报并等它念完（引擎异常/被打断时有兼底超时，不让循环卡死）。 */
+    private suspend fun speakAndWait(text: String) {
+        val done = CompletableDeferred<Unit>()
+        speaker.speak(text, onDone = { done.complete(Unit) })
+        withTimeoutOrNull(VOICE_SPEAK_TIMEOUT_MS) { done.await() }
+    }
     private fun loadAttachment(block: () -> Result<Attachment>) {
         if (_ui.value.attachmentBusy) return
         if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
@@ -773,7 +918,9 @@ class AppViewModel(
         val phoneInitiated = phoneTurnStarted
         phoneTurnStarted = false
         val settings = settingsStore.settings.value
-        val notify = Notifier.shouldNotifyTurnComplete(
+        // 语音模式自己会播报回复，完成通知/播报一律让路（否则一句回复念两遍）
+        val inVoiceChat = _ui.value.voiceChat != null
+        val notify = !inVoiceChat && Notifier.shouldNotifyTurnComplete(
             enabled = settings.notifyOnTurnComplete,
             foreground = AppVisibility.foreground,
             phoneInitiated = phoneInitiated,
@@ -781,12 +928,16 @@ class AppViewModel(
         val spoke = notify && settings.speakTurnComplete
         _ui.update {
             it.copy(
-                lastTurnNotify = Notifier.turnNotifyReason(
-                    enabled = settings.notifyOnTurnComplete,
-                    foreground = AppVisibility.foreground,
-                    phoneInitiated = phoneInitiated,
-                    spoke = spoke,
-                ),
+                lastTurnNotify = if (inVoiceChat) {
+                    "跳过：语音模式中（由语音模式播报）"
+                } else {
+                    Notifier.turnNotifyReason(
+                        enabled = settings.notifyOnTurnComplete,
+                        foreground = AppVisibility.foreground,
+                        phoneInitiated = phoneInitiated,
+                        spoke = spoke,
+                    )
+                },
             )
         }
         if (!notify) return
@@ -1137,6 +1288,17 @@ class AppViewModel(
     companion object {
         private const val MAX_PROBLEMS = 5
         private const val MAX_ATTACHMENTS = 3
+
+        // ---- 语音对话模式（阶段 1）----
+
+        /** 连续几次没识别到内容就退出（避免没配 STT 时死循环）。 */
+        private const val VOICE_MAX_FAILURES = 3
+        /** 等回复的上限：agent 跑工具可能很久，但无限静默不如明确退出。 */
+        private const val VOICE_REPLY_TIMEOUT_MS = 5 * 60_000L
+        /** 一次最多念多少字的回复——语音聊天里念全文就是灾难。 */
+        private const val VOICE_SPEAK_MAX_CHARS = 300
+        /** 播报兼底超时（TextToSpeech 没回调时不让循环卡死）。 */
+        private const val VOICE_SPEAK_TIMEOUT_MS = 90_000L
 
         fun factory(container: AppContainer): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {

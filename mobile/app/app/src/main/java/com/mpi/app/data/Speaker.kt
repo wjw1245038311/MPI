@@ -2,6 +2,7 @@ package com.mpi.app.data
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 
 /**
@@ -21,12 +22,17 @@ class Speaker(context: Context) {
     private val appContext: Context = context.applicationContext
     private var engine: TextToSpeech? = null
     private var ready = false
-    private var pending: String? = null
+    private var pending: Pair<String, (() -> Unit)?>? = null
+    /** 当前这句播完要回调谁（语音模式靠它接着听）。 */
+    private var doneCallback: (() -> Unit)? = null
 
-    /** 念一句。引擎没就绪就先排队，永远不抛。 */
-    fun speak(text: String) {
+    /** 念一句。引擎没就绪就先排队，永远不抛。[onDone] 在本句播完（或出错）时回调。 */
+    fun speak(text: String, onDone: (() -> Unit)? = null) {
         val value = text.trim()
-        if (value.isEmpty()) return
+        if (value.isEmpty()) {
+            runCatching { onDone?.invoke() }
+            return
+        }
         val current: TextToSpeech?
         synchronized(this) {
             if (engine == null) {
@@ -34,16 +40,27 @@ class Speaker(context: Context) {
             }
             current = engine
             if (!ready) {
-                pending = value
+                pending = value to onDone
                 return
             }
+            doneCallback = onDone
         }
         runCatching { current?.speak(value, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID) }
+    }
+
+    /** 立即停掉当前播报（退出语音模式 / 用户说话打断）。 */
+    fun stop() {
+        synchronized(this) {
+            pending = null
+            doneCallback = null
+        }
+        runCatching { engine?.stop() }
     }
 
     fun shutdown() {
         synchronized(this) {
             pending = null
+            doneCallback = null
             ready = false
             runCatching { engine?.stop() }
             runCatching { engine?.shutdown() }
@@ -52,7 +69,7 @@ class Speaker(context: Context) {
     }
 
     private fun onInit(ok: Boolean) {
-        val queued: String?
+        val queued: Pair<String, (() -> Unit)?>?
         synchronized(this) {
             ready = ok
             if (!ok) {
@@ -64,10 +81,25 @@ class Speaker(context: Context) {
             // 注意：setLanguage 返回 int，不是 void，所以在 Kotlin 里只能当方法调，
             // 不能写成 `engine?.language = ...`（合成属性要求 setter 返回 void）。
             runCatching { engine?.setLanguage(Locale.CHINESE) }
+            // 播完通知：语音模式靠它从「播报中」回到「在听」
+            runCatching {
+                engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) = Unit
+                    override fun onDone(utteranceId: String?) = fireDone()
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) = fireDone()
+                    override fun onError(utteranceId: String?, errorCode: Int) = fireDone()
+                })
+            }
             queued = pending
             pending = null
         }
-        if (queued != null) speak(queued)
+        queued?.let { (text, onDone) -> speak(text, onDone) }
+    }
+
+    private fun fireDone() {
+        val callback = synchronized(this) { doneCallback.also { doneCallback = null } }
+        runCatching { callback?.invoke() }
     }
 
     private companion object {
