@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -28,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -36,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalDensity
@@ -71,6 +74,10 @@ internal class NodePanelState(
     var offset by mutableFloatStateOf(0f)
         private set
 
+    /** 正在拖动（手指按着）——指示器只在此时出现（安卓边缘手势那种「动态生成」）。 */
+    var dragging by mutableStateOf(false)
+        internal set
+
     private var settleJob: Job? = null
 
     /** 展开进度 0..1（面板位移 / 透明度都按它算）。 */
@@ -78,10 +85,12 @@ internal class NodePanelState(
 
     fun dragBy(delta: Float) {
         settleJob?.cancel()
+        dragging = true
         offset = (offset + delta).coerceIn(-panelWidthPx, 0f)
     }
 
     fun settle(velocity: Float) {
+        dragging = false
         val open = offset < -panelWidthPx * OPEN_FRACTION || velocity < -FLING_VELOCITY
         animateTo(if (open) -panelWidthPx else 0f)
     }
@@ -130,14 +139,17 @@ internal fun Modifier.edgeSwipeNodePanel(
     return pointerInput(enabled, edgeWidth) {
         val edgePx = edgeWidth.toPx()
         awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false)
-            // 只在右边缘起手（含面板已展开时往回拖）
+            var total = 0f
+            var decided = false
+            // ⚠️ 必须在 **Initial 阶段**拿事件并在拖动时 consume：
+            // 外层是 Material 的 ModalNavigationDrawer，它的拖拽在 Main 阶段且**不区分方向**
+            // （左拖也会把左侧会话列表拉出来 ✗ 真机反馈「左右划都弹左侧面板」）。
+            // Initial 是「根→叶」，比 Main 先跑，在这里消费掉，抽屉就看不到这次拖动了。
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             if (down.position.x < size.width - edgePx) return@awaitEachGesture
             val tracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
-            var decided = false
-            var total = 0f
             while (true) {
-                val event = awaitPointerEvent()
+                val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
                 tracker.addPosition(change.uptimeMillis, change.position)
@@ -188,21 +200,24 @@ internal fun NodePanelLayer(
             )
         }
 
-        // 边缘把手：收起时提示「这里可以拉」，点一下直接打开
-        if (swipeEnabled && progress < 0.05f) {
+        // 跟手指示器：**只在拖动时**出现，贴在面板左缘一起走——
+        // 就是安卓系统边缘手势那种「动态生成」的箭头，而不是一个常驻按钮。
+        if (state.dragging) {
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .width(18.dp)
-                    .height(56.dp)
-                    .clip(RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp))
-                    .background(MpiTheme.colors.control)
-                    .clickable { state.open() },
+                    .offset {
+                        val edge = -INDICATOR_SIZE.toPx() - 6.dp.toPx()
+                        IntOffset((panelWidthPx + state.offset).roundToInt() + edge.roundToInt(), 0)
+                    }
+                    .size(INDICATOR_SIZE)
+                    .clip(CircleShape)
+                    .background(MpiTheme.colors.control.copy(alpha = 0.92f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = IconChevronRight,
-                    contentDescription = "会话节点",
+                    contentDescription = null,
                     tint = MpiTheme.colors.textDim,
                     modifier = Modifier.size(14.dp).rotate(180f),
                 )
@@ -281,8 +296,11 @@ internal fun userMessageNodes(messages: List<ThreadMessage>): List<UserNode> =
         UserNode(id = message.id, index = index, preview = text.ifEmpty { "（图片/附件）" }.take(60))
     }
 
-/** 右边缘起手区宽度（越窄越不容易误触）。 */
-internal val NODE_PANEL_EDGE = 22.dp
+/** 右边缘起手区宽度（越窄越不容易误触；“最边缘向着中间划” ≈ 16dp）。 */
+internal val NODE_PANEL_EDGE = 16.dp
+
+/** 拖动时那个跟手指示器的直径。 */
+private val INDICATOR_SIZE = 34.dp
 
 /** 面板宽度。 */
 internal val NODE_PANEL_WIDTH = 268.dp
