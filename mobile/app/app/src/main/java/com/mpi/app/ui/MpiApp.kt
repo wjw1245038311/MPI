@@ -214,6 +214,9 @@ fun MpiApp(container: AppContainer) {
                                 viewModel.reportVoiceError("没有麦克风权限，无法语音输入")
                             },
                             onDismissVoiceError = viewModel::dismissVoiceError,
+                            voiceChat = state.voiceChat,
+                            voiceChatText = state.voiceChatText,
+                            onStopVoiceChat = viewModel::stopVoiceChat,
                             pendingFollowUp = state.pendingFollowUp,
                             sendError = state.sendError,
                             sendNote = state.sendNote,
@@ -278,15 +281,6 @@ fun MpiApp(container: AppContainer) {
                     state = state,
                     deviceName = container.deviceName,
                     onClose = { diagnosticsOpen = false },
-                )
-            }
-            // 语音对话模式浮层（最后画 = 盖在设置/搜索之上）
-            state.voiceChat?.let { voiceChat ->
-                VoiceChatOverlay(
-                    state = voiceChat,
-                    lastText = state.voiceChatText,
-                    error = state.voiceError,
-                    onStop = viewModel::stopVoiceChat,
                 )
             }
             if (searchOpen) {

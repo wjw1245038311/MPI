@@ -135,6 +135,11 @@ fun ThreadScreen(
     onStartVoiceChat: () -> Unit,
     onVoicePermissionDenied: () -> Unit,
     onDismissVoiceError: () -> Unit,
+    /** 语音对话模式状态（null = 未开启）；开启时在输入条上方显示状态条。 */
+    voiceChat: VoiceChatState?,
+    /** 语音模式下最近一句识别到的文本（显示在状态条里）。 */
+    voiceChatText: String?,
+    onStopVoiceChat: () -> Unit,
     pendingFollowUp: String?,
     sendError: String?,
     /** 主机回退成排队时的说明（非错误；气泡仍会停在「发送中」直到 pi 投递）。 */
@@ -305,6 +310,12 @@ fun ThreadScreen(
                 error = respondError,
                 onRespond = onRespond,
             )
+        }
+
+        // 语音模式：状态条贴在输入条上方，**消息区照旧可见**（不做全屏浮层，
+        // 否则把对话盖住了——语音只是输入方式，对话才是主体）
+        voiceChat?.let { state ->
+            VoiceChatBar(state = state, lastText = voiceChatText, onStop = onStopVoiceChat)
         }
 
         Composer(
