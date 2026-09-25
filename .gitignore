@@ -77,3 +77,7 @@ logs/
 
 # 回填时的原文备份（临时，不入库）
 .alexandria/knowledge/lessons/.backup-bare/
+
+# 私有应用（应用商店 app 包）：只保留约定说明，其余一律不入库
+examples/apps/private/*
+!examples/apps/private/README.md
