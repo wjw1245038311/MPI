@@ -16,7 +16,7 @@
  *     node scripts/dev-publish-android.mjs
  *
  *   --no-bump    不动 gradle 版本号
- *   --no-build   复用现有 app-debug.apk（快）
+ *   --no-build   复用现有 app-debug.apk（快；**与版本自增互斥**）
  *   --no-push    只生成产物，不推到中继
  *   --dry-run    只打印将要写的内容，不落盘、不推送
  *
@@ -88,6 +88,12 @@ function main() {
   log(`   分发目录：${SHARE_DIR}\n`);
 
   log("  [1/5] 版本号");
+  // ⚠️ 自增版本号却跳过构建 = 清单写 0.5.37、而 APK 内部的 versionName 还是 0.5.36
+  // （清单里带的是文件外部的版本号，构建 APK 时才会写进 BuildConfig）→ 装上后会**反复
+  // 提示更新**（死循环）。所以这个组合直接拒掉，而不是出一个看似成功的错产品。
+  if (!noBump && noBuild) {
+    throw new Error("--no-bump 与 --no-build 不能同时用：自增版本号必须重新构建 APK，否则清单版本与包内版本不一致（会无限提示更新）");
+  }
   const version = noBump ? currentVersion() : bumpVersion();
   if (!version) throw new Error("读不到 versionName");
 
