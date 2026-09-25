@@ -77,9 +77,6 @@ class MainActivity : ComponentActivity() {
      * resumed + 焦点是实时信号，任一侧丢失都算后台；回到前台两者都会恢复，不会卡死。
      */
     private fun syncForeground(reason: String) {
-        val next = resumed && focused
-        if (!AppVisibility.set(next, reason)) return
-        // 人都回到 App 了，挂着那条「回复已完成」没意义
-        if (next) container.notifier.cancelTurnComplete()
+        AppVisibility.set(resumed && focused, reason)
     }
 }

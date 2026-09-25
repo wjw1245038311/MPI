@@ -501,6 +501,8 @@ class AppViewModel(
         val requesterRef = requester ?: return
         // 用户/自动已经进过会话 —— 不再自动打开别的
         autoOpenedThread = true
+        // 进到这条会话了，它的「回复完成」通知就完成使命（其它会话的通知不碰）
+        notifier.cancelTurnComplete(threadId)
         closeThread()
 
         val threadSessionLocal = ThreadSession(

@@ -21,6 +21,9 @@ class Notifier(private val context: Context) {
     private val manager: NotificationManager? =
         context.getSystemService(NotificationManager::class.java)
 
+    /** 「回复完成」通知目前属于哪条会话（null = 没挂着）；用于「打开该会话才清」。 */
+    private var turnThreadId: String? = null
+
     init {
         ensureChannels()
     }
@@ -61,6 +64,7 @@ class Notifier(private val context: Context) {
      * （判定见 [shouldNotifyTurnComplete]）——前台盯着屏幕时不打扰。
      */
     fun notifyTurnComplete(threadId: String, threadTitle: String?, body: String) {
+        turnThreadId = threadId
         val notification = NotificationCompat.Builder(context, CHANNEL_TURN)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(turnCompleteTitle(threadTitle))
@@ -73,8 +77,15 @@ class Notifier(private val context: Context) {
         runCatching { manager?.notify(TURN_NOTIFICATION_ID, notification) }
     }
 
-    /** 回到前台（或用户已看过）就没必要再挂着完成通知。 */
-    fun cancelTurnComplete() {
+    /**
+     * 清除「回复完成」通知。
+     *
+     * @param threadId 传了就**只在该会话匹配时**清——由 [AppViewModel.openThread] 调用：
+     *   回到 App 但看的是别的会话时不该清（用户确认的时机）。不传则无条件清。
+     */
+    fun cancelTurnComplete(threadId: String? = null) {
+        if (threadId != null && threadId != turnThreadId) return
+        turnThreadId = null
         runCatching { manager?.cancel(TURN_NOTIFICATION_ID) }
     }
 
