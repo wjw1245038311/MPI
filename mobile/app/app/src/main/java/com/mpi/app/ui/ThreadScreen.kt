@@ -145,8 +145,6 @@ fun ThreadScreen(
     /** 语音模式下最近一句识别到的文本（显示在状态条里）。 */
     voiceChatText: String?,
     onStopVoiceChat: () -> Unit,
-    /** 左划打开「会话节点」面板（设置项；关掉就完全不做这个手势）。 */
-    swipeNodePanel: Boolean,
     /** 会话节点面板状态：**手势挂在 DrawerHost 的抽屉外层**（才能压过抽屉自带的手势），
      *  面板本体仍在这里渲染与滚动定位。 */
     nodePanel: NodePanelState,
@@ -319,7 +317,6 @@ fun ThreadScreen(
                 activeIndex = { listState.firstVisibleItemIndex },
                 state = nodePanel,
                 panelWidth = NODE_PANEL_WIDTH,
-                swipeEnabled = swipeNodePanel,
                 onJump = { node ->
                     nodePanel.close()
                     val index = display.indexOfFirst { it.id == node.id }

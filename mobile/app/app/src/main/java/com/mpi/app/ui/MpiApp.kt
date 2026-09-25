@@ -236,7 +236,6 @@ fun MpiApp(container: AppContainer) {
                             voiceChat = state.voiceChat,
                             voiceChatText = state.voiceChatText,
                             onStopVoiceChat = viewModel::stopVoiceChat,
-                            swipeNodePanel = settings.swipeNodePanel,
                             nodePanel = nodePanel,
                             pendingFollowUp = state.pendingFollowUp,
                             sendError = state.sendError,
@@ -404,7 +403,7 @@ private fun DrawerHost(
                     bottom = size.height.toFloat(),
                 )
             }
-            .edgeSwipeNodePanel(swipeNodePanel && sessionOpen, NODE_PANEL_EDGE, nodePanel),
+            .edgeSwipeNodePanel(swipeNodePanel && sessionOpen, nodePanel),
         drawerContent = {
             // 抽屉宽度：手机上一手能回到对话（用户要求最多占屏宽 2/3）
             ModalDrawerSheet(

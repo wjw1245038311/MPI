@@ -1,8 +1,7 @@
 package com.mpi.app.ui
 
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -66,6 +65,8 @@ import kotlinx.coroutines.launch
 class NodePanelState(
     private val scope: CoroutineScope,
     private val panelWidthPx: Float,
+    /** 吸附速度阈值（px/s）：与 ModalNavigationDrawer 的 DrawerVelocityThreshold（400.dp）一致。 */
+    private val velocityThresholdPx: Float,
 ) {
     /** 0 = 收起；-panelWidthPx = 完全展开。 */
     var offset by mutableFloatStateOf(0f)
@@ -82,7 +83,7 @@ class NodePanelState(
     }
 
     fun settle(velocity: Float) {
-        val open = offset < -panelWidthPx * OPEN_FRACTION || velocity < -FLING_VELOCITY
+        val open = offset < -panelWidthPx * OPEN_FRACTION || velocity < -velocityThresholdPx
         animateTo(if (open) -panelWidthPx else 0f)
     }
 
@@ -96,66 +97,69 @@ class NodePanelState(
             animate(
                 initialValue = offset,
                 targetValue = target,
-                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                // 与 ModalNavigationDrawer 的 AnchoredDraggableDefaultAnimationSpec 一致（Tween 256ms）
+                animationSpec = tween(SETTLE_MS),
             ) { value, _ -> offset = value }
         }
     }
 
-    private companion object {
-        /** 拖过面板宽度的这个比例就吸附到「开」。 */
-        const val OPEN_FRACTION = 0.35f
-        /** 快甩阈值（px/s）：即使距离不够，甩得够快也开。 */
-        const val FLING_VELOCITY = 700f
+    companion object {
+        /** 拖过面板宽度的这个比例就吸附到「开」——与 ModalNavigationDrawer 的 DrawerPositionalThreshold 一致。 */
+        const val OPEN_FRACTION = 0.5f
+
+        /** 吸附动画时长（ms）——与 ModalNavigationDrawer 的 AnchoredDraggableDefaultAnimationSpec 一致。 */
+        const val SETTLE_MS = 256
     }
 }
 
 @Composable
 internal fun rememberNodePanelState(panelWidth: Dp): NodePanelState {
-    val widthPx = with(LocalDensity.current) { panelWidth.toPx() }
+    val density = LocalDensity.current
+    val widthPx = with(density) { panelWidth.toPx() }
+    // 速度阈值取 ModalNavigationDrawer 的 DrawerVelocityThreshold（400.dp），保证左右两侧吸附手感一致
+    val velocityPx = with(density) { 400.dp.toPx() }
     val scope = rememberCoroutineScope()
-    return remember(widthPx) { NodePanelState(scope, widthPx) }
+    return remember(widthPx, velocityPx) { NodePanelState(scope, widthPx, velocityPx) }
 }
 
 /**
- * 右边缘左划 → 跟手拉出节点面板（对齐系统「边缘返回」那种手感：边缘起手、跟手、无把手）。
+ * 跟手拉出右侧节点面板——**与左侧会话列表抽屉（ModalNavigationDrawer）逐项对齐**。
  *
- * 只消费**横向**拖拽：起手不在右边缘、或方向真是纵向的，一律不碰（交给列表滚动）。
+ * 读 Material3 的 NavigationDrawer.kt 后照抄它的口径（不再猜）：
+ *  - **不限制起手区**：左侧抽屉的 `Modifier.anchoredDraggable(...)` 挂在整个根 Box 上，
+ *    任意位置的水平拖动都能拉出它（这也正是「左划也会弹出左侧列表」的原因）；
+ *  - **吸附阈值**：`positionalThreshold = distance * 0.5f`、`velocityThreshold = 400.dp`；
+ *  - **吸附动画**：`TweenSpec(durationMillis = 256)`——都落在 [NodePanelState] 里。
  *
- * **挂载位置很关键**：必须挂在 `ModalNavigationDrawer` 外面（见 DrawerHost），配合 Initial
- * 阶段才能压过抽屉自带的手势——否则左划会被抽屉接走、弹出左侧会话列表（真机三轮反馈）。
+ * 唯一的差别是**方向分工**（Material 的抽屉不区分方向，左右两个同时挂会互相抢）：
+ *  - 面板收起时只认**向左**拖 → 拉出右侧面板；
+ *  - 面板已打开时只认**向右**拖 → 把它收回去；
+ *  - 另一个方向整个让给左侧会话列表抽屉。
  *
- * ⚠️ 方向判定必须「横向松、纵向严」（2026-09-26 真机反复反馈「面板根本划不出来」）：
- * 手指从最右边缘往中间划时**天然带纵向分量**，只要要求「横向必须先过 touchSlop 且大于纵向」，
- * 绝大多数真实手势都会在起手的第一帧被判成纵向而直接放弃。现在：横向只需要 slop 的 60%
- * 且允许明显斜向（|dx| > 0.6|dy|）就认；纵向要给到 2×slop 才认定为「用户在滚列表」。
+ * 纵向一律不消费（还给 LazyColumn 滚动）：判定口径是「横向 0.6×touchSlop 且允许明显斜向」
+ * 对「纵向 2×touchSlop」——手指从边缘往里划时天然带纵向分量，判太严会直接放弃整个手势。
+ *
+ * **挂载位置**：必须挂在 `ModalNavigationDrawer` 外面（见 DrawerHost）配 Initial 阶段，
+ * 才能先于抽屉消费掉属于我们的那次拖动。
  */
 internal fun Modifier.edgeSwipeNodePanel(
     enabled: Boolean,
-    edgeWidth: Dp,
     state: NodePanelState,
 ): Modifier {
     if (!enabled) return this
-    return pointerInput(enabled, edgeWidth) {
+    return pointerInput(enabled) {
         val touchSlop = viewConfiguration.touchSlop
         val horizontalTrigger = touchSlop * 0.6f
         val verticalGiveUp = touchSlop * 2f
         awaitEachGesture {
-            // ⚠️ 必须用 **Initial 阶段**，而且本手势必须挂在 **ModalNavigationDrawer 外面**
-            // （调用点在 DrawerHost 的 Modifier 上）——这两个条件缺一不可（真机踩了三轮）：
-            //   · Initial 是「根 → 叶」：我们作为抽屉的祖先先处理，横向拖动一旦在这个阶段
-            //     消费掉，抽屉在后面的 Main 阶段就看不到这次拖动了；
-            //   · 反过来放 Main 必输：Main 是「叶 → 根」，抽屉是子节点、先拿到事件；
-            //   · 挂在消息区 Box（抽屉内部）也必输：Initial 阶段抽屉那侧先跑。
-            // 纵向判断只依赖自己的位移、**不消费任何事件**，所以 LazyColumn 在 Main 阶段照旧能滚。
-            // down 用 requireUnconsumed = false：我们不抢点击，只抢「明确左划」那一下。
+            // ⚠️ 必须用 **Initial 阶段**：本手势挂在 ModalNavigationDrawer 的 modifier 上
+            // （抽屉的祖先），Initial 是「根 → 叶」——我们最先拿到事件，横向拖动一消费，
+            // 抽屉在后面的 Main 阶段就看不到了。换成 Main 必输（那是叶 → 根，抽屉先跑）。
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            // 起手区 = 「最右 edgeWidth」与「**屏幕右半边**」中更宽的那个。
-            // 为什么不用真正的边缘（曾用 16/24dp，真机三轮都划不出来）：Android 手势导航把屏幕
-            // 最外 ~20-24dp 划给了系统返回手势，App 在那条缝里**收不到** event；而人手能稳定落下的
-            // 位置也在边缘往里 1cm 左右。放宽不会抢走左侧列表——方向判定只认**向左**，
-            // 向右的拖动整个还给抽屉（右划=左侧会话列表，左划=右侧节点面板，与桌面端一致）。
-            val leftBound = minOf(size.width - edgeWidth.toPx(), size.width * 0.5f)
-            if (down.position.x < leftBound) return@awaitEachGesture
+            // 起手区：**不限制**（与左侧抽屉对称——它也是全屏任意位置）。屏幕最右那一条
+            // 归系统返回手势，由 MpiApp 的 systemGestureExclusion 申请回来。
+            // closing：面板已经（部分）打开时，方向反过来——向右拖是把它收回去。
+            val closing = state.progress > 0.01f
             val tracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
             var total = 0f
             var dragging = false
@@ -163,15 +167,15 @@ internal fun Modifier.edgeSwipeNodePanel(
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
-                // 别人（已跑完的更外层）已经在处理这次手势：不插手
+                // 已被更外层节点处理：不插手
                 if (!dragging && change.isConsumed) break
                 tracker.addPosition(change.uptimeMillis, change.position)
                 val dx = change.position.x - down.position.x
                 val dy = change.position.y - down.position.y
                 if (!dragging) {
                     if (abs(dx) > horizontalTrigger && abs(dx) > abs(dy) * 0.6f) {
-                        // 只认**向左** = 拉出右侧节点面板；向右是抽屉的（左侧会话列表）
-                        if (dx < 0f) dragging = true else break
+                        val mine = if (closing) dx > 0f else dx < 0f
+                        if (mine) dragging = true else break
                     } else if (abs(dy) > verticalGiveUp) {
                         // 纵向明显主导 = 用户在滚列表：**此前一个事件都没消费过**，直接放行
                         break
@@ -201,7 +205,6 @@ internal fun NodePanelLayer(
     activeIndex: () -> Int,
     state: NodePanelState,
     panelWidth: Dp,
-    swipeEnabled: Boolean,
     onJump: (UserNode) -> Unit,
 ) {
     val progress = state.progress
@@ -231,8 +234,6 @@ internal fun NodePanelLayer(
                     // ⚠️ offset 必须在 edgeSwipeNodePanel **之前**：offset 只平移它内层的内容，
                     // 挂在它外层的话 pointerInput 的命中区域不会跟着移出屏幕。
                     .offset { IntOffset((panelWidthPx + state.offset).roundToInt(), 0) }
-                    // 展开后也能从右边缘往回拖收起（同一个 state，+delta 方向自然往回走）
-                    .edgeSwipeNodePanel(swipeEnabled, NODE_PANEL_EDGE, state)
                     .width(panelWidth)
                     .fillMaxHeight()
                     .background(MpiTheme.colors.surfaceMuted),
