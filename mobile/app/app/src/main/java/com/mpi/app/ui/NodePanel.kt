@@ -117,9 +117,14 @@ internal fun rememberNodePanelState(panelWidth: Dp): NodePanelState {
 }
 
 /**
- * 右边缘左划 → 跟手拉出节点面板。
+ * 右边缘左划 → 跟手拉出节点面板（对齐系统「边缘返回」那种手感：边缘起手、跟手、无把手）。
  *
- * 只消费**横向**拖拽：起手不在右边缘、或主轴是纵向的，一律不碰（交给列表滚动）。
+ * 只消费**横向**拖拽：起手不在右边缘、或方向真是纵向的，一律不碰（交给列表滚动）。
+ *
+ * ⚠️ 方向判定必须「横向松、纵向严」（2026-09-26 真机反复反馈「面板根本划不出来」）：
+ * 手指从最右边缘往中间划时**天然带纵向分量**，只要要求「横向必须先过 touchSlop 且大于纵向」，
+ * 绝大多数真实手势都会在起手的第一帧被判成纵向而直接放弃。现在：横向只需要 slop 的 60%
+ * 且允许明显斜向（|dx| > 0.6|dy|）就认；纵向要给到 2×slop 才认定为「用户在滚列表」。
  */
 internal fun Modifier.edgeSwipeNodePanel(
     enabled: Boolean,
@@ -129,10 +134,9 @@ internal fun Modifier.edgeSwipeNodePanel(
     if (!enabled) return this
     return pointerInput(enabled, edgeWidth) {
         val edgePx = edgeWidth.toPx()
-        // 方向判定用**系统 touch slop**（≈8dp 起），而不是某个固定像素：固定 16px 比手指
-        // 起手时的抖动量还小，一次轻微横移就会被判成「横向拖拽」，之后所有 move 全被吃掉
-        // ——真机表现就是「右边没法下拉」（列表在这块区域再也滚不动）。
         val touchSlop = viewConfiguration.touchSlop
+        val horizontalTrigger = touchSlop * 0.6f
+        val verticalGiveUp = touchSlop * 2f
         awaitEachGesture {
             // ⚠️ 必须在 **Initial 阶段**拿事件并在拖动时 consume：
             // 外层是 Material 的 ModalNavigationDrawer，它的拖拽在 Main 阶段且**不区分方向**
@@ -151,10 +155,14 @@ internal fun Modifier.edgeSwipeNodePanel(
                 val dx = change.position.x - down.position.x
                 val dy = change.position.y - down.position.y
                 if (!dragging) {
-                    // 「谁先过 touch slop 谁赢」：纵向先过 = 用户在滚列表——**此前一个事件都
-                    // 没消费过**，直接退出还给 LazyColumn；横向先过才算拉面板。
-                    if (abs(dy) > touchSlop && abs(dy) > abs(dx)) break
-                    if (abs(dx) > touchSlop && abs(dx) > abs(dy)) dragging = true else continue
+                    if (abs(dx) > horizontalTrigger && abs(dx) > abs(dy) * 0.6f) {
+                        dragging = true
+                    } else if (abs(dy) > verticalGiveUp) {
+                        // 纵向明显主导 = 用户在滚列表：**此前一个事件都没消费过**，直接放行
+                        break
+                    } else {
+                        continue
+                    }
                 }
                 state.dragBy(dx - total)
                 total = dx
@@ -166,9 +174,10 @@ internal fun Modifier.edgeSwipeNodePanel(
 }
 
 /**
- * 节点抽屉本体：箭头把手（常驻右侧边缘）+ 半透明遮罩 + 面板。
+ * 节点抽屉本体：半透明遮罩 + 面板（没有常驻把手——用户要的是系统边缘手势那种动态指示器，
+ * 拖动时面板自己跟手出现就是指示）。
  *
- * 遮罩只在展开时参与命中（收起时完全不挂 clickable），否则会把消息区的点击吞掉。
+ * 遮罩只在展开时参与命中（收起时整块都不挂载），否则会把消息区的点击吞掉。
  */
 @Composable
 internal fun NodePanelLayer(
@@ -274,8 +283,8 @@ internal fun userMessageNodes(messages: List<ThreadMessage>): List<UserNode> =
         UserNode(id = message.id, index = index, preview = text.ifEmpty { "（图片/附件）" }.take(60))
     }
 
-/** 右边缘起手区宽度（越窄越不容易误触；“最边缘向着中间划” ≈ 16dp）。 */
-internal val NODE_PANEL_EDGE = 16.dp
+/** 右边缘起手区宽度（对齐系统边缘手势的量级：约 24dp）。 */
+internal val NODE_PANEL_EDGE = 24.dp
 
 /** 面板宽度。 */
 internal val NODE_PANEL_WIDTH = 268.dp
