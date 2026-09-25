@@ -547,7 +547,7 @@ class AppViewModel(
         val threadSessionLocal = ThreadSession(
             threadId = threadId,
             transport = transport,
-            request = { type, payload, tid -> requesterRef.request(type, payload, threadId = tid) },
+            request = { type, payload, tid, timeoutMs -> requesterRef.request(type, payload, threadId = tid, timeoutMs = timeoutMs) },
             scope = scope,
             onProblem = { problem ->
                 _ui.update { state ->
@@ -1253,7 +1253,12 @@ class AppViewModel(
         val newRequester = Requester(
             transport = newSession,
             // 请求超时但连接还在 → 主机 uplink 可能静默掉线，重握手一次
-            onStaleConnection = { newSession.reauthenticate() },
+            // 请求超时但连接还在：**不要走同 socket 重认证**。R1 之后 relay 只在 socket
+            // 真换掉时才通知主机，所以同 socket 的 hello 永远等不到新挑战（构造上不可能成功）
+            // ——只会在 20s 后超时再重试，把 App 卡在「认证中」（真机日志：中继上每 20~40 秒
+            // 一次 hello，连着十几次，期间发消息全是「连接未就绪」）。
+            // 正确做法：标记订阅失效，下一次 resync/发送前的 ensureSubscribed 会重新注册订阅。
+            onStaleConnection = { threadSession?.invalidateSubscription() },
         )
         val newRepository = HostRepository(
             scope = scope,

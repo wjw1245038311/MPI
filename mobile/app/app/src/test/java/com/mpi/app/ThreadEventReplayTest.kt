@@ -50,7 +50,7 @@ class ThreadEventReplayTest {
     }
 
     private class Requests(private val snapshot: String) {
-        suspend fun request(type: String, payload: JsonElement?, threadId: String?): JsonElement? =
+        suspend fun request(type: String, payload: JsonElement?, threadId: String?, timeoutMs: Long?): JsonElement? =
             Envelope.json.parseToJsonElement(snapshot)
     }
 

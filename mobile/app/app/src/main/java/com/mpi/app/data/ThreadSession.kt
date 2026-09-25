@@ -90,7 +90,7 @@ data class ThreadView(
 class ThreadSession(
     val threadId: String,
     private val transport: RequestTransport,
-    private val request: suspend (type: String, payload: JsonElement?, threadId: String?) -> JsonElement?,
+    private val request: suspend (type: String, payload: JsonElement?, threadId: String?, timeoutMs: Long?) -> JsonElement?,
     private val scope: CoroutineScope,
     /** 非致命问题上报（丢帧导致的缺口、解密失败等）。 */
     private val onProblem: (String) -> Unit = {},
@@ -163,7 +163,7 @@ class ThreadSession(
     suspend fun subscribe() {
         syncLock.withLock {
             val payload = try {
-                requestWhenReady("thread.subscribe", threadIdPayload(), threadId)
+                requestWhenReady("thread.subscribe", threadIdPayload(), threadId, SNAPSHOT_TIMEOUT_MS)
             } catch (e: Exception) {
                 _view.value = _view.value.copy(ready = true, errorBanner = friendlyError(e))
                 throw e
@@ -181,11 +181,16 @@ class ThreadSession(
      * （连接未就绪）」横幅一直挂着，得手动「重新同步」或重启 App 才恢复（2026-09-26 反馈）。
      * 这里有限重试，认证一完成就自动接上；真的超时了才把错误冒给上层。
      */
-    private suspend fun requestWhenReady(type: String, payload: JsonElement, threadId: String): JsonElement? {
+    private suspend fun requestWhenReady(
+        type: String,
+        payload: JsonElement,
+        threadId: String,
+        timeoutMs: Long? = null,
+    ): JsonElement? {
         var attempt = 0
         while (true) {
             try {
-                return request(type, payload, threadId)
+                return request(type, payload, threadId, timeoutMs)
             } catch (e: RequestException) {
                 if (e.kind != RequestException.Kind.NotReady || attempt >= READY_RETRY_LIMIT) throw e
                 attempt++
@@ -225,7 +230,7 @@ class ThreadSession(
      */
     private suspend fun ensureSubscribedLocked(): JsonElement? {
         if (subscribed) return null
-        val payload = requestWhenReady("thread.subscribe", threadIdPayload(), threadId)
+        val payload = requestWhenReady("thread.subscribe", threadIdPayload(), threadId, SNAPSHOT_TIMEOUT_MS)
         subscribed = true
         return payload
     }
@@ -257,7 +262,7 @@ class ThreadSession(
                     applySnapshot(fresh)
                     return@withLock
                 }
-                val payload = requestWhenReady("thread.resync", threadIdPayload(), threadId)
+                val payload = requestWhenReady("thread.resync", threadIdPayload(), threadId, SNAPSHOT_TIMEOUT_MS)
                 applySnapshot(payload)
             } catch (e: Exception) {
                 _view.value = _view.value.copy(errorBanner = e.message ?: "同步失败")
@@ -848,6 +853,16 @@ class ThreadSession(
         /** 等认证就绪的重试上限与间隔（500ms × 30 ≈ 15s）。 */
         private const val READY_RETRY_LIMIT = 30
         private const val READY_RETRY_INTERVAL_MS = 500L
+
+        /**
+         * 快照请求（subscribe / resync）的超时。
+         *
+         * **不能走默认 10s**：会话一大会话快照能到 2MB（真机日志：`rendered=99 sent=99
+         * bytes=1.97MB`），中继链路上十几秒都可能——超时后会被当成「连接陈旧」→ 触发
+         * 同 socket 重认证（而 R1 之后那条路走不通）→ 重认证风暴、发消息永远「连接未就绪」。
+         * 60s 与 PWA 的 SNAPSHOT_TIMEOUT_MS 对齐。
+         */
+        private const val SNAPSHOT_TIMEOUT_MS = 60_000L
     }
 }
 

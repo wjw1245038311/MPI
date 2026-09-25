@@ -365,10 +365,13 @@ export default function App() {
     let s = sessionRef.current;
     if (!s) {
       s = new HostSession(client, {
-        // Request timed out while the socket is still open — the host's uplink may
-        // have dropped silently; re-hello forces the relay to re-route + challenge.
+        // 请求超时但 socket 还开着。
+        //
+        // ⚠️ 原来这里是「同 socket 重发 hello，逼中继重发挑战」——R1（2026-09-24）之后不成立了：
+        // 中继只在 socket 真换掉时才通知主机，所以同 socket 的 hello 永远等不到新挑战。
+        // 正确做法：标记订阅失效，下一次 resync / 发送前的 ensureSubscribed 会重新注册订阅。
         onStaleConnection: () => {
-          if (record.deviceToken && record.deviceId) client.hello(record.deviceId, record.deviceToken, record.hostId);
+          threadSessionRef.current?.invalidateSubscription();
         },
       });
       setSession(s);

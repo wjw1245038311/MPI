@@ -67,7 +67,7 @@ class ThreadSessionReducerTest {
     private class FakeRequests(private val snapshotJson: String) {
         val calls = CopyOnWriteArrayList<String>()
 
-        suspend fun request(type: String, payload: JsonElement?, threadId: String?): JsonElement? {
+        suspend fun request(type: String, payload: JsonElement?, threadId: String?, timeoutMs: Long?): JsonElement? {
             calls += type
             return Envelope.json.parseToJsonElement(snapshotJson)
         }
@@ -178,7 +178,7 @@ class ThreadSessionReducerTest {
         val session = ThreadSession(
             threadId = THREAD_ID,
             transport = FakeTransport(),
-            request = { _, _, _ -> throw IllegalStateException("network down") },
+            request = { _, _, _, _ -> throw IllegalStateException("network down") },
             scope = scope,
             onProblem = { problems += it },
         )
