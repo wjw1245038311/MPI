@@ -256,6 +256,7 @@ fun MpiApp(container: AppContainer) {
                     onNotifyOnTurnComplete = container.settingsStore::setNotifyOnTurnComplete,
                     onSpeakTurnComplete = container.settingsStore::setSpeakTurnComplete,
                     onVoiceContent = container.settingsStore::setVoiceSpeechContent,
+                    onSpeakDuringCall = container.settingsStore::setSpeakDuringCall,
                     onOpenDiagnostics = { diagnosticsOpen = true },
                     onRemoveDevice = {
                         settingsOpen = false

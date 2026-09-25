@@ -100,6 +100,13 @@ data class AppSettings(
     val speakTurnComplete: Boolean = true,
     /** 播报念什么：固定语 / 回复摘要（仅在 [speakTurnComplete] 开着时有意义）。 */
     val voiceSpeechContent: VoiceSpeechContent = VoiceSpeechContent.Fixed,
+    /**
+     * 通话中也尝试播报（含微信这类 VoIP）。默认关。
+     *
+     * 关掉时：通话中直接跳过（系统会把媒体音/TTS 压掉，念了听不到，还可能被通话对方听到）。
+     * 开了也只是**尝试**——部分 ROM 通话中整个静音媒体流，那时这个开关也救不回来。
+     */
+    val speakDuringCall: Boolean = false,
 )
 
 /**
@@ -146,6 +153,11 @@ class SettingsStore(context: Context) {
         _settings.value = read()
     }
 
+    fun setSpeakDuringCall(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SPEAK_DURING_CALL, value).apply()
+        _settings.value = read()
+    }
+
     private fun read(): AppSettings = AppSettings(
         appearance = Appearance.fromStored(prefs.getString(KEY_APPEARANCE, null)),
         fontSize = FontSize.fromStored(prefs.getString(KEY_FONT_SIZE, null)),
@@ -153,6 +165,7 @@ class SettingsStore(context: Context) {
         notifyOnTurnComplete = prefs.getBoolean(KEY_NOTIFY_TURN_COMPLETE, true),
         speakTurnComplete = prefs.getBoolean(KEY_SPEAK_TURN_COMPLETE, true),
         voiceSpeechContent = VoiceSpeechContent.fromStored(prefs.getString(KEY_VOICE_SPEECH_CONTENT, null)),
+        speakDuringCall = prefs.getBoolean(KEY_SPEAK_DURING_CALL, false),
     )
 
     companion object {
@@ -163,5 +176,6 @@ class SettingsStore(context: Context) {
         private const val KEY_NOTIFY_TURN_COMPLETE = "notifyOnTurnComplete"
         private const val KEY_SPEAK_TURN_COMPLETE = "speakTurnComplete"
         private const val KEY_VOICE_SPEECH_CONTENT = "voiceSpeechContent"
+        private const val KEY_SPEAK_DURING_CALL = "speakDuringCall"
     }
 }

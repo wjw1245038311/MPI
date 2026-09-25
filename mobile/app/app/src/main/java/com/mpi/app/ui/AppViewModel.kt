@@ -872,7 +872,11 @@ class AppViewModel(
     /** 播报并等它念完（引擎异常/被打断时有兼底超时，不让循环卡死）。 */
     private suspend fun speakAndWait(text: String) {
         val done = CompletableDeferred<Unit>()
-        speaker.speak(text, onDone = { done.complete(Unit) })
+        speaker.speak(
+            text,
+            onDone = { done.complete(Unit) },
+            allowDuringCall = settingsStore.settings.value.speakDuringCall,
+        )
         withTimeoutOrNull(VOICE_SPEAK_TIMEOUT_MS) { done.await() }
     }
     private fun loadAttachment(block: () -> Result<Attachment>) {
@@ -926,9 +930,10 @@ class AppViewModel(
             phoneInitiated = phoneInitiated,
         )
         val voiceEnabled = settings.speakTurnComplete
-        // 通话中（含微信 VoIP）系统会把 TTS 压掉，念了也是白念，还可能被通话对方听到 → 跳过
+        // 通话中（含微信 VoIP）系统会把 TTS 压掉，念了也是白念，还可能被通话对方听到 →
+        // 默认跳过；用户在设置里开了「通话中也播报」就照样试一把。
         val inCall = speaker.inCall()
-        val spoke = notify && voiceEnabled && !inCall
+        val spoke = notify && voiceEnabled && (!inCall || settings.speakDuringCall)
         _ui.update {
             it.copy(
                 lastTurnNotify = if (inVoiceChat) {
@@ -940,6 +945,7 @@ class AppViewModel(
                         phoneInitiated = phoneInitiated,
                         voiceEnabled = voiceEnabled,
                         inCall = inCall,
+                        speakDuringCall = settings.speakDuringCall,
                     )
                 },
             )
@@ -949,7 +955,12 @@ class AppViewModel(
         // 回复摘要优先（与桌面端完成卡片同源）；出错时 [Notifier.turnCompleteText] 改用错误文案
         val reply = view.messages.lastOrNull { it.role == "assistant" }?.let { messageTextOf(it) }
         notifier.notifyTurnComplete(threadId, title, Notifier.turnCompleteText(reply, view.errorBanner))
-        if (spoke) speaker.speak(Notifier.turnCompleteSpeech(settings.voiceSpeechContent, title, reply))
+        if (spoke) {
+            speaker.speak(
+                Notifier.turnCompleteSpeech(settings.voiceSpeechContent, title, reply),
+                allowDuringCall = settings.speakDuringCall,
+            )
+        }
     }
 
     /** 重试一条发送失败的消息（保留原位，不重复上屏）。 */

@@ -30,17 +30,20 @@ class Speaker(context: Context) {
     /**
      * 念一句。引擎没就绪就先排队，永远不抛。[onDone] 在本句播完（或出错）时回调。
      *
-     * @return true = 已提交播报；false = 被跳过（空文本 / 通话中）。
+     * @return true = 已提交播报；false = 被跳过（空文本 / 通话中且未允许）。
+     * @param allowDuringCall 通话中也尝试念（设置项；默认关）。开了也不保证出声——
+     *   部分 ROM 通话中会整个静音媒体流，那时任何客户端手段都救不回来。
      */
-    fun speak(text: String, onDone: (() -> Unit)? = null): Boolean {
+    fun speak(text: String, onDone: (() -> Unit)? = null, allowDuringCall: Boolean = false): Boolean {
         val value = text.trim()
         if (value.isEmpty()) {
             runCatching { onDone?.invoke() }
             return false
         }
         // 通话中（含微信这类 VoIP）：系统会把媒体音压掉或改路由到听筒，念了也听不到，
-        // 而且可能被通话对方听见 → 直接跳过（通知照发）。onDone 要回调，否则语音模式会干等。
-        if (inCall()) {
+        // 而且可能被通话对方听见 → 默认跳过（通知照发）。onDone 必须回调，
+        // 否则语音模式的循环会干等到超时。
+        if (!allowDuringCall && inCall()) {
             runCatching { onDone?.invoke() }
             return false
         }

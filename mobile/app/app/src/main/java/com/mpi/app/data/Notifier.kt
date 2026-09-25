@@ -210,7 +210,7 @@ class Notifier(private val context: Context) {
          *
          * 专治「设了却没收到通知」——判定条件直接摊在诊断页上，不用猜。
          * [voiceEnabled] = 语音播报开关；[inCall] = 当时是否在通话（含微信这类 VoIP：
-         * 系统会把媒体音/TTS 压掉，所以跳过播报，但**通知照发**）。
+         * 系统会把媒体音/TTS 压掉）；[speakDuringCall] = 用户是否允许通话中也尝试播报。
          */
         internal fun turnNotifyReason(
             enabled: Boolean,
@@ -218,12 +218,14 @@ class Notifier(private val context: Context) {
             phoneInitiated: Boolean,
             voiceEnabled: Boolean,
             inCall: Boolean,
+            speakDuringCall: Boolean,
         ): String = when {
             !enabled -> "跳过：设置里已关闭"
             !phoneInitiated -> "跳过：回合由电脑端发起"
             foreground -> "跳过：App 在前台"
             !voiceEnabled -> "已通知"
-            inCall -> "已通知（通话中，未播报）"
+            inCall && !speakDuringCall -> "已通知（通话中，未播报）"
+            inCall -> "已通知 + 语音（通话中，可能听不到）"
             else -> "已通知 + 语音"
         }
 

@@ -88,6 +88,7 @@ fun SettingsScreen(
     onNotifyOnTurnComplete: (Boolean) -> Unit,
     onSpeakTurnComplete: (Boolean) -> Unit,
     onVoiceContent: (VoiceSpeechContent) -> Unit,
+    onSpeakDuringCall: (Boolean) -> Unit,
     onOpenDiagnostics: () -> Unit,
     onRemoveDevice: () -> Unit,
     updateInfo: UpdateInfo?,
@@ -143,6 +144,13 @@ fun SettingsScreen(
                     title = "播报内容",
                     trailing = voiceContentLabel(settings.voiceSpeechContent),
                     onClick = { voiceContentPicker = true },
+                )
+                // 通话中（含微信语音）系统会把 TTS 压掉；开着就是「照样试一把」，不保证出声。
+                SettingsItem(
+                    icon = null,
+                    title = "通话中也播报",
+                    trailing = if (settings.speakDuringCall) "开（可能听不到）" else "关",
+                    onClick = { onSpeakDuringCall(!settings.speakDuringCall) },
                 )
                 // 「语言」条目已删：原生端全量中文硬编码，没有任何可选项，
                 // 放着只会是个点了没反应的箭头（用户反馈）。要真做 zh/en 得先把
