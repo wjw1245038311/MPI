@@ -947,13 +947,15 @@ class AppViewModel(
         val settings = settingsStore.settings.value
         // 语音模式自己会播报回复，完成通知/播报一律让路（否则一句回复念两遍）
         val inVoiceChat = _ui.value.voiceChat != null
-        // ⚠️ 不能用缓存的 AppVisibility.foreground：熄屏/锁屏在部分 ROM 上不一定立刻走到
-        // onPause，缓存值会停在 true，于是后台跑完的回合被当成「用户正看着」→ 通知静默不发
-        // （真机症状：对话完成无通知，诊断却报「跳过：App 在前台」）。实时判定 + 屏幕/锁屏。
+        // ⚠️ 「别打扰」的准确口径：App 在前台 **且打开的就是这个会话**。
+        // 只看「App 在前台」太宽——前台翻别的会话、或在设置/抽屉里时，完成通知照样该弹
+        // （真机反馈：用 PWA 看进度 / 前台开着别的会话时收不到通知）。
+        // 屏幕/锁屏也是实时查的：熄屏、锁屏在部分 ROM 上不一定立刻走 onPause。
         val foregroundNow = AppVisibility.isForegroundNow()
+        val watchingThread = foregroundNow && _ui.value.openThreadId == threadId
         val notify = !inVoiceChat && Notifier.shouldNotifyTurnComplete(
             enabled = settings.notifyOnTurnComplete,
-            foreground = foregroundNow,
+            watchingThread = watchingThread,
             phoneInitiated = phoneInitiated,
         )
         val voiceEnabled = settings.speakTurnComplete
@@ -971,12 +973,12 @@ class AppViewModel(
                         .format(java.util.Date())
                     Notifier.turnNotifyReason(
                         enabled = settings.notifyOnTurnComplete,
-                        foreground = foregroundNow,
+                        watchingThread = watchingThread,
                         phoneInitiated = phoneInitiated,
                         voiceEnabled = voiceEnabled,
                         inCall = inCall,
                         speakDuringCall = settings.speakDuringCall,
-                    ) + "（${AppVisibility.detail()} · $stamp）"
+                    ) + "（${AppVisibility.detail()} · 看的是本会话=${if (watchingThread) "是" else "否"} · $stamp）"
                 },
             )
         }

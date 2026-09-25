@@ -182,14 +182,18 @@ class Notifier(private val context: Context) {
         /**
          * 该不该发「对话完成」通知（纯函数，可单测）。
          *
-         * 三个都成立才发：设置开着、App **不在前台**（盯着屏幕看时不打扰）、
+         * 三个都成立才发：设置开着、**用户没有正在看这个会话**（盯着看时没必要再响）、
          * 且这个回合是**手机自己发起**的（桌面发起的不该响）。
+         *
+         * ⚠️ [watchingThread] 的口径是「App 在前台 **且** 打开的就是这个会话」：
+         * 只看「App 在前台」太宽——用户可能在前台翻别的会话、或在设置/抽屉里，
+         * 这时完成通知照样该弹（真机反馈：用 PWA 看进度 / 前台开着别的会话时收不到通知）。
          */
         internal fun shouldNotifyTurnComplete(
             enabled: Boolean,
-            foreground: Boolean,
+            watchingThread: Boolean,
             phoneInitiated: Boolean,
-        ): Boolean = enabled && phoneInitiated && !foreground
+        ): Boolean = enabled && phoneInitiated && !watchingThread
 
         /** 播报里回复摘要最多念多少字——再长就只剩吵了。 */
         private const val SPEECH_MAX = 60
@@ -235,7 +239,7 @@ class Notifier(private val context: Context) {
          */
         internal fun turnNotifyReason(
             enabled: Boolean,
-            foreground: Boolean,
+            watchingThread: Boolean,
             phoneInitiated: Boolean,
             voiceEnabled: Boolean,
             inCall: Boolean,
@@ -243,7 +247,7 @@ class Notifier(private val context: Context) {
         ): String = when {
             !enabled -> "跳过：设置里已关闭"
             !phoneInitiated -> "跳过：回合由电脑端发起"
-            foreground -> "跳过：App 在前台"
+            watchingThread -> "跳过：正在看这个会话"
             !voiceEnabled -> "已通知"
             inCall && !speakDuringCall -> "已通知（通话中，未播报）"
             inCall -> "已通知 + 语音（通话中，可能听不到）"
