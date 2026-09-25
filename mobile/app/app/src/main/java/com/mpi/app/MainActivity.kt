@@ -1,6 +1,7 @@
 package com.mpi.app
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -53,6 +54,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         resumed = true
         syncForeground("画面可见")
+        applySystemGestureExclusion()
     }
 
     override fun onPause() {
@@ -79,5 +81,31 @@ class MainActivity : ComponentActivity() {
     private fun syncForeground(reason: String) {
         AppVisibility.set(resumed = resumed, focused = focused, reason = reason)
         container.foreground.value = AppVisibility.foreground
+    }
+
+    /**
+     * 把屏幕右边缘从**系统返回手势区**里申请回来（API 29+）。
+     *
+     * 为什么 View 层还要再做一次：`Modifier.systemGestureExclusion`（MpiApp 里）的生效范围
+     * 由框架/ROM 决定，真机实测贴边左划仍被系统吃掉——表现就是弹出返回箭头、触发返回键、
+     * 于是打开了左侧会话列表。这里在根 View 上再申请一条更宽的边缘条，两者叠加提高命中率。
+     * 系统对排除区有上限（沿边缘约 200dp），拿不回的那部分由「任意位置都能起手」的手势接住。
+     */
+    private fun applySystemGestureExclusion() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val root = window.decorView
+        if (root.width <= 0 || root.height <= 0) {
+            // 首帧布局前尺寸还是 0，等一帧再设
+            root.post { applySystemGestureExclusion() }
+            return
+        }
+        val edgePx = (EDGE_EXCLUSION_DP * resources.displayMetrics.density).toInt()
+        root.systemGestureExclusionRects =
+            listOf(android.graphics.Rect(root.width - edgePx, 0, root.width, root.height))
+    }
+
+    private companion object {
+        /** 向系统申请的右边缘排除区宽度（dp）；比系统手势区宽一些，给手指留容错。 */
+        const val EDGE_EXCLUSION_DP = 32f
     }
 }
