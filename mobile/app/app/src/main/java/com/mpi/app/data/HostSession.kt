@@ -129,12 +129,8 @@ class HostSession(
     /** 建立连接；后续断线由内部自动重连（除非是终止性失败）。 */
     fun connect() {
         stopped = false
-        if (client.isOpen()) {
-            startAuthentication()
-            return
-        }
         attempt = 0
-        client.connect()
+        ensureConnected()
     }
 
     /**
@@ -143,14 +139,21 @@ class HostSession(
      * 为什么要它：后台长时间挂着时连接必然已经死了，而重试是**按退避**走的（最长 30s），
      * 用户拿起来那一刻不一定刚好轮到——真机表现就是「必须把 App 完全关掉才恢复」。
      * 这里重置退避并立即动手；socket 还开着（半死）就先关掉，让它走完整的重连 + 重认证。
+     *
+     * **为什么不在 close 之后直接 connect**：那会让新旧两条 socket 短暂并存，中继把旧的
+     * 一条判为 `replaced`（并发 `hello`）。旧 socket 的迟到帧（`replaced` / `closed(1000)`）
+     * 曾经会打在同一会话上，被判终止性 `Replaced` 后永久停死——中继日志指纹是同一 deviceId
+     * 每几秒一轮 `hello ok` + `REPLACED` + `gone (code=1000)`（2026-09-26 真机取证）。
+     * 现在 close 只负责放弃 socket，重建一律由 `onClosed(expected)` → [ensureConnected] 单飞发起。
      */
     fun kick() {
         if (stopped) return
         if (_state.value is SessionState.Connected) return
+        // 终止性失败（令牌失效 / 被撤销 / 被顶替）重连也不会成功——留给用户显式点重连。
+        if ((_state.value as? SessionState.Failed)?.reason?.isTerminal == true) return
         attempt = 0
         reconnectJob?.cancel()
-        if (client.isOpen()) client.close()
-        client.connect()
+        if (client.hasLiveSocket()) client.close() else client.connect()
     }
 
     /** 主动断开并停止重连。 */
@@ -288,6 +291,12 @@ class HostSession(
 
     private fun onClosed(closed: RelayState.Closed) {
         aesKey = null
+        // 本端主动放弃（kick 重建 / 换设备）：这是「我决定重来」，不是「中继断线」。
+        // 不报任何故障文案，只按需立刻重建——否则用户会看到自己制造的「连接中断（1000）」。
+        if (closed.expected) {
+            ensureConnected()
+            return
+        }
         when (closed.code) {
             // 中继重启后路由表为空，而主机的 uplink 还在重新上报已存 token。
             // 这段窗口内 hello 会被拒（4001）——若一口咬定「必须重新配对」，
@@ -378,10 +387,27 @@ class HostSession(
         reconnectJob = scope.launch {
             delay(delayMs)
             if (stopped) return@launch
-            // 与 connect() 一致：socket 还开着（半死连接）就补一次认证，
-            // 否则 connect() 会被 isOpen() 挡掉、白跑一轮。
-            if (client.isOpen()) startAuthentication() else client.connect()
+            ensureConnected()
         }
+    }
+
+    /**
+     * 「保证有一条连接在推进」——所有重连路径的唯一出口。
+     *
+     * - 有 socket 且已握手完成 → 重走一次挑战应答（中继重启后路由会丢，必须重新 hello）；
+     * - 有 socket 但还在握手中 → 什么都不做：它的 `onOpen` 会触发 [startAuthentication]；
+     * - 没有 socket → 建一条。
+     *
+     * 这样「close + 立刻 connect」那种新旧 socket 并存的写法不可能再出现：socket 的存在
+     * 与否只有一个判据（[RelayClient.hasLiveSocket]），且永远不会同时有两条。
+     */
+    private fun ensureConnected() {
+        if (stopped) return
+        if (client.hasLiveSocket()) {
+            if (client.isOpen()) startAuthentication()
+            return
+        }
+        client.connect()
     }
 
     private fun fail(reason: SessionFailure, detail: String) {

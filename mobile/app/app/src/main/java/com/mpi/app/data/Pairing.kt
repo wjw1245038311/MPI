@@ -199,7 +199,10 @@ object Pairing {
 
                         is RelayState.Failed -> throw PairingException("无法连接中继：${state.message}")
 
-                        is RelayState.Closed -> throw PairingException("中继断开连接：${state.code} ${state.reason}".trim())
+                        // 本端主动放弃（kick 重建）不是失败：让上层走它自己的重建流程。
+                        is RelayState.Closed -> if (!state.expected) {
+                            throw PairingException("中继断开连接：${state.code} ${state.reason}".trim())
+                        }
 
                         else -> Unit
                     }
@@ -230,9 +233,14 @@ object Pairing {
             when (state) {
                 is RelayState.Failed -> failures.trySend(PairingException("连接失败：${state.message}"))
 
-                is RelayState.Closed -> failures.trySend(
-                    PairingException("中继关闭了连接：${state.code} ${state.reason}".trim()),
-                )
+                // 本端主动放弃（kick 重建）不当作失败上报——上层会用新 socket 重新握手。
+                // 旧写法把「自己关的 1000」报成「中继关闭了连接：1000」，用户看到的是一条
+                // 完全误导的错误（2026-09-26 真机事故）。
+                is RelayState.Closed -> if (!state.expected) {
+                    failures.trySend(
+                        PairingException("中继关闭了连接：${state.code} ${state.reason}".trim()),
+                    )
+                }
 
                 else -> Unit
             }

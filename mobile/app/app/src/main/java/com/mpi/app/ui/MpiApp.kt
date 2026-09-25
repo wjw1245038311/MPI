@@ -82,8 +82,17 @@ fun MpiApp(container: AppContainer) {
     // 回到前台就踢一次重连：长时间后台后连接已死，而自动重连按退避走（最长 30s）——
     // 不等退避就能恢复，用户也就不会再觉得「必须把 App 完全关掉才连得上」。
     val appForeground by container.foreground.collectAsState()
+    // 只踢「后台 → 前台」的复活。首帧 `true` 是启动本身——那时首连正在建立，
+    // 踢它等于自己打断自己（2026-09-26 重装新包后必现「连接中断（1000）」+「本设备已在
+    // 另一处连接」的来源：kick 的 close(1000) 撞上正在进行的认证）。
+    var seenForeground by remember { mutableStateOf(false) }
     LaunchedEffect(appForeground) {
-        if (appForeground) viewModel.kickConnection()
+        if (!appForeground) return@LaunchedEffect
+        if (!seenForeground) {
+            seenForeground = true
+            return@LaunchedEffect
+        }
+        viewModel.kickConnection()
     }
     var settingsOpen by remember { mutableStateOf(false) }
     var diagnosticsOpen by remember { mutableStateOf(false) }
