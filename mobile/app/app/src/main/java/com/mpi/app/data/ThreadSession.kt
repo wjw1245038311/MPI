@@ -182,6 +182,17 @@ class ThreadSession(
     }
 
     /**
+     * 本地先行更新当前模型（远程切模型成功后立刻反馈，不等主机 config_changed 事件往返）。
+     *
+     * 主机现在也会广播 config_changed(model)，那才是权威值；这里只是把「响应 → 广播 →
+     * 中继」这两跳之前的窗口填上，事件到达后是同值覆盖（幂等）。与 PWA
+     * 「无 model_changed 事件，所以本地先更新徽标」同一取舍（2026-09-25 手机同步排查）。
+     */
+    fun noteLocalModel(provider: String, id: String) {
+        patch { it.copy(model = ModelRef(provider, id)) }
+    }
+
+    /**
      * 确保当前连接上已注册订阅（幂等）。
      *
      * 真机踩过：主机按 connectionId 记订阅，重连后旧订阅被清掉，而 [resync] 只拉

@@ -795,7 +795,14 @@ class AppViewModel(
 
     fun setPermission(permission: RemotePermission) = configAction { it.setPermission(permission) }
 
-    fun setModel(provider: String, modelId: String) = configAction { it.setModel(provider, modelId) }
+    fun setModel(provider: String, modelId: String) = configAction {
+        // 失败会抛出 → 走 configError 显示（不静默），所以下面这行只在确实成功后执行。
+        it.setModel(provider, modelId)
+        // 本地先更新 chip：不等主机 config_changed 事件往返（主机也会广播，事件到达是同值覆盖）。
+        // 2026-09-25 真机：「切了个已从配置删掉的模型，好像没反应也没提示」——
+        // 实际原因是切换当时客户端不消费响应快照，而主机又不广播，chip 就一直没动。
+        threadSession?.noteLocalModel(provider, modelId)
+    }
 
     fun setThinking(level: String) = configAction { it.setThinking(level) }
 
