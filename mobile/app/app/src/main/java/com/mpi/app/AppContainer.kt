@@ -62,6 +62,14 @@ class AppContainer(context: Context) {
     /** 通知点击带来的待打开会话（UI 消费后置空）。 */
     val pendingThreadOpen = MutableStateFlow<String?>(null)
 
+    /**
+     * 前后台（由 MainActivity 维护）。
+     *
+     * 除了给「完成通知只在后台发」用，还驱动**回前台立刻重连**：长时间挂着后连接必然已死，
+     * 而重试是按退避走的（最长 30s），不等它就得上用户觉得「必须关掉 App 才恢复」。
+     */
+    val foreground = MutableStateFlow(false)
+
     /** 与 UI 生命周期同长的作用域（会话/仓库/轮询都挂在这里）。 */
     val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

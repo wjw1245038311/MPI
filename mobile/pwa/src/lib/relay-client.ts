@@ -95,6 +95,31 @@ export class RelayClient {
     this.openSocket();
   }
 
+  /**
+   * 立即重连（回到前台 / 网络恢复时调）。
+   *
+   * 为什么要它：后台标签页会被浏览器节流甚至冻结，退避定时器不一定按时跑；等它自己
+   * 轮到可能要等很久，用户看到的就是「挂久了只能重开页面」。这里清掉退避、马上再试；
+   * socket 半死（浏览器不一定及时报 onclose）就先丢掉。
+   */
+  reconnectNow(): void {
+    if (!this.stayAlive) return;
+    // E2E 通道已就绪 = 真连着，别去动它
+    if (this.frameCrypto && this.isOpen()) return;
+    this.retryCount = 0;
+    this.clearReconnectTimer();
+    const socket = this.ws;
+    if (socket) {
+      this.ws = null;
+      try {
+        socket.close(1000, "kick");
+      } catch {
+        /* already closed */
+      }
+    }
+    this.openSocket();
+  }
+
   /** Permanent shutdown — no further reconnects. */
   close(code = 1000, reason = ""): void {
     this.stayAlive = false;

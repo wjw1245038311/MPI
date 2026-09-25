@@ -165,6 +165,22 @@ function useIsWide(): boolean {
 export default function App() {
   const storeRef = useRef<KeyStore>(new IdbKeyStore());
   const clientRef = useRef<RelayClient | null>(null);
+
+  // 回到前台 / 网络恢复 → 立刻重连一次。
+  // 后台标签页会被浏览器节流甚至冻结，退避定时器不一定按时跑；真机反馈「挂久了必须重开
+  // 页面才行」——这里不等退避，直接踢一次（细节见 RelayClient.reconnectNow）。
+  useEffect(() => {
+    const kick = () => clientRef.current?.reconnectNow();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") kick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", kick);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", kick);
+    };
+  }, []);
   const [session, setSession] = useState<HostSession | null>(null);
   const sessionRef = useRef<HostSession | null>(null);
   sessionRef.current = session;
@@ -828,8 +844,12 @@ export default function App() {
       : "";
 
   /**
-   * 设备身份不再被这台主机认可（桌面端撤销过、或手机端身份被重置）时，relay 会用
-   * 4001/AUTH_FAILED 关掉连接。此时无限重试毫无意义——得明确告诉用户重新配对。
+   * 设备身份不再被认可（桌面端撤销过、手机端身份被重置）时，relay 会用 4001/AUTH_FAILED
+   * 关掉连接。
+   *
+   * ⚠️ 但**别把它当成「必须重新配对」**：中继重启后路由表为空、而主机 uplink 还在补报
+   * token 的这段窗口里，4001 是**暂时**的——客户端会一直按退避重试（回前台还会立即
+   * 重试，见 RelayClient.reconnectNow）。这里只提供一条手动出口，不代表已经没救。
    */
   const needsRepair = !!connErr && /AUTH_FAILED|4001/i.test(connErr);
 
@@ -905,7 +925,8 @@ export default function App() {
             {needsRepair && (
               <div className="card">
                 <p className="hint" style={{ marginTop: 0 }}>
-                  这台桌面不认识本设备了（可能已在该桌面端「撤销设备」，或手机端身份被重置）。需要重新配一次对。
+                  中继暂时不认本设备（常见于中继刚重启、桌面端还在补报令牌）。客户端会一直自动重连，
+                  回到前台也会立即重试；若持续很久仍连不上，才需要重新配一次对。
                 </p>
                 <button className="btn primary btn-with-icon" onClick={disconnect}>
                   <Refresh size={15} /> 重新配对

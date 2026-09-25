@@ -77,6 +77,8 @@ class MainActivity : ComponentActivity() {
      * resumed + 焦点是实时信号，任一侧丢失都算后台；回到前台两者都会恢复，不会卡死。
      */
     private fun syncForeground(reason: String) {
-        AppVisibility.set(resumed && focused, reason)
+        val next = resumed && focused
+        AppVisibility.set(next, reason)
+        container.foreground.value = next
     }
 }

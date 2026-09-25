@@ -79,6 +79,12 @@ fun MpiApp(container: AppContainer) {
     val state by viewModel.ui.collectAsState()
     var hostsOpen by remember { mutableStateOf(false) }
     val settings by container.settingsStore.settings.collectAsState()
+    // 回到前台就踢一次重连：长时间后台后连接已死，而自动重连按退避走（最长 30s）——
+    // 不等退避就能恢复，用户也就不会再觉得「必须把 App 完全关掉才连得上」。
+    val appForeground by container.foreground.collectAsState()
+    LaunchedEffect(appForeground) {
+        if (appForeground) viewModel.kickConnection()
+    }
     var settingsOpen by remember { mutableStateOf(false) }
     var diagnosticsOpen by remember { mutableStateOf(false) }
     var scanOpen by remember { mutableStateOf(false) }

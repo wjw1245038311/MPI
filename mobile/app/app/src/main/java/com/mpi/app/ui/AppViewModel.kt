@@ -1202,6 +1202,16 @@ class AppViewModel(
         session?.reauthenticate()
     }
 
+    /**
+     * 回到前台时踢一次重连（MpiApp 在前后台变化时调用）。
+     *
+     * 长时间后台后连接已死，而自动重连是按退避走的（最长 30s）——不等退避就能立刻恢复，
+     * 不用再「完全关掉 App」。
+     */
+    fun kickConnection() {
+        session?.kick()
+    }
+
     // ---- 内部 ----
 
     /**

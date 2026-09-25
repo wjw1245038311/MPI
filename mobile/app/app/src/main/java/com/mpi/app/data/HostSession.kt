@@ -100,6 +100,11 @@ class HostSession(
 
     /** 认证连续失败次数：网络抖动很常见，不能一次就判「需要重新配对」。 */
     private var authAttempts = 0
+    /**
+     * 被中继回 4001（拒绝认证）的**累计**次数——只用于「很久了要不要提醒重新配对」的提示，
+     * **不用作重试上限**（参见 [onClosed] 里 4001 分支的注释）。
+     */
+    private var authDeniedCount = 0
     private var stopped = false
 
     private val unsubscribeFrame = client.onFrame { raw -> handleFrame(raw) }
@@ -129,6 +134,22 @@ class HostSession(
             return
         }
         attempt = 0
+        client.connect()
+    }
+
+    /**
+     * 立刻重试一次（回到前台 / 网络恢复时由 UI 调用）。
+     *
+     * 为什么要它：后台长时间挂着时连接必然已经死了，而重试是**按退避**走的（最长 30s），
+     * 用户拿起来那一刻不一定刚好轮到——真机表现就是「必须把 App 完全关掉才恢复」。
+     * 这里重置退避并立即动手；socket 还开着（半死）就先关掉，让它走完整的重连 + 重认证。
+     */
+    fun kick() {
+        if (stopped) return
+        if (_state.value is SessionState.Connected) return
+        attempt = 0
+        reconnectJob?.cancel()
+        if (client.isOpen()) client.close()
         client.connect()
     }
 
@@ -272,16 +293,25 @@ class HostSession(
             // 这段窗口内 hello 会被拒（4001）——若一口咬定「必须重新配对」，
             // 用户就得白白重配一次。所以先当作**可恢复**的连接问题重试几次，
             // 超出上限才判定为终止性失败。
+            // 4001 = 中继暂时不认这个令牌。**永远当作可恢复的网络问题**，不判死。
+            //
+            // 代码里早就记着这个场景：中继重启后路由表为空，而主机 uplink 还在补报已存
+            // token——这段窗口里的 4001 是暂时的，判死会逼用户白白重配一次。
+            //
+            // 2026-09-25 真机事故（后端得改的就是它）：后台挂 20~30 分钟，网络路径断了，
+            // 期间产生几十次 Network 重试，把**共用的** attempt 顶到上限；等网络恢复，第一个
+            // 4001 就让 attempt > 3 直接判死 → 发消息永远报「连接未就绪」，只能完全关掉 App。
             RelayClient.CLOSE_AUTH_FAILED -> {
-                if (attempt < AUTH_RETRY_LIMIT && !stopped) {
-                    attempt++
-                    scheduleReconnectOrFail(
-                        SessionFailure.Network,
-                        "中继暂时拒绝认证（第 $attempt 次重试）",
-                    )
+                authDeniedCount++
+                val hint = if (authDeniedCount == AUTH_DENIED_HINT_AFTER) {
+                    "（已持续失败，若一直这样可在「设置 → 断开并移除本设备」后重新配对）"
                 } else {
-                    fail(SessionFailure.AuthFailed, "中继拒绝认证（令牌已失效，需要重新配对）")
+                    ""
                 }
+                scheduleReconnectOrFail(
+                    SessionFailure.Network,
+                    "中继暂时拒绝认证（第 $authDeniedCount 次，正在自动重试）$hint",
+                )
             }
 
             RelayClient.CLOSE_REVOKED -> fail(SessionFailure.Revoked, "桌面端已移除本设备")
@@ -317,21 +347,19 @@ class HostSession(
                 aesKey = result.aesKey
                 attempt = 0
                 authAttempts = 0
+                authDeniedCount = 0
                 _state.value = SessionState.Connected(record.hostId)
             } catch (e: PairingException) {
                 aesKey = null
                 if (stopped) return@launch
-                // 网络抖动（超时 / EOF）经常表现为 PairingException。一次失败就判「需要重新配对」
-                // 会让用户被迫手动重连（真机反馈「用着用着掉线」）——先当作可恢复问题重试。
+                // 认证失败基本是网络层的事（超时 / EOF / 中继刚重启），**一律当可恢复**：
+                // 判死会让用户被迫手动重连甚至重配——真机现象就是「后台久了一直连不上，
+                // 只能完全关掉 App」。权威的「别重试了」只有 4002 撤销 / 4006 被顶替（见 onClosed）。
                 authAttempts++
-                if (authAttempts >= AUTH_FAILURE_RETRY_LIMIT) {
-                    scheduleReconnectOrFail(SessionFailure.AuthFailed, e.message ?: "认证失败")
-                } else {
-                    scheduleReconnectOrFail(
-                        SessionFailure.Network,
-                        "认证失败，正在自动重试（第 $authAttempts 次）：${e.message ?: ""}".trim(),
-                    )
-                }
+                scheduleReconnectOrFail(
+                    SessionFailure.Network,
+                    "认证失败，正在自动重试（第 $authAttempts 次）：${e.message ?: ""}".trim(),
+                )
             }
         }
     }
@@ -349,7 +377,10 @@ class HostSession(
         attempt++
         reconnectJob = scope.launch {
             delay(delayMs)
-            if (!stopped && !client.isOpen()) client.connect()
+            if (stopped) return@launch
+            // 与 connect() 一致：socket 还开着（半死连接）就补一次认证，
+            // 否则 connect() 会被 isOpen() 挡掉、白跑一轮。
+            if (client.isOpen()) startAuthentication() else client.connect()
         }
     }
 
@@ -371,15 +402,12 @@ class HostSession(
         val DEFAULT_BACKOFF = listOf(1_000L, 2_000L, 5_000L, 10_000L, 30_000L)
 
         /**
-         * 认证被拒后的重试次数上限。
-         *
-         * 为什么需要：中继是无状态的（重启即丢路由表），而主机 uplink 重连后会补报已存
-         * token。这期间的 4001 是**暂时**的；直接判死会让用户无端重新配对。
-         * 也不能无上限重试——真的是令牌失效时，应当尽快让人看到「需要重新配对」。
+         * 4001 累计多少次后开始提醒「可能需要重新配对」（**不停止重试**）。
+         * 30s 封顶的退避下大约 = 十几分钟；只当建议，不当判死的依据。
          */
-        const val AUTH_RETRY_LIMIT = 3
+        private const val AUTH_DENIED_HINT_AFTER = 20
 
-        /** 认证请求连续失败多少次才认定为「令牌/密钥真的有问题」——需要重新配对。 */
+        /** 认证请求连续失败多少次才在文案里提一句「可能需要重新配对」（**不停止重试**）。 */
         const val AUTH_FAILURE_RETRY_LIMIT = 5
     }
 }
