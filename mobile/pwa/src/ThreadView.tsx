@@ -1110,11 +1110,16 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
           </>
         )}
         {/* 宽屏对话区宽度。放在工具条末尾：与权限/模式/模型同属「本会话的环境设置」。
-            手机端（<1024px）不受影响。 */}
+            文案带上「列宽」前缀——只写档位名（如「标准（默认）」）用户认不出这是什么（真机反馈）。 */}
         {columnPreset && (
-          <button type="button" className="cfg-chip" onClick={() => setSheet("width")} title="对话区宽度（仅宽屏生效）">
+          <button
+            type="button"
+            className="cfg-chip"
+            onClick={() => setSheet("width")}
+            title="对话区宽度（仅宽屏 ≥1024px 生效）"
+          >
             <IconWidth />
-            {COLUMN_PRESETS[columnPreset].label}
+            列宽 · {COLUMN_PRESETS[columnPreset].chip}
           </button>
         )}
       </div>

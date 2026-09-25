@@ -34,6 +34,8 @@ const {
   for (const id of COLUMN_PRESET_ORDER) {
     const spec = COLUMN_PRESETS[id];
     assert.ok(spec.label, `${id} 缺 label（面板要显示）`);
+    assert.ok(spec.chip, `${id} 缺 chip（工具条上的短文案）`);
+    assert.notEqual(spec.chip, spec.label, `${id}: chip 应是短文案，不应直接复用 label（真机上只写档位名会认不出是什么）`);
     assert.ok(spec.note, `${id} 缺 note（要把代价讲清）`);
     assert.ok(spec.colMax, `${id} 缺 colMax`);
     assert.ok(spec.colMargin !== undefined, `${id} 缺 colMargin`);

@@ -12,6 +12,8 @@ export type ColumnPreset = "narrow" | "standard" | "wide" | "full";
 
 export interface ColumnPresetSpec {
   label: string;
+  /** 工具条 chip 上的短文案（chip 很窄，用完整 label 会认不出来是干什么的）。 */
+  chip: string;
   /** 面板里的一句话说明（把代价讲清，别让用户猜）。 */
   note: string;
   /** 对话列最大宽度（CSS max-width 值）。 */
@@ -27,6 +29,7 @@ export const COLUMN_PRESET_ORDER: ColumnPreset[] = ["narrow", "standard", "wide"
 export const COLUMN_PRESETS: Record<ColumnPreset, ColumnPresetSpec> = {
   narrow: {
     label: "窄 · 900",
+    chip: "窄",
     note: "整列固定 900px 居中。正文与代码都很短，适合只看对话、旁边还要放别的窗口。",
     colMax: "900px",
     colMargin: "auto",
@@ -34,6 +37,7 @@ export const COLUMN_PRESETS: Record<ColumnPreset, ColumnPresetSpec> = {
   },
   standard: {
     label: "标准（默认）",
+    chip: "标准",
     note: "占主区 68%（900–1600px）居中，左右留白对称。正文限宽 1000，代码块吃满整列。",
     colMax: "max(900px, min(68%, 1600px))",
     colMargin: "auto",
@@ -41,6 +45,7 @@ export const COLUMN_PRESETS: Record<ColumnPreset, ColumnPresetSpec> = {
   },
   wide: {
     label: "宽 · 85%",
+    chip: "宽",
     note: "占主区 85%（1000–1900px）居中。留白更少，代码块与工具输出更宽。",
     colMax: "max(1000px, min(85%, 1900px))",
     colMargin: "auto",
@@ -48,6 +53,7 @@ export const COLUMN_PRESETS: Record<ColumnPreset, ColumnPresetSpec> = {
   },
   full: {
     label: "拉满 · 无留白",
+    chip: "拉满",
     note: "占满主区、不留白。正文也不再限宽——4K 下一行会很长（约 200 字符），只建议以代码/工具输出为主的会话。",
     colMax: "100%",
     colMargin: "0",
