@@ -119,7 +119,8 @@ internal fun rememberNodePanelState(panelWidth: Dp): NodePanelState {
 /**
  * 右边缘左划 → 跟手拉出节点面板（对齐系统「边缘返回」那种手感：边缘起手、跟手、无把手）。
  *
- * 只消费**横向**拖拽：起手不在右边缘、或方向真是纵向的，一律不碰（交给列表滚动）。
+ * 只消费**横向**拖拽：起手不在右边缘、或方向真是纵向的、或别人已经在处理这次手势，
+ * 一律不碰（交给列表滚动 / 别人）。
  *
  * ⚠️ 方向判定必须「横向松、纵向严」（2026-09-26 真机反复反馈「面板根本划不出来」）：
  * 手指从最右边缘往中间划时**天然带纵向分量**，只要要求「横向必须先过 touchSlop 且大于纵向」，
@@ -138,19 +139,27 @@ internal fun Modifier.edgeSwipeNodePanel(
         val horizontalTrigger = touchSlop * 0.6f
         val verticalGiveUp = touchSlop * 2f
         awaitEachGesture {
-            // ⚠️ 必须在 **Initial 阶段**拿事件并在拖动时 consume：
-            // 外层是 Material 的 ModalNavigationDrawer，它的拖拽在 Main 阶段且**不区分方向**
-            // （左拖也会把左侧会话列表拉出来 ✗ 真机反馈「左右划都弹左侧面板」）。
-            // Initial 是「根→叶」，比 Main 先跑，在这里消费掉，抽屉就看不到这次拖动了。
-            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            // ⚠️ 必须用 **Main 阶段**，而不是 Initial（这里踩过两次坑，别再改回去）：
+            //   · Main 的派发顺序是「叶 → 根」：本节点挂在消息区 Box 上，位于 LazyColumn 之上、
+            //     Material 的 ModalNavigationDrawer 之下——顺序是「LazyColumn → 我们 → 抽屉」。
+            //   · 纵向滚动：LazyColumn 先消费 → 我们检测到 consumed 立即退出（列表照旧能滚）；
+            //   · 横向拖拽：LazyColumn 不碰 → 我们消费 → 抽屉（更靠根）在 Main 阶段看到
+            //     consumed，不会再抢走（真机反馈「左划弹出来的是左侧会话列表」就是它抢的）。
+            //   · Initial 是「根 → 叶」，抽屉那头先跑——实测抢不过它（e49f4c5 当时改成 Initial
+            //     是走错了方向）。
+            // down 也用 requireUnconsumed = false：真正决定「要不要插手」的是下面每一帧的
+            // change.isConsumed 检查，不依赖 down 此刻是否已被消费（某些子节点会在按下时就消费）。
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
             if (down.position.x < size.width - edgePx) return@awaitEachGesture
             val tracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
             var total = 0f
             var dragging = false
             while (true) {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val event = awaitPointerEvent(PointerEventPass.Main)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
+                // 别人（LazyColumn 滚动、按钮点击）已经在处理这次手势：不插手
+                if (!dragging && change.isConsumed) break
                 tracker.addPosition(change.uptimeMillis, change.position)
                 val dx = change.position.x - down.position.x
                 val dy = change.position.y - down.position.y
