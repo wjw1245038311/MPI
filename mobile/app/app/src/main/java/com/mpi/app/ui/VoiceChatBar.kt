@@ -3,7 +3,6 @@ package com.mpi.app.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,7 +11,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -25,16 +23,15 @@ import com.mpi.app.ui.theme.MpiTheme
  * 语音对话模式的状态条（贴在输入条上方，**不盖消息区**）。
  *
  * 为什么不做全屏浮层：语音模式下更该看到**对话本身**（消息气泡、流式回复）——千问手机版
- * 也是这样：语音只是输入/输出的方式，对话仍然是主体。全屏浮层把消息盖住，反而看不到
- * 它正在说什么、说到哪了。
+ * 也是这样：语音只是输入方式，对话才是主体。全屏浮层把消息盖住，反而看不到它说到哪了。
  *
- * 阶段 1 是半双工（播报时麦克风关着），所以这里没有「说话打断」入口，只有状态 + 结束。
+ * 这里**不放退出按钮**：开关就是输入条上那个话筒——语音模式开着时它已换成声波图标，
+ * 点它退出（用户确定的口径：不要额外的 X）。
  */
 @Composable
 fun VoiceChatBar(
     state: VoiceChatState,
     lastText: String?,
-    onStop: () -> Unit,
 ) {
     val listening = state == VoiceChatState.Listening
     Row(
@@ -74,12 +71,12 @@ fun VoiceChatBar(
                 )
             }
         }
-        TextButton(
-            onClick = onStop,
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-        ) {
-            Text("结束", style = MaterialTheme.typography.labelMedium)
-        }
+        // 纯提示文字（不是按钮）：开关就是左边那颗话筒，图标已换成声波
+        Text(
+            text = "点话筒结束",
+            style = MaterialTheme.typography.labelSmall,
+            color = MpiTheme.colors.textFaint,
+        )
     }
 }
 

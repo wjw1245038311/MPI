@@ -315,7 +315,7 @@ fun ThreadScreen(
         // 语音模式：状态条贴在输入条上方，**消息区照旧可见**（不做全屏浮层，
         // 否则把对话盖住了——语音只是输入方式，对话才是主体）
         voiceChat?.let { state ->
-            VoiceChatBar(state = state, lastText = voiceChatText, onStop = onStopVoiceChat)
+            VoiceChatBar(state = state, lastText = voiceChatText)
         }
 
         Composer(
@@ -340,6 +340,8 @@ fun ThreadScreen(
             onStartVoiceChat = onStartVoiceChat,
             onVoicePermissionDenied = onVoicePermissionDenied,
             onDismissVoiceError = onDismissVoiceError,
+            voiceChatActive = voiceChat != null,
+            onStopVoiceChat = onStopVoiceChat,
             pendingFollowUp = pendingFollowUp,
             sendError = sendError,
             sendNote = sendNote,
@@ -401,6 +403,8 @@ private fun Composer(
     onStartVoiceChat: () -> Unit,
     onVoicePermissionDenied: () -> Unit,
     onDismissVoiceError: () -> Unit,
+    voiceChatActive: Boolean,
+    onStopVoiceChat: () -> Unit,
     pendingFollowUp: String?,
     sendError: String?,
     /** 主机回退成排队时的说明（非错误）。 */
@@ -653,6 +657,13 @@ private fun Composer(
                 }
 
                 when {
+                    // 语音模式开着：这颗钮就是开关（图标已换成声波，点一下退出）
+                    voiceChatActive -> {
+                        RoundIconButton(onClick = onStopVoiceChat, background = MpiTheme.colors.accentSoft) {
+                            Icon(IconVoiceChat, contentDescription = "语音对话中（点一下结束）", tint = MpiTheme.colors.send, modifier = Modifier.size(17.dp))
+                        }
+                    }
+
                     transcribing -> {
                         RoundIconButton(onClick = {}, enabled = false, background = MpiTheme.colors.control) {
                             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)

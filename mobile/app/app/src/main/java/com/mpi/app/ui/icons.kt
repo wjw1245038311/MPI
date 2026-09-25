@@ -165,6 +165,20 @@ val IconMic: ImageVector by lazy {
 
 // ---- 设置页分组图标（沿用 24 viewBox / stroke 1.7 / 圆头）----
 
+/**
+ * 即时语音（声波）：语音对话模式开着时替掉话筒图标——一眼看出「现在是连续对话模式」，
+ * 点它退出。
+ */
+val IconVoiceChat: ImageVector by lazy {
+    strokeIcon("VoiceChat") {
+        moveTo(4f, 10f); lineTo(4f, 14f)
+        moveTo(8f, 7f); lineTo(8f, 17f)
+        moveTo(12f, 4.5f); lineTo(12f, 19.5f)
+        moveTo(16f, 7f); lineTo(16f, 17f)
+        moveTo(20f, 10f); lineTo(20f, 14f)
+    }
+}
+
 /** 通知。 */
 val IconBell: ImageVector by lazy {
     strokeIcon("Bell") {
