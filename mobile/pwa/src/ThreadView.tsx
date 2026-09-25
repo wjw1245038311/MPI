@@ -603,9 +603,12 @@ export interface ThreadViewProps {
   /** 乐观回显：本地立刻上屏用户消息，返回本地占位 id（用于失败回滚）。 */
   onEcho?: (input: { text: string; images?: { data: string; mimeType: string }[]; fileCount?: number }) => string;
   onEchoDrop?: (id: string) => void;
+  /** 发送前的兜底：保证会话订阅还在（重连后主机按 connectionId 清过订阅，漏补的话
+   * 主机会把本次回合的所有事件静默丢弃）。已订阅时零往返；出错不阻断发送。 */
+  onEnsureSubscribed?: () => Promise<void>;
 }
 
-export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop }: ThreadViewProps) {
+export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop, onEnsureSubscribed }: ThreadViewProps) {
   const pendingUi = view.pendingUi;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -717,6 +720,10 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     setSending(true);
     setAtBottom(true); // 回显的消息要立刻可见（自动滚底 effect 会跟着 messages 变化跑）
     try {
+      // 兜底：重连后可能漏掉订阅（主机按 connectionId 记订阅，断了就没了），
+      // 那样主机会把本次回合的**所有**事件静默丢弃（diag: remote-pub … subs=0）。
+      // 已订阅时是纯本地判断、零往返；失败也不阻断发送。
+      await onEnsureSubscribed?.().catch(() => { /* 兜底失败不阻断发送 */ });
       await actions.send(
         text,
         mode,

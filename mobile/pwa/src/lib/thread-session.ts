@@ -8,7 +8,10 @@
  *     the listener BEFORE fetching the snapshot, so those frames are lossless);
  *   - applies a simplified streaming reducer (text/thinking deltas, tool blocks,
  *     message_end finalization) — history rendering comes from snapshot blocks;
- *   - detects seq gaps and socket drops → thread.resync (live snapshot).
+ *   - detects seq gaps and socket drops → thread.resync (live snapshot);
+ *   - **重连后重新注册订阅**：主机按 connectionId 记订阅，断线即清，而 thread.resync
+ *     只拉快照不注册——只 resync 会让之后所有实时事件被主机静默丢弃（见
+ *     ensureSubscribedLocked 的注释）。
  * Pure logic — node-testable against a real relay + fake host service.
  */
 import type {
@@ -133,6 +136,15 @@ export class ThreadSession {
   /** ui.request ids already answered — duplicate pushes must not re-pop the card. */
   private readonly respondedUiIds = new Set<string>();
   private openCount = 0;
+  /** open() 是否已完成首次订阅。之前的“重连”判定靠 openCount>1，但 session 可能是
+   * 在 client 已经 open 之后才创建的（配对完成后才 new ThreadSession），那时**第一个
+   * 观测到的 open 已经是重连**，会被 openCount<=1 误当成首次而跳过失效——真实事故就是
+   * 这么漏的。改用这个标志：open() 前不插手，open() 后每一次 open 都是重连。 */
+  private opened = false;
+  /** 当前连接在主机侧是否已注册订阅。断线后主机按 connectionId 清掉它 → 必须置 false。 */
+  private subscribed = false;
+  /** 进行中的订阅补齐 / 重同步：重连回调会连着来好几次，复用同一次，避免重复拉全量快照。 */
+  private syncInFlight: Promise<void> | null = null;
   private closing = false;
   /** 乐观回显计数（local-<n>）。 */
   private echoSeq = 0;
@@ -155,9 +167,16 @@ export class ThreadSession {
     this.detachState = client.onState((state) => {
       if (state !== "open" || this.closing) return;
       this.openCount += 1;
-      // The first open is covered by the explicit open(); later opens mean a
-      // reconnect — events were lost, so resync from the live snapshot.
-      if (this.openCount > 1 && this.view.ready) void this.resync().catch(() => { /* surfaced via UI error state */ });
+      // open() 完成前的 open 由 open() 自己负责（它 await whenReady 后订阅），不插手，
+      // 否则会和首次订阅撞车。
+      if (!this.opened) return;
+      // 每次“变为 open”都当作一次重连：主机按 connectionId 记订阅，任何重连后旧订阅
+      // 都已失效，**必须重注册**。否则 resync 只拿回快照、订阅始终是空的，之后所有
+      // 实时事件都被主机静默丢弃（diag 里就是 `remote-pub … subs=0`），真机症状是
+      // 气泡卡在「发送中」、整条回复连同提问一起晚到。resync 内部会在未订阅时自动
+      // 走 thread.subscribe。
+      this.invalidateSubscription();
+      void this.resync().catch(() => { /* surfaced via UI error state */ });
     });
   }
 
@@ -178,13 +197,71 @@ export class ThreadSession {
     // handshake to finish, otherwise the first subscribe dies with
     // "connection not ready" and there is no retry (S8 acceptance ③).
     await this.client.whenReady();
+    await this.ensureSubscribedLocked();
+    this.opened = true;
+  }
+
+  /**
+   * 保证当前连接已在主机侧注册订阅（幂等；已订阅时零往返）。
+   *
+   * 主机按 **connectionId** 记订阅，连接断开时会被清掉（service.ts 的 disconnect()），
+   * 而 `thread.resync` **只拉快照、不注册订阅**。所以重连后只 resync 的话，之后所有
+   * 实时事件都会被主机静默丢弃——diag 里的指纹是 `remote-pub … subs=0`，真机症状是
+   * 「气泡卡发送中 / 整条消息包括回复一起晚到 / 看着像一直在加载」。
+   *
+   * 用 `thread.subscribe` 补而不是另发一个请求：它的响应**本身就带回最新快照**，
+   * 既注册又拿数据，省一次往返（与原生端 ThreadSession.kt 的同一取舍）。
+   */
+  private async ensureSubscribedLocked(): Promise<void> {
+    if (this.subscribed) return;
     const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.subscribe", { threadId: this.view.threadId }, "subscribe", SNAPSHOT_TIMEOUT_MS);
     if (!payload?.snapshot) throw new Error("thread.subscribe returned no snapshot");
+    // 先置位再应用快照：applySnapshot 会 flush 缓冲事件，那一刻起已算已订阅。
+    this.subscribed = true;
     this.applySnapshot(payload.snapshot);
   }
 
-  /** Re-fetch the live snapshot (gap detected or socket recovered). */
+  /** 重连后调用：新连接在主机侧没有订阅，标记失效，让下一次 [resync] /
+   * [ensureSubscribed] 重新注册（原生端 invalidateSubscription 的等价物）。 */
+  invalidateSubscription(): void {
+    this.subscribed = false;
+  }
+
+  /** 发送路径的兜底：正在对话时保证订阅在（已订阅时是纯本地判断，零往返）。
+   * 失败**不抛出**——订阅丢了不该让用户发不出消息，真实错误由发送本身暴露。 */
+  async ensureSubscribed(): Promise<void> {
+    if (this.closing) return;
+    try {
+      await this.ensureSubscribedLocked();
+    } catch { /* 兜底失败不阻断发送 */ }
+  }
+
+  /** Re-fetch the live snapshot (gap detected or socket recovered).
+   * 并发调用复用同一次同步：重连回调会连着来好几次。 */
   async resync(): Promise<void> {
+    if (this.syncInFlight) return this.syncInFlight;
+    this.syncInFlight = (async () => {
+      try {
+        await this.runSync();
+      } finally {
+        this.syncInFlight = null;
+      }
+    })();
+    return this.syncInFlight;
+  }
+
+  private async runSync(): Promise<void> {
+    // 未订阅（重连后的新连接）：直接走订阅——它带回的快照就是最新的，既不漏注册
+    // 又省一次往返。此时**不动 ready**，避免消息区无谓地闪一下「加载中」。
+    if (!this.subscribed) {
+      try {
+        await this.ensureSubscribedLocked();
+        return;
+      } catch (error) {
+        this.patch({ ready: true, errorBanner: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+    }
     // Buffer incoming events until the fresh snapshot lands.
     this.patch({ ready: false });
     try {

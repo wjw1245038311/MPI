@@ -790,6 +790,8 @@ export default function App() {
             // 乐观回显：点发送立刻上屏（不等主机往返，真机反馈过 5-6s 延迟）
             onEcho={(input) => threadSessionRef.current?.echoUser(input) ?? ""}
             onEchoDrop={(id) => threadSessionRef.current?.dropEcho(id)}
+            // 发送兜底：重连后主机按 connectionId 清过订阅，漏补的话事件全被丢弃。
+            onEnsureSubscribed={() => threadSessionRef.current?.ensureSubscribed() ?? Promise.resolve()}
           />
         ) : view === "home" && hostId ? (
           <div className="chat-empty">

@@ -5,7 +5,7 @@
  * Covers: subscribe-response snapshot, pre-snapshot event buffering (lossless),
  * streaming reducer (text accumulation, tool block running→done, message_end
  * finalization), seq-gap → resync, and mid-stream socket drop → reconnect +
- * reauth + resync without duplicates or loss.
+ * reauth + **重新订阅** without duplicates or loss.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -72,6 +72,7 @@ async function main() {
     const THREAD_ID = "thread-abc";
     let seqCounter = 0;
     let resyncCount = 0;
+    let subscribeCount = 0;
     /** When armed, the next thread.poke emits an event with a skipped seq (gap). */
     let gapArmed = false;
     const snapshotMessages = [
@@ -103,6 +104,7 @@ async function main() {
           }
           if (request.type === "thread.subscribe" || request.type === "thread.resync") {
             if (request.type === "thread.resync") resyncCount += 1;
+            if (request.type === "thread.subscribe") subscribeCount += 1;
             // Simulate the host's real ordering: listener registered first, snapshot
             // fetched after — so these events are published BEFORE the response.
             const sendEvent = (kind, data) => ctx.send(makeEnvelope("thread.event", request.sessionId, { kind, data }, { threadId: THREAD_ID, seq: ++seqCounter }));
@@ -235,23 +237,29 @@ async function main() {
     await waitFor(() => resyncCount > beforeGap, "gap detected → thread.resync requested");
     await waitFor(() => ts.getSnapshot().ready && ts.getSnapshot().messages.length === 2, "resync snapshot replaces state");
 
-    // --- mid-stream drop: reconnect + reauth + resync --------------------------------------
-    const beforeDrop = resyncCount;
+    // --- mid-stream drop: reconnect + reauth + **重新订阅** --------------------------------
+    // 曾经的 bug（PWA 独有，原生端已修但未移植）：主机按 connectionId 记订阅，断线即清；
+    // 客户端重连后只发 `thread.resync`——而它**只拉快照、不注册订阅**，于是之后所有实时
+    // 事件都被主机静默丢弃（diag 指纹 `remote-pub … subs=0`，真机表现为「气泡卡发送中 /
+    // 整条消息包括回复一起晚到）。所以重连后必须重新 `thread.subscribe`。
+    const beforeDropSub = subscribeCount;
     client.simulateDrop();
     await waitFor(
-      () => {
-        const v = ts.getSnapshot();
-        return v.ready && resyncCount > beforeDrop;
-      },
-      "reconnect + reauth + resync restores the thread view",
+      () => subscribeCount > beforeDropSub,
+      "重连后重新注册订阅（thread.subscribe，而不是只发 thread.resync）",
+      15_000,
+    );
+    await waitFor(() => ts.getSnapshot().ready, "重连后视图恢复");
+    // 实时投递的硬证据：预设的实时回合（快照之后发的，即订阅已生效之后）必须到达。
+    // 旧实现只 resync 的话这一步会超时——因为主机根本不会把事件发给它。
+    await waitFor(
+      () => ts.getSnapshot().messages.some((m) => m.role === "assistant" && m.blocks.some((b) => b.text === "Hello!")),
+      "重连后实时事件恢复投递（证明订阅真的注册上了）",
       15_000,
     );
     view = ts.getSnapshot();
-    assert.deepEqual(
-      view.messages.map((m) => m.role),
-      ["user", "assistant"],
-      "post-drop state is a clean snapshot — no duplicates from the lost stream tail",
-    );
+    const historyIds = view.messages.filter((m) => m.id === "m1" || m.id === "m2").map((m) => m.id);
+    assert.deepEqual(historyIds, ["m1", "m2"], "重连后的快照历史不重复（无重连丢流尾巴的重复）");
 
     // --- S8.7 regression: idle thread — snapshot must notify without any events -------
     {
