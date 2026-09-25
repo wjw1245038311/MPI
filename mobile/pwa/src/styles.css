@@ -25,6 +25,14 @@
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
   --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, "Liberation Mono", monospace;
 
+  /* ---- 宽屏对话区宽度（≥1024px 生效；预设由 App 内联写到 .app 上）----
+     默认「标准」：占主区 68%、居中（左右留白**对称**）。可在会话内改：
+     ThreadView 工具栏的「列宽」→ 窄 / 标准 / 宽 / 拉满。见 lib/column-preset.ts。
+     这里是兜底值（内联变量缺失时也能正确渲染）。 */
+  --thread-col-max: max(900px, min(68%, 1600px));
+  --thread-col-margin: auto;
+  --thread-prose-max: 1000px;
+
   /* 兼容早期 PWA 样式里用的旧名字（勿在新代码里使用） */
   --panel: var(--surface);
   --muted: var(--text-dim);
@@ -763,24 +771,22 @@ button:disabled { opacity: 0.5; cursor: default; }
     padding: 0 24px 16px;
     min-height: 0;
   }
-  /* 对话列：**靠左**，占主区 68%，两端兜底。
-     为什么靠左而不是居中：居中会在**侧栏与对话列之间**空出一大片（2560 视口下约 368px），
-     真机看着就是「对话区旁边一大块空地」。靠左后这块空隙消失，剩余空间都落在屏幕右边缘。
-     上限不是写死像素而是比例（68%）+ 两端 clamp：
-       · 下限 900：窄屏（1024 下主区约 710）时被 width:100% 接管，填满主区
-       · 上限 1600：4K@100%（主区 3432）封顶，不至把正文拉成一行 200 字符
-     实测：主区 710 → 710（填满）｜1080 → 900｜2200 → 1463｜3480 → 1600 */
+  /* 对话列：宽度与对齐全部由 CSS 变量决定（见 :root —— 预设可在会话内切换）。
+     默认居中 → 左右留白对称；「拉满」预设把 margin 置 0 → 贴左、无留白。
+     正文上限也走变量：拉满档为 none（不限宽），其余档限制约 1000–1100。
+     `max(900px, min(68%, 1600px))`：比例为主，两端兜底——
+       主区 710 → 710（width:100% 接管，填满）｜1080 → 900｜2200 → 1463｜3480 → 1600 */
   .thread-view,
   .app-main > .card,
   .app-main > .chat-empty {
     width: 100%;
-    max-width: max(900px, min(68%, 1600px));
+    max-width: var(--thread-col-max);
+    margin-inline: var(--thread-col-margin);
   }
 
-  /* 只有「正文」需要固定的可读上限（约 80–100 字符/行）——它**不跟着屏宽放大**，
-     这是生理限制，不是布局问题。代码块 / 工具输出不受此限，吃满对话列。 */
+  /* 正文的可读上限（约 80–110 字符/行）；代码块 / 工具输出不受此限，吃满对话列。 */
   .msg-text,
-  .msg-thinking pre { max-width: 1000px; }
+  .msg-thinking pre { max-width: var(--thread-prose-max); }
   /* 用户气泡原为 max-width: 85%（相对列宽）——列宽后 85% 会太大，加个绝对上限。 */
   .message.user { max-width: min(85%, 900px); }
 

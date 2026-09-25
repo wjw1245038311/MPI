@@ -14,6 +14,7 @@ import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
 import { withChoiceSegments } from "./lib/choice-block";
 import { ChoicePanel } from "./components/ChoicePanel";
+import { COLUMN_PRESETS, COLUMN_PRESET_ORDER, type ColumnPreset } from "./lib/column-preset";
 import { groupToolBlocks, type ToolGroup } from "./lib/tool-groups";
 import { formatTokens, readContextUsage } from "./lib/context-usage";
 
@@ -113,6 +114,14 @@ function IconX() {
 }
 
 /** 配置栏用：权限（锁）与模型（方框）。 */
+function IconWidth() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4" />
+    </svg>
+  );
+}
+
 function IconLock() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
@@ -615,9 +624,12 @@ export interface ThreadViewProps {
   /** 发送前的兜底：保证会话订阅还在（重连后主机按 connectionId 清过订阅，漏补的话
    * 主机会把本次回合的所有事件静默丢弃）。已订阅时零往返；出错不阻断发送。 */
   onEnsureSubscribed?: () => Promise<void>;
+  /** 宽屏对话区宽度预设（工具条「列宽」面板）。 */
+  columnPreset?: ColumnPreset;
+  onColumnPreset?: (next: ColumnPreset) => void;
 }
 
-export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop, onEnsureSubscribed }: ThreadViewProps) {
+export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop, onEnsureSubscribed, columnPreset, onColumnPreset }: ThreadViewProps) {
   const pendingUi = view.pendingUi;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -631,7 +643,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
    *  注意：组件级状态，切走会话再回来会丢（v1 限制）。 */
   const [pendingFu, setPendingFu] = useState<{ text: string; images: CompressedImage[]; files: PickedFile[] } | null>(null);
   // 顶部配置抽屉（权限/模式/模型）与瞬时提示。
-  const [sheet, setSheet] = useState<null | "permission" | "mode" | "model" | "ctx">(null);
+  const [sheet, setSheet] = useState<null | "permission" | "mode" | "model" | "ctx" | "width">(null);
   const [toast, setToast] = useState<string | null>(null);
   const [modelBusy, setModelBusy] = useState(false);
 
@@ -1097,6 +1109,14 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
             )}
           </>
         )}
+        {/* 宽屏对话区宽度。放在工具条末尾：与权限/模式/模型同属「本会话的环境设置」。
+            手机端（<1024px）不受影响。 */}
+        {columnPreset && (
+          <button type="button" className="cfg-chip" onClick={() => setSheet("width")} title="对话区宽度（仅宽屏生效）">
+            <IconWidth />
+            {COLUMN_PRESETS[columnPreset].label}
+          </button>
+        )}
       </div>
 
       {/* 内容来自本地缓存时的提示（对齐原生 ThreadScreen「离线：显示本地缓存…」）：
@@ -1347,6 +1367,27 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                   </span>
                   {view.compacting ? <span className="spinner" /> : null}
                 </button>
+              </>
+            ) : sheet === "width" ? (
+              <>
+                <div className="sheet-title">对话区宽度</div>
+                <p className="sheet-note">
+                  只影响宽屏（≥1024px）；手机端不受影响。默认「标准」——左右留白对称。
+                </p>
+                <div className="sheet-list">
+                  {COLUMN_PRESET_ORDER.map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`sheet-item${columnPreset === id ? " on" : ""}`}
+                      onClick={() => onColumnPreset?.(id)}
+                    >
+                      <span className="sheet-item-main">{COLUMN_PRESETS[id].label}</span>
+                      {columnPreset === id && <em className="sheet-tag">当前</em>}
+                    </button>
+                  ))}
+                </div>
+                {columnPreset && <p className="sheet-note">{COLUMN_PRESETS[columnPreset].note}</p>}
               </>
             ) : sheet === "permission" ? (
               <>

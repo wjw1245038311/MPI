@@ -6,7 +6,7 @@
  * → projects → threads with state badges; data flows through HostSession over the
  * E2E-encrypted channel, polling while any thread is running.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { RemoteThreadSnapshot, RemoteThreadState } from "../../shared/protocol";
 import ThreadView from "./ThreadView";
 import { Check, ChevronRight, Close, Phone, Plus, Refresh } from "./components/icons";
@@ -21,6 +21,7 @@ import { Requester } from "./lib/requester";
 import { ThreadActions } from "./lib/thread-actions";
 import { ThreadSession, type ThreadView as ThreadViewState } from "./lib/thread-session";
 import { SnapshotCache } from "./lib/snapshot-cache";
+import { columnCssVars, DEFAULT_COLUMN_PRESET, readColumnPreset, writeColumnPreset, type ColumnPreset } from "./lib/column-preset";
 import { ThreadCache } from "./lib/thread-cache";
 import { IdbStore } from "./lib/thread-cache-idb";
 import { ensureBrowserPush } from "./lib/webpush";
@@ -281,6 +282,12 @@ export default function App() {
 
   // P5-3：壳内推送提示（WebView 没有 PushManager）——按 hostId 记住，关过就不再弹。
   const [pushHintDismissed, setPushHintDismissed] = useState(false);
+  /** 宽屏对话区宽度偏好（会话内可切换，记在本地）。默认「标准」= 居中、左右留白对称。 */
+  const [columnPreset, setColumnPreset] = useState<ColumnPreset>(readColumnPreset);
+  const changeColumnPreset = (next: ColumnPreset) => {
+    setColumnPreset(next);
+    writeColumnPreset(next);
+  };
   useEffect(() => {
     if (!hostId) return;
     try {
@@ -830,7 +837,7 @@ export default function App() {
     /* thread-open：会话视图必须是**确定高度**（100dvh）且不整体滚动，
        否则长对话会把输入框顶到屏幕外（"标题和输入框不能共存"）。
        列表页仍用 min-height + 整页滚动。 */
-    <div className={`app${view === "home" && openThreadId ? " thread-open" : ""}`}>
+    <div className={`app${view === "home" && openThreadId ? " thread-open" : ""}`} style={columnCssVars(columnPreset) as CSSProperties}>
       <UpdatePill />
       <header className="app-header">
         <button
@@ -877,6 +884,9 @@ export default function App() {
             onEchoDrop={(id) => threadSessionRef.current?.dropEcho(id)}
             // 发送兜底：重连后主机按 connectionId 清过订阅，漏补的话事件全被丢弃。
             onEnsureSubscribed={() => threadSessionRef.current?.ensureSubscribed() ?? Promise.resolve()}
+            // 宽屏对话区宽度（工具条上的「列宽」面板）
+            columnPreset={columnPreset}
+            onColumnPreset={changeColumnPreset}
           />
         ) : view === "home" && hostId ? (
           <div className="chat-empty">

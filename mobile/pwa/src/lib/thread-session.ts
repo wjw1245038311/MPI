@@ -156,6 +156,15 @@ export class ThreadSession {
   private subscribed = false;
   /** 进行中的订阅补齐 / 重同步：重连回调会连着来好几次，复用同一次，避免重复拉全量快照。 */
   private syncInFlight: Promise<void> | null = null;
+  /**
+   * 正在等 subscribe / resync 的**响应**。期间的帧先缓冲，快照落地后再按序重放。
+   *
+   * ⚠️ 不能用 `view.ready` 代替：缓存播种（applyCachedSnapshot）会把 ready 置 true，
+   * 但那时订阅响应还没到；而帧的解密是**异步**的——快照帧大、解密慢，小的事件帧会先到，
+   * 于是被立即应用、随后又被快照覆盖丢弃。若这些事件不在快照里（快照产生之后才发生的），
+   * 内容就真的丢了。测试用「播种后仍能收到实时回合」把这个竞态抓了出来。
+   */
+  private awaitingSnapshot = false;
   private closing = false;
   /** 乐观回显计数（local-<n>）。 */
   private echoSeq = 0;
@@ -228,11 +237,17 @@ export class ThreadSession {
    */
   private async ensureSubscribedLocked(): Promise<void> {
     if (this.subscribed) return;
-    const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.subscribe", { threadId: this.view.threadId }, "subscribe", SNAPSHOT_TIMEOUT_MS);
-    if (!payload?.snapshot) throw new Error("thread.subscribe returned no snapshot");
-    // 先置位再应用快照：applySnapshot 会 flush 缓冲事件，那一刻起已算已订阅。
-    this.subscribed = true;
-    this.applySnapshot(payload.snapshot);
+    this.awaitingSnapshot = true;
+    try {
+      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.subscribe", { threadId: this.view.threadId }, "subscribe", SNAPSHOT_TIMEOUT_MS);
+      if (!payload?.snapshot) throw new Error("thread.subscribe returned no snapshot");
+      // 先置位再应用快照：applySnapshot 会 flush 缓冲事件，那一刻起已算已订阅。
+      this.subscribed = true;
+      this.applySnapshot(payload.snapshot); // 内部会解除 awaitingSnapshot 并重放缓冲
+    } catch (error) {
+      this.awaitingSnapshot = false;
+      throw error;
+    }
   }
 
   /** 重连后调用：新连接在主机侧没有订阅，标记失效，让下一次 [resync] /
@@ -277,12 +292,14 @@ export class ThreadSession {
       }
     }
     // Buffer incoming events until the fresh snapshot lands.
+    this.awaitingSnapshot = true;
     this.patch({ ready: false });
     try {
       const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.resync", { threadId: this.view.threadId }, "resync", SNAPSHOT_TIMEOUT_MS);
       if (!payload?.snapshot) throw new Error("thread.resync returned no snapshot");
       this.applySnapshot(payload.snapshot);
     } catch (error) {
+      this.awaitingSnapshot = false;
       // Keep the stale view visible instead of a blank screen; the next
       // reconnect/reauth cycle retries.
       this.patch({ ready: true, errorBanner: error instanceof Error ? error.message : String(error) });
@@ -347,7 +364,7 @@ export class ThreadSession {
 
     // Before the snapshot lands, buffer — the host registered our listener before
     // fetching the snapshot, so these frames are lossless and ordered.
-    if (!this.view.ready) {
+    if (this.awaitingSnapshot || !this.view.ready) {
       this.pendingEvents.push({ seq, payload });
       return;
     }
@@ -416,6 +433,8 @@ export class ThreadSession {
       cachedAt,
       pendingUi: this.view.pendingUi, // a pending approval survives the resync
     });
+    // 快照已落地：解除「等快照期间先缓冲」，再按序重放缓冲帧（它们可能不在快照里）。
+    this.awaitingSnapshot = false;
     // Re-arm seq tracking: the fresh snapshot makes subsequent events lossless on
     // this socket, so the first live event after it sets the baseline.
     this.expectNext = null;

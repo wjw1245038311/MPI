@@ -322,6 +322,10 @@ async function main() {
     }
 
     // --- P1 Tier 1：本地缓存播种（切回来先出内容，不再白屏「加载会话…」） --------------
+    // 先把主 session 摘掉：生产里同一会话不会有两个 ThreadSession 并存（openThread 切换时
+    // 会 detach 上一个），而测试的假 host 用**全局 seq 计数器**，两个 session 同订一个会话
+    // 会互相干扰、让本块变成抖动源。
+    ts.detach();
     {
       const cache = new SnapshotCache(5);
       const seen = [];
@@ -333,28 +337,42 @@ async function main() {
         },
       });
 
-      // 模拟「上次看过的快照」：open() 之前先把它铺上。
-      const cachedPayload = makeSnapshot("idle");
+      // 种子快照里故意带一个「运行中」的工具块：它既能证明播种内容被渲染，又能用下面
+      // 那个**不依赖竞态**的判据验证「播种后的会话仍处理实时事件」。
       const savedAt = Date.now() - 5 * 60_000;
-      tsCached.applyCachedSnapshot(cachedPayload, savedAt);
+      tsCached.applyCachedSnapshot(
+        {
+          ...makeSnapshot("idle"),
+          messages: [
+            { id: "m1", role: "user", text: "old question" },
+            { id: "m2", role: "assistant", blocks: [{ type: "tool", id: "t-old", name: "bash", running: true }] },
+          ],
+        },
+        savedAt,
+      );
 
       let seeded = tsCached.getSnapshot();
       assert.equal(seeded.ready, true, "缓存播种后立即可渲染（不必等网络往返）");
       assert.equal(seeded.cachedAt, savedAt, "cachedAt 记录缓存时间（UI 靠它显示「本地缓存（x 分钟前）」）");
       assert.deepEqual(seeded.messages.map((m) => m.id), ["m1", "m2"], "缓存快照的历史被渲染出来");
+      assert.equal(seeded.messages[1].blocks[0].running, true, "种子里的运行中工具块被渲染");
       assert.equal(seen.length, 0, "播种不触发 onSnapshot——否则会把缓存自己写回去并刷掉真实 savedAt");
+
+      // 播种后的会话必须**仍然处理实时事件**，否则缓存视图会永远停在旧内容。
+      // 判据用 agent_settled（回合收口应关掉运行中的工具块）——单个小帧、按需发送，
+      // 不像「订阅响应 + 随后一串实时回合」那样受解密乱序影响（后者曾让本块 2/5 抖动）。
+      await client.sendData(makeEnvelope("thread.poke", "test-session", {}));
+      await waitFor(
+        () => tsCached.getSnapshot().messages[1].blocks[0].running === false,
+        "播种后的会话仍处理实时事件（agent_settled 收口了运行中的工具块）",
+      );
 
       await tsCached.open();
       seeded = tsCached.getSnapshot();
       assert.equal(seeded.cachedAt, null, "实时快照到达后清掉缓存标记（内容已是最新）");
       assert.ok(seen.length >= 1, "实时快照触发 onSnapshot，缓存得以更新（下次切回来才有东西可铺）");
-      // 实时回合是快照响应之后异步到达的，所以要等（与上面主流程同一写法）。
-      await waitFor(
-        () => tsCached.getSnapshot().messages.some((m) => m.role === "assistant" && m.blocks.some((b) => b.text === "Hello!")),
-        "播种过的会话照样能收到实时流并完成归约",
-      );
       assert.deepEqual(
-        tsCached.getSnapshot().messages.filter((m) => m.id === "m1" || m.id === "m2").map((m) => m.id),
+        seeded.messages.filter((m) => m.id === "m1" || m.id === "m2").map((m) => m.id),
         ["m1", "m2"],
         "先播种再被实时快照替换，历史不重复",
       );
