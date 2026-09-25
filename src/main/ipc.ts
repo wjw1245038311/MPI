@@ -8,7 +8,7 @@ import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-up
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { appendDiagLog } from "./diag-log";
-import { capRenderedHistory, MAX_REMOTE_RAW_MESSAGES, remoteMessageSize, trimRemoteHistory, trimRemoteHistoryByEncodedSize } from "./remote/history-limit";
+import { MAX_REMOTE_RAW_MESSAGES, prepareRemoteHistory, remoteMessageSize } from "./remote/history-limit";
 import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
 import { listTests, readScenarioHistory, readScenarioResult, runLogicTest, runScenarioCase } from "./test-runner";
 import { getDevReleaseLogWindow, openChangelogWindow, openDevReleaseLogWindow } from "./standalone-windows";
@@ -1656,7 +1656,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       if (!Array.isArray(message?.content)) return [];
       return message.content.slice(0, 24).map((block: any): RemoteBlock | null => {
         if (block?.type === "text") return { type: "text", text: String(block.text || "").slice(0, 12_000) };
-        if (block?.type === "thinking") return { type: "thinking", text: String(block.thinking || "").slice(0, 12_000) };
+        // thinking **不设逐块上限**（2026-09-25）：实测它在一次会话里占下发字节的 62%，
+        // 但又是用户明确要保留的内容；旧的 12,000 平均只截掉 5%（thinking 块平均
+        // 3756 字符），却害得历史被裁。改由 prepareRemoteHistory 的预算 + 单帧硬保证
+        // （shrinkToBudget）统一负责——去掉逐块上限后那个兜底是**必需品**。
+        if (block?.type === "thinking") return { type: "thinking", text: String(block.thinking || "") };
         if (block?.type === "toolCall") {
           const result = typeof block.id === "string" ? toolResults.get(block.id) : undefined;
           return {
@@ -1779,10 +1783,10 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       });
     });
     flushAssistantRound();
-    // 两道裁剪：先按估算快速预裁，再按**真实序列化长度**兜底——
-    // 手机端 Envelope.parse 对解密后的内层 envelope 有 2MB 硬上限，超了一律丢帧
-    // （2026-09-24 真机：订阅响应被丢 → 10s 超时 → 重握手 → 重连风暴）。
-    const trimmed = trimRemoteHistoryByEncodedSize(trimRemoteHistory(capRenderedHistory(output)));
+    // 裁剪流水线（条数 → 估算 → 真实长度 → 单帧兜底）；客户端对解密后的内层 envelope
+    // 有硬上限，超了一律丢帧（2026-09-24 真机：订阅响应被丢 → 10s 超时 → 重握手 →
+    // 重连风暴）。顺序与兜底细节见 remote/history-limit.ts 的 prepareRemoteHistory。
+    const trimmed = prepareRemoteHistory(output);
     // 取证：手机端「往上拉不动」到底是主机只发了这么多，还是界面没渲染。
     // diag 日志里看 remote-history 行的 sent/total/bytes/encoded 即可判定。
     const estimated = trimmed.reduce((sum, m) => sum + remoteMessageSize(m), 0);
