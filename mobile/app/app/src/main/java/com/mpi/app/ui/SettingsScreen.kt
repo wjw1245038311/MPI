@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.mpi.app.AppVisibility
 import com.mpi.app.BuildConfig
 import com.mpi.app.data.AppSettings
 import com.mpi.app.data.Appearance
@@ -525,6 +526,10 @@ fun DiagnosticsScreen(
             DiagRow(
                 "完成通知",
                 state.lastTurnNotify ?: "还没判定过（回合结束时才有）",
+            )
+            DiagRow(
+                "前后台标记",
+                "${if (AppVisibility.foreground) "前台（会跳过通知）" else "后台"}（${AppVisibility.lastChange}）",
             )
             DiagRow(
                 "最近问题",

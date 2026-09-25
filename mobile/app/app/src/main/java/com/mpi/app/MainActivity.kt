@@ -45,16 +45,41 @@ class MainActivity : ComponentActivity() {
         container.pendingThreadOpen.value = intent.getStringExtra(Notifier.EXTRA_THREAD_ID)
     }
 
-    // 前后台标记（驱动「对话完成」通知只在后台发）——见 AppVisibility。
-    override fun onStart() {
-        super.onStart()
-        AppVisibility.foreground = true
-        // 人都回到 App 了，挂着那条「回复已完成」没意义
-        container.notifier.cancelTurnComplete()
+    // 前台标记（驱动「对话完成」通知只在后台发）——见 AppVisibility。
+    private var resumed = false
+    private var focused = false
+
+    override fun onResume() {
+        super.onResume()
+        resumed = true
+        syncForeground("画面可见")
     }
 
-    override fun onStop() {
-        AppVisibility.foreground = false
-        super.onStop()
+    override fun onPause() {
+        resumed = false
+        syncForeground("画面不可见")
+        super.onPause()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        focused = hasFocus
+        syncForeground(if (hasFocus) "窗口获得焦点" else "窗口失去焦点")
+    }
+
+    /**
+     * 前台 = **画面可见（resumed）且窗口有焦点**。
+     *
+     * 为什么不用 onStart/onStop：那是「完全不可见」才触发，真机上用它判断「用户是不是在
+     * 看这个会话」明显偏宽——切到最近任务、下拉通知栏、熄屏都可能还停在 started 状态，
+     * 于是后台跑完的回合被当成「前台看着」，通知就静默不发了
+     * （2026-09-25 真机：诊断页报的正是「跳过：App 在前台」）。
+     * resumed + 焦点是实时信号，任一侧丢失都算后台；回到前台两者都会恢复，不会卡死。
+     */
+    private fun syncForeground(reason: String) {
+        val next = resumed && focused
+        if (!AppVisibility.set(next, reason)) return
+        // 人都回到 App 了，挂着那条「回复已完成」没意义
+        if (next) container.notifier.cancelTurnComplete()
     }
 }
