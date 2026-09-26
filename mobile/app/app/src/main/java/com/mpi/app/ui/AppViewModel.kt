@@ -27,6 +27,7 @@ import com.mpi.app.data.ThreadActions
 import com.mpi.app.data.ThreadCache
 import com.mpi.app.data.ThreadSession
 import com.mpi.app.data.ThreadView
+import com.mpi.app.data.TurnWakeLock
 import com.mpi.app.data.UpdateInfo
 import com.mpi.app.data.UpdateCheckResult
 import com.mpi.app.data.Updater
@@ -193,6 +194,8 @@ class AppViewModel(
     private val homeCache: HomeCache,
     /** 通知深链待打开的会话；非空时不要抢自动打开。 */
     private val pendingThreadOpen: StateFlow<String?>,
+    /** 后台/锁屏播报保活 wakelock（见 [TurnWakeLock]）。 */
+    private val turnWakeLock: TurnWakeLock,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(AppUiState())
@@ -594,6 +597,8 @@ class AppViewModel(
                     voiceSettle?.complete(Unit)
                     voiceSettle = null
                     speakTurnComplete(view)
+                    // 回合结束：后台保活 wakelock 一并放掉（未持有时是 no-op）
+                    turnWakeLock.release()
                     flushPendingFollowUp()
                 }
                 // 审批提醒（M5）：请求出现就通知，消失就撤销
@@ -635,6 +640,7 @@ class AppViewModel(
         _ui.value.openThreadId?.let { drafts[it] = _ui.value.draft }
         reconnectSyncJob?.cancel()
         reconnectSyncJob = null
+        turnWakeLock.release()
         threadSession?.detach()
         threadSession = null
         threadActions = null
@@ -1153,6 +1159,8 @@ class AppViewModel(
                 // 手机发起的回合：现在只影响「是否语音播报」（完成通知与谁发起无关，见
                 // notifyFinishedTurns 的飞书已读口径）。
                 phoneTurnStarted = true
+                // 后台/锁屏播报保活：回合在跑时防 CPU 睡 / Doze（亮屏时零成本）。
+                if (settingsStore.settings.value.speakInBackground) turnWakeLock.acquire()
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
                 _ui.update {
                     it.copy(sending = false, attachments = emptyList(), sendNote = queuedNoteOf(result))
@@ -1361,6 +1369,7 @@ class AppViewModel(
 
     private fun detachSession() {
         _ui.value.openThreadId?.let { drafts[it] = _ui.value.draft }
+        turnWakeLock.release()
         threadSession?.detach()
         threadSession = null
         threadActions = null
@@ -1415,6 +1424,7 @@ class AppViewModel(
                         container.threadCache,
                         container.homeCache,
                         container.pendingThreadOpen,
+                        container.turnWakeLock,
                     ) as T
             }
     }

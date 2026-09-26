@@ -12,6 +12,7 @@ import com.mpi.app.data.SecretBox
 import com.mpi.app.data.SettingsStore
 import com.mpi.app.data.Speaker
 import com.mpi.app.data.ThreadCache
+import com.mpi.app.data.TurnWakeLock
 import com.mpi.app.data.Updater
 import com.mpi.app.data.VoiceRecorder
 import java.io.File
@@ -61,6 +62,9 @@ class AppContainer(context: Context) {
 
     /** 语音播报（对话完成念一句，系统 TTS；失败静默降级）。 */
     val speaker: Speaker = Speaker(appContext)
+
+    /** 后台/锁屏播报保活 wakelock（回合在跑时防 CPU 睡 / Doze）。 */
+    val turnWakeLock: TurnWakeLock = TurnWakeLock(appContext)
 
     /** 自更新（M6）：读中继清单、下载、调安装器。 */
     val updater: Updater = Updater(appContext)

@@ -290,6 +290,7 @@ fun MpiApp(container: AppContainer) {
                     onVoiceContent = container.settingsStore::setVoiceSpeechContent,
                     onVoiceFixedPhrase = container.settingsStore::setVoiceFixedPhrase,
                     onSpeakDuringCall = container.settingsStore::setSpeakDuringCall,
+                    onSpeakInBackground = container.settingsStore::setSpeakInBackground,
                     onShowToolCalls = container.settingsStore::setShowToolCalls,
                     onShowThinking = container.settingsStore::setShowThinking,
                     onOpenDiagnostics = { diagnosticsOpen = true },

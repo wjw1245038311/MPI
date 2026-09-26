@@ -112,6 +112,13 @@ data class AppSettings(
      * 开了也只是**尝试**——部分 ROM 通话中整个静音媒体流，那时这个开关也救不回来。
      */
     val speakDuringCall: Boolean = false,
+    /**
+     * 后台/锁屏播报保活：手机发起的回合在跑时持 wakelock，防 CPU 睡 / Doze（见 [TurnWakeLock]）。默认开。
+     *
+     * 只解决「系统睡过去 → 事件收不及时 → 播报晚到/漏掉」；ROM 本身锁屏静音媒体流的话
+     * App 侧无解（与通话中同一性质）。
+     */
+    val speakInBackground: Boolean = true,
 )
 
 /**
@@ -175,6 +182,11 @@ class SettingsStore(context: Context) {
         _settings.value = read()
     }
 
+    fun setSpeakInBackground(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SPEAK_IN_BACKGROUND, value).apply()
+        _settings.value = read()
+    }
+
     private fun read(): AppSettings = AppSettings(
         appearance = Appearance.fromStored(prefs.getString(KEY_APPEARANCE, null)),
         fontSize = FontSize.fromStored(prefs.getString(KEY_FONT_SIZE, null)),
@@ -187,6 +199,7 @@ class SettingsStore(context: Context) {
         voiceFixedPhrase = prefs.getString(KEY_VOICE_FIXED_PHRASE, null)?.takeIf { it.isNotBlank() }
             ?: Notifier.DEFAULT_FIXED_PHRASE,
         speakDuringCall = prefs.getBoolean(KEY_SPEAK_DURING_CALL, false),
+        speakInBackground = prefs.getBoolean(KEY_SPEAK_IN_BACKGROUND, true),
     )
 
     companion object {
@@ -200,5 +213,6 @@ class SettingsStore(context: Context) {
         private const val KEY_VOICE_SPEECH_CONTENT = "voiceSpeechContent"
         private const val KEY_VOICE_FIXED_PHRASE = "voiceFixedPhrase"
         private const val KEY_SPEAK_DURING_CALL = "speakDuringCall"
+        private const val KEY_SPEAK_IN_BACKGROUND = "speakInBackground"
     }
 }

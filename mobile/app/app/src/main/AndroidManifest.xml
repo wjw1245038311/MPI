@@ -12,6 +12,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 后台/锁屏播报保活：回合在跑时防 CPU 睡 / Doze（见 TurnWakeLock） -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 自更新（M6）：下载新 APK 后调系统安装器 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 

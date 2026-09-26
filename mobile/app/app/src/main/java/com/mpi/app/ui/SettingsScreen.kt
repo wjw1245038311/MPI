@@ -94,6 +94,7 @@ fun SettingsScreen(
     onVoiceContent: (VoiceSpeechContent) -> Unit,
     onVoiceFixedPhrase: (String) -> Unit,
     onSpeakDuringCall: (Boolean) -> Unit,
+    onSpeakInBackground: (Boolean) -> Unit,
     onShowToolCalls: (Boolean) -> Unit,
     onShowThinking: (Boolean) -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -166,6 +167,13 @@ fun SettingsScreen(
                     title = "通话中也播报",
                     trailing = if (settings.speakDuringCall) "开（可能听不到）" else "关",
                     onClick = { onSpeakDuringCall(!settings.speakDuringCall) },
+                )
+                // 后台/锁屏保活：回合在跑时持 wakelock，防 CPU 睡 / Doze 把播报拖到重连才念。
+                SettingsItem(
+                    icon = null,
+                    title = "后台/锁屏播报",
+                    trailing = if (settings.speakInBackground) "开（保持连接）" else "关",
+                    onClick = { onSpeakInBackground(!settings.speakInBackground) },
                 )
                 // 「语言」条目已删：原生端全量中文硬编码，没有任何可选项，
                 // 放着只会是个点了没反应的箭头（用户反馈）。要真做 zh/en 得先把
