@@ -17,6 +17,7 @@ import com.mpi.app.data.KeyStoreCorruptException
 import com.mpi.app.data.Pairing
 import com.mpi.app.data.PairingRecord
 import com.mpi.app.data.PairingStage
+import com.mpi.app.data.LastThreadStore
 import com.mpi.app.data.NetworkWatcher
 import com.mpi.app.data.RelayClient
 import com.mpi.app.data.Requester
@@ -199,6 +200,8 @@ class AppViewModel(
     private val turnWakeLock: TurnWakeLock,
     /** 网络恢复监听（快恢复，见 [NetworkWatcher]）。 */
     private val networkWatcher: NetworkWatcher,
+    /** 上一次打开的会话（重启后优先回到它，见 [LastThreadStore]）。 */
+    private val lastThread: LastThreadStore,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(AppUiState())
@@ -591,6 +594,8 @@ class AppViewModel(
                 draft = drafts[threadId].orEmpty(),
             )
         }
+        // 记住这条：重启 App 后优先回到它（见 LastThreadStore）。
+        lastThread.threadId = threadId
 
         jobs += scope.launch {
             var lastPendingId: String? = null
@@ -649,6 +654,8 @@ class AppViewModel(
         // 语音模式挂在这条会话上：离开会话就退，否则循环会在没会话时白等到超时
         stopVoiceChat()
         _ui.value.openThreadId?.let { drafts[it] = _ui.value.draft }
+        // 用户主动关掉会话（切换会话时会紧接着重写新值）→ 下次启动不再回到它
+        lastThread.threadId = null
         reconnectSyncJob?.cancel()
         reconnectSyncJob = null
         turnWakeLock.release()
@@ -1295,7 +1302,15 @@ class AppViewModel(
             if (session?.isAuthenticated != true) return
             val threads = snapshot.allThreads
             if (threads.isEmpty()) return
-            val target = threads.firstOrNull { it.state == RemoteThreadState.Running } ?: threads.first()
+            // 首帧常常是**本地缓存列表**（cachedAt != null）——它可能还没有刚新建的会话，
+            // 拿它决定「自动打开哪条」会选错（2026-09-26 真机：新建会话发完消息重启，
+            // 进的是旧会话）。等真实列表到了再决定。
+            if (snapshot.cachedAt != null) return
+            // 优先回到「上一次打开的会话」——「最近打开」比「最近更新」更贴近用户预期，
+            // 也不受列表排序/主机缓存影响。不在列表里（可能已删）才回退到旧策略。
+            val target = threads.firstOrNull { it.id == lastThread.threadId }
+                ?: threads.firstOrNull { it.state == RemoteThreadState.Running }
+                ?: threads.first()
             // 先消费掉「每次 attach 只自动开一次」的机会再动手：
             // 否则它与用户新建会话并发时，会晚一步把界面抢回运行中那条。
             autoOpenedThread = true
@@ -1443,6 +1458,7 @@ class AppViewModel(
                         container.pendingThreadOpen,
                         container.turnWakeLock,
                         container.networkWatcher,
+                        container.lastThread,
                     ) as T
             }
     }

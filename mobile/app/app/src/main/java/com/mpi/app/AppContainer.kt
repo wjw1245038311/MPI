@@ -7,6 +7,7 @@ import com.mpi.app.data.AttachmentLoader
 import com.mpi.app.data.FileKeyStore
 import com.mpi.app.data.HomeCache
 import com.mpi.app.data.KeyStore
+import com.mpi.app.data.LastThreadStore
 import com.mpi.app.data.NetworkWatcher
 import com.mpi.app.data.Notifier
 import com.mpi.app.data.SecretBox
@@ -69,6 +70,9 @@ class AppContainer(context: Context) {
 
     /** 网络恢复监听（快恢复）：AppViewModel 注册回调并 start() 后生效。 */
     val networkWatcher: NetworkWatcher = NetworkWatcher(appContext)
+
+    /** 上一次打开的会话（重启后优先回到它，见 [LastThreadStore]）。 */
+    val lastThread: LastThreadStore = LastThreadStore(appContext)
 
     /** 自更新（M6）：读中继清单、下载、调安装器。 */
     val updater: Updater = Updater(appContext)
