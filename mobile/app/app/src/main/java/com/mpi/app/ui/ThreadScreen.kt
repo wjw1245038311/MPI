@@ -951,6 +951,7 @@ private fun ScrollToBottomButton(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThreadTopBar(
     title: String,
@@ -975,14 +976,17 @@ private fun ThreadTopBar(
         IconButton(onClick = onBack) {
             Icon(IconArrowLeft, contentDescription = "返回", tint = MaterialTheme.colorScheme.onSurface)
         }
-        // 语音输出快捷入口（标题左侧）：点一下快速设置。
+        // 语音输出快捷入口（标题左侧）：短按直接开/关播报，长按弹设置菜单。
         // 开 = 声波 + 强调色，关 = 静音 + 浅灰——不开菜单也能一眼看出当前状态。
         Box(modifier = Modifier.padding(start = 2.dp)) {
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
                     .background(if (speakTurnComplete) MpiTheme.colors.accentSoft else Color.Transparent)
-                    .clickable { voiceMenuOpen = true }
+                    .combinedClickable(
+                        onClick = { onSetSpeakTurnComplete(!speakTurnComplete) },
+                        onLongClick = { voiceMenuOpen = true },
+                    )
                     .padding(horizontal = 8.dp, vertical = 3.dp),
                 contentAlignment = Alignment.Center,
             ) {
