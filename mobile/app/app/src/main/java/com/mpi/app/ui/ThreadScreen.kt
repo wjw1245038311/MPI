@@ -180,7 +180,18 @@ fun ThreadScreen(
     val renderable = view.renderable
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
     // 工具/思考块隐藏时的可见列表（纯函数，可单测）：只影响展示，不影响 allMessages 的状态推导
+    val showThinkingPlaceholder = shouldShowThinkingPlaceholder(view)
     val display = visibleMessages(renderable, showToolCalls, showThinking)
+        // 占位行出现时，把「已 start 但一个块都没有」的流式消息从列表里摘掉：
+        // 否则会先渲染一个只有头像的空行（MessageRow 对空 blocks 只画头像），
+        // 紧接着再跟着我们的占位行——屏上会出现两个「M」头像。
+        .let { list ->
+            if (showThinkingPlaceholder) {
+                list.filterNot { it.id == view.streaming?.id && !hasVisibleContent(it) }
+            } else {
+                list
+            }
+        }
 
     // ---- 会话节点（右边缘左划拉出）----
     // 节点 = 用户消息（与桌面端左侧用户消息导航同口径）；索引按 display 算，可直接定位滚动。
@@ -202,11 +213,13 @@ fun ThreadScreen(
     // 内容增长时，只要还在跟随就贴底。key 取「消息数 + 流式内容总长度」：
     // 只看最后一块的长度会漏掉「变的不是最后一块」（如工具结果回填）。
     val streamLength = view.streaming?.blocks?.sumOf { it.text?.length ?: 0 } ?: 0
-    LaunchedEffect(display.size, streamLength) {
+    LaunchedEffect(display.size, streamLength, showThinkingPlaceholder) {
         if (following && display.isNotEmpty()) {
             // 必须用大 offset 真滚到底：scrollToItem(lastIndex) 只是把最后一条的“顶部”
             // 对齐视口，最后一条很长时仍可下滚，atBottom 就永远为 false（按钮不消失）。
-            listState.scrollToItem(display.lastIndex, Int.MAX_VALUE)
+            // 占位行是 display 之外的第 size 个 item，贴底得滚到它。
+            val lastItem = if (showThinkingPlaceholder) display.size else display.lastIndex
+            listState.scrollToItem(lastItem, Int.MAX_VALUE)
         }
     }
 
@@ -324,7 +337,7 @@ fun ThreadScreen(
                     }
                     // prefill 等待占位：agent 在跑但还没有流式消息（本地模型可达数十秒），
                     // 与桌面端同一谓词（见 ThinkingIndicator.kt）。
-                    if (shouldShowThinkingPlaceholder(view)) {
+                    if (showThinkingPlaceholder) {
                         item(key = "thinking-placeholder") { ThinkingPlaceholderRow() }
                     }
                 }

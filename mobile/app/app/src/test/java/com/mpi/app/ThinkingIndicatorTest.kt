@@ -43,9 +43,26 @@ class ThinkingIndicatorTest {
     }
 
     @Test
-    fun `hidden once the assistant message starts or the run ends`() {
-        assertFalse(shouldShowThinkingPlaceholder(view(streaming = ThreadMessage(id = "s", role = "assistant"))))
+    fun `hidden once there is something visible to show`() {
+        // 已有正文 → 消息自己渲染，不需要占位行
+        assertFalse(
+            shouldShowThinkingPlaceholder(
+                view(streaming = ThreadMessage(id = "s", role = "assistant", blocks = listOf(MessageBlock(type = BlockType.Text, text = "好")))),
+            ),
+        )
         assertFalse(shouldShowThinkingPlaceholder(view(running = false)))
+    }
+
+    @Test
+    fun `shown while the assistant message has started but has no content yet`() {
+        // 本地模型的真实状态：pi 在 HTTP 响应头到达时就发了 message_start，而 prefill
+        // 还没结束——streaming 非空、一个块都没有。
+        assertTrue(shouldShowThinkingPlaceholder(view(streaming = ThreadMessage(id = "s", role = "assistant"))))
+        assertTrue(
+            shouldShowThinkingPlaceholder(
+                view(streaming = ThreadMessage(id = "s", role = "assistant", blocks = listOf(MessageBlock(type = BlockType.Text, text = "")))),
+            ),
+        )
     }
 
     @Test
