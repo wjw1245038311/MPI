@@ -405,3 +405,23 @@ val IconTerminalOff: ImageVector by lazy {
         moveTo(5.5f, 18.5f); lineTo(18.5f, 5.5f)
     }
 }
+
+/** 语音播报开：喇叭 + 两道声波。 */
+val IconVolume: ImageVector by lazy {
+    strokeIcon("Volume") {
+        moveTo(11f, 5f); lineTo(7f, 9f); lineTo(3.5f, 9f)
+        lineTo(3.5f, 15f); lineTo(7f, 15f); lineTo(11f, 19f); close()
+        moveTo(14.8f, 9.6f); curveTo(16.3f, 10.9f, 16.3f, 13.1f, 14.8f, 14.4f)
+        moveTo(17.5f, 7.2f); curveTo(20.2f, 9.6f, 20.2f, 14.4f, 17.5f, 16.8f)
+    }
+}
+
+/** 语音播报关：喇叭 + ×。 */
+val IconVolumeOff: ImageVector by lazy {
+    strokeIcon("VolumeOff") {
+        moveTo(11f, 5f); lineTo(7f, 9f); lineTo(3.5f, 9f)
+        lineTo(3.5f, 15f); lineTo(7f, 15f); lineTo(11f, 19f); close()
+        moveTo(16f, 9.8f); lineTo(21f, 14.2f)
+        moveTo(21f, 9.8f); lineTo(16f, 14.2f)
+    }
+}

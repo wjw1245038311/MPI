@@ -192,8 +192,6 @@ fun MpiApp(container: AppContainer) {
                         // 手势来自哪一侧）；这里不再重复注册，避免两处抢同一个返回。
                         ThreadScreen(
                             view = openThread,
-                            projectName = state.host.projects
-                                .firstOrNull { it.id == openThread.summary?.projectId }?.name,
                             draft = state.draft,
                             sending = state.sending,
                             responding = state.responding,
@@ -216,6 +214,12 @@ fun MpiApp(container: AppContainer) {
                             onToggleToolCalls = {
                                 container.settingsStore.setShowToolCalls(!settings.showToolCalls)
                             },
+                            speakTurnComplete = settings.speakTurnComplete,
+                            voiceSpeechContent = settings.voiceSpeechContent,
+                            speakDuringCall = settings.speakDuringCall,
+                            onSetSpeakTurnComplete = container.settingsStore::setSpeakTurnComplete,
+                            onSetVoiceSpeechContent = container.settingsStore::setVoiceSpeechContent,
+                            onSetSpeakDuringCall = container.settingsStore::setSpeakDuringCall,
                             choiceDrafts = state.choiceDrafts,
                             onChoiceDraftChange = viewModel::setChoiceDraft,
                             onClearChoiceDrafts = viewModel::clearChoiceDrafts,

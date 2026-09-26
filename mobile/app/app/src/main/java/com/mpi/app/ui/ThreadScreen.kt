@@ -82,10 +82,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mpi.app.data.Attachment
 import com.mpi.app.data.ThreadView
+import com.mpi.app.data.VoiceSpeechContent
 import com.mpi.app.protocol.BlockType
 import com.mpi.app.protocol.MessageBlock
 import com.mpi.app.protocol.RemotePermission
-import com.mpi.app.protocol.RemoteThreadState
 import com.mpi.app.protocol.ThreadMessage
 import com.mpi.app.ui.theme.MpiTheme
 import kotlinx.coroutines.delay
@@ -101,7 +101,6 @@ import kotlin.math.roundToInt
 @Composable
 fun ThreadScreen(
     view: ThreadView,
-    projectName: String?,
     draft: String,
     sending: Boolean,
     responding: Boolean,
@@ -119,6 +118,13 @@ fun ThreadScreen(
     /** 是否显示工具/终端调用行（本地设置，默认显示）。 */
     showToolCalls: Boolean,
     onToggleToolCalls: () -> Unit,
+    /** 语音输出快捷设置（标题旁喇叭图标）：与 SettingsScreen 三项同语义。 */
+    speakTurnComplete: Boolean,
+    voiceSpeechContent: VoiceSpeechContent,
+    speakDuringCall: Boolean,
+    onSetSpeakTurnComplete: (Boolean) -> Unit,
+    onSetVoiceSpeechContent: (VoiceSpeechContent) -> Unit,
+    onSetSpeakDuringCall: (Boolean) -> Unit,
     choiceDrafts: Map<String, ChoiceAnswer>,
     onChoiceDraftChange: (String, ChoiceAnswer?) -> Unit,
     onClearChoiceDrafts: (String) -> Unit,
@@ -207,12 +213,15 @@ fun ThreadScreen(
     Column(modifier = modifier.fillMaxSize().safeDrawingPadding()) {
         ThreadTopBar(
             title = view.summary?.title?.ifEmpty { null } ?: "会话",
-            projectName = projectName,
-            state = view.summary?.state,
-            running = view.running,
             compacting = view.compacting,
             showToolCalls = showToolCalls,
             onToggleToolCalls = onToggleToolCalls,
+            speakTurnComplete = speakTurnComplete,
+            voiceSpeechContent = voiceSpeechContent,
+            speakDuringCall = speakDuringCall,
+            onSetSpeakTurnComplete = onSetSpeakTurnComplete,
+            onSetVoiceSpeechContent = onSetVoiceSpeechContent,
+            onSetSpeakDuringCall = onSetSpeakDuringCall,
             onBack = onBack,
             onOpenSettings = onOpenSettings,
             onOpenSearch = onOpenSearch,
@@ -945,16 +954,20 @@ private fun ScrollToBottomButton(
 @Composable
 private fun ThreadTopBar(
     title: String,
-    projectName: String?,
-    state: RemoteThreadState?,
-    running: Boolean,
     compacting: Boolean,
     showToolCalls: Boolean,
+    speakTurnComplete: Boolean,
+    voiceSpeechContent: VoiceSpeechContent,
+    speakDuringCall: Boolean,
     onToggleToolCalls: () -> Unit,
+    onSetSpeakTurnComplete: (Boolean) -> Unit,
+    onSetVoiceSpeechContent: (VoiceSpeechContent) -> Unit,
+    onSetSpeakDuringCall: (Boolean) -> Unit,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
 ) {
+    var voiceMenuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -962,34 +975,66 @@ private fun ThreadTopBar(
         IconButton(onClick = onBack) {
             Icon(IconArrowLeft, contentDescription = "返回", tint = MaterialTheme.colorScheme.onSurface)
         }
-        // 标题最多占屏幕宽度的一半，超出用省略号（真机反馈的诉求）
-        Column(Modifier.weight(1f).padding(end = 6.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = (LocalConfiguration.current.screenWidthDp / 2).dp),
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (state != null) {
-                    StateDot(state, size = 7)
-                    Spacer(Modifier.size(5.dp))
-                }
-                Text(
-                    text = buildString {
-                        if (!projectName.isNullOrEmpty()) append("$projectName · ")
-                        // 运行中就不再说「空闲」——两个状态并排会显得自相矛盾
-                        if (running) append("运行中") else append(state?.label() ?: "状态未知")
-                        if (compacting) append(" · 压缩中")
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MpiTheme.colors.textDim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+        // 语音输出快捷入口（标题左侧）：点一下快速设置。
+        // 开 = 声波 + 强调色，关 = 静音 + 浅灰——不开菜单也能一眼看出当前状态。
+        Box(modifier = Modifier.padding(start = 2.dp)) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (speakTurnComplete) MpiTheme.colors.accentSoft else Color.Transparent)
+                    .clickable { voiceMenuOpen = true }
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (speakTurnComplete) IconVolume else IconVolumeOff,
+                    contentDescription = if (speakTurnComplete) "语音播报：开" else "语音播报：关",
+                    tint = if (speakTurnComplete) MaterialTheme.colorScheme.primary else MpiTheme.colors.textFaint,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+            DropdownMenu(
+                expanded = voiceMenuOpen,
+                onDismissRequest = { voiceMenuOpen = false },
+            ) {
+                // 「设置 → 账号」里三项的快捷入口（语义与 SettingsScreen 完全一致，只是前置）。
+                // 点完不关菜单：快速设置常要连调几项。
+                VoiceMenuItem(
+                    label = "完成后语音播报",
+                    checked = speakTurnComplete,
+                    onClick = { onSetSpeakTurnComplete(!speakTurnComplete) },
+                )
+                VoiceMenuItem(
+                    label = voiceContentLabel(VoiceSpeechContent.Fixed),
+                    checked = speakTurnComplete && voiceSpeechContent == VoiceSpeechContent.Fixed,
+                    enabled = speakTurnComplete,
+                    onClick = { onSetVoiceSpeechContent(VoiceSpeechContent.Fixed) },
+                )
+                VoiceMenuItem(
+                    label = voiceContentLabel(VoiceSpeechContent.Reply),
+                    checked = speakTurnComplete && voiceSpeechContent == VoiceSpeechContent.Reply,
+                    enabled = speakTurnComplete,
+                    onClick = { onSetVoiceSpeechContent(VoiceSpeechContent.Reply) },
+                )
+                VoiceMenuItem(
+                    label = "通话中也播报",
+                    checked = speakDuringCall,
+                    onClick = { onSetSpeakDuringCall(!speakDuringCall) },
                 )
             }
         }
+        // 标题最多占屏幕宽度的一半，超出用省略号（真机反馈的诉求）。
+        // 「项目 · 空闲」状态行已删：信息量低；运行中看输入条停止钮、压缩中有转圈。
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 4.dp)
+                .widthIn(max = (LocalConfiguration.current.screenWidthDp / 2).dp),
+        )
         // 只在压缩中显示转圈：运行中状态行已经有「运行中」文字，
         // 再放一个圈用户不知道它干嘛的（真机反馈）。
         if (compacting) {
@@ -1022,6 +1067,34 @@ private fun ThreadTopBar(
             )
         }
     }
+}
+
+/** 语音输出快捷菜单项：标签 + 选中勾（与 ConfigSheet 模型下拉同一风格）。 */
+@Composable
+private fun VoiceMenuItem(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(text = label, style = MaterialTheme.typography.bodyMedium)
+                if (checked) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        imageVector = IconCheck,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+        },
+        enabled = enabled,
+        onClick = onClick,
+    )
 }
 
 /** 消息正文（复制用）：只取文本块，工具 / 思考 / 图片不参与。 */
