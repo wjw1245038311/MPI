@@ -8,7 +8,7 @@ import { register } from "node:module";
 
 register(new URL("./electron-stub-loader.mjs", import.meta.url));
 
-const { createDiagLogWriter } = await import("../src/main/diag-log.ts");
+const { createDiagLogWriter, stampDiagLine } = await import("../src/main/diag-log.ts");
 
 let passed = 0;
 function ok(name) {
@@ -46,6 +46,19 @@ try {
   }
   assert.equal(threw, false);
   ok("never throws on unwritable paths");
+
+  // Plain-text lines get a local timestamp; JSON events keep their own `t` field.
+  assert.equal(
+    stampDiagLine("remote-conn open id=abc", new Date(2026, 8, 26, 13, 47, 51, 123)),
+    "2026-09-26 13:47:51.123 remote-conn open id=abc",
+  );
+  assert.equal(stampDiagLine('{"t":"x","kind":"window-focus"}'), '{"t":"x","kind":"window-focus"}');
+  assert.equal(
+    stampDiagLine("  remote-req subscribe").endsWith(" remote-req subscribe"),
+    true,
+    "leading whitespace stays part of the line",
+  );
+  ok("stamps plain-text lines and leaves JSON events untouched");
 
   console.log(`\n${passed} groups passed`);
 } finally {

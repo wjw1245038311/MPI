@@ -36,6 +36,22 @@ export function diagLogPath(): string {
 let writer: ((line: string) => void) | null = null;
 
 /**
+ * 给**纯文本**诊断行补本地时间戳（`YYYY-MM-DD HH:mm:ss.SSS`）。
+ *
+ * 背景：`remote-*`（连接/订阅/agent 起止）与 `ctx-usage` 这类行原本没有时刻，
+ * 真机排查「退后台断连 → 重连」到底隔了多久时只能靠猜，也因此定不了「事件是不是
+ * 丢了」。JSON 事件行已自带 `t` 字段（renderer 侧写入），原样返回，避免重复。
+ */
+export function stampDiagLine(line: string, now: Date = new Date()): string {
+  if (line.trimStart().startsWith("{")) return line;
+  const p = (n: number, width = 2) => String(n).padStart(width, "0");
+  const stamp =
+    `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ` +
+    `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}.${p(now.getMilliseconds(), 3)}`;
+  return `${stamp} ${line}`;
+}
+
+/**
  * Append one line to the diagnostic log (lazy init on first use).
  *
  * 整体再兜一层 try：初始化路径用了 `electron.app`，纯 Node 环境（单元测试
@@ -45,7 +61,7 @@ let writer: ((line: string) => void) | null = null;
 export function appendDiagLog(line: string): void {
   try {
     if (!writer) writer = createDiagLogWriter(diagLogPath());
-    writer(line);
+    writer(stampDiagLine(line));
   } catch {
     /* 没有 electron app（测试）或磁盘不可写：静默跳过 */
   }
