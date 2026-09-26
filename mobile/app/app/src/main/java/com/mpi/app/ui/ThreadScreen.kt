@@ -322,6 +322,11 @@ fun ThreadScreen(
                             onClearDrafts = onClearChoiceDrafts,
                         )
                     }
+                    // prefill 等待占位：agent 在跑但还没有流式消息（本地模型可达数十秒），
+                    // 与桌面端同一谓词（见 ThinkingIndicator.kt）。
+                    if (shouldShowThinkingPlaceholder(view)) {
+                        item(key = "thinking-placeholder") { ThinkingPlaceholderRow() }
+                    }
                 }
             }
 
@@ -1509,6 +1514,34 @@ private fun RoundIconButton(
         ) {
             content()
         }
+    }
+}
+
+/**
+ * Prefill 等待占位行：agent 在跑但 assistant 消息还没开始（本地模型 prefill 可达
+ * 数十秒）。**计时器就在这里**——每秒只有这一行重组，不会带着整条消息列表重建。
+ */
+@Composable
+private fun ThinkingPlaceholderRow() {
+    var elapsedSec by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        val startedAt = System.currentTimeMillis()
+        while (true) {
+            delay(1_000)
+            elapsedSec = ((System.currentTimeMillis() - startedAt) / 1000).toInt()
+        }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp)
+        Text(
+            text = "思考中 · ${formatElapsed(elapsedSec)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MpiTheme.colors.textFaint,
+        )
     }
 }
 
