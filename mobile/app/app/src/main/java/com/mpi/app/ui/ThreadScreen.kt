@@ -2,6 +2,7 @@ package com.mpi.app.ui
 
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -88,8 +89,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.mpi.app.data.Attachment
 import com.mpi.app.data.ThreadView
 import com.mpi.app.data.VoiceSpeechContent
@@ -236,7 +235,10 @@ fun ThreadScreen(
     }
 
     // safeDrawingPadding：同时避让状态栏（截图里标题被时间压住）、手势条与键盘
-    Column(modifier = modifier.fillMaxSize().safeDrawingPadding()) {
+    // 根用 Box：图片预览要做成**真·全屏覆盖层**。Dialog 在这个 Compose 版本下会被
+    // 平台默认宽度限制住（实测只铺中间一块），所以自己搭一层，才能盖住顶栏与输入条。
+    Box(modifier) {
+    Column(Modifier.fillMaxSize().safeDrawingPadding()) {
         ThreadTopBar(
             title = view.summary?.title?.ifEmpty { null } ?: "会话",
             compacting = view.compacting,
@@ -357,7 +359,6 @@ fun ThreadScreen(
                     }
                 }
             }
-            previewImage?.let { ImagePreviewDialog(it, onClose = { previewImage = null }) }
             }
 
             NodePanelLayer(
@@ -452,6 +453,9 @@ fun ThreadScreen(
                 onRefresh = onResync,
             )
         }
+    }
+    // 预览盖在最上层（含顶栏与输入条）：真正的「全屏」。
+    previewImage?.let { ImagePreviewOverlay(it, onClose = { previewImage = null }) }
     }
 }
 
@@ -1446,9 +1450,9 @@ private fun ThinkingBlockRow(block: MessageBlock, key: String) {
  */
 internal val LocalImagePreviewer = staticCompositionLocalOf<((ImageBitmap) -> Unit)?> { null }
 
-/** 全屏图片预览：双指缩放（1x–6x）、拖移，点空白或返回关闭。 */
+/** 全屏图片预览覆盖层：双指缩放（1x–6x）、拖移，点空白或返回关闭。 */
 @Composable
-private fun ImagePreviewDialog(bitmap: ImageBitmap, onClose: () -> Unit) {
+private fun ImagePreviewOverlay(bitmap: ImageBitmap, onClose: () -> Unit) {
     var scale by remember { mutableStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
@@ -1456,33 +1460,30 @@ private fun ImagePreviewDialog(bitmap: ImageBitmap, onClose: () -> Unit) {
         // 缩回 1x 时把位移归零，否则图片会“滑出”屏幕且再也回不到中间。
         offset = if (scale <= 1f) Offset.Zero else offset + panChange
     }
-    Dialog(
-        onDismissRequest = onClose,
-        // usePlatformDefaultWidth=false：预览要占满整屏，而不是被 Dialog 的默认宽度限制。
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+    // 覆盖层不是 Dialog，返回键要自己接（否则会直接退出会话）。
+    BackHandler { onClose() }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.96f))
+            .pointerInput(Unit) { detectTapGestures { onClose() } },
+        contentAlignment = Alignment.Center,
     ) {
-        Box(
+        Image(
+            bitmap = bitmap,
+            contentDescription = "图片预览（双指缩放，点空白关闭）",
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.94f))
-                .pointerInput(Unit) { detectTapGestures { onClose() } },
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(
-                bitmap = bitmap,
-                contentDescription = "图片预览（双指缩放，点空白关闭）",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer(
-                        scaleX = scale,
-                        scaleY = scale,
-                        translationX = offset.x,
-                        translationY = offset.y,
-                    )
-                    .transformable(transformState),
-                contentScale = ContentScale.Fit,
-            )
-        }
+                .graphicsLayer(
+                    scaleX = scale,
+                    scaleY = scale,
+                    translationX = offset.x,
+                    translationY = offset.y,
+                )
+                .transformable(transformState),
+            // Fit：完整显示不裁切；竖图会顶满高度，横图顶满宽度。
+            contentScale = ContentScale.Fit,
+        )
     }
 }
 
