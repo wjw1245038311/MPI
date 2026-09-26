@@ -1995,10 +1995,13 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     // 这里必须优先用桥的状态：否则手机切完模型后重新 subscribe（只走磁盘快照）
     // 会拿回 session 文件里的旧模型 —— 就是「切走再切回来变回刷新前」的根因。
     const open = ref.localId ? bridges.get(ref.localId) : undefined;
+    // 桥已开着 → 顺带取它的实时状态（零成本：不冷启动）。回合在跑必须报 running：
+    // 手机退后台断连后重订阅走的就是这条磁盘路径（thread.subscribe 刻意不冷启桥），
+    // 若一律报 idle，手机会误判「回合结束」提前语音播报（2026-09-26 真机反馈）。
     const openState: any = open ? await open.bridge.getState().catch(() => null) : null;
-    // 磁盘快照永远不可能是「running」（remoteState(false, …)）→ 一律收口：
-    // 被中断的工具在文件里没有 toolResult，不收口就会在远程视图里永远转圈。
-    const state = remoteState(false, messages.length > 0);
+    // running → 在飞工具确实还在途，不收口；非 running → 被中断的工具文件里没有
+    // toolResult，收口掉免得远程视图永远转圈（原「磁盘快照一律 idle」的语义保留给桥没开的情况）。
+    const state = remoteState(!!openState?.isStreaming, messages.length > 0);
     return {
       id: threadId,
       projectId: ref.projectId,
