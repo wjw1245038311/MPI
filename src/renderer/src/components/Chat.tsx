@@ -11,6 +11,7 @@ import { extractEditPairs, normalizeTranscriptText } from "../lib/tool-args";
 import { findMessageOccurrences } from "../lib/chat-search";
 import { MarkedDiv, useSearchMark } from "../lib/search-mark";
 import { getExpandState, setExpandState } from "../lib/expand-state";
+import { shouldShowThinkingIndicator } from "../lib/thinking-indicator";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
@@ -106,6 +107,24 @@ export function Chat() {
 
   const streaming = thread?.streaming;
   const count = (thread?.messages.length || 0) + (streaming ? 1 : 0);
+
+  // Prefill 等待指示器：agent run 活跃但 assistant 消息尚未开始（本地模型 prefill
+  // 可达数十秒）、且没有工具卡在跑 → 显示带已等待秒数的「思考中」占位行。
+  const thinkingActive = shouldShowThinkingIndicator(thread, streaming);
+  const [thinkingSince, setThinkingSince] = useState<number | null>(null);
+  useEffect(() => {
+    // 进入/离开等待窗口或切换线程时重置起点（切回仍在思考的线程从 0 重计，可接受）。
+    setThinkingSince(thinkingActive ? Date.now() : null);
+  }, [thinkingActive, activeThreadId]);
+  const [thinkingNow, setThinkingNow] = useState(0);
+  useEffect(() => {
+    if (!thinkingActive) return;
+    setThinkingNow(Date.now());
+    const id = window.setInterval(() => setThinkingNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [thinkingActive]);
+  const thinkingElapsedSec =
+    thinkingSince !== null && thinkingNow > 0 ? Math.max(0, Math.floor((thinkingNow - thinkingSince) / 1000)) : 0;
 
   // 「活跃输入」跟踪：区分真实滚动手势与布局引起的 scrollTop 位移。
   // content-visibility 高度解析 / 浏览器钳制会在无用户输入时产生微小位移，
@@ -248,7 +267,8 @@ export function Chat() {
       // the top, so it can be restored even if no scroll event fires later.
       rememberScrollPosition();
     }
-  }, [activeThreadId, count, streamTailLen, streaming?.blocks?.length, thread?.messages.length]);
+    // thinkingActive：prefill 占位行的出现不改变 count，必须显式驱动跟随。
+  }, [activeThreadId, count, streamTailLen, streaming?.blocks?.length, thread?.messages.length, thinkingActive]);
 
   // When the active thread's turn finishes (streaming → null), jump back to
   // the latest message — users expect the transcript to end at the bottom.
@@ -353,7 +373,7 @@ export function Chat() {
         setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el));
       }
     }
-  }, [activeThreadId, count, streaming?.blocks?.length, thread?.loading]);
+  }, [activeThreadId, count, streaming?.blocks?.length, thread?.loading, thinkingActive]);
 
   useEffect(() => {
     if (!previewImage) return;
@@ -822,6 +842,9 @@ export function Chat() {
                 onPreviewImage={setPreviewImage}
                 {...groupSearchProps}
               />
+            )}
+            {thinkingActive && (
+              <ThinkingPlaceholder language={language} elapsedSec={thinkingElapsedSec} />
             )}
             {thread.error && (
               <div className="msg system">
@@ -1483,7 +1506,9 @@ function MessageGroupInner({
           // marks for it (message-level ring/flash still applies).
           streaming ? group.items[group.items.length - 1]?.key ?? null : null,
         )}
-        {streaming && !hasBlocks && <span className="muted">思考中</span>}
+        {streaming && !hasBlocks && (
+          <span className="muted">{language === "zh" ? "思考中" : "Thinking…"}</span>
+        )}
         {streaming && <span className="streaming-dot" />}
         {last.errorMessage && <div style={{ color: "#c0392b", marginTop: 6 }}>{last.errorMessage}</div>}
         {visibleArtifacts.length > 0 && (
@@ -1560,6 +1585,22 @@ function MessageGroupInner({
     </div>
   );
 }
+
+/** Prefill 等待占位行：agent 在跑但 assistant 消息还没开始（本地模型 prefill
+ * 可达数十秒）。秒数由 Chat 每秒驱动重渲染，组件本身无状态。 */
+const ThinkingPlaceholder = memo(function ThinkingPlaceholder({ language, elapsedSec }: { language: "en" | "zh"; elapsedSec: number }) {
+  return (
+    <div className="msg thinking-placeholder">
+      <div className="msg-avatar" aria-label={language === "zh" ? "MPI 智能体" : "MPI Agent"}>
+        <img className="msg-avatar-img" src={doraemonAvatarUrl} alt="" />
+      </div>
+      <div className="msg-body thinking-placeholder-body">
+        <span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span>
+        <span className="muted">{language === "zh" ? `思考中 · ${elapsedSec}s` : `Thinking… ${elapsedSec}s`}</span>
+      </div>
+    </div>
+  );
+});
 
 function plainOfGroup(g: MsgGroup): string {
   return g.items
