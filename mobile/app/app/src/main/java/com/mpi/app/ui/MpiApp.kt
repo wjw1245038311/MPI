@@ -244,6 +244,7 @@ fun MpiApp(container: AppContainer) {
                             voiceChat = state.voiceChat,
                             voiceChatText = state.voiceChatText,
                             onStopVoiceChat = viewModel::stopVoiceChat,
+                            swipeNodePanel = settings.swipeNodePanel,
                             nodePanel = nodePanel,
                             pendingFollowUp = state.pendingFollowUp,
                             sendError = state.sendError,
@@ -376,6 +377,7 @@ private fun DrawerHost(
     val nodePanel = rememberNodePanelState(NODE_PANEL_WIDTH)
     val sessionOpen = state.openThreadId != null && state.thread != null
     val drawerOpen = drawerState.isOpen
+    // 屏幕宽度（px）：PredictiveBackHandler 里判「触点是否从右侧边缘来」（Android 13 兜底用）
     val viewWidthPx = LocalView.current.width.toFloat()
     // 在 composable 上下文里读一次：PredictiveBackHandler 的 lambda 不是 composable，
     // 不能在里面读 LocalContext（编译期报 “@Composable invocations can only happen…”）
@@ -466,7 +468,7 @@ private fun DrawerHost(
                     bottom = size.height.toFloat(),
                 )
             }
-            .edgeSwipeNodePanel(swipeNodePanel && sessionOpen, NODE_PANEL_EDGE, nodePanel),
+            .edgeSwipeNodePanel(swipeNodePanel, nodePanel),
         drawerContent = {
             // 抽屉宽度：手机上一手能回到对话（用户要求最多占屏宽 2/3）
             ModalDrawerSheet(

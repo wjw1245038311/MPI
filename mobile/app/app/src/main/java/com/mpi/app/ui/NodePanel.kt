@@ -132,35 +132,33 @@ internal fun rememberNodePanelState(panelWidth: Dp): NodePanelState {
 }
 
 /**
- * 右边缘左划 → 跟手拉出节点面板（**局部/补充**通路：系统手势区之外、右边缘 64dp 以内）。
+ * 在**会话的消息区**里左划 → 跟手拉出节点面板。
  *
- * 与系统返回那个通路的分工（见 MpiApp 的 PredictiveBackHandler）：
- *  - **最外 24dp（系统返回手势区）**：交给系统，我们用预测性返回的 progress 驱动面板；
- *  - **24dp~64dp**：系统不管，由本手势处理（这一带在部分机型上还能靠
- *    `systemGestureExclusion` 拿回无箭头体验）；
- *  - **更靠内**：一概不碰。输入框/横向列表/代码块的拖动都应该归它们自己
- *    （真机反馈：choices 输入框里左滑也弹出面板）。
+ * ⚠️ 判定区域 = **挂载它的那个节点**，而不是屏幕边缘（真机反馈：输入框里左滑弹出面板、
+ * 而对话区域左滑又没了）。所以本手势只挂在 ThreadScreen 的消息区 Box 上：
+ *  - 消息区（含面板自身）内任意位置左划/右划 → 认；
+ *  - 底部输入框、顶栏 → 不在这个节点里，完全不碰（choices 输入框里左滑不再弹面板）。
  *
- * 为什么用 **Main 阶段**、逐帧检查 `change.isConsumed`：Main 是「叶 → 根」，子组件先拿事件，
- * 它们消费了就退出——这正是左侧 Material 抽屉不会抢输入框横滑的原因，照抄。
+ * 为什么用 **Main 阶段**、逐帧看 `change.isConsumed`：Main 是「叶 → 根」，子节点先拿事件——
+ * 代码块横向滚动、消息里的可选择文本这些会先消费，我们就让位（左侧 Material 抽屉同理）；
+ * 而外层那个不区分方向的 ModalNavigationDrawer 在更靠根的位置，我们消费后它看不到这次拖动。
+ *
+ * 方向分工（Material 抽屉不区分方向，两个同时挂会互抢）：
+ *  - 面板收起时只认**向左**；
+ *  - 面板已打开时只认**向右**（收回）。
+ * 纵向一律不消费，还给 LazyColumn 滚动。
  */
 internal fun Modifier.edgeSwipeNodePanel(
     enabled: Boolean,
-    edgeWidth: Dp,
     state: NodePanelState,
 ): Modifier {
     if (!enabled) return this
-    return pointerInput(enabled, edgeWidth) {
+    return pointerInput(enabled) {
         val touchSlop = viewConfiguration.touchSlop
         val horizontalTrigger = touchSlop * 0.6f
         val verticalGiveUp = touchSlop * 2f
-        val edgePx = edgeWidth.toPx()
-        val systemZonePx = SYSTEM_GESTURE_ZONE.toPx()
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
-            val x = down.position.x
-            // 只在「右边缘 64dp 内、但不含最外 24dp 系统手势区」起手
-            if (x < size.width - edgePx || x >= size.width - systemZonePx) return@awaitEachGesture
             val closing = state.progress > 0.01f
             val tracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
             var total = 0f
@@ -169,7 +167,7 @@ internal fun Modifier.edgeSwipeNodePanel(
                 val event = awaitPointerEvent(PointerEventPass.Main)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
-                // 子组件（输入框、横向列表、代码块）已经在处理这次拖动：让位
+                // 子组件（代码块横向滚动、可选择文本…）已经在处理这次拖动：让位
                 if (!dragging && change.isConsumed) break
                 tracker.addPosition(change.uptimeMillis, change.position)
                 val dx = change.position.x - down.position.x
@@ -193,9 +191,6 @@ internal fun Modifier.edgeSwipeNodePanel(
         }
     }
 }
-
-/** 系统返回手势区宽度（最外这条不碰，由预测性返回那条通路负责）。 */
-internal val SYSTEM_GESTURE_ZONE = 24.dp
 
 /**
  * 节点抽屉本体：半透明遮罩 + 面板（没有常驻把手——用户要的是系统边缘手势那种动态指示器，
