@@ -1461,7 +1461,6 @@ function MessageGroupInner({
 
   // Assistant round: ONE avatar shared by every assistant message in the group.
   const last = group.items[group.items.length - 1];
-  const hasBlocks = group.items.some((m) => m.blocks && m.blocks.length > 0);
   const openArtifact = async (artifact: (typeof artifacts)[number]) => {
     try {
       const exists = await window.pi.app.fileExists(artifact.path);
@@ -1492,9 +1491,8 @@ function MessageGroupInner({
           // marks for it (message-level ring/flash still applies).
           streaming ? group.items[group.items.length - 1]?.key ?? null : null,
         )}
-        {streaming && !hasBlocks && (
-          <span className="muted">{language === "zh" ? "思考中" : "Thinking…"}</span>
-        )}
+        {/* 「还没有任何块」的等待提示已上交给 Chat 的 ThinkingPlaceholder（带秒数），
+            这里不再重复输出一句静态「思考中」。 */}
         {streaming && <span className="streaming-dot" />}
         {last.errorMessage && <div style={{ color: "#c0392b", marginTop: 6 }}>{last.errorMessage}</div>}
         {visibleArtifacts.length > 0 && (

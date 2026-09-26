@@ -9,12 +9,15 @@ const ti = await import("../src/renderer/src/lib/thinking-indicator.ts");
 /** 最小 ThreadState 切片：默认「agent 在跑、无工具」= 应显示。 */
 const base = (over = {}) => ({ isStreaming: true, compacting: false, toolRuns: {}, ...over });
 const streamingMsg = { key: "a1", role: "assistant" };
+const streamingWithText = { key: "a1", role: "assistant", blocks: [{ type: "text", text: "好" }] };
+const streamingWithTool = { key: "a1", role: "assistant", blocks: [{ type: "toolCall", id: "t", name: "bash", arguments: {} }] };
 
 // --- 不显示 ---------------------------------------------------------------
 
 assert.equal(ti.shouldShowThinkingIndicator(null, null), false); // 无线程
 assert.equal(ti.shouldShowThinkingIndicator({ ...base(), isStreaming: false }, null), false); // run 未开始/已结束
-assert.equal(ti.shouldShowThinkingIndicator(base(), streamingMsg), false); // assistant 消息已开始 → 消息内「思考中」接管
+assert.equal(ti.shouldShowThinkingIndicator(base(), streamingWithText), false); // 已有正文 → 消息自己渲染
+assert.equal(ti.shouldShowThinkingIndicator(base(), streamingWithTool), false); // 已有工具卡 → 它已展示活动
 assert.equal(
   ti.shouldShowThinkingIndicator({ ...base(), compacting: true }, null),
   false,
@@ -37,6 +40,10 @@ assert.equal(
 // --- 显示（三个 prefill 窗口） ---------------------------------------------
 
 assert.equal(ti.shouldShowThinkingIndicator(base(), null), true); // 发送后 → agent_start / LLM prefill
+assert.equal(
+  ti.shouldShowThinkingIndicator(base(), streamingMsg),
+  true,
+); // assistant 已 start 但一个块都没有（本地模型 prefill 期间的真实状态）→ 仍然要等
 assert.equal(
   ti.shouldShowThinkingIndicator({ ...base(), toolRuns: { t1: doneRun } }, null),
   true,

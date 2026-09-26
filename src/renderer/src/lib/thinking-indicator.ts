@@ -27,8 +27,6 @@ export function shouldShowThinkingIndicator(
   streaming: ViewMessage | null | undefined,
 ): boolean {
   if (!t || !t.isStreaming) return false;
-  // assistant 消息已开始 → 由消息内既有的「思考中」/流式圆点接管。
-  if (streaming) return false;
   // 压缩进行中 → composer 侧已有自己的指示（按钮 busy + 提示）。
   if (t.compacting) return false;
   const runs = t.toolRuns ?? {};
@@ -36,5 +34,22 @@ export function shouldShowThinkingIndicator(
     // 工具卡已在展示活动，不再叠加占位行。
     if (runs[key]?.running) return false;
   }
-  return true;
+  // 判据是「还没有任何可见内容」，而不是「assistant 消息还没开始」：
+  // pi 在 **HTTP 响应头到达**时就发 message_start，而本地模型（llama-server 等）的
+  // 响应头通常早于 prefill 完成——那时 streaming 已非空却一个块都没有。
+  // （2026-09-26 真机：本地模型 prefill 期间一直等不到占位行，就是因为这条判早了。）
+  return !hasVisibleContent(streaming);
+}
+
+/** 流式消息里是否已有用户看得见的东西（正文 / 思考 / 工具调用）。 */
+function hasVisibleContent(message: ViewMessage | null | undefined): boolean {
+  const blocks = message?.blocks;
+  if (!Array.isArray(blocks) || blocks.length === 0) return false;
+  return blocks.some((block) => {
+    if (!block) return false;
+    if (block.type === "toolCall") return true; // 工具卡本身就是可见活动
+    if (block.type === "thinking") return !!block.thinking;
+    if (block.type === "text") return !!block.text;
+    return false;
+  });
 }
