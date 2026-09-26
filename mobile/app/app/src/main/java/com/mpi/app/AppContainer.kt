@@ -7,6 +7,7 @@ import com.mpi.app.data.AttachmentLoader
 import com.mpi.app.data.FileKeyStore
 import com.mpi.app.data.HomeCache
 import com.mpi.app.data.KeyStore
+import com.mpi.app.data.NetworkWatcher
 import com.mpi.app.data.Notifier
 import com.mpi.app.data.SecretBox
 import com.mpi.app.data.SettingsStore
@@ -65,6 +66,9 @@ class AppContainer(context: Context) {
 
     /** 后台/锁屏播报保活 wakelock（回合在跑时防 CPU 睡 / Doze）。 */
     val turnWakeLock: TurnWakeLock = TurnWakeLock(appContext)
+
+    /** 网络恢复监听（快恢复）：AppViewModel 注册回调并 start() 后生效。 */
+    val networkWatcher: NetworkWatcher = NetworkWatcher(appContext)
 
     /** 自更新（M6）：读中继清单、下载、调安装器。 */
     val updater: Updater = Updater(appContext)

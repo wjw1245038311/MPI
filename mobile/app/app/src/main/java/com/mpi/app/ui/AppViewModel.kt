@@ -17,6 +17,7 @@ import com.mpi.app.data.KeyStoreCorruptException
 import com.mpi.app.data.Pairing
 import com.mpi.app.data.PairingRecord
 import com.mpi.app.data.PairingStage
+import com.mpi.app.data.NetworkWatcher
 import com.mpi.app.data.RelayClient
 import com.mpi.app.data.Requester
 import com.mpi.app.data.SessionState
@@ -196,6 +197,8 @@ class AppViewModel(
     private val pendingThreadOpen: StateFlow<String?>,
     /** 后台/锁屏播报保活 wakelock（见 [TurnWakeLock]）。 */
     private val turnWakeLock: TurnWakeLock,
+    /** 网络恢复监听（快恢复，见 [NetworkWatcher]）。 */
+    private val networkWatcher: NetworkWatcher,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(AppUiState())
@@ -240,6 +243,10 @@ class AppViewModel(
     private val jobs = mutableListOf<Job>()
 
     init {
+        // 快恢复：系统恢复网络（Doze 维护窗口 / 回 Wi-Fi）时立刻重连，不等退避。
+        // 与 MpiApp 的前后台 kick 并列；已连上时 HostSession.kick 自己短路。
+        networkWatcher.start()
+        networkWatcher.addListener { session?.kick() }
         scope.launch { initialize() }
     }
 
@@ -1143,6 +1150,11 @@ class AppViewModel(
             MessageBlock(type = BlockType.Image, data = image.bytesB64, mimeType = image.mimeType)
         }
         val localId = session.echoUserMessage(text, localImageBlocks)
+        // 后台/锁屏播报保活：**点击就抢锁**，而不是等 send RPC 回来。
+        // 用户按下 home/锁屏只发生在发出后的几十毫秒内，等成功后（几百 ms）再 acquire
+        // 会赶不及——2026-09-26 真机就是切后台 ~1s 内被中继判 relay-device-offline。
+        // acquire 幂等，异常/失败由 30 分钟超时兜底。
+        if (settingsStore.settings.value.speakInBackground) turnWakeLock.acquire()
         if (clearDraft) {
             _ui.value.openThreadId?.let { drafts[it] = "" }
             _ui.update { it.copy(draft = "", sending = true, sendError = null, sendNote = null) }
@@ -1159,8 +1171,6 @@ class AppViewModel(
                 // 手机发起的回合：现在只影响「是否语音播报」（完成通知与谁发起无关，见
                 // notifyFinishedTurns 的飞书已读口径）。
                 phoneTurnStarted = true
-                // 后台/锁屏播报保活：回合在跑时防 CPU 睡 / Doze（亮屏时零成本）。
-                if (settingsStore.settings.value.speakInBackground) turnWakeLock.acquire()
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
                 _ui.update {
                     it.copy(sending = false, attachments = emptyList(), sendNote = queuedNoteOf(result))
@@ -1176,6 +1186,8 @@ class AppViewModel(
                     return@launch
                 }
                 session.markSendFailed(localId, error.message ?: "发送失败")
+                // 回合没能开跑，随手释放上面乐观抢到的保活锁
+                turnWakeLock.release()
                 _ui.update {
                     it.copy(
                         sending = false,
@@ -1425,6 +1437,7 @@ class AppViewModel(
                         container.homeCache,
                         container.pendingThreadOpen,
                         container.turnWakeLock,
+                        container.networkWatcher,
                     ) as T
             }
     }

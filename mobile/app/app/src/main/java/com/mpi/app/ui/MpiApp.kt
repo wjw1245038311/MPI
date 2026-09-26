@@ -283,6 +283,7 @@ fun MpiApp(container: AppContainer) {
             if (settingsOpen) {
                 SettingsScreen(
                     settings = settings,
+                    appForeground = appForeground,
                     onAppearance = container.settingsStore::setAppearance,
                     onFontSize = container.settingsStore::setFontSize,
                     onNotifyOnTurnComplete = container.settingsStore::setNotifyOnTurnComplete,

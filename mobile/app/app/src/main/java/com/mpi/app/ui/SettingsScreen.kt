@@ -30,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,7 @@ import com.mpi.app.BuildConfig
 import com.mpi.app.data.AppSettings
 import com.mpi.app.data.Appearance
 import com.mpi.app.data.FontSize
+import com.mpi.app.data.KeepAliveGuide
 import com.mpi.app.data.Notifier
 import com.mpi.app.data.SessionState
 import com.mpi.app.data.UpdateInfo
@@ -87,6 +89,7 @@ internal fun voiceContentLabel(content: VoiceSpeechContent): String = when (cont
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
+    appForeground: Boolean,
     onAppearance: (Appearance) -> Unit,
     onFontSize: (FontSize) -> Unit,
     onNotifyOnTurnComplete: (Boolean) -> Unit,
@@ -114,8 +117,18 @@ fun SettingsScreen(
     var fontPicker by remember { mutableStateOf(false) }
     var voiceContentPicker by remember { mutableStateOf(false) }
     var fixedPhraseDialog by remember { mutableStateOf(false) }
+    var keepAliveDialog by remember { mutableStateOf(false) }
     var confirmingRemove by remember { mutableStateOf(false) }
     var cacheNote by remember { mutableStateOf<String?>(null) }
+
+    // 电池优化白名单是**系统状态**，不在 SettingsStore 里。从系统设置页回来时要重算，
+    // 否则条目上永远显示离开前的旧值。
+    var batteryWhitelisted by remember {
+        mutableStateOf(KeepAliveGuide.isIgnoringBatteryOptimizations(context))
+    }
+    LaunchedEffect(appForeground) {
+        if (appForeground) batteryWhitelisted = KeepAliveGuide.isIgnoringBatteryOptimizations(context)
+    }
 
     BackHandler(enabled = true) { onClose() }
 
@@ -174,6 +187,14 @@ fun SettingsScreen(
                     title = "后台/锁屏播报",
                     trailing = if (settings.speakInBackground) "开（保持连接）" else "关",
                     onClick = { onSpeakInBackground(!settings.speakInBackground) },
+                )
+                // 系统白名单：Doze/App Standby 会在后台推迟网络（连 wakelock 也不豁免），
+                // 只靠前台服务不够——这是「后台断连、回前台才补播报」的治本项。
+                SettingsItem(
+                    icon = null,
+                    title = "后台保活（推荐开启）",
+                    trailing = if (batteryWhitelisted) "已允许电池优化" else "去设置",
+                    onClick = { keepAliveDialog = true },
                 )
                 // 「语言」条目已删：原生端全量中文硬编码，没有任何可选项，
                 // 放着只会是个点了没反应的箭头（用户反馈）。要真做 zh/en 得先把
@@ -319,6 +340,50 @@ fun SettingsScreen(
                 }
             },
             confirmButton = { TextButton(onClick = { voiceContentPicker = false }) { Text("关闭") } },
+        )
+    }
+
+    if (keepAliveDialog) {
+        val vendor = KeepAliveGuide.currentVendor()
+        AlertDialog(
+            onDismissRequest = { keepAliveDialog = false },
+            title = { Text("后台保活设置") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "系统在后台会限制网络（Doze / 应用待机），连 wakelock 也不豁免——" +
+                            "这就是「后台断连、打开 App 才补上」的原因。建议完成两步：",
+                    )
+                    Text("① 允许本应用「忽略电池优化」")
+                    Text("② 在「自启动 / 后台运行 / 省电策略」里放行本应用（各家入口不同）")
+                    if (vendor.label.isNotEmpty()) {
+                        Text("当前机型：${vendor.label}", color = MpiTheme.colors.textFaint)
+                    }
+                    Text(
+                        "已允许电池优化：${if (batteryWhitelisted) "是" else "否"}",
+                        color = MpiTheme.colors.textFaint,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    keepAliveDialog = false
+                    val intent = if (batteryWhitelisted) {
+                        KeepAliveGuide.appDetailsSettings(context)
+                    } else {
+                        KeepAliveGuide.requestIgnoreBatteryOptimization(context)
+                    }
+                    runCatching { context.startActivity(intent) }
+                }) { Text("电池优化") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    keepAliveDialog = false
+                    if (!KeepAliveGuide.openVendorSettings(context)) {
+                        runCatching { context.startActivity(KeepAliveGuide.appDetailsSettings(context)) }
+                    }
+                }) { Text("自启动设置") }
+            },
         )
     }
 
