@@ -4,7 +4,9 @@ import com.mpi.app.data.ThreadCache
 import java.io.File
 import java.nio.file.Files
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -59,6 +61,58 @@ class ThreadCacheTest {
     @Test
     fun `read of an unknown thread returns null`() {
         assertNull(cache().read("host-a", "missing"))
+    }
+
+    @Test
+    fun `incremental snapshot merges into the cached full one`() {
+        val store = cache()
+        store.write("host-a", "t-1", snapshotWithMessages("t-1", listOf("a", "b", "c")))
+        // 锚点 c：主机只回「c 及其之后」
+        store.mergeIncremental("host-a", "t-1", incrementalWithMessages("t-1", listOf("c", "d")))
+
+        assertEquals(listOf("a", "b", "c", "d"), cachedMessageIds(store, "host-a", "t-1"))
+    }
+
+    @Test
+    fun `incremental merge keeps the refreshed model list`() {
+        val store = cache()
+        store.write("host-a", "t-1", snapshotWithMessages("t-1", listOf("a", "b"), modelName = null))
+        store.mergeIncremental(
+            "host-a",
+            "t-1",
+            incrementalWithMessages("t-1", listOf("b"), modelName = "DeepSeek V4.1 Flash"),
+        )
+
+        val payload = store.read("host-a", "t-1")!!.payload as JsonObject
+        val option = ((payload["snapshot"] as JsonObject)["availableModels"] as JsonArray).first() as JsonObject
+        assertEquals("DeepSeek V4.1 Flash", option["name"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `incremental with an unknown anchor replaces the cache`() {
+        val store = cache()
+        store.write("host-a", "t-1", snapshotWithMessages("t-1", listOf("a", "b")))
+        // 锚点 z 不在旧缓存里 → 主机实际回的是全量，别拼出重复历史
+        store.mergeIncremental("host-a", "t-1", incrementalWithMessages("t-1", listOf("z", "y")))
+
+        assertEquals(listOf("z", "y"), cachedMessageIds(store, "host-a", "t-1"))
+    }
+
+    private fun snapshotWithMessages(id: String, ids: List<String>, modelName: String? = null) =
+        Json.parseToJsonElement(
+            """{"snapshot":{"id":"$id","availableModels":[{"provider":"deepseek","id":"deepseek-flash"${modelName?.let { ",\"name\":\"$it\"" }.orEmpty()}}],"messages":[${ids.joinToString(",") { "{\"id\":\"$it\"}" }}]}}""",
+        )
+
+    private fun incrementalWithMessages(id: String, ids: List<String>, modelName: String? = null) =
+        Json.parseToJsonElement(
+            """{"snapshot":{"id":"$id","incremental":true,"availableModels":[{"provider":"deepseek","id":"deepseek-flash"${modelName?.let { ",\"name\":\"$it\"" }.orEmpty()}}],"messages":[${ids.joinToString(",") { "{\"id\":\"$it\"}" }}]}}""",
+        )
+
+    private fun cachedMessageIds(store: ThreadCache, hostId: String, threadId: String): List<String> {
+        val payload = store.read(hostId, threadId)!!.payload as JsonObject
+        return ((payload["snapshot"] as JsonObject)["messages"] as JsonArray).map {
+            (it as JsonObject)["id"]!!.jsonPrimitive.content
+        }
     }
 
     @Test

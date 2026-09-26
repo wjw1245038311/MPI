@@ -98,7 +98,7 @@ class ThreadSession(
      * 拿到**实时**快照时的回调（用于写本地缓存）。
      * 缓存写入失败不该影响会话本身，所以调用方自行吞异常。
      */
-    private val onSnapshot: (JsonElement) -> Unit = {},
+    private val onSnapshot: (JsonElement, Boolean) -> Unit = { _, _ -> },
 ) {
     private val _view = MutableStateFlow(ThreadView(threadId = threadId))
     val view: StateFlow<ThreadView> = _view.asStateFlow()
@@ -418,9 +418,12 @@ class ThreadSession(
             // 重新定位 seq 基线；第一条实时事件会重新建立期望值
             expectNext = null
         }
-        // 拿到的实时快照顺手写缓存（下一次打开就能秒开）。
-        // **增量不写**：缓存要的是「一份完整历史」，塞进增量会让下次 prime 只铺出个片段。
-        if (!snapshot.incremental) payload?.let { runCatching { onSnapshot(it) } }
+        // 拿到的实时快照写缓存（下一次打开就能秒开）。
+        // 增量也要写：打开会话时因为先 prime 了缓存，subscribe 必带 haveMessageId →
+        // 主机只回增量；不写的话缓存永远停在最早那份全量，表现为「刷新后对了、
+        // 重开 App 又变回旧的」（2026-09-26 真机：模型名刷新后正确、重开又成裸 id）。
+        // 合并细节交给缓存层（按锚点拼接 messages）。
+        payload?.let { runCatching { onSnapshot(it, snapshot.incremental) } }
         for ((seq, event) in buffered) applyEvent(event, seq)
     }
 

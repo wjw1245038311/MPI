@@ -76,7 +76,7 @@ class ThreadSessionReducerTest {
     private fun newSession(
         transport: FakeTransport = FakeTransport(),
         requests: FakeRequests = FakeRequests(SNAPSHOT),
-        onSnapshot: (JsonElement) -> Unit = {},
+        onSnapshot: (JsonElement, Boolean) -> Unit = { _, _ -> },
     ): ThreadSession = ThreadSession(
         threadId = THREAD_ID,
         transport = transport,
@@ -232,7 +232,7 @@ class ThreadSessionReducerTest {
     @Test
     fun `live snapshot is handed to the cache callback but prime is not`() = runBlocking {
         val captured = CopyOnWriteArrayList<String>()
-        val session = newSession(onSnapshot = { captured += it.toString() })
+        val session = newSession(onSnapshot = { payload, _ -> captured += payload.toString() })
 
         session.prime(Envelope.json.parseToJsonElement(SNAPSHOT), savedAt = 1L)
         assertEquals(0, captured.size) // 预热不写缓存

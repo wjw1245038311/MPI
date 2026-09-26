@@ -569,10 +569,14 @@ class AppViewModel(
                     state.copy(problems = (state.problems.filterNot { it == problem } + problem).takeLast(MAX_PROBLEMS))
                 }
             },
-            // 每次拿到实时快照就写本地缓存：下次打开先用它秒开（断网也能看）
-            onSnapshot = { payload ->
+            // 每次拿到快照就写本地缓存：下次打开先用它秒开（断网也能看）。
+            // 增量按锚点合并（否则缓存停在最早那份全量 → 「刷新后不能保存」）。
+            onSnapshot = { payload, incremental ->
                 val hostId = _ui.value.activeHostId
-                if (hostId != null) threadCache.write(hostId, threadId, payload)
+                if (hostId != null) {
+                    if (incremental) threadCache.mergeIncremental(hostId, threadId, payload)
+                    else threadCache.write(hostId, threadId, payload)
+                }
             },
         )
         threadSession = threadSessionLocal

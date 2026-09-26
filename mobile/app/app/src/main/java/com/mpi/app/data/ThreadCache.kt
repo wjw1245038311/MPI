@@ -2,8 +2,10 @@ package com.mpi.app.data
 
 import java.io.File
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /** 一条本地缓存的会话快照。 */
 data class CachedThread(val payload: JsonElement, val savedAt: Long)
@@ -65,6 +67,24 @@ class ThreadCache(
         }
     }
 
+    /**
+     * 把**增量快照**合并进缓存。
+     *
+     * 为什么需要：打开会话时为了秒开先 prime 了缓存，之后 subscribe 必然带上
+     * `haveMessageId` → 主机只回「锚点及其之后」。若照旧不写缓存，缓存就永远停在
+     * 最开始那份全量上 —— 表现为「刷新后名字/状态都对了，杀掉 App 重开又变回旧的」
+     * （2026-09-26 真机：模型名刷新后正确、重开又成裸 id）。
+     *
+     * 合并规则：旧缓存的 messages 里**锚点之前**的部分保留，锚点及其之后一律用新到的
+     * （新快照的其它字段本来就是最新的，直接覆盖）。锚点找不到 = 主机实际回了全量，
+     * 直接用新的。
+     */
+    fun mergeIncremental(hostId: String, threadId: String, payload: JsonElement) {
+        val incoming = payload as? JsonObject ?: return
+        val old = read(hostId, threadId)?.payload as? JsonObject
+        write(hostId, threadId, mergeIncrementalPayload(old, incoming))
+    }
+
     /** 主机被移除时清掉它的缓存（下次重新配对不会看到旧内容）。 */
     fun deleteHost(hostId: String) {
         runCatching { dirFor(hostId).deleteRecursively() }
@@ -108,3 +128,33 @@ class ThreadCache(
         const val DEFAULT_MAX_BYTES_TOTAL = 32L * 1024 * 1024
     }
 }
+
+/**
+ * 见 [ThreadCache.mergeIncremental]；抽成纯函数便于单测。
+ *
+ * 输入是两份主机响应 JSON（旧缓存 + 新到的增量，形如 `{"snapshot":{...}}`），
+ * 输出可直接落盘的那份。
+ */
+internal fun mergeIncrementalPayload(old: JsonObject?, incoming: JsonObject): JsonObject {
+    val incomingSnapshot = incoming["snapshot"] as? JsonObject ?: return incoming
+    val incomingMessages = incomingSnapshot["messages"] as? JsonArray ?: return incoming
+    if (incomingMessages.isEmpty()) return incoming
+    val oldMessages = (old?.get("snapshot") as? JsonObject)?.get("messages") as? JsonArray ?: return incoming
+    val anchorId = (incomingMessages.first() as? JsonObject)?.stringOrNull("id") ?: return incoming
+    val anchorIndex = oldMessages.indexOfFirst { (it as? JsonObject)?.stringOrNull("id") == anchorId }
+    // 锚点找不到（-1）→ 主机实际回的是全量；锚点就在开头（0）→ 无需保留旧的头部。
+    if (anchorIndex <= 0) return incoming
+    val head = oldMessages.take(anchorIndex)
+    val mergedMessages = JsonArray(head + incomingMessages)
+    return JsonObject(
+        incoming.toMutableMap().apply {
+            put(
+                "snapshot",
+                JsonObject(incomingSnapshot.toMutableMap().apply { put("messages", mergedMessages) }),
+            )
+        },
+    )
+}
+
+private fun JsonObject.stringOrNull(key: String): String? =
+    runCatching { get(key)?.jsonPrimitive?.content }.getOrNull()

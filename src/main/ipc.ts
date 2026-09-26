@@ -1917,6 +1917,17 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
   }
 
+  /**
+   * 最近一次从任一 pi 桥拿到的可用模型列表（进程级记忆）。
+   *
+   * 为什么需要：thread.subscribe 是 history-first（刻意不冷启桥），磁盘快照的
+   * availableModels 只能取 models.json；而 pi 运行时的模型来自另一份来源
+   * （内置目录 + models-store.json，例如 “DeepSeek V4.1 Flash”）。缺了那半份，
+   * 手机 chip 匹配不到显示名、只能显示裸 id，列表里也找不到当前模型
+   * （2026-09-26 真机）。拿到过一次就记住，磁盘快照也用它补齐，不额外冷启桥。
+   */
+  let lastKnownPiModels: unknown[] = [];
+
   async function remoteSnapshot(threadId: string, options: { live?: boolean; haveMessageId?: string } = {}): Promise<RemoteThreadSnapshot> {
     const ref = await remoteThread(threadId);
     const configuredModels = configuredRemoteModelOptions();
@@ -1941,7 +1952,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         permission,
         cwdName: basename(ref.cwd) || ref.cwd,
         model: null,
-        availableModels: configuredModels,
+        availableModels: remoteModelOptions([...lastKnownPiModels, ...configuredModels]),
         skills: [],
         thinkingLevel: "off",
         thinkingLevels: ["off"],
@@ -1967,7 +1978,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         permission: toRemotePermission(live.permission),
         cwdName: basename(ref.cwd) || ref.cwd,
         model: gathered.model || null,
-        availableModels: remoteModelOptions([...modelArray(gathered.models), ...configuredModels]),
+        availableModels: remoteModelOptions([...(lastKnownPiModels = modelArray(gathered.models)), ...configuredModels]),
         skills: remoteSkills(gathered.commands, ref.cwd),
         thinkingLevel: gathered.thinkingLevel || "off",
         thinkingLevels: await bridgeThinkingLevels(live.bridge),
@@ -2013,7 +2024,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       permission,
       cwdName: basename(ref.cwd) || ref.cwd,
       model: openState?.model ?? history.model,
-      availableModels: configuredModels,
+      availableModels: remoteModelOptions([...lastKnownPiModels, ...configuredModels]),
       skills: [],
       thinkingLevel: openState?.thinkingLevel || history.thinkingLevel || "off",
       thinkingLevels: open ? await bridgeThinkingLevels(open.bridge) : undefined,
@@ -2547,7 +2558,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       // （2026-09-26 真机）。这里的拼法与 live 快照（ipc.ts:1970）保持一致。
       try {
         const models: any = await handle.bridge.getAvailableModels();
-        const availableModels = remoteModelOptions([...modelArray(models), ...configuredRemoteModelOptions()]);
+        lastKnownPiModels = modelArray(models);
+        const availableModels = remoteModelOptions([...lastKnownPiModels, ...configuredRemoteModelOptions()]);
         if (availableModels.length) {
           publishThreadConfigChange(
             { remoteThreadId: threadId, sessionFile: ref.sessionFile },
