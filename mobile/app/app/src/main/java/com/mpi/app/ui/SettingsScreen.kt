@@ -25,6 +25,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,6 +49,7 @@ import com.mpi.app.BuildConfig
 import com.mpi.app.data.AppSettings
 import com.mpi.app.data.Appearance
 import com.mpi.app.data.FontSize
+import com.mpi.app.data.Notifier
 import com.mpi.app.data.SessionState
 import com.mpi.app.data.UpdateInfo
 import com.mpi.app.data.VoiceSpeechContent
@@ -88,6 +90,7 @@ fun SettingsScreen(
     onNotifyOnTurnComplete: (Boolean) -> Unit,
     onSpeakTurnComplete: (Boolean) -> Unit,
     onVoiceContent: (VoiceSpeechContent) -> Unit,
+    onVoiceFixedPhrase: (String) -> Unit,
     onSpeakDuringCall: (Boolean) -> Unit,
     onShowToolCalls: (Boolean) -> Unit,
     onShowThinking: (Boolean) -> Unit,
@@ -107,6 +110,7 @@ fun SettingsScreen(
     var appearancePicker by remember { mutableStateOf(false) }
     var fontPicker by remember { mutableStateOf(false) }
     var voiceContentPicker by remember { mutableStateOf(false) }
+    var fixedPhraseDialog by remember { mutableStateOf(false) }
     var confirmingRemove by remember { mutableStateOf(false) }
     var cacheNote by remember { mutableStateOf<String?>(null) }
 
@@ -132,8 +136,8 @@ fun SettingsScreen(
                     trailing = if (settings.notifyOnTurnComplete) "开（仅后台）" else "关",
                     onClick = { onNotifyOnTurnComplete(!settings.notifyOnTurnComplete) },
                 )
-                // 语音只念固定语（「<会话标题>回复已完成」），不念回复正文——代码/符号念出来不好听。
-                // 触发条件与上一条完全一致；引擎/中文语音包缺失时静默降级为「只发通知」。
+                // 完成后出声念一句：固定语或回复摘要（见下一条）；
+                // 引擎/中文语音包缺失时静默降级为「只发通知」。
                 SettingsItem(
                     icon = IconMic,
                     title = "完成后语音播报",
@@ -146,6 +150,13 @@ fun SettingsScreen(
                     title = "播报内容",
                     trailing = voiceContentLabel(settings.voiceSpeechContent),
                     onClick = { voiceContentPicker = true },
+                )
+                // 固定语文案可自定义；会话标题前缀由播报逻辑自动加，不在这句里。
+                SettingsItem(
+                    icon = null,
+                    title = "固定语内容",
+                    trailing = settings.voiceFixedPhrase,
+                    onClick = { fixedPhraseDialog = true },
                 )
                 // 通话中（含微信语音）系统会把 TTS 压掉；开着就是「照样试一把」，不保证出声。
                 SettingsItem(
@@ -298,6 +309,42 @@ fun SettingsScreen(
                 }
             },
             confirmButton = { TextButton(onClick = { voiceContentPicker = false }) { Text("关闭") } },
+        )
+    }
+
+    if (fixedPhraseDialog) {
+        // 每次打开都从当前设置重新起稿（对话框关闭即离开组合，remember 会重置）。
+        var draft by remember { mutableStateOf(settings.voiceFixedPhrase) }
+        AlertDialog(
+            onDismissRequest = { fixedPhraseDialog = false },
+            title = { Text("固定语内容") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text(Notifier.DEFAULT_FIXED_PHRASE) },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "有会话标题时会自动加「<标题>」前缀；超过 ${Notifier.SPEECH_MAX} 字只念前面部分。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MpiTheme.colors.textFaint,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onVoiceFixedPhrase(draft)
+                        fixedPhraseDialog = false
+                    },
+                    enabled = draft.isNotBlank(),
+                ) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { fixedPhraseDialog = false }) { Text("取消") } },
         )
     }
 

@@ -94,14 +94,17 @@ data class AppSettings(
      */
     val notifyOnTurnComplete: Boolean = true,
     /**
-     * 「对话完成」时**念一句**（系统 TTS，固定语，不是念回复正文）。默认开。
+     * 「对话完成」时**念一句**（系统 TTS；念什么由 [voiceSpeechContent] 决定）。默认开。
      *
-     * 触发条件与 [notifyOnTurnComplete] 完全一致（仅后台/锁屏 + 仅手机发起的回合）；
-     * 引擎缺失 / 中文语音包没装时静默降级为「只发通知」。
+     * 触发条件与 [notifyOnTurnComplete] **不同**：通知走飞书已读口径（不区分谁发起，
+     * 只看有没有在看着该会话）；出声更打扰，所以语音只念**手机发起的回合**，且挂在
+     * 当前打开会话的 running→false 回调上。引擎缺失 / 中文语音包没装时静默降级为「只发通知」。
      */
     val speakTurnComplete: Boolean = true,
     /** 播报念什么：固定语 / 回复摘要（仅在 [speakTurnComplete] 开着时有意义）。 */
     val voiceSpeechContent: VoiceSpeechContent = VoiceSpeechContent.Fixed,
+    /** 固定语的文案本身，用户可改；空白回落默认「回复已完成」（见 [Notifier.DEFAULT_FIXED_PHRASE]）。 */
+    val voiceFixedPhrase: String = Notifier.DEFAULT_FIXED_PHRASE,
     /**
      * 通话中也尝试播报（含微信这类 VoIP）。默认关。
      *
@@ -160,6 +163,13 @@ class SettingsStore(context: Context) {
         _settings.value = read()
     }
 
+    fun setVoiceFixedPhrase(value: String) {
+        // 压平空白；空串回落默认，避免存下一句念不出东西的「固定语」。
+        val normalized = value.replace(Regex("\\s+"), " ").trim()
+        prefs.edit().putString(KEY_VOICE_FIXED_PHRASE, normalized.ifEmpty { Notifier.DEFAULT_FIXED_PHRASE }).apply()
+        _settings.value = read()
+    }
+
     fun setSpeakDuringCall(value: Boolean) {
         prefs.edit().putBoolean(KEY_SPEAK_DURING_CALL, value).apply()
         _settings.value = read()
@@ -173,6 +183,9 @@ class SettingsStore(context: Context) {
         notifyOnTurnComplete = prefs.getBoolean(KEY_NOTIFY_TURN_COMPLETE, true),
         speakTurnComplete = prefs.getBoolean(KEY_SPEAK_TURN_COMPLETE, true),
         voiceSpeechContent = VoiceSpeechContent.fromStored(prefs.getString(KEY_VOICE_SPEECH_CONTENT, null)),
+        // 旧版本没写过这个键 / 值损坏时回落默认。
+        voiceFixedPhrase = prefs.getString(KEY_VOICE_FIXED_PHRASE, null)?.takeIf { it.isNotBlank() }
+            ?: Notifier.DEFAULT_FIXED_PHRASE,
         speakDuringCall = prefs.getBoolean(KEY_SPEAK_DURING_CALL, false),
     )
 
@@ -185,6 +198,7 @@ class SettingsStore(context: Context) {
         private const val KEY_NOTIFY_TURN_COMPLETE = "notifyOnTurnComplete"
         private const val KEY_SPEAK_TURN_COMPLETE = "speakTurnComplete"
         private const val KEY_VOICE_SPEECH_CONTENT = "voiceSpeechContent"
+        private const val KEY_VOICE_FIXED_PHRASE = "voiceFixedPhrase"
         private const val KEY_SPEAK_DURING_CALL = "speakDuringCall"
     }
 }

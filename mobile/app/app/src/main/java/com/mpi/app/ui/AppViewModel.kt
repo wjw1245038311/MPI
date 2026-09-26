@@ -957,7 +957,7 @@ class AppViewModel(
         val title = view.summary?.title
         val reply = view.messages.lastOrNull { it.role == "assistant" }?.let { messageTextOf(it) }
         speaker.speak(
-            Notifier.turnCompleteSpeech(settings.voiceSpeechContent, title, reply),
+            Notifier.turnCompleteSpeech(settings.voiceSpeechContent, title, reply, settings.voiceFixedPhrase),
             allowDuringCall = settings.speakDuringCall,
         )
     }

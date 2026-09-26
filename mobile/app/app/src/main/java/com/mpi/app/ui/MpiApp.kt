@@ -288,6 +288,7 @@ fun MpiApp(container: AppContainer) {
                     onNotifyOnTurnComplete = container.settingsStore::setNotifyOnTurnComplete,
                     onSpeakTurnComplete = container.settingsStore::setSpeakTurnComplete,
                     onVoiceContent = container.settingsStore::setVoiceSpeechContent,
+                    onVoiceFixedPhrase = container.settingsStore::setVoiceFixedPhrase,
                     onSpeakDuringCall = container.settingsStore::setSpeakDuringCall,
                     onShowToolCalls = container.settingsStore::setShowToolCalls,
                     onShowThinking = container.settingsStore::setShowThinking,

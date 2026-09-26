@@ -63,6 +63,43 @@ class NotifierLogicTest {
     }
 
     @Test
+    fun `speech uses the user-customized fixed phrase`() {
+        // 有标题：前缀照加，正文换成自定义文案
+        assertEquals(
+            "「部署」 任务完成，请查看",
+            Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, "部署", null, "任务完成，请查看"),
+        )
+        // 无标题：只念自定义文案
+        assertEquals("任务完成，请查看", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, null, null, "任务完成，请查看"))
+    }
+
+    @Test
+    fun `blank custom fixed phrase falls back to the default`() {
+        assertEquals("回复已完成", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, null, null, "   "))
+        // 多行输入压平后念出来才像人话
+        assertEquals(
+            "「部署」 任务完成 请查看",
+            Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, "部署", null, "任务完成\n请查看"),
+        )
+    }
+
+    @Test
+    fun `long custom fixed phrase is clipped for speech`() {
+        val spoken = Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, null, null, "字".repeat(100))
+        assertEquals(Notifier.SPEECH_MAX, spoken.length)
+        assertTrue(spoken.endsWith("…"))
+    }
+
+    @Test
+    fun `reply content falls back to the custom fixed phrase when nothing is left`() {
+        // 只有代码：去掉围栏后什么都不剩 → 退回（自定义）固定语
+        assertEquals(
+            "任务完成",
+            Notifier.turnCompleteSpeech(VoiceSpeechContent.Reply, null, "```js\ncode()\n```", "任务完成"),
+        )
+    }
+
+    @Test
     fun `speech reply content drops code fences and the long one is clipped`() {
         val reply = "已经改好了：\n```kotlin\nval x = 1\n```\n下次不会再这样。"
         assertEquals(

@@ -147,6 +147,9 @@ class Notifier(private val context: Context) {
     }
 
     companion object {
+        /** 固定语默认文案（用户可在设置里改，见 SettingsStore.voiceFixedPhrase）。 */
+        internal const val DEFAULT_FIXED_PHRASE = "回复已完成"
+
         const val CHANNEL_SERVICE = "mpi-service"
         const val CHANNEL_APPROVAL = "mpi-approval"
         const val CHANNEL_TURN = "mpi-turn"
@@ -193,8 +196,8 @@ class Notifier(private val context: Context) {
             watchingThread: Boolean,
         ): Boolean = enabled && !watchingThread
 
-        /** 播报里回复摘要最多念多少字——再长就只剩吵了。 */
-        private const val SPEECH_MAX = 60
+        /** 播报里回复摘要 / 自定义固定语最多念多少字——再长就只剩吵了（设置页提示文案也引用它）。 */
+        internal const val SPEECH_MAX = 60
 
         /** ``` 围栏代码块：念出来毫无意义（会是「反引号反引号反引号…」）。 */
         private val FENCED_CODE = Regex("```[\\s\\S]*?```")
@@ -212,16 +215,21 @@ class Notifier(private val context: Context) {
         /**
          * 语音播报稿（纯函数，可单测）：按设置念**固定语**或**回复摘要**。
          *
+         * 固定语文案用户可自定义（[fixedPhrase]），会话标题前缀仍由这里自动加；
          * 摘要先去掉代码围栏、压平空白、截短——念出来才像人话；摘要为空时退回固定语。
          */
         internal fun turnCompleteSpeech(
             content: VoiceSpeechContent,
             threadTitle: String?,
             reply: String?,
+            fixedPhrase: String = DEFAULT_FIXED_PHRASE,
         ): String {
             val title = threadTitle?.trim().orEmpty()
             val prefix = if (title.isEmpty()) "" else "「${title.take(40)}」"
-            val fixed = if (prefix.isEmpty()) "回复已完成" else "$prefix 回复已完成"
+            // 自定义固定语：压平空白、空回落默认、超长截短（念太长就只剩吵了）。
+            val phrase = flatten(fixedPhrase).ifEmpty { DEFAULT_FIXED_PHRASE }
+            val clipped = if (phrase.length <= SPEECH_MAX) phrase else "${phrase.take(SPEECH_MAX - 1)}…"
+            val fixed = if (prefix.isEmpty()) clipped else "$prefix $clipped"
             if (content == VoiceSpeechContent.Fixed) return fixed
             val excerpt = spokenReply(reply, SPEECH_MAX)
             if (excerpt.isEmpty()) return fixed
