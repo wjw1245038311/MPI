@@ -151,7 +151,7 @@ fun SettingsScreen(
                     trailing = voiceContentLabel(settings.voiceSpeechContent),
                     onClick = { voiceContentPicker = true },
                 )
-                // 固定语文案可自定义；会话标题前缀由播报逻辑自动加，不在这句里。
+                // 固定语是模板：{title} 替换为会话标题（截40字）；不写就不念标题。
                 SettingsItem(
                     icon = null,
                     title = "固定语内容",
@@ -329,7 +329,7 @@ fun SettingsScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "有会话标题时会自动加「<标题>」前缀；超过 ${Notifier.SPEECH_MAX} 字只念前面部分。",
+                        text = "支持 {title} 占位符（替换为会话标题，截40字）；没标题时自动去掉——不想要标题就别写它。模板超 ${Notifier.SPEECH_MAX} 字只念前面部分。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MpiTheme.colors.textFaint,
                     )

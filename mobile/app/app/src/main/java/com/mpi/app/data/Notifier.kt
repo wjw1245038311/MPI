@@ -147,8 +147,12 @@ class Notifier(private val context: Context) {
     }
 
     companion object {
-        /** 固定语默认文案（用户可在设置里改，见 SettingsStore.voiceFixedPhrase）。 */
-        internal const val DEFAULT_FIXED_PHRASE = "回复已完成"
+        /** 固定语默认模板（用户可在设置里改，见 SettingsStore.voiceFixedPhrase）；`{title}` 见 [turnCompleteSpeech]。 */
+        // 注意：」与句子之间保留一个空格——旧行为是前缀+空格+句子，默认模板要逐字复现它。
+        internal const val DEFAULT_FIXED_PHRASE = "「{title}」 回复已完成"
+
+        /** 固定语模板里的标题占位符（小写、精确匹配）。 */
+        private const val TITLE_PLACEHOLDER = "{title}"
 
         const val CHANNEL_SERVICE = "mpi-service"
         const val CHANNEL_APPROVAL = "mpi-approval"
@@ -215,8 +219,10 @@ class Notifier(private val context: Context) {
         /**
          * 语音播报稿（纯函数，可单测）：按设置念**固定语**或**回复摘要**。
          *
-         * 固定语文案用户可自定义（[fixedPhrase]），会话标题前缀仍由这里自动加；
-         * 摘要先去掉代码围栏、压平空白、截短——念出来才像人话；摘要为空时退回固定语。
+         * 固定语是用户可编辑的**模板**（[fixedPhrase]）：`{title}` 替换为会话标题（截40字），
+         * 没标题时去掉占位符并清掉落空的「」；想不念标题就别写 `{title}`。
+         * 摘要模式仍自动带标题前缀（模板只管固定语）；摘要先去掉代码围栏、压平空白、
+         * 截短——念出来才像人话；摘要为空时退回固定语。
          */
         internal fun turnCompleteSpeech(
             content: VoiceSpeechContent,
@@ -226,10 +232,20 @@ class Notifier(private val context: Context) {
         ): String {
             val title = threadTitle?.trim().orEmpty()
             val prefix = if (title.isEmpty()) "" else "「${title.take(40)}」"
-            // 自定义固定语：压平空白、空回落默认、超长截短（念太长就只剩吵了）。
-            val phrase = flatten(fixedPhrase).ifEmpty { DEFAULT_FIXED_PHRASE }
-            val clipped = if (phrase.length <= SPEECH_MAX) phrase else "${phrase.take(SPEECH_MAX - 1)}…"
-            val fixed = if (prefix.isEmpty()) clipped else "$prefix $clipped"
+            // 模板：压平空白、空回落默认；截短只算模板本身（标题另计，最长40字）。
+            var template = flatten(fixedPhrase).ifEmpty { DEFAULT_FIXED_PHRASE }
+            if (template.length > SPEECH_MAX) {
+                // 截断可能切在占位符中间 → 先去掉尾部残缺片段再补省略号，别让 TTS 念花括号。
+                val cut = template.take(SPEECH_MAX - 1).replace(Regex("\\{[a-z]*$"), "")
+                template = "$cut…"
+            }
+            val fixed = flatten(
+                if (title.isEmpty()) {
+                    template.replace(TITLE_PLACEHOLDER, "").replace("「」", "")
+                } else {
+                    template.replace(TITLE_PLACEHOLDER, title.take(40))
+                },
+            )
             if (content == VoiceSpeechContent.Fixed) return fixed
             val excerpt = spokenReply(reply, SPEECH_MAX)
             if (excerpt.isEmpty()) return fixed

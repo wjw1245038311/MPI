@@ -64,21 +64,35 @@ class NotifierLogicTest {
 
     @Test
     fun `speech uses the user-customized fixed phrase`() {
-        // 有标题：前缀照加，正文换成自定义文案
-        assertEquals(
-            "「部署」 任务完成，请查看",
-            Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, "部署", null, "任务完成，请查看"),
-        )
-        // 无标题：只念自定义文案
+        // 模板里没有 {title} → 不念标题（新口径：前缀不再自动加）
+        assertEquals("任务完成，请查看", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, "部署", null, "任务完成，请查看"))
         assertEquals("任务完成，请查看", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, null, null, "任务完成，请查看"))
     }
 
     @Test
+    fun `speech template substitutes the title placeholder`() {
+        // 默认模板 = 「{title}」回复已完成：有标题带前缀、无标题清掉空引号（与旧行为等价）
+        assertEquals("「部署」 回复已完成", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, "部署", null))
+        assertEquals("回复已完成", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, null, null))
+        // 自定义模板：占位符位置/措辞随意摆
+        assertEquals("部署 的活干完了", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, "部署", null, "{title} 的活干完了"))
+        // 无标题 → 去掉占位符（模板依赖标题时读起来不完整，属预期）
+        assertEquals("的活干完了", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, null, null, "{title} 的活干完了"))
+    }
+
+    @Test
+    fun `long titles in the template are truncated to 40 chars`() {
+        val long = "x".repeat(100)
+        assertEquals("「${"x".repeat(40)}」 回复已完成", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, long, null))
+    }
+
+    @Test
     fun `blank custom fixed phrase falls back to the default`() {
+        // 空白 → 默认模板；无标题时念「回复已完成」
         assertEquals("回复已完成", Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, null, null, "   "))
-        // 多行输入压平后念出来才像人话
+        // 多行输入压平后念出来才像人话（模板无占位符 → 不加前缀）
         assertEquals(
-            "「部署」 任务完成 请查看",
+            "任务完成 请查看",
             Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, "部署", null, "任务完成\n请查看"),
         )
     }
@@ -91,12 +105,27 @@ class NotifierLogicTest {
     }
 
     @Test
+    fun `clipping never leaves a broken placeholder fragment`() {
+        // 模板 65 字：截断正好切在 {title} 中间 → 去掉尾部残缺片段，别让 TTS 念花括号
+        val template = "字".repeat(58) + "{title}"
+        val spoken = Notifier.turnCompleteSpeech(VoiceSpeechContent.Fixed, null, null, template)
+        assertTrue(spoken.endsWith("…"))
+        assertTrue(!spoken.contains("{"))
+    }
+
+    @Test
     fun `reply content falls back to the custom fixed phrase when nothing is left`() {
         // 只有代码：去掉围栏后什么都不剩 → 退回（自定义）固定语
         assertEquals(
             "任务完成",
             Notifier.turnCompleteSpeech(VoiceSpeechContent.Reply, null, "```js\ncode()\n```", "任务完成"),
         )
+    }
+
+    @Test
+    fun `reply summary keeps its automatic title prefix`() {
+        // 摘要模式不受模板影响：仍自动带标题前缀（模板只管固定语）
+        assertEquals("「部署」 已经改好了", Notifier.turnCompleteSpeech(VoiceSpeechContent.Reply, "部署", "已经改好了"))
     }
 
     @Test

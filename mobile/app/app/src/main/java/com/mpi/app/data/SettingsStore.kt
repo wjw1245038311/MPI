@@ -103,7 +103,7 @@ data class AppSettings(
     val speakTurnComplete: Boolean = true,
     /** 播报念什么：固定语 / 回复摘要（仅在 [speakTurnComplete] 开着时有意义）。 */
     val voiceSpeechContent: VoiceSpeechContent = VoiceSpeechContent.Fixed,
-    /** 固定语的文案本身，用户可改；空白回落默认「回复已完成」（见 [Notifier.DEFAULT_FIXED_PHRASE]）。 */
+    /** 固定语模板（用户可改）：`{title}` 替换为会话标题，不写就不念标题；空白回落默认。 */
     val voiceFixedPhrase: String = Notifier.DEFAULT_FIXED_PHRASE,
     /**
      * 通话中也尝试播报（含微信这类 VoIP）。默认关。
