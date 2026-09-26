@@ -83,38 +83,12 @@ class NotifierLogicTest {
     }
 
     @Test
-    fun `turn notify reason names the blocking condition`() {
-        fun reason(
-            enabled: Boolean = true,
-            watchingThread: Boolean = false,
-            phoneInitiated: Boolean = true,
-            voice: Boolean = true,
-            inCall: Boolean = false,
-            speakDuringCall: Boolean = false,
-        ) = Notifier.turnNotifyReason(enabled, watchingThread, phoneInitiated, voice, inCall, speakDuringCall)
-
-        assertEquals("已通知 + 语音", reason())
-        assertEquals("跳过：设置里已关闭", reason(enabled = false))
-        assertEquals("跳过：回合由电脑端发起", reason(phoneInitiated = false))
-        assertEquals("跳过：正在看这个会话", reason(watchingThread = true))
-        assertEquals("已通知", reason(voice = false))
-        // 微信/运营商通话中：系统会把媒体音/TTS 压掉 → 默认跳过播报，但通知照发
-        assertEquals("已通知（通话中，未播报）", reason(inCall = true))
-        // 用户在设置里开了「通话中也播报」→ 照样试，但不保证出声
-        assertEquals("已通知 + 语音（通话中，可能听不到）", reason(inCall = true, speakDuringCall = true))
-        // 前面几个条件优先级更高（那时连通知都不发）
-        assertEquals("跳过：正在看这个会话", reason(watchingThread = true, inCall = true))
-        assertEquals("跳过：设置里已关闭", reason(enabled = false, inCall = true))
-    }
-
-    @Test
-    fun `only phone initiated turns notify, and only while not watching that thread`() {
-        assertTrue(Notifier.shouldNotifyTurnComplete(enabled = true, watchingThread = false, phoneInitiated = true))
+    fun `a finished turn notifies unless the user is watching that thread`() {
+        // 飞书已读口径：不区分谁发起，只要没在看着这个会话就通知
+        assertTrue(Notifier.shouldNotifyTurnComplete(enabled = true, watchingThread = false))
         // 设置关掉 → 不发
-        assertTrue(!Notifier.shouldNotifyTurnComplete(enabled = false, watchingThread = false, phoneInitiated = true))
+        assertTrue(!Notifier.shouldNotifyTurnComplete(enabled = false, watchingThread = false))
         // 正在看这个会话 → 不打扰
-        assertTrue(!Notifier.shouldNotifyTurnComplete(enabled = true, watchingThread = true, phoneInitiated = true))
-        // 桌面发起的回合 → 不响
-        assertTrue(!Notifier.shouldNotifyTurnComplete(enabled = true, watchingThread = false, phoneInitiated = false))
+        assertTrue(!Notifier.shouldNotifyTurnComplete(enabled = true, watchingThread = true))
     }
 }

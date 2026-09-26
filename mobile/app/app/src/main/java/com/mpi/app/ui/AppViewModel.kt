@@ -208,9 +208,11 @@ class AppViewModel(
      * 本回合是**手机自己发起**的吗？发送成功后置起，回合结束时消费掉。
      * 「对话完成」通知只对手机发起的回合发——桌面发起的没必要响（见 [notifyTurnComplete]）。
      */
-    /** 手机发起、尚未通知的回合：会话 id + 发起时刻（离线期间跑完的靠它补发，见 [notifyTurnFinishedOffline]）。 */
-    private var pendingTurnNotifyThreadId: String? = null
-    private var pendingTurnNotifyAtMs: Long = 0L
+    /** 手机发起的回合（只给语音播报用：电脑端发起的回合不念）。 */
+    private var phoneTurnStarted = false
+
+    /** 上一轮各会话的状态：用来发现「刚跑完」的会话（见 [notifyFinishedTurns]）。 */
+    private var lastThreadStates: Map<String, RemoteThreadState> = emptyMap()
     /** 语音对话模式的循环 Job（null = 未运行）。 */
     private var voiceChatJob: Job? = null
     /** 语音模式里「回合结束」的握手：视图收集器 settle 时唤醒它。 */
@@ -591,7 +593,7 @@ class AppViewModel(
                     // 判定里因「语音模式中」跳过，避免一句回复念两遍。
                     voiceSettle?.complete(Unit)
                     voiceSettle = null
-                    notifyTurnComplete(threadId, view)
+                    speakTurnComplete(view)
                     flushPendingFollowUp()
                 }
                 // 审批提醒（M5）：请求出现就通知，消失就撤销
@@ -937,63 +939,67 @@ class AppViewModel(
     }
 
     /**
-     * 手机发起的回合在后台跑完 → 系统通知（点它直达该会话）+ 可选语音播报。
+     * 回合结束时的**语音播报**（完成通知不在这里了——它由列表轮询驱动，见 [notifyFinishedTurns]）。
      *
-     * 三个条件缺一不发（纯函数判定见 [Notifier.shouldNotifyTurnComplete]）：设置开着、
-     * **不在前台**（盯着屏幕看时不打扰）、本回合是**手机发起**的（桌面发起的不响）。
-     * 不管发不发，标记都在这里消费掉，避免下一个回合误报；判定结果写进诊断页。
+     * 只念「手机发起的回合」：电脑端发起的回合在电脑前跑完，手机念一遍很吵
+     * （通知不设这个限制——没看着就该叫一下，但**出声念**更打扰，口径不同）。
      */
-    private fun notifyTurnComplete(threadId: String, view: ThreadView) {
-        val phoneInitiated = pendingTurnNotifyThreadId == threadId
-        if (phoneInitiated) pendingTurnNotifyThreadId = null
+    private fun speakTurnComplete(view: ThreadView) {
+        val phoneInitiated = phoneTurnStarted
+        phoneTurnStarted = false
+        if (!phoneInitiated) return
+        if (_ui.value.voiceChat != null) return // 语音模式自己会播报回复
         val settings = settingsStore.settings.value
-        // 语音模式自己会播报回复，完成通知/播报一律让路（否则一句回复念两遍）
-        val inVoiceChat = _ui.value.voiceChat != null
-        // ⚠️ 「别打扰」的准确口径：App 在前台 **且打开的就是这个会话**。
-        // 只看「App 在前台」太宽——前台翻别的会话、或在设置/抽屉里时，完成通知照样该弹
-        // （真机反馈：用 PWA 看进度 / 前台开着别的会话时收不到通知）。
-        // 屏幕/锁屏也是实时查的：熄屏、锁屏在部分 ROM 上不一定立刻走 onPause。
-        val foregroundNow = AppVisibility.isForegroundNow()
-        val watchingThread = foregroundNow && _ui.value.openThreadId == threadId
-        val notify = !inVoiceChat && Notifier.shouldNotifyTurnComplete(
-            enabled = settings.notifyOnTurnComplete,
-            watchingThread = watchingThread,
-            phoneInitiated = phoneInitiated,
-        )
-        val voiceEnabled = settings.speakTurnComplete
+        if (!settings.speakTurnComplete) return
         // 通话中（含微信 VoIP）系统会把 TTS 压掉，念了也是白念，还可能被通话对方听到 →
         // 默认跳过；用户在设置里开了「通话中也播报」就照样试一把。
-        val inCall = speaker.inCall()
-        val spoke = notify && voiceEnabled && (!inCall || settings.speakDuringCall)
-        _ui.update {
-            it.copy(
-                lastTurnNotify = if (inVoiceChat) {
-                    "跳过：语音模式中（由语音模式播报）"
-                } else {
-                    // 带上判定依据与时刻：下次「设了却没收到通知」时不用再猜是哪个信号拦的
-                    val stamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
-                        .format(java.util.Date())
-                    Notifier.turnNotifyReason(
-                        enabled = settings.notifyOnTurnComplete,
-                        watchingThread = watchingThread,
-                        phoneInitiated = phoneInitiated,
-                        voiceEnabled = voiceEnabled,
-                        inCall = inCall,
-                        speakDuringCall = settings.speakDuringCall,
-                    ) + "（${AppVisibility.detail()} · 看的是本会话=${if (watchingThread) "是" else "否"} · $stamp）"
-                },
-            )
-        }
-        if (!notify) return
+        if (speaker.inCall() && !settings.speakDuringCall) return
         val title = view.summary?.title
-        // 回复摘要优先（与桌面端完成卡片同源）；出错时 [Notifier.turnCompleteText] 改用错误文案
         val reply = view.messages.lastOrNull { it.role == "assistant" }?.let { messageTextOf(it) }
-        notifier.notifyTurnComplete(threadId, title, Notifier.turnCompleteText(reply, view.errorBanner))
-        if (spoke) {
-            speaker.speak(
-                Notifier.turnCompleteSpeech(settings.voiceSpeechContent, title, reply),
-                allowDuringCall = settings.speakDuringCall,
-            )
+        speaker.speak(
+            Notifier.turnCompleteSpeech(settings.voiceSpeechContent, title, reply),
+            allowDuringCall = settings.speakDuringCall,
+        )
+    }
+
+    /**
+     * 「飞书已读」式的完成通知：**只看会话状态，不区分谁发起的回合**。
+     *
+     * 为什么不再挂在 threadSession 的 running→false 上（上一版的做法）：只有**当前打开的那个
+     * 会话**才有这个回调，用户一划走 / 断连就丢事件，通知永远不来（真机反馈 + 主机 diag 里
+     * 成串的 `remote-conn closed … relay-device-offline` 为证）；而且它只认「手机发起」，
+     * 与「只要我没看着就该通知我」相反。
+     *
+     * 现在看**主机列表快照**（连接在线时每 5 秒轮询一次）：上一轮还在 Running、这一轮不在了的
+     * 会话就是「刚跑完」。正在看这个会话才不打扰（炨屏/锁屏也算离开，见 [AppVisibility]）。
+     */
+    private fun notifyFinishedTurns(snapshot: HostSnapshot) {
+        val states = snapshot.allThreads.associate { it.id to it.state }
+        val finished = snapshot.allThreads.filter { thread ->
+            lastThreadStates[thread.id] == RemoteThreadState.Running &&
+                thread.state != RemoteThreadState.Running
+        }
+        lastThreadStates = states
+        if (finished.isEmpty()) return
+
+        val settings = settingsStore.settings.value
+        val watchingThreadId = if (AppVisibility.isForegroundNow()) _ui.value.openThreadId else null
+        val stamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+        finished.forEach { thread ->
+            val watching = watchingThreadId == thread.id
+            val reason = when {
+                !settings.notifyOnTurnComplete -> "跳过：设置里已关闭"
+                watching -> "跳过：正在看这个会话"
+                else -> "已通知"
+            }
+            _ui.update { it.copy(lastTurnNotify = "$reason（${AppVisibility.detail()} · $stamp）") }
+            if (Notifier.shouldNotifyTurnComplete(settings.notifyOnTurnComplete, watching)) {
+                notifier.notifyTurnComplete(
+                    thread.id,
+                    thread.title,
+                    Notifier.turnCompleteText(thread.preview, null),
+                )
+            }
         }
     }
 
@@ -1011,29 +1017,6 @@ class AppViewModel(
             delay(12_000)
             notifier.notifyTest("测试通知 · 判定依据 ${AppVisibility.detail()}")
         }
-    }
-
-    /**
-     * 补发「离线期间跑完」的完成通知。
-     *
-     * 原来的完成通知只挂在**当前订阅的那个会话**的 running→false 上（见 [notifyTurnComplete]
-     * 的调用点）：用户一划到后台连接就断（主机 diag 里成串的 `remote-conn closed …
-     * relay-device-offline`），回合结束事件丢了；回到 App 也只在重新打开那个会话时才有回调，
-     * 于是通知永远不来（真机反馈："划到后台、用 PWA 看进度，完成通知收不到"）。
-     *
-     * 这里用**主机列表快照**兜底：会话不再是 Running 就补一条；还在跑就什么都不做。
-     * 超过 [OFFLINE_NOTIFY_MAX_AGE_MS] 的陈旧待通知直接丢弃（避免打开 App 时弹出几小时前的通知）。
-     */
-    private fun notifyTurnFinishedOffline(snapshot: HostSnapshot) {
-        val pending = pendingTurnNotifyThreadId ?: return
-        if (System.currentTimeMillis() - pendingTurnNotifyAtMs > OFFLINE_NOTIFY_MAX_AGE_MS) {
-            pendingTurnNotifyThreadId = null
-            return
-        }
-        val thread = snapshot.allThreads.firstOrNull { it.id == pending } ?: return
-        if (thread.state == RemoteThreadState.Running) return // 还在跑，等它结束
-        pendingTurnNotifyThreadId = null
-        notifier.notifyTurnComplete(pending, thread.title, "回复已完成（断开期间跑完的）")
     }
 
     /** 重试一条发送失败的消息（保留原位，不重复上屏）。 */
@@ -1167,13 +1150,9 @@ class AppViewModel(
             runCatching { session.ensureSubscribed() }
             try {
                 val result = actions.send(text, mode, images, files)
-                // 手机发起的回合：跑完时给一条完成通知——见 notifyTurnComplete()。
-                // 记**会话 id + 时刻**（不是布尔）：切后台断连后事件会丢，回前台时
-                // 靠它去主机列表里对状态补发（见 notifyTurnFinishedOffline）。
-                if (_ui.value.openThreadId != null) {
-                    pendingTurnNotifyThreadId = _ui.value.openThreadId
-                    pendingTurnNotifyAtMs = System.currentTimeMillis()
-                }
+                // 手机发起的回合：现在只影响「是否语音播报」（完成通知与谁发起无关，见
+                // notifyFinishedTurns 的飞书已读口径）。
+                phoneTurnStarted = true
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
                 _ui.update {
                     it.copy(sending = false, attachments = emptyList(), sendNote = queuedNoteOf(result))
@@ -1366,7 +1345,7 @@ class AppViewModel(
             newRepository.snapshot.collect { snapshot ->
                 _ui.update { it.copy(host = snapshot) }
                 maybeAutoOpenThread(snapshot)
-                notifyTurnFinishedOffline(snapshot)
+                notifyFinishedTurns(snapshot)
             }
         }
 
@@ -1407,12 +1386,6 @@ class AppViewModel(
     companion object {
         private const val MAX_PROBLEMS = 5
         private const val MAX_ATTACHMENTS = 3
-
-        /**
-         * 待补发的完成通知最多留多久（2 小时）：超过就当成陈旧，不再在打开 App 时弹回来。
-         * 见 [notifyTurnFinishedOffline]。
-         */
-        private const val OFFLINE_NOTIFY_MAX_AGE_MS = 2 * 60 * 60 * 1000L
 
         // ---- 语音对话模式（阶段 1）----
 

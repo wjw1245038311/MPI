@@ -182,18 +182,16 @@ class Notifier(private val context: Context) {
         /**
          * 该不该发「对话完成」通知（纯函数，可单测）。
          *
-         * 三个都成立才发：设置开着、**用户没有正在看这个会话**（盯着看时没必要再响）、
-         * 且这个回合是**手机自己发起**的（桌面发起的不该响）。
+         * 两个条件：设置开着、**用户没有正在看这个会话**。
          *
-         * ⚠️ [watchingThread] 的口径是「App 在前台 **且** 打开的就是这个会话」：
-         * 只看「App 在前台」太宽——用户可能在前台翻别的会话、或在设置/抽屉里，
-         * 这时完成通知照样该弹（真机反馈：用 PWA 看进度 / 前台开着别的会话时收不到通知）。
+         * ⚠️ **不再限制「谁发起的回合」**（原来是「手机发起的才通知」）：用户口径是
+         * 「参照飞书已读——只要我没看着，就该通知我」。电脑端发起的回合跑完了，
+         * 手机上正干别的，同样应该被叫一下；反过来正在看这个会话时就不叫。
          */
         internal fun shouldNotifyTurnComplete(
             enabled: Boolean,
             watchingThread: Boolean,
-            phoneInitiated: Boolean,
-        ): Boolean = enabled && phoneInitiated && !watchingThread
+        ): Boolean = enabled && !watchingThread
 
         /** 播报里回复摘要最多念多少字——再长就只剩吵了。 */
         private const val SPEECH_MAX = 60
@@ -228,30 +226,6 @@ class Notifier(private val context: Context) {
             val excerpt = spokenReply(reply, SPEECH_MAX)
             if (excerpt.isEmpty()) return fixed
             return if (prefix.isEmpty()) excerpt else "$prefix $excerpt"
-        }
-
-        /**
-         * 诊断用：这一回合为什么发/没发（纯函数，可单测）。
-         *
-         * 专治「设了却没收到通知」——判定条件直接摊在诊断页上，不用猜。
-         * [voiceEnabled] = 语音播报开关；[inCall] = 当时是否在通话（含微信这类 VoIP：
-         * 系统会把媒体音/TTS 压掉）；[speakDuringCall] = 用户是否允许通话中也尝试播报。
-         */
-        internal fun turnNotifyReason(
-            enabled: Boolean,
-            watchingThread: Boolean,
-            phoneInitiated: Boolean,
-            voiceEnabled: Boolean,
-            inCall: Boolean,
-            speakDuringCall: Boolean,
-        ): String = when {
-            !enabled -> "跳过：设置里已关闭"
-            !phoneInitiated -> "跳过：回合由电脑端发起"
-            watchingThread -> "跳过：正在看这个会话"
-            !voiceEnabled -> "已通知"
-            inCall && !speakDuringCall -> "已通知（通话中，未播报）"
-            inCall -> "已通知 + 语音（通话中，可能听不到）"
-            else -> "已通知 + 语音"
         }
 
         private fun flatten(value: String?): String = value?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
