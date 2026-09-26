@@ -42,6 +42,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mpi.app.AppVisibility
@@ -314,7 +316,7 @@ fun SettingsScreen(
 
     if (fixedPhraseDialog) {
         // 每次打开都从当前设置重新起稿（对话框关闭即离开组合，remember 会重置）。
-        var draft by remember { mutableStateOf(settings.voiceFixedPhrase) }
+        var draft by remember { mutableStateOf(TextFieldValue(settings.voiceFixedPhrase)) }
         AlertDialog(
             onDismissRequest = { fixedPhraseDialog = false },
             title = { Text("固定语内容") },
@@ -327,6 +329,34 @@ fun SettingsScreen(
                         singleLine = true,
                         placeholder = { Text(Notifier.DEFAULT_FIXED_PHRASE) },
                     )
+                    // 点一下在光标处插入标题占位符（有选区则替换），不用手敲 {title}。
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Surface(
+                            onClick = {
+                                val chip = "{title}"
+                                val start = draft.selection.min
+                                val end = draft.selection.max
+                                draft = draft.copy(
+                                    text = draft.text.substring(0, start) + chip + draft.text.substring(end),
+                                    selection = TextRange(start + chip.length),
+                                )
+                            },
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                        ) {
+                            Text(
+                                text = "{title}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                        Text("插入标题占位符", style = MaterialTheme.typography.bodySmall, color = MpiTheme.colors.textFaint)
+                    }
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = "支持 {title} 占位符（替换为会话标题，截40字）；没标题时自动去掉——不想要标题就别写它。模板超 ${Notifier.SPEECH_MAX} 字只念前面部分。",
@@ -338,10 +368,10 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        onVoiceFixedPhrase(draft)
+                        onVoiceFixedPhrase(draft.text)
                         fixedPhraseDialog = false
                     },
-                    enabled = draft.isNotBlank(),
+                    enabled = draft.text.isNotBlank(),
                 ) { Text("保存") }
             },
             dismissButton = { TextButton(onClick = { fixedPhraseDialog = false }) { Text("取消") } },
