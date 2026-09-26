@@ -262,8 +262,21 @@ object ThreadModels {
         return dto.toDomain()
     }
 
-    fun decodeUiRequest(element: kotlinx.serialization.json.JsonElement?): UiRequest? {
-        if (element == null) return null
+    /**
+     * 解析 `config_changed` 里补推的 availableModels。
+     *
+     * 返回 null 表示事件里**没有**这个字段（保持端上原值不变）；空列表也算有效值。
+     * 为什么单独一条：磁盘快照（history-first）的列表只带配置模型，缺 pi 目录里那份，
+     * 桥就绪后主机补推一次完整列表（2026-09-26 真机：chip 显示裸 id、列表里找不到当前模型）。
+     */
+    fun decodeModelOptions(element: kotlinx.serialization.json.JsonElement?): List<ModelOption>? {
+        if (element == null || element is kotlinx.serialization.json.JsonNull) return null
+        val dto = runCatching { json.decodeFromString<List<ModelOptionDto>>(element.toString()) }
+            .getOrNull() ?: return null
+        return dto.filter { it.id.isNotEmpty() }.map { ModelOption(it.provider, it.id, it.name, it.reasoning) }
+    }
+
+    fun decodeUiRequest(element: kotlinx.serialization.json.JsonElement?): UiRequest? {        if (element == null) return null
         val dto = runCatching { json.decodeFromString(UiRequestDto.serializer(), element.toString()) }
             .getOrNull() ?: return null
         if (dto.id.isEmpty()) return null

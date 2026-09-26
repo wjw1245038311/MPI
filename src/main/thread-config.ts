@@ -10,6 +10,7 @@
  * 不依赖 electron / DOM，可被测试直接 import。
  */
 import { builtinTaskModes, normalizeTaskModes, type PermissionLevel, type TaskModeDef } from "../shared/task-mode-catalog";
+import type { RemoteModelOption } from "./remote/protocol";
 
 /** 一次配置变更的补丁：只带真正变化的字段。 */
 export interface ThreadConfigPatch {
@@ -17,6 +18,17 @@ export interface ThreadConfigPatch {
   model?: { provider: string; id: string } | null;
   taskMode?: string | null;
   thinkingLevel?: string;
+  /**
+   * 桥就绪后补推的「可选模型」列表。
+   *
+   * 为什么需要：`thread.subscribe` 是 **history-first**（刻意不冷启桥），磁盘快照的
+   * availableModels 只带 models.json 的配置模型，**不含 pi 目录里的模型**（如 pi.dev
+   * 提供的 `deepseek-flash` / “DeepSeek V4.1 Flash”）；而 live 快照是「pi 模型 + 配置
+   * 模型」。于是完全重启 App 后，手机 chip 找不到当前模型的显示名、只能显示裸 id，
+   * 下拉里也看不到当前模型，得手动刷新（触发 live 快照）才补齐。
+   * （2026-09-26 真机：chip 显示 `deepseek-flash`，列表里没有 4.1。）
+   */
+  availableModels?: RemoteModelOption[];
 }
 
 /** 变更来源：远端（手机）需要桌面弹提示；桌面自己操作不需要。 */
@@ -29,6 +41,7 @@ export function buildConfigPatch(input: ThreadConfigPatch): ThreadConfigPatch | 
   if (input.model !== undefined) patch.model = input.model;
   if (input.taskMode !== undefined) patch.taskMode = input.taskMode;
   if (input.thinkingLevel !== undefined) patch.thinkingLevel = input.thinkingLevel;
+  if (input.availableModels !== undefined) patch.availableModels = input.availableModels;
   return Object.keys(patch).length ? patch : null;
 }
 

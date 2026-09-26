@@ -29,6 +29,11 @@ const { buildConfigPatch, resolveModeById, planModeApplication, planModeClear } 
   const multi = buildConfigPatch({ permission: "full", thinkingLevel: "high", taskMode: "iterate" });
   assert.deepEqual(multi, { permission: "full", thinkingLevel: "high", taskMode: "iterate" });
 
+  // availableModels 是桥就绪后补推的完整模型列表（磁盘快照那份缺 pi 目录里的模型）：
+  // 必须原样透传，手机端靠它把 chip 的裸 id 换成显示名（2026-09-26 真机）。
+  const models = [{ provider: "deepseek", id: "deepseek-flash", name: "DeepSeek V4.1 Flash" }];
+  assert.deepEqual(buildConfigPatch({ availableModels: models }), { availableModels: models });
+
   console.log("ok 1 - buildConfigPatch: undefined 丢弃、null 保留、空补丁为 null");
 }
 

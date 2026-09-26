@@ -720,6 +720,40 @@ class ThreadSessionReducerTest {
     }
 
     @Test
+    fun `config changed can carry a refreshed available model list`() = runBlocking {
+        val transport = FakeTransport()
+        val session = newSession(transport)
+        session.subscribe()
+
+        // 桥就绪后主机补推完整列表（磁盘快照那份缺 pi 目录里的模型）——
+        // chip 靠它才能把裸 id 换成显示名（2026-09-26 真机）。
+        transport.deliver(
+            event(
+                seq = 1,
+                kind = "config_changed",
+                data = buildJsonObject {
+                    put(
+                        "availableModels",
+                        buildJsonArray {
+                            add(buildJsonObject { put("provider", "deepseek"); put("id", "deepseek-flash"); put("name", "DeepSeek V4.1 Flash") })
+                            add(buildJsonObject { put("provider", "new-provider"); put("id", "qwen3.8-27b@q5_k_m") })
+                        },
+                    )
+                },
+            ),
+        )
+        assertEquals(listOf("deepseek-flash", "qwen3.8-27b@q5_k_m"), session.view.value.availableModels.map { it.id })
+
+        // 不带该字段的 config_changed（权限/思考档位变化）不得把列表清空
+        transport.deliver(
+            event(seq = 2, kind = "config_changed", data = buildJsonObject { put("thinkingLevel", "high") }),
+        )
+        assertEquals(2, session.view.value.availableModels.size)
+        assertEquals("high", session.view.value.thinkingLevel)
+        session.detach()
+    }
+
+    @Test
     fun `other threads' events are ignored`() = runBlocking {
         val transport = FakeTransport()
         val session = newSession(transport)

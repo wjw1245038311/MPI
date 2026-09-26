@@ -2540,6 +2540,24 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       appendDiagLog(`ctx-usage warm remote=${threadId.slice(0, 12)}`);
       const handle = await ensureRemoteBridge(ref);
       publishThreadContextUsageHook?.(handle.getId());
+      // 桥刚就绪：补推一次**完整**的可选模型列表。
+      // 磁盘快照是 history-first 的，availableModels 只带 models.json 的配置模型，缺 pi
+      // 目录里那份（如 pi.dev 的 deepseek-flash = “DeepSeek V4.1 Flash”）；不补的话手机
+      // chip 匹配不到显示名、只能显示裸 id，下拉里也找不到当前模型，得手动刷新才补齐
+      // （2026-09-26 真机）。这里的拼法与 live 快照（ipc.ts:1970）保持一致。
+      try {
+        const models: any = await handle.bridge.getAvailableModels();
+        const availableModels = remoteModelOptions([...modelArray(models), ...configuredRemoteModelOptions()]);
+        if (availableModels.length) {
+          publishThreadConfigChange(
+            { remoteThreadId: threadId, sessionFile: ref.sessionFile },
+            { availableModels },
+            "agent",
+          );
+        }
+      } catch {
+        /* 拿不到就维持磁盘快照那份，不阻断预热 */
+      }
     },
   };
 

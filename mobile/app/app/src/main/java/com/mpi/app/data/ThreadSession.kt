@@ -590,6 +590,8 @@ class ThreadSession(
         val hasModel = data.containsKey("model")
         val newModel = (data["model"] as? JsonObject)?.str("id")?.takeIf { it.isNotEmpty() }
             ?.let { ModelRef(data["model"]!!.jsonObject.str("provider").orEmpty(), it) }
+        // 桥就绪后主机会补推一份完整列表（磁盘快照那份缺 pi 目录模型）；没有该字段时保持原值。
+        val newModels = ThreadModels.decodeModelOptions(data["availableModels"])
         patch { view ->
             view.copy(
                 summary = if (permission != null) {
@@ -598,6 +600,7 @@ class ThreadSession(
                     view.summary
                 },
                 model = if (hasModel) newModel else view.model,
+                availableModels = newModels ?: view.availableModels,
                 thinkingLevel = if (data.containsKey("thinkingLevel")) {
                     data["thinkingLevel"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }
                 } else {
