@@ -1,6 +1,18 @@
 import type { ThreadState, ViewMessage } from "./types";
 
 /**
+ * 把已等待秒数格式化成给人看的字符串：`59s` / `1m03s`。
+ *
+ * 本地大模型 prefill 到分钟级不罕见，纯秒数（`137s`）读起来费劲。
+ */
+export function formatElapsed(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  return `${minutes}m${String(total % 60).padStart(2, "0")}s`;
+}
+
+/**
  * 聊天区是否显示「思考中」占位行（prefill 等待指示器）。
  *
  * pi 只在 LLM 响应头到达后才发 assistant message_start；本地模型 prefill 可能

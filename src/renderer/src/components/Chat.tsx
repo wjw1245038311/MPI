@@ -11,7 +11,7 @@ import { extractEditPairs, normalizeTranscriptText } from "../lib/tool-args";
 import { findMessageOccurrences } from "../lib/chat-search";
 import { MarkedDiv, useSearchMark } from "../lib/search-mark";
 import { getExpandState, setExpandState } from "../lib/expand-state";
-import { shouldShowThinkingIndicator } from "../lib/thinking-indicator";
+import { formatElapsed, shouldShowThinkingIndicator } from "../lib/thinking-indicator";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
@@ -109,22 +109,9 @@ export function Chat() {
   const count = (thread?.messages.length || 0) + (streaming ? 1 : 0);
 
   // Prefill 等待指示器：agent run 活跃但 assistant 消息尚未开始（本地模型 prefill
-  // 可达数十秒）、且没有工具卡在跑 → 显示带已等待秒数的「思考中」占位行。
+  // 可达数十秒）、且没有工具卡在跑 → 显示「思考中 · Ns」占位行。
+  // 秒数的计时器在 ThinkingPlaceholder 内部：每秒钟只重渲染那一行，不惊动整个聊天区。
   const thinkingActive = shouldShowThinkingIndicator(thread, streaming);
-  const [thinkingSince, setThinkingSince] = useState<number | null>(null);
-  useEffect(() => {
-    // 进入/离开等待窗口或切换线程时重置起点（切回仍在思考的线程从 0 重计，可接受）。
-    setThinkingSince(thinkingActive ? Date.now() : null);
-  }, [thinkingActive, activeThreadId]);
-  const [thinkingNow, setThinkingNow] = useState(0);
-  useEffect(() => {
-    if (!thinkingActive) return;
-    setThinkingNow(Date.now());
-    const id = window.setInterval(() => setThinkingNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [thinkingActive]);
-  const thinkingElapsedSec =
-    thinkingSince !== null && thinkingNow > 0 ? Math.max(0, Math.floor((thinkingNow - thinkingSince) / 1000)) : 0;
 
   // 「活跃输入」跟踪：区分真实滚动手势与布局引起的 scrollTop 位移。
   // content-visibility 高度解析 / 浏览器钳制会在无用户输入时产生微小位移，
@@ -843,9 +830,8 @@ export function Chat() {
                 {...groupSearchProps}
               />
             )}
-            {thinkingActive && (
-              <ThinkingPlaceholder language={language} elapsedSec={thinkingElapsedSec} />
-            )}
+            {/* key = 线程：切会话时重新挂载，等待秒数从 0 起算 */}
+            {thinkingActive && <ThinkingPlaceholder key={activeThreadId} language={language} />}
             {thread.error && (
               <div className="msg system">
                 <div className="msg-body">⚠ {thread.error}</div>
@@ -1587,8 +1573,15 @@ function MessageGroupInner({
 }
 
 /** Prefill 等待占位行：agent 在跑但 assistant 消息还没开始（本地模型 prefill
- * 可达数十秒）。秒数由 Chat 每秒驱动重渲染，组件本身无状态。 */
-const ThinkingPlaceholder = memo(function ThinkingPlaceholder({ language, elapsedSec }: { language: "en" | "zh"; elapsedSec: number }) {
+ * 可达数十秒）。**计时器自包含**：只重渲染这一行，不让 Chat 根节点每秒
+ * 带着整个消息列表重建（长会话下这是实打实的秒级开销）。 */
+const ThinkingPlaceholder = memo(function ThinkingPlaceholder({ language }: { language: "en" | "zh" }) {
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    const startedAt = Date.now();
+    const id = window.setInterval(() => setElapsedSec(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, []);
   return (
     <div className="msg thinking-placeholder">
       <div className="msg-avatar" aria-label={language === "zh" ? "MPI 智能体" : "MPI Agent"}>
@@ -1596,7 +1589,7 @@ const ThinkingPlaceholder = memo(function ThinkingPlaceholder({ language, elapse
       </div>
       <div className="msg-body thinking-placeholder-body">
         <span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span>
-        <span className="muted">{language === "zh" ? `思考中 · ${elapsedSec}s` : `Thinking… ${elapsedSec}s`}</span>
+        <span className="muted">{language === "zh" ? `思考中 · ${formatElapsed(elapsedSec)}` : `Thinking… ${formatElapsed(elapsedSec)}`}</span>
       </div>
     </div>
   );

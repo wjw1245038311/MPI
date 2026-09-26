@@ -42,4 +42,13 @@ assert.equal(
   true,
 ); // 工具全部结束 → 等待下一次 LLM 响应头（第二轮 prefill）
 
+// --- 秒数文案 ---------------------------------------------------------------
+
+assert.equal(ti.formatElapsed(0), "0s");
+assert.equal(ti.formatElapsed(59), "59s");
+assert.equal(ti.formatElapsed(60), "1m00s");
+assert.equal(ti.formatElapsed(83), "1m23s");
+assert.equal(ti.formatElapsed(-5), "0s"); // 时钟回拨/负值不吐怪字符串
+assert.equal(ti.formatElapsed(3599), "59m59s");
+
 console.log("thinking-indicator tests passed");
