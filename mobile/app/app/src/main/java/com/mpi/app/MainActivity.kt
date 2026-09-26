@@ -3,9 +3,7 @@ package com.mpi.app
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.mpi.app.data.Notifier
@@ -32,7 +30,6 @@ class MainActivity : ComponentActivity() {
         container.pendingThreadOpen.value = intent?.getStringExtra(Notifier.EXTRA_THREAD_ID)
 
         val benchmark = intent?.getBooleanExtra(EXTRA_BENCHMARK, false) == true
-        setupRightEdgeBackSwipe()
         setContent {
             if (benchmark) {
                 MpiTheme { BenchmarkScreen() }
@@ -110,72 +107,5 @@ class MainActivity : ComponentActivity() {
     private companion object {
         /** 向系统申请的右边缘排除区宽度（dp）；比系统手势区宽一些，给手指留容错。 */
         const val EDGE_EXCLUSION_DP = 32f
-
-        /** 返回手势的触点落在这条比例线以右，就算「右侧侧滑」。 */
-        const val RIGHT_SWIPE_START_FRACTION = 0.75f
-    }
-
-    /**
-     * 把「屏幕右侧的返回手势」当作右侧节点面板的**侧滑**（Android 13+ 预测性返回）。
-     *
-     * 为什么绕这一圈：屏幕最右那条缝归**系统返回手势**，App 拿不到 touch；
-     * `systemGestureExclusionRects` 系统也只接受每边约 200dp 高（官方文档），贴边全高做不到。
-     * 而预测性返回的回调恰好给了侧滑需要的两样东西：
-     *  - [BackEventCompat.swipeEdge]（Android 14+）→ 手势来自哪一侧（老版本用触点位置兜底）；
-     *  - [BackEventCompat.progress] → 手势进度，可直接驱面板跟手。
-     *
-     * 行为：面板未开时右边缘向内滑 = 拉开；已开时 = 收回去（与系统手势“再滑一次就退一层”一致）。
-     * 左侧来源以及其它页面的返回**原地让位**给 Compose 的 BackHandler，行为不变。
-     */
-    private fun setupRightEdgeBackSwipe() {
-        onBackPressedDispatcher.addCallback(
-            this,
-            object : OnBackPressedCallback(true) {
-                private var fromRight = false
-                private var closing = false
-
-                override fun handleOnBackStarted(backEvent: BackEventCompat) {
-                    fromRight = false
-                    closing = false
-                    if (!container.rightSwipeEnabled.value) return
-                    fromRight = when (backEvent.swipeEdge) {
-                        BackEventCompat.EDGE_RIGHT -> true
-                        BackEventCompat.EDGE_LEFT -> false
-                        // Android 13 没有 swipeEdge：用触点位置兜底（落在右 1/4 算右侧）
-                        else -> {
-                            val width = window.decorView.width
-                            width > 0 && backEvent.touchX >= width * RIGHT_SWIPE_START_FRACTION
-                        }
-                    }
-                    if (!fromRight) return
-                    closing = container.rightPanelOpen.value
-                    container.rightPanelSwipe.value = if (closing) 1f else 0f
-                }
-
-                override fun handleOnBackProgressed(backEvent: BackEventCompat) {
-                    if (!fromRight) return
-                    val progress = backEvent.progress.coerceIn(0f, 1f)
-                    // 关闭时进度反向：手势往里滑 → 面板往右退
-                    container.rightPanelSwipe.value = if (closing) 1f - progress else progress
-                }
-
-                override fun handleOnBackPressed() {
-                    if (fromRight) {
-                        container.rightPanelSwipe.value = null
-                        if (closing) container.closeRightPanel.value += 1 else container.openRightPanel.value += 1
-                        return
-                    }
-                    // 不是右侧来源：让位给 Compose 的 BackHandler，处理完再把自己的开关打开
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
-                    window.decorView.post { isEnabled = true }
-                }
-
-                override fun handleOnBackCancelled() {
-                    // 手势取消：面板退回原状态（开着就回到全开，关着就回到收起）
-                    if (fromRight) container.rightPanelSwipe.value = if (closing) 1f else 0f
-                }
-            },
-        )
     }
 }

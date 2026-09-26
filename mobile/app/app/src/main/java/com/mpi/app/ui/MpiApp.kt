@@ -40,12 +40,15 @@ import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -54,6 +57,7 @@ import com.mpi.app.data.Appearance
 import com.mpi.app.data.PairingRecord
 import com.mpi.app.data.SessionState
 import com.mpi.app.ui.theme.MpiTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
@@ -183,9 +187,8 @@ fun MpiApp(container: AppContainer) {
                 ) { openDrawer, drawerOpen, nodePanel ->
                     val openThread = state.thread
                     if (state.openThreadId != null && openThread != null) {
-                        BackHandler(enabled = !drawerOpen) {
-                            if (state.configSheetOpen) viewModel.closeConfigSheet() else openDrawer()
-                        }
+                        // 返回键的处理已上提到 DrawerHost 的 PredictiveBackHandler（它需要先看
+                        // 手势来自哪一侧）；这里不再重复注册，避免两处抢同一个返回。
                         ThreadScreen(
                             view = openThread,
                             projectName = state.host.projects
@@ -370,34 +373,53 @@ private fun DrawerHost(
     // 真机三轮反馈：手势一旦放在抽屉内部，左划总被抽屉接走 → 弹出左侧会话列表。
     val nodePanel = rememberNodePanelState(NODE_PANEL_WIDTH)
     val sessionOpen = state.openThreadId != null && state.thread != null
+    val drawerOpen = drawerState.isOpen
+    val viewWidthPx = LocalView.current.width.toFloat()
 
-    // 只在「会话页开着 + 设置里开了左划面板」时，才允许把**来自屏幕右侧的返回手势**
-    // 当成节点面板的侧滑（Android 13+ 预测性返回）；其余页面的返回行为完全不变。
-    LaunchedEffect(swipeNodePanel, sessionOpen) {
-        container.rightSwipeEnabled.value = swipeNodePanel && sessionOpen
-    }
-    DisposableEffect(Unit) {
-        onDispose { container.rightSwipeEnabled.value = false }
-    }
+    /** 触点是否落在屏幕右边缘段（Android 13 拿不到 swipeEdge 时的兜底）。 */
+    fun startedAtRightEdge(touchX: Float): Boolean =
+        viewWidthPx > 0f && touchX >= viewWidthPx * RIGHT_EDGE_START_FRACTION
 
-    // 预测性返回的进度 → 面板跟手；手势完成 → 滑到位（见 MainActivity.setupRightEdgeBackSwipe）
-    val rightSwipe by container.rightPanelSwipe.collectAsState()
-    LaunchedEffect(rightSwipe) {
-        val progress = rightSwipe ?: return@LaunchedEffect
-        if (progress <= 0f) nodePanel.close() else nodePanel.dragToProgress(progress)
-    }
-    val openPanelSignal by container.openRightPanel.collectAsState()
-    LaunchedEffect(openPanelSignal) {
-        if (openPanelSignal > 0) nodePanel.open()
-    }
-    val closePanelSignal by container.closeRightPanel.collectAsState()
-    LaunchedEffect(closePanelSignal) {
-        if (closePanelSignal > 0) nodePanel.close()
-    }
-    // 把「面板是否已展开」回报给 Activity：它据此决定右边缘向内滑是开还是关
-    LaunchedEffect(Unit) {
-        snapshotFlow { nodePanel.progress > 0.5f }.collect { open ->
-            container.rightPanelOpen.value = open
+    // 预测性返回：把「从屏幕**边缘**向内侧滑」这条系统手势接过来当侧滑。
+    //
+    // 为什么走这一层而不是 Activity：Activity 的 OnBackPressedCallback 与 Compose 的
+    // BackHandler 共用 onBackPressedDispatcher（LIFO，后注册者优先），会话页的 BackHandler
+    // 后注册 → 它先拿到提交，右边缘向内滑于是又变成「打开左侧会话列表」（真机反馈）。
+    // 改成 Compose 原生的 PredictiveBackHandler 后：① 本层在会话页之外，后注册/优先；
+    // ② 能直接拿到 BackEventCompat（swipeEdge 判断哪侧、progress 驱跟手）。
+    PredictiveBackHandler(enabled = sessionOpen || drawerOpen) { progress ->
+        var decided = false
+        var fromRight = false
+        var closing = false
+        try {
+            progress.collect { event ->
+                if (!decided) {
+                    decided = true
+                    // Android 14+ 才有 swipeEdge（更早的版本默认值是 EDGE_LEFT，不能当真）
+                    val rightEdge = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        event.swipeEdge == BackEventCompat.EDGE_RIGHT
+                    } else {
+                        startedAtRightEdge(event.touchX)
+                    }
+                    // 设置里关掉左划面板时，右边缘手势也不夺——保持普通返回
+                    fromRight = swipeNodePanel && rightEdge
+                    closing = nodePanel.progress > 0.5f
+                }
+                if (fromRight) {
+                    nodePanel.dragToProgress(if (closing) 1f - event.progress else event.progress)
+                }
+            }
+            // 手势完成（未被取消）：右边缘 → 开/关面板；否则走原本的返回语义
+            when {
+                drawerOpen -> scope.launch { drawerState.close() }
+                fromRight -> if (closing) nodePanel.close() else nodePanel.open()
+                state.configSheetOpen -> viewModel.closeConfigSheet()
+                else -> scope.launch { drawerState.open() }
+            }
+        } catch (cancel: CancellationException) {
+            // 手势取消：面板回到原状态
+            if (fromRight) if (closing) nodePanel.open() else nodePanel.close()
+            throw cancel
         }
     }
     // 贴边起手要用到的两个量：边缘条宽度（px）与下面 systemGestureExclusion 的矩形。
@@ -617,3 +639,9 @@ private fun HostRow(
         }
     }
 }
+
+/**
+ * 触点落在这条比例线以右，就算「从右侧边缘向内侧滑」。
+ * 仅在 Android 13（拿不到 [BackEventCompat.swipeEdge]）时作为兜底。
+ */
+private const val RIGHT_EDGE_START_FRACTION = 0.75f

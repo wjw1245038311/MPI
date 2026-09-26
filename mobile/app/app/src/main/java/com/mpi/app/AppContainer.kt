@@ -69,28 +69,6 @@ class AppContainer(context: Context) {
     val pendingThreadOpen = MutableStateFlow<String?>(null)
 
     /**
-     * 系统返回手势的「右侧侧滑」通道（Android 13+ 预测性返回）。
-     *
-     * 为什么需要它：屏幕最右那条缝归**系统返回手势**，App 拿不到 touch（即使申请了
-     * systemGestureExclusion，系统也只接受约 200dp 高）→ 贴边侧滑要么被当返回、要么划不动。
-     * 现在改用预测性返回的回调：手势来自右侧时，用它的 progress 驱动右侧节点面板跟手，
-     * 手势完成就把面板打开——不占系统手势区，也不需要排除区。
-     */
-    val rightPanelSwipe = MutableStateFlow<Float?>(null)
-
-    /** 是否允许把「来自屏幕右侧的返回手势」当成右侧面板的侧滑（由会话页置位）。 */
-    val rightSwipeEnabled = MutableStateFlow(false)
-
-    /** 返回手势完成 → 请 UI 把右侧面板滑到位（每次 +1）。 */
-    val openRightPanel = MutableStateFlow(0)
-
-    /** 面板已开时，右边缘向内滑 = 关闭（每次 +1）。 */
-    val closeRightPanel = MutableStateFlow(0)
-
-    /** 右侧面板当前是否已展开（UI 更新）：决定「右边缘向内滑」是开还是关。 */
-    val rightPanelOpen = MutableStateFlow(false)
-
-    /**
      * 前后台（由 MainActivity 维护）。
      *
      * 除了给「完成通知只在后台发」用，还驱动**回前台立刻重连**：长时间挂着后连接必然已死，
