@@ -132,6 +132,28 @@ internal fun rememberNodePanelState(panelWidth: Dp): NodePanelState {
 }
 
 /**
+ * 把指针事件「吃掉」，**只为阻止祖先节点的手势**（会话页消息区的左划拉面板、
+ * 以及外层 Material 抽屉的横拖）。
+ *
+ * 原理：Main 阶段是「叶 → 根」，子节点（输入框自身）**先**拿到事件——所以打字、
+ * 移光标、选文本、点击全不受影响；等事件冒到本节点时才被消费，更外层的祖先就看不到这次
+ * 拖动了。用于「消息区里的输入框」这类被父层手势误抢的控件。
+ *
+ * 纵向也一并消费：输入框区域内的滑动本就不该拿去滚动列表。
+ */
+internal fun Modifier.blockAncestorGestures(): Modifier = pointerInput(Unit) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
+        var pressed = true
+        while (pressed) {
+            val event = awaitPointerEvent(PointerEventPass.Main)
+            event.changes.forEach { it.consume() }
+            pressed = event.changes.any { it.pressed }
+        }
+    }
+}
+
+/**
  * 在**会话的消息区**里左划 → 跟手拉出节点面板。
  *
  * ⚠️ 判定区域 = **挂载它的那个节点**，而不是屏幕边缘（真机反馈：输入框里左滑弹出面板、

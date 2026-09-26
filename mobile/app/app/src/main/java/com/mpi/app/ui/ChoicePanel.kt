@@ -137,7 +137,11 @@ fun ChoicePanel(
                     OutlinedTextField(
                         value = otherText[qi].orEmpty(),
                         onValueChange = { otherText[qi] = it },
-                        modifier = Modifier.fillMaxWidth(),
+                        // blockAncestorGestures：输入框在**消息区**里，而消息区挂着「左划拉出
+                        // 节点面板」；不拦住的话，在输入框里左右拖动（移光标/选文本）会被父层
+                        // 当成边缘手势（真机反馈：输入框两边都弹出面板/抽屉）。
+                        // 它是 Main 阶段消费，子节点（输入框自身）先处理，不影响打字与选文本。
+                        modifier = Modifier.fillMaxWidth().blockAncestorGestures(),
                         placeholder = { Text(if (zh) "输入自定义答案…" else "Type your answer…", style = MaterialTheme.typography.bodySmall) },
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
