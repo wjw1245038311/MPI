@@ -1183,7 +1183,9 @@ private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit, on
                     // 用户消息也要渲染图片块（之前只滤 Text，自己发的图直接看不见——真机反馈）
                     message.blocks.forEach { block ->
                         when (block.type) {
-                            BlockType.Text -> MessageText(block.text.orEmpty(), color = MaterialTheme.colorScheme.onSurface)
+                            // fillWidth=false：气泡 shrink-wrap 贴住文字（微信式右对齐小气泡）；
+                            // 之前默认撑满 300dp，短消息变成「大块 + 居中文字」。
+                            BlockType.Text -> MessageText(block.text.orEmpty(), color = MaterialTheme.colorScheme.onSurface, fillWidth = false)
                             BlockType.Image -> ImageBlock(block)
                             else -> Unit
                         }

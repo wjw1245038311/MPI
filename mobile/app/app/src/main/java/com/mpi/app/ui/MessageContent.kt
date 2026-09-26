@@ -34,9 +34,15 @@ import com.mpi.app.ui.theme.MpiTheme
  * 解析结果按「块」缓存（[remember]），避免流式刷新时每帧重新切分整段文本。
  */
 @Composable
-fun MessageText(text: String, modifier: Modifier = Modifier, color: androidx.compose.ui.graphics.Color? = null) {
+fun MessageText(
+    text: String,
+    modifier: Modifier = Modifier,
+    color: androidx.compose.ui.graphics.Color? = null,
+    /** false = 列不撑满宽度（用户气泡用：shrink-wrap，短消息才是贴右的小气泡）。 */
+    fillWidth: Boolean = true,
+) {
     val segments = remember(text) { parseSegments(text) }
-    RenderSegments(segments, color ?: MaterialTheme.colorScheme.onSurface, modifier)
+    RenderSegments(segments, color ?: MaterialTheme.colorScheme.onSurface, modifier, fillWidth)
 }
 
 /** 渲染一组段（choices 段由 [ChoiceAwareText] 负责，这里跳过）。 */
@@ -45,8 +51,9 @@ internal fun RenderSegments(
     segments: List<Segment>,
     bodyColor: androidx.compose.ui.graphics.Color,
     modifier: Modifier = Modifier,
+    fillWidth: Boolean = true,
 ) {
-    Column(modifier.fillMaxWidth()) {
+    Column(if (fillWidth) modifier.fillMaxWidth() else modifier) {
         for (segment in segments) {
             when (segment) {
                 is Segment.Code -> {
