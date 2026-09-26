@@ -92,6 +92,46 @@ object KeepAliveGuide {
         Vendor.OTHER -> emptyList()
     }
 
+    /**
+     * 该厂商「怎么放行」的具体步骤（纯函数，弹窗里直接展示）。
+     *
+     * 为什么必须写具体：能打开厂商页面只是第一步，真正的开关常叫完全不同的名字——
+     * 华为真机上要的是「关闭自动管理」，用户按「自启动」的字面意思找是找不到的
+     * （2026-09-26：手动管理前切后台 13~28 秒即断，改后活过 10 分钟）。
+     */
+    fun vendorHint(vendor: Vendor): String = when (vendor) {
+        Vendor.XIAOMI ->
+            "小米 / 红米：设置 → 应用设置 → 应用管理 → MPI → 省电策略 → 选「无限制」；\n" +
+                "再到 授权管理 → 自启动管理 → 允许 MPI。"
+
+        Vendor.HUAWEI ->
+            "华为 / 荣耀：设置 → 应用和服务 → 应用启动管理 → MPI → 关闭「自动管理」；\n" +
+                "再手动打开：允许自启动、允许关联启动、允许后台活动。"
+
+        Vendor.OPPO ->
+            "OPPO / realme：设置 → 电池 → 应用耗电管理 → MPI →\n" +
+                "允许后台运行 / 允许自启动，省电策略选「不限制」。"
+
+        Vendor.VIVO ->
+            "vivo / iQOO：设置 → 电池 → 后台高耗电 → 允许 MPI；\n" +
+                "再到 i 管家 → 自启动 / 后台运行 里放行。"
+
+        Vendor.MEIZU ->
+            "魅族：手机管家 → 权限管理 → 自启动 → 允许 MPI；\n" +
+                "再到 电量管理 → 耗电保护 → 允许后台运行。"
+
+        Vendor.ONEPLUS ->
+            "一加：设置 → 电池 → 应用耗电管理 → MPI →\n" +
+                "允许后台运行 / 允许自启动（与 OPPO 共用 ColorOS 菜单）。"
+
+        Vendor.LETV ->
+            "乐视：设置 → 权限管理 → 自启动 → 允许 MPI。"
+
+        Vendor.OTHER ->
+            "在系统设置里找到「应用管理 → MPI」，打开自启动 / 后台运行 / 后台活动之类的开关；\n" +
+                "有「省电策略 / 耗电管理」的选「无限制」。"
+    }
+
     /** 是否已被系统豁免电池优化（查不到时按「已允许」处理——不打扰用户）。 */
     fun isIgnoringBatteryOptimizations(context: Context): Boolean {
         val pm = context.applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager

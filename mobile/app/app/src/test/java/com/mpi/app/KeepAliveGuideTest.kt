@@ -49,6 +49,20 @@ class KeepAliveGuideTest {
     }
 
     @Test
+    fun `every vendor gets a concrete hint that names the app`() {
+        for (v in Vendor.values()) {
+            val hint = KeepAliveGuide.vendorHint(v)
+            assertTrue("$v 必须有提示文案", hint.isNotBlank())
+            assertTrue("$v 的提示要点名 MPI，否则用户不知道给谁设置", hint.contains("MPI"))
+        }
+        // 华为真机上真正的开关叫「自动管理」——按「自启动」字面找是找不到的（2026-09-26 踩过）
+        assertTrue(
+            "华为提示必须点出「自动管理」",
+            KeepAliveGuide.vendorHint(Vendor.HUAWEI).contains("自动管理"),
+        )
+    }
+
+    @Test
     fun `every known vendor ships at least one parsable candidate`() {
         for (v in Vendor.values()) {
             val candidates = KeepAliveGuide.vendorSettingCandidates(v)

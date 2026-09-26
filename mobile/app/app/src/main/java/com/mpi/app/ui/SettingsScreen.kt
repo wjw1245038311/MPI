@@ -349,18 +349,18 @@ fun SettingsScreen(
             onDismissRequest = { keepAliveDialog = false },
             title = { Text("后台保活设置") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "系统在后台会限制网络（Doze / 应用待机），连 wakelock 也不豁免——" +
-                            "这就是「后台断连、打开 App 才补上」的原因。建议完成两步：",
+                        "系统会在后台限制网络，连接被掉后回复完成的播报要等你打开 App 才补上。" +
+                            "请手动放行本应用：",
                     )
-                    Text("① 允许本应用「忽略电池优化」")
-                    Text("② 在「自启动 / 后台运行 / 省电策略」里放行本应用（各家入口不同）")
-                    if (vendor.label.isNotEmpty()) {
-                        Text("当前机型：${vendor.label}", color = MpiTheme.colors.textFaint)
-                    }
                     Text(
-                        "已允许电池优化：${if (batteryWhitelisted) "是" else "否"}",
+                        KeepAliveGuide.vendorHint(vendor),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "菜单名随 ROM 版本略有不同。「忽略电池优化」只防 Doze（长时间锁屏），" +
+                            "对切后台就断这种情况无效，可以先不做。",
                         color = MpiTheme.colors.textFaint,
                     )
                 }
@@ -368,21 +368,23 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     keepAliveDialog = false
+                    // 先试厂商「自启动 / 应用启动管理」页，打不开就回落应用详情页
+                    // （自启动 / 后台运行 / 省电策略都在那里）。
+                    if (!KeepAliveGuide.openVendorSettings(context)) {
+                        runCatching { context.startActivity(KeepAliveGuide.appDetailsSettings(context)) }
+                    }
+                }) { Text("去放行") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    keepAliveDialog = false
                     val intent = if (batteryWhitelisted) {
-                        KeepAliveGuide.appDetailsSettings(context)
+                        KeepAliveGuide.batteryOptimizationSettings()
                     } else {
                         KeepAliveGuide.requestIgnoreBatteryOptimization(context)
                     }
                     runCatching { context.startActivity(intent) }
                 }) { Text("电池优化") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    keepAliveDialog = false
-                    if (!KeepAliveGuide.openVendorSettings(context)) {
-                        runCatching { context.startActivity(KeepAliveGuide.appDetailsSettings(context)) }
-                    }
-                }) { Text("自启动设置") }
             },
         )
     }
