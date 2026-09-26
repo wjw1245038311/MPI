@@ -1302,13 +1302,16 @@ class AppViewModel(
             if (session?.isAuthenticated != true) return
             val threads = snapshot.allThreads
             if (threads.isEmpty()) return
-            // 首帧常常是**本地缓存列表**（cachedAt != null）——它可能还没有刚新建的会话，
-            // 拿它决定「自动打开哪条」会选错（2026-09-26 真机：新建会话发完消息重启，
-            // 进的是旧会话）。等真实列表到了再决定。
-            if (snapshot.cachedAt != null) return
-            // 优先回到「上一次打开的会话」——「最近打开」比「最近更新」更贴近用户预期，
-            // 也不受列表排序/主机缓存影响。不在列表里（可能已删）才回退到旧策略。
-            val target = threads.firstOrNull { it.id == lastThread.threadId }
+            // 「上一次打开的会话」优先：「最近打开」比「最近更新」更贴近用户预期，
+            // 也不受列表排序/主机缓存影响。
+            // 它必须在 cachedAt 判断**之前**——命中就说明缓存里就有这条，断网时
+            // 照样能秒开上次那个会话；反过来先 return 会让离线启动什么都不打开。
+            val remembered = threads.firstOrNull { it.id == lastThread.threadId }
+            // 命不中才需要猜；而猜（Running 优先 / updatedAt 最新）必须等**真实**列表：
+            // 首帧常是本地缓存列表（cachedAt != null），可能还没有刚新建的会话，
+            // 拿它决定会选错（2026-09-26 真机：新建会话发完消息重启，进的是旧会话）。
+            if (remembered == null && snapshot.cachedAt != null) return
+            val target = remembered
                 ?: threads.firstOrNull { it.state == RemoteThreadState.Running }
                 ?: threads.first()
             // 先消费掉「每次 attach 只自动开一次」的机会再动手：
