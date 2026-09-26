@@ -59,6 +59,19 @@ class ThreadCacheTest {
     }
 
     @Test
+    fun `stray tmp files are removed on the next write`() {
+        val store = cache()
+        store.write("host-a", "t-1", snapshot("t-1"))
+        // 模拟 atomicWrite 异常路径留下的临时文件（不在 .json 裁剪范围内）
+        val dir = allCacheFiles().first().parentFile!!
+        val stray = File(dir, "abcd.json.tmp").apply { writeText("x") }
+
+        store.write("host-a", "t-2", snapshot("t-2"))
+
+        assertFalse("残留的 .tmp 应被清掉", stray.exists())
+    }
+
+    @Test
     fun `read of an unknown thread returns null`() {
         assertNull(cache().read("host-a", "missing"))
     }

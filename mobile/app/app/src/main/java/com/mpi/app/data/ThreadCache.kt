@@ -97,8 +97,12 @@ class ThreadCache(
 
     /** 按「条数上限 + 总量上限」修剪：保留最近写入的，从最旧的开始删。 */
     private fun prune(dir: File) {
-        val files = dir.listFiles { file -> file.isFile && file.name.endsWith(EXTENSION) } ?: return
-        val newestFirst = files.sortedByDescending { it.lastModified() }
+        val files = dir.listFiles { file -> file.isFile } ?: return
+        // 顺手清掉 atomicWrite 可能留下的 .tmp 残留（异常路径才会产生）：它们不叫 .json，
+        // 下面的裁剪扫不到，会一直攒着（2026-09-26 存储排查时发现的小漏洞）。
+        files.filter { it.name.endsWith(TEMP_EXTENSION) }.forEach { runCatching { it.delete() } }
+        val entries = files.filter { it.name.endsWith(EXTENSION) }
+        val newestFirst = entries.sortedByDescending { it.lastModified() }
         var total = 0L
         newestFirst.forEachIndexed { index, file ->
             total += file.length()
@@ -118,6 +122,9 @@ class ThreadCache(
         const val DIR_NAME = "thread-cache"
 
         const val EXTENSION = ".json"
+
+        /** [CacheFiles.atomicWrite] 的临时后缀；异常路径可能残留，由 prune 清掉。 */
+        const val TEMP_EXTENSION = ".tmp"
 
         const val DEFAULT_MAX_ENTRIES = 20
 
