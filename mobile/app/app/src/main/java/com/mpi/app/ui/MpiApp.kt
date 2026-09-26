@@ -214,6 +214,7 @@ fun MpiApp(container: AppContainer) {
                             onToggleToolCalls = {
                                 container.settingsStore.setShowToolCalls(!settings.showToolCalls)
                             },
+                            showThinking = settings.showThinking,
                             speakTurnComplete = settings.speakTurnComplete,
                             voiceSpeechContent = settings.voiceSpeechContent,
                             speakDuringCall = settings.speakDuringCall,
@@ -291,6 +292,8 @@ fun MpiApp(container: AppContainer) {
                     onSpeakTurnComplete = container.settingsStore::setSpeakTurnComplete,
                     onVoiceContent = container.settingsStore::setVoiceSpeechContent,
                     onSpeakDuringCall = container.settingsStore::setSpeakDuringCall,
+                    onShowToolCalls = container.settingsStore::setShowToolCalls,
+                    onShowThinking = container.settingsStore::setShowThinking,
                     onOpenDiagnostics = { diagnosticsOpen = true },
                     onRemoveDevice = {
                         settingsOpen = false

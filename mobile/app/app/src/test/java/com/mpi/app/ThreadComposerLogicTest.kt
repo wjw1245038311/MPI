@@ -36,7 +36,7 @@ class ThreadComposerLogicTest {
     }
 }
 
-/** 工具调用显示/隐藏（本地设置）：只影响展示，不影响复制/choices 口径。 */
+/** 工具调用 / 思考过程显示或隐藏（本地设置）：只影响展示，不影响复制/choices 口径。 */
 class ThreadVisibilityLogicTest {
 
     private fun assistant(vararg blocks: MessageBlock) = ThreadMessage(id = "m", role = "assistant", blocks = blocks.toList())
@@ -70,6 +70,45 @@ class ThreadVisibilityLogicTest {
         val visible = com.mpi.app.ui.visibleMessages(messages, showToolCalls = false)
         assertEquals(1, visible.size)
         assertEquals("有正文", visible.single().blocks.single().text)
+    }
+
+    @Test
+    fun `hiding thinking drops thinking blocks but keeps the rest`() {
+        val messages = listOf(
+            assistant(
+                MessageBlock(type = BlockType.Thinking, text = "想一下"),
+                MessageBlock(type = BlockType.Tool, name = "bash", text = "结果"),
+                MessageBlock(type = BlockType.Text, text = "说完了"),
+            ),
+        )
+        val visible = com.mpi.app.ui.visibleMessages(messages, showToolCalls = true, showThinking = false)
+        assertEquals(1, visible.size)
+        assertEquals(listOf(BlockType.Tool, BlockType.Text), visible.single().blocks.map { it.type })
+    }
+
+    @Test
+    fun `a message with only thinking blocks disappears entirely`() {
+        val messages = listOf(
+            assistant(MessageBlock(type = BlockType.Thinking, text = "只想不说")),
+            assistant(MessageBlock(type = BlockType.Text, text = "有正文")),
+        )
+        val visible = com.mpi.app.ui.visibleMessages(messages, showToolCalls = true, showThinking = false)
+        assertEquals(1, visible.size)
+        assertEquals("有正文", visible.single().blocks.single().text)
+    }
+
+    @Test
+    fun `hiding both tools and thinking keeps only text`() {
+        val messages = listOf(
+            assistant(
+                MessageBlock(type = BlockType.Thinking, text = "想"),
+                MessageBlock(type = BlockType.Tool, name = "bash", text = "跑"),
+                MessageBlock(type = BlockType.Text, text = "说"),
+            ),
+        )
+        val visible = com.mpi.app.ui.visibleMessages(messages, showToolCalls = false, showThinking = false)
+        assertEquals(1, visible.size)
+        assertEquals(listOf(BlockType.Text), visible.single().blocks.map { it.type })
     }
 }
 

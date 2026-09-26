@@ -115,9 +115,11 @@ fun ThreadScreen(
     onSendChoice: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
-    /** 是否显示工具/终端调用行（本地设置，默认显示）。 */
+    /** 是否显示工具/终端调用行（本地设置，默认显示；顶栏终端图标与设置页同源）。 */
     showToolCalls: Boolean,
     onToggleToolCalls: () -> Unit,
+    /** 是否显示思考过程块（本地设置，默认显示；设置页「对话分栏」同源）。 */
+    showThinking: Boolean,
     /** 语音输出快捷设置（标题旁喇叭图标）：与 SettingsScreen 三项同语义。 */
     speakTurnComplete: Boolean,
     voiceSpeechContent: VoiceSpeechContent,
@@ -178,8 +180,8 @@ fun ThreadScreen(
     val listState = rememberLazyListState()
     val renderable = view.renderable
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
-    // 工具行隐藏时的可见列表（纯函数，可单测）：只影响展示，不影响 allMessages 的状态推导
-    val display = visibleMessages(renderable, showToolCalls)
+    // 工具/思考块隐藏时的可见列表（纯函数，可单测）：只影响展示，不影响 allMessages 的状态推导
+    val display = visibleMessages(renderable, showToolCalls, showThinking)
 
     // ---- 会话节点（右边缘左划拉出）----
     // 节点 = 用户消息（与桌面端左侧用户消息导航同口径）；索引按 display 算，可直接定位滚动。
@@ -1106,18 +1108,27 @@ internal fun messageTextOf(message: ThreadMessage): String =
     message.blocks.filter { it.type == BlockType.Text }.mapNotNull { it.text }.joinToString("\n").trim()
 
 /**
- * 按「是否显示工具调用」过滤要渲染的消息（纯函数，可单测）：
- * - 隐藏时丢掉 tool 块；
+ * 按「是否显示工具调用 / 思考过程」过滤要渲染的消息（纯函数，可单测）：
+ * - 隐藏时丢掉对应类型的块；
  * - 丢掉后完全没有块的消息一并丢掉（否则会留下空白的助手气泡）；
+ *   （模型正在思考、还没有正文时整条消息会暂时不可见——活动指示靠输入条停止钮，与工具行同口径）；
  * - 只用于展示，调用方仍拿原列表做 choices 面板的状态推导。
  */
-internal fun visibleMessages(messages: List<ThreadMessage>, showToolCalls: Boolean): List<ThreadMessage> {
-    if (showToolCalls) return messages
+internal fun visibleMessages(
+    messages: List<ThreadMessage>,
+    showToolCalls: Boolean,
+    showThinking: Boolean = true,
+): List<ThreadMessage> {
+    val hidden = buildSet {
+        if (!showToolCalls) add(BlockType.Tool)
+        if (!showThinking) add(BlockType.Thinking)
+    }
+    if (hidden.isEmpty()) return messages
     return messages.mapNotNull { message ->
-        if (message.blocks.none { it.type == BlockType.Tool }) {
+        if (message.blocks.none { it.type in hidden }) {
             message
         } else {
-            val blocks = message.blocks.filterNot { it.type == BlockType.Tool }
+            val blocks = message.blocks.filterNot { it.type in hidden }
             if (blocks.isEmpty()) null else message.copy(blocks = blocks)
         }
     }

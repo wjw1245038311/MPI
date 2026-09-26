@@ -89,6 +89,8 @@ fun SettingsScreen(
     onSpeakTurnComplete: (Boolean) -> Unit,
     onVoiceContent: (VoiceSpeechContent) -> Unit,
     onSpeakDuringCall: (Boolean) -> Unit,
+    onShowToolCalls: (Boolean) -> Unit,
+    onShowThinking: (Boolean) -> Unit,
     onOpenDiagnostics: () -> Unit,
     onRemoveDevice: () -> Unit,
     updateInfo: UpdateInfo?,
@@ -167,6 +169,25 @@ fun SettingsScreen(
                     trailing = fontSizeLabel(settings.fontSize),
                     showDivider = false,
                     onClick = { fontPicker = true },
+                )
+            }
+
+            // ---- 对话分栏（会话区显示内容）----
+            SettingsGroup("对话分栏") {
+                // 与会话顶栏的终端图标是同一个设置（都读写 SettingsStore，天然同步）。
+                SettingsItem(
+                    icon = IconTerminal,
+                    title = "显示工具调用",
+                    trailing = if (settings.showToolCalls) "开" else "关",
+                    onClick = { onShowToolCalls(!settings.showToolCalls) },
+                )
+                // 隐藏后思考块不渲染；模型正在思考时整条消息暂时不可见，活动指示靠输入条停止钮。
+                SettingsItem(
+                    icon = null,
+                    title = "显示思考过程",
+                    trailing = if (settings.showThinking) "开" else "关",
+                    showDivider = false,
+                    onClick = { onShowThinking(!settings.showThinking) },
                 )
             }
 

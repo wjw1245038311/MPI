@@ -84,6 +84,8 @@ data class AppSettings(
     val fontSize: FontSize = FontSize.Normal,
     /** 会话视图是否显示工具（bash/read/edit…）调用行。默认显示。 */
     val showToolCalls: Boolean = true,
+    /** 会话视图是否显示思考过程块。默认显示。 */
+    val showThinking: Boolean = true,
     /**
      * 手机发起的回合在**后台/锁屏**跑完时发系统通知。默认开。
      *
@@ -138,6 +140,11 @@ class SettingsStore(context: Context) {
         _settings.value = read()
     }
 
+    fun setShowThinking(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_THINKING, value).apply()
+        _settings.value = read()
+    }
+
     fun setNotifyOnTurnComplete(value: Boolean) {
         prefs.edit().putBoolean(KEY_NOTIFY_TURN_COMPLETE, value).apply()
         _settings.value = read()
@@ -162,6 +169,7 @@ class SettingsStore(context: Context) {
         appearance = Appearance.fromStored(prefs.getString(KEY_APPEARANCE, null)),
         fontSize = FontSize.fromStored(prefs.getString(KEY_FONT_SIZE, null)),
         showToolCalls = prefs.getBoolean(KEY_SHOW_TOOL_CALLS, true),
+        showThinking = prefs.getBoolean(KEY_SHOW_THINKING, true),
         notifyOnTurnComplete = prefs.getBoolean(KEY_NOTIFY_TURN_COMPLETE, true),
         speakTurnComplete = prefs.getBoolean(KEY_SPEAK_TURN_COMPLETE, true),
         voiceSpeechContent = VoiceSpeechContent.fromStored(prefs.getString(KEY_VOICE_SPEECH_CONTENT, null)),
@@ -173,6 +181,7 @@ class SettingsStore(context: Context) {
         private const val KEY_APPEARANCE = "appearance"
         private const val KEY_FONT_SIZE = "fontSize"
         private const val KEY_SHOW_TOOL_CALLS = "showToolCalls"
+        private const val KEY_SHOW_THINKING = "showThinking"
         private const val KEY_NOTIFY_TURN_COMPLETE = "notifyOnTurnComplete"
         private const val KEY_SPEAK_TURN_COMPLETE = "speakTurnComplete"
         private const val KEY_VOICE_SPEECH_CONTENT = "voiceSpeechContent"
