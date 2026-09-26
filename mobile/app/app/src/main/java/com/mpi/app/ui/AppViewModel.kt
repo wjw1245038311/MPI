@@ -457,6 +457,8 @@ class AppViewModel(
             payload = kotlinx.serialization.json.buildJsonObject { put("name", trimmed) },
             threadId = threadId,
             failure = "重命名失败",
+            // 改的就是当前打开的会话：顶栏标题就地更新（列表已由 refresh() 刷新）。
+            onSuccess = { if (_ui.value.openThreadId == threadId) threadSession?.applyRenamedTitle(trimmed) },
         )
     }
 

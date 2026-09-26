@@ -210,6 +210,7 @@ fun MpiApp(container: AppContainer) {
                             onSendChoice = viewModel::sendChoice,
                             onOpenSettings = { settingsOpen = true },
                             onOpenSearch = { searchOpen = true },
+                            onRenameTitle = { name -> viewModel.renameThread(openThread.threadId, name) },
                             showToolCalls = settings.showToolCalls,
                             showThinking = settings.showThinking,
                             speakTurnComplete = settings.speakTurnComplete,

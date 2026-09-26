@@ -272,6 +272,19 @@ class ThreadSession(
     }
 
     /**
+     * 重命名成功（主机已提交）后就地更新摘要标题。
+     *
+     * 不走 [resync]：回合进行中 resync 会用快照替换 messages/streaming，顶栏闪一下
+     * 还可能打断流式渲染；标题是主机已确认的事实，直接 patch 即可。
+     */
+    fun applyRenamedTitle(name: String) {
+        patch { view ->
+            val summary = view.summary ?: return@patch view
+            view.copy(summary = summary.copy(title = name))
+        }
+    }
+
+    /**
      * 乐观回显：点发送后立刻上屏，不等主机回执（§1.1「点击到视觉反馈 < 100ms」）。
      * 主机回执到达时由 [applyEvent] 的 message_start 把这条「转正」，避免重复上屏。
      *

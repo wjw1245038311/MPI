@@ -47,6 +47,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -124,6 +125,8 @@ fun ThreadScreen(
     onSendChoice: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
+    /** 双击顶栏标题 → 快速重命名（与侧栏长按菜单同语义）。 */
+    onRenameTitle: (String) -> Unit,
     /** 是否显示工具/终端调用行（本地设置，默认显示；开关在设置页「对话分栏」）。 */
     showToolCalls: Boolean,
     /** 是否显示思考过程块（本地设置，默认显示；设置页「对话分栏」同源）。 */
@@ -251,6 +254,7 @@ fun ThreadScreen(
             onBack = onBack,
             onOpenSettings = onOpenSettings,
             onOpenSearch = onOpenSearch,
+            onRenameTitle = onRenameTitle,
         )
 
         if (configError != null) {
@@ -1003,8 +1007,13 @@ private fun ThreadTopBar(
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
+    /** 双击标题 → 快速重命名（与侧栏长按菜单同语义）。 */
+    onRenameTitle: (String) -> Unit,
 ) {
     var voiceMenuOpen by remember { mutableStateOf(false) }
+    // 双击标题弹重命名框；draft 每次打开时刷新为当前标题，避免残留上次输入。
+    var renaming by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf(title) }
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1065,6 +1074,7 @@ private fun ThreadTopBar(
         }
         // 标题最多占屏幕宽度的一半，超出用省略号（真机反馈的诉求）。
         // 「项目 · 空闲」状态行已删：信息量低；运行中看输入条停止钮、压缩中有转圈。
+        // 双击标题 → 快速重命名（与侧栏长按菜单同语义）；单击无动作。
         Text(
             text = title,
             style = MaterialTheme.typography.titleMedium,
@@ -1073,7 +1083,8 @@ private fun ThreadTopBar(
             modifier = Modifier
                 .weight(1f)
                 .padding(start = 4.dp)
-                .widthIn(max = (LocalConfiguration.current.screenWidthDp / 2).dp),
+                .widthIn(max = (LocalConfiguration.current.screenWidthDp / 2).dp)
+                .combinedClickable(onClick = {}, onDoubleClick = { draft = title; renaming = true }),
         )
         // 只在压缩中显示转圈：运行中状态行已经有「运行中」文字，
         // 再放一个圈用户不知道它干嘛的（真机反馈）。
@@ -1097,6 +1108,30 @@ private fun ThreadTopBar(
                 modifier = Modifier.size(19.dp),
             )
         }
+    }
+
+    // 双击标题 → 重命名对话框（与侧栏长按菜单同一风格；保存走 onRenameTitle）。
+    if (renaming) {
+        AlertDialog(
+            onDismissRequest = { renaming = false },
+            title = { Text("重命名会话") },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("会话名称", style = MaterialTheme.typography.bodySmall) },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { renaming = false; onRenameTitle(draft.trim()) },
+                    enabled = draft.isNotBlank(),
+                ) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { renaming = false }) { Text("取消") } },
+        )
     }
 }
 
