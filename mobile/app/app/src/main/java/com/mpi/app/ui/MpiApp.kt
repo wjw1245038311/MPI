@@ -211,9 +211,6 @@ fun MpiApp(container: AppContainer) {
                             onOpenSettings = { settingsOpen = true },
                             onOpenSearch = { searchOpen = true },
                             showToolCalls = settings.showToolCalls,
-                            onToggleToolCalls = {
-                                container.settingsStore.setShowToolCalls(!settings.showToolCalls)
-                            },
                             showThinking = settings.showThinking,
                             speakTurnComplete = settings.speakTurnComplete,
                             voiceSpeechContent = settings.voiceSpeechContent,

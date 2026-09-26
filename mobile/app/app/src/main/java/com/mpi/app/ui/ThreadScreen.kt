@@ -115,9 +115,8 @@ fun ThreadScreen(
     onSendChoice: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
-    /** 是否显示工具/终端调用行（本地设置，默认显示；顶栏终端图标与设置页同源）。 */
+    /** 是否显示工具/终端调用行（本地设置，默认显示；开关在设置页「对话分栏」）。 */
     showToolCalls: Boolean,
-    onToggleToolCalls: () -> Unit,
     /** 是否显示思考过程块（本地设置，默认显示；设置页「对话分栏」同源）。 */
     showThinking: Boolean,
     /** 语音输出快捷设置（标题旁喇叭图标）：与 SettingsScreen 三项同语义。 */
@@ -216,8 +215,6 @@ fun ThreadScreen(
         ThreadTopBar(
             title = view.summary?.title?.ifEmpty { null } ?: "会话",
             compacting = view.compacting,
-            showToolCalls = showToolCalls,
-            onToggleToolCalls = onToggleToolCalls,
             speakTurnComplete = speakTurnComplete,
             voiceSpeechContent = voiceSpeechContent,
             speakDuringCall = speakDuringCall,
@@ -958,11 +955,9 @@ private fun ScrollToBottomButton(
 private fun ThreadTopBar(
     title: String,
     compacting: Boolean,
-    showToolCalls: Boolean,
     speakTurnComplete: Boolean,
     voiceSpeechContent: VoiceSpeechContent,
     speakDuringCall: Boolean,
-    onToggleToolCalls: () -> Unit,
     onSetSpeakTurnComplete: (Boolean) -> Unit,
     onSetVoiceSpeechContent: (VoiceSpeechContent) -> Unit,
     onSetSpeakDuringCall: (Boolean) -> Unit,
@@ -1046,16 +1041,7 @@ private fun ThreadTopBar(
         if (compacting) {
             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
         }
-        // 搜索与设置（截图那种右侧图标组）
-        // 工具行显示开关：终端图标（带斜杠 = 已隐藏），设置会持久化
-        IconButton(onClick = onToggleToolCalls) {
-            Icon(
-                if (showToolCalls) IconTerminal else IconTerminalOff,
-                contentDescription = if (showToolCalls) "隐藏工具调用" else "显示工具调用",
-                tint = if (showToolCalls) MpiTheme.colors.textDim else MpiTheme.colors.textFaint,
-                modifier = Modifier.size(19.dp),
-            )
-        }
+        // 搜索与设置（截图那种右侧图标组）；工具行开关已移到设置页「对话分栏」
         IconButton(onClick = onOpenSearch) {
             Icon(
                 IconSearch,
