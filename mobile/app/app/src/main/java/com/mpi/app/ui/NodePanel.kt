@@ -87,6 +87,15 @@ class NodePanelState(
         animateTo(if (open) -panelWidthPx else 0f)
     }
 
+    /**
+     * 系统返回手势（预测性返回）驱动的跟手：直接把位移设成进度对应的位置。
+     * 0 = 收起，1 = 完全展开（见 MainActivity 的右侧侧滑）。
+     */
+    fun dragToProgress(progress: Float) {
+        settleJob?.cancel()
+        offset = -panelWidthPx * progress.coerceIn(0f, 1f)
+    }
+
     fun open() = animateTo(-panelWidthPx)
 
     fun close() = animateTo(0f)

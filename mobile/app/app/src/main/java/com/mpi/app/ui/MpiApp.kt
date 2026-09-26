@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -171,6 +172,7 @@ fun MpiApp(container: AppContainer) {
                 // 所以返回键只是打开侧栏、不退出会话（关掉侧栏还在原会话里）；
                 // 从会话切到别的会话也走同一条侧栏，不再有中间那个空列表页。
                 DrawerHost(
+                    container = container,
                     state = state,
                     viewModel = viewModel,
                     openDrawerSignal = drawerSignal,
@@ -350,6 +352,7 @@ fun MpiApp(container: AppContainer) {
 
 @Composable
 private fun DrawerHost(
+    container: AppContainer,
     state: AppUiState,
     viewModel: AppViewModel,
     openDrawerSignal: Int,
@@ -366,6 +369,26 @@ private fun DrawerHost(
     // 真机三轮反馈：手势一旦放在抽屉内部，左划总被抽屉接走 → 弹出左侧会话列表。
     val nodePanel = rememberNodePanelState(NODE_PANEL_WIDTH)
     val sessionOpen = state.openThreadId != null && state.thread != null
+
+    // 只在「会话页开着 + 设置里开了左划面板」时，才允许把**来自屏幕右侧的返回手势**
+    // 当成节点面板的侧滑（Android 13+ 预测性返回）；其余页面的返回行为完全不变。
+    LaunchedEffect(swipeNodePanel, sessionOpen) {
+        container.rightSwipeEnabled.value = swipeNodePanel && sessionOpen
+    }
+    DisposableEffect(Unit) {
+        onDispose { container.rightSwipeEnabled.value = false }
+    }
+
+    // 预测性返回的进度 → 面板跟手；手势完成 → 滑到位（见 MainActivity.setupRightEdgeBackSwipe）
+    val rightSwipe by container.rightPanelSwipe.collectAsState()
+    LaunchedEffect(rightSwipe) {
+        val progress = rightSwipe ?: return@LaunchedEffect
+        if (progress <= 0f) nodePanel.close() else nodePanel.dragToProgress(progress)
+    }
+    val openPanelSignal by container.openRightPanel.collectAsState()
+    LaunchedEffect(openPanelSignal) {
+        if (openPanelSignal > 0) nodePanel.open()
+    }
     // 贴边起手要用到的两个量：边缘条宽度（px）与下面 systemGestureExclusion 的矩形。
     val density = LocalDensity.current
     val edgePx = with(density) { NODE_PANEL_EDGE.toPx() }

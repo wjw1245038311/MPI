@@ -3,7 +3,9 @@ package com.mpi.app
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.mpi.app.data.Notifier
@@ -30,6 +32,7 @@ class MainActivity : ComponentActivity() {
         container.pendingThreadOpen.value = intent?.getStringExtra(Notifier.EXTRA_THREAD_ID)
 
         val benchmark = intent?.getBooleanExtra(EXTRA_BENCHMARK, false) == true
+        setupRightEdgeBackSwipe()
         setContent {
             if (benchmark) {
                 MpiTheme { BenchmarkScreen() }
@@ -107,5 +110,59 @@ class MainActivity : ComponentActivity() {
     private companion object {
         /** 向系统申请的右边缘排除区宽度（dp）；比系统手势区宽一些，给手指留容错。 */
         const val EDGE_EXCLUSION_DP = 32f
+
+        /** 返回手势的触点落在这条比例线以右，就算「右侧侧滑」。 */
+        const val RIGHT_SWIPE_START_FRACTION = 0.75f
+    }
+
+    /**
+     * 把「屏幕右侧的返回手势」当作右侧节点面板的**侧滑**（Android 13+ 预测性返回）。
+     *
+     * 为什么绕这一圈：屏幕最右那条缝归系统返回手势，App 拿不到 touch（`systemGestureExclusion`
+     * 系统也只接受约 200dp 高）；贴边侧滑于是要么被当成返回、要么根本划不动（真机现象：弹返回
+     * 箭头 → 返回键 → 打开左侧会话列表）。
+     *
+     * 预测性返回的回调不但给了**触点位置**（touchX，能判断来自哪一侧），还给了**手势进度**
+     * （progress，能驱面板跟手）——正好是侧滑需要的两样东西。
+     *
+     * 只有会话页且设置开着时才接管（[AppContainer.rightSwipeEnabled]）；其它情况的返回**原地
+     * 让位**给 Compose 的 BackHandler（抽屉/设置/会话返回），行为不变。
+     */
+    private fun setupRightEdgeBackSwipe() {
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                private var fromRight = false
+
+                override fun handleOnBackStarted(backEvent: BackEventCompat) {
+                    fromRight = false
+                    if (!container.rightSwipeEnabled.value) return
+                    val width = window.decorView.width
+                    if (width <= 0) return
+                    fromRight = backEvent.touchX >= width * RIGHT_SWIPE_START_FRACTION
+                    if (fromRight) container.rightPanelSwipe.value = 0f
+                }
+
+                override fun handleOnBackProgressed(backEvent: BackEventCompat) {
+                    if (fromRight) container.rightPanelSwipe.value = backEvent.progress.coerceIn(0f, 1f)
+                }
+
+                override fun handleOnBackPressed() {
+                    if (fromRight) {
+                        container.rightPanelSwipe.value = null
+                        container.openRightPanel.value += 1
+                        return
+                    }
+                    // 不是右侧来源：让位给 Compose 的 BackHandler，处理完再把自己的开关打开
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    window.decorView.post { isEnabled = true }
+                }
+
+                override fun handleOnBackCancelled() {
+                    if (fromRight) container.rightPanelSwipe.value = 0f
+                }
+            },
+        )
     }
 }
