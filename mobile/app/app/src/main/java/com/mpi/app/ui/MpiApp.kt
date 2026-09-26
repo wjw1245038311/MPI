@@ -35,6 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -388,6 +389,16 @@ private fun DrawerHost(
     val openPanelSignal by container.openRightPanel.collectAsState()
     LaunchedEffect(openPanelSignal) {
         if (openPanelSignal > 0) nodePanel.open()
+    }
+    val closePanelSignal by container.closeRightPanel.collectAsState()
+    LaunchedEffect(closePanelSignal) {
+        if (closePanelSignal > 0) nodePanel.close()
+    }
+    // 把「面板是否已展开」回报给 Activity：它据此决定右边缘向内滑是开还是关
+    LaunchedEffect(Unit) {
+        snapshotFlow { nodePanel.progress > 0.5f }.collect { open ->
+            container.rightPanelOpen.value = open
+        }
     }
     // 贴边起手要用到的两个量：边缘条宽度（px）与下面 systemGestureExclusion 的矩形。
     val density = LocalDensity.current

@@ -84,6 +84,12 @@ class AppContainer(context: Context) {
     /** 返回手势完成 → 请 UI 把右侧面板滑到位（每次 +1）。 */
     val openRightPanel = MutableStateFlow(0)
 
+    /** 面板已开时，右边缘向内滑 = 关闭（每次 +1）。 */
+    val closeRightPanel = MutableStateFlow(0)
+
+    /** 右侧面板当前是否已展开（UI 更新）：决定「右边缘向内滑」是开还是关。 */
+    val rightPanelOpen = MutableStateFlow(false)
+
     /**
      * 前后台（由 MainActivity 维护）。
      *
