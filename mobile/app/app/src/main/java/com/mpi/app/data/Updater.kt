@@ -163,6 +163,9 @@ class Updater(private val context: Context) {
      */
     suspend fun download(info: UpdateInfo): Result<DownloadResult> = withContext(Dispatchers.IO) {
         runCatching {
+            // 先清历史残留：下载文件名带版本号（update-<版本>.apk），不清就会一版一个
+            // 27MB 永远堆在 cacheDir（2026-09-26 真机：装了十几个版本，数据被撑到 1.4GB）。
+            pruneDownloadArtifacts()
             if (info.patchUsable()) {
                 val viaPatch = runCatching { downloadViaPatch(info, info.patch!!) }
                 viaPatch.getOrNull()?.let { return@runCatching DownloadResult(it, viaPatch = true) }
@@ -180,6 +183,20 @@ class Updater(private val context: Context) {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
+    }
+
+    /**
+     * 清掉历史更新产物（`update-*.apk` / `patch-*.bin`）。
+     *
+     * 为什么要单独抽出来并公开：老版本用户装上新版后，那些积累的旧包不会自己消失——
+     * App 启动时也调一次，装完新版立刻释放。
+     */
+    fun pruneDownloadArtifacts() {
+        runCatching {
+            context.cacheDir.listFiles { file ->
+                file.isFile && (file.name.startsWith("update-") || file.name.startsWith("patch-"))
+            }?.forEach { runCatching { it.delete() } }
+        }
     }
 
     // ---- 内部 ----

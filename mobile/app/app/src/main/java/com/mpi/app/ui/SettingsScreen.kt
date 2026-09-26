@@ -33,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -52,13 +53,17 @@ import com.mpi.app.BuildConfig
 import com.mpi.app.data.AppSettings
 import com.mpi.app.data.Appearance
 import com.mpi.app.data.FontSize
+import com.mpi.app.data.HomeCache
 import com.mpi.app.data.KeepAliveGuide
 import com.mpi.app.data.Notifier
 import com.mpi.app.data.SessionState
+import com.mpi.app.data.ThreadCache
 import com.mpi.app.data.UpdateInfo
 import com.mpi.app.data.VoiceSpeechContent
 import com.mpi.app.ui.theme.MpiTheme
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** 外观模式的显示名。 */
 internal fun appearanceLabel(mode: Appearance): String = when (mode) {
@@ -665,6 +670,32 @@ internal fun downloadTrailing(info: UpdateInfo, currentVersion: String = BuildCo
         formatBytes(info.size)
     }
 
+/**
+ * 存储明细：把「应用数据到底被什么占了」摊开。
+ *
+ * 起因（2026-09-26）：用户发现应用数据 1.4GB 却看不到明细——系统设置页只给总数。
+ * 这里列出各缓存目录与更新残留（后者曾是主要浪费：一版一个 27MB 的 APK）。
+ */
+private fun buildStorageSummary(context: Context): String {
+    fun sizeOf(dir: File?): Long =
+        if (dir == null || !dir.exists()) 0L else dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+    val filesDir = context.filesDir
+    val cacheDir = context.cacheDir
+    val artifacts = cacheDir.listFiles { file ->
+        file.isFile && (file.name.startsWith("update-") || file.name.startsWith("patch-"))
+    } ?: emptyArray()
+    return buildString {
+        appendLine("应用数据 ${formatBytes(sizeOf(filesDir))}")
+        appendLine("　会话缓存 ${formatBytes(sizeOf(File(filesDir, ThreadCache.DIR_NAME)))}")
+        appendLine("　首页缓存 ${formatBytes(sizeOf(File(filesDir, HomeCache.DIR_NAME)))}")
+        append("缓存目录 ${formatBytes(sizeOf(cacheDir))}")
+        if (artifacts.isNotEmpty()) {
+            append("（更新残留 ${formatBytes(artifacts.sumOf { it.length() })} / ${artifacts.size} 个）")
+        }
+    }
+}
+
 /** 1.5 MB / 820 KB / 512 B。 */
 internal fun formatBytes(bytes: Long): String {
     if (bytes <= 0) return "0 B"
@@ -712,6 +743,13 @@ fun DiagnosticsScreen(
                 state.lastTurnNotify ?: "还没判定过（回合结束时才有）",
             )
             DiagRow("通知通道", notificationStatus)
+            // 存储明细：系统设置页只给一个总数，看不到是谁占的（真机反馈：1.4GB 不知从哪来）。
+            // 递归算目录在 IO 线程，免得堵住首帧。
+            val storageContext = LocalContext.current
+            val storageSummary by produceState(initialValue = "计算中…") {
+                value = withContext(Dispatchers.IO) { buildStorageSummary(storageContext) }
+            }
+            DiagRow("存储", storageSummary, monospace = true)
             // 测试通知：延时发，用户才有时间切后台/熄屏——测的就是真实场景
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp),

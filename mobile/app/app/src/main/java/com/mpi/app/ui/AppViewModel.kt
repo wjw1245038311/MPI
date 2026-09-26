@@ -250,6 +250,8 @@ class AppViewModel(
         // 与 MpiApp 的前后台 kick 并列；已连上时 HostSession.kick 自己短路。
         networkWatcher.start()
         networkWatcher.addListener { session?.kick() }
+        // 清掉历史更新包（一版一个 27MB 堆在 cacheDir，老用户装上新版后得主动释放）。
+        scope.launch { withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { updater.pruneDownloadArtifacts() } } }
         scope.launch { initialize() }
     }
 
