@@ -14,6 +14,9 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -56,7 +59,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +71,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -80,6 +88,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.mpi.app.data.Attachment
 import com.mpi.app.data.ThreadView
 import com.mpi.app.data.VoiceSpeechContent
@@ -180,6 +190,8 @@ fun ThreadScreen(
     val renderable = view.renderable
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
     // 工具/思考块隐藏时的可见列表（纯函数，可单测）：只影响展示，不影响 allMessages 的状态推导
+    // 点击消息里的图片 → 全屏预览（见 ImagePreviewDialog）。
+    var previewImage by remember { mutableStateOf<ImageBitmap?>(null) }
     val showThinkingPlaceholder = shouldShowThinkingPlaceholder(view)
     val display = visibleMessages(renderable, showToolCalls, showThinking)
         // 占位行出现时，把「已 start 但一个块都没有」的流式消息从列表里摘掉：
@@ -312,6 +324,9 @@ fun ThreadScreen(
                 // 判定区域 = 这个消息区 Box：输入框/顶栏不在里面，所以它们的手势不受影响
                 .edgeSwipeNodePanel(nodePanel),
         ) {
+            // 图片块拿不到 ThreadScreen 的 state（隔了好几层），用 CompositionLocal 把
+            // 「打开预览」这件事传下去，免得为一张图把回调穿过整条渲染链。
+            CompositionLocalProvider(LocalImagePreviewer provides { previewImage = it }) {
             when {
                 !view.ready -> CenteredHint(text = "正在载入会话…", loading = true)
 
@@ -341,6 +356,8 @@ fun ThreadScreen(
                         item(key = "thinking-placeholder") { ThinkingPlaceholderRow() }
                     }
                 }
+            }
+            previewImage?.let { ImagePreviewDialog(it, onClose = { previewImage = null }) }
             }
 
             NodePanelLayer(
@@ -1422,6 +1439,54 @@ private fun ThinkingBlockRow(block: MessageBlock, key: String) {
 }
 
 /**
+ * 「点击图片打开全屏预览」的传递通道。
+ *
+ * 图片块在 MessageRow 下面好几层，把回调一路穿下去既吵又容易漏；预览本身是
+ * 屏幕级状态（ThreadScreen 持有），用 CompositionLocal 最贴合。null = 不支持预览。
+ */
+internal val LocalImagePreviewer = staticCompositionLocalOf<((ImageBitmap) -> Unit)?> { null }
+
+/** 全屏图片预览：双指缩放（1x–6x）、拖移，点空白或返回关闭。 */
+@Composable
+private fun ImagePreviewDialog(bitmap: ImageBitmap, onClose: () -> Unit) {
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        scale = (scale * zoomChange).coerceIn(1f, 6f)
+        // 缩回 1x 时把位移归零，否则图片会“滑出”屏幕且再也回不到中间。
+        offset = if (scale <= 1f) Offset.Zero else offset + panChange
+    }
+    Dialog(
+        onDismissRequest = onClose,
+        // usePlatformDefaultWidth=false：预览要占满整屏，而不是被 Dialog 的默认宽度限制。
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.94f))
+                .pointerInput(Unit) { detectTapGestures { onClose() } },
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                bitmap = bitmap,
+                contentDescription = "图片预览（双指缩放，点空白关闭）",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offset.x,
+                        translationY = offset.y,
+                    )
+                    .transformable(transformState),
+                contentScale = ContentScale.Fit,
+            )
+        }
+    }
+}
+
+/**
  * 消息里的图片块：把 base64 / data URL 解成 Bitmap 直接显示。
  *
  * 解码失败（数据截断、格式不支持）时给一行明确提示，**不静默丢掉**。
@@ -1439,12 +1504,16 @@ private fun ImageBlock(block: MessageBlock) {
     }
 
     if (bitmap != null) {
+        // LocalImagePreviewer.current 只能在 @Composable 上下文里读（clickable 的 lambda 不是）
+        val previewer = LocalImagePreviewer.current
         Image(
             bitmap = bitmap,
-            contentDescription = "图片",
+            contentDescription = "图片（点击放大）",
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp)),
+                .clip(RoundedCornerShape(10.dp))
+                // 点击放大：手机上小图看不清（截图 / 报错图常常如此）。
+                .clickable { previewer?.invoke(bitmap) },
             contentScale = ContentScale.Fit,
         )
     } else {

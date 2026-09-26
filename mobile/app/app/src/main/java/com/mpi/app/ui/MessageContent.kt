@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -53,44 +54,49 @@ internal fun RenderSegments(
     modifier: Modifier = Modifier,
     fillWidth: Boolean = true,
 ) {
-    Column(if (fillWidth) modifier.fillMaxWidth() else modifier) {
-        for (segment in segments) {
-            when (segment) {
-                is Segment.Code -> {
-                    val scroll = rememberScrollState()
-                    Text(
-                        text = segment.text,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MpiTheme.colors.codeBg)
-                            .horizontalScroll(scroll)
-                            .padding(10.dp),
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                            lineHeight = 19.sp,
-                        ),
-                        color = bodyColor,
-                    )
-                    if (segment.choiceWarn) {
+    // 文本可选择：长按出现系统选择手柄，可拖选**部分**复制（此前只能整条长按复制）。
+    // 与消息气泡外层的 combinedClickable 不冲突：长按落在文本上由选择接管，
+    // 落在气泡空白/头像上仍是「复制整条」。
+    SelectionContainer {
+        Column(if (fillWidth) modifier.fillMaxWidth() else modifier) {
+            for (segment in segments) {
+                when (segment) {
+                    is Segment.Code -> {
+                        val scroll = rememberScrollState()
                         Text(
-                            text = "choices 面板解析失败，按代码显示",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MpiTheme.colors.textFaint,
+                            text = segment.text,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MpiTheme.colors.codeBg)
+                                .horizontalScroll(scroll)
+                                .padding(10.dp),
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                                lineHeight = 19.sp,
+                            ),
+                            color = bodyColor,
+                        )
+                        if (segment.choiceWarn) {
+                            Text(
+                                text = "choices 面板解析失败，按代码显示",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MpiTheme.colors.textFaint,
+                            )
+                        }
+                    }
+
+                    is Segment.Body -> if (segment.text.isNotBlank()) {
+                        Text(
+                            text = inlineStyled(segment.text, bodyColor, MpiTheme.colors.codeBg),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = bodyColor,
                         )
                     }
-                }
 
-                is Segment.Body -> if (segment.text.isNotBlank()) {
-                    Text(
-                        text = inlineStyled(segment.text, bodyColor, MpiTheme.colors.codeBg),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = bodyColor,
-                    )
+                    is Segment.Choice -> Unit
                 }
-
-                is Segment.Choice -> Unit
             }
         }
     }
