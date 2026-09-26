@@ -1108,7 +1108,8 @@ class AppViewModel(
 
     /**
      * 会话级配置写操作的公共外壳：串行化、busy 标记、失败原因留给 UI。
-     * 失败时**不关 Sheet**，这样错误就显示在用户刚点的那个面板里。
+     * 成功/失败都**不关 Sheet**——用户可能还要连改几项（权限→模型→思考档位），
+     * 每设一项就收起一次反而要反复重开；关闭交给用户自己（下滑 / 返回手势）。
      */
     private fun configAction(block: suspend (ThreadActions) -> Unit) {
         val actions = threadActions ?: return
@@ -1117,7 +1118,7 @@ class AppViewModel(
         scope.launch {
             try {
                 block(actions)
-                _ui.update { it.copy(configBusy = false, configError = null, configSheetOpen = false) }
+                _ui.update { it.copy(configBusy = false, configError = null) }
             } catch (error: Exception) {
                 _ui.update { it.copy(configBusy = false, configError = error.message ?: "设置失败") }
             }
