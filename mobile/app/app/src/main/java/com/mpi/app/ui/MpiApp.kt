@@ -1,5 +1,6 @@
 package com.mpi.app.ui
 
+import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -40,6 +41,7 @@ import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -375,6 +377,9 @@ private fun DrawerHost(
     val sessionOpen = state.openThreadId != null && state.thread != null
     val drawerOpen = drawerState.isOpen
     val viewWidthPx = LocalView.current.width.toFloat()
+    // 在 composable 上下文里读一次：PredictiveBackHandler 的 lambda 不是 composable，
+    // 不能在里面读 LocalContext（编译期报 “@Composable invocations can only happen…”）
+    val hostActivity = LocalContext.current as? Activity
 
     /** 触点是否落在屏幕右边缘段（Android 13 拿不到 swipeEdge 时的兜底）。 */
     fun startedAtRightEdge(touchX: Float): Boolean =
@@ -412,7 +417,12 @@ private fun DrawerHost(
             // 手势完成（未被取消）：右边缘 → 开/关面板；否则走原本的返回语义
             when {
                 drawerOpen -> scope.launch { drawerState.close() }
-                fromRight -> if (closing) nodePanel.close() else nodePanel.open()
+                // 面板已开时，右边缘再向内滑一次 = **退出到后台**（与「侧滑两次退出」的系统习惯一致）
+                fromRight && closing -> {
+                    nodePanel.close()
+                    hostActivity?.moveTaskToBack(true)
+                }
+                fromRight -> nodePanel.open()
                 state.configSheetOpen -> viewModel.closeConfigSheet()
                 else -> scope.launch { drawerState.open() }
             }
@@ -441,13 +451,10 @@ private fun DrawerHost(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        // 手势就挂在这一层 = 抽屉的祖先：Initial（根 → 叶）时最先拿到事件，横向拖动消费后
-        // 抽屉在后面的 Main 阶段看不到它。只在会话页开着时启用，其它页面不拦右边缘。
-        //
-        // systemGestureExclusion：Android 手势导航默认把屏幕最外 ~20-24dp 划给**系统返回手势**，
-        // App 在那条缝里收不到 event——「贴边缘拉出」要成立，得先把这条边缘申请回来。
-        // 系统会对排除区做限制（沿边缘最多 ~200dp），能拿回多少算多少；拿不回的部分由
-        // edgeSwipeNodePanel 里「屏幕右半边起手也算」的兜底接住。API 29 以下无手势导航，无影响。
+        // 两个通路叠在一起（见 NodePanel.kt 顶部的分工说明）：
+        //  1. 最外 24dp 归系统返回手势 → 用预测性返回的 progress 驱面板（上面的 PredictiveBackHandler）；
+        //  2. 系统手势区之外、右边缘 64dp 以内：申请 systemGestureExclusion（能拿回多少算多少，
+        //     系统沿边缘约 200dp 上限）后交给 edgeSwipeNodePanel 自己跟手。
         modifier = Modifier
             .systemGestureExclusion { coordinates ->
                 // 坐标是本节点的局部坐标：只把右侧 edgePx 宽的一条申请为排除区
@@ -459,7 +466,7 @@ private fun DrawerHost(
                     bottom = size.height.toFloat(),
                 )
             }
-            .edgeSwipeNodePanel(swipeNodePanel && sessionOpen, nodePanel),
+            .edgeSwipeNodePanel(swipeNodePanel && sessionOpen, NODE_PANEL_EDGE, nodePanel),
         drawerContent = {
             // 抽屉宽度：手机上一手能回到对话（用户要求最多占屏宽 2/3）
             ModalDrawerSheet(

@@ -132,51 +132,44 @@ internal fun rememberNodePanelState(panelWidth: Dp): NodePanelState {
 }
 
 /**
- * 跟手拉出右侧节点面板——**与左侧会话列表抽屉（ModalNavigationDrawer）逐项对齐**。
+ * 右边缘左划 → 跟手拉出节点面板（**局部/补充**通路：系统手势区之外、右边缘 64dp 以内）。
  *
- * 读 Material3 的 NavigationDrawer.kt 后照抄它的口径（不再猜）：
- *  - **不限制起手区**：左侧抽屉的 `Modifier.anchoredDraggable(...)` 挂在整个根 Box 上，
- *    任意位置的水平拖动都能拉出它（这也正是「左划也会弹出左侧列表」的原因）；
- *  - **吸附阈值**：`positionalThreshold = distance * 0.5f`、`velocityThreshold = 400.dp`；
- *  - **吸附动画**：`TweenSpec(durationMillis = 256)`——都落在 [NodePanelState] 里。
+ * 与系统返回那个通路的分工（见 MpiApp 的 PredictiveBackHandler）：
+ *  - **最外 24dp（系统返回手势区）**：交给系统，我们用预测性返回的 progress 驱动面板；
+ *  - **24dp~64dp**：系统不管，由本手势处理（这一带在部分机型上还能靠
+ *    `systemGestureExclusion` 拿回无箭头体验）；
+ *  - **更靠内**：一概不碰。输入框/横向列表/代码块的拖动都应该归它们自己
+ *    （真机反馈：choices 输入框里左滑也弹出面板）。
  *
- * 唯一的差别是**方向分工**（Material 的抽屉不区分方向，左右两个同时挂会互相抢）：
- *  - 面板收起时只认**向左**拖 → 拉出右侧面板；
- *  - 面板已打开时只认**向右**拖 → 把它收回去；
- *  - 另一个方向整个让给左侧会话列表抽屉。
- *
- * 纵向一律不消费（还给 LazyColumn 滚动）：判定口径是「横向 0.6×touchSlop 且允许明显斜向」
- * 对「纵向 2×touchSlop」——手指从边缘往里划时天然带纵向分量，判太严会直接放弃整个手势。
- *
- * **挂载位置**：必须挂在 `ModalNavigationDrawer` 外面（见 DrawerHost）配 Initial 阶段，
- * 才能先于抽屉消费掉属于我们的那次拖动。
+ * 为什么用 **Main 阶段**、逐帧检查 `change.isConsumed`：Main 是「叶 → 根」，子组件先拿事件，
+ * 它们消费了就退出——这正是左侧 Material 抽屉不会抢输入框横滑的原因，照抄。
  */
 internal fun Modifier.edgeSwipeNodePanel(
     enabled: Boolean,
+    edgeWidth: Dp,
     state: NodePanelState,
 ): Modifier {
     if (!enabled) return this
-    return pointerInput(enabled) {
+    return pointerInput(enabled, edgeWidth) {
         val touchSlop = viewConfiguration.touchSlop
         val horizontalTrigger = touchSlop * 0.6f
         val verticalGiveUp = touchSlop * 2f
+        val edgePx = edgeWidth.toPx()
+        val systemZonePx = SYSTEM_GESTURE_ZONE.toPx()
         awaitEachGesture {
-            // ⚠️ 必须用 **Initial 阶段**：本手势挂在 ModalNavigationDrawer 的 modifier 上
-            // （抽屉的祖先），Initial 是「根 → 叶」——我们最先拿到事件，横向拖动一消费，
-            // 抽屉在后面的 Main 阶段就看不到了。换成 Main 必输（那是叶 → 根，抽屉先跑）。
-            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            // 起手区：**不限制**（与左侧抽屉对称——它也是全屏任意位置）。屏幕最右那一条
-            // 归系统返回手势，由 MpiApp 的 systemGestureExclusion 申请回来。
-            // closing：面板已经（部分）打开时，方向反过来——向右拖是把它收回去。
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
+            val x = down.position.x
+            // 只在「右边缘 64dp 内、但不含最外 24dp 系统手势区」起手
+            if (x < size.width - edgePx || x >= size.width - systemZonePx) return@awaitEachGesture
             val closing = state.progress > 0.01f
             val tracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
             var total = 0f
             var dragging = false
             while (true) {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val event = awaitPointerEvent(PointerEventPass.Main)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
-                // 已被更外层节点处理：不插手
+                // 子组件（输入框、横向列表、代码块）已经在处理这次拖动：让位
                 if (!dragging && change.isConsumed) break
                 tracker.addPosition(change.uptimeMillis, change.position)
                 val dx = change.position.x - down.position.x
@@ -200,6 +193,9 @@ internal fun Modifier.edgeSwipeNodePanel(
         }
     }
 }
+
+/** 系统返回手势区宽度（最外这条不碰，由预测性返回那条通路负责）。 */
+internal val SYSTEM_GESTURE_ZONE = 24.dp
 
 /**
  * 节点抽屉本体：半透明遮罩 + 面板（没有常驻把手——用户要的是系统边缘手势那种动态指示器，
