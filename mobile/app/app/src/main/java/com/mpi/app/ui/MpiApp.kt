@@ -183,7 +183,6 @@ fun MpiApp(container: AppContainer) {
                     state = state,
                     viewModel = viewModel,
                     openDrawerSignal = drawerSignal,
-                    swipeNodePanel = settings.swipeNodePanel,
                     onOpenHosts = { hostsOpen = true },
                     onOpenSettings = { settingsOpen = true },
                 ) { openDrawer, drawerOpen, nodePanel ->
@@ -244,7 +243,6 @@ fun MpiApp(container: AppContainer) {
                             voiceChat = state.voiceChat,
                             voiceChatText = state.voiceChatText,
                             onStopVoiceChat = viewModel::stopVoiceChat,
-                            swipeNodePanel = settings.swipeNodePanel,
                             nodePanel = nodePanel,
                             pendingFollowUp = state.pendingFollowUp,
                             sendError = state.sendError,
@@ -289,7 +287,6 @@ fun MpiApp(container: AppContainer) {
                     onSpeakTurnComplete = container.settingsStore::setSpeakTurnComplete,
                     onVoiceContent = container.settingsStore::setVoiceSpeechContent,
                     onSpeakDuringCall = container.settingsStore::setSpeakDuringCall,
-                    onSwipeNodePanel = container.settingsStore::setSwipeNodePanel,
                     onOpenDiagnostics = { diagnosticsOpen = true },
                     onRemoveDevice = {
                         settingsOpen = false
@@ -363,8 +360,6 @@ private fun DrawerHost(
     state: AppUiState,
     viewModel: AppViewModel,
     openDrawerSignal: Int,
-    /** 左划拉出「会话节点」面板（设置项）。 */
-    swipeNodePanel: Boolean,
     onOpenHosts: () -> Unit,
     onOpenSettings: () -> Unit,
     content: @Composable (openDrawer: () -> Unit, drawerOpen: Boolean, nodePanel: NodePanelState) -> Unit,
@@ -408,8 +403,8 @@ private fun DrawerHost(
                     } else {
                         startedAtRightEdge(event.touchX)
                     }
-                    // 设置里关掉左划面板时，右边缘手势也不夺——保持普通返回
-                    fromRight = swipeNodePanel && rightEdge
+                    // 设置里关掉左划面板的开关已移除（用户口径：这个手势一直启用）
+                    fromRight = rightEdge
                     closing = nodePanel.progress > 0.5f
                 }
                 if (fromRight) {
@@ -468,7 +463,7 @@ private fun DrawerHost(
                     bottom = size.height.toFloat(),
                 )
             }
-            .edgeSwipeNodePanel(swipeNodePanel, nodePanel),
+            .edgeSwipeNodePanel(nodePanel),
         drawerContent = {
             // 抽屉宽度：手机上一手能回到对话（用户要求最多占屏宽 2/3）
             ModalDrawerSheet(

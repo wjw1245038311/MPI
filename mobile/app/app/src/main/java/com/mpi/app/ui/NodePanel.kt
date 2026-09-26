@@ -171,11 +171,9 @@ internal fun Modifier.blockAncestorGestures(): Modifier = pointerInput(Unit) {
  * 纵向一律不消费，还给 LazyColumn 滚动。
  */
 internal fun Modifier.edgeSwipeNodePanel(
-    enabled: Boolean,
     state: NodePanelState,
 ): Modifier {
-    if (!enabled) return this
-    return pointerInput(enabled) {
+    return pointerInput(Unit) {
         val touchSlop = viewConfiguration.touchSlop
         val horizontalTrigger = touchSlop * 0.6f
         val verticalGiveUp = touchSlop * 2f

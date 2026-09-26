@@ -107,13 +107,6 @@ data class AppSettings(
      * 开了也只是**尝试**——部分 ROM 通话中整个静音媒体流，那时这个开关也救不回来。
      */
     val speakDuringCall: Boolean = false,
-    /**
-     * 会话里**左划**打开「会话节点」面板（对齐桌面端左侧的用户消息导航）。默认开。
-     *
-     * 与已有的「右划拉出会话列表」互为镜像；不想要这个手势就从设置里关掉
-     * （用户口径：左划是否生效由设置控制）。
-     */
-    val swipeNodePanel: Boolean = true,
 )
 
 /**
@@ -165,11 +158,6 @@ class SettingsStore(context: Context) {
         _settings.value = read()
     }
 
-    fun setSwipeNodePanel(value: Boolean) {
-        prefs.edit().putBoolean(KEY_SWIPE_NODE_PANEL, value).apply()
-        _settings.value = read()
-    }
-
     private fun read(): AppSettings = AppSettings(
         appearance = Appearance.fromStored(prefs.getString(KEY_APPEARANCE, null)),
         fontSize = FontSize.fromStored(prefs.getString(KEY_FONT_SIZE, null)),
@@ -178,7 +166,6 @@ class SettingsStore(context: Context) {
         speakTurnComplete = prefs.getBoolean(KEY_SPEAK_TURN_COMPLETE, true),
         voiceSpeechContent = VoiceSpeechContent.fromStored(prefs.getString(KEY_VOICE_SPEECH_CONTENT, null)),
         speakDuringCall = prefs.getBoolean(KEY_SPEAK_DURING_CALL, false),
-        swipeNodePanel = prefs.getBoolean(KEY_SWIPE_NODE_PANEL, true),
     )
 
     companion object {
@@ -190,6 +177,5 @@ class SettingsStore(context: Context) {
         private const val KEY_SPEAK_TURN_COMPLETE = "speakTurnComplete"
         private const val KEY_VOICE_SPEECH_CONTENT = "voiceSpeechContent"
         private const val KEY_SPEAK_DURING_CALL = "speakDuringCall"
-        private const val KEY_SWIPE_NODE_PANEL = "swipeNodePanel"
     }
 }

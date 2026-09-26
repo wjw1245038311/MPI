@@ -145,8 +145,6 @@ fun ThreadScreen(
     /** 语音模式下最近一句识别到的文本（显示在状态条里）。 */
     voiceChatText: String?,
     onStopVoiceChat: () -> Unit,
-    /** 左划拉出「会话节点」面板（设置项）。 */
-    swipeNodePanel: Boolean,
     /** 会话节点面板状态：**手势挂在消息区那个 Box 上**（判定区域 = 消息区，不含输入框），
      *  面板本体也在这里渲染与滚动定位。 */
     nodePanel: NodePanelState,
@@ -291,7 +289,7 @@ fun ThreadScreen(
             Modifier
                 .weight(1f)
                 // 判定区域 = 这个消息区 Box：输入框/顶栏不在里面，所以它们的手势不受影响
-                .edgeSwipeNodePanel(swipeNodePanel, nodePanel),
+                .edgeSwipeNodePanel(nodePanel),
         ) {
             when {
                 !view.ready -> CenteredHint(text = "正在载入会话…", loading = true)
