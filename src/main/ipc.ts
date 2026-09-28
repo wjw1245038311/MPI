@@ -2547,9 +2547,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       );
       return remoteSnapshot(threadId, { live: true });
     },
-    prompt: (threadId, text, images, files) => threadService.prompt(threadId, text, images, files),
-    steer: (threadId, text, images, files) => threadService.steer(threadId, text, images, files),
-    followUp: (threadId, text, images, files) => threadService.followUp(threadId, text, images, files),
+    prompt: (threadId, text, images, files, videos) => threadService.prompt(threadId, text, images, files, videos),
+    steer: (threadId, text, images, files, videos) => threadService.steer(threadId, text, images, files, videos),
+    followUp: (threadId, text, images, files, videos) => threadService.followUp(threadId, text, images, files, videos),
     abort: (threadId) => threadService.abort(threadId),
     renameThread: async (threadId, name) => {
       const ref = await remoteThread(threadId);

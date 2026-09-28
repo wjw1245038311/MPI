@@ -483,7 +483,9 @@ export abstract class ChannelBase<S> {
       }, JOB_TIMEOUT_MS);
 
       try {
-        await this.options.backend.prompt(threadId, params.text);
+        // 三个附件参数显式传 undefined：RemoteBackend 把它们声明成必填（`X | undefined`），
+        // 就是为了让“漏传第 5 个参数”这类错误在编译期就爆掉（2026-09-28 视频被静默吞掉的事故）。
+        await this.options.backend.prompt(threadId, params.text, undefined, undefined, undefined);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new Error(message);

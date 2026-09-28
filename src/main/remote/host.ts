@@ -294,17 +294,29 @@ export class RemoteHost {
       request = parseEnvelope(raw);
     } catch (error) {
       const e = error instanceof RemoteProtocolError ? error : new RemoteProtocolError("INVALID_REQUEST", String(error));
+      // 取证：帧到了但解析不了（长度/JSON/版本）。没有这行时，客户端看到的是
+      // 一个对不上号（UNMATCHED）的错误，而主机这边一片空白——2026-09-28 查视频
+      // 发送丢失就卡在这里：大帧进来后**什么痕迹都没有**。
+      appendDiagLog(`remote-frame REJECT len=${raw.length} conn=${connectionId.slice(0, 24)} code=${e.code} msg=${e.message.slice(0, 80)}`);
       this.sendFrame(connection, makeEnvelope("error", connection.sessionId, undefined, { error: { code: e.code, message: e.message } }));
       return;
     }
 
     if (!connection.authenticated) {
       if (request.type !== "pair.hello") {
+        appendDiagLog(`remote-frame UNAUTH type=${request.type} len=${raw.length} conn=${connectionId.slice(0, 24)}`);
         this.sendFrame(connection, errorFor(request, "AUTH_REQUIRED", "Pairing is required before remote commands"));
         return;
       }
       this.handleHello(connection, request);
       return;
+    }
+
+    // 取证（2026-09-28）：入站帧一览。只记非平凡帧（>2KB）与所有 prompt/steer/followUp——
+    // 小请求（claimWrite 等）量大且无诊断价值。“大帧进来了但服务层没反应”这类问题，
+    // 靠这行与 service.ts 的 `remote-req …` 行对齐即可定死丢在哪一层。
+    if (raw.length > 2_000 || request.type.startsWith("thread.") || request.type === "ui.respond") {
+      appendDiagLog(`remote-frame type=${request.type} len=${raw.length} conn=${connectionId.slice(0, 24)}`);
     }
 
     await this.options.service.handle(request, {

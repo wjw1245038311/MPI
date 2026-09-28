@@ -30,9 +30,17 @@ export interface RemoteBackend {
    * shows a spinner from compaction_start/end events, and the refreshed
    * context usage arrives as a `context_usage` event. */
   compact(threadId: string, instructions?: string): Promise<unknown>;
-  prompt(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown>;
-  steer(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown>;
-  followUp(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown>;
+  /**
+   * videos 特意写成**必填**（类型是 `X | undefined`，而不是可选参数 `videos?`）。
+   *
+   * 2026-09-28 真机事故：新增 videos 后，中间转发层（ipc.ts 的 remoteBackend）的箭头函数
+   * 只写了 4 个参数 → 第 5 个参数被**默默吞掉**，而 TS 因为“可选参数可以少传”一声不吭。
+   * 症状极其难查：客户端发了 285KB 帧、主机日志记着 `videos=1`，但落盘/引用全都没有。
+   * 改成必填后，同一类漏传会直接**编译失败**。
+   */
+  prompt(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined): Promise<unknown>;
+  steer(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined): Promise<unknown>;
+  followUp(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined): Promise<unknown>;
   abort(threadId: string): Promise<unknown>;
   /** 重命名会话（pi RPC `set_session_name`）。 */
   renameThread(threadId: string, name: string): Promise<unknown>;
@@ -261,8 +269,15 @@ export class RemoteService {
       case "thread.steer":
       case "thread.followUp": {
         const threadId = this.requiredThread(request);
+        // 取证（2026-09-28）：把**附件明细**一起记下。原先只记类型与线程，导致
+        // 「中继看到了 381KB 大帧、服务层却当纯文本处理」这种事故无从分辨是
+        // 客户端没发、还是主机没读——这两行对齐就能定死在哪一层。
         appendDiagLog(
-          `remote-req ${request.type} conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)}`,
+          `remote-req ${request.type} conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)}` +
+            ` payload=${JSON.stringify(payload).length}B keys=${Object.keys(payload).join(",").slice(0, 80)}` +
+            ` images=${Array.isArray(payload.images) ? payload.images.length : 0}` +
+            ` videos=${Array.isArray(payload.videos) ? payload.videos.length : 0}` +
+            ` files=${Array.isArray(payload.files) ? payload.files.length : 0}`,
         );
         this.assertWriter(threadId, context);
         // Image-only messages are legal (phone composer): empty text is fine

@@ -77,17 +77,19 @@ export class ThreadService {
   constructor(
     private readonly getFn: (threadId: string) => Promise<RemoteThreadSnapshot>,
     private readonly createFn: (projectId: string, name?: string, permission?: RemotePermission) => Promise<RemoteThreadSnapshot>,
-    private readonly promptFn: (threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]) => Promise<unknown>,
-    private readonly steerFn: (threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]) => Promise<unknown>,
-    private readonly followUpFn: (threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]) => Promise<unknown>,
+    private readonly promptFn: (threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined) => Promise<unknown>,
+    private readonly steerFn: (threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined) => Promise<unknown>,
+    private readonly followUpFn: (threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined) => Promise<unknown>,
     private readonly abortFn: (threadId: string) => Promise<unknown>,
   ) {}
 
   get(threadId: string): Promise<RemoteThreadSnapshot> { return this.getFn(threadId); }
   create(projectId: string, name?: string, permission?: RemotePermission): Promise<RemoteThreadSnapshot> { return this.createFn(projectId, name, permission); }
-  prompt(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown> { return this.promptFn(threadId, text, images, files, videos); }
-  steer(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown> { return this.steerFn(threadId, text, images, files, videos); }
-  followUp(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown> { return this.followUpFn(threadId, text, images, files, videos); }
+  // videos 必填（`X | undefined`）——见 service.ts RemoteBackend 上的说明：少传一个参数
+  // 在可选参数下是静默的，2026-09-28 就是这么把视频丢掉的。
+  prompt(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined): Promise<unknown> { return this.promptFn(threadId, text, images, files, videos); }
+  steer(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined): Promise<unknown> { return this.steerFn(threadId, text, images, files, videos); }
+  followUp(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined): Promise<unknown> { return this.followUpFn(threadId, text, images, files, videos); }
   abort(threadId: string): Promise<unknown> { return this.abortFn(threadId); }
 }
 

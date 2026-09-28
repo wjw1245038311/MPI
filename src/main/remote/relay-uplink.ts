@@ -17,6 +17,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import WebSocket from "ws";
+import { appendDiagLog } from "../diag-log";
 import { decryptFrame, deriveAesKey, encryptFrame } from "./e2e-crypto";
 import { x25519SharedSecret } from "./identity";
 import type { RemotePushSubscription } from "./protocol";
@@ -277,6 +278,7 @@ export class RelayUplink implements RelayOutbound {
       if (msg.e === 1) {
         const session = this.e2eSessions.get(from);
         if (!session?.active) {
+          appendDiagLog(`relay-in DROPPED-LARGE from=${from} c=${typeof msg.c === "string" ? msg.c.length : 0} reason=no-active-e2e`);
           console.warn(`[relay-uplink] dropping encrypted frame from ${from} without an active E2E session`);
           return;
         }
@@ -294,8 +296,7 @@ export class RelayUplink implements RelayOutbound {
       }
       void this.options.getHost()?.handleTransportFrame(connectionId, raw).catch((error) => {
         console.error("[relay-uplink] handleTransportFrame failed:", error);
-      });
-    });
+      });    });
 
     ws.on("error", (error: Error & { message?: string }) => {
       if (this.ws === ws) this.lastError = error?.message || "uplink connection error";
