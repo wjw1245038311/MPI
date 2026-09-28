@@ -395,13 +395,17 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
       );
     }
     const src = block.data.startsWith("data:") ? block.data : `data:${block.mimeType || "video/mp4"};base64,${block.data}`;
+    // 飞书式：气泡里**只给一个视频框**（首帧当封面 + 中央 ▶），点一下直接全屏播。
+    // 这里的 <video> 只负责出首帧（无 controls、静音、`#t=0.1` 促帧）——不在列表里常驻
+    // 一个可控播放器，也就不存在“先点播放再点全屏”的两跳。
+    const meta = [block.size ? formatSize(block.size) : "", (block.mimeType || "").replace("video/", "")].filter(Boolean).join(" · ");
     return (
-      <div className="msg-video-wrap">
-        {/* preload=metadata：只拉首帧/时长，不把整段视频解密进内存（手机上差值很明显）。 */}
-        <video className="msg-video" src={src} controls playsInline preload="metadata" />
-        <button type="button" className="msg-video-full" aria-label="全屏播放">
-          ⛶
-        </button>
+      <div className="msg-video-card">
+        <video className="msg-video-poster" src={`${src}#t=0.1`} muted playsInline preload="metadata" tabIndex={-1} />
+        <span className="msg-video-play" aria-hidden="true">
+          ▶
+        </span>
+        {meta ? <span className="msg-video-meta">{meta}</span> : null}
       </div>
     );
   }
@@ -548,10 +552,10 @@ function ImagePreview({ src, onClose }: { src: string; onClose: () => void }) {
 }
 
 /**
- * 全屏视频预览：气泡里的播放器在竖屏手机上太小，给一个铺满屏幕的播放器。
+ * 全屏视频播放（飞书式交互的落点）：点视频框直接到这里，铺满屏幕并自动开播。
  *
- * 与 ImagePreview 的做法不同（不接管缩放/拖移）：视频自带原生控件，再叠一层手势会打架。
- * 这里只负责“铺满 + 关闭”（Esc / × / 点空白）。
+ * 不接管缩放/拖移（视频自带原生控件，再叠一层手势会打架）：只负责“铺满 + 关闭”
+ * （Esc / × / 点空白）。
  */
 function VideoPreview({ src, onClose }: { src: string; onClose: () => void }) {
   useEffect(() => {
@@ -990,11 +994,12 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       setPreviewSrc(target.currentSrc || target.src);
       return;
     }
-    // 视频全屏按钮：从同层的 <video> 取 src（不把 data URL 再塞一份进 DOM 属性——
-    // 一段 3MB 视频的 base64 复制到属性里是实打实的内存与解析开销）。
-    if (target instanceof HTMLElement && target.classList.contains("msg-video-full")) {
-      const video = target.closest(".msg-video-wrap")?.querySelector("video");
-      if (video?.src) setVideoPreviewSrc(video.src);
+    // 视频框点击 → 直接全屏播（飞书式）。从框里的 <video> 取 src（不把 data URL 再塞一份进
+    // DOM 属性——一段 3MB 视频的 base64 复制到属性里是实打实的内存与解析开销）。
+    if (target instanceof HTMLElement && target.closest(".msg-video-card")) {
+      const poster = target.closest(".msg-video-card")?.querySelector("video");
+      // 去掉促帧用的 #t=0.1，全屏播放从 0 开始。
+      if (poster?.src) setVideoPreviewSrc(poster.src.split("#")[0]);
     }
   };
 

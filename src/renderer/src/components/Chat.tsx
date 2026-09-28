@@ -1909,6 +1909,19 @@ const SkillInvocation = memo(function SkillInvocation({ name, language }: { name
  */
 function UserVideo({ name, path, language }: { name: string; path: string; language: "en" | "zh" }) {
   const [failed, setFailed] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const url = chatAttachmentUrl(name);
+
+  // 全屏播放中用 Esc 关（覆盖层不是 dialog，浏览器不会自己处理）。
+  useEffect(() => {
+    if (!playing) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPlaying(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [playing]);
+
   if (failed) {
     return (
       <div className="msg-user-video-missing" title={path}>
@@ -1923,14 +1936,55 @@ function UserVideo({ name, path, language }: { name: string; path: string; langu
       </div>
     );
   }
+
+  // 飞书式：气泡里只给一个视频框（首帧当封面 + 中央 ▶），点一下直接全屏播。
+  // 框里的 <video> 只负责出首帧（无 controls、静音、#t=0.1 促帧）；真正的播放器在全屏层。
   return (
-    <video
-      className="msg-user-video"
-      src={chatAttachmentUrl(name)}
-      controls
-      preload="metadata"
-      onError={() => setFailed(true)}
-    />
+    <>
+      <div
+        className="msg-user-video-card"
+        role="button"
+        tabIndex={0}
+        title={`${language === "zh" ? "播放" : "Play"}: ${name}`}
+        onClick={() => setPlaying(true)}
+      >
+        <video
+          className="msg-user-video-poster"
+          src={`${url}#t=0.1`}
+          muted
+          playsInline
+          preload="metadata"
+          tabIndex={-1}
+          onError={() => setFailed(true)}
+        />
+        <span className="msg-user-video-play" aria-hidden="true">
+          ▶
+        </span>
+      </div>
+      {playing && (
+        <div className="video-preview" role="dialog" aria-modal="true" onClick={() => setPlaying(false)}>
+          <video
+            className="video-preview-player"
+            src={url}
+            controls
+            autoPlay
+            playsInline
+            onClick={(event) => event.stopPropagation()}
+          />
+          <button
+            type="button"
+            className="video-preview-close"
+            aria-label={language === "zh" ? "关闭" : "Close"}
+            onClick={(event) => {
+              event.stopPropagation();
+              setPlaying(false);
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 

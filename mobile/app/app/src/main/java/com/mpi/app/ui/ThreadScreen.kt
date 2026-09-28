@@ -21,6 +21,7 @@ import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -1548,8 +1549,6 @@ private fun VideoBlock(block: MessageBlock) {
     val context = LocalContext.current
     // block.data 变了才重写文件（列表滚动会导致重组）。
     val source = remember(block.data) { block.data?.let { writeVideoCacheFile(context, it, block.mimeType) } }
-    var playing by remember(source) { mutableStateOf(false) }
-    var expanded by remember(source) { mutableStateOf(false) }
 
     if (source == null) {
         // 本体没下发（实时事件通道剥大帧 / 超出快照视频预算）或解码失败 → 占位卡片，
@@ -1558,6 +1557,9 @@ private fun VideoBlock(block: MessageBlock) {
         return
     }
 
+    // 飞书式：气泡里只给一个视频框（首帧当封面 + 中央 ▶），点一下**直接全屏**。
+    // 播放器只在全屏期间存在，所以列表里不会积一堆 ExoPlayer。
+    var playing by remember(source) { mutableStateOf(false) }
     val player = remember(source, playing) {
         if (!playing) {
             null
@@ -1574,44 +1576,13 @@ private fun VideoBlock(block: MessageBlock) {
         onDispose { player?.release() }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (!playing) {
-            VideoPosterCard(block = block, onPlay = { playing = true })
-        } else if (!expanded) {
-            // 同一个播放器不能同时绑两个 PlayerView，所以全屏时这里只留一块占位。
-            Box(Modifier.widthIn(max = 320.dp)) {
-                AndroidView(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp)
-                        .clip(RoundedCornerShape(10.dp)),
-                    factory = { ctx -> PlayerView(ctx).apply { useController = true } },
-                    update = { view -> view.player = player },
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { expanded = true }) { Text("全屏") }
-                TextButton(
-                    onClick = {
-                        playing = false
-                        expanded = false
-                    },
-                ) { Text("收起") }
-            }
-        } else {
-            Box(
-                Modifier.widthIn(max = 320.dp).height(200.dp).background(Color.Black),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("全屏播放中…", color = Color.White, style = MaterialTheme.typography.labelSmall)
-            }
-            TextButton(onClick = { expanded = false }) { Text("退出全屏") }
-        }
-    }
+    // 首帧当封面：用 MediaMetadataRetriever 抽一帧（不建播放器），失败就只剩深色底。
+    val poster = remember(source) { extractFirstFrame(source) }
+    VideoPosterCard(block = block, poster = poster, onPlay = { playing = true })
 
-    if (expanded && player != null) {
+    if (playing && player != null) {
         Dialog(
-            onDismissRequest = { expanded = false },
+            onDismissRequest = { playing = false },
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
             Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -1622,39 +1593,73 @@ private fun VideoBlock(block: MessageBlock) {
                 )
                 TextButton(
                     modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
-                    onClick = { expanded = false },
+                    onClick = { playing = false },
                 ) { Text("关闭", color = Color.White) }
             }
         }
     }
 }
 
-/** 点 ▶ 之前的静态卡片（没建播放器）；有尺寸信息就显示出来。 */
+/**
+ * 视频框：首帧封面 + 中央 ▶ + 右下角尺寸/格式。
+ *
+ * 首帧取不到（编解码器不支持/文件异常）时退化成深色底 + ▶——仍可点开播，不拦人。
+ */
 @Composable
-private fun VideoPosterCard(block: MessageBlock, onPlay: () -> Unit) {
-    Row(
+private fun VideoPosterCard(block: MessageBlock, poster: ImageBitmap?, onPlay: () -> Unit) {
+    Box(
         modifier = Modifier
-            .widthIn(max = 320.dp)
+            .widthIn(max = 300.dp)
+            .aspectRatio(16f / 9f)
             .clip(RoundedCornerShape(10.dp))
-            .background(MpiTheme.colors.control)
-            .clickable { onPlay() }
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            .background(Color.Black)
+            .clickable { onPlay() },
+        contentAlignment = Alignment.Center,
     ) {
-        Text("▶", style = MaterialTheme.typography.titleMedium, color = MpiTheme.colors.accentSoft)
-        Column {
-            Text(
-                text = block.name ?: "视频",
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+        if (poster != null) {
+            Image(
+                bitmap = poster,
+                contentDescription = "视频（点击播放）",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
             )
-            Text(
-                text = formatVideoMeta(block),
-                style = MaterialTheme.typography.labelSmall,
-                color = MpiTheme.colors.textFaint,
-            )
+        }
+        Box(
+            modifier = Modifier
+                .size(46.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("▶", color = Color.White, fontSize = 16.sp)
+        }
+        Text(
+            text = formatVideoMeta(block),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(6.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color.Black.copy(alpha = 0.55f))
+                .padding(horizontal = 6.dp, vertical = 1.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White,
+        )
+    }
+}
+
+/** 抽首帧当封面（飞书式观感）。失败 → null：卡片退化成深色底 + ▶，不影响点开播。 */
+private fun extractFirstFrame(file: File): ImageBitmap? {
+    val retriever = android.media.MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(file.absolutePath)
+        retriever.getFrameAtTime(0)?.asImageBitmap()
+    } catch (error: Throwable) {
+        null
+    } finally {
+        try {
+            retriever.release()
+        } catch (_: Throwable) {
+            // release 失败无需处理
         }
     }
 }

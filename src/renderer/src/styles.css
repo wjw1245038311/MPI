@@ -1240,19 +1240,69 @@ body.sidebar-resizing * {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
-/* ---- 视频附件（手机端发来的，内联播放；见 chat-attachment-protocol.ts）-------- */
-/* 渲染在用户消息的附件区（.msg-user-files 是 grid，默认 stretch）——
-   给播放器与占位卡片一个 justify-self，否则会被拉到整列宽。 */
-.msg-user-video {
-  display: block;
+/* ---- 视频附件（飞书式：气泡里只有一个视频框，点一下直接全屏；见 chat-attachment-protocol.ts）---- */
+/* 渲染在用户消息的附件区（.msg-user-files 是 grid）——justify-self 防止被拉到整列宽。 */
+.msg-user-video-card {
+  position: relative;
   justify-self: start;
-  max-width: min(420px, 100%);
-  max-height: 320px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
+  width: min(300px, 100%);
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
   background: #000;
+  cursor: pointer;
 }
-/* 临时目录被清理 / 文件被删时的占位卡片——不能只剩一块空白。 */
+.msg-user-video-poster {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none; /* 只当封面：点击归父级卡片 */
+}
+.msg-user-video-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  color: #fff;
+  font-size: 16px;
+  line-height: 46px;
+  text-align: center;
+  text-indent: 3px; /* ▶ 字形偏左，缩进一下才视觉居中 */
+}
+/* 全屏播放层：铺满 + 居中，Esc / × / 点空白关闭。 */
+.video-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.96);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.video-preview-player {
+  max-width: 100%;
+  max-height: 100%;
+}
+.video-preview-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+/* 文件已被清理时的占位卡片——不能只剩一块空白。 */
 .msg-user-video-missing {
   display: flex;
   align-items: center;
