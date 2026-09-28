@@ -236,8 +236,11 @@ export interface ViewAttachment {
   note?: string;
   error?: string;
   /** "quote" marks a conversation quote (right-click → 引用); rendered as a
-   * non-clickable chip, never opened in the preview panel. */
-  kind?: "file" | "quote";
+   * non-clickable chip, never opened in the preview panel.
+   *
+   * "video" marks a phone-side video attachment (`attach="video"` 信封): 渲染成
+   * 内联播放器而不是文件卡片——见 Chat.tsx 的 UserVideo。 */
+  kind?: "file" | "quote" | "video";
 }
 
 /** Quote metadata carried by a prompt attachment: the selected text plus its

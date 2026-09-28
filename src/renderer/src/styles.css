@@ -1241,14 +1241,11 @@ body.sidebar-resizing * {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 /* ---- 视频附件（手机端发来的，内联播放；见 chat-attachment-protocol.ts）-------- */
-.msg-user-videos {
-  display: grid;
-  gap: 8px;
-  margin-top: 8px;
-  justify-items: start;
-}
+/* 渲染在用户消息的附件区（.msg-user-files 是 grid，默认 stretch）——
+   给播放器与占位卡片一个 justify-self，否则会被拉到整列宽。 */
 .msg-user-video {
   display: block;
+  justify-self: start;
   max-width: min(420px, 100%);
   max-height: 320px;
   border-radius: 8px;
@@ -1259,6 +1256,7 @@ body.sidebar-resizing * {
 .msg-user-video-missing {
   display: flex;
   align-items: center;
+  justify-self: start;
   gap: 8px;
   max-width: 420px;
   padding: 8px 10px;

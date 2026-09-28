@@ -89,6 +89,10 @@ export function parseUserMessage(text: string): ParsedUserMessage {
       if (path) attachment.path = path;
       if (note) attachment.note = note;
       if (error) attachment.error = error;
+      // 手机端发来的视频：主机写入的信封带 attach="video"（见 main/remote/video-refs.ts）。
+      // 标成 video 让渲染层用内联播放器而不是“文件附件”卡片——否则用户看到一张
+      // 文件名卡片，得自己点开才能发现是个视频。
+      if (readAttribute(attrs, "attach") === "video") attachment.kind = "video";
       attachments.push(attachment);
     } else {
       // A <quote> block: the body is the quoted passage itself.

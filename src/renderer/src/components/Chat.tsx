@@ -18,7 +18,7 @@ import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
 import { splitChoiceSegments } from "../lib/choice-block";
 import { ChoicePanel } from "./ChoicePanel";
-import { chatAttachmentUrl, splitVideoRefs } from "../lib/chat-attachments";
+import { chatAttachmentUrl } from "../lib/chat-attachments";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
 import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
@@ -1334,10 +1334,7 @@ function MessageGroupInner({
 
   if (group.role === "user") {
     const m = group.items[0];
-    // 视频附件：先把 `<file … attach="video" … />` 引用剥出来（否则用户会在自己气泡里
-    // 看到那一整行原始标签），再交给 <UserVideo> 内联播放。
-    const videoSplit = m.text ? splitVideoRefs(m.text) : { text: "", refs: [] };
-    const parsedHtml = videoSplit.text ? parseHtmlReferenceText(videoSplit.text) : { text: "", references: [] };
+    const parsedHtml = m.text ? parseHtmlReferenceText(m.text) : { text: "", references: [] };
     const skillBlock = parsedHtml.text ? parseSkillBlock(parsedHtml.text) : null;
     const openAttachment = async (attachment: NonNullable<ViewMessage["attachments"]>[number]) => {
       if (!attachment.path) return;
@@ -1382,13 +1379,6 @@ function MessageGroupInner({
                 ))}
               </div>
             )}
-            {videoSplit.refs.length > 0 && (
-              <div className="msg-user-videos" aria-label={language === "zh" ? "视频附件" : "Video attachments"}>
-                {videoSplit.refs.map((ref, index) => (
-                  <UserVideo key={`${ref.name}-${index}`} name={ref.name} path={ref.path} language={language} />
-                ))}
-              </div>
-            )}
             {m.images && m.images.length > 0 && (
               <div className="msg-user-imgs">
                 {m.images.map((im, i) => (
@@ -1401,7 +1391,11 @@ function MessageGroupInner({
             {m.attachments && m.attachments.length > 0 && (
               <div className="msg-user-files" aria-label={language === "zh" ? "文件附件与引用" : "File attachments and quotes"}>
                 {m.attachments.map((attachment, index) =>
-                  attachment.kind === "quote" ? (
+                  attachment.kind === "video" && attachment.path ? (
+                    // 视频附件：给内联播放器（否则只是一张文件名卡片，得点开才知道是视频）。
+                    // 走 chatatt:// 协议取字节——路径在 %TEMP%/mpi-clipboard，渲染层不直读文件。
+                    <UserVideo key={`video-${index}`} name={attachment.name} path={attachment.path} language={language} />
+                  ) : attachment.kind === "quote" ? (
                     // Conversation quote (right-click → 引用): a non-clickable
                     // chip; the model-facing envelope carries its location.
                     <div key={`quote-${index}`} className="msg-user-quote" title={attachment.note || attachment.name}>
@@ -1904,11 +1898,14 @@ const SkillInvocation = memo(function SkillInvocation({ name, language }: { name
 });
 
 /**
- * 用户消息里的视频附件：内联播放器。
+ * 用户消息里的视频附件（手机端发来的）：内联播放器。
  *
  * 文件由主机 stageClipboardFile 落在 `%TEMP%/mpi-clipboard`，渲染层通过 `chatatt://` 协议取
- * （支持 Range → 能拖进度条）。临时目录被系统清理 / 文件被删时退化成占位卡片，
- * 而不是一块空白（否则用户以为消息丢了）。
+ * （支持 Range → 能拖进度条）；渲染层不直读本地文件。临时目录被系统清理 / 文件被删时
+ * 退化成占位卡片，而不是一块空白（否则用户以为消息丢了）。
+ *
+ * 调用点在用户消息的附件列表里（`attachment.kind === "video"`，由 store.ts 的
+ * parseUserMessage 根据主机写入的 `attach="video"` 信封标记）。
  */
 function UserVideo({ name, path, language }: { name: string; path: string; language: "en" | "zh" }) {
   const [failed, setFailed] = useState(false);

@@ -22,36 +22,36 @@ const VIDEO_NAME = "ef8e2332-954c-44ff-82bc-a4234c65923c-video-1790606293289-0.m
 writeFileSync(join(TEMP, "mpi-clipboard", VIDEO_NAME), Buffer.alloc(4096, 7));
 
 const rendererSide = await import("../src/renderer/src/lib/chat-attachments.ts");
+// 渲染层真正的引用解析在 store.ts 的 parseUserMessage（那里本来就在做 <file> 信封 → 附件）。
+const { parseUserMessage } = await import("../src/renderer/src/store.ts");
 const hostSide = await import("../src/main/remote/video-refs.ts");
 const protocolSide = await import("../src/main/chat-attachment-protocol.ts");
 
 const envelope = (name, path) => `<file name="${name}" path="${path}" attach="video" note="video attachment; inline-playable in MPI clients" />`;
 
-// --- 1. 两侧解析规则必须同源（跨文件漂移守卫）----------------------------------
-
-const samples = [
-  "普通消息，没有任何引用",
-  `看这个${envelope(VIDEO_NAME, `C:\\Users\\x\\AppData\\Local\\Temp\\mpi-clipboard\\${VIDEO_NAME}`)}`,
-  `<file name="a.pdf" path="/p/a.pdf" note="attached (binary or large; not inlined)" />`,
-  `文件<file name="a.pdf" path="/p/a.pdf" note="attached (binary or large; not inlined)" />${envelope("v1.mp4", "/t/v1.mp4")}`,
-  `两个${envelope("a.mp4", "/t/a.mp4")}${envelope("b.mp4", "/t/b.mp4")}`,
-];
-
-for (const sample of samples) {
-  const renderer = rendererSide.splitVideoRefs(sample);
-  const host = hostSide.splitVideoRefs(sample);
-  assert.deepEqual(renderer.refs, host.refs, `渲染层与主机侧的引用解析必须一致：${sample.slice(0, 40)}`);
-  assert.equal(renderer.text, host.text, `清理后的文本也必须一致：${sample.slice(0, 40)}`);
-}
-
+// --- 1. 主机写信封 → 渲染层解成「视频附件」（跨文件契约守卫）-----------------------
+// 用**真实产出函数**（hostSide.videoRefEnvelope）当下游解析的输入：两边一旦漂移，
+// 症状就是“气泡里冒出原始标签”或“视频被当成普通文件卡片”。
 {
-  const split = rendererSide.splitVideoRefs(samples[1]);
-  assert.deepEqual(split.refs, [{ name: VIDEO_NAME, path: `C:\\Users\\x\\AppData\\Local\\Temp\\mpi-clipboard\\${VIDEO_NAME}` }], "能解出文件名与路径");
-  assert.equal(split.text, "看这个", "引用被剥掉且文本已 trim（否则气泡里会多出空行）");
-  const mixed = rendererSide.splitVideoRefs(samples[3]);
-  assert.ok(mixed.text.includes("a.pdf"), "普通文件引用不能被误剥（保持既有行为）");
-  assert.equal(mixed.refs.length, 1);
-  assert.deepEqual(rendererSide.splitVideoRefs(samples[0]), { text: samples[0], refs: [] }, "没有标记的文本原样返回（不影响普通消息）");
+  const abs = `C:\\Users\\x\\AppData\\Local\\Temp\\mpi-clipboard\\${VIDEO_NAME}`;
+  const parsed = parseUserMessage(`看这个${hostSide.videoRefEnvelope(VIDEO_NAME, abs)}`);
+  assert.equal(parsed.text, "看这个", "信封要从可见文本里剔掉（否则气泡里多一行原始标签）");
+  assert.equal(parsed.attachments.length, 1);
+  assert.deepEqual(
+    { kind: parsed.attachments[0].kind, name: parsed.attachments[0].name, path: parsed.attachments[0].path },
+    { kind: "video", name: VIDEO_NAME, path: abs },
+    "必须标成 video（否则渲染成文件卡片，得点开才知道是视频）",
+  );
+
+  // 普通文件引用不能被误标成视频（保持既有行为）。
+  const plain = parseUserMessage('<file name="a.pdf" path="/p/a.pdf" note="attached (binary or large; not inlined)" />');
+  assert.equal(plain.attachments[0].kind, undefined, "普通 <file> 引用不能带上 kind=video");
+
+  // 同时带普通文件与视频：各归各的。
+  const mixed = parseUserMessage(
+    `<file name="a.pdf" path="/p/a.pdf" note="attached (binary or large; not inlined)" />${hostSide.videoRefEnvelope("v.mp4", "/t/v.mp4")}`,
+  );
+  assert.deepEqual(mixed.attachments.map((a) => a.kind), [undefined, "video"], "混合场景各归各的");
 }
 
 // --- 2. chatatt:// URL + 文件名白名单 ------------------------------------------
