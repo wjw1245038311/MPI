@@ -122,7 +122,7 @@ class ThreadSession(
      * 别人发的图必须靠一次全量快照补齐；短时间多条只拉一次。
      */
     @Volatile
-    private var imageBackfillPending = false
+    private var mediaBackfillPending = false
 
     /**
      * 当前连接上是否已注册订阅。
@@ -538,7 +538,7 @@ class ThreadSession(
             val text = textOfContent(message["content"])
             // 事件通道不带图片本体（主机只留 {type:image, omitted:true}）：带图的用户消息
             // 本地只能先建纯文本版，必须再拉一次全量快照把图片块补回来。
-            val hasImagePart = contentHasImage(message["content"])
+            val hasMediaPart = contentNeedsMediaBackfill(message["content"])
             // 图片消息可能没有文本（image-only）：这时按「最后一条待发用户消息」转正，
             // 否则那条乐观回显会永远挂在「发送中」。
             val echo = _view.value.messages.lastOrNull { candidate ->
@@ -548,11 +548,14 @@ class ThreadSession(
             if (text.isEmpty() && echo == null) {
                 // 别的设备发的纯图片消息：本地没有可显示的文本版，但图片块仍要靠
                 // 全量快照补回来（否则要等下一次自然 resync 才可见）。
-                if (hasImagePart) scheduleImageBackfill()
+                if (hasMediaPart) scheduleMediaBackfill()
                 return
             }
-            // 自己发的图：回显里已有本地字节，不用补拉（echoUserMessage 注释）。
-            val echoHasImages = echo?.blocks?.any { it.type == BlockType.Image } == true
+            // 自己发的媒体：回显里已有本地字节，不用补拉（echoUserMessage 注释）。字面量
+            // 可能是图片块也可能是文件占位——只要回显里带了媒体本体就不再补拉。
+            val echoHasMedia = echo?.blocks?.any {
+                it.type == BlockType.Image || it.type == BlockType.Video || !it.data.isNullOrEmpty()
+            } == true
             if (echo != null) {
                 patch { view ->
                     view.copy(
@@ -572,7 +575,7 @@ class ThreadSession(
                     )
                 }
             }
-            if (hasImagePart && !echoHasImages) scheduleImageBackfill()
+            if (hasMediaPart && !echoHasMedia) scheduleMediaBackfill()
         } else if (_view.value.streaming == null) {
             patch { it.copy(streaming = ThreadMessage(id = "a-$seq", role = "assistant")) }
         }
@@ -883,21 +886,28 @@ class ThreadSession(
         _view.value.messages.lastOrNull { !it.pending }?.id?.takeIf { it.isNotEmpty() }
 
     /** content 里是否有图片块（事件通道只留标记、不带 data）。 */
-    private fun contentHasImage(content: JsonElement?): Boolean =
+    /**
+     * 事件里的用户消息是否带来媒体（图片/视频）但拿不到本体。
+     *
+     * 2026-09-28：原来只认 image → 视频消息永远不触发补拉，手机装了新版也看不到
+     * （事件通道会把视频引用剥掉，本地根本不知道这条消息里有视频）。
+     */
+    private fun contentNeedsMediaBackfill(content: JsonElement?): Boolean =
         (content as? kotlinx.serialization.json.JsonArray)?.any {
-            (it as? JsonObject)?.str("type") == "image"
+            val part = it as? JsonObject
+            part?.str("type") == "image" || part?.str("type") == "video"
         } ?: false
 
-    /** 带图用户消息 → 一次全量快照补拉图片块（防抖：在途时不重复发）。 */
-    private fun scheduleImageBackfill() {
-        if (imageBackfillPending) return
-        imageBackfillPending = true
+    /** 带媒体（图/视频）的用户消息 → 一次全量快照补拉（防抖：在途时不重复发）。 */
+    private fun scheduleMediaBackfill() {
+        if (mediaBackfillPending) return
+        mediaBackfillPending = true
         scope.launch {
             try {
                 resync(full = true)
             } catch (_: Exception) { /* 失败经 resync 的 errorBanner / onProblem 上报 */ }
             finally {
-                imageBackfillPending = false
+                mediaBackfillPending = false
             }
         }
     }

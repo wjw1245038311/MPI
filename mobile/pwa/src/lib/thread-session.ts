@@ -108,6 +108,27 @@ function textOfContent(content: unknown): string {
   return parts.join("");
 }
 
+/**
+ * 事件里的媒体块（图片/视频）：只取「有这一块、但没本体」的信息。
+ *
+ * 为什么需要：主机在事件通道里刻意剥掉本体（防大帧），而且在用户消息里把视频引用也
+ * 剥了——客户端因此**根本不知道这条消息里有视频**，于是一辈子不显示、也不会去补快照
+ * （手机端 2026-09-28 就是如此）。主机现在会额外补一个 `{type:"video",omitted:true}` 块。
+ */
+function mediaPartsOfContent(content: unknown): Array<{ type: "image" | "video"; name?: string; mimeType?: string }> {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const part = item as Record<string, unknown>;
+    if (part.type !== "image" && part.type !== "video") return [];
+    return [{
+      type: part.type as "image" | "video",
+      name: typeof part.name === "string" ? part.name : undefined,
+      mimeType: typeof part.mimeType === "string" ? part.mimeType : undefined,
+    }];
+  });
+}
+
 function summarizeArgs(args: unknown): string | undefined {
   if (!args || typeof args !== "object") return undefined;
   try {
@@ -183,6 +204,8 @@ export class ThreadSession {
   private closing = false;
   /** 乐观回显计数（local-<n>）。 */
   private echoSeq = 0;
+  /** 收到带媒体的用户消息时补快照的防抖位（在途时不重复发）。 */
+  private mediaBackfillInFlight = false;
   private readonly detachFrame: () => void;
   private readonly detachState: () => void;
   /** 实时快照的落地回调（写本地缓存用），见 ThreadSessionOptions.onSnapshot。 */
@@ -503,7 +526,8 @@ export class ThreadSession {
         if (!m) break;
         if (m.role === "user") {
           const text = textOfContent(m.content).trim();
-          if (text) {
+          const media = mediaPartsOfContent(m.content);
+          if (text || media.length) {
             // 本地乐观回显先转正（否则同一条消息会上屏两次）。
             // 文本两侧都 trim：主机会把附件的 <file …/> 引用追加在文本末尾（并在下发时剥掉），
             // 对账不能因为一个换行就失配——那会让气泡重复一个。
@@ -513,7 +537,20 @@ export class ThreadSession {
             if (echo) {
               this.patch({ messages: this.view.messages.map((message) => (message.id === echo.id ? { ...message, pending: false } : message)) });
             } else {
-              this.pushMessage({ id: `u-${seq}-${this.view.messages.length}`, role: "user", blocks: [{ type: "text", text }] });
+              // 媒体块只带“有这么个东西”的信息（主机事件通道不带本体）——字节要靠快照，
+              // 所以下面统一补一次快照；占位块先让用户看到“这里有个视频”。
+              const blocks: ViewBlock[] = [
+                ...media.map((part) => ({ type: part.type, name: part.name, mimeType: part.mimeType, omitted: true } as ViewBlock)),
+                ...(text ? [{ type: "text" as const, text }] : []),
+              ];
+              this.pushMessage({ id: `u-${seq}-${this.view.messages.length}`, role: "user", blocks });
+            }
+            // 本体在事件里（视频/图片）→ 补一次全量快照。防抖：in-flight 时不重复发。
+            if (media.length && !this.mediaBackfillInFlight) {
+              this.mediaBackfillInFlight = true;
+              void this.resync()
+                .catch(() => { /* 经 errorBanner 上报 */ })
+                .finally(() => { this.mediaBackfillInFlight = false; });
             }
           }
         } else if (!this.view.streaming) {

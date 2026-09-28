@@ -1606,7 +1606,43 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return Number.isFinite(timestamp) ? Math.trunc(timestamp) : 0;
   }
 
-  function remoteSafeEventValue(value: unknown, depth = 0): unknown {
+  /**
+ * 实时事件里把视频附件补成占了块。
+ *
+ * 背景（2026-09-28 真机）：事件通道会把视频引用从文本里剥掉（防大帧/防气泡里露出标签），
+ * 但客户端**需要知道“这条消息里有视频”**——手机端就靠这个去补一次快照（它只对 image 块
+ * 触发补拉，所以视频拿不到本体会一直不可见，装新包也没用）。
+ *
+ * 只做浅拷贝，绝不改原事件对象：渲染层广播用的是同一个对象。
+ */
+function withVideoMarkers<T extends Record<string, any>>(event: T): T {
+  const message = event?.message;
+  if (!message || message.role !== "user") return event;
+  const raw = message.content;
+  const parts: any[] | null = typeof raw === "string" ? [{ type: "text", text: raw }] : Array.isArray(raw) ? raw : null;
+  if (!parts) return event;
+  const refs: Array<{ name: string; path: string }> = [];
+  const next = parts.map((part: any) => {
+    if (part?.type !== "text" || typeof part.text !== "string") return part;
+    const split = splitVideoRefs(part.text);
+    if (!split.refs.length) return part;
+    refs.push(...split.refs);
+    return { ...part, text: split.text };
+  });
+  if (!refs.length) return event;
+  return {
+    ...event,
+    message: {
+      ...message,
+      content: [
+        ...next,
+        ...refs.map((ref) => ({ type: "video", omitted: true, mimeType: videoMimeForPath(ref.path), name: ref.name })),
+      ],
+    },
+  } as T;
+}
+
+function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     if (depth > 4 || value === null || typeof value === "number" || typeof value === "boolean") return value;
     if (typeof value === "string") return remoteSafeString(splitVideoRefs(value).text);
     if (Array.isArray(value)) return value.slice(0, 50).map((item) => remoteSafeEventValue(item, depth + 1));
@@ -2704,7 +2740,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     let event: RemoteThreadEventPayload;
     if (channel === "pi:event") {
       const piEvent = (payload as any).event || {};
-      event = { kind: String(piEvent.type || "agent.event"), data: { event: remoteSafeEventValue(piEvent) as Record<string, unknown> } };
+      // 带视频引用的用户消息 → 额外补一个 video 占位块（客户端据此触发快照补拉）。
+      const eventForRemote = withVideoMarkers(piEvent);
+      event = { kind: String(piEvent.type || "agent.event"), data: { event: remoteSafeEventValue(eventForRemote) as Record<string, unknown> } };
       // 取证：回合关键事件的发布时刻 + 当时的订阅者数。
       // 真机反馈「气泡卡发送中 / 整条消息包括回复一起晚到」——subs=0 即说明
       // 手机此刻不在订阅状态，事件被静默丢弃（只能靠重连后的 resync 快照补齐）。
