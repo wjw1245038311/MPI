@@ -118,6 +118,13 @@ class ThreadSession(
     private val syncLock = Mutex()
 
     /**
+     * 「带图用户消息」全量补拉防抖：事件通道不带图片本体（主机只留 omitted 标记），
+     * 别人发的图必须靠一次全量快照补齐；短时间多条只拉一次。
+     */
+    @Volatile
+    private var imageBackfillPending = false
+
+    /**
      * 当前连接上是否已注册订阅。
      *
      * 主机按 **connectionId** 记订阅，`transportClosed` 时会把它清掉——
@@ -228,9 +235,9 @@ class ThreadSession(
      * @return 本次**刚补上**订阅时返回它携带的快照（调用方可直接应用，省一次往返）；
      *   已订阅时返回 null（不发请求）。
      */
-    private suspend fun ensureSubscribedLocked(): JsonElement? {
+    private suspend fun ensureSubscribedLocked(full: Boolean = false): JsonElement? {
         if (subscribed) return null
-        val payload = requestWhenReady("thread.subscribe", threadIdPayload(), threadId, SNAPSHOT_TIMEOUT_MS)
+        val payload = requestWhenReady("thread.subscribe", threadIdPayload(full), threadId, SNAPSHOT_TIMEOUT_MS)
         subscribed = true
         return payload
     }
@@ -255,14 +262,17 @@ class ThreadSession(
      * **未订阅时直接走订阅**：它带回的快照就是最新的，既不漏注册又省一次往返
      * （重连自愈的关键路径）。已订阅时才走 `thread.resync`，保住 live 快照语义。
      */
-    suspend fun resync() {
+    /**
+     * @param full 强制全量快照（不带 haveMessageId）：用于补拉事件通道里被省略的图片块。
+     */
+    suspend fun resync(full: Boolean = false) {
         syncLock.withLock {
             try {
-                ensureSubscribedLocked()?.let { fresh ->
+                ensureSubscribedLocked(full)?.let { fresh ->
                     applySnapshot(fresh)
                     return@withLock
                 }
-                val payload = requestWhenReady("thread.resync", threadIdPayload(), threadId, SNAPSHOT_TIMEOUT_MS)
+                val payload = requestWhenReady("thread.resync", threadIdPayload(full), threadId, SNAPSHOT_TIMEOUT_MS)
                 applySnapshot(payload)
             } catch (e: Exception) {
                 _view.value = _view.value.copy(errorBanner = e.message ?: "同步失败")
@@ -526,13 +536,23 @@ class ThreadSession(
         val role = message.str("role").orEmpty()
         if (role == "user") {
             val text = textOfContent(message["content"])
+            // 事件通道不带图片本体（主机只留 {type:image, omitted:true}）：带图的用户消息
+            // 本地只能先建纯文本版，必须再拉一次全量快照把图片块补回来。
+            val hasImagePart = contentHasImage(message["content"])
             // 图片消息可能没有文本（image-only）：这时按「最后一条待发用户消息」转正，
             // 否则那条乐观回显会永远挂在「发送中」。
             val echo = _view.value.messages.lastOrNull { candidate ->
                 candidate.pending && candidate.role == "user" &&
                     (text.isEmpty() || candidate.blocks.any { it.type == BlockType.Text && it.text == text })
             }
-            if (text.isEmpty() && echo == null) return
+            if (text.isEmpty() && echo == null) {
+                // 别的设备发的纯图片消息：本地没有可显示的文本版，但图片块仍要靠
+                // 全量快照补回来（否则要等下一次自然 resync 才可见）。
+                if (hasImagePart) scheduleImageBackfill()
+                return
+            }
+            // 自己发的图：回显里已有本地字节，不用补拉（echoUserMessage 注释）。
+            val echoHasImages = echo?.blocks?.any { it.type == BlockType.Image } == true
             if (echo != null) {
                 patch { view ->
                     view.copy(
@@ -552,6 +572,7 @@ class ThreadSession(
                     )
                 }
             }
+            if (hasImagePart && !echoHasImages) scheduleImageBackfill()
         } else if (_view.value.streaming == null) {
             patch { it.copy(streaming = ThreadMessage(id = "a-$seq", role = "assistant")) }
         }
@@ -848,17 +869,38 @@ class ThreadSession(
         synchronized(lock) { _view.value = transform(_view.value) }
     }
 
-    private fun threadIdPayload(): JsonElement =
+    private fun threadIdPayload(full: Boolean = false): JsonElement =
         kotlinx.serialization.json.buildJsonObject {
             put("threadId", threadId)
             // 增量快照锚点：本地已经有到哪一条（乐观占位不算，主机不认识它们的 id）。
             // 主机在窗口里找得到就只回锚点及其之后（通常几十字节），找不到就回全量。
-            lastKnownMessageId()?.let { put("haveMessageId", it) }
+            // full=true 时故意不带锚点——强制全量，把事件通道省略的图片块补回来。
+            if (!full) lastKnownMessageId()?.let { put("haveMessageId", it) }
         }
 
     /** 本地已有的最后一条「主机也认识」的消息 id（乐观回显 pending 不算）。 */
     private fun lastKnownMessageId(): String? =
         _view.value.messages.lastOrNull { !it.pending }?.id?.takeIf { it.isNotEmpty() }
+
+    /** content 里是否有图片块（事件通道只留标记、不带 data）。 */
+    private fun contentHasImage(content: JsonElement?): Boolean =
+        (content as? kotlinx.serialization.json.JsonArray)?.any {
+            (it as? JsonObject)?.str("type") == "image"
+        } ?: false
+
+    /** 带图用户消息 → 一次全量快照补拉图片块（防抖：在途时不重复发）。 */
+    private fun scheduleImageBackfill() {
+        if (imageBackfillPending) return
+        imageBackfillPending = true
+        scope.launch {
+            try {
+                resync(full = true)
+            } catch (_: Exception) { /* 失败经 resync 的 errorBanner / onProblem 上报 */ }
+            finally {
+                imageBackfillPending = false
+            }
+        }
+    }
 
     private fun textOfContent(content: JsonElement?): String {
         when (content) {

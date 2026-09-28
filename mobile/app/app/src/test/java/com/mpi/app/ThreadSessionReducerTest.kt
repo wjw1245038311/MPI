@@ -27,6 +27,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -64,12 +65,22 @@ class ThreadSessionReducerTest {
         }
     }
 
-    private class FakeRequests(private val snapshotJson: String) {
+    private class FakeRequests(
+        private val snapshotJson: String,
+        /** 首次请求（subscribe）之后的后续请求依次返回这些快照（如全量补拉时带图的版本）。 */
+        private val followUps: List<String> = emptyList(),
+    ) {
         val calls = CopyOnWriteArrayList<String>()
+        val payloads = CopyOnWriteArrayList<JsonElement?>()
+        @Volatile
+        private var index = 0
 
         suspend fun request(type: String, payload: JsonElement?, threadId: String?, timeoutMs: Long?): JsonElement? {
             calls += type
-            return Envelope.json.parseToJsonElement(snapshotJson)
+            payloads += payload
+            val json = if (index == 0) snapshotJson else followUps.getOrNull(index - 1) ?: snapshotJson
+            index++
+            return Envelope.json.parseToJsonElement(json)
         }
     }
 
@@ -299,6 +310,71 @@ class ThreadSessionReducerTest {
 
         val echo = session.view.value.messages.last { it.id == id }
         assertTrue("图片消息也要能转正，否则永远挂着发送中", !echo.pending)
+        session.detach()
+    }
+
+    // ---- 带图用户消息的全量补拉（事件通道不带图片本体） ----
+
+    @Test
+    fun `a remote user message with an omitted image triggers a full resync without anchor`() = runBlocking {
+        val transport = FakeTransport()
+        val requests = FakeRequests(SNAPSHOT, listOf(SNAPSHOT_WITH_IMAGE))
+        val session = newSession(transport, requests)
+        session.subscribe()
+
+        // 远程带图用户消息到达：本地先建纯文本版，随后应触发一次全量补拉。
+        transport.deliver(event(seq = 1, kind = "message_start", event = userMessageEventWithImage("看图")))
+
+        withTimeout(3000) {
+            while (!requests.calls.contains("thread.resync")) delay(20)
+        }
+        val resyncPayload = requests.payloads[requests.calls.indexOf("thread.resync")] as JsonObject
+        assertEquals("t-1", resyncPayload["threadId"]?.jsonPrimitive?.content)
+        assertNull(
+            "全量补拉不能带 haveMessageId——带了主机只回增量，图片永远补不回来",
+            resyncPayload["haveMessageId"],
+        )
+
+        // 全量快照整体替换 messages：图片块补齐。
+        val withImage = session.view.value.messages.last { it.id == "m3" }
+        assertTrue(withImage.blocks.any { it.type == BlockType.Image && it.data == "QUJD" })
+        session.detach()
+    }
+
+    @Test
+    fun `own image echo does not trigger a backfill`() = runBlocking {
+        val transport = FakeTransport()
+        val requests = FakeRequests(SNAPSHOT)
+        val session = newSession(transport, requests)
+        session.subscribe()
+
+        // 自己发的图：回显里已有本地字节，message_start（带 omitted 标记）只负责转正。
+        session.echoUserMessage(
+            text = "看图",
+            imageBlocks = listOf(MessageBlock(type = BlockType.Image, data = "AAAA", mimeType = "image/jpeg")),
+        )
+        transport.deliver(event(seq = 1, kind = "message_start", event = userMessageEventWithImage("看图")))
+
+        delay(200) // 给补拉协程一个触发窗口——它不该被触发。
+        assertFalse(requests.calls.contains("thread.resync"))
+        session.detach()
+    }
+
+    @Test
+    fun `multiple image messages only trigger one backfill`() = runBlocking {
+        val transport = FakeTransport()
+        val requests = FakeRequests(SNAPSHOT, listOf(SNAPSHOT_WITH_IMAGE))
+        val session = newSession(transport, requests)
+        session.subscribe()
+
+        transport.deliver(event(seq = 1, kind = "message_start", event = userMessageEventWithImage("看图")))
+        transport.deliver(event(seq = 2, kind = "message_start", event = userMessageEventWithImage("再看一张")))
+
+        withTimeout(3000) {
+            while (!requests.calls.contains("thread.resync")) delay(20)
+        }
+        delay(200) // 等第二条（应被防抖抑制）的判断窗口过去。
+        assertEquals(1, requests.calls.count { it == "thread.resync" })
         session.detach()
     }
 
@@ -794,6 +870,23 @@ class ThreadSessionReducerTest {
         put("message", buildJsonObject { put("role", role) })
     }
 
+    /** 别的设备发的带图用户消息：事件通道只留 omitted 标记、不带 data（主机 remoteSafeEventValue 的行为）。 */
+    private fun userMessageEventWithImage(text: String) = buildJsonObject {
+        put(
+            "message",
+            buildJsonObject {
+                put("role", "user")
+                put(
+                    "content",
+                    buildJsonArray {
+                        add(buildJsonObject { put("type", "text"); put("text", text) })
+                        add(buildJsonObject { put("type", "image"); put("omitted", true) })
+                    },
+                )
+            },
+        )
+    }
+
     private fun textDelta(seq: Int, delta: String) = event(
         seq = seq,
         kind = "message_update",
@@ -901,6 +994,25 @@ class ThreadSessionReducerTest {
               "messages":[
                 {"id":"m1","role":"user","blocks":[{"type":"text","text":"第一条"}]},
                 {"id":"m2","role":"assistant","blocks":[{"type":"tool","name":"bash","result":"工具输出内容"}]}
+              ],
+              "nextSeq":0
+            }}
+        """.trimIndent()
+
+        /** 全量补拉后的快照：多了 m3（带图用户消息，图片块有 data）。 */
+        val SNAPSHOT_WITH_IMAGE = """
+            {"snapshot":{
+              "id":"t-1","projectId":"p1","title":"修复登录 bug","preview":"p","updatedAt":200,
+              "messageCount":3,"state":"idle","permission":"full","cwdName":"MPI",
+              "model":{"provider":"anthropic","id":"model-x"},
+              "availableModels":[{"provider":"anthropic","id":"model-x","name":"Model X"}],
+              "thinkingLevel":"low","thinkingLevels":["off","low","high"],"taskMode":null,
+              "availableModes":[{"id":"iterate","name":"迭代","summary":"沙盒 · 低思考"}],
+              "contextUsage":{"tokens":10,"contextWindow":100,"percent":10},
+              "messages":[
+                {"id":"m1","role":"user","blocks":[{"type":"text","text":"第一条"}]},
+                {"id":"m2","role":"assistant","blocks":[{"type":"tool","name":"bash","result":"工具输出内容"}]},
+                {"id":"m3","role":"user","blocks":[{"type":"text","text":"看图"},{"type":"image","data":"QUJD","mimeType":"image/jpeg"}]}
               ],
               "nextSeq":0
             }}
