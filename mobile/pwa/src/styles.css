@@ -286,7 +286,21 @@ button:disabled { opacity: 0.5; cursor: default; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 双击（双触）重命名：禁掉浏览器双击缩放，dblclick 才能稳定触发 */
+  touch-action: manipulation;
 }
+/* 双击顶栏标题 → 行内重命名（与 Android de62d5e 同语义）。 */
+.header-rename { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; }
+.header-rename input {
+  flex: 1;
+  min-width: 0;
+  max-width: 240px;
+  font-size: 15px;
+  text-align: center;
+  padding: 4px 8px;
+}
+.header-rename .cp-btn { padding: 5px 10px; font-size: 12.5px; flex: none; }
+.header-rename-error { margin-top: 2px; font-size: 11.5px; }
 .app-logo.small {
   width: 30px;
   height: 30px;
@@ -415,7 +429,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* 乐观回显中（主机还没回执）：淡一点，回执到达即转实——用户能看出"已发出，在等主机"。 */
 .message.pending { opacity: 0.55; transition: opacity 0.18s ease; }
 
-.message.user { align-self: flex-end; max-width: 85%; background: var(--user-bubble); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
+/* shrink-wrap 贴住文字（对齐 Android 995dd32）：短消息才是右对齐小气泡，长消息仍受 max-width 约束换行。 */
+.message.user { align-self: flex-end; width: fit-content; max-width: 85%; background: var(--user-bubble); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; }
 .message.assistant { align-self: stretch; display: flex; flex-direction: column; gap: 8px; }
 .msg-role { font-size: 11px; color: var(--muted); letter-spacing: 0.4px; }
 
@@ -444,7 +459,44 @@ button:disabled { opacity: 0.5; cursor: default; }
 .spinner { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--ok); border-radius: 50%; animation: spin 0.9s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.msg-image { max-width: 100%; border-radius: 8px; }
+/* prefill 等待占位行（「思考中 · Ns」）：转圈 + 秒数，与桌面/Android 同语义。 */
+.thinking-placeholder { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+
+/* 全屏图片预览（点消息里的图片放大；滚轮/双指缩放 1x–6x，轻点复位或关闭）。 */
+.image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: rgba(0, 0, 0, 0.96);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none; /* 拦住原生滚动/缩放，手势全交给 pointer events */
+  user-select: none;
+}
+.image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  -webkit-user-drag: none;
+  cursor: zoom-in;
+}
+.image-preview-close {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  right: 16px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.msg-image { max-width: 100%; border-radius: 8px; cursor: zoom-in; }
 .msg-artifacts { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
 .artifact { background: var(--control); border-radius: 6px; padding: 2px 8px; color: var(--text-dim); }
 .artifact.created { color: var(--ok); }

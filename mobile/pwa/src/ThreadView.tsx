@@ -5,7 +5,7 @@
  * S6 adds the send bar (prompt/steer + abort + sandbox/full toggle) and the
  * full-screen approval card (ui.request → ui.respond, §4.5 diff preview).
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { RemotePermission, RemoteThreadState, RemoteUiRequest } from "../../shared/protocol";
 import type { ThreadActions, SendMode } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
@@ -17,6 +17,7 @@ import { ChoicePanel } from "./components/ChoicePanel";
 import { COLUMN_PRESETS, COLUMN_PRESET_ORDER, type ColumnPreset } from "./lib/column-preset";
 import { groupToolBlocks, type ToolGroup } from "./lib/tool-groups";
 import { formatTokens, readContextUsage } from "./lib/context-usage";
+import { formatElapsed, shouldShowThinkingIndicator } from "./lib/thinking-indicator";
 
 /** 主机侧上限（见 src/main/remote/service.ts MAX_REMOTE_FILES / MAX_REMOTE_FILE_DATA）。 */
 const MAX_FILES = 3;
@@ -360,6 +361,157 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
   return <MessageText text={block.text ?? ""} choiceCtx={choiceCtx} />;
 }
 
+/**
+ * Prefill 等待占位行：agent 在跑但还没有可见内容（本地模型 prefill 可达数十秒）。
+ * **计时器自包含**：每秒只重渲染这一行，不让 ThreadView 根节点带着整个消息列表重建
+ * （长会话下这是实打实的秒级开销）。与桌面端 ThinkingPlaceholder / Android
+ * ThinkingPlaceholderRow 同一语义；key 用 threadId——切会话后秒数从头计。
+ */
+const ThinkingPlaceholder = memo(function ThinkingPlaceholder() {
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    const startedAt = Date.now();
+    const id = window.setInterval(() => setElapsedSec(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <p className="hint thinking-placeholder" aria-live="polite">
+      <span className="spinner" aria-hidden="true" />
+      思考中 · {formatElapsed(elapsedSec)}
+    </p>
+  );
+});
+
+/**
+ * 全屏图片预览：点消息里的图片放大（截图/报错图这类小图在气泡里看不清）。
+ * 与 Android ImagePreviewOverlay 同语义：缩放 1x–6x、缩进后拖移；Esc / × / 轻点关闭。
+ * - 桌面：滚轮或触控板双指捏合缩放（ctrlKey wheel）；
+ * - 手机：两指捏合（pointer events，touch-action:none 拦住原生手势）；
+ * - 轻点（无拖动）：已放大 → 复位到 1x；未放大 → 关闭。Esc / × 任何时候直接关。
+ */
+function ImagePreview({ src, onClose }: { src: string; onClose: () => void }) {
+  const [t, setT] = useState({ scale: 1, x: 0, y: 0 });
+  const imgRef = useRef<HTMLImageElement | null>(null);
+
+  // Esc 关闭（覆盖层不是 dialog，浏览器没有返回键——自己接）。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // 滚轮缩放（触控板捏合也走 wheel + ctrlKey）。原生监听：React 的 onWheel 是 passive，
+  // preventDefault 不生效，页面会跟着滚。
+  useEffect(() => {
+    const el = imgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002));
+      setT((prev) => applyZoomFactor(prev, factor));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // 指针手势：单指拖移（仅放大后）/ 两指捏合缩放。
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const gesture = useRef<{ mode: "pan" | "pinch"; startDist: number; startScale: number; lastX: number; lastY: number } | null>(null);
+  const movedRef = useRef(false);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 1) {
+      gesture.current = { mode: "pan", startDist: 0, startScale: t.scale, lastX: e.clientX, lastY: e.clientY };
+      movedRef.current = false;
+    } else if (pointers.current.size === 2) {
+      const [a, b] = [...pointers.current.values()];
+      gesture.current = { mode: "pinch", startDist: Math.hypot(a.x - b.x, a.y - b.y), startScale: t.scale, lastX: 0, lastY: 0 };
+    }
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const g = gesture.current;
+    if (!g) return;
+    if (g.mode === "pinch" && pointers.current.size >= 2) {
+      const [a, b] = [...pointers.current.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      // 绝对映射：从手势起点的 scale 按当前指距比例算目标值（不能逐帧乘因子，会累积漂移）。
+      if (g.startDist > 0) setT((prev) => applyZoomAbsolute(prev, g.startScale * (dist / g.startDist)));
+    } else if (g.mode === "pan") {
+      const dx = e.clientX - g.lastX;
+      const dy = e.clientY - g.lastY;
+      g.lastX = e.clientX;
+      g.lastY = e.clientY;
+      if (Math.abs(dx) + Math.abs(dy) > 0) movedRef.current = true;
+      setT((prev) => (prev.scale <= 1 ? prev : { ...prev, x: prev.x + dx, y: prev.y + dy }));
+    }
+  };
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size === 1 && gesture.current?.mode === "pinch") {
+      // 一指点掉后剩下的那根手指接管为拖移——以当前位置重新起算，避免跳变。
+      const [p] = [...pointers.current.values()];
+      gesture.current = { mode: "pan", startDist: 0, startScale: t.scale, lastX: p.x, lastY: p.y };
+    } else if (pointers.current.size === 0) {
+      gesture.current = null;
+    }
+  };
+
+  /** 轻点（无拖动）：已放大 → 复位；未放大 → 关闭。 */
+  const onClick = () => {
+    if (movedRef.current) return; // 拖移/捏合后的 click 不算轻点
+    setT((prev) => (prev.scale > 1 ? { scale: 1, x: 0, y: 0 } : prev));
+    if (t.scale <= 1) onClose();
+  };
+
+  return (
+    // 手势挂在覆盖层整体（不是 img）：快速拖动滑出图片区域时事件不丢，轻点空白处也能关。
+    <div className="image-preview" role="dialog" aria-modal="true" aria-label="图片预览（滚轮/双指缩放，轻点复位或关闭）"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onClick={onClick}
+    >
+      <img
+        ref={imgRef}
+        src={src}
+        alt="图片预览"
+        style={{ transform: `translate(${t.x}px, ${t.y}px) scale(${t.scale})` }}
+      />
+      <button
+        type="button"
+        className="image-preview-close"
+        aria-label="关闭预览"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+/** 缩放因子作用到当前变换（滚轮/触控板捏合）：限幅 1x–6x；缩回 1x 时位移归零
+ * （否则图片会滑出屏幕且回不到中间）。 */
+function applyZoomFactor(t: { scale: number; x: number; y: number }, factor: number): { scale: number; x: number; y: number } {
+  return applyZoomAbsolute(t, t.scale * factor);
+}
+
+/** 直接设定目标缩放（双指捏合的绝对映射）：限幅 1x–6x；缩回 1x 时位移归零。 */
+function applyZoomAbsolute(t: { scale: number; x: number; y: number }, targetScale: number): { scale: number; x: number; y: number } {
+  const scale = Math.min(6, Math.max(1, targetScale));
+  return scale <= 1 ? { scale: 1, x: 0, y: 0 } : { ...t, scale };
+}
+
 /** 草稿按会话存放（切走再回来、下拉刷新都不丢）。 */
 function draftKey(threadId: string): string {
   return `mpi-draft-${threadId}`;
@@ -661,6 +813,9 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
 
+  // 图片全屏预览：当前放大的 data URL（null = 未打开）。
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+
   // 切会话：载入该会话的草稿 + 把顶层配置回收到当前快照值。
   const threadIdRef = useRef(view.threadId);
   useEffect(() => {
@@ -705,12 +860,23 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  // prefill 等待指示（与桌面/Android 同谓词，见 lib/thinking-indicator.ts）。
+  const running = view.running || view.summary?.state === "running";
+  const thinkingActive = shouldShowThinkingIndicator({
+    running,
+    compacting: view.compacting,
+    messages: view.messages,
+    streaming: view.streaming,
+  });
+
   // Auto-scroll while the user is pinned to the bottom.
   useEffect(() => {
     if (!atBottom) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [view.messages, view.streaming, atBottom]);
+    // thinkingActive：占位行的出现不改变 messages/streaming，必须显式驱动跟随
+    // （否则贴底用户要等第一个 token 才看到指示器）。
+  }, [view.messages, view.streaming, atBottom, thinkingActive]);
 
   // NOTE: no auto-clear of sendError here — an earlier version cleared it while
   // NOT running, which made mic/STT failures invisible (set → instantly wiped).
@@ -722,13 +888,20 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
   };
 
+  /** 图片点击 → 全屏预览。事件委托在滚动容器上：不用把回调穿进 Message/Block，
+   *  以后任何地方再渲染 msg-image 也自动生效。 */
+  const handleImageClick = (e: React.MouseEvent) => {
+    const target = e.target;
+    if (target instanceof HTMLImageElement && target.classList.contains("msg-image")) {
+      setPreviewSrc(target.currentSrc || target.src);
+    }
+  };
+
   const scrollToBottom = () => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
     setAtBottom(true);
   };
-
-  const running = view.running || view.summary?.state === "running";
 
   /** 共享发送路径：乐观回显 + actions.send；失败时撤气泡、内容还回输入框。
    *  （真机反馈：等主机 ACK 才清空，点完要卡五六秒才有动静——先上屏再走网络。） */
@@ -1136,7 +1309,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
         <>
           {/* 定位容器：消息区自己负责滚动，「回到底部」按钮悬浮在它之上，不占高度。 */}
           <div className="thread-scroll-wrap">
-            <div className="thread-scroll" ref={scrollRef} onScroll={handleScroll}>
+            <div className="thread-scroll" ref={scrollRef} onScroll={handleScroll} onClick={handleImageClick}>
               {view.messages.map((message) => (
                 <Message
                   key={message.id}
@@ -1148,7 +1321,8 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                 />
               ))}
               {view.streaming && <Message message={view.streaming} />}
-              {running && !view.streaming && <p className="hint">正在工作…</p>}
+              {/* prefill 等待占位：覆盖「还没流式消息」与「响应头已到但一个块都没有」两个窗口 */}
+              {thinkingActive && <ThinkingPlaceholder key={view.threadId} />}
             </div>
             {!atBottom && view.messages.length > 0 && (
               <button type="button" className="to-bottom" onClick={scrollToBottom} aria-label="回到底部">
@@ -1448,6 +1622,9 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       )}
 
       {toast && <div className="toast">{toast}</div>}
+
+      {/* 图片全屏预览（z-index 高于审批卡/抽屉——打开时它就是最上层） */}
+      {previewSrc && <ImagePreview src={previewSrc} onClose={() => setPreviewSrc(null)} />}
 
       {/* S6.3 approval card (full-screen, above everything) */}
       {view.pendingUi && <ApprovalCard request={view.pendingUi} busy={uiBusy} error={uiError} onRespond={onRespondUi} />}

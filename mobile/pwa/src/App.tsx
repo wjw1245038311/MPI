@@ -220,20 +220,25 @@ export default function App() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [metaBusy, setMetaBusy] = useState(false);
   const [metaError, setMetaError] = useState<string | null>(null);
+  // 双击顶栏标题快速重命名（与 Android de62d5e 同语义）：编辑态 + 草稿。
+  const [headerRenaming, setHeaderRenaming] = useState(false);
+  const [headerRenameDraft, setHeaderRenameDraft] = useState("");
 
   /**
    * 发一个会话元数据请求。列表里的会话不一定是当前打开的，所以用临时 Requester
    * 并把 threadId 放在 envelope 上（主机 requiredThread 读的就是它）。
    * rename/delete 需要写租约（主机 assertWriter），所以先 claimWrite。
+   *
+   * @returns true = 主机已提交（调用方可做就地更新）；false = 失败或无连接。
    */
   const runThreadMeta = async (
     threadId: string,
     type: "thread.rename" | "thread.setPinned" | "thread.delete",
     payload: Record<string, unknown>,
     claim: boolean,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const client = clientRef.current;
-    if (!client) return;
+    if (!client) return false;
     setMetaBusy(true);
     setMetaError(null);
     const requester = new Requester(client, { threadId });
@@ -244,13 +249,43 @@ export default function App() {
       setRenamingId(null);
       setDeletingId(null);
       void sessionRef.current?.refresh();
+      return true;
     } catch (error) {
       setMetaError(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       requester.detach();
       setMetaBusy(false);
     }
   };
+
+  /** 双击顶栏标题 → 行内重命名（与侧栏 ⋮ 菜单同语义；仅会话打开时有效）。 */
+  const startHeaderRename = () => {
+    const title = threadView?.summary?.title;
+    if (!title || metaBusy) return;
+    setMetaError(null);
+    setHeaderRenameDraft(title);
+    setHeaderRenaming(true);
+  };
+
+  /** 提交顶栏重命名：成功后标题就地更新（不走 resync，避免打断流式渲染）。 */
+  const commitHeaderRename = async () => {
+    const name = headerRenameDraft.trim();
+    if (!name || !openThreadId || metaBusy) return;
+    const ok = await runThreadMeta(openThreadId, "thread.rename", { name }, true);
+    if (ok) {
+      setHeaderRenaming(false);
+      // 改的就是当前打开的会话：顶栏标题就地更新（列表已由 refresh() 刷新）。
+      threadSessionRef.current?.applyRenamedTitle(name);
+    }
+    // 失败：保持输入框开着，metaError 显示在表单下方，可直接重试。
+  };
+
+  const cancelHeaderRename = () => {
+    setHeaderRenaming(false);
+    setMetaError(null);
+  };
+
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
   // P1：新建会话——thread.create 需要 projectId；多项目时先在抽屉里内联选项目。
   const [creatingThread, setCreatingThread] = useState(false);
@@ -628,6 +663,7 @@ export default function App() {
     setThreadSession(null);
     setThreadView(null);
     setOpenThreadId(null);
+    setHeaderRenaming(false); // 会话关了，顶栏重命名编辑态一并收掉
   };
   closeThreadRef.current = closeThread;
 
@@ -719,6 +755,7 @@ export default function App() {
     setError(null);
     setExpandedProjectId(null);
     setOpenThreadId(null);
+    setHeaderRenaming(false);
     setThreadSession(null);
     setThreadView(null);
     setView("pairing");
@@ -873,8 +910,46 @@ export default function App() {
           <span className="app-logo" aria-hidden="true">M</span>
         </button>
         <div className="header-main">
-          <h1>{headerTitle}</h1>
-          {headerSubtitle && <div className="hint">{headerSubtitle}</div>}
+          {threadView?.summary && headerRenaming ? (
+            // 双击标题进入的行内重命名（与侧栏 ⋮ 菜单同语义）；失败保持编辑态可重试。
+            <form
+              className="header-rename"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void commitHeaderRename();
+              }}
+            >
+              <input
+                type="text"
+                value={headerRenameDraft}
+                autoFocus
+                spellCheck={false}
+                placeholder="会话名称"
+                aria-label="重命名会话"
+                onChange={(e) => setHeaderRenameDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") cancelHeaderRename();
+                }}
+              />
+              <button type="submit" className="cp-btn primary" disabled={metaBusy || !headerRenameDraft.trim()}>
+                保存
+              </button>
+              <button type="button" className="cp-btn" onClick={cancelHeaderRename}>
+                取消
+              </button>
+            </form>
+          ) : (
+            <>
+              <h1
+                onDoubleClick={() => startHeaderRename()}
+                title={threadView?.summary ? "双击重命名会话" : undefined}
+              >
+                {headerTitle}
+              </h1>
+              {headerSubtitle && <div className="hint">{headerSubtitle}</div>}
+            </>
+          )}
+          {headerRenaming && metaError && <div className="hint error-text header-rename-error">{metaError}</div>}
         </div>
         {/* 占位：右侧被壳的 ⋮ 占用，补上等宽元素标题才能真居中 */}
         <span className="header-spacer" aria-hidden="true" />

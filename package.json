@@ -48,6 +48,7 @@
     "test:pwa-snapshot-cache": "node --experimental-transform-types scripts/test-pwa-snapshot-cache.mjs",
     "test:pwa-thread-cache": "node --experimental-transform-types scripts/test-pwa-thread-cache.mjs",
     "test:pwa-column-preset": "node --experimental-transform-types scripts/test-pwa-column-preset.mjs",
+    "test:pwa-thinking-indicator": "node --experimental-transform-types scripts/test-pwa-thinking-indicator.mjs",
     "test:remote-files": "node --experimental-transform-types scripts/test-remote-files.mjs",
     "test:webpush": "node --experimental-transform-types scripts/test-webpush.mjs",
     "test:relay-tls-static": "node scripts/test-relay-tls-static.mjs",

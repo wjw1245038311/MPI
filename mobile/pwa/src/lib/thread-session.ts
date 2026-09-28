@@ -714,6 +714,17 @@ export class ThreadSession {
     this.patch({ messages: this.view.messages.filter((message) => message.id !== id) });
   }
 
+  /**
+   * 重命名成功（主机已提交）后就地更新摘要标题。
+   *
+   * 不走 resync：回合进行中 resync 会用快照替换 messages/streaming，顶栏闪一下
+   * 还可能打断流式渲染；标题是主机已确认的事实，直接 patch 即可。（与 Android
+   * ThreadSession.applyRenamedTitle 同语义。）
+   */
+  applyRenamedTitle(name: string): void {
+    if (this.view.summary) this.patch({ summary: { ...this.view.summary, title: name } });
+  }
+
   private pushMessage(message: ViewMessage): void {
     this.patch({ messages: [...this.view.messages, message] });
   }
