@@ -251,13 +251,32 @@ export function settleToolsOutsideRunningTurn<T extends RemoteMessage>(messages:
  * 返回值一定满足 `JSON.stringify(result).length <= limit`，除非连"地板级"的单条都
  * 塞不下（那时返回尽力而为的结果）。
  */
+import { REMOTE_VIDEO_BASE64_BUDGET } from "./video-refs";
+
 export function prepareRemoteHistory(
   messages: RemoteMessage[],
   limit = REMOTE_SNAPSHOT_BYTE_BUDGET,
   rawLimit = MAX_RENDERED_MESSAGES,
 ): RemoteMessage[] {
   const stage1 = messages.length > rawLimit ? messages.slice(-rawLimit) : messages;
-  const stage2 = trimRemoteHistory(stage1, limit);
-  const stage3 = trimRemoteHistoryByEncodedSize(stage2, limit);
-  return shrinkToBudget(stage3, limit);
+  // 视频附件是**有意**内联的例外，不该把历史挤掉。
+  //
+  // 2026-09-28 真机事故：REMOTE_SNAPSHOT_BYTE_BUDGET 的 2MB 是给「文本+图片」定的
+  // （2026-09-26：一次订阅发 2MB 就会撞手机 10s 超时），而视频字节是后来才进快照的。
+  // 一条 2MB 视频（base64 ≈2.8MB）自己就超了 2MB → 裁剪从最旧的开始丢 → **一次丢掉 62 条
+  // 历史**（日志：rendered=71 sent=4）。所以视频字节另算一笔预算，上限由
+  // REMOTE_VIDEO_BASE64_BUDGET 管，且整体不得越过客户端硬上限（8MB − headroom）。
+  const videoBytes = stage1.reduce(
+    (sum, message) =>
+      sum +
+      (message.blocks || []).reduce((inner, block) => inner + (block.type === "video" && block.data ? block.data.length : 0), 0),
+    0,
+  );
+  const effective = Math.min(
+    limit + Math.min(videoBytes, REMOTE_VIDEO_BASE64_BUDGET),
+    MAX_INNER_ENVELOPE_BYTES - SNAPSHOT_HEADROOM_BYTES,
+  );
+  const stage2 = trimRemoteHistory(stage1, effective);
+  const stage3 = trimRemoteHistoryByEncodedSize(stage2, effective);
+  return shrinkToBudget(stage3, effective);
 }

@@ -8,6 +8,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { register } from "node:module";
+
+// 源码用 bundler 风格的无后缀相对 import（history-limit.ts 现在也 import 了 ./video-refs）——
+// node 下需要一个把它们补成 .ts 的解析器。
+register(new URL("./ts-ext-loader.mjs", import.meta.url));
 
 const {
   REMOTE_VIDEO_BASE64_BUDGET,
@@ -115,6 +120,35 @@ const ROOT = resolve(import.meta.dirname, "..");
   assert.ok(
     REMOTE_VIDEO_BASE64_BUDGET + REMOTE_VIDEO_FILE_MAX_BYTES < REMOTE_HISTORY_BYTE_BUDGET,
     "视频预算必须留得下至少一个视频本体，且总预算不许超快照预算",
+  );
+}
+
+// --- 5. 视频字节不能把历史挤掉（2026-09-28 真机回归）--------------------------------
+{
+  // 复现真机：70 条小消息 + 一条 2MB 视频（base64 ≈2.8MB）。
+  const filler = Array.from({ length: 70 }, (_, index) => ({
+    id: `t${index}`,
+    role: "assistant",
+    text: "正文".repeat(500),
+  }));
+  const videoData = "V".repeat(2_800_000);
+  const withVideo = {
+    id: "v",
+    role: "user",
+    blocks: [{ type: "video", name: "clip.mp4", mimeType: "video/mp4", data: videoData, size: 2_100_000 }],
+  };
+  const out = prepareRemoteHistory([...filler, withVideo]);
+  // 修复前：视频字节吃掉 2MB 快照预算 → 裁剪从最旧的开始丢，一次丢几十条历史（真机 rendered=71 sent=4）。
+  assert.ok(
+    out.length > 50,
+    `带视频时不能把历史裁光（实际只剩 ${out.length}/${filler.length + 1} 条）`,
+  );
+  const keptVideo = out.find((m) => m.id === "v");
+  assert.equal(keptVideo?.blocks?.[0]?.data, videoData, "视频本体要完整保留");
+  // 但媒体预算不是无底洞：整体仍须远低于客户端硬上限。
+  assert.ok(
+    JSON.stringify(out).length < REMOTE_HISTORY_BYTE_BUDGET,
+    "含视频的快照仍要进得了客户端硬上限",
   );
 }
 

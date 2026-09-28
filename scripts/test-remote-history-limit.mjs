@@ -11,6 +11,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { register } from "node:module";
+
+// history-limit.ts 现在 import 了 ./video-refs（无后缀，bundler 风格）——node 下需补 .ts。
+register(new URL("./ts-ext-loader.mjs", import.meta.url));
 
 const {
   CLIENT_MAX_ENVELOPE_BYTES,
