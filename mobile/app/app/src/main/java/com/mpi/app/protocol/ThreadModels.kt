@@ -18,6 +18,8 @@ enum class BlockType {
     Thinking,
     Tool,
     Image,
+    /** 视频附件（主机内联下发的 base64）。UI 侧渲染成播放器，见 ThreadScreen 的 VideoBlock。 */
+    Video,
     ;
 
     companion object {
@@ -27,6 +29,7 @@ enum class BlockType {
             "thinking" -> Thinking
             "tool" -> Tool
             "image" -> Image
+            "video" -> Video
             else -> Text
         }
     }
@@ -42,9 +45,13 @@ data class MessageBlock(
     val running: Boolean = false,
     /** 工具调用参数（主机侧压成一行）。 */
     val argsText: String? = null,
-    /** 图片块的数据（data URL 或 base64）。 */
+    /** 图片/视频块的数据（data URL 或裸 base64）。 */
     val data: String? = null,
     val mimeType: String? = null,
+    /** 视频原始字节数（video 块用，占位卡片上显示大小）。 */
+    val size: Long? = null,
+    /** 主机刻意没下发本体（实时事件通道防大帧，或超出快照视频预算）→ 渲染占位卡片。 */
+    val omitted: Boolean = false,
     /** 工具调用 id —— 流式事件按它定位到具体块。 */
     val id: String? = null,
     /** 工具是否以失败结束。 */
@@ -157,6 +164,8 @@ internal data class BlockDto(
     val args: String? = null,
     val data: String? = null,
     val mimeType: String? = null,
+    val size: Long? = null,
+    val omitted: Boolean? = null,
     val isError: Boolean? = null,
     val id: String? = null,
 )
@@ -340,6 +349,8 @@ object ThreadModels {
             argsText = args,
             data = data,
             mimeType = mimeType,
+            size = size,
+            omitted = omitted == true,
             id = id,
             isError = isError == true,
         )

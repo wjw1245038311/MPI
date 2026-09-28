@@ -14,8 +14,8 @@ android {
         // 与旧壳 (com.mpi.remote) 区分，保证两者可并存安装
         minSdk = 26
         targetSdk = 34
-        versionCode = 111
-        versionName = "0.5.106"
+        versionCode = 112
+        versionName = "0.5.107"
 
         // 只保留手机（arm64-v8a）与模拟器（x86_64）——个人自用，不做全 ABI 分发包
         ndk {
@@ -89,6 +89,11 @@ dependencies {
 
     // 加密：Ed25519 / X25519（Android 原生支持随版本而异，BC 可控且跨版本一致）
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+
+    // 视频附件播放（媒体消息要在气泡里直接看）。选 Media3 而不是平台 VideoView：
+    // 格式/容器兼容性更好、PlayerView 自带控件（含全屏与进度），代价是 +1.5MB 左右。
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.0.21")

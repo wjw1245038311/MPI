@@ -62,6 +62,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.derivedStateOf
@@ -84,6 +85,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import android.content.Context
+import java.io.File
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -1261,6 +1270,7 @@ private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit, on
                             // 之前默认撑满 300dp，短消息变成「大块 + 居中文字」。
                             BlockType.Text -> MessageText(block.text.orEmpty(), color = MaterialTheme.colorScheme.onSurface, fillWidth = false)
                             BlockType.Image -> ImageBlock(block)
+                            BlockType.Video -> VideoBlock(block)
                             else -> Unit
                         }
                     }
@@ -1328,6 +1338,7 @@ private fun AssistantMessageRow(
                     BlockType.Tool -> ToolBlockRow(block, key = "${message.id}-tool-$index")
                     BlockType.Thinking -> ThinkingBlockRow(block, key = "${message.id}-think-$index")
                     BlockType.Image -> ImageBlock(block)
+                    BlockType.Video -> VideoBlock(block)
                     BlockType.Text -> if (!block.text.isNullOrBlank()) {
                         // 定稿的 assistant 文本才认 choices 面板（流式中间态仍按代码块）
                         if (finalized) {
@@ -1519,6 +1530,199 @@ private fun ImagePreviewOverlay(bitmap: ImageBitmap, onClose: () -> Unit) {
             // Fit：完整显示不裁切；竖图会顶满高度，横图顶满宽度。
             contentScale = ContentScale.Fit,
         )
+    }
+}
+
+/**
+ * 消息里的**视频块**：气泡内直接播放。
+ *
+ * 数据是主机内联下发的 base64（见 mobile/shared/protocol.ts 的 video 块 /
+ * src/main/remote/video-refs.ts）。ExoPlayer 吃不下 `data:` URI，所以先把字节落到 cacheDir
+ * 再播（同一份数据只写一次）。
+ *
+ * **懒创建**：没点 ▶ 之前不建播放器——一个会话里可能有多个视频，每个都建个 ExoPlayer
+ * 会白占内存与硬件解码器。点开后内联播放，⛶ 进全屏（Dialog 铺满屏幕）。
+ */
+@Composable
+private fun VideoBlock(block: MessageBlock) {
+    val context = LocalContext.current
+    // block.data 变了才重写文件（列表滚动会导致重组）。
+    val source = remember(block.data) { block.data?.let { writeVideoCacheFile(context, it, block.mimeType) } }
+    var playing by remember(source) { mutableStateOf(false) }
+    var expanded by remember(source) { mutableStateOf(false) }
+
+    if (source == null) {
+        // 本体没下发（实时事件通道剥大帧 / 超出快照视频预算）或解码失败 → 占位卡片，
+        // 不能留一块空白（用户会以为消息丢了）。
+        VideoPlaceholder(block)
+        return
+    }
+
+    val player = remember(source, playing) {
+        if (!playing) {
+            null
+        } else {
+            ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(Uri.fromFile(source)))
+                prepare()
+                playWhenReady = true
+            }
+        }
+    }
+    // 离开组合（滚出屏幕/切会话/退出）时释放——否则解码器泄漏。
+    DisposableEffect(player) {
+        onDispose { player?.release() }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (!playing) {
+            VideoPosterCard(block = block, onPlay = { playing = true })
+        } else if (!expanded) {
+            // 同一个播放器不能同时绑两个 PlayerView，所以全屏时这里只留一块占位。
+            Box(Modifier.widthIn(max = 320.dp)) {
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                    factory = { ctx -> PlayerView(ctx).apply { useController = true } },
+                    update = { view -> view.player = player },
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { expanded = true }) { Text("全屏") }
+                TextButton(
+                    onClick = {
+                        playing = false
+                        expanded = false
+                    },
+                ) { Text("收起") }
+            }
+        } else {
+            Box(
+                Modifier.widthIn(max = 320.dp).height(200.dp).background(Color.Black),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("全屏播放中…", color = Color.White, style = MaterialTheme.typography.labelSmall)
+            }
+            TextButton(onClick = { expanded = false }) { Text("退出全屏") }
+        }
+    }
+
+    if (expanded && player != null) {
+        Dialog(
+            onDismissRequest = { expanded = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx -> PlayerView(ctx).apply { useController = true } },
+                    update = { view -> view.player = player },
+                )
+                TextButton(
+                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                    onClick = { expanded = false },
+                ) { Text("关闭", color = Color.White) }
+            }
+        }
+    }
+}
+
+/** 点 ▶ 之前的静态卡片（没建播放器）；有尺寸信息就显示出来。 */
+@Composable
+private fun VideoPosterCard(block: MessageBlock, onPlay: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .widthIn(max = 320.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MpiTheme.colors.control)
+            .clickable { onPlay() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("▶", style = MaterialTheme.typography.titleMedium, color = MpiTheme.colors.accentSoft)
+        Column {
+            Text(
+                text = block.name ?: "视频",
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = formatVideoMeta(block),
+                style = MaterialTheme.typography.labelSmall,
+                color = MpiTheme.colors.textFaint,
+            )
+        }
+    }
+}
+
+/** 没有本体时的占位（不静默丢消息）。 */
+@Composable
+private fun VideoPlaceholder(block: MessageBlock) {
+    Row(
+        modifier = Modifier
+            .widthIn(max = 320.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MpiTheme.colors.control)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("🎬", style = MaterialTheme.typography.titleMedium)
+        Column {
+            Text(block.name ?: "视频", style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                // 主机在 block.text 里写了“为什么没下发”（超出预算 / 临时文件被清理）。
+                text = block.text?.takeIf { it.isNotBlank() } ?: "视频未随本次同步下发",
+                style = MaterialTheme.typography.labelSmall,
+                color = MpiTheme.colors.textFaint,
+            )
+        }
+    }
+}
+
+private fun formatVideoMeta(block: MessageBlock): String {
+    val size = block.size
+    val sizeText = when {
+        size == null || size <= 0 -> null
+        size >= 1_000_000 -> String.format("%.1fMB", size / 1_000_000.0)
+        else -> "${(size + 1023) / 1024}KB"
+    }
+    return listOfNotNull(sizeText, block.mimeType?.takeIf { it.isNotBlank() })
+        .joinToString(" · ")
+        .ifEmpty { "点击播放" }
+}
+
+/**
+ * 视频 base64 → cacheDir 文件（ExoPlayer 播不了 `data:` URI）。
+ *
+ * 名字用「长度 + 前 16 字节哈希」做指纹，同一份数据不重复写；失败（数据截断/超大）返回 null，
+ * 由调用方退化成占位卡片。
+ */
+private fun writeVideoCacheFile(context: Context, raw: String, mimeType: String?): File? {
+    return try {
+        val base64 = if (raw.startsWith("data:")) raw.substringAfter(',', raw) else raw
+        // 主机侧单个视频 ≤3MB（base64 ≈4.2MB）；远超这个量级的说明数据异常，不硬解。
+        if (base64.length > 6_000_000) return null
+        val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+        if (bytes.isEmpty()) return null
+        val extension = when (mimeType?.lowercase()) {
+            "video/webm" -> "webm"
+            "video/quicktime" -> "mov"
+            "video/x-matroska" -> "mkv"
+            else -> "mp4"
+        }
+        val head = bytes.copyOf(minOf(16, bytes.size))
+        val name = "v-${Integer.toHexString(bytes.size)}-${Integer.toHexString(head.contentHashCode())}.$extension"
+        val directory = File(context.cacheDir, "video-attachments").apply { mkdirs() }
+        val target = File(directory, name)
+        if (!target.exists()) target.writeBytes(bytes)
+        target
+    } catch (error: Throwable) {
+        null
     }
 }
 

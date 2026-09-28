@@ -25,13 +25,14 @@ internal fun shouldShowThinkingPlaceholder(view: ThreadView): Boolean {
     return !hasVisibleContent(view.streaming)
 }
 
-/** 流式消息里是否已有用户看得见的东西（正文 / 思考 / 图片 / 工具）。 */
+/** 流式消息里是否已有用户看得见的东西（正文 / 思考 / 图片 / 视频 / 工具）。 */
 internal fun hasVisibleContent(message: ThreadMessage?): Boolean {
     if (message == null) return false
     return message.blocks.any { block ->
         when (block.type) {
             BlockType.Tool -> true
-            BlockType.Image -> !block.data.isNullOrEmpty()
+            // 图片/视频：有本体才算可见（本体可能被刻意省略）
+            BlockType.Image, BlockType.Video -> !block.data.isNullOrEmpty()
             else -> !block.text.isNullOrEmpty()
         }
     }

@@ -99,6 +99,31 @@ class ThreadSessionReducerTest {
     // ---- 快照 ----
 
     @Test
+    fun `video blocks are parsed with body, size and omitted flag`() = runBlocking {
+        // 手机端要能直接看视频：块类型必须是 Video（未知类型会兜底成 Text → 屏幕上什么
+        // 都不显示，2026-09-28 真机就是如此），且 data/size/omitted 都要带过来——
+        // 占位卡片靠 size 显示大小、靠 omitted/text 说明“为什么没下发”。
+        val session = newSession(requests = FakeRequests(SNAPSHOT_WITH_VIDEO))
+        session.subscribe()
+
+        val view = session.view.value
+        val withVideo = view.messages.first { it.id == "m1" }
+        val video = withVideo.blocks.first { it.type == BlockType.Video }
+        assertEquals("clip.mp4", video.name)
+        assertEquals("video/mp4", video.mimeType)
+        assertEquals("本体要原样带过来（渲染层自己解码）", "QUJD", video.data)
+        assertEquals(214278L, video.size)
+        assertFalse("本体下发时不该标 omitted", video.omitted)
+
+        val omitted = view.messages.first { it.id == "m2" }.blocks.single()
+        assertEquals(BlockType.Video, omitted.type)
+        assertTrue("主机没下发本体时要标 omitted → 渲染占位卡片", omitted.omitted)
+        assertNull(omitted.data)
+        assertTrue("占位卡片要有说明文案", omitted.text!!.contains("未随快照下发"))
+        session.detach()
+    }
+
+    @Test
     fun `subscribe applies the snapshot`() = runBlocking {
         val session = newSession()
         session.subscribe()
@@ -994,6 +1019,28 @@ class ThreadSessionReducerTest {
               "messages":[
                 {"id":"m1","role":"user","blocks":[{"type":"text","text":"第一条"}]},
                 {"id":"m2","role":"assistant","blocks":[{"type":"tool","name":"bash","result":"工具输出内容"}]}
+              ],
+              "nextSeq":0
+            }}
+        """.trimIndent()
+
+        /** 带视频的消息：手机端要能直接播（块类型必须是 Video，且 data/size/omitted 都带过来）。 */
+        val SNAPSHOT_WITH_VIDEO = """
+            {"snapshot":{
+              "id":"t-1","projectId":"p1","title":"视频","preview":"p","updatedAt":300,
+              "messageCount":2,"state":"idle","permission":"full","cwdName":"MPI",
+              "model":{"provider":"anthropic","id":"model-x"},
+              "availableModels":[],"thinkingLevel":"low","taskMode":null,
+              "availableModes":[],"contextUsage":{"tokens":10,"contextWindow":100,"percent":10},
+              "messages":[
+                {"id":"m1","role":"user","blocks":[
+                  {"type":"text","text":"看视频"},
+                  {"type":"video","name":"clip.mp4","mimeType":"video/mp4","data":"QUJD","size":214278}
+                ]},
+                {"id":"m2","role":"user","blocks":[
+                  {"type":"video","name":"old.mp4","mimeType":"video/mp4","size":999,"omitted":true,
+                   "text":"视频未随快照下发（超出本次快照预算）"}
+                ]}
               ],
               "nextSeq":0
             }}
