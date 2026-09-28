@@ -33,9 +33,52 @@ const protocolSide = await import("../src/main/chat-attachment-protocol.ts");
 const storeSide = await import("../src/main/chat-attachment-store.ts");
 
 // 落盘一个假视频（走真实函数，顺带验证落盘本身）。
-const staged = storeSide.stageChatVideoBytes({ mimeType: "video/mp4", data: Buffer.alloc(4096, 7).toString("base64") });
+const POSTER_B64 = Buffer.alloc(1024, 5).toString("base64");
+const staged = storeSide.stageChatVideoBytes({
+  mimeType: "video/mp4",
+  data: Buffer.alloc(4096, 7).toString("base64"),
+  poster: { data: POSTER_B64, mimeType: "image/jpeg" },
+});
 assert.equal(staged.size, 4096, "手机端视频应落在持久附件区（按字节写入）");
 const durableName = staged.name;
+// 封面：与视频同目录、名字由视频名派生，能被 resolve 出来（快照回填就靠它）。
+assert.ok(staged.posterName, "带封面的上传应该把封面一并落盘");
+assert.equal(staged.posterName, hostSide.posterNameFor(durableName, "image/jpeg"), "封面文件名必须由视频名派生（快照靠 `poster=` 属性找它）");
+
+{
+  const resolved = storeSide.resolveChatAttachment(staged.posterName);
+  assert.ok(resolved, "封面必须能被 resolveChatAttachment 解析到（否则快照里永远是深色卡片）");
+  const slice = storeSide.readAttachmentSlice(staged.posterName, 0);
+  assert.equal(slice.size, 1024, "封面字节数应与写入时一致");
+  assert.ok(slice.data.equals(Buffer.alloc(1024, 5)), "封面字节必须原样落盘（不是被压过/截过的）");
+
+  // 信封往返：poster 名写进去、解析得回来（写入/解析同源）。
+  const envelopeText = hostSide.videoRefEnvelope(durableName, resolved, staged.posterName);
+  const parsedRef = hostSide.splitVideoRefs(`看这个${envelopeText}`);
+  assert.equal(parsedRef.text, "看这个", "带封面的引用也要从可见文本里剔掉");
+  assert.deepEqual(
+    { name: parsedRef.refs[0].name, poster: parsedRef.refs[0].poster },
+    { name: durableName, poster: staged.posterName },
+    "poster 属性必须原样往返",
+  );
+
+  // 超大封面必须被丢掉（不能让它变成新的“大字节”），但视频本身照常落盘。
+  const fat = storeSide.stageChatVideoBytes({
+    mimeType: "video/mp4",
+    data: Buffer.alloc(16, 1).toString("base64"),
+    poster: { data: Buffer.alloc(hostSide.VIDEO_POSTER_MAX_BYTES + 1, 1).toString("base64"), mimeType: "image/jpeg" },
+  });
+  assert.equal(fat.posterName, null, "超出上限的封面应被丢弃（视频本身不受影响）");
+  assert.ok(storeSide.resolveChatAttachment(fat.name), "封面被丢弃时视频必须照常落盘");
+
+  // 不支持的封面类型也要被丢掉（协议只收 jpeg/png/webp，而落盘侧不依赖调用方自律）。
+  const bmp = storeSide.stageChatVideoBytes({
+    mimeType: "video/mp4",
+    data: Buffer.alloc(16, 2).toString("base64"),
+    poster: { data: Buffer.alloc(64, 2).toString("base64"), mimeType: "image/bmp" },
+  });
+  assert.equal(bmp.posterName, null, "不支持的封面 MIME 应被丢弃");
+}
 // 旧名字（%TEMP%/mpi-clipboard 时代）现在应该解析不到——旧附件退化为占位卡片是预期行为。
 const LEGACY_NAME = VIDEO_NAME;
 

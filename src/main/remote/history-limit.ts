@@ -154,7 +154,7 @@ export const CLIENT_MAX_ENVELOPE_BYTES = 8_000_000;
 const SHRINK_FLOOR = 2_000;
 export const SHRINK_MARKER = "\n…[内容过大，已截断]";
 
-const SHRINKABLE_KEYS = ["text", "result", "data"] as const;
+const SHRINKABLE_KEYS = ["text", "result", "data", "poster"] as const;
 
 /**
  * 单帧硬保证的第二级：裁剪后**仍**超预算时，收缩消息**内部**的块。
@@ -187,11 +187,11 @@ export function shrinkToBudget<T extends RemoteMessage>(messages: T[], limit: nu
       consider(index, "text", message.text);
       message.blocks?.forEach((block, blockIndex) => {
         for (const key of SHRINKABLE_KEYS) {
-          // base64 媒体本体（image/video）**不可收缩**：砍半再追一句中文标记会让字节流直接
-          // 损坏——客户端只能渲染出一个破图片/破播放器，比丢掉历史还糟。
-          // 赶预算的事交给「丢更早的消息」；视频本身的预算见 ipc.ts 的 REMOTE_VIDEO_BASE64_BUDGET
-          // （单个视频 base64 ≤4.2MB，永远小于 7.6MB 的预算，所以不会出现“单条消息自己就超帧”的死局）。
-          if (key === "data" && (block.type === "image" || block.type === "video")) continue;
+          // base64 媒体本体（image/video）与**封面**均**不可收缩**：砍半再追一句中文标记会让
+          // 字节流直接损坏——客户端只能渲染出一个破图片/破播放器，比丢掉历史还糟。
+          // 赶预算的事交给「丢更早的消息」；封面的预算见 ipc.ts 的 VIDEO_POSTER_BASE64_BUDGET
+          // （单张 ≤160KB，永远小于 7.6MB 的预算，所以不会出现“单条消息自己就超帧”的死局）。
+          if ((key === "data" || key === "poster") && (block.type === "image" || block.type === "video")) continue;
           consider(index, `blocks.${blockIndex}.${key}`, (block as Record<string, unknown>)[key]);
         }
       });
@@ -251,7 +251,7 @@ export function settleToolsOutsideRunningTurn<T extends RemoteMessage>(messages:
  * 返回值一定满足 `JSON.stringify(result).length <= limit`，除非连"地板级"的单条都
  * 塞不下（那时返回尽力而为的结果）。
  */
-import { REMOTE_VIDEO_BASE64_BUDGET } from "./video-refs";
+import { VIDEO_POSTER_BASE64_BUDGET } from "./video-refs";
 
 export function prepareRemoteHistory(
   messages: RemoteMessage[],
@@ -259,21 +259,24 @@ export function prepareRemoteHistory(
   rawLimit = MAX_RENDERED_MESSAGES,
 ): RemoteMessage[] {
   const stage1 = messages.length > rawLimit ? messages.slice(-rawLimit) : messages;
-  // 视频附件是**有意**内联的例外，不该把历史挤掉。
+  // 视频封面是**有意**下发的例外，不该把历史挤掉。
   //
-  // 2026-09-28 真机事故：REMOTE_SNAPSHOT_BYTE_BUDGET 的 2MB 是给「文本+图片」定的
-  // （2026-09-26：一次订阅发 2MB 就会撞手机 10s 超时），而视频字节是后来才进快照的。
-  // 一条 2MB 视频（base64 ≈2.8MB）自己就超了 2MB → 裁剪从最旧的开始丢 → **一次丢掉 62 条
-  // 历史**（日志：rendered=71 sent=4）。所以视频字节另算一笔预算，上限由
-  // REMOTE_VIDEO_BASE64_BUDGET 管，且整体不得越过客户端硬上限（8MB − headroom）。
-  const videoBytes = stage1.reduce(
+  // 2026-09-28 真机事故（当时下发的是视频本体）：REMOTE_SNAPSHOT_BYTE_BUDGET 的 2MB 是给
+  // 「文本+图片」定的（2026-09-26：一次订阅发 2MB 就会撞手机 10s 超时），而视频字节是后来
+  // 才进快照的。一条 2MB 视频（base64 ≈2.8MB）自己就超了 2MB → 裁剪从最旧的开始丢 →
+  // **一次丢掉 62 条历史**（日志：rendered=71 sent=4）。
+  //
+  // 2026-09-29（阶段2）：快照只下发 εKB 级的**首帧封面**（不再有视频本体），但同一道理
+  // 仍然成立（几十张封面叠起来也是几 MB），所以封面字节照旧另算一笔预算，
+  // 上限由 VIDEO_POSTER_BASE64_BUDGET 管，且整体不得越过客户端硬上限（8MB − headroom）。
+  const posterBytes = stage1.reduce(
     (sum, message) =>
       sum +
-      (message.blocks || []).reduce((inner, block) => inner + (block.type === "video" && block.data ? block.data.length : 0), 0),
+      (message.blocks || []).reduce((inner, block) => inner + (block.type === "video" && block.poster ? block.poster.length : 0), 0),
     0,
   );
   const effective = Math.min(
-    limit + Math.min(videoBytes, REMOTE_VIDEO_BASE64_BUDGET),
+    limit + Math.min(posterBytes, VIDEO_POSTER_BASE64_BUDGET),
     MAX_INNER_ENVELOPE_BYTES - SNAPSHOT_HEADROOM_BYTES,
   );
   const stage2 = trimRemoteHistory(stage1, effective);

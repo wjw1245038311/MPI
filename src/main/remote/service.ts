@@ -118,6 +118,13 @@ const MAX_REMOTE_VIDEOS = 1;
 const MAX_REMOTE_VIDEO_DATA = 4_200_000;
 
 /**
+ * 首帧封面的 base64 上限（与 video-refs.ts 的 VIDEO_POSTER_MAX_BYTES 对应，
+ * 留出 4/3 膨胀与误差余量）。
+ */
+const MAX_REMOTE_POSTER_DATA = 240_000;
+const REMOTE_POSTER_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+/**
  * 不进 request 缓存（去重重试缓存）的请求类型。
  *
  * `attachment.fetch` 的响应是几百 KB 的分片，而缓存上限是 500 条 —— 一个 20MB 的
@@ -488,10 +495,36 @@ export class RemoteService {
         throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", `files[${index}] has invalid or oversized base64 data`);
       }
       const mimeType = typeof file.mimeType === "string" ? file.mimeType.slice(0, 120) : undefined;
+      const poster = this.optionalPoster(file, `files[${index}]`);
       total += data.length;
       if (total > MAX_REMOTE_FILE_DATA_TOTAL) throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", "File attachments are too large");
-      return { name, ...(mimeType ? { mimeType } : {}), data };
+      return { name, ...(mimeType ? { mimeType } : {}), data, ...poster };
     });
+  }
+
+  /**
+   * 可选的**首帧封面**（视频附件用）。
+   *
+   * 超限/类型不对一律**静默丢弃**而不是报错：封面只是观感优化，为此整条消息失败
+   * （用户在跑十几次上传后才发现发不出去）得不偿失；丢了它客户端退化成深色卡片。
+   */
+  private optionalPoster(source: Record<string, unknown>, label: string): { poster?: string; posterMimeType?: string } {
+    const poster = source.poster;
+    if (poster === undefined) return {};
+    if (typeof poster !== "string" || !poster || poster.length > MAX_REMOTE_POSTER_DATA) {
+      appendDiagLog(`remote-poster ${label} dropped: invalid or oversized (${typeof poster === "string" ? poster.length : "non-string"})`);
+      return {};
+    }
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(poster)) {
+      appendDiagLog(`remote-poster ${label} dropped: not base64`);
+      return {};
+    }
+    const posterMimeType = typeof source.posterMimeType === "string" ? source.posterMimeType.slice(0, 60).toLowerCase() : "image/jpeg";
+    if (!REMOTE_POSTER_MIME_TYPES.has(posterMimeType)) {
+      appendDiagLog(`remote-poster ${label} dropped: mime ${posterMimeType.slice(0, 30)}`);
+      return {};
+    }
+    return { poster, posterMimeType };
   }
 
   /**
@@ -527,7 +560,8 @@ export class RemoteService {
         );
       }
       const size = typeof video.size === "number" && Number.isFinite(video.size) && video.size > 0 ? Math.floor(video.size) : undefined;
-      return { type: "video" as const, data, mimeType, ...(size ? { size } : {}) };
+      const poster = this.optionalPoster(video, `videos[${index}]`);
+      return { type: "video" as const, data, mimeType, ...(size ? { size } : {}), ...poster };
     });
   }
 

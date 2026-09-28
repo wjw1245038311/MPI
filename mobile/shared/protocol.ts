@@ -67,6 +67,13 @@ export interface RemoteFileInput {
   name: string;
   mimeType?: string;
   data: string;
+  /**
+   * 可选**首帧封面**（base64）。只有当这个文件被当作视频附件处理时才会用到
+   * （`attach="video"`，见 video-refs.ts）：主机把它落盘并用它当气泡封面，
+   * 视频本体则改为客户端点开时按需拉（attachment.fetch）。
+   */
+  poster?: string;
+  posterMimeType?: string;
 }
 
 /**
@@ -84,6 +91,9 @@ export interface RemoteVideoInput {
   mimeType: string;
   /** 原始字节数（客户端上报，主机只用于显示与预算判断） */
   size?: number;
+  /** 可选首帧封面（base64，≤ VIDEO_POSTER_MAX_BYTES）——气泡里的封面就是它 */
+  poster?: string;
+  posterMimeType?: string;
 }
 
 /**

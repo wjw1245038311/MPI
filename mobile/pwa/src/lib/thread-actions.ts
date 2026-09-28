@@ -101,7 +101,7 @@ export class ThreadActions {
     mode: SendMode,
     images?: { type?: "image"; data: string; mimeType: string }[],
     files?: { name: string; mimeType?: string; data: string }[],
-    videos?: { type?: "video"; data: string; mimeType: string; size?: number }[],
+    videos?: { type?: "video"; data: string; mimeType: string; size?: number; poster?: string; posterMimeType?: string }[],
   ): Promise<unknown> {
     const trimmed = text.trim();
     if (!trimmed && !(images && images.length) && !(files && files.length) && !(videos && videos.length)) {
@@ -113,8 +113,8 @@ export class ThreadActions {
         ? { images: images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })) }
         : {}),
       ...(files && files.length ? { files } : {}),
-      // 视频单独走 videos：主机据此把它当成**可播放媒体**内联下发（files 里的视频只是给
-      // agent 读的文件，不进快照）。上限见主机 video-refs.ts。
+      // 视频单独走 videos：主机据此把它当成**可播放媒体**处理（files 里的视频只是给 agent
+      // 读的文件）。首帧封面（poster）一并上传：快照只下发它，视频本体由接收端点开时按需拉。
       ...(videos && videos.length
         ? {
             videos: videos.map((video) => ({
@@ -122,6 +122,7 @@ export class ThreadActions {
               data: video.data,
               mimeType: video.mimeType,
               ...(typeof video.size === "number" ? { size: video.size } : {}),
+              ...(video.poster ? { poster: video.poster, posterMimeType: video.posterMimeType || "image/jpeg" } : {}),
             })),
           }
         : {}),

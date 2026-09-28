@@ -6,6 +6,7 @@ import { BUILTIN_BALANCED_ID, normalizeTaskModes, taskModeName, taskModeSummary 
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage, PendingQuote, PromptAttachment, TaskModeDef } from "../lib/types";
 import { MPI_FILE_MIME, MPI_SESSION_MIME, parseSessionDragPayload } from "../lib/file-drag";
+import { extractVideoPoster, looksLikeVideo } from "../lib/video-poster";
 import { SttError, startRecording, sttRecordErrorText, sttTranscribeErrorText, type RecordingHandle } from "../lib/stt";
 import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh, Settings, Mic, Info } from "./icons";
 import { LongTaskMonitor } from "./LongTaskMonitor";
@@ -73,13 +74,18 @@ async function fileToAttachment(file: File): Promise<{ image?: PendingImage; fil
   const image = await fileToImage(file);
   if (image) return { image };
 
+  // 视频：顺手拍一张首帧当封面（快照里只下发封面，视频本体由接收端点开时按需拉）。
+  // 抽不出来（编码不支持/超时）不算失败——照常发送，接收端退化成深色卡片。
+  const poster = looksLikeVideo(file) ? await extractVideoPoster(file) : null;
+
   let abs = "";
   try {
     abs = window.pi.app.getPathForFile(file) || (file as File & { path?: string }).path || "";
   } catch {
     // Clipboard-created files are not backed by a path; they are staged below.
   }
-  if (abs) return { file: { abs, name: file.name || abs.split(/[\\/]/).pop() || "pasted-file" } };
+  const withPoster = (entry: PendingFile): PendingFile => (poster ? { ...entry, poster } : entry);
+  if (abs) return { file: withPoster({ abs, name: file.name || abs.split(/[\\/]/).pop() || "pasted-file" }) };
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (!bytes.length) return null;
@@ -88,7 +94,7 @@ async function fileToAttachment(file: File): Promise<{ image?: PendingImage; fil
     mimeType: file.type,
     data: bytesToBase64(bytes),
   });
-  return staged?.abs ? { file: { abs: staged.abs, name: staged.name || file.name || "pasted-file" } } : null;
+  return staged?.abs ? { file: withPoster({ abs: staged.abs, name: staged.name || file.name || "pasted-file" }) } : null;
 }
 
 function promptTextWithHtmlReferences(text: string, references: HtmlElementReference[]): string {
@@ -631,7 +637,7 @@ export function Composer({ threadId }: { threadId: string }) {
   /** Files + quotes in the attachment form pi receives (quotes carry their
    * location in this conversation instead of a file path). */
   const draftAttachments = (): PromptAttachment[] => [
-    ...files.map((f): PromptAttachment => ({ abs: f.abs, name: f.name })),
+    ...files.map((f): PromptAttachment => ({ abs: f.abs, name: f.name, ...(f.poster ? { poster: f.poster } : {}) })),
     ...quotes.map(quoteToAttachment),
   ];
 

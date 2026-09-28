@@ -1,11 +1,14 @@
 /**
  * 远程**视频附件**的引用协议（主机侧）。
  *
- * 背景：视频要「像图片一样在对话框里直接看」，所以字节得内联下发给客户端；但 agent
- * 只会读文件、看不了视频，所以落盘后**还得**给 agent 留一条路径引用。两条诉求用同一个
- * 承载物：
+ * 背景：视频要「像图片一样在对话框里直接看」。但 agent 只会读文件、看不了视频，
+ * 所以落盘后**还得**给 agent 留一条路径引用。两条诉求用同一个承载物：
  *
- *   <file name="video-….mp4" path="/…/temp/mpi-clipboard/….mp4" attach="video" note="…" />
+ *   <file name="video-….mp4" path="…" attach="video" poster="…-video-….mp4.poster.jpg" />
+ *
+ * 自 2026-09-29（阶段2）起，快照**不再下发视频字节**（只下发上面那张封面图）——
+ * 原片由客户端点开时按需拉（见 attachment.fetch）。好处：快照从几 MB 降到几十 KB，
+ * 历史不再被视频挤掉；代价是点开到出画面要等一小段（有进度条与封面顶替）。
  *
  * 普通附件引用（没有 `attach="video"`）保持原样不动，只有带标记的才会被剥出来换成
  * 可播放的 `video` 块——见 `ipc.ts` 的 remoteMessages。
@@ -16,16 +19,17 @@ import { extname } from "node:path";
 
 /** 标记普通 <file> 引用与“可播放视频引用”的属性。 */
 export const VIDEO_REF_ATTR = 'attach="video"';
-const VIDEO_REF_RE = /<file\s+name="([^"]*)"\s+path="([^"]*)"\s+attach="video"[^>]*\/>/g;
+/** `poster="…"` 子句（可选）：没有它时只匹配到 attach，不会吃掉后面的属性。 */
+const VIDEO_REF_RE = /<file\s+name="([^"]*)"\s+path="([^"]*)"\s+attach="video"(?:\s+poster="([^"]*)")?[^>]*\/>/g;
 
 /**
- * 单个视频可以**内联进快照**的原始字节上限（base64 后 ≈4MB）。
+ * 单个视频可以**整帧内联上传**的原始字节上限（base64 后 ≈4MB）。
  *
- * 超过它的视频照样作为视频附件保存、照样生成 `attach="video"` 引用（客户端点开就按需拉，
- * 见 attachment.fetch），只是不再随快照下发字节而已——这是 2026-09-28 之后的大小分界：
- * 快照再也不会被几 MB 的视频撑爆，也不必再把大视频降级成普通文件卡片。
+ * 只关于**上传**（PWA 选中视频后走 `videos` 通道 base64 内联上传，受 8MB envelope 硬上限制约），
+ * 与「快照里下发多少字节」已无关：自 2026-09-29 起快照不下发任何视频字节，
+ * 只下发一张封面图（见 VIDEO_POSTER_MAX_BYTES 与 attachment.fetch）。
  */
-export const REMOTE_VIDEO_INLINE_MAX_BYTES = 3_000_000;
+export const REMOTE_VIDEO_UPLOAD_MAX_BYTES = 3_000_000;
 
 /**
  * 能被当作「视频附件」处理的原始字节上限（落盘附件区 + 生成引用 + 客户端可点开播放）。
@@ -36,16 +40,42 @@ export const REMOTE_VIDEO_INLINE_MAX_BYTES = 3_000_000;
 export const REMOTE_VIDEO_MAX_BYTES = 128 * 1024 * 1024;
 
 /**
- * 一次快照里视频字节的**总预算**（base64 字符），**最新优先**。
+ * 封面图（首帧）的原始字节上限。
  *
- * 为什么单独预算：快照总预算只有 7.6MB（MAX_INNER_ENVELOPE_BYTES 去掉 headroom），
- * 而视频是最容易把它撑爆的东西，又是用户希望保留的内容——超出预算时宁可把**更早的**
- * 视频降级成占位卡片（`omitted: true`），也不让它去挤历史。
- *
- * 自 2026-09-28 起这个预算只服务于**小视频的内联**（≤ REMOTE_VIDEO_INLINE_MAX_BYTES）；
- * 大视频一律走按需拉取，不占这里。
+ * 为什么卡这么小：封面要**跟着每一次快照**下发（用户滚动历史时得立刻看到画面），
+ * 而快照有 8MB 硬上限。160KB 足够一张 640px 宽的 JPEG 首帧（实测通常 20–60KB）。
  */
-export const REMOTE_VIDEO_BASE64_BUDGET = 4_500_000;
+export const VIDEO_POSTER_MAX_BYTES = 160_000;
+
+/** 封面允许的 MIME（与三端生成侧一致）。 */
+export const VIDEO_POSTER_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+/**
+ * 一次快照里封面图字节的**总预算**（base64 字符），**最新优先**。
+ *
+ * 超出预算时只把**更早的**封面降级成深色卡片（视频本体仍可点开按需拉），保留视频与历史。
+ */
+export const VIDEO_POSTER_BASE64_BUDGET = 2_000_000;
+
+/** 封面文件命名：在视频文件名后追加后缀（同一目录，不会与视频名碰撞）。 */
+export const posterNameFor = (videoName: string, mimeType = "image/jpeg"): string =>
+  `${videoName}.poster${posterExtForMime(mimeType)}`;
+
+/** 按封面文件名推断 MIME（客户端要正确的 mime 才能渲染）。 */
+export const posterMimeForName = (name: string): string => {
+  const lower = String(name || "").toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return "image/jpeg";
+};
+
+/** 按 MIME 给出封面文件扩展名（落盘时用）。 */
+export const posterExtForMime = (mimeType: string): string => {
+  const lower = String(mimeType || "").toLowerCase();
+  if (lower === "image/png") return ".png";
+  if (lower === "image/webp") return ".webp";
+  return ".jpg";
+};
 
 export const VIDEO_MIME_BY_EXT: Record<string, string> = {
   ".mp4": "video/mp4",
@@ -70,21 +100,23 @@ export const videoMimeForPath = (path: string): string => VIDEO_MIME_BY_EXT[extn
 /** <file> 属性值转义（会话名等也可能含引号，与 ipc.ts 的 attr 同规则）。 */
 const attr = (value: string): string => String(value).replace(/"/g, "&quot;");
 
-/** 生成给 agent 看的视频引用（带 `attach="video"` 标记，客户端据此换成播放器）。 */
-export function videoRefEnvelope(name: string, abs: string): string {
-  return `\n\n<file name="${attr(name)}" path="${attr(abs)}" attach="video" note="video attachment; inline-playable in MPI clients" />`;
+/** 生成给 agent 看的视频引用（带 `attach="video"` 标记与可选封面名）。 */
+export function videoRefEnvelope(name: string, abs: string, posterName?: string): string {
+  const poster = posterName ? ` poster="${attr(posterName)}"` : "";
+  return `\n\n<file name="${attr(name)}" path="${attr(abs)}" attach="video"${poster} note="video attachment; inline-playable in MPI clients" />`;
 }
 
 /**
  * 把文本里的视频引用剥出来（只对带 `attach="video"` 的引用生效）。
  *
- * 返回清理后的文本（去掉引用后 trim）与引用列表；没有标记时原样返回，零成本。
+ * 返回清理后的文本（去掉引用后 trim）与引用列表（含可选封面文件名）；
+ * 没有标记时原样返回，零成本。
  */
-export function splitVideoRefs(text: string): { text: string; refs: Array<{ name: string; path: string }> } {
+export function splitVideoRefs(text: string): { text: string; refs: Array<{ name: string; path: string; poster?: string }> } {
   if (!text || !text.includes(VIDEO_REF_ATTR)) return { text, refs: [] };
-  const refs: Array<{ name: string; path: string }> = [];
-  const cleaned = text.replace(VIDEO_REF_RE, (_all, name: string, path: string) => {
-    refs.push({ name: String(name), path: String(path) });
+  const refs: Array<{ name: string; path: string; poster?: string }> = [];
+  const cleaned = text.replace(VIDEO_REF_RE, (_all, name: string, path: string, poster: string | undefined) => {
+    refs.push({ name: String(name), path: String(path), ...(poster ? { poster: String(poster) } : {}) });
     return "";
   });
   return { text: refs.length ? cleaned.trim() : text, refs };

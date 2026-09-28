@@ -31,8 +31,10 @@ internal fun hasVisibleContent(message: ThreadMessage?): Boolean {
     return message.blocks.any { block ->
         when (block.type) {
             BlockType.Tool -> true
-            // 图片/视频：有本体才算可见（本体可能被刻意省略）
-            BlockType.Image, BlockType.Video -> !block.data.isNullOrEmpty()
+            // 图片：有本体才算可见（本体可能被刻意省略）。
+            // 视频：现在快照只给封面 + 名字（视频本体按需拉），所以有封面或有名字都算可见。
+            BlockType.Image -> !block.data.isNullOrEmpty()
+            BlockType.Video -> !block.data.isNullOrEmpty() || !block.poster.isNullOrEmpty() || !block.name.isNullOrEmpty()
             else -> !block.text.isNullOrEmpty()
         }
     }

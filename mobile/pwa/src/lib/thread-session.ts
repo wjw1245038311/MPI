@@ -35,6 +35,9 @@ export interface ViewBlock {
   mimeType?: string;
   /** 视频原始字节数（video 块用，用于占位卡片显示大小） */
   size?: number;
+  /** 视频**首帧封面**（base64 图片）：快照不再下发视频本体后，气泡里的画面就是它。 */
+  poster?: string;
+  posterMimeType?: string;
   /** 主机刻意没下发本体（实时事件通道防大帧，或超出快照视频预算）→ 渲染占位卡片。 */
   omitted?: boolean;
 }

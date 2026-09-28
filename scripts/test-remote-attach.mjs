@@ -29,7 +29,7 @@ const { RemoteService } = await import("../src/main/remote/service.ts");
 const { makeEnvelope } = await import("../mobile/shared/protocol.ts");
 const { REMOTE_REQUEST_TYPES } = await import("../src/main/remote/protocol.ts");
 const { ATTACHMENT_FETCH_CHUNK_BYTES, readAttachmentSlice } = await import("../src/main/chat-attachment-store.ts");
-const { fillInlineVideoBytes, LAZY_VIDEO_NOTE, MISSING_VIDEO_NOTE } = await import("../src/main/remote/video-inline.ts");
+const { fillVideoPosters, LAZY_VIDEO_NOTE, MISSING_VIDEO_NOTE } = await import("../src/main/remote/video-poster.ts");
 const { ThreadActions } = await import("../mobile/pwa/src/lib/thread-actions.ts");
 const { fetchAttachmentBytes } = await import("../mobile/pwa/src/lib/attachment-fetch.ts");
 
@@ -255,66 +255,80 @@ console.log("ok 1 - attachment.fetch 已登记进协议请求白名单");
   console.log("ok 4 - PWA：分片循环拼装/进度/取消/防死循环 + ThreadActions 接线（只读、无 claimWrite）");
 }
 
-// ---- 5. 快照内联判定（大视频→懒加载，小视频→内联）--------------------------
+// ---- 5. 快照封面回填（不下发视频本体，只下发封面）------------------------
 {
-  const INLINE_MAX = 1_000; // 测试里用小值，不用附件的 3MB（更易读，且行为等价）
-  const make = (path, size, throwOnStat = false) => {
-    const state = { size: undefined, data: undefined, note: undefined };
+  const make = (video, size, poster) => {
+    const state = { size: undefined, poster: undefined, mime: undefined, note: undefined };
     return {
-      path,
       state,
       candidate: {
-        path,
+        videoPath: video,
+        ...(poster ? { posterPath: poster } : {}),
         setSize: (value) => { state.size = value; },
-        setData: (value) => { state.data = value; },
+        setPoster: (value, mime) => { state.poster = value; state.mime = mime; },
         setNote: (value) => { state.note = value; },
       },
-      sizeOf: () => {
-        if (throwOnStat) throw new Error("ENOENT");
-        return size;
-      },
-      readBase64: () => "B".repeat(Math.ceil((size * 4) / 3)),
     };
   };
 
-  const small = make("small.mp4", 800);
-  const big = make("big.mp4", 50_000_000);
-  const gone = make("gone.mp4", 0, true);
-
-  const byPath = { "small.mp4": small, "big.mp4": big, "gone.mp4": gone };
-  fillInlineVideoBytes([small.candidate, big.candidate, gone.candidate], {
-    sizeOf: (path) => byPath[path].sizeOf(),
-    readBase64: (path) => byPath[path].readBase64(),
+  const sizes = { "a.mp4": 50_000_000, "b.mp4": 12_000, "a.mp4.poster.jpg": 40_000, "b.mp4.poster.png": 30_000 };
+  const bases = { "a.mp4.poster.jpg": "P".repeat(40_000), "b.mp4.poster.png": "Q".repeat(30_000) };
+  const options = {
+    sizeOf: (path) => {
+      if (!(path in sizes)) throw new Error("ENOENT");
+      return sizes[path];
+    },
+    readBase64: (path) => bases[path],
     budget: 1_000_000,
-    inlineMaxBytes: INLINE_MAX,
+  };
+
+  // 大视频：不下发本体，但有封面 + size（卡片看得见画面，点开才拉字节）。
+  const big = make("a.mp4", 50_000_000, "a.mp4.poster.jpg");
+  fillVideoPosters([big.candidate], options);
+  assert.equal(big.state.size, 50_000_000, "大视频必须带 size（卡片尺寸与拉取进度条都要它）");
+  assert.equal(big.state.poster, bases["a.mp4.poster.jpg"], "没封面就没有任何画面可显示");
+  assert.equal(big.state.mime, "image/jpeg", "封面 mime 由文件名扇出（客户端要用它构造 data URL）");
+  assert.equal(big.state.note, LAZY_VIDEO_NOTE, "无论有没有封面，都要告诉客户端“点开按需获取”");
+
+  // 没有封面的视频（发送端抽帧失败 / 旧消息）：size 照样要写，note 也不能缺。
+  const noPoster = make("b.mp4", 12_000);
+  fillVideoPosters([noPoster.candidate], options);
+  assert.equal(noPoster.state.size, 12_000, "没封面也要带 size");
+  assert.equal(noPoster.state.poster, undefined);
+  assert.equal(noPoster.state.note, LAZY_VIDEO_NOTE);
+
+  // 附件被清理：措辞要能区分于没封面（否则排查会一直往封面方向查）。
+  const gone = make("missing.mp4", 0, undefined);
+  const goneSizeOf = options.sizeOf;
+  fillVideoPosters([gone.candidate], { ...options, sizeOf: (path) => { if (path === "missing.mp4") throw new Error("ENOENT"); return goneSizeOf(path); } });
+  assert.equal(gone.state.note, MISSING_VIDEO_NOTE, "读不到视频要明说“已被清理”");
+  assert.equal(gone.state.size, undefined);
+
+  // 超预算：封面不填，但 size/note 仍在（降级成深色卡片，视频仍可点开拉）。
+  const overBudget = make("a.mp4", 50_000_000, "a.mp4.poster.jpg");
+  fillVideoPosters([overBudget.candidate], { ...options, budget: 10 });
+  assert.equal(overBudget.state.poster, undefined, "超出预算的封面不下发");
+  assert.equal(overBudget.state.size, 50_000_000, "被省略封面的视频同样要带 size");
+  assert.equal(overBudget.state.note, LAZY_VIDEO_NOTE);
+
+  // 封面文件异常（超出单张字节上限）：当作没封面，不能把坏字节写进块里。
+  const fatPoster = make("a.mp4", 50_000_000, "a.mp4.poster.jpg");
+  fillVideoPosters([fatPoster.candidate], { ...options, posterMaxBytes: 10 });
+  assert.equal(fatPoster.state.poster, undefined, "超上限的封面一律不下发（防止一张胖图撑爆快照）");
+
+  // 预算按**最新优先**：预算只够一张时，先满足列表末尾（最新）那个。
+  const older = make("a.mp4", 1_000, "a.mp4.poster.jpg");
+  const newer = make("b.mp4", 1_000, "b.mp4.poster.png");
+  const orderSizes = { "a.mp4": 1_000, "b.mp4": 1_000, "a.mp4.poster.jpg": 40_000, "b.mp4.poster.png": 30_000 };
+  fillVideoPosters([older.candidate, newer.candidate], {
+    sizeOf: (path) => orderSizes[path],
+    readBase64: (path) => bases[path],
+    budget: 30_000,
   });
-
-  // 小视频：内联，且带 size（开箱即播）。
-  assert.ok(small.state.data, "小视频（≤ 内联阈值）必须内联下发字节");
-  assert.equal(small.state.size, 800, "内联的视频也要带 size（卡片元信息）");
-
-  // 大视频：不下发字节，但 size 与“可点开”的说明必须在——这是懒加载卡片的全部依据。
-  assert.equal(big.state.data, undefined, "大视频不能内联（否则又把快照撑爆）");
-  assert.equal(big.state.size, 50_000_000, "大视频仍必须带 size（卡片显示与进度条都要它）");
-  assert.equal(big.state.note, LAZY_VIDEO_NOTE, "大视频要给“点开按需获取”而不是“未下发”");
-
-  // 附件已被清理：措辞要能区分于预算不足（否则排查会一直往预算方向查）。
-  assert.equal(gone.state.note, MISSING_VIDEO_NOTE, "读不到文件要明说“已被清理”");
-  assert.equal(gone.state.size, undefined, "读不到就没有 size");
-
-  // 预算按**最新优先**分配：预算只够一个时，留下的是列表末尾（最新）那个。
-  const older = make("older.mp4", 900);
-  const newer = make("newer.mp4", 900);
-  fillInlineVideoBytes([older.candidate, newer.candidate], {
-    sizeOf: (path) => (path === "older.mp4" ? 900 : 900),
-    readBase64: () => "B".repeat(1000),
-    budget: 1000,
-    inlineMaxBytes: INLINE_MAX,
-  });
-  assert.equal(newer.state.data, "B".repeat(1000), "预算不够时应优先保留**最新**的视频");
-  assert.equal(older.state.data, undefined, "更早的视频被省略（且是可点开的懒加载）");
-  assert.equal(older.state.size, 900, "被省略的视频同样要带 size");
-  console.log("ok 5 - 快照内联判定：大视频→懒加载（带 size）/小视频→内联/被清理可区分/最新优先");
+  assert.equal(newer.state.poster, bases["b.mp4.poster.png"], "预算不够时应优先保留**最新**视频的封面");
+  assert.equal(older.state.poster, undefined, "更早的视频封面被省略（视频本体仍可点开拉）");
+  assert.equal(older.state.size, 1_000, "被省略封面的视频同样要带 size");
+  console.log("ok 5 - 快照封面回填：不下发本体/带 size/封面缺失可区分/超限丢弃/最新优先");
 }
 
 console.log("\nremote-attach: 全部通过");

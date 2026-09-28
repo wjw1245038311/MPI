@@ -2445,7 +2445,9 @@ export const useStore = create<PiStore>()((set, get) => {
           base64: im.data,
           mimeType: im.mimeType,
         })),
-        files: (attachments || []).filter((a) => !a.quote).map((f) => ({ abs: f.abs, name: f.name })),
+        files: (attachments || [])
+          .filter((a) => !a.quote)
+          .map((f) => ({ abs: f.abs, name: f.name, ...(f.poster ? { poster: f.poster } : {}) })),
         quotes: (attachments || [])
           .filter((a): a is PromptAttachment & { quote: NonNullable<PromptAttachment["quote"]> } => !!a.quote)
           .map((a) => ({ id: uid(), ...a.quote! })),

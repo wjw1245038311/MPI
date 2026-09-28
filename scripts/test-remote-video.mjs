@@ -15,9 +15,10 @@ import { register } from "node:module";
 register(new URL("./ts-ext-loader.mjs", import.meta.url));
 
 const {
-  REMOTE_VIDEO_BASE64_BUDGET,
-  REMOTE_VIDEO_INLINE_MAX_BYTES,
   REMOTE_VIDEO_MAX_BYTES,
+  REMOTE_VIDEO_UPLOAD_MAX_BYTES,
+  VIDEO_POSTER_BASE64_BUDGET,
+  VIDEO_POSTER_MAX_BYTES,
   splitVideoRefs,
   videoMimeForPath,
   videoRefEnvelope,
@@ -51,6 +52,17 @@ const ROOT = resolve(import.meta.dirname, "..");
   const two = splitVideoRefs(`${videoRefEnvelope("a.mp4", "/tmp/a.mp4")}${videoRefEnvelope("b.mp4", "/tmp/b.mp4")}`);
   assert.deepEqual(two.refs.map((r) => r.name), ["a.mp4", "b.mp4"]);
 
+  // 封面（poster 属性）能原样往返；没有 poster 的老信封仍照旧解析。
+  const withPoster = splitVideoRefs(`看${videoRefEnvelope("v.mp4", "/tmp/v.mp4", "v.mp4.poster.jpg")}`);
+  assert.deepEqual(
+    withPoster.refs,
+    [{ name: "v.mp4", path: "/tmp/v.mp4", poster: "v.mp4.poster.jpg" }],
+    "带封面的信封要能解出 poster（快照据此去读封面文件）",
+  );
+  const noPoster = splitVideoRefs(videoRefEnvelope("v.mp4", "/tmp/v.mp4"));
+  assert.equal(noPoster.refs[0].poster, undefined, "旧信封没有 poster 属性，不能凭空造一个");
+  assert.equal(noPoster.text, "", "带 note 的信封仍要整条剥走（poster 子句是可选的，不能把后面的属性吞掉）");
+
   // 名字里带引号不能破坏解析（attr 转义）。
   const quoted = splitVideoRefs(videoRefEnvelope('he"llo.mp4', "/tmp/q.mp4"));
   assert.equal(quoted.refs[0].name, "he&quot;llo.mp4", "引号被转义后解析不破（与 <file> 信封同一规则）");
@@ -66,6 +78,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 {
   const videoData = "V".repeat(600_000);
   const imageData = "I".repeat(400_000);
+  const posterData = "P".repeat(200_000);
   const messages = [
     {
       id: "m1",
@@ -73,7 +86,7 @@ const ROOT = resolve(import.meta.dirname, "..");
       text: "x".repeat(500_000),
       blocks: [
         { type: "text", text: "y".repeat(400_000) },
-        { type: "video", name: "a.mp4", mimeType: "video/mp4", data: videoData, size: 450_000 },
+        { type: "video", name: "a.mp4", mimeType: "video/mp4", data: videoData, size: 450_000, poster: posterData, posterMimeType: "image/jpeg" },
         { type: "image", mimeType: "image/png", data: imageData },
       ],
     },
@@ -82,6 +95,7 @@ const ROOT = resolve(import.meta.dirname, "..");
   const limited = shrinkToBudget(messages, 500_000, 5);
   const blocks = limited[0].blocks;
   assert.equal(blocks[1].data, videoData, "视频 base64 必须原封不动（砍半+加标记会让播放器直接坏掉）");
+  assert.equal(blocks[1].poster, posterData, "封面（poster）同理：砍半就是一张破图，比没封面还糟");
   assert.equal(blocks[2].data, imageData, "图片 base64 同理（同一个隐患）");
   assert.ok(limited[0].text.includes(SHRINK_MARKER), "该让位的是文本——它才是可收缩的");
   assert.ok(blocks[0].text.includes(SHRINK_MARKER), "文本块可以被收缩");
@@ -90,18 +104,18 @@ const ROOT = resolve(import.meta.dirname, "..");
 // --- 3. 视频进快照预算：宁可丢更早的消息，也不砍视频本体 ------------------------
 
 {
-  const videoData = "V".repeat(4_000_000); // ≈3MB 原始字节
+  const posterData = "P".repeat(220_000); // ≈160KB 原始字节的封面
   const filler = { id: "old", role: "assistant", text: "z".repeat(6_000_000) };
   const withVideo = {
     id: "new",
     role: "user",
     text: "看这个视频",
-    blocks: [{ type: "video", name: "v.mp4", mimeType: "video/mp4", data: videoData, size: 3_000_000 }],
+    blocks: [{ type: "video", name: "v.mp4", mimeType: "video/mp4", poster: posterData, posterMimeType: "image/jpeg", size: 50_000_000 }],
   };
   const out = prepareRemoteHistory([filler, withVideo]);
   const kept = out.find((m) => m.id === "new");
   assert.ok(kept, "带视频的最新消息必须留下");
-  assert.equal(kept.blocks[0].data, videoData, "留下来的视频本体必须完整");
+  assert.equal(kept.blocks[0].poster, posterData, "留下来的封面必须完整");
   assert.ok(!out.some((m) => m.id === "old"), "挤不下时丢的是更早的普通消息");
 }
 
@@ -111,27 +125,52 @@ const ROOT = resolve(import.meta.dirname, "..");
   const serviceSrc = readFileSync(resolve(ROOT, "src", "main", "remote", "service.ts"), "utf8");
   const hostMax = Number(/MAX_REMOTE_VIDEO_DATA = ([\d_]+)/.exec(serviceSrc)?.[1]?.replace(/_/g, ""));
   assert.ok(hostMax > 0, "service.ts 里应有 MAX_REMOTE_VIDEO_DATA");
-  const expectedBase64 = Math.ceil((REMOTE_VIDEO_INLINE_MAX_BYTES * 4) / 3);
+  const expectedBase64 = Math.ceil((REMOTE_VIDEO_UPLOAD_MAX_BYTES * 4) / 3);
   assert.ok(
     hostMax >= expectedBase64,
-    `主机上限 ${hostMax} 必须装得下 ${REMOTE_VIDEO_INLINE_MAX_BYTES} 原始字节（base64 ≈ ${expectedBase64}，PWA 选中的视频走 videos 通道内联上传）`,
+    `主机上限 ${hostMax} 必须装得下 ${REMOTE_VIDEO_UPLOAD_MAX_BYTES} 原始字节（base64 ≈ ${expectedBase64}，PWA 选中的视频走 videos 通道整帧上传）`,
   );
 
   const pwaSrc = readFileSync(resolve(ROOT, "mobile", "pwa", "src", "ThreadView.tsx"), "utf8");
   const pwaMax = Number(/MAX_VIDEO_BYTES = ([\d_]+)/.exec(pwaSrc)?.[1]?.replace(/_/g, ""));
-  assert.equal(pwaMax, REMOTE_VIDEO_INLINE_MAX_BYTES, "PWA 的视频上限必须等于主机侧的**内联**上限（它走 videos 通道内联上传）");
+  assert.equal(pwaMax, REMOTE_VIDEO_UPLOAD_MAX_BYTES, "PWA 的视频上限必须等于主机侧的**上传**上限（它走 videos 通道整帧上传）");
 
   assert.ok(
-    REMOTE_VIDEO_BASE64_BUDGET + REMOTE_VIDEO_INLINE_MAX_BYTES < REMOTE_HISTORY_BYTE_BUDGET,
-    "视频预算必须留得下至少一个内联视频的本体，且总预算不许超快照预算",
+    VIDEO_POSTER_BASE64_BUDGET < REMOTE_HISTORY_BYTE_BUDGET,
+    "封面预算必须小于快照总预算（否则等于没有预算）",
+  );
+  assert.ok(
+    VIDEO_POSTER_MAX_BYTES * 4 < VIDEO_POSTER_BASE64_BUDGET,
+    "封面总预算至少要装得下几张封面（否则历史里的封面会成片丢失）",
   );
 
-  // 2026-09-28：内联上限与“可存为视频附件”的上限拆成两个。
+  // 2026-09-29（阶段2）：快照只下发封面，视频本体一律按需拉。
   // 拆开才成立的两个前提：① 大视频仍有名字可拉（客户端 attachment.fetch）；
   // ② 附件区总量上限装得下至少一个最大的视频（否则刚落盘就被自己的清理策略盯上）。
   assert.ok(
-    REMOTE_VIDEO_MAX_BYTES > REMOTE_VIDEO_INLINE_MAX_BYTES,
-    "可存的视频上限必须大于内联上限（否则拆分无意义）",
+    REMOTE_VIDEO_MAX_BYTES > REMOTE_VIDEO_UPLOAD_MAX_BYTES,
+    "可存的视频上限必须大于上传上限（否则拆分无意义）",
+  );
+
+  // 封面尺寸/字节上限三端必须一致：主机落盘后由三端渲染，任一端漂移都会出现
+  // “封面被主机静默丢弃”或“三端封面清晰度不一致”。
+  const pwaPosterSrc = readFileSync(resolve(ROOT, "mobile", "pwa", "src", "lib", "video-attach.ts"), "utf8");
+  const desktopPosterSrc = readFileSync(resolve(ROOT, "src", "renderer", "src", "lib", "video-poster.ts"), "utf8");
+  const androidPosterSrc = readFileSync(
+    resolve(ROOT, "mobile", "app", "app", "src", "main", "java", "com", "mpi", "app", "data", "Attachments.kt"),
+    "utf8",
+  );
+  for (const [label, source] of [["PWA", pwaPosterSrc], ["桌面端", desktopPosterSrc], ["安卓", androidPosterSrc]]) {
+    const maxBytes = Number(/POSTER_MAX_BYTES = ([\d_]+)/.exec(source)?.[1]?.replace(/_/g, ""));
+    const maxEdge = Number(/POSTER_MAX_EDGE = ([\d_]+)/.exec(source)?.[1]?.replace(/_/g, ""));
+    assert.equal(maxBytes, VIDEO_POSTER_MAX_BYTES, `${label}的封面字节上限必须与主机侧 VIDEO_POSTER_MAX_BYTES 一致`);
+    assert.equal(maxEdge, 640, `${label}的封面最长边应为 640px（三端口径一致）`);
+  }
+  // 主机侧的接收上限要装得下三端生成的上限（base64 膨胀 + 余量）。
+  const posterHostMax = Number(/MAX_REMOTE_POSTER_DATA = ([\d_]+)/.exec(serviceSrc)?.[1]?.replace(/_/g, ""));
+  assert.ok(
+    posterHostMax >= Math.ceil((VIDEO_POSTER_MAX_BYTES * 4) / 3),
+    `service.ts 的 MAX_REMOTE_POSTER_DATA(${posterHostMax}) 必须装得下 ${VIDEO_POSTER_MAX_BYTES} 原始字节的封面`,
   );
   const storeSrc = readFileSync(resolve(ROOT, "src", "main", "chat-attachment-store.ts"), "utf8");
   const dirMaxExpression = /const MAX_DIR_BYTES = ([\d_\s*]+);/.exec(storeSrc)?.[1];
@@ -152,11 +191,11 @@ const ROOT = resolve(import.meta.dirname, "..");
     role: "assistant",
     text: "正文".repeat(500),
   }));
-  const videoData = "V".repeat(2_800_000);
+  const posterData = "P".repeat(220_000);
   const withVideo = {
     id: "v",
     role: "user",
-    blocks: [{ type: "video", name: "clip.mp4", mimeType: "video/mp4", data: videoData, size: 2_100_000 }],
+    blocks: [{ type: "video", name: "clip.mp4", mimeType: "video/mp4", poster: posterData, posterMimeType: "image/jpeg", size: 50_000_000 }],
   };
   const out = prepareRemoteHistory([...filler, withVideo]);
   // 修复前：视频字节吃掉 2MB 快照预算 → 裁剪从最旧的开始丢，一次丢几十条历史（真机 rendered=71 sent=4）。
@@ -165,7 +204,8 @@ const ROOT = resolve(import.meta.dirname, "..");
     `带视频时不能把历史裁光（实际只剩 ${out.length}/${filler.length + 1} 条）`,
   );
   const keptVideo = out.find((m) => m.id === "v");
-  assert.equal(keptVideo?.blocks?.[0]?.data, videoData, "视频本体要完整保留");
+  assert.equal(keptVideo?.blocks?.[0]?.poster, posterData, "封面要完整保留");
+  assert.equal(keptVideo?.blocks?.[0]?.data, undefined, "快照**不能**再带视频本体（那是几 MB 级字节）");
   // 但媒体预算不是无底洞：整体仍须远低于客户端硬上限。
   assert.ok(
     JSON.stringify(out).length < REMOTE_HISTORY_BYTE_BUDGET,

@@ -192,14 +192,14 @@ import {
   type SystemNotificationCenter,
 } from "./system-notifications";
 import {
-  REMOTE_VIDEO_BASE64_BUDGET,
+  VIDEO_POSTER_BASE64_BUDGET,
   VIDEO_REF_ATTR,
   splitVideoRefs,
   videoMimeForPath,
   videoRefEnvelope,
 } from "./remote/video-refs";
-import { fillInlineVideoBytes } from "./remote/video-inline";
-import { ATTACHMENT_FETCH_CHUNK_BYTES, adoptChatVideo, isVideoFile, readAttachmentSlice, stageChatVideoBytes } from "./chat-attachment-store";import {
+import { fillVideoPosters } from "./remote/video-poster";
+import { ATTACHMENT_FETCH_CHUNK_BYTES, adoptChatVideo, isVideoFile, readAttachmentSlice, resolveChatAttachment, stageChatVideoBytes } from "./chat-attachment-store";import {
   RemoteProtocolError,
   type RemoteFileArtifact,
   type RemoteFileInput,
@@ -315,6 +315,8 @@ interface Attachment {
   /** Conversation quote (right-click → 引用): inlined as a <quote> block that
    * points back at the passage's location in this session. */
   quote?: QuoteMeta;
+  /** 视频附件的首帧封面（渲染层抽好传下来）——落盘后当气泡封面，见 video-refs.ts。 */
+  poster?: { data: string; mimeType?: string };
 }
 
 const CLIPBOARD_FILE_MAX_BYTES = 50_000_000;
@@ -472,11 +474,11 @@ function processAttachments(attachments: Attachment[] | undefined, text: string)
         }
         // 视频：**复制**进持久附件区，并用 attach="video" 信封——这样桌面端与手机端都能
         // 在对话框里直接播（见 chat-attachment-store.ts / remote/video-refs.ts）。
-        // 超过内联上限的视频保持普通文件引用（照旧不内联，避免把每次快照撑爆）。
+        // 首帧封面（a.poster，渲染层抽的）一并落盘：快照只下发它，不下发视频字节。
         if (isVideoFile(a.name || a.abs)) {
-          const adopted = adoptChatVideo(a.abs);
+          const adopted = adoptChatVideo(a.abs, a.poster);
           if (adopted) {
-            extra += videoRefEnvelope(adopted.name, adopted.abs);
+            extra += videoRefEnvelope(adopted.name, adopted.abs, adopted.posterName ?? undefined);
             continue;
           }
           // 复制失败（太大/读不到）→ 退回普通引用，至少 agent 还能读到原文件
@@ -1759,8 +1761,8 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     };
 
     const output: RemoteMessage[] = [];
-    /** 本轮快照里待回填字节的视频块（顺序 = 消息顺序，预算从末尾往前分配）。 */
-    const pendingVideos: Array<{ block: RemoteBlock; path: string }> = [];
+    /** 本轮快照里待回填封面的视频块（顺序 = 消息顺序，预算从末尾往前分配）。 */
+    const pendingVideos: Array<{ block: RemoteBlock; path: string; posterName?: string }> = [];
     let assistantRound: RemoteMessage | null = null;
     let unmatchedToolOutputs: string[] = [];
     const flushAssistantRound = () => {
@@ -1836,13 +1838,13 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       const role = message?.role === "user" || message?.role === "system" ? message.role : "system";
       const blocks = blocksFor(message);
       const artifacts = artifactsByMessage.get(index);
-      // 视频附件：把 host 自己写在用户消息里的 `<file … attach="video" />` 引用剥出来，
-      // 换成 video 块（字节在本函数末尾按预算从盘上回填）；文本同时清干净，
+      // 视频附件：把 host 自己写在用户消息里的 `<file … attach="video" poster="…" />` 引用剥出来，
+      // 换成 video 块（封面在本函数末尾按预算从盘上回填）；文本同时清干净，
       // 否则气泡里会露出引用原文。从**未截断**的原文里取引用，避免长文把末尾的引用切掉。
       const videoSource = splitVideoRefs(remoteText(message?.content));
       const videoBlocks = videoSource.refs.map((ref): RemoteBlock => {
         const block: RemoteBlock = { type: "video", name: ref.name, mimeType: videoMimeForPath(ref.path), omitted: true };
-        pendingVideos.push({ block, path: ref.path });
+        pendingVideos.push({ block, path: ref.path, ...(ref.poster ? { posterName: ref.poster } : {}) });
         return block;
       });
       const allBlocks = [...blocks, ...videoBlocks];
@@ -1859,31 +1861,32 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       });
     });
     flushAssistantRound();
-    // 视频字节回填：**最新优先**。只有小视频（≤ 内联阈值）才下发字节；更大的与超出快照
-    // 预算的都保留 `omitted` 占位块（带 name + size），客户端点开时按需拉
-    // （attachment.fetch）。所以这里不再是「降级成灰卡」，而是「换成懒加载」。
-    // 判定逻辑本身在 remote/video-inline.ts（纯函数，单独单测）。
-    const inlineResult = fillInlineVideoBytes(
-      pendingVideos.map(({ block, path }) => ({
-        path,
+    // 封面回填：**最新优先**。快照**不下发视频本体**（那是几 MB 级字节，会把快照撑爆、
+    // 还会把更早的历史从裁剪里挤掉），只下发一张首帧封面 + 名字 + 大小；原片由客户端
+    // 点开时按需拉（attachment.fetch）。没有封面 → 深色卡片，照样可点开。
+    // 判定逻辑本身在 remote/video-poster.ts（纯函数，单独单测）。
+    const posterResult = fillVideoPosters(
+      pendingVideos.map(({ block, path, posterName }) => ({
+        videoPath: path,
+        ...(posterName ? { posterPath: resolveChatAttachment(posterName) ?? undefined } : {}),
         setSize: (size: number) => {
           block.size = size;
         },
-        setData: (base64: string) => {
-          block.data = base64;
-          block.omitted = false;
+        setPoster: (base64: string, mimeType: string) => {
+          block.poster = base64;
+          block.posterMimeType = mimeType;
         },
         setNote: (text: string) => {
           block.text = text;
         },
       })),
       {
-        budget: REMOTE_VIDEO_BASE64_BUDGET,
+        budget: VIDEO_POSTER_BASE64_BUDGET,
         sizeOf: (path) => statSync(path).size,
         readBase64: (path) => readFileSync(path).toString("base64"),
       },
     );
-    const videoBytes = inlineResult.inlinedBytes;
+
     // 裁剪流水线（条数 → 估算 → 真实长度 → 单帧兜底）；客户端对解密后的内层 envelope
     // 有硬上限，超了一律丢帧（2026-09-24 真机：订阅响应被丢 → 10s 超时 → 重握手 →
     // 重连风暴）。顺序与兜底细节见 remote/history-limit.ts 的 prepareRemoteHistory。
@@ -1893,7 +1896,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     const estimated = trimmed.reduce((sum, m) => sum + remoteMessageSize(m), 0);
     const encoded = JSON.stringify(trimmed).length;
     appendDiagLog(
-      `remote-history total=${source.length} rendered=${output.length} sent=${trimmed.length} bytes=${estimated} encoded=${encoded} vid=${pendingVideos.length} vidBytes=${videoBytes}`,
+      `remote-history total=${source.length} rendered=${output.length} sent=${trimmed.length} bytes=${estimated} encoded=${encoded} vid=${pendingVideos.length} posters=${posterResult.posters} posterBytes=${posterResult.posterBytes}`,
     );
     return trimmed;
   }
@@ -2317,10 +2320,13 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
    * processAttachments 的内联/引用规则、以及 agent 读文件的能力完全复用，
    * 不需要为手机端另开一条通路。
    */
-  const stageRemoteFiles = (files?: RemoteFileInput[]): { abs: string; name: string }[] =>
-    (files ?? []).map((file) =>
-      stageClipboardFile({ name: file.name, mimeType: file.mimeType, data: file.data }),
-    );
+  const stageRemoteFiles = (files?: RemoteFileInput[]): Attachment[] =>
+    (files ?? []).map((file) => ({
+      ...stageClipboardFile({ name: file.name, mimeType: file.mimeType, data: file.data }),
+      // 手机端视频（走 files 通道）也带封面：processAttachments 会把视频扩展名的附件
+      // 交给 adoptChatVideo，那里会把这张封面一起落盘。
+      ...(file.poster ? { poster: { data: file.poster, mimeType: file.posterMimeType } } : {}),
+    }));
 
   /**
    * 手机端**视频**附件 → 落盘（与文件同一目录）→ 给 agent 留一条带 `attach="video"` 的引用。
@@ -2333,11 +2339,16 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       .map((video) => {
         // 落在 <userData>/chat-attachments（**持久**区，不是 %TEMP%）：消息里的视频引用
         // 属于会话历史，文件被清理掉就只剩占位卡片。见 chat-attachment-store.ts。
-        const staged = stageChatVideoBytes({ name: undefined, mimeType: video.mimeType, data: video.data });
+        const staged = stageChatVideoBytes({
+          name: undefined,
+          mimeType: video.mimeType,
+          data: video.data,
+          poster: video.poster ? { data: video.poster, mimeType: video.posterMimeType } : undefined,
+        });
         // 落盘即登记：发送端（或任何已订阅的设备）收到快照后马上就能按需拉取，
         // 不必等下一次快照生成替它登记。
         rememberAttachmentNames(threadId, [staged.name]);
-        return videoRefEnvelope(staged.name, staged.abs);
+        return videoRefEnvelope(staged.name, staged.abs, staged.posterName ?? undefined);
       })
       .join("");
 

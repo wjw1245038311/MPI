@@ -267,6 +267,8 @@ export interface PromptAttachment {
   abs: string;
   name: string;
   quote?: QuoteMeta;
+  /** 视频附件的首帧封面（渲染层抽好传给主进程落盘）——快照里下发的就是它。 */
+  poster?: { data: string; mimeType?: string };
 }
 
 export interface ViewMessage {
@@ -795,6 +797,8 @@ export interface PendingImage {
 export interface PendingFile {
   abs: string;
   name: string;
+  /** 视频的首帧封面（拖入/选择时抽好的；非视频不抽）。 */
+  poster?: { data: string; mimeType?: string };
 }
 
 /** A selected HTML element kept as a structured composer reference. */

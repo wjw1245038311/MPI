@@ -1184,6 +1184,11 @@ class AppViewModel(
                 put("name", file.name)
                 put("data", file.bytesB64)
                 if (file.mimeType != null) put("mimeType", file.mimeType)
+                // 视频的首帧封面：主机落盘后用它当气泡封面（快照不再下发视频本体）。
+                file.posterB64?.let { poster ->
+                    put("poster", poster)
+                    put("posterMimeType", "image/jpeg")
+                }
             }
         }
         // 先乐观上屏（§1.1：点击到视觉反馈 < 100ms），失败再标红留在原位

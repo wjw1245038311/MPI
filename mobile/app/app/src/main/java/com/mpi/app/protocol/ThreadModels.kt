@@ -50,6 +50,12 @@ data class MessageBlock(
     val mimeType: String? = null,
     /** 视频原始字节数（video 块用，占位卡片上显示大小）。 */
     val size: Long? = null,
+    /**
+     * 视频的**首帧封面**（base64 图片）。快照不再下发视频本体后，气泡里的画面就靠它；
+     * 没有封面（旧消息 / 发送端抽帧失败）→ 退化成深色卡片 + ▶，照样可点开按需拉。
+     */
+    val poster: String? = null,
+    val posterMimeType: String? = null,
     /** 主机刻意没下发本体（实时事件通道防大帧，或超出快照视频预算）→ 渲染占位卡片。 */
     val omitted: Boolean = false,
     /** 工具调用 id —— 流式事件按它定位到具体块。 */
@@ -165,6 +171,8 @@ internal data class BlockDto(
     val data: String? = null,
     val mimeType: String? = null,
     val size: Long? = null,
+    val poster: String? = null,
+    val posterMimeType: String? = null,
     val omitted: Boolean? = null,
     val isError: Boolean? = null,
     val id: String? = null,
@@ -350,6 +358,8 @@ object ThreadModels {
             data = data,
             mimeType = mimeType,
             size = size,
+            poster = poster,
+            posterMimeType = posterMimeType,
             omitted = omitted == true,
             id = id,
             isError = isError == true,

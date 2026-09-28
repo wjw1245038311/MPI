@@ -17,7 +17,7 @@ import { app } from "electron";
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME } from "./remote/video-refs";
+import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME, VIDEO_POSTER_MAX_BYTES, VIDEO_POSTER_MIME_TYPES, posterNameFor } from "./remote/video-refs";
 
 export const CHAT_ATTACHMENT_DIR = "chat-attachments";
 /**
@@ -52,11 +52,39 @@ function stagedName(originalName: string): string {
   return `${randomUUID()}-${safe}`;
 }
 
+/** 调用方（上传/拖入）可能带一张首帧封面。 */
+export interface VideoPosterInput {
+  data: string;
+  mimeType?: string;
+}
+
+/** 校验并写入封面文件；不合法（太大/类型不支持/写失败）→ 返回 null，视频本身不受影响。 */
+function writePoster(videoName: string, poster?: VideoPosterInput): string | null {
+  if (!poster || typeof poster.data !== "string" || !poster.data) return null;
+  const mimeType = String(poster.mimeType || "image/jpeg").toLowerCase();
+  if (!VIDEO_POSTER_MIME_TYPES.has(mimeType)) return null;
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(poster.data, "base64");
+  } catch {
+    return null;
+  }
+  if (!bytes.length || bytes.length > VIDEO_POSTER_MAX_BYTES) return null;
+  // 名字从视频名派生（两个名字同源，客户端靠 `poster="…"` 属性找到它）。
+  const name = posterNameFor(videoName, mimeType);
+  try {
+    writeFileSync(join(dir(), name), bytes);
+    return name;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * 手机端发来的视频（base64，已在内存里）→ 落盘。
+ * 手机端发来的视频（base64，已在内存里）→ 落盘（含可选首帧封面）。
  * 超过 REMOTE_VIDEO_MAX_BYTES 直接抛错（调用方本来就已按同一上限校验过）。
  */
-export function stageChatVideoBytes(args: { name?: string; mimeType?: string; data: string }): { abs: string; name: string; size: number } {
+export function stageChatVideoBytes(args: { name?: string; mimeType?: string; data: string; poster?: VideoPosterInput }): { abs: string; name: string; size: number; posterName: string | null } {
   const bytes = Buffer.from(String(args.data || ""), "base64");
   if (!bytes.length) throw new Error("video attachment is empty");
   if (bytes.length > REMOTE_VIDEO_MAX_BYTES) throw new Error("video attachment is too large");
@@ -64,7 +92,7 @@ export function stageChatVideoBytes(args: { name?: string; mimeType?: string; da
   const name = stagedName(args.name || `video-${Date.now()}${extension}`);
   const abs = join(dir(), name);
   writeFileSync(abs, bytes, { flag: "wx" });
-  return { abs, name, size: bytes.length };
+  return { abs, name, size: bytes.length, posterName: writePoster(name, args.poster) };
 }
 
 /**
@@ -76,14 +104,14 @@ export function stageChatVideoBytes(args: { name?: string; mimeType?: string; da
  * 上限用 REMOTE_VIDEO_MAX_BYTES（128MB）而不是内联阈值：桌面端拖进来的大视频同样要能在
  * 手机/PWA 上点开看（那边走 attachment.fetch 按需拉），所以不该在这里就被挡掉。
  */
-export function adoptChatVideo(filePath: string): { abs: string; name: string; size: number } | null {
+export function adoptChatVideo(filePath: string, poster?: VideoPosterInput): { abs: string; name: string; size: number; posterName: string | null } | null {
   try {
     const stats = statSync(filePath);
     if (!stats.isFile() || stats.size <= 0 || stats.size > REMOTE_VIDEO_MAX_BYTES) return null;
     const name = stagedName(basename(filePath));
     const abs = join(dir(), name);
     copyFileSync(filePath, abs);
-    return { abs, name, size: stats.size };
+    return { abs, name, size: stats.size, posterName: writePoster(name, poster) };
   } catch {
     return null;
   }

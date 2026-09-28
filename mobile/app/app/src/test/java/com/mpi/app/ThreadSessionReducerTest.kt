@@ -115,6 +115,16 @@ class ThreadSessionReducerTest {
         assertEquals(214278L, video.size)
         assertFalse("本体下发时不该标 omitted", video.omitted)
 
+        // 2026-09-29（阶段2）：快照不再下发视频本体，改为只给一张**首帧封面**。
+        // 手机端要能拿到 poster/posterMimeType（否则大视频在气泡里只能是一块黑）。
+        val lazyVideo = view.messages.first { it.id == "m3" }.blocks.single()
+        assertEquals(BlockType.Video, lazyVideo.type)
+        assertEquals("UE9TVEVS", lazyVideo.poster)
+        assertEquals("image/jpeg", lazyVideo.posterMimeType)
+        assertEquals(50_000_000L, lazyVideo.size)
+        assertNull("视频本体不该再随快照下发", lazyVideo.data)
+        assertEquals("点开按需获取", lazyVideo.text)
+
         val omitted = view.messages.first { it.id == "m2" }.blocks.single()
         assertEquals(BlockType.Video, omitted.type)
         assertTrue("主机没下发本体时要标 omitted → 渲染占位卡片", omitted.omitted)
@@ -1040,13 +1050,18 @@ class ThreadSessionReducerTest {
                 {"id":"m2","role":"user","blocks":[
                   {"type":"video","name":"old.mp4","mimeType":"video/mp4","size":999,"omitted":true,
                    "text":"视频未随快照下发（超出本次快照预算）"}
+                ]},
+                {"id":"m3","role":"user","blocks":[
+                  {"type":"video","name":"poster.mp4","mimeType":"video/mp4","size":50000000,
+                   "poster":"UE9TVEVS","posterMimeType":"image/jpeg","omitted":true,
+                   "text":"点开按需获取"}
                 ]}
               ],
               "nextSeq":0
             }}
         """.trimIndent()
 
-        /** 全量补拉后的快照：多了 m3（带图用户消息，图片块有 data）。 */
+        /** 全量补拉后的快照：多了 m4（带图用户消息，图片块有 data）。 */
         val SNAPSHOT_WITH_IMAGE = """
             {"snapshot":{
               "id":"t-1","projectId":"p1","title":"修复登录 bug","preview":"p","updatedAt":200,

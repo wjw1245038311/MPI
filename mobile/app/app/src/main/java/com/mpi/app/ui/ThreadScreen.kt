@@ -1577,21 +1577,13 @@ private fun VideoBlock(block: MessageBlock) {
     var totalBytes by remember(block.name) { mutableStateOf(block.size?.toLong() ?: 0L) }
     val source = inlineSource ?: fetchedSource
 
-    if (source == null) {
-        // 没名字（历史遗留 / 附件已被清理）→ 真占位，点了也没得拉。
-        if (block.name == null) {
-            VideoPlaceholder(block)
-            return
-        }
-        LazyVideoCard(
-            block = block,
-            fetching = fetching,
-            error = fetchError,
-            loaded = fetchedBytes,
-            total = totalBytes,
-            onPlay = {
-                if (fetching) return@LazyVideoCard
-                val name = block.name ?: return@LazyVideoCard
+    /** 点开→按需拉字节（快照只给了封面/名字，视频本体由客户端自己拉）。 */
+    val startFetch: () -> Unit = {
+        if (!fetching) {
+            val name = block.name
+            if (name == null) {
+                Unit
+            } else {
                 fetching = true
                 fetchError = null
                 fetchedBytes = 0L
@@ -1610,8 +1602,30 @@ private fun VideoBlock(block: MessageBlock) {
                         fetchError = "附件已不可用（可能已被清理）"
                     }
                 }
-            },
-        )
+            }
+        }
+    }
+
+    if (source == null) {
+        // 没名字（历史遗留 / 附件已被清理）→ 真占位，点了也没得拉。
+        if (block.name == null) {
+            VideoPlaceholder(block)
+            return
+        }
+        // 快照下发的**首帧封面**：观感与已内联的视频完全一致（首帧 + ▶），只是点开才拉字节。
+        val cover = remember(block.poster) { block.poster?.let { decodePosterFrame(it) } }
+        if (cover != null && !fetching) {
+            VideoPosterCard(block = block, poster = cover, onPlay = startFetch)
+        } else {
+            LazyVideoCard(
+                block = block,
+                fetching = fetching,
+                error = fetchError,
+                loaded = fetchedBytes,
+                total = totalBytes,
+                onPlay = startFetch,
+            )
+        }
         return
     }
 
@@ -1766,6 +1780,18 @@ private fun VideoPosterCard(block: MessageBlock, poster: ImageBitmap?, onPlay: (
             style = MaterialTheme.typography.labelSmall,
             color = Color.White,
         )
+    }
+}
+
+/** 把快照下发的封面（base64）解成 Bitmap；失败 → null（退化成深色卡片）。 */
+private fun decodePosterFrame(base64: String): ImageBitmap? {
+    return try {
+        val raw = if (base64.startsWith("data:")) base64.substringAfter(',', base64) else base64
+        val bytes = android.util.Base64.decode(raw, android.util.Base64.DEFAULT)
+        if (bytes.isEmpty()) return null
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+    } catch (error: Throwable) {
+        null
     }
 }
 

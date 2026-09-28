@@ -10,6 +10,7 @@ import type { RemotePermission, RemoteThreadState, RemoteUiRequest } from "../..
 import type { ThreadActions, SendMode } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
 import { compressImageFile, type CompressedImage } from "./lib/image-attach";
+import { extractVideoPoster } from "./lib/video-attach";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
 import { withChoiceSegments } from "./lib/choice-block";
@@ -400,20 +401,26 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
           </div>
         );
       }
-      // 可点开的懒加载卡片：深色框 + ▶，点击时按需拉字节（拉完直接全屏播）。
+      // 可点开的懒加载卡片：有封面就铺封面（一眼看到画面），没封面才退化成深色底 + ▶。
       // data-* 属性供滚动容器上的事件委托读取（与图片点击同一套路，不把回调穿进 Block）。
+      const posterSrc = block.poster
+        ? block.poster.startsWith("data:")
+          ? block.poster
+          : `data:${block.posterMimeType || "image/jpeg"};base64,${block.poster}`
+        : null;
       return (
         <div
-          className="msg-video-card msg-video-card--lazy"
+          className={`msg-video-card msg-video-card--lazy${posterSrc ? "" : " msg-video-card--blank"}`}
           data-lazy-video={block.name}
           data-lazy-mime={block.mimeType || "video/mp4"}
           title={block.name}
         >
+          {posterSrc ? <img className="msg-video-poster" src={posterSrc} alt="" /> : null}
           <span className="msg-video-play" aria-hidden="true">
             ▶
           </span>
           {meta ? <span className="msg-video-meta">{meta}</span> : null}
-          <span className="msg-video-lazy-hint">点击播放</span>
+          {posterSrc ? null : <span className="msg-video-lazy-hint">点击播放</span>}
         </div>
       );
     }

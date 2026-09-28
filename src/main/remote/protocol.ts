@@ -66,6 +66,13 @@ export interface RemoteFileInput {
   name: string;
   mimeType?: string;
   data: string;
+  /**
+   * 可选**首帧封面**（base64）。只有当这个文件被当作视频附件处理时才会用到
+   * （`attach="video"`，见 video-refs.ts）：主机把它落盘并用它当气泡封面，
+   * 视频本体则改为客户端点开时按需拉（attachment.fetch）。
+   */
+  poster?: string;
+  posterMimeType?: string;
 }
 
 /**
@@ -81,6 +88,9 @@ export interface RemoteVideoInput {
   mimeType: string;
   /** 原始字节数（客户端上报，主机只用于显示与预算判断） */
   size?: number;
+  /** 可选首帧封面（base64，≤ VIDEO_POSTER_MAX_BYTES）——气泡里的封面就是它 */
+  poster?: string;
+  posterMimeType?: string;
 }
 
 /**
@@ -155,6 +165,12 @@ export interface RemoteMessage {
     mimeType?: string;
     /** 视频原始字节数（video 块用） */
     size?: number;
+    /**
+     * 视频的**首帧封面**（base64 图片）。快照不再下发视频本体后，气泡里的画面就靠它；
+     * 没有封面（旧消息 / 发送端抽帧失败）→ 客户端退化成深色卡片 + ▶。
+     */
+    poster?: string;
+    posterMimeType?: string;
     /** 实时事件通道刻意剥掉本体（防大帧）——照图片语义。 */
     omitted?: boolean;
   }>;
