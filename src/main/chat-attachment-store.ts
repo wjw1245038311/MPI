@@ -14,7 +14,7 @@
  * 不该再受「能不能内联」制约。
  */
 import { app } from "electron";
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME, VIDEO_POSTER_MAX_BYTES, VIDEO_POSTER_MIME_TYPES, posterNameFor } from "./remote/video-refs";
@@ -186,6 +186,85 @@ export function readAttachmentSlice(
   return { abs, size, offset: start, eof: end >= size, data: readSlice(abs, start, end - 1) };
 }
 
+/** 上传分包的后缀（收齐后原子改名成正式名）。与 NAME_RE 兼容，不会与正式名撞。 */
+export const UPLOAD_PART_SUFFIX = ".part";
+
+/** 为一个即将上传的视频**预分配**名字（客户端拿到它才是要 PUT 的目标）。 */
+export function reserveVideoName(originalName?: string, mimeType?: string): string {
+  const extension = VIDEO_EXT_BY_MIME[String(mimeType || "").toLowerCase()] || ".mp4";
+  return stagedName(originalName || `video-${Date.now()}${extension}`);
+}
+
+/** 分片临时文件路径（不存在也算合法——写入时创建）。 */
+export function uploadPartPath(name: string): string | null {
+  if (!NAME_RE.test(name) || name.includes("..")) return null;
+  return join(dir(), `${name}${UPLOAD_PART_SUFFIX}`);
+}
+
+/**
+ * 写入一个上传分片（定位写），返回已收字节数。
+ *
+ * 定位写而不是追加：客户端可重传某个分片（弱网断点续传），而不用从头再来。
+ */
+export function writeUploadChunk(name: string, offset: number, chunk: Buffer): number {
+  const target = uploadPartPath(name);
+  if (!target) throw new Error("invalid upload name");
+  const fd = openSync(target, "a+");
+  try {
+    writeSync(fd, chunk, 0, chunk.length, offset);
+  } finally {
+    closeSync(fd);
+  }
+  return statSync(target).size;
+}
+
+/** 放弃上传（客户端取消/超时）→ 删掉临时文件。 */
+export function abandonUpload(name: string): void {
+  const target = uploadPartPath(name);
+  if (!target) return;
+  try {
+    unlinkSync(target);
+  } catch {
+    /* 没建过就算了 */
+  }
+}
+
+/**
+ * 收齐后把 `.part` 原子改名成正式名（`rename` 是同盘原子操作，不会出现半截文件被当成成品）。
+ * 若目标已存在（重传完成）→ 删除临时文件，结果一样。
+ */
+export function completeUploadedVideo(name: string): { abs: string; size: number } | null {
+  const part = uploadPartPath(name);
+  if (!part) return null;
+  const target = join(dir(), name);
+  try {
+    if (!existsSync(part)) return existsSync(target) ? { abs: target, size: statSync(target).size } : null;
+    renameSync(part, target);
+    return { abs: target, size: statSync(target).size };
+  } catch {
+    return null;
+  }
+}
+
+/** 封面落盘（供上传流程调用；与 `stageChatVideoBytes` 内部用同一个实现）。 */
+export function storeVideoPoster(videoName: string, poster?: VideoPosterInput): string | null {
+  return writePoster(videoName, poster);
+}
+
+/**
+ * 找已存在的封面文件名（上传完成后回填信封时用）。
+ *
+ * 封面扩展名取决于上传时的 MIME，所以三个候选都要看（不能拿 .jpg hardcode）。
+ */
+export function findVideoPoster(videoName: string): string | null {
+  const base = posterNameFor(videoName, "image/jpeg").replace(/\.jpg$/i, "");
+  for (const extension of [".jpg", ".png", ".webp"]) {
+    const candidate = `${base}${extension}`;
+    if (resolveChatAttachment(candidate)) return candidate;
+  }
+  return null;
+}
+
 /** 启动时按总量上限清理最旧的附件（尽力而为，失败不影响启动）。 */
 export function pruneChatAttachments(maxBytes = MAX_DIR_BYTES): void {
   try {
@@ -201,9 +280,21 @@ export function pruneChatAttachments(maxBytes = MAX_DIR_BYTES): void {
         }
       })
       .filter((entry): entry is { name: string; size: number; mtime: number } => entry !== null);
-    let total = entries.reduce((sum, entry) => sum + entry.size, 0);
+    // 先清掉没人的上传残留（.part）：它们只可能是「上传中途程序退出」留下的，
+    // 留着会占配额，而且永远不会被收尾。
+    const staleCutoff = Date.now() - 60 * 60 * 1000;
+    const parts = entries.filter((entry) => entry.name.endsWith(UPLOAD_PART_SUFFIX) && entry.mtime < staleCutoff);
+    for (const part of parts) {
+      try {
+        unlinkSync(join(target, part.name));
+      } catch {
+        /* 删不掉就继续（下次启动再试） */
+      }
+    }
+    const live = parts.length ? entries.filter((entry) => !parts.includes(entry)) : entries;
+    let total = live.reduce((sum, entry) => sum + entry.size, 0);
     if (total <= maxBytes) return;
-    for (const entry of entries.sort((a, b) => a.mtime - b.mtime)) {
+    for (const entry of live.sort((a, b) => a.mtime - b.mtime)) {
       if (total <= maxBytes) break;
       unlinkSync(join(target, entry.name));
       total -= entry.size;

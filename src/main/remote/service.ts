@@ -59,6 +59,18 @@ export interface RemoteBackend {
    * 名字非法 / 文件已被清理 / 不属于该会话 → 抛 NOT_FOUND。
    */
   fetchAttachment(threadId: string, name: string, offset: number): Promise<RemoteAttachmentChunk>;
+  /**
+   * 签发一个**直连附件令牌**（能力 URL）：上行 `PUT` / 下行 `GET+Range`。
+   *
+   * read：name 必须是本会话引用过的附件（沿用 attachmentNameAllowed）；
+   * write：主机预分配名字，字节到齐后客户端在消息里只带 `storedName`。
+   * 直连不可用（Tailscale 未就绪等）→ 抛 DIRECT_UNAVAILABLE，客户端回落。
+   */
+  issueAttachmentUrl(
+    threadId: string,
+    deviceId: string,
+    input: { mode: "read" | "write"; name?: string; originalName?: string; mimeType?: string; size?: number },
+  ): Promise<{ url: string; token: string; name: string; expiresAt: number }>;
   respondUi(threadId: string, requestId: string, payload: Record<string, unknown>): Promise<unknown>;
   /** S7 WebPush：store the device's PushSubscription and sync it to the relay. */
   storePushSubscription(deviceId: string, subscription: RemotePushSubscription): Promise<unknown>;
@@ -131,6 +143,9 @@ const REMOTE_POSTER_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp
  * 视频就有 40 片，几轮下来能把内存吃掉几百 MB。取字节是幂等的，重试的代价只是再读一次盘。
  */
 const NON_CACHED_REQUEST_TYPES = new Set<string>(["attachment.fetch"]);
+
+/** 直连上传的单个附件上限（与 attachment-server.ts 的 ATTACHMENT_UPLOAD_MAX_BYTES 对齐）。 */
+const MAX_DIRECT_UPLOAD_BYTES = 128 * 1024 * 1024;
 
 export class RemoteService {
   private readonly subscriptions = new Map<string, Map<string, () => void>>();
@@ -352,6 +367,30 @@ export class RemoteService {
         return responseFor(request, await this.backend.fileTree(this.requiredString(payload, "projectId"), this.optionalString(payload, "relativePath")));
       case "file.preview":
         return responseFor(request, await this.backend.filePreview(this.requiredString(payload, "projectId"), this.requiredString(payload, "relativePath")));
+      case "attachment.url": {
+        // 只申请一个 URL（不搬字节）：读不需要写租约；写也不抢会话编辑权（上传期间
+        // 用户可能还在正常聊天），作用域由令牌绑定（会话 + 设备）。
+        const threadId = this.requiredThread(request);
+        const mode = payload.mode === "write" ? ("write" as const) : payload.mode === "read" ? ("read" as const) : null;
+        if (!mode) throw new RemoteProtocolError("INVALID_REQUEST", "mode must be read or write");
+        const name = mode === "read" ? this.requiredShortString(payload, "name") : this.optionalString(payload, "name");
+        const originalName = this.optionalString(payload, "originalName");
+        const mimeType = this.optionalString(payload, "mimeType");
+        const rawSize = payload.size;
+        const size = typeof rawSize === "number" && Number.isFinite(rawSize) && rawSize > 0 ? Math.floor(rawSize) : undefined;
+        if (size !== undefined && size > MAX_DIRECT_UPLOAD_BYTES) {
+          throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", `Attachment is too large (maximum ${Math.floor(MAX_DIRECT_UPLOAD_BYTES / 1024 / 1024)} MB)`);
+        }
+        return responseFor(request, {
+          direct: await this.backend.issueAttachmentUrl(threadId, context.deviceId, {
+            mode,
+            ...(name ? { name } : {}),
+            ...(originalName ? { originalName } : {}),
+            ...(mimeType ? { mimeType } : {}),
+            ...(size ? { size } : {}),
+          }),
+        });
+      }
       case "attachment.fetch": {
         // 只读取字节：不要写租约（读字节不该抢会话的编辑权），但必须带 threadId——
         // 作用域校验以它为界（「这个附件被这个会话引用过吗」）。
@@ -490,12 +529,21 @@ export class RemoteService {
       if (!name || name.length > REMOTE_FILE_NAME_MAX) {
         throw new RemoteProtocolError("INVALID_REQUEST", `files[${index}].name is invalid`);
       }
-      const data = file.data;
-      if (typeof data !== "string" || data.length === 0 || data.length > MAX_REMOTE_FILE_DATA || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
+      const data = typeof file.data === "string" ? file.data : "";
+      // storedName（直连上传完成）→ 不需要 data；否则按内联校验（体积/字符集）。
+      const storedName = typeof file.storedName === "string" ? file.storedName.trim() : "";
+      if (!storedName && (!data || data.length > MAX_REMOTE_FILE_DATA || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))) {
         throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", `files[${index}] has invalid or oversized base64 data`);
       }
       const mimeType = typeof file.mimeType === "string" ? file.mimeType.slice(0, 120) : undefined;
       const poster = this.optionalPoster(file, `files[${index}]`);
+      if (storedName) {
+        // 名字合法性由后端（附件区白名单 + 上传登记）校验，这里只做形状限制。
+        if (storedName.length > REMOTE_FILE_NAME_MAX) {
+          throw new RemoteProtocolError("INVALID_REQUEST", `files[${index}].storedName is invalid`);
+        }
+        return { name, ...(mimeType ? { mimeType } : {}), data: "", storedName, ...poster };
+      }
       total += data.length;
       if (total > MAX_REMOTE_FILE_DATA_TOTAL) throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", "File attachments are too large");
       return { name, ...(mimeType ? { mimeType } : {}), data, ...poster };
@@ -550,18 +598,31 @@ export class RemoteService {
         throw new RemoteProtocolError("INVALID_REQUEST", `videos[${index}].mimeType must be video/*`);
       }
       const data = video.data;
-      if (typeof data !== "string" || data.length === 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
-        throw new RemoteProtocolError("INVALID_REQUEST", `videos[${index}].data must be base64`);
-      }
-      if (data.length > MAX_REMOTE_VIDEO_DATA) {
-        throw new RemoteProtocolError(
-          "PAYLOAD_TOO_LARGE",
-          `videos[${index}] is too large (maximum ${Math.floor((MAX_REMOTE_VIDEO_DATA * 3) / 4 / 1000)} KB)`,
-        );
+      // storedName（直连上传完成）→ 字节已在主机磁盘，不再要求内联 base64。
+      const storedName = typeof video.storedName === "string" ? video.storedName.trim() : "";
+      if (!storedName) {
+        if (typeof data !== "string" || data.length === 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
+          throw new RemoteProtocolError("INVALID_REQUEST", `videos[${index}].data must be base64`);
+        }
+        if (data.length > MAX_REMOTE_VIDEO_DATA) {
+          throw new RemoteProtocolError(
+            "PAYLOAD_TOO_LARGE",
+            `videos[${index}] is too large (maximum ${Math.floor((MAX_REMOTE_VIDEO_DATA * 3) / 4 / 1000)} KB); use attachment.url for larger files`,
+          );
+        }
+      } else if (storedName.length > REMOTE_FILE_NAME_MAX) {
+        throw new RemoteProtocolError("INVALID_REQUEST", `videos[${index}].storedName is invalid`);
       }
       const size = typeof video.size === "number" && Number.isFinite(video.size) && video.size > 0 ? Math.floor(video.size) : undefined;
       const poster = this.optionalPoster(video, `videos[${index}]`);
-      return { type: "video" as const, data, mimeType, ...(size ? { size } : {}), ...poster };
+      return {
+        type: "video" as const,
+        data: typeof data === "string" ? data : "",
+        mimeType,
+        ...(size ? { size } : {}),
+        ...(storedName ? { storedName } : {}),
+        ...poster,
+      };
     });
   }
 

@@ -59,6 +59,7 @@
     "test:remote-history": "node --experimental-strip-types scripts/test-remote-history-limit.mjs",
     "test:remote-video": "node --experimental-transform-types scripts/test-remote-video.mjs",
     "test:remote-attach": "node --experimental-transform-types scripts/test-remote-attach.mjs",
+    "test:attachment-direct": "node --experimental-transform-types scripts/test-attachment-direct.mjs",
     "test:chat-attachments": "node --experimental-transform-types scripts/test-chat-attachments.mjs",
     "test:remote-seq": "node --experimental-transform-types scripts/test-remote-seq.mjs",
     "test:ltm-newthread": "node --experimental-strip-types scripts/test-ltm-newthread.mjs",

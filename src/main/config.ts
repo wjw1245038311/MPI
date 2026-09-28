@@ -83,6 +83,15 @@ export interface AppConfig {
    * node + cli.js directly to avoid Windows .cmd / quoting pitfalls.
    */
   piCliPath: string;
+  /**
+   * tailscale CLI 的绝对路径（可选）。
+   *
+   * 用于**附件直连**：主机读 `tailscale status --json` 拿到自己的 tailnet 主机名，
+   * 才能拼出客户端可访问的 URL（见 ipc.ts 的 resolveAttachmentBaseUrl）。
+   * 没装进 PATH 时填这里（Windows 默认不装进 PATH）；留空则用 PATH 上的 `tailscale`，
+   * 两者都不可用 → 直连关闭（客户端回落内联/中继分片，功能不坏）。
+   */
+  tailscaleBin?: string;
   /** Projects the user explicitly pinned; shown at the top of the sidebar. */
   pinnedProjects: string[];
   /** Internal migration marker for the explicit project-pin behavior. */

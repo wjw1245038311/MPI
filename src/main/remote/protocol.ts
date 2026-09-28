@@ -41,6 +41,9 @@ export const REMOTE_REQUEST_TYPES = [
   // 按需取**附件字节**（视频原片不再内联进快照后，这是客户端唯一的取字节入口）。
   // 分片由客户端按 offset 推进，服务端回传实际长度与 eof。
   "attachment.fetch",
+  // 申请**直连附件 URL**（能力令牌）：上行 PUT / 下行 GET+Range 都走它。
+  // 拿不到（Tailscale 不可用 / 未开启直连）→ 客户端回落内联/中继分片。
+  "attachment.url",
   "ui.respond",
 ] as const;
 
@@ -73,6 +76,24 @@ export interface RemoteFileInput {
    */
   poster?: string;
   posterMimeType?: string;
+  /**
+   * 直连上传完成的附件名（P1）：带了它就**不需要 data**——字节已经在主机附件区。
+   * 主机侧会校验「这个名字确实由本设备在本会话上传完成」，再交给 agent。
+   */
+  storedName?: string;
+}
+
+/**
+ * 「已经存在主机上的附件」引用（P1 直连上传的产物）。
+ *
+ * 与内联的区别：客户端先用 `attachment.url` 拿写令牌，把字节 `PUT` 到主机附件区，
+ * 消息里**只带名字**（零字节）—— 所以不再受 8MB 内层 envelope 与 6MB 单文件上限约束。
+ * 主机侧会先校验这个名字确实是「本会话 + 本设备」上传完成的，再交给 agent。
+ */
+export interface RemoteStoredInput {
+  /** 主机预分配并已收齐的附件名（不是原始文件名）。 */
+  storedName: string;
+  mimeType?: string;
 }
 
 /**
@@ -91,6 +112,8 @@ export interface RemoteVideoInput {
   /** 可选首帧封面（base64，≤ VIDEO_POSTER_MAX_BYTES）——气泡里的封面就是它 */
   poster?: string;
   posterMimeType?: string;
+  /** 直连上传完成的附件名（此时 `data` 为空串，字节已在主机磁盘上）。 */
+  storedName?: string;
 }
 
 /**

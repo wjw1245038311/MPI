@@ -199,7 +199,10 @@ import {
   videoRefEnvelope,
 } from "./remote/video-refs";
 import { fillVideoPosters } from "./remote/video-poster";
-import { ATTACHMENT_FETCH_CHUNK_BYTES, adoptChatVideo, isVideoFile, readAttachmentSlice, resolveChatAttachment, stageChatVideoBytes } from "./chat-attachment-store";import {
+import { ATTACHMENT_FETCH_CHUNK_BYTES, adoptChatVideo, findVideoPoster, isVideoFile, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes } from "./chat-attachment-store";
+import { createAttachmentServer } from "./remote/attachment-server";
+import { AttachmentTokenStore } from "./remote/attachment-tokens";
+import type { Server } from "node:http";import {
   RemoteProtocolError,
   type RemoteFileArtifact,
   type RemoteFileInput,
@@ -2328,15 +2331,128 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       ...(file.poster ? { poster: { data: file.poster, mimeType: file.posterMimeType } } : {}),
     }));
 
+  // ---- 附件直连（P1）：令牌 + HTTP 服务 + 直连上传产物 ---------------------------------
+
+  /** 直连令牌（能力 URL）：绑定 会话/设备/方向/时限，见 remote/attachment-tokens.ts。 */
+  const attachmentTokens = new AttachmentTokenStore();
+  let attachmentServer: Server | null = null;
+  let attachmentServerReady: Promise<boolean> | null = null;
+  let attachmentBaseUrl: string | null = null;
+  let attachmentBaseUrlResolved = false;
+  /** 本进程内经写令牌上传完成的附件（名字 → 归属），消息里带 storedName 时据此放行。 */
+  const uploadedAttachments = new Map<string, { threadId: string; deviceId: string; at: number }>();
+  const ATTACHMENT_HTTP_PORT = Number(process.env.MPI_ATTACHMENT_PORT || 8899);
+
+  /**
+   * 直连 URL 的基地址（tailnet 主机名 + 端口）。拿不到 → null（客户端回落内联/中继分片）。
+   *
+   * 为什么要检测而不是写死：机器名/域名因机而异，而写死一个主机名就等于把配置钉在一台机器上。
+   * 优先级：环境变量覆盖（开发/测试） > tailscale CLI 读取 `Self.DNSName`。
+   */
+  async function resolveAttachmentBaseUrl(): Promise<string | null> {
+    const override = process.env.MPI_ATTACHMENT_BASE_URL;
+    if (override) return override.replace(/\/+$/, "");
+    if (attachmentBaseUrlResolved) return attachmentBaseUrl;
+    attachmentBaseUrlResolved = true;
+    try {
+      const { execFileSync } = await import("node:child_process");
+      // 优先级：环境变量 > 配置里的绝对路径 > PATH。
+      // Windows 上 Tailscale 默认不把 CLI 放进 PATH，所以配置项是主要的兜底手段。
+      const bin = process.env.MPI_TAILSCALE_BIN || getConfig().tailscaleBin || "tailscale";
+      const raw = execFileSync(bin, ["status", "--json"], {
+        timeout: 5_000,
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      const dnsName = String(JSON.parse(raw)?.Self?.DNSName || "").replace(/\.$/, "");
+      if (dnsName) attachmentBaseUrl = `http://${dnsName}:${ATTACHMENT_HTTP_PORT}`;
+      else appendDiagLog("attachment-direct unavailable: tailscale reports no DNS name");
+    } catch (error) {
+      // 常见原因：tailscale CLI 不在 PATH（Windows 默认不装进 PATH）。此时直连不可用，
+      // 但功能整体不坏——客户端会回落。要开启就设 MPI_TAILSCALE_BIN 或把它加进 PATH。
+      appendDiagLog(`attachment-direct unavailable: ${String((error as Error)?.message).slice(0, 60)}`);
+    }
+    return attachmentBaseUrl;
+  }
+
+  /** 懒启动附件 HTTP 服务（首次需要直连时才开端口；只绑本机，由 tailscale serve 转发）。 */
+  async function ensureAttachmentServer(): Promise<string | null> {
+    const base = await resolveAttachmentBaseUrl();
+    if (!base) return null;
+    if (!attachmentServer) {
+      const server = createAttachmentServer({
+        tokens: attachmentTokens,
+        port: ATTACHMENT_HTTP_PORT,
+        log: appendDiagLog,
+        onUploadComplete: ({ name, threadId, deviceId }) => {
+          // 字节到齐才登记：此后 `storedName` 引用与客户端的按需拉取都能过作用域校验。
+          uploadedAttachments.set(name, { threadId, deviceId, at: Date.now() });
+          rememberAttachmentNames(threadId, [name]);
+        },
+      });
+      attachmentServer = server;
+      attachmentServerReady = new Promise<boolean>((resolve) => {
+        server.once("listening", () => resolve(true));
+        server.once("error", (error) => {
+          appendDiagLog(`attachment-http listen failed: ${String((error as Error)?.message).slice(0, 60)}`);
+          resolve(false);
+        });
+      });
+    }
+    if (attachmentServerReady && !(await attachmentServerReady)) return null;
+    return base;
+  }
+
+  /**
+   * 直连上传完成的附件 → 直接拼信封（字节已经在附件区，**不能再 adopt 一次**，
+   * 否则会复制成第二个文件 + 历史里出现两个名字）。
+   */
+  function storedVideoEnvelope(storedName: string): string | null {
+    if (!uploadedAttachments.has(storedName)) return null;
+    const abs = resolveChatAttachment(storedName);
+    if (!abs) return null;
+    return videoRefEnvelope(storedName, abs, findVideoPoster(storedName) ?? undefined);
+  }
+
+  /**
+   * files 通道里的直连产物：抽出来单独成信封，并从内联列表里剔除。
+   *
+   * 必须在这里分开——`processAttachments` 会把视频扩展名的附件交给 `adoptChatVideo`，
+   * 而直连上传的文件已经在附件区里了。
+   */
+  function splitStoredFiles(files?: RemoteFileInput[]): { inline?: RemoteFileInput[]; envelopes: string } {
+    if (!files?.length) return { envelopes: "" };
+    const inline: RemoteFileInput[] = [];
+    const envelopes: string[] = [];
+    for (const file of files) {
+      if (!file.storedName) {
+        inline.push(file);
+        continue;
+      }
+      const envelope = storedVideoEnvelope(file.storedName);
+      if (envelope) envelopes.push(envelope);
+    }
+    return { inline: inline.length ? inline : undefined, envelopes: envelopes.join("") };
+  }
+
   /**
    * 手机端**视频**附件 → 落盘（与文件同一目录）→ 给 agent 留一条带 `attach="video"` 的引用。
    *
    * 两件事：① agent 只能读文件、看不了视频，所以引用必须留着（否则模型不知道有这个视频）；
    * ② 引用带 `attach="video"` 标记，远程快照据此把它换成可播放的 video 块（见 remoteMessages）。
+   *
+   * 直连上传（`storedName`，P1）走同一条出口：字节早已在附件区，只需拼信封。
    */
   const stageRemoteVideos = (threadId: string, videos?: RemoteVideoInput[]): string =>
     (videos ?? [])
       .map((video) => {
+        if (video.storedName) {
+          const direct = storedVideoEnvelope(video.storedName);
+          if (direct) return direct;
+          // 令牌过期/文件被清 → 当作没传过（不静默丢消息：客户端会看到视频块缺失）
+          appendDiagLog(`attachment stored-ref dropped name=${video.storedName.slice(0, 36)}`);
+          return "";
+        }
         // 落在 <userData>/chat-attachments（**持久**区，不是 %TEMP%）：消息里的视频引用
         // 属于会话历史，文件被清理掉就只剩占位卡片。见 chat-attachment-store.ts。
         const staged = stageChatVideoBytes({
@@ -2413,7 +2529,11 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       const tBridge = Date.now();
       // 文件先落盘，再按桌面同款规则内联/引用（图片仍直传模型）；视频另走一条：
       // 落盘 + 带标记的引用（客户端把它换成可播放的 video 块）。
-      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(threadId, videos));
+      const directFiles = splitStoredFiles(files);
+      const staged = processAttachments(
+        stageRemoteFiles(directFiles.inline),
+        text + directFiles.envelopes + stageRemoteVideos(threadId, videos),
+      );
       let queuedAs: "followUp" | undefined;
       try {
         await bridge.bridge.prompt(staged.text, [...(images ?? []), ...staged.images]);
@@ -2452,13 +2572,21 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     },
     async (threadId, text, images, files, videos) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
-      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(threadId, videos));
+      const directFiles = splitStoredFiles(files);
+      const staged = processAttachments(
+        stageRemoteFiles(directFiles.inline),
+        text + directFiles.envelopes + stageRemoteVideos(threadId, videos),
+      );
       await bridge.bridge.steer(staged.text, [...(images ?? []), ...staged.images]);
       return { ok: true };
     },
     async (threadId, text, images, files, videos) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
-      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(threadId, videos));
+      const directFiles = splitStoredFiles(files);
+      const staged = processAttachments(
+        stageRemoteFiles(directFiles.inline),
+        text + directFiles.envelopes + stageRemoteVideos(threadId, videos),
+      );
       await bridge.bridge.followUp(staged.text, [...(images ?? []), ...staged.images]);
       return { ok: true };
     },
@@ -2709,6 +2837,35 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     },
     fileTree: (projectId, relativePath) => filePreviewService.tree(projectId, relativePath),
     filePreview: (projectId, relativePath) => filePreviewService.preview(projectId, relativePath),
+    issueAttachmentUrl: async (threadId, deviceId, input) => {
+      const base = await ensureAttachmentServer();
+      if (!base) {
+        // 直连不可用（不在 tailnet / CLI 读不到主机名）：客户端据此走内联或中继分片。
+        throw new RemoteProtocolError("DIRECT_UNAVAILABLE", "Direct attachment transfer is unavailable on this host");
+      }
+      if (input.mode === "read") {
+        const name = input.name || "";
+        // 作用域沿用按需拉取那一套（只能取本会话引用过的附件）。
+        if (!(await attachmentNameAllowed(threadId, name))) {
+          throw new RemoteProtocolError("NOT_FOUND", "Attachment is not available for this thread");
+        }
+        const token = attachmentTokens.mint({ mode: "read", threadId, deviceId, name, ...(input.mimeType ? { mimeType: input.mimeType } : {}) });
+        appendDiagLog(`attachment-direct mint read name=${name.slice(0, 36)} dev=${deviceId.slice(0, 12)}`);
+        return { url: `${base}/att/${token.token}`, token: token.token, name, expiresAt: token.expiresAt };
+      }
+      // 写入令牌：名字由主机预分配（客户端无法自己指定名字，也就无法覆盖别人的附件）。
+      const name = reserveVideoName(input.originalName, input.mimeType);
+      const token = attachmentTokens.mint({
+        mode: "write",
+        threadId,
+        deviceId,
+        name,
+        ...(input.size ? { size: input.size } : {}),
+        ...(input.mimeType ? { mimeType: input.mimeType } : {}),
+      });
+      appendDiagLog(`attachment-direct mint write name=${name.slice(0, 36)} dev=${deviceId.slice(0, 12)} size=${input.size ?? "?"}`);
+      return { url: `${base}/att/${token.token}`, token: token.token, name, expiresAt: token.expiresAt };
+    },
     fetchAttachment: async (threadId, name, offset): Promise<RemoteAttachmentChunk> => {
       // 作用域校验在前：不区分「名字非法」「文件已被清理」「不属于该会话」——
       // 一律 NOT_FOUND，避免这个接口变成探测附件区是否存在某个名字的工具。
