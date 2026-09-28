@@ -25,14 +25,18 @@ const SNAPSHOT_TIMEOUT_MS = 60_000;
 
 export interface ViewBlock {
   id?: string; // tool block identity (toolCallId)
-  type: "text" | "thinking" | "tool" | "image";
+  type: "text" | "thinking" | "tool" | "image" | "video";
   text?: string; // text/thinking content, or tool result preview
   name?: string; // tool name
   argsText?: string; // compact argument summary for tools
   running?: boolean; // tool in flight
   isError?: boolean;
-  data?: string; // image payload (data URL)
+  data?: string; // image/video payload (base64)
   mimeType?: string;
+  /** 视频原始字节数（video 块用，用于占位卡片显示大小） */
+  size?: number;
+  /** 主机刻意没下发本体（实时事件通道防大帧，或超出快照视频预算）→ 渲染占位卡片。 */
+  omitted?: boolean;
 }
 
 export interface ViewMessage {
@@ -119,15 +123,26 @@ function mapRemoteMessage(m: RemoteMessage): ViewMessage {
     id: m.id,
     role: m.role === "user" ? "user" : "assistant",
     blocks: (m.blocks || []).map((b) => ({
-      type: b.type === "image" ? ("image" as const) : b.type === "tool" ? ("tool" as const) : b.type === "thinking" ? ("thinking" as const) : ("text" as const),
+      type:
+        b.type === "image"
+          ? ("image" as const)
+          : b.type === "video"
+            ? ("video" as const)
+            : b.type === "tool"
+              ? ("tool" as const)
+              : b.type === "thinking"
+                ? ("thinking" as const)
+                : ("text" as const),
       // 工具块的正文是 result（曾经写成 b.text → 展开后什么都没有），
-      // 其余块用 text。
+      // 其余块用 text。视频块的 text 是占位说明（如“超出本次快照预算”）。
       text: b.type === "tool" ? b.result : b.text,
       name: b.name,
       running: b.running,
       argsText: b.args,
       data: b.data,
       mimeType: b.mimeType,
+      size: b.size,
+      omitted: b.omitted,
     })),
     artifacts: m.artifacts,
     stopReason: m.stopReason,
@@ -487,10 +502,14 @@ export class ThreadSession {
         const m = ev.message;
         if (!m) break;
         if (m.role === "user") {
-          const text = textOfContent(m.content);
+          const text = textOfContent(m.content).trim();
           if (text) {
             // 本地乐观回显先转正（否则同一条消息会上屏两次）。
-            const echo = [...this.view.messages].reverse().find((message) => message.pending && message.role === "user" && message.blocks.some((b) => b.type === "text" && b.text === text));
+            // 文本两侧都 trim：主机会把附件的 <file …/> 引用追加在文本末尾（并在下发时剥掉），
+            // 对账不能因为一个换行就失配——那会让气泡重复一个。
+            const echo = [...this.view.messages]
+              .reverse()
+              .find((message) => message.pending && message.role === "user" && message.blocks.some((b) => b.type === "text" && (b.text || "").trim() === text));
             if (echo) {
               this.patch({ messages: this.view.messages.map((message) => (message.id === echo.id ? { ...message, pending: false } : message)) });
             } else {
@@ -716,10 +735,17 @@ export class ThreadSession {
    * 而这条往返里包含主机建桥/冷启动 pi 的时间。现在本地先上屏（pending），
    * 主机真正收到后 message_start(user) 会把它「转正」，snapshot 到达时清掉残余占位。
    */
-  echoUser(input: { text: string; images?: { data: string; mimeType: string }[]; fileCount?: number }): string {
+  echoUser(input: {
+    text: string;
+    images?: { data: string; mimeType: string }[];
+    /** 视频附件：与图片一样立即本地可见（自己的视频不用等主机快照就能播）。 */
+    videos?: { data: string; mimeType: string; size?: number }[];
+    fileCount?: number;
+  }): string {
     const id = `local-${++this.echoSeq}`;
     const blocks: ViewBlock[] = [
       ...(input.images || []).map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })),
+      ...(input.videos || []).map((video) => ({ type: "video" as const, data: video.data, mimeType: video.mimeType, size: video.size })),
       ...(input.text ? [{ type: "text" as const, text: input.text }] : []),
       ...(input.fileCount ? [{ type: "text" as const, text: `📎 ${input.fileCount} 个文件` }] : []),
     ];

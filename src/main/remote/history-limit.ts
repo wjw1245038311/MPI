@@ -187,6 +187,11 @@ export function shrinkToBudget<T extends RemoteMessage>(messages: T[], limit: nu
       consider(index, "text", message.text);
       message.blocks?.forEach((block, blockIndex) => {
         for (const key of SHRINKABLE_KEYS) {
+          // base64 媒体本体（image/video）**不可收缩**：砍半再追一句中文标记会让字节流直接
+          // 损坏——客户端只能渲染出一个破图片/破播放器，比丢掉历史还糟。
+          // 赶预算的事交给「丢更早的消息」；视频本身的预算见 ipc.ts 的 REMOTE_VIDEO_BASE64_BUDGET
+          // （单个视频 base64 ≤4.2MB，永远小于 7.6MB 的预算，所以不会出现“单条消息自己就超帧”的死局）。
+          if (key === "data" && (block.type === "image" || block.type === "video")) continue;
           consider(index, `blocks.${blockIndex}.${key}`, (block as Record<string, unknown>)[key]);
         }
       });

@@ -22,10 +22,31 @@ import { formatElapsed, shouldShowThinkingIndicator } from "./lib/thinking-indic
 /** 主机侧上限（见 src/main/remote/service.ts MAX_REMOTE_FILES / MAX_REMOTE_FILE_DATA）。 */
 const MAX_FILES = 3;
 const MAX_FILE_BYTES = 6_000_000;
+/**
+ * 视频附件上限（原始字节）。
+ *
+ * 为什么比文件小得多：视频是**内联**下发的（要“像图片一样在对话框里直接看”），
+ * 字节会进每次快照，而快照有 8MB 硬上限。这个值必须与主机侧
+ * `src/main/remote/video-refs.ts` 的 REMOTE_VIDEO_FILE_MAX_BYTES 一致——
+ * scripts/test-remote-video.mjs 会直接读本文件做漂移守卫。
+ */
+const MAX_VIDEO_BYTES = 3_000_000;
 
 /** 一个待发送的文件附件（base64）。 */
 interface PickedFile {
   name: string;
+  mimeType: string;
+  data: string;
+  size: number;
+}
+
+/**
+ * 视频附件（最多 1 个——主机的 MAX_REMOTE_VIDEOS）。
+ *
+ * 与 PickedFile 分开：它走 `videos` 通道（内联下发、客户端渲染成播放器），
+ * 而 files 里的视频只是给 agent 读的文件。
+ */
+interface PickedVideo {
   mimeType: string;
   data: string;
   size: number;
@@ -358,6 +379,32 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
     const src = block.data.startsWith("data:") ? block.data : `data:${block.mimeType || "image/jpeg"};base64,${block.data}`;
     return <img className="msg-image" src={src} alt={block.mimeType || "image"} />;
   }
+  if (block.type === "video") {
+    // 本体可能缺：实时事件通道刻意剥掉大帧（照图片的语义），或超出快照视频预算。
+    // 这时给占位卡片而不是空白——否则用户会以为消息丢了。
+    if (!block.data) {
+      return (
+        <div className="msg-video-placeholder">
+          <span className="mvp-icon" aria-hidden="true">🎬</span>
+          <span className="mvp-text">
+            <strong>{block.name || "视频"}</strong>
+            {block.size ? ` · ${formatSize(block.size)}` : ""}
+            <em>{block.text || "视频未随本次同步下发"}</em>
+          </span>
+        </div>
+      );
+    }
+    const src = block.data.startsWith("data:") ? block.data : `data:${block.mimeType || "video/mp4"};base64,${block.data}`;
+    return (
+      <div className="msg-video-wrap">
+        {/* preload=metadata：只拉首帧/时长，不把整段视频解密进内存（手机上差值很明显）。 */}
+        <video className="msg-video" src={src} controls playsInline preload="metadata" />
+        <button type="button" className="msg-video-full" aria-label="全屏播放">
+          ⛶
+        </button>
+      </div>
+    );
+  }
   return <MessageText text={block.text ?? ""} choiceCtx={choiceCtx} />;
 }
 
@@ -500,9 +547,41 @@ function ImagePreview({ src, onClose }: { src: string; onClose: () => void }) {
   );
 }
 
+/**
+ * 全屏视频预览：气泡里的播放器在竖屏手机上太小，给一个铺满屏幕的播放器。
+ *
+ * 与 ImagePreview 的做法不同（不接管缩放/拖移）：视频自带原生控件，再叠一层手势会打架。
+ * 这里只负责“铺满 + 关闭”（Esc / × / 点空白）。
+ */
+function VideoPreview({ src, onClose }: { src: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="video-preview" role="dialog" aria-modal="true" aria-label="视频预览" onClick={onClose}>
+      <video src={src} controls autoPlay playsInline onClick={(e) => e.stopPropagation()} />
+      <button
+        type="button"
+        className="image-preview-close"
+        aria-label="关闭预览"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 /** 缩放因子作用到当前变换（滚轮/触控板捏合）：限幅 1x–6x；缩回 1x 时位移归零
- * （否则图片会滑出屏幕且回不到中间）。 */
-function applyZoomFactor(t: { scale: number; x: number; y: number }, factor: number): { scale: number; x: number; y: number } {
+ * （否则图片会滑出屏幕且回不到中间）。 */function applyZoomFactor(t: { scale: number; x: number; y: number }, factor: number): { scale: number; x: number; y: number } {
   return applyZoomAbsolute(t, t.scale * factor);
 }
 
@@ -770,8 +849,14 @@ export interface ThreadViewProps {
   uiError?: string | null;
   onRespondUi: (requestId: string, response: Record<string, unknown>) => void;
   onBack: () => void;
-  /** 乐观回显：本地立刻上屏用户消息，返回本地占位 id（用于失败回滚）。 */
-  onEcho?: (input: { text: string; images?: { data: string; mimeType: string }[]; fileCount?: number }) => string;
+  /** 乐观回显：本地立刻上屏用户消息，返回本地占位 id（用于失败回滚）。
+   *  视频与图片一样先本地可见（自己的视频不用等主机快照就能播）。 */
+  onEcho?: (input: {
+    text: string;
+    images?: { data: string; mimeType: string }[];
+    videos?: { data: string; mimeType: string; size?: number }[];
+    fileCount?: number;
+  }) => string;
   onEchoDrop?: (id: string) => void;
   /** 发送前的兜底：保证会话订阅还在（重连后主机按 connectionId 清过订阅，漏补的话
    * 主机会把本次回合的所有事件静默丢弃）。已订阅时零往返；出错不阻断发送。 */
@@ -793,7 +878,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   /** 「待处理后续」暂存区（与桌面端同语义）：运行中点发送先本地暂存、不进 pi；
    *  settle 时自动以 prompt 投递。⚡=立即插入（steer），✎=取回输入框重编。
    *  注意：组件级状态，切走会话再回来会丢（v1 限制）。 */
-  const [pendingFu, setPendingFu] = useState<{ text: string; images: CompressedImage[]; files: PickedFile[] } | null>(null);
+  const [pendingFu, setPendingFu] = useState<{ text: string; images: CompressedImage[]; files: PickedFile[]; videos: PickedVideo[] } | null>(null);
   // 顶部配置抽屉（权限/模式/模型）与瞬时提示。
   const [sheet, setSheet] = useState<null | "permission" | "mode" | "model" | "ctx" | "width">(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -803,10 +888,13 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   // (max 3 — host's MAX_REMOTE_FILES).
   const [attachments, setAttachments] = useState<CompressedImage[]>([]);
   const [files, setFiles] = useState<PickedFile[]>([]);
+  // 视频附件（最多 1 个，与主机 MAX_REMOTE_VIDEOS 一致）。
+  const [videos, setVideos] = useState<PickedVideo[]>([]);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const albumInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
 
   // T5 voice input.
   const recorderRef = useRef<VoiceRecorder | null>(null);
@@ -815,6 +903,8 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
   // 图片全屏预览：当前放大的 data URL（null = 未打开）。
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  // 视频全屏预览（气泡里的播放器在竖屏手机上太小）。
+  const [videoPreviewSrc, setVideoPreviewSrc] = useState<string | null>(null);
 
   // 切会话：载入该会话的草稿 + 把顶层配置回收到当前快照值。
   const threadIdRef = useRef(view.threadId);
@@ -892,12 +982,19 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
   };
 
-  /** 图片点击 → 全屏预览。事件委托在滚动容器上：不用把回调穿进 Message/Block，
-   *  以后任何地方再渲染 msg-image 也自动生效。 */
+  /** 图片/视频点击 → 全屏预览。事件委托在滚动容器上：不用把回调穿进 Message/Block，
+   *  以后任何地方再渲染 msg-image / msg-video 也自动生效。 */
   const handleImageClick = (e: React.MouseEvent) => {
     const target = e.target;
     if (target instanceof HTMLImageElement && target.classList.contains("msg-image")) {
       setPreviewSrc(target.currentSrc || target.src);
+      return;
+    }
+    // 视频全屏按钮：从同层的 <video> 取 src（不把 data URL 再塞一份进 DOM 属性——
+    // 一段 3MB 视频的 base64 复制到属性里是实打实的内存与解析开销）。
+    if (target instanceof HTMLElement && target.classList.contains("msg-video-full")) {
+      const video = target.closest(".msg-video-wrap")?.querySelector("video");
+      if (video?.src) setVideoPreviewSrc(video.src);
     }
   };
 
@@ -909,12 +1006,13 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
   /** 共享发送路径：乐观回显 + actions.send；失败时撤气泡、内容还回输入框。
    *  （真机反馈：等主机 ACK 才清空，点完要卡五六秒才有动静——先上屏再走网络。） */
-  const dispatch = async (text: string, images: CompressedImage[], picked: PickedFile[], mode: SendMode): Promise<void> => {
+  const dispatch = async (text: string, images: CompressedImage[], picked: PickedFile[], mode: SendMode, clips: PickedVideo[] = []): Promise<void> => {
     if (!actions) return;
-    const echoId = onEcho?.({ text, images: images.length ? images : undefined, fileCount: picked.length }) || "";
+    const echoId = onEcho?.({ text, images: images.length ? images : undefined, fileCount: picked.length, videos: clips.length ? clips : undefined }) || "";
     setDraft("");
     setAttachments([]);
     setFiles([]);
+    setVideos([]);
     setSending(true);
     setAtBottom(true); // 回显的消息要立刻可见（自动滚底 effect 会跟着 messages 变化跑）
     try {
@@ -927,6 +1025,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
         mode,
         images.length ? images : undefined,
         picked.length ? picked.map((f) => ({ name: f.name, mimeType: f.mimeType, data: f.data })) : undefined,
+        clips.length ? clips : undefined,
       );
       // 状态滞后窗口：主机实际在跑 → 它已把本条回退成 followUp 排队（queuedAs）。
       // 回显气泡保留即可——pi 投递后真实 user entry 到达会按文本对账转正，无需额外提示。
@@ -937,6 +1036,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       setDraft(text);
       setAttachments(images);
       setFiles(picked);
+      setVideos(clips);
       setSendError(message.startsWith("THREAD_BUSY") ? "该会话正被其他设备操作，请稍后再试。" : `发送失败：${message}`);
     } finally {
       setSending(false);
@@ -948,25 +1048,27 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     const text = draft;
     const images = attachments;
     const picked = files;
-    if (!text.trim() && !images.length && !picked.length) return;
+    const clips = videos;
+    if (!text.trim() && !images.length && !picked.length && !clips.length) return;
     setSendError(null);
 
     // 运行中：先本地暂存为「待处理后续」（与桌面端同语义——streaming 时回车是排队，
     // 不是立即发送；要插入用横幅上的 ⚡）。已有一条暂存时，本条直接 followUp 进 pi 队列。
     if (running) {
       if (!pendingFu) {
-        setPendingFu({ text: text.trim(), images, files: picked });
+        setPendingFu({ text: text.trim(), images, files: picked, videos: clips });
         setDraft("");
         setAttachments([]);
         setFiles([]);
+        setVideos([]);
         return;
       }
-      void dispatch(text, images, picked, "followUp");
+      void dispatch(text, images, picked, "followUp", clips);
       return;
     }
 
     // 空闲：照常 prompt。
-    void dispatch(text, images, picked, "prompt");
+    void dispatch(text, images, picked, "prompt", clips);
   };
 
   /** settle（running true→false）：自动投递暂存内容。 */
@@ -974,7 +1076,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     if (!actions || !pendingFu) return;
     const p = pendingFu;
     setPendingFu(null);
-    await dispatch(p.text, p.images, p.files, "prompt");
+    await dispatch(p.text, p.images, p.files, "prompt", p.videos);
   };
 
   /** ⚡ 立即插入：打断当前回合马上处理（steer）。 */
@@ -982,7 +1084,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     if (!actions || !pendingFu) return;
     const p = pendingFu;
     setPendingFu(null);
-    await dispatch(p.text, p.images, p.files, "steer");
+    await dispatch(p.text, p.images, p.files, "steer", p.videos);
   };
 
   /** ✎ 取回输入框重新编辑。 */
@@ -991,6 +1093,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     setDraft(pendingFu.text);
     setAttachments(pendingFu.images);
     setFiles(pendingFu.files);
+    setVideos(pendingFu.videos);
     setPendingFu(null);
     inputRef.current?.focus();
   };
@@ -1050,6 +1153,41 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     if (!input) return;
     input.value = "";
     void input.click();
+  };
+
+  /** 视频（最多 1 个，走 videos 通道 → 两端都能直接播放）。 */
+  const pickVideo = () => {
+    setAttachMenuOpen(false);
+    const input = videoInputRef.current;
+    if (!input) return;
+    input.value = "";
+    void input.click();
+  };
+
+  const onVideoPicked = async (list: FileList | null) => {
+    const file = list?.[0];
+    if (!file) return;
+    // 上限比文件小得多（3MB）——因为视频是两个端点都能直接看的**内联**内容，
+    // 字节会进每次快照。提示里给出原因，别只报一个数字（真机反馈：用户会反复重试）。
+    if (file.size > MAX_VIDEO_BYTES) {
+      setSendError(
+        `视频太大：${formatSize(file.size)}（上限 ${Math.round(MAX_VIDEO_BYTES / 1_000_000)}MB，约 10 秒 720p）。请截短或压缩后再发——超限的视频会跟着每次同步下发，会把会话拖慢。`,
+      );
+      return;
+    }
+    const browserType = file.type || "";
+    if (browserType && !/^video\//.test(browserType)) {
+      setSendError(`只支持视频文件（实际：${browserType}）`);
+      return;
+    }
+    try {
+      setSendError(null);
+      const data = arrayBufferToBase64(await file.arrayBuffer());
+      // 包成 video/mp4 而不是空 mime：主机会拒掉非 video/* 的请求（INVALID_REQUEST）。
+      setVideos([{ mimeType: browserType || "video/mp4", data, size: file.size }]);
+    } catch (error) {
+      setSendError(`视频读取失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const onFilesPicked = async (list: FileList | null) => {
@@ -1342,12 +1480,19 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
           {/* Composer：常驻按钮（附件/录音/停止/发送）。录音不改布局，只改按钮态。 */}
           <div className={`composer ${recording ? "recording" : ""}`}>
-            {(attachments.length > 0 || files.length > 0) && (
+            {(attachments.length > 0 || files.length > 0 || videos.length > 0) && (
               <div className="attach-row">
                 {attachments.map((attachment, i) => (
                   <span key={i} className="attach-chip">
                     <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="附件预览" />
                     <button type="button" className="attach-x" onClick={() => removeAttachment(i)} aria-label="移除图片">×</button>
+                  </span>
+                ))}
+                {videos.map((video, i) => (
+                  <span key={`v${i}`} className="attach-chip file" title={`视频 · ${formatSize(video.size)}`}>
+                    <span aria-hidden="true">🎬</span>
+                    <span className="file-name">视频 · {formatSize(video.size)}</span>
+                    <button type="button" className="attach-x" onClick={() => setVideos((prev) => prev.filter((_, index) => index !== i))} aria-label="移除视频">×</button>
                   </span>
                 ))}
                 {files.map((file, i) => (
@@ -1371,7 +1516,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                   {pendingFu.text ? (
                     <div className="pf-text">{pendingFu.text}</div>
                   ) : (
-                    <div className="pf-text">{`${pendingFu.images.length + pendingFu.files.length} 个附件`}</div>
+                    <div className="pf-text">{`${pendingFu.images.length + pendingFu.files.length + pendingFu.videos.length} 个附件`}</div>
                   )}
                 </div>
                 <div className="pf-actions">
@@ -1428,6 +1573,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                 <div className="attach-menu">
                   <button type="button" onClick={() => pickImages("camera")}>📷 拍照</button>
                   <button type="button" onClick={() => pickImages("album")}>🖼️ 相册</button>
+                  <button type="button" onClick={() => pickVideo()}>🎬 视频（≤3MB）</button>
                   <button type="button" onClick={() => pickFiles()}>📎 文件</button>
                 </div>
               )}
@@ -1451,7 +1597,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                   type="button"
                   className={`send-btn primary ${running ? "steer" : ""}`}
                   onClick={() => void doSend()}
-                  disabled={sending || (!draft.trim() && !attachments.length && !files.length)}
+                  disabled={sending || (!draft.trim() && !attachments.length && !files.length && !videos.length)}
                   aria-label={running ? (pendingFu ? "再排一条" : "存为待处理后续") : "发送"}
                 >
                   <IconSend />
@@ -1463,6 +1609,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
             <input ref={albumInputRef} type="file" accept="image/*" multiple hidden onChange={(e) => void onFilesPicked(e.target.files)} />
             <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => void onFilesPicked(e.target.files)} />
             <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => void onFilesPicked(e.target.files)} />
+            <input ref={videoInputRef} type="file" accept="video/*" hidden onChange={(e) => void onVideoPicked(e.target.files)} />
           </div>
         </>
       )}
@@ -1629,6 +1776,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
       {/* 图片全屏预览（z-index 高于审批卡/抽屉——打开时它就是最上层） */}
       {previewSrc && <ImagePreview src={previewSrc} onClose={() => setPreviewSrc(null)} />}
+      {videoPreviewSrc && <VideoPreview src={videoPreviewSrc} onClose={() => setVideoPreviewSrc(null)} />}
 
       {/* S6.3 approval card (full-screen, above everything) */}
       {view.pendingUi && <ApprovalCard request={view.pendingUi} busy={uiBusy} error={uiError} onRespond={onRespondUi} />}

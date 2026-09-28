@@ -97,15 +97,30 @@ export class ThreadActions {
     mode: SendMode,
     images?: { type?: "image"; data: string; mimeType: string }[],
     files?: { name: string; mimeType?: string; data: string }[],
+    videos?: { type?: "video"; data: string; mimeType: string; size?: number }[],
   ): Promise<unknown> {
     const trimmed = text.trim();
-    if (!trimmed && !(images && images.length) && !(files && files.length)) throw new Error("empty message");
+    if (!trimmed && !(images && images.length) && !(files && files.length) && !(videos && videos.length)) {
+      throw new Error("empty message");
+    }
     return this.writeRequest(`thread.${mode}`, {
       text: trimmed,
       ...(images && images.length
         ? { images: images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })) }
         : {}),
       ...(files && files.length ? { files } : {}),
+      // 视频单独走 videos：主机据此把它当成**可播放媒体**内联下发（files 里的视频只是给
+      // agent 读的文件，不进快照）。上限见主机 video-refs.ts。
+      ...(videos && videos.length
+        ? {
+            videos: videos.map((video) => ({
+              type: "video" as const,
+              data: video.data,
+              mimeType: video.mimeType,
+              ...(typeof video.size === "number" ? { size: video.size } : {}),
+            })),
+          }
+        : {}),
     }, mode);
   }
 

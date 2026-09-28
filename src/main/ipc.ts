@@ -192,6 +192,14 @@ import {
   type SystemNotificationCenter,
 } from "./system-notifications";
 import {
+  REMOTE_VIDEO_BASE64_BUDGET,
+  REMOTE_VIDEO_FILE_MAX_BYTES,
+  splitVideoRefs,
+  videoMimeForPath,
+  videoRefEnvelope,
+  VIDEO_EXT_BY_MIME,
+} from "./remote/video-refs";
+import {
   RemoteProtocolError,
   type RemoteFileArtifact,
   type RemoteFileInput,
@@ -204,6 +212,7 @@ import {
   type RemoteThreadEventPayload,
   type RemoteContextUsage,
   type RemoteThreadSnapshot,
+  type RemoteVideoInput,
   type RemoteThreadState,
 } from "./remote/protocol";
 import { buildConfigPatch, planModeApplication, resolveModeById, type ConfigChangeOrigin, type ThreadConfigPatch } from "./thread-config";
@@ -433,6 +442,8 @@ function toolArgsSummary(args: unknown): string | undefined {
 
 /** Escape attribute values for the <file> envelope (session titles may contain quotes). */
 const attr = (s: string) => s.replace(/"/g, "&quot;");
+
+// 视频附件的引用格式、上限与预算都在 remote/video-refs.ts（写入与解析必须同源）。
 
 function processAttachments(attachments: Attachment[] | undefined, text: string): { text: string; images: unknown[] } {
   const images: unknown[] = [];
@@ -1586,7 +1597,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
 
   function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     if (depth > 4 || value === null || typeof value === "number" || typeof value === "boolean") return value;
-    if (typeof value === "string") return remoteSafeString(value);
+    if (typeof value === "string") return remoteSafeString(splitVideoRefs(value).text);
     if (Array.isArray(value)) return value.slice(0, 50).map((item) => remoteSafeEventValue(item, depth + 1));
     if (!value || typeof value !== "object") return undefined;
     // 图片块：事件通道不做大图搬运。base64 会被 remoteSafeString 截成 100k 坏数据，
@@ -1655,12 +1666,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
 
     const blocksFor = (message: any): RemoteBlock[] => {
       if (typeof message?.content === "string") {
-        const text = message.content.slice(0, 12_000);
+        const text = splitVideoRefs(message.content).text.slice(0, 12_000);
         return text ? [{ type: "text", text }] : [];
       }
       if (!Array.isArray(message?.content)) return [];
       return message.content.slice(0, 24).map((block: any): RemoteBlock | null => {
-        if (block?.type === "text") return { type: "text", text: String(block.text || "").slice(0, 12_000) };
+        if (block?.type === "text") return { type: "text", text: splitVideoRefs(String(block.text || "")).text.slice(0, 12_000) };
         // thinking **不设逐块上限**（2026-09-25）：实测它在一次会话里占下发字节的 62%，
         // 但又是用户明确要保留的内容；旧的 12,000 平均只截掉 5%（thinking 块平均
         // 3756 字符），却害得历史被裁。改由 prepareRemoteHistory 的预算 + 单帧硬保证
@@ -1700,6 +1711,8 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     };
 
     const output: RemoteMessage[] = [];
+    /** 本轮快照里待回填字节的视频块（顺序 = 消息顺序，预算从末尾往前分配）。 */
+    const pendingVideos: Array<{ block: RemoteBlock; path: string }> = [];
     let assistantRound: RemoteMessage | null = null;
     let unmatchedToolOutputs: string[] = [];
     const flushAssistantRound = () => {
@@ -1775,11 +1788,21 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       const role = message?.role === "user" || message?.role === "system" ? message.role : "system";
       const blocks = blocksFor(message);
       const artifacts = artifactsByMessage.get(index);
+      // 视频附件：把 host 自己写在用户消息里的 `<file … attach="video" />` 引用剥出来，
+      // 换成 video 块（字节在本函数末尾按预算从盘上回填）；文本同时清干净，
+      // 否则气泡里会露出引用原文。从**未截断**的原文里取引用，避免长文把末尾的引用切掉。
+      const videoSource = splitVideoRefs(remoteText(message?.content));
+      const videoBlocks = videoSource.refs.map((ref): RemoteBlock => {
+        const block: RemoteBlock = { type: "video", name: ref.name, mimeType: videoMimeForPath(ref.path), omitted: true };
+        pendingVideos.push({ block, path: ref.path });
+        return block;
+      });
+      const allBlocks = [...blocks, ...videoBlocks];
       output.push({
         id: String(message?.id || `${role}-${index}`),
         role,
-        text: textFor(message),
-        blocks: blocks.length ? blocks : undefined,
+        text: videoSource.text.slice(0, 12_000) || undefined,
+        blocks: allBlocks.length ? allBlocks : undefined,
         artifacts: artifacts?.length ? artifacts : undefined,
         timestamp: typeof message?.timestamp === "number" ? message.timestamp : undefined,
         provider: typeof message?.provider === "string" ? message.provider : undefined,
@@ -1788,6 +1811,36 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       });
     });
     flushAssistantRound();
+    // 视频字节回填：**最新优先**。单个超过上限（客户端/主机只保证 ≤3MB，但临时目录里的
+    // 文件可能被人换过）或超出快照预算的，保留 `omitted` 占位块 + 一句说明，客户端显示灰卡。
+    let videoBudget = REMOTE_VIDEO_BASE64_BUDGET;
+    let videoBytes = 0;
+    for (let i = pendingVideos.length - 1; i >= 0; i--) {
+      const { block, path } = pendingVideos[i];
+      if (videoBudget <= 0) {
+        block.text = "视频未随快照下发（超出本次快照预算）";
+        continue;
+      }
+      try {
+        const size = statSync(path).size;
+        if (size <= 0 || size > REMOTE_VIDEO_FILE_MAX_BYTES) {
+          block.text = `视频未随快照下发（大小 ${Math.round(size / 1000)}KB 超出上限）`;
+          continue;
+        }
+        const data = readFileSync(path).toString("base64");
+        if (data.length > videoBudget) {
+          block.text = "视频未随快照下发（超出本次快照预算）";
+          continue;
+        }
+        videoBudget -= data.length;
+        videoBytes += size;
+        block.data = data;
+        block.size = size;
+        block.omitted = false;
+      } catch {
+        block.text = "视频文件已不在主机上（临时目录被清理）";
+      }
+    }
     // 裁剪流水线（条数 → 估算 → 真实长度 → 单帧兜底）；客户端对解密后的内层 envelope
     // 有硬上限，超了一律丢帧（2026-09-24 真机：订阅响应被丢 → 10s 超时 → 重握手 →
     // 重连风暴）。顺序与兜底细节见 remote/history-limit.ts 的 prepareRemoteHistory。
@@ -1797,7 +1850,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     const estimated = trimmed.reduce((sum, m) => sum + remoteMessageSize(m), 0);
     const encoded = JSON.stringify(trimmed).length;
     appendDiagLog(
-      `remote-history total=${source.length} rendered=${output.length} sent=${trimmed.length} bytes=${estimated} encoded=${encoded}`,
+      `remote-history total=${source.length} rendered=${output.length} sent=${trimmed.length} bytes=${estimated} encoded=${encoded} vid=${pendingVideos.length} vidBytes=${videoBytes}`,
     );
     return trimmed;
   }
@@ -2154,6 +2207,25 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       stageClipboardFile({ name: file.name, mimeType: file.mimeType, data: file.data }),
     );
 
+  /**
+   * 手机端**视频**附件 → 落盘（与文件同一目录）→ 给 agent 留一条带 `attach="video"` 的引用。
+   *
+   * 两件事：① agent 只能读文件、看不了视频，所以引用必须留着（否则模型不知道有这个视频）；
+   * ② 引用带 `attach="video"` 标记，远程快照据此把它换成可播放的 video 块（见 remoteMessages）。
+   */
+  const stageRemoteVideos = (videos?: RemoteVideoInput[]): string =>
+    (videos ?? [])
+      .map((video, index) => {
+        const ext = VIDEO_EXT_BY_MIME[String(video.mimeType || "").toLowerCase()] || ".mp4";
+        const staged = stageClipboardFile({
+          name: `video-${Date.now()}-${index}${ext}`,
+          mimeType: video.mimeType,
+          data: video.data,
+        });
+        return videoRefEnvelope(staged.name, staged.abs);
+      })
+      .join("");
+
   const threadService = new ThreadService(
     (threadId) => remoteSnapshot(threadId),
     async (projectId, name, permission = "sandbox") => {
@@ -2207,14 +2279,15 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
         throw error;
       }
     },
-    async (threadId, text, images, files) => {
+    async (threadId, text, images, files, videos) => {
       // 手机端「点发送卡五六秒」的取证点：建桥（冷启动 pi）与真正投递分两段计时。
       const t0 = Date.now();
       const ref = await remoteThread(threadId);
       const bridge = await ensureRemoteBridge(ref);
       const tBridge = Date.now();
-      // 文件先落盘，再按桌面同款规则内联/引用（图片仍直传模型）。
-      const staged = processAttachments(stageRemoteFiles(files), text);
+      // 文件先落盘，再按桌面同款规则内联/引用（图片仍直传模型）；视频另走一条：
+      // 落盘 + 带标记的引用（客户端把它换成可播放的 video 块）。
+      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(videos));
       let queuedAs: "followUp" | undefined;
       try {
         await bridge.bridge.prompt(staged.text, [...(images ?? []), ...staged.images]);
@@ -2251,15 +2324,15 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       invalidateRemoteProjects();
       return queuedAs ? { ok: true, queuedAs } : { ok: true };
     },
-    async (threadId, text, images, files) => {
+    async (threadId, text, images, files, videos) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
-      const staged = processAttachments(stageRemoteFiles(files), text);
+      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(videos));
       await bridge.bridge.steer(staged.text, [...(images ?? []), ...staged.images]);
       return { ok: true };
     },
-    async (threadId, text, images, files) => {
+    async (threadId, text, images, files, videos) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
-      const staged = processAttachments(stageRemoteFiles(files), text);
+      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(videos));
       await bridge.bridge.followUp(staged.text, [...(images ?? []), ...staged.images]);
       return { ok: true };
     },

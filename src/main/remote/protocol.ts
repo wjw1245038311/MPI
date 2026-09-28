@@ -65,6 +65,21 @@ export interface RemoteFileInput {
   data: string;
 }
 
+/**
+ * 手机端发送的**视频**附件（base64，内联下发）。
+ *
+ * 与普通文件不同：视频除了落盘交给 agent（同一条 stageClipboardFile + `<file>` 引用），
+ * 还会在消息里生成一个 `video` 块，让客户端像图片一样**在对话框里直接播放**。
+ * 代价是字节会进快照，所以上限卡得很死（见 service.ts 的 MAX_REMOTE_VIDEO_DATA）。
+ */
+export interface RemoteVideoInput {
+  type: "video";
+  data: string;
+  mimeType: string;
+  /** 原始字节数（客户端上报，主机只用于显示与预算判断） */
+  size?: number;
+}
+
 export type RemoteEnvelope<T = unknown> = {
   v: typeof REMOTE_PROTOCOL_VERSION;
   type: string;
@@ -104,7 +119,7 @@ export interface RemoteMessage {
   role: "user" | "assistant" | "system" | "tool";
   text?: string;
   blocks?: Array<{
-    type: "text" | "thinking" | "tool" | "image";
+    type: "text" | "thinking" | "tool" | "image" | "video";
     text?: string;
     name?: string;
     running?: boolean;
@@ -114,6 +129,10 @@ export interface RemoteMessage {
     args?: string;
     data?: string;
     mimeType?: string;
+    /** 视频原始字节数（video 块用） */
+    size?: number;
+    /** 实时事件通道刻意剥掉本体（防大帧）——照图片语义。 */
+    omitted?: boolean;
   }>;
   /** Files created or updated by this assistant round. Paths are project-relative. */
   artifacts?: RemoteFileArtifact[];

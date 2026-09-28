@@ -1,4 +1,4 @@
-import type { RemoteFileInput, RemoteImageInput, RemotePermission, RemoteThreadEventPayload, RemoteThreadSnapshot } from "./protocol";
+import type { RemoteFileInput, RemoteImageInput, RemotePermission, RemoteThreadEventPayload, RemoteThreadSnapshot, RemoteVideoInput } from "./protocol";
 
 /**
  * 线程事件订阅者。**第二个参数是该事件的线程序号**（见 [RemoteEventHub.publish]）。
@@ -77,17 +77,17 @@ export class ThreadService {
   constructor(
     private readonly getFn: (threadId: string) => Promise<RemoteThreadSnapshot>,
     private readonly createFn: (projectId: string, name?: string, permission?: RemotePermission) => Promise<RemoteThreadSnapshot>,
-    private readonly promptFn: (threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]) => Promise<unknown>,
-    private readonly steerFn: (threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]) => Promise<unknown>,
-    private readonly followUpFn: (threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]) => Promise<unknown>,
+    private readonly promptFn: (threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]) => Promise<unknown>,
+    private readonly steerFn: (threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]) => Promise<unknown>,
+    private readonly followUpFn: (threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]) => Promise<unknown>,
     private readonly abortFn: (threadId: string) => Promise<unknown>,
   ) {}
 
   get(threadId: string): Promise<RemoteThreadSnapshot> { return this.getFn(threadId); }
   create(projectId: string, name?: string, permission?: RemotePermission): Promise<RemoteThreadSnapshot> { return this.createFn(projectId, name, permission); }
-  prompt(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown> { return this.promptFn(threadId, text, images, files); }
-  steer(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown> { return this.steerFn(threadId, text, images, files); }
-  followUp(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown> { return this.followUpFn(threadId, text, images, files); }
+  prompt(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown> { return this.promptFn(threadId, text, images, files, videos); }
+  steer(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown> { return this.steerFn(threadId, text, images, files, videos); }
+  followUp(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown> { return this.followUpFn(threadId, text, images, files, videos); }
   abort(threadId: string): Promise<unknown> { return this.abortFn(threadId); }
 }
 

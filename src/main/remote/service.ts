@@ -3,6 +3,7 @@ import {
   makeEnvelope,
   type RemoteEnvelope,
   type RemoteFileInput,
+  type RemoteVideoInput,
   type RemoteImageInput,
   RemoteProtocolError,
   responseFor,
@@ -29,9 +30,9 @@ export interface RemoteBackend {
    * shows a spinner from compaction_start/end events, and the refreshed
    * context usage arrives as a `context_usage` event. */
   compact(threadId: string, instructions?: string): Promise<unknown>;
-  prompt(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
-  steer(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
-  followUp(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[]): Promise<unknown>;
+  prompt(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown>;
+  steer(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown>;
+  followUp(threadId: string, text: string, images?: RemoteImageInput[], files?: RemoteFileInput[], videos?: RemoteVideoInput[]): Promise<unknown>;
   abort(threadId: string): Promise<unknown>;
   /** 重命名会话（pi RPC `set_session_name`）。 */
   renameThread(threadId: string, name: string): Promise<unknown>;
@@ -88,6 +89,16 @@ const MAX_REMOTE_FILE_DATA_TOTAL = 16_000_000;
 const REMOTE_FILE_NAME_MAX = 180;
 const MAX_REMOTE_IMAGE_DATA = 1_200_000;
 const MAX_REMOTE_IMAGE_DATA_TOTAL = 1_500_000;
+/**
+ * 视频附件：每条消息最多 1 个，单个 base64 ≤ 4.2MB（≈3MB 原始字节，与 PWA 的
+ * MAX_VIDEO_BYTES 对应）。
+ *
+ * 为什么卡这么死：视频是**内联**下发的（要「像图片一样在对话框里直接看」），字节会进
+ * 每次快照；而快照有 8MB 硬上限（MAX_INNER_ENVELOPE_BYTES），PWA 还会把快照写进
+ * IndexedDB 缓存。放宽这个值之前先读 history-limit.ts 的预算逻辑。
+ */
+const MAX_REMOTE_VIDEOS = 1;
+const MAX_REMOTE_VIDEO_DATA = 4_200_000;
 
 export class RemoteService {
   private readonly subscriptions = new Map<string, Map<string, () => void>>();
@@ -259,15 +270,16 @@ export class RemoteService {
         const rawText = typeof payload.text === "string" ? payload.text.trim() : "";
         const images = this.optionalImages(payload);
         const files = this.optionalFiles(payload);
-        if (!rawText && !images?.length && !files?.length) {
-          throw new RemoteProtocolError("INVALID_REQUEST", "text, images or files is required");
+        const videos = this.optionalVideos(payload);
+        if (!rawText && !images?.length && !files?.length && !videos?.length) {
+          throw new RemoteProtocolError("INVALID_REQUEST", "text, images, files or videos is required");
         }
         const text = rawText;
         const result = request.type === "thread.prompt"
-          ? await this.backend.prompt(threadId, text, images, files)
+          ? await this.backend.prompt(threadId, text, images, files, videos)
           : request.type === "thread.steer"
-            ? await this.backend.steer(threadId, text, images, files)
-            : await this.backend.followUp(threadId, text, images, files);
+            ? await this.backend.steer(threadId, text, images, files, videos)
+            : await this.backend.followUp(threadId, text, images, files, videos);
         return responseFor(request, result);
       }
       case "thread.abort": {
@@ -432,6 +444,43 @@ export class RemoteService {
       total += data.length;
       if (total > MAX_REMOTE_FILE_DATA_TOTAL) throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", "File attachments are too large");
       return { name, ...(mimeType ? { mimeType } : {}), data };
+    });
+  }
+
+  /**
+   * 视频附件（内联下发，见 protocol.ts 的 RemoteVideoInput）。
+   *
+   * 与 files 分开而不是混进 files：语义不同——files 里的视频只是「给 agent 读的文件」
+   * （不内联、不进快照），videos 里的才会被远程客户端当成可播放的媒体。混在一起就变成
+   * 靠 mime 猜意图，从 📎 入口挑的视频会意外把快照撞大。
+   */
+  private optionalVideos(payload: Record<string, unknown>): RemoteVideoInput[] | undefined {
+    const value = payload.videos;
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.length > MAX_REMOTE_VIDEOS) {
+      throw new RemoteProtocolError("INVALID_REQUEST", `videos must contain at most ${MAX_REMOTE_VIDEOS} items`);
+    }
+    return value.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new RemoteProtocolError("INVALID_REQUEST", `videos[${index}] is invalid`);
+      }
+      const video = item as Record<string, unknown>;
+      const mimeType = typeof video.mimeType === "string" ? video.mimeType.slice(0, 120) : "";
+      if (!/^video\//i.test(mimeType)) {
+        throw new RemoteProtocolError("INVALID_REQUEST", `videos[${index}].mimeType must be video/*`);
+      }
+      const data = video.data;
+      if (typeof data !== "string" || data.length === 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
+        throw new RemoteProtocolError("INVALID_REQUEST", `videos[${index}].data must be base64`);
+      }
+      if (data.length > MAX_REMOTE_VIDEO_DATA) {
+        throw new RemoteProtocolError(
+          "PAYLOAD_TOO_LARGE",
+          `videos[${index}] is too large (maximum ${Math.floor((MAX_REMOTE_VIDEO_DATA * 3) / 4 / 1000)} KB)`,
+        );
+      }
+      const size = typeof video.size === "number" && Number.isFinite(video.size) && video.size > 0 ? Math.floor(video.size) : undefined;
+      return { type: "video" as const, data, mimeType, ...(size ? { size } : {}) };
     });
   }
 

@@ -74,6 +74,8 @@ async function main() {
     const THREAD_ID = "thread-abc";
     /** 专用于「快照期间回合在跑」的回归（见下面 tsRunning 块）。 */
     const THREAD_RUNNING = "thread-running";
+    /** 专用于视频块映射/占位/乐观回显（见下面 tsVideo 块）。 */
+    const THREAD_VIDEO = "thread-video";
     let seqCounter = 0;
     let resyncCount = 0;
     let subscribeCount = 0;
@@ -104,6 +106,27 @@ async function main() {
           // response itself must notify view listeners (UI was stuck on loading).
           if ((request.type === "thread.subscribe" || request.type === "thread.resync") && request.threadId === "t-idle") {
             ctx.send(responseFor(request, { snapshot: { id: "t-idle", projectId: "p1", title: "Idle thread", preview: "", updatedAt: Date.now(), messageCount: 0, state: "idle", permission: "sandbox", cwdName: "demo", model: null, availableModels: [], skills: [], thinkingLevel: "off", messages: [], nextSeq: 0 } }));
+            return;
+          }
+          if ((request.type === "thread.subscribe" || request.type === "thread.resync") && request.threadId === THREAD_VIDEO) {
+            // 主机侧的 video 块形状：本体（裸 base64，无 data: 前缀）与“未下发”占位两种。
+            ctx.send(
+              responseFor(request, {
+                snapshot: {
+                  ...makeSnapshot("idle"),
+                  id: THREAD_VIDEO,
+                  messages: [
+                    { id: "v1", role: "user", text: "看这个", blocks: [{ type: "video", name: "clip.mp4", mimeType: "video/mp4", data: "AAAA", size: 1234 }] },
+                    {
+                      id: "v2",
+                      role: "user",
+                      text: "老的",
+                      blocks: [{ type: "video", name: "old.mp4", mimeType: "video/mp4", size: 999, omitted: true, text: "视频未随快照下发（超出本次快照预算）" }],
+                    },
+                  ],
+                },
+              }),
+            );
             return;
           }
           if ((request.type === "thread.subscribe" || request.type === "thread.resync") && request.threadId === THREAD_RUNNING) {
@@ -373,6 +396,29 @@ async function main() {
         "回合结束后不得再显示「思考中」占位行（真机反馈：要刷新页面才消失）",
       );
       tsRunning.detach();
+    }
+
+    // --- 视频附件：块映射 + 占位 + 乐观回显 --------------------------------------------
+    {
+      const tsVideo = new ThreadSession(client, THREAD_VIDEO, { requestTimeoutMs: 3_000 });
+      await tsVideo.open();
+      const view1 = tsVideo.getSnapshot();
+      const [clip, old] = view1.messages[0].blocks;
+      assert.equal(clip.type, "video", "主机的 video 块要映射成视图的 video 块");
+      assert.equal(clip.data, "AAAA", "本体（裸 base64）原样保留——渲染时再补 data: 前缀");
+      assert.equal(clip.size, 1234, "size 用于占位卡片显示大小");
+      const placeholder = view1.messages[1].blocks[0];
+      assert.equal(placeholder.type, "video");
+      assert.equal(placeholder.data, undefined, "未下发的视频不能有本体");
+      assert.ok(placeholder.text, "占位必须带一句说明（否则用户以为消息丢了）");
+
+      // 乐观回显：自己发的视频立刻上屏（带本体），不用等主机快照。
+      tsVideo.echoUser({ text: "看看", videos: [{ data: "BBBB", mimeType: "video/mp4", size: 7 }] });
+      const echo = tsVideo.getSnapshot().messages.at(-1);
+      assert.equal(echo.pending, true);
+      assert.deepEqual(echo.blocks.map((b) => b.type), ["video", "text"], "回显气泡要先视频后文字（与图片同一顺序）");
+      assert.equal(echo.blocks[0].data, "BBBB");
+      tsVideo.detach();
     }
 
     // --- P1 Tier 1：本地缓存播种（切回来先出内容，不再白屏「加载会话…」） --------------

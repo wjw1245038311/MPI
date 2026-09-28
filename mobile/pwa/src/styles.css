@@ -497,6 +497,61 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 
 .msg-image { max-width: 100%; border-radius: 8px; cursor: zoom-in; }
+
+/* ---- 视频附件（内联下发，气泡内直接播放）------------------------------------ */
+.msg-video-wrap { position: relative; max-width: 100%; }
+.msg-video {
+  display: block;
+  max-width: 100%;
+  /* 竖屏视频不要顶满一屏：手机上会看不到消息上下文。 */
+  max-height: 60vh;
+  border-radius: 8px;
+  background: #000;
+}
+/* 全屏按钮：浮在播放器右上角，不挡原生控件条的底部。 */
+.msg-video-full {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+/* 本体没下发时的占位卡片（实时事件通道剥大帧 / 超出快照视频预算）。 */
+.msg-video-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--control);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.msg-video-placeholder .mvp-icon { font-size: 18px; }
+.msg-video-placeholder .mvp-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.msg-video-placeholder .mvp-text strong { color: var(--text); font-weight: 600; }
+.msg-video-placeholder .mvp-text em { font-style: normal; opacity: 0.8; }
+
+/* 全屏视频预览（Esc / × / 点空白关闭）。 */
+.video-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: rgba(0, 0, 0, 0.96);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.video-preview video { max-width: 100%; max-height: 100%; }
 .msg-artifacts { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
 .artifact { background: var(--control); border-radius: 6px; padding: 2px 8px; color: var(--text-dim); }
 .artifact.created { color: var(--ok); }

@@ -66,6 +66,23 @@ export interface RemoteFileInput {
   data: string;
 }
 
+/**
+ * 手机端发送的**视频**附件（base64，内联下发）。
+ *
+ * 与普通文件不同：视频除了落盘交给 agent（与 RemoteFileInput 同一条 stageClipboardFile
+ * 落盘路径 + `<file>` 引用），还会在消息里生成一个 `video` 块，让客户端能像图片一样
+ * **在对话框里直接播放**。代价是字节会进入快照，所以上限卡得很死（见主机 MAX_REMOTE_VIDEO_DATA）。
+ *
+ * 提示：浏览器能稳定播放的是 mp4/webm；mov 等容器可能放不出来（v1 不做转码）。
+ */
+export interface RemoteVideoInput {
+  type: "video";
+  data: string;
+  mimeType: string;
+  /** 原始字节数（客户端上报，主机只用于显示与预算判断） */
+  size?: number;
+}
+
 export type RemoteEnvelope<T = unknown> = {
   v: typeof REMOTE_PROTOCOL_VERSION;
   type: string;
@@ -105,7 +122,7 @@ export interface RemoteMessage {
   role: "user" | "assistant" | "system" | "tool";
   text?: string;
   blocks?: Array<{
-    type: "text" | "thinking" | "tool" | "image";
+    type: "text" | "thinking" | "tool" | "image" | "video";
     text?: string;
     name?: string;
     running?: boolean;
@@ -115,6 +132,10 @@ export interface RemoteMessage {
     args?: string;
     data?: string;
     mimeType?: string;
+    /** 视频原始字节数（image/video 块用）。video 块缺 data 时，客户端显示占位卡片。 */
+    size?: number;
+    /** 实时事件通道里刻意剥掉了本体（防大帧）——照图片的语义。true 表示这不是 blob 缺失。 */
+    omitted?: boolean;
   }>;
   /** Files created or updated by this assistant round. Paths are project-relative. */
   artifacts?: RemoteFileArtifact[];
