@@ -325,6 +325,19 @@ export class ThreadSession {
     this.patch({
       ...extra,
       running: false,
+      // 必须连 summary.state 一起收口（与主机 remoteState 同语义：有消息 → idle，没有 → draft）。
+      //
+      // 为什么：`summary` 只在快照里被写入，而 UI 的 running 判据是
+      // `view.running || summary.state === "running"`（ThreadView.tsx）。主机在快照里**刻意**
+      // 如实报 running（ipc.ts 的 remoteSnapshot：手机退后台重订走磁盘路径，报 idle 会误判
+      // 回合结束）。于是只要有任意一次快照落在「回合进行中」（开会话 / resync / 重连补订阅），
+      // summary.state 就锁成 "running"，之后 agent_settled 只清 view.running，界面**永久**停在
+      // 「运行中」：顶栏徽标不消失、聊天区挂着「思考中 · Ns」（判据是 running && 无可见流式内容，
+      // 回合结束后 streaming=null 正好满足）、输入框把新消息存成「待处理后续」而不发送。
+      // 真机症状即「网页端有时一直思考中，刷新页面才能正常」。
+      ...(this.view.summary
+        ? { summary: { ...this.view.summary, state: this.view.messages.length ? ("idle" as const) : ("draft" as const) } }
+        : {}),
       messages: this.view.messages.map(close),
       streaming: this.view.streaming ? close(this.view.streaming) : null,
     });
@@ -463,7 +476,12 @@ export class ThreadSession {
     const ev = ((payload.data?.event || {}) as Record<string, any>);
     switch (payload.kind) {
       case "agent_start":
-        this.patch({ running: true });
+        // summary.state 也要跟着走（见 settleTurn 的长注释）：否则快照落在回合中途会把
+        // 界面锁在「运行中」，且顶栏徽标会一直显示旧状态。
+        this.patch({
+          running: true,
+          ...(this.view.summary ? { summary: { ...this.view.summary, state: "running" as const } } : {}),
+        });
         break;
       case "message_start": {
         const m = ev.message;

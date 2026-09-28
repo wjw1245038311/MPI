@@ -861,6 +861,10 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   }, [toast]);
 
   // prefill 等待指示（与桌面/Android 同谓词，见 lib/thinking-indicator.ts）。
+  // 这里的 OR 本身是冗余的（applySnapshotCore 已把 snapshot.state 灌进 view.running），但**依赖
+  // summary.state 被实时事件同步**——agent_start/settleTurn 会一起更新它。若只让 summary 停留在
+  // 快照那一刻，「回合中途拿到过快照」的会话会永久卡在 running（真机：思考中/运行中徽标不消失，
+  // 刷新才正常）。回归守卫见 scripts/test-pwa-thread.mjs。
   const running = view.running || view.summary?.state === "running";
   const thinkingActive = shouldShowThinkingIndicator({
     running,

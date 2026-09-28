@@ -66,11 +66,14 @@ async function main() {
     const { parsePairingLink, runPairing, attachAutoReauth } = await import("../mobile/pwa/src/lib/pairing.ts");
     const { RelayClient } = await import("../mobile/pwa/src/lib/relay-client.ts");
     const { ThreadSession, mergeIncremental } = await import("../mobile/pwa/src/lib/thread-session.ts");
+    const { shouldShowThinkingIndicator } = await import("../mobile/pwa/src/lib/thinking-indicator.ts");
     const { SnapshotCache } = await import("../mobile/pwa/src/lib/snapshot-cache.ts");
     const { makeEnvelope, responseFor } = await import("../mobile/shared/protocol.ts");
 
     // --- fake host service: scripted thread events ------------------------------------
     const THREAD_ID = "thread-abc";
+    /** 专用于「快照期间回合在跑」的回归（见下面 tsRunning 块）。 */
+    const THREAD_RUNNING = "thread-running";
     let seqCounter = 0;
     let resyncCount = 0;
     let subscribeCount = 0;
@@ -101,6 +104,14 @@ async function main() {
           // response itself must notify view listeners (UI was stuck on loading).
           if ((request.type === "thread.subscribe" || request.type === "thread.resync") && request.threadId === "t-idle") {
             ctx.send(responseFor(request, { snapshot: { id: "t-idle", projectId: "p1", title: "Idle thread", preview: "", updatedAt: Date.now(), messageCount: 0, state: "idle", permission: "sandbox", cwdName: "demo", model: null, availableModels: [], skills: [], thinkingLevel: "off", messages: [], nextSeq: 0 } }));
+            return;
+          }
+          if ((request.type === "thread.subscribe" || request.type === "thread.resync") && request.threadId === THREAD_RUNNING) {
+            // 主机在回合进行中返回的快照会**如实**报 running（ipc.ts 的 remoteSnapshot：
+            // 手机退后台重订走磁盘路径，报 idle 会误判回合结束）。这里复刻那一刻。
+            ctx.send(responseFor(request, { snapshot: makeSnapshot("running") }));
+            // 快照之后回合结束——只发 agent_settled（真实语义：本回合彻底结束）。
+            setTimeout(() => ctx.send(makeEnvelope("thread.event", request.sessionId, { kind: "agent_settled", data: {} }, { threadId: THREAD_RUNNING, seq: ++seqCounter })), 0);
             return;
           }
           if (request.type === "thread.subscribe" || request.type === "thread.resync") {
@@ -330,6 +341,38 @@ async function main() {
       assert.equal(tsIdle.getSnapshot().ready, true);
       off();
       tsIdle.detach();
+    }
+
+    // --- 回归：快照落在回合中途 → 回合结束后不得永久卡在「运行中」-----------------------
+    // 真机反馈（2026-09-28）：「网页端有时候会一直显示思考中，刷新页面才能正常」。
+    // 根因：summary 只在快照里写入，而 UI 的 running 判据是
+    // `view.running || summary.state === "running"`；快照落在回合中途就会把 summary.state
+    // 锁成 "running"，agent_settled 只清 view.running → 界面永久停在运行中（顶栏徽标 +
+    // 聊天区「思考中」占位行），输入框还会把新消息存成「待处理后续」而不发送。
+    {
+      const tsRunning = new ThreadSession(client, THREAD_RUNNING, { requestTimeoutMs: 3_000 });
+      await tsRunning.open();
+      const midTurn = tsRunning.getSnapshot();
+      assert.equal(midTurn.running, true, "快照 state=running → view.running 为真（回合进行中）");
+      assert.equal(midTurn.summary?.state, "running", "快照把 running 写进了 summary.state");
+
+      await waitFor(() => tsRunning.getSnapshot().running === false, "agent_settled 收口 running");
+      const settled = tsRunning.getSnapshot();
+      assert.equal(
+        settled.summary?.state,
+        "idle",
+        "回合结束后 summary.state 必须离开 running（有消息 → idle），否则界面永久卡在「运行中」",
+      );
+
+      // 复刻 ThreadView 的组合判据 + thinking-indicator 谓词——这是真机症状的直接守卫。
+      const running = settled.running || settled.summary?.state === "running";
+      assert.equal(running, false, "ThreadView 的 running 判据必须为假（顶栏徽标不再显示「运行中」）");
+      assert.equal(
+        shouldShowThinkingIndicator({ running, compacting: settled.compacting, messages: settled.messages, streaming: settled.streaming }),
+        false,
+        "回合结束后不得再显示「思考中」占位行（真机反馈：要刷新页面才消失）",
+      );
+      tsRunning.detach();
     }
 
     // --- P1 Tier 1：本地缓存播种（切回来先出内容，不再白屏「加载会话…」） --------------
