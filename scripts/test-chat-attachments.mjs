@@ -14,10 +14,15 @@ import { fileURLToPath } from "node:url";
 
 register(new URL("./electron-stub-loader.mjs", import.meta.url));
 
-// 沙盒：把 app.getPath("userData") 指到临时目录——持久附件区就在它下面。
+// 沙盒：把 app.getPath("userData")/"temp" 都指到临时目录。
+// ⚠️ temp 必须隔离：resolve 会回退到 `%TEMP%/mpi-clipboard` 看旧附件，
+// 不隔离就会去读真实机器上的目录（测试不再 hermetic）。
 const TEMP = join(tmpdir(), `mpi-chat-att-${process.pid}`);
+const SANDBOX_TEMP = join(TEMP, "sys-temp");
 process.env.MPI_TEST_USER_DATA = TEMP;
-mkdirSync(TEMP, { recursive: true });
+process.env.MPI_TEST_TEMP = SANDBOX_TEMP;
+mkdirSync(join(TEMP, "mpi-clipboard"), { recursive: true });
+mkdirSync(join(SANDBOX_TEMP, "mpi-clipboard"), { recursive: true });
 const VIDEO_NAME = "ef8e2332-954c-44ff-82bc-a4234c65923c-video-1790606293289-0.mp4";
 
 const rendererSide = await import("../src/renderer/src/lib/chat-attachments.ts");
@@ -74,7 +79,10 @@ const envelope = (name, path) => `<file name="${name}" path="${path}" attach="vi
   assert.equal(storeSide.resolveChatAttachment("C:secret.mp4"), null, "不能接受带盘符的名字（白名单里没有冒号）");
   assert.equal(storeSide.resolveChatAttachment("nope/missing.mp4"), null, "不接受含分隔符的名字");
   assert.equal(storeSide.resolveChatAttachment("missing.mp4"), null, "文件不存在 → null（渲染层显示占位卡片）");
-  assert.equal(storeSide.resolveChatAttachment(LEGACY_NAME), null, "旧 %TEMP% 时代的附件名不在持久区 → 占位卡片");
+  assert.equal(storeSide.resolveChatAttachment(LEGACY_NAME), null, "旧 %TEMP% 时代、而那里也没有该文件 → null");
+  // 旧目录兜底：历史消息的信封指向 %TEMP%/mpi-clipboard，文件还在那儿时仍要能播。
+  writeFileSync(join(SANDBOX_TEMP, "mpi-clipboard", LEGACY_NAME), Buffer.alloc(64, 3));
+  assert.ok(storeSide.resolveChatAttachment(LEGACY_NAME), "旧目录里存在的附件要能解析（否则老消息全变占位卡片）");
   // 桌面端本地视频：adopt 复制进持久区（原文件不动），超过上限则不收。
   const localVideo = join(TEMP, "local-clip.mp4");
   writeFileSync(localVideo, Buffer.alloc(1024, 1));

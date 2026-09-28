@@ -77,18 +77,23 @@ export function adoptChatVideo(filePath: string): { abs: string; name: string; s
   }
 }
 
+/** 旧落盘目录（历史遗留）：附件曾在 `%TEMP%/mpi-clipboard`。那里属于“随时可清理”的语义，
+ * 所以新附件不再往那儿放；但为了不让**已有的历史消息**凭空变成占位卡片，找不到时回这里看一眼。 */
+const LEGACY_TEMP_DIR = "mpi-clipboard";
+
 /** 按文件名解析成磁盘路径（chatatt:// 协议用）；不合法或不存在 → null。 */
 export function resolveChatAttachment(name: string): string | null {
   if (!name || !NAME_RE.test(name) || name.includes("..")) return null;
-  const target = join(dir(false), name);
-  if (basename(target) !== name) return null;
-  try {
-    const stats = statSync(target);
-    if (!stats.isFile()) return null;
-  } catch {
-    return null;
+  const candidates = [join(dir(false), name), join(app.getPath("temp"), LEGACY_TEMP_DIR, name)];
+  for (const target of candidates) {
+    if (basename(target) !== name) continue;
+    try {
+      if (statSync(target).isFile()) return target;
+    } catch {
+      /* 继续看下一个候选位置 */
+    }
   }
-  return target;
+  return null;
 }
 
 /** 启动时按总量上限清理最旧的附件（尽力而为，失败不影响启动）。 */

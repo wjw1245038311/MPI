@@ -80,6 +80,8 @@ export function registerChatAttachmentScheme(): void {
 }
 
 export function registerChatAttachmentProtocol(): void {
+  /** 已记过“成功提供服务”的文件名（避免 Range 请求刷爆日志）。 */
+  const servedNames = new Set<string>();
   protocol.handle(SCHEME, (request) => {
     try {
       if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
@@ -100,6 +102,12 @@ export function registerChatAttachmentProtocol(): void {
         "X-Content-Type-Options": "nosniff",
       };
       const range = parseRange(request.headers.get("range"), size);
+      // 取证：每个文件名只记**第一条**请求（拖动进度条会连发 Range 请求，全记会淹掉日志）。
+      // 有这行才能正面确认「渲染层真的来取过字节」——否则只能靠“没有 404”反推。
+      if (!servedNames.has(name)) {
+        servedNames.add(name);
+        appendDiagLog(`chatatt serve name=${name.slice(0, 60)} size=${size}${range ? ` range=${range.start}-${range.end}` : ""}`);
+      }
       if (range) {
         const length = range.end - range.start + 1;
         const body = request.method === "HEAD" ? "" : readSlice(target, range.start, range.end);
