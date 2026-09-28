@@ -27,6 +27,9 @@ mkdirSync(process.env.MPI_TEST_TEMP, { recursive: true });
 const { AttachmentTokenStore, parseUploadOffset } = await import("../src/main/remote/attachment-tokens.ts");
 const { createAttachmentServer } = await import("../src/main/remote/attachment-server.ts");
 const store = await import("../src/main/chat-attachment-store.ts");
+const { uploadVideoDirect, requestDirectPlaybackUrl, DIRECT_UPLOAD_CHUNK_BYTES } = await import(
+  "../mobile/pwa/src/lib/attachment-direct.ts"
+);
 
 // ---- 1. 令牌与偏移解析（纯逻辑）---------------------------------------------
 {
@@ -170,6 +173,53 @@ try {
   const missing = await fetch(`${base}/att/${tokens.mint({ mode: "read", threadId: "t", deviceId: "d", name: "gone.mp4" }).token}`);
   assert.equal(missing.status, 404, "文件已被清理 → 404（客户端据此退化成占位卡片）");
   console.log("ok 2 - HTTP 服务：分片上传/原子改名/封面/Range(206)/CORS/授权/404 全覆盖");
+
+  // ---- 2.5 PWA 客户端：分片上传 + 回落信号 ------------------------------------
+  // 用**真服务**当后端，只把“动作层”换成一个能签发令牌的替身（形状同 ThreadActions）。
+  const actions = {
+    async requestAttachmentUrl(input) {
+      const token = tokens.mint({
+        mode: input.mode,
+        threadId: "t-1",
+        deviceId: "dev-1",
+        name: input.name || store.reserveVideoName(input.originalName, input.mimeType),
+        size: input.size,
+        mimeType: input.mimeType,
+      });
+      return { url: `${base}/att/${token.token}`, token: token.token, name: token.name, expiresAt: token.expiresAt };
+    },
+  };
+
+  // 跨分片上传（故意大于一个分片）→ 服务端拼出来的字节必须逐字节一致。
+  const big = Buffer.alloc(DIRECT_UPLOAD_CHUNK_BYTES + 1_234);
+  for (let i = 0; i < big.length; i += 997) big[i] = i % 251;
+  const progress = [];
+  const uploaded = await uploadVideoDirect(
+    actions,
+    { file: { name: "clip.mp4" }, bytes: new Uint8Array(big), mimeType: "video/mp4", poster: { data: Buffer.alloc(300, 1).toString("base64"), mimeType: "image/jpeg" } },
+    (loaded, total) => progress.push([loaded, total]),
+  );
+  assert.ok(uploaded?.storedName, "直连上传应返回主机预分配的附件名（消息里只带它）");
+  assert.equal(uploaded.posterStored, true, "封面应随上传送达（POST 分支）");
+  assert.ok(
+    readFileSync(join(TEMP, "chat-attachments", uploaded.storedName)).equals(big),
+    "两个分片拼出来的字节必须与上传的逐字节一致",
+  );
+  assert.equal(progress.at(-1)[0], big.length, "最后一次进度必须是“已传=总大小”");
+  assert.ok(progress.length >= 2, "跨分片时必须多次回报进度（否则进度条会从 0 直接跳满）");
+
+  // 回落信号：动作层报错（DIRECT_UNAVAILABLE / 网络问题）→ 返回 null，由调用方走内联。
+  const refusing = { requestAttachmentUrl: async () => { throw new Error("DIRECT_UNAVAILABLE: nope"); } };
+  const fallback = await uploadVideoDirect(refusing, { file: { name: "x.mp4" }, bytes: new Uint8Array([1, 2, 3]), mimeType: "video/mp4", poster: null }, () => {});
+  assert.equal(fallback, null, "直连不可用必须返回 null（调用方据此回落，而不是把错误抛给用户）");
+
+  // 读 URL：拿到就能直接喂 <video>（真流式）；不可用时返回 null。
+  const directReadUrl = await requestDirectPlaybackUrl(actions, uploaded.storedName, "video/mp4");
+  assert.ok(directReadUrl?.startsWith(base), "读 URL 应指向同一直连基地址");
+  const rangedDirect = await fetch(directReadUrl, { headers: { Range: "bytes=10-19" } });
+  assert.equal(rangedDirect.status, 206, "直连播放走的就是 Range（可 seek）");
+  assert.equal(await requestDirectPlaybackUrl(refusing, "x.mp4", "video/mp4"), null, "读 URL 拿不到也必须是 null");
+  console.log("ok 3 - PWA：跨分片上传/进度/封面/回落信号 + 直连读 URL（Range）");
 } finally {
   await new Promise((resolve) => server.close(resolve));
 }

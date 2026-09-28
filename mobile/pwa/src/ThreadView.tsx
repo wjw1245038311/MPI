@@ -11,6 +11,7 @@ import type { ThreadActions, SendMode } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
 import { compressImageFile, type CompressedImage } from "./lib/image-attach";
 import { extractVideoPoster, looksLikeVideo } from "./lib/video-attach";
+import { requestDirectPlaybackUrl, uploadVideoDirect } from "./lib/attachment-direct";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
 import { withChoiceSegments } from "./lib/choice-block";
@@ -57,6 +58,11 @@ interface PickedVideo {
   mimeType: string;
   data: string;
   size: number;
+  /** 首帧封面（base64 JPEG）——快照里的画面就是它；抽不出来就没有。 */
+  poster?: string;
+  posterMimeType?: string;
+  /** 直连上传完成的附件名（有它时字节已在主机，`data` 为空串）。 */
+  storedName?: string;
 }
 
 const formatSize = (bytes: number): string =>
@@ -944,6 +950,8 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   // 大视频按需拉取（点开才拉）：进度 + 取消。null = 当前没有进行中的拉取。
   const [lazyVideo, setLazyVideo] = useState<{ name: string; loaded: number; total: number; error?: string } | null>(null);
   const lazyAbortRef = useRef<AbortController | null>(null);
+  // 视频**直连上传**进度（P1）：几十 MB 上传必须给反馈，否则像卡死。
+  const [videoUpload, setVideoUpload] = useState<{ name: string; loaded: number; total: number } | null>(null);
 
   // 切会话：载入该会话的草稿 + 把顶层配置回收到当前快照值。
   const threadIdRef = useRef(view.threadId);
@@ -1058,6 +1066,14 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     lazyAbortRef.current = controller;
     setLazyVideo({ name, loaded: 0, total: 0 });
     try {
+      // 先试**直连**（P1）：URL 直接喂给 <video>，原生 Range、可 seek、边下边播。
+      const directUrl = await requestDirectPlaybackUrl(actions, name, mimeType);
+      if (directUrl) {
+        setLazyVideo(null);
+        setVideoPreviewSrc(directUrl);
+        return;
+      }
+      // 回落：中继分片（拉完才能播，但离线主机也能工作）。
       const url = await actions.fetchAttachmentUrl(name, mimeType, {
         signal: controller.signal,
         onProgress: (loaded, total) => setLazyVideo({ name, loaded, total }),
@@ -1246,17 +1262,63 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     void input.click();
   };
 
+  /**
+   * 准备一个视频附件：**优先直连上传**（P1，可到 128MB，消息里零字节），
+   * 不可用才回落内联（≤3MB）。
+   *
+   * 为什么先直连：内联天花板是 8MB 内层 envelope（单文件 ~6MB，再扣封面额度）；
+   * 直连走后只带名字。直连不可用（主机不在 tailnet / 未开通转发 / 浏览器拦混合内容）
+   * 时小文件照旧内联，大文件给一句能归因的错（而不是隐形的 PAYLOAD_TOO_LARGE）。
+   */
+  const prepareVideo = async (file: File, mimeType: string): Promise<void> => {
+    setVideoUpload({ name: file.name || "视频", loaded: 0, total: file.size });
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      // 首帧封面（抽不到就只发视频本体：接收端退化成深色卡片，不影响可播性）。
+      const poster = await extractVideoPoster(file).catch(() => null);
+      if (actions) {
+        const direct = await uploadVideoDirect(
+          actions,
+          { file, bytes, mimeType, poster },
+          (loaded, total) => setVideoUpload({ name: file.name || "视频", loaded, total }),
+        );
+        if (direct) {
+          setVideos([
+            {
+              mimeType,
+              data: "",
+              size: bytes.byteLength,
+              storedName: direct.storedName,
+              // 封面已随上传 POST 给主机（失败也不影响）；仍随消息带一份作兜底——主机侧是幂等写入。
+              ...(poster ? { poster: poster.data, posterMimeType: poster.mimeType } : {}),
+            },
+          ]);
+          return;
+        }
+      }
+      if (file.size > MAX_VIDEO_BYTES) {
+        setSendError(
+          `视频太大：${formatSize(file.size)}。直连上传不可用（需主机在线且已开通附件直连转发），内联上限只有 ${Math.round(MAX_VIDEO_BYTES / 1_000_000)}MB——请检查主机的 Tailscale 后重试。`,
+        );
+        return;
+      }
+      // 回落：内联上传（受 8MB 内层 envelope 与单文件上限约束）。
+      setVideos([
+        {
+          mimeType,
+          data: arrayBufferToBase64(bytes.buffer as ArrayBuffer),
+          size: file.size,
+          ...(poster ? { poster: poster.data, posterMimeType: poster.mimeType } : {}),
+        },
+      ]);
+    } finally {
+      setVideoUpload(null);
+    }
+  };
+
   const onVideoPicked = async (list: FileList | null) => {
     const file = list?.[0];
     if (!file) return;
-    // 上限比文件小得多（3MB）——因为视频是两个端点都能直接看的**内联**内容，
-    // 字节会进每次快照。提示里给出原因，别只报一个数字（真机反馈：用户会反复重试）。
-    if (file.size > MAX_VIDEO_BYTES) {
-      setSendError(
-        `视频太大：${formatSize(file.size)}（上限 ${Math.round(MAX_VIDEO_BYTES / 1_000_000)}MB，约 10 秒 720p）。请截短或压缩后再发——超限的视频会跟着每次同步下发，会把会话拖慢。`,
-      );
-      return;
-    }
     const browserType = file.type || "";
     if (browserType && !/^video\//.test(browserType)) {
       setSendError(`只支持视频文件（实际：${browserType}）`);
@@ -1264,9 +1326,8 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     }
     try {
       setSendError(null);
-      const data = arrayBufferToBase64(await file.arrayBuffer());
       // 包成 video/mp4 而不是空 mime：主机会拒掉非 video/* 的请求（INVALID_REQUEST）。
-      setVideos([{ mimeType: browserType || "video/mp4", data, size: file.size }]);
+      await prepareVideo(file, browserType || "video/mp4");
     } catch (error) {
       setSendError(`视频读取失败：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1867,6 +1928,17 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       )}
 
       {toast && <div className="toast">{toast}</div>}
+
+      {/* 视频直连上传进度（P1）：几十 MB 上传必须有反馈，否则用户以为卡死。 */}
+      {videoUpload && (
+        <div className="video-fetch" role="status" aria-live="polite">
+          <span className="vf-text">
+            正在上传视频 {videoUpload.name}
+            {videoUpload.total > 0 ? ` ${Math.min(99, Math.floor((videoUpload.loaded / videoUpload.total) * 100))}%` : "…"}
+            {videoUpload.total > 0 ? `（${formatSize(videoUpload.loaded)} / ${formatSize(videoUpload.total)}）` : ""}
+          </span>
+        </div>
+      )}
 
       {/* 大视频按需拉取：进度 + 取消（拉的是附件字节，几十 MB 也要有反馈）。 */}
       {lazyVideo && (

@@ -101,7 +101,7 @@ export class ThreadActions {
     mode: SendMode,
     images?: { type?: "image"; data: string; mimeType: string }[],
     files?: { name: string; mimeType?: string; data: string }[],
-    videos?: { type?: "video"; data: string; mimeType: string; size?: number; poster?: string; posterMimeType?: string }[],
+    videos?: { type?: "video"; data: string; mimeType: string; size?: number; poster?: string; posterMimeType?: string; storedName?: string }[],
   ): Promise<unknown> {
     const trimmed = text.trim();
     if (!trimmed && !(images && images.length) && !(files && files.length) && !(videos && videos.length)) {
@@ -123,6 +123,8 @@ export class ThreadActions {
               mimeType: video.mimeType,
               ...(typeof video.size === "number" ? { size: video.size } : {}),
               ...(video.poster ? { poster: video.poster, posterMimeType: video.posterMimeType || "image/jpeg" } : {}),
+              // 直连上传完成的名字：消息里零字节（字节已在主机附件区）。
+              ...(video.storedName ? { storedName: video.storedName } : {}),
             })),
           }
         : {}),
@@ -141,8 +143,7 @@ export class ThreadActions {
     return this.writeRequest("thread.abort", {}, "abort");
   }
 
-  /**
-   * 按需取回一个附件的字节，拼成 objectURL（点开视频才拉）。
+  /** 按需取回一个附件的字节，拼成 objectURL（点开视频才拉）。
    *
    * 只读、不需要写租约（与 stt.transcribe 同类）：拉字节不该抢会话的编辑权。
    * 作用域校验在主机侧（附件必须被这个会话引用过，见 ipc.ts 的 attachmentNameAllowed）。
@@ -151,8 +152,31 @@ export class ThreadActions {
     return fetchAttachmentUrl((target, offset) => this.fetchAttachmentChunk(target, offset), name, mimeType, options);
   }
 
-  /** 拉字节那一半（测试与调试用；界面走 fetchAttachmentUrl 拿可播放的 URL）。 */
-  fetchAttachmentBytes(name: string, options: AttachmentFetchOptions = {}): Promise<Uint8Array> {
+  /**
+   * 申请**直连附件 URL**（能力令牌）：上行 PUT / 下行 GET+Range 都走它。
+   *
+   * 只读、不需要写租约（拉/传字节不该抢会话的编辑权）。主机回 DIRECT_UNAVAILABLE
+   * 表示直连不可用（不在 tailnet / 未开通转发）——调用方据此走内联或中继分片回落。
+   */
+  async requestAttachmentUrl(input: {
+    mode: "read" | "write";
+    name?: string;
+    originalName?: string;
+    mimeType?: string;
+    size?: number;
+  }): Promise<{ url: string; token: string; name: string; expiresAt: number }> {
+    const payload = await this.requester.request<{ direct?: { url?: string; token?: string; name?: string; expiresAt?: number } }>(
+      "attachment.url",
+      input,
+      "attachUrl",
+      20_000,
+    );
+    const direct = payload?.direct;
+    if (!direct?.url || !direct.name) throw new Error("attachment.url returned no url");
+    return { url: direct.url, token: direct.token || "", name: direct.name, expiresAt: direct.expiresAt || 0 };
+  }
+
+  /** 拉字节那一半（测试与调试用；界面走 fetchAttachmentUrl 拿可播放的 URL）。 */  fetchAttachmentBytes(name: string, options: AttachmentFetchOptions = {}): Promise<Uint8Array> {
     return fetchAttachmentBytes((target, offset) => this.fetchAttachmentChunk(target, offset), name, options);
   }
 

@@ -199,7 +199,7 @@ import {
   videoRefEnvelope,
 } from "./remote/video-refs";
 import { fillVideoPosters } from "./remote/video-poster";
-import { ATTACHMENT_FETCH_CHUNK_BYTES, adoptChatVideo, findVideoPoster, isVideoFile, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes } from "./chat-attachment-store";
+import { ATTACHMENT_FETCH_CHUNK_BYTES, adoptChatVideo, findVideoPoster, isVideoFile, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeVideoPoster } from "./chat-attachment-store";
 import { createAttachmentServer } from "./remote/attachment-server";
 import { AttachmentTokenStore } from "./remote/attachment-tokens";
 import type { Server } from "node:http";import {
@@ -2342,11 +2342,17 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
   /** 本进程内经写令牌上传完成的附件（名字 → 归属），消息里带 storedName 时据此放行。 */
   const uploadedAttachments = new Map<string, { threadId: string; deviceId: string; at: number }>();
   const ATTACHMENT_HTTP_PORT = Number(process.env.MPI_ATTACHMENT_PORT || 8899);
+  /** tailnet 侧的对外端口（由 `scripts/setup-attachment-serve.sh` 的 --https 转发指向内部端口）。 */
+  const ATTACHMENT_PUBLIC_PORT = Number(process.env.MPI_ATTACHMENT_PUBLIC_PORT || 8443);
 
   /**
-   * 直连 URL 的基地址（tailnet 主机名 + 端口）。拿不到 → null（客户端回落内联/中继分片）。
+   * 直连 URL 的基地址（tailnet 主机名 + 对外端口）。拿不到 → null（客户端回落内联/中继分片）。
    *
-   * 为什么要检测而不是写死：机器名/域名因机而异，而写死一个主机名就等于把配置钉在一台机器上。
+   * 为什么必须 **https**：PWA 从 https 页面加载，若附件 URL 是 http，浏览器会当成
+   * **混合内容**直接拦掉（媒体属于可拦类型）——网页端就永远拉不到字节。Tailscale 会给本机
+   * 签发真实的 Let's Encrypt 证书（*.ts.net），三端都信。
+   *
+   * 为什么检测而不是写死：机器名/域名因机而异，写死就等于把配置钉在一台机器上。
    * 优先级：环境变量覆盖（开发/测试） > tailscale CLI 读取 `Self.DNSName`。
    */
   async function resolveAttachmentBaseUrl(): Promise<string | null> {
@@ -2365,7 +2371,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         windowsHide: true,
       });
       const dnsName = String(JSON.parse(raw)?.Self?.DNSName || "").replace(/\.$/, "");
-      if (dnsName) attachmentBaseUrl = `http://${dnsName}:${ATTACHMENT_HTTP_PORT}`;
+      if (dnsName) attachmentBaseUrl = `https://${dnsName}:${ATTACHMENT_PUBLIC_PORT}`;
       else appendDiagLog("attachment-direct unavailable: tailscale reports no DNS name");
     } catch (error) {
       // 常见原因：tailscale CLI 不在 PATH（Windows 默认不装进 PATH）。此时直连不可用，
@@ -2447,6 +2453,11 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     (videos ?? [])
       .map((video) => {
         if (video.storedName) {
+          // 直连上传时封面走的是 POST /att/<token>；万一那一步失败，消息里还会再带一份
+          // （客户端不知道主机到底写没写成）——这里补写一次，写入是幂等的。
+          if (video.poster) {
+            storeVideoPoster(video.storedName, { data: video.poster, mimeType: video.posterMimeType });
+          }
           const direct = storedVideoEnvelope(video.storedName);
           if (direct) return direct;
           // 令牌过期/文件被清 → 当作没传过（不静默丢消息：客户端会看到视频块缺失）
