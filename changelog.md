@@ -10,8 +10,8 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    - **视频本体一律不再进快照**（见下一条：改用一张首帧封面当气泡画面），点开才拉字节：新协议 `attachment.fetch`，按 offset 分片、带进度与取消，拉完直接全屏播放
    - 主机侧：视频落盘上限 3MB → **128MB**，聊天附件区总量 300MB → 1GB（大视频不再内联后，附件区是它们唯一的家）；分片取字节按**会话作用域**授权（只能取本会话引用过的附件），并且不吃请求缓存（分片几百 KB，缓存会把内存吃掉几百 MB）
    - 三端：PWA（`attachment-fetch.ts`，objectURL 缓存最近 2 个）、安卓（直写 `cacheDir`，先 `.part` 再改名，拉过一次不再走网络）都已接入；桌面端无需改动（本机走 `chatatt://`，本来就带 Range 拖动）
-   - 上传口径不变：PWA 的 🎬 入口仍受 3MB 限制（走 `videos` 通道整帧上传，受 8MB 单帧上限制约），手机与 PWA 的 📎「文件」入口 6MB，桌面端拖入可到 128MB
-   - 已知限制（v1）：**手机/PWA 自己发的视频超过 6MB 发不出去**（文件通道单文件上限；要支持得先做分片上传）；另外**手机相册入口只收图片**，视频得走 📎「文件」入口挑
+   - 上传口径（本条落地时）：PWA 的 🎬 入口仍受 3MB 限制（走 `videos` 通道整帧上传，受 8MB 单帧上限制约），手机与 PWA 的 📎「文件」入口 6MB，桌面端拖入可到 128MB——**PWA 的 🎬 入口已被下一条（附件直连）改成直传，此处只对回落路径与安卓端仍成立**
+   - 已知限制（v1）：**手机/PWA 自己发的视频超过 6MB 发不出去**（文件通道单文件上限；要支持得先做分片上传——**PWA 已由下一条解决，安卓端仍未解决**）；另外**手机相册入口只收图片**，视频得走 📎「文件」入口挑
 
    验证方式：`npm run typecheck` + `npm test`（新增 `test:remote-attach`：分片读取边界/作用域/不缓存/PWA 与安卓的循环与护栏/快照内联判定）+（手机端）`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`。应用内：桌面端把一个 5–50MB 的 mp4 拖进会话发送 → 手机 / PWA 气泡里出现可点开的深色视频框（右下角显示尺寸与格式）→ 点一下框内出现「正在获取视频 N%」→ 拉完自动全屏播放；PWA 再关掉重开同一个视频应立刻播（走了本地缓存）；主机日志出现 `remote-attach fetch name=… off=0 len=… size=… eof=…`（每个视频只记首片与末片）。
 
@@ -22,6 +22,16 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    - 封面同样不进收缩器（砍半就是一张破图），超预算时让位的是「更早的消息」
 
    验证方式：`npm run typecheck` + `npm test`（`test:remote-video` 新增封面常量三端一致性、引用协议 poster 往返、快照不含视频本体；`test:remote-attach` 新增封面回填判定；`test:chat-attachments` 新增封面落盘/超限丢弃/信封往返）+ 安卓 `assembleDebug :app:testDebugUnitTest`。应用内：桌面端拖一个 50MB 的 mp4 发送 → 手机/PWA 气泡里**直接看到首帧画面**（不是黑框）→ 点一下才出现进度并开始拉取；主机日志里该次快照的 `remote-history … vid=1 posters=1 posterBytes=<几万>`，`encoded=` 应远小于 1MB。
+
+3. **附件改走「直连」（P1）：视频字节不再塞进协议帧，改由客户端直接向主机 PUT/GET**——上一条解决了「快照被视频撑爆」，但字节仍然只能走两条窄路：上行内联进 `thread.prompt` 那一帧（单文件被 8MB 内层信封卡到 ~6MB），下行按中继分片拉（拉完才能播、不能拖进度条）。现在主机多开一个**附件 HTTP 服务**，字节走它：
+   - 服务只绑 **127.0.0.1**，由 `tailscale serve --tcp` 转发到 tailnet（`scripts/setup-attachment-serve.sh`，对外默认 8443），URL 形如 `https://<主机名>.ts.net:8443/att/<token>`——局域网与公网都碰不到它
+   - 授权是**能力令牌**（新 `attachment-tokens.ts`）：只能由主机通过既有 E2E 通道签发（`attachment.url`），绑定 (会话, 附件, 设备, 方向, 15 分钟时限)；上传字节到齐才登记作用域，主机重启即全部失效
+   - 下行 `GET` 支持 **Range**（206，可拖进度条、边下边播）；上行按 **4MB 分片 PUT**（`Content-Range` / `X-MPI-Offset`，收齐判定，弱网可只重传失败分片），另有一次独立 `POST` 送首帧封面。单文件上限 128MB
+   - PWA：选视频**先申请写令牌直传**（消息里只带名字、零字节），不可用自动回落内联（≤3MB）；点开视频**先申请读令牌喂给 `<video>`**（原生 Range、可 seek），拿不到才回落原来的中继分片
+   - 为什么必须 https：PWA 从 https 页面加载，http 的附件 URL 会被浏览器按**混合内容**直接拦掉（媒体属于可拦类型）
+   - 已知限制：**安卓端还没接直连**（P2 待做）——手机 App 看大视频仍走中继分片、发大视频仍受 6MB 上限；桌面端无需改动（本机走 `chatatt://`，本就带 Range）
+
+   验证方式：`npm run typecheck` + `npm run test:attachment-direct`（令牌作用域/过期/撤销、上传分片偏移与收齐、Range 206 与首尾边界、上传超限、CORS 预检）+ `npm run test:pwa-shared` + `mobile/pwa` 的 `tsc --noEmit`。应用内（手机浏览器 / PWA，**先硬刷新**——service worker 会缓存旧包）：① 发大视频 —— 🎬 选一个 20–50MB 的 mp4 → 出现「正在上传视频 N%」→ 发送后气泡里是首帧封面；主机日志应有 `attachment-direct mint write name=… dev=…` + `attachment-http upload done name=… size=…`。② 播大视频 —— 点开该视频应立即开始播、且**能拖进度条**；主机日志应有 `attachment-direct mint read name=…` 与 `attachment-http GET name=… range=bytes=…`（**没有 GET 那行 = 回落到了中继**，此时会看到一长串 `remote-attach fetch` 且要等整段下完）。③ 反向 —— 桌面端拖一个大视频发出 → 手机 PWA 上同样点开即播。④ 回落 —— 把手机 Tailscale 关掉再点开视频，应仍能播（走中继，慢但可用）。
 
 ## v0.9.2（2026-09-26）
 

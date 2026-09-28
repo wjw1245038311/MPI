@@ -159,6 +159,11 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
         };
         const range = parseRange(req.headers.range ?? null, size);
         token.hits += 1;
+        // 取证：**直连下行到底有没有被用上**。一次播放有几十条 Range 请求，全记会刷爆日志，
+        // 只记这条令牌的第一次命中——排查时「有这行 = 走了直连 / 没有 = 客户端回落了中继」。
+        if (token.hits === 1) {
+          log(`attachment-http GET name=${token.name.slice(0, 48)} size=${size} range=${req.headers.range ?? "-"}`);
+        }
         if (range) {
           const length = range.end - range.start + 1;
           const body = req.method === "HEAD" ? "" : readSlice(abs, range.start, range.end);
