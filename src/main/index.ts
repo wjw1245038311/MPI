@@ -13,6 +13,7 @@ import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-p
 import { registerPdfViewerProtocol, registerPdfViewerScheme } from "./pdf-viewer-protocol";
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
 import { registerChatAttachmentProtocol, registerChatAttachmentScheme } from "./chat-attachment-protocol";
+import { pruneChatAttachments } from "./chat-attachment-store";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
 import { stopMemoryEndpoint } from "./memory-endpoint";
 import { disposeMemoryIndex } from "./memory-service";
@@ -281,6 +282,9 @@ if (!gotLock) {
     registerPdfViewerProtocol();
     registerTodoAttachmentProtocol();
     registerChatAttachmentProtocol();
+    // 聊天附件区按总量上限清理最旧的（视频会积累；历史引用失去文件就退化成占位卡片，
+    // 所以这里只删到限额内、而不是全清）。
+    pruneChatAttachments();
     // Remove runtime trees superseded by an in-app core update (they may have
     // been locked by pi child processes during the previous run; nothing holds
     // them now). Best effort — leftovers simply wait for the next launch.

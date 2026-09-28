@@ -13,15 +13,14 @@
  *
  * 为什么支持 Range：视频要拖进度条。没有 206 就只能整段读完再播。
  */
-import { app, protocol } from "electron";
+import { protocol } from "electron";
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
-import { basename, extname, join } from "node:path";
+import { extname } from "node:path";
+import { appendDiagLog } from "./diag-log";
+import { resolveChatAttachment } from "./chat-attachment-store";
 
 const SCHEME = "chatatt";
-/** 与 ipc.ts 的 stageClipboardFile 同一目录（app.getPath("temp")/mpi-clipboard）。 */
-const CLIPBOARD_FILE_DIR = "mpi-clipboard";
-/** 只为「内联播放的视频附件」设计；上限之外的请求一律拒绝（不给它当通用文件服务器用）。 */
-const MAX_SERVED_BYTES = 64 * 1024 * 1024;
+// 附件的落盘目录、文件名白名单与合法性校验都在 chat-attachment-store.ts——这里只管协议。
 
 const MIME_TYPES: Record<string, string> = {
   ".mp4": "video/mp4",
@@ -32,32 +31,9 @@ const MIME_TYPES: Record<string, string> = {
   ".avi": "video/x-msvideo",
 };
 
-/** 文件名白名单：`stageRemoteVideos` 产出的形状（uuid-video-<ts>-<n>.<ext>）。 */
-const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$/;
-
-/** 渲染层拼 URL 用的唯一入口（主机侧同名函数见 ipc.ts 的 stageRemoteVideos 注释）。 */
+/** 渲染层拼 URL 用的唯一入口（落盘侧见 chat-attachment-store.ts）。 */
 export function chatAttachmentUrl(name: string): string {
   return `${SCHEME}://attachment/?name=${encodeURIComponent(name)}`;
-}
-
-/**
- * 校验文件名并解析成磁盘路径；不合法或文件不存在/过大 → null。
- *
- * 双重防线：① 文件名形状白名单（挡掉 `..`／路径分隔符／盘符）；② `basename()` 回查，
- * 确保拼接后仍落在 `%TEMP%/mpi-clipboard` 里。
- */
-export function resolveChatAttachment(name: string): string | null {
-  if (!name || !NAME_RE.test(name) || name.includes("..")) return null;
-  const dir = join(app.getPath("temp"), CLIPBOARD_FILE_DIR);
-  const target = join(dir, name);
-  if (basename(target) !== name) return null;
-  try {
-    const stats = statSync(target);
-    if (!stats.isFile() || stats.size > MAX_SERVED_BYTES) return null;
-  } catch {
-    return null; // 临时目录可能已被系统清理——调用方按 404 显示占位卡片
-  }
-  return target;
 }
 
 /** 解析 `Range: bytes=…`（导出供测试）。不可满足 → null（调用方退回 200 全量）。 */
@@ -110,7 +86,12 @@ export function registerChatAttachmentProtocol(): void {
       const url = new URL(request.url);
       const name = url.searchParams.get("name") || "";
       const target = resolveChatAttachment(name);
-      if (!target) return new Response("Not found", { status: 404 });
+      if (!target) {
+        // 取证：404 是「播放器转圈 / 显示占位卡片」最常见的原因（附件被清理、名字对不上），
+        // 而协议请求本身不进任何日志——没这行就只能猜。
+        appendDiagLog(`chatatt 404 name=${name.slice(0, 60)}`);
+        return new Response("Not found", { status: 404 });
+      }
       const size = statSync(target).size;
       const headers: Record<string, string> = {
         "Content-Type": MIME_TYPES[extname(target).toLowerCase()] || "application/octet-stream",

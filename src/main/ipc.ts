@@ -197,8 +197,8 @@ import {
   splitVideoRefs,
   videoMimeForPath,
   videoRefEnvelope,
-  VIDEO_EXT_BY_MIME,
 } from "./remote/video-refs";
+import { adoptChatVideo, isVideoFile, stageChatVideoBytes } from "./chat-attachment-store";
 import {
   RemoteProtocolError,
   type RemoteFileArtifact,
@@ -468,6 +468,17 @@ function processAttachments(attachments: Attachment[] | undefined, text: string)
           // inline — let the agent read it selectively with its file tools.
           extra += `\n\n<file name="${attr(a.name)}" path="${attr(a.abs)}" note="conversation transcript; read selectively with file tools" />`;
           continue;
+        }
+        // 视频：**复制**进持久附件区，并用 attach="video" 信封——这样桌面端与手机端都能
+        // 在对话框里直接播（见 chat-attachment-store.ts / remote/video-refs.ts）。
+        // 超过内联上限的视频保持普通文件引用（照旧不内联，避免把每次快照撑爆）。
+        if (isVideoFile(a.name || a.abs)) {
+          const adopted = adoptChatVideo(a.abs);
+          if (adopted) {
+            extra += videoRefEnvelope(adopted.name, adopted.abs);
+            continue;
+          }
+          // 复制失败（太大/读不到）→ 退回普通引用，至少 agent 还能读到原文件
         }
         if (TEXT_ATTACH_EXTS.has(ext) || ext === "") {
           const st = statSync(a.abs);
@@ -2215,13 +2226,10 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
    */
   const stageRemoteVideos = (videos?: RemoteVideoInput[]): string =>
     (videos ?? [])
-      .map((video, index) => {
-        const ext = VIDEO_EXT_BY_MIME[String(video.mimeType || "").toLowerCase()] || ".mp4";
-        const staged = stageClipboardFile({
-          name: `video-${Date.now()}-${index}${ext}`,
-          mimeType: video.mimeType,
-          data: video.data,
-        });
+      .map((video) => {
+        // 落在 <userData>/chat-attachments（**持久**区，不是 %TEMP%）：消息里的视频引用
+        // 属于会话历史，文件被清理掉就只剩占位卡片。见 chat-attachment-store.ts。
+        const staged = stageChatVideoBytes({ name: undefined, mimeType: video.mimeType, data: video.data });
         return videoRefEnvelope(staged.name, staged.abs);
       })
       .join("");
