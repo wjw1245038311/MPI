@@ -16,7 +16,8 @@ register(new URL("./ts-ext-loader.mjs", import.meta.url));
 
 const {
   REMOTE_VIDEO_BASE64_BUDGET,
-  REMOTE_VIDEO_FILE_MAX_BYTES,
+  REMOTE_VIDEO_INLINE_MAX_BYTES,
+  REMOTE_VIDEO_MAX_BYTES,
   splitVideoRefs,
   videoMimeForPath,
   videoRefEnvelope,
@@ -110,16 +111,36 @@ const ROOT = resolve(import.meta.dirname, "..");
   const serviceSrc = readFileSync(resolve(ROOT, "src", "main", "remote", "service.ts"), "utf8");
   const hostMax = Number(/MAX_REMOTE_VIDEO_DATA = ([\d_]+)/.exec(serviceSrc)?.[1]?.replace(/_/g, ""));
   assert.ok(hostMax > 0, "service.ts 里应有 MAX_REMOTE_VIDEO_DATA");
-  const expectedBase64 = Math.ceil((REMOTE_VIDEO_FILE_MAX_BYTES * 4) / 3);
-  assert.ok(hostMax >= expectedBase64, `主机上限 ${hostMax} 必须装得下 ${REMOTE_VIDEO_FILE_MAX_BYTES} 原始字节（base64 ≈ ${expectedBase64}）`);
+  const expectedBase64 = Math.ceil((REMOTE_VIDEO_INLINE_MAX_BYTES * 4) / 3);
+  assert.ok(
+    hostMax >= expectedBase64,
+    `主机上限 ${hostMax} 必须装得下 ${REMOTE_VIDEO_INLINE_MAX_BYTES} 原始字节（base64 ≈ ${expectedBase64}，PWA 选中的视频走 videos 通道内联上传）`,
+  );
 
   const pwaSrc = readFileSync(resolve(ROOT, "mobile", "pwa", "src", "ThreadView.tsx"), "utf8");
   const pwaMax = Number(/MAX_VIDEO_BYTES = ([\d_]+)/.exec(pwaSrc)?.[1]?.replace(/_/g, ""));
-  assert.equal(pwaMax, REMOTE_VIDEO_FILE_MAX_BYTES, "PWA 的视频上限必须与主机侧 video-refs.ts 一致");
+  assert.equal(pwaMax, REMOTE_VIDEO_INLINE_MAX_BYTES, "PWA 的视频上限必须等于主机侧的**内联**上限（它走 videos 通道内联上传）");
 
   assert.ok(
-    REMOTE_VIDEO_BASE64_BUDGET + REMOTE_VIDEO_FILE_MAX_BYTES < REMOTE_HISTORY_BYTE_BUDGET,
-    "视频预算必须留得下至少一个视频本体，且总预算不许超快照预算",
+    REMOTE_VIDEO_BASE64_BUDGET + REMOTE_VIDEO_INLINE_MAX_BYTES < REMOTE_HISTORY_BYTE_BUDGET,
+    "视频预算必须留得下至少一个内联视频的本体，且总预算不许超快照预算",
+  );
+
+  // 2026-09-28：内联上限与“可存为视频附件”的上限拆成两个。
+  // 拆开才成立的两个前提：① 大视频仍有名字可拉（客户端 attachment.fetch）；
+  // ② 附件区总量上限装得下至少一个最大的视频（否则刚落盘就被自己的清理策略盯上）。
+  assert.ok(
+    REMOTE_VIDEO_MAX_BYTES > REMOTE_VIDEO_INLINE_MAX_BYTES,
+    "可存的视频上限必须大于内联上限（否则拆分无意义）",
+  );
+  const storeSrc = readFileSync(resolve(ROOT, "src", "main", "chat-attachment-store.ts"), "utf8");
+  const dirMaxExpression = /const MAX_DIR_BYTES = ([\d_\s*]+);/.exec(storeSrc)?.[1];
+  const dirMaxBytes = (dirMaxExpression || "")
+    .split("*")
+    .reduce((acc, part) => acc * Number(part.replace(/[\s_]/g, "") || NaN), 1);
+  assert.ok(
+    Number.isFinite(dirMaxBytes) && dirMaxBytes >= REMOTE_VIDEO_MAX_BYTES * 4,
+    `附件区总量（${dirMaxExpression?.trim() ?? "读不到"}）至少要装得下 4 个最大视频（${REMOTE_VIDEO_MAX_BYTES}），否则等于没放宽`,
   );
 }
 

@@ -23,12 +23,15 @@ import { formatElapsed, shouldShowThinkingIndicator } from "./lib/thinking-indic
 const MAX_FILES = 3;
 const MAX_FILE_BYTES = 6_000_000;
 /**
- * 视频附件上限（原始字节）。
+ * 视频附件上限（原始字节）——**内联上传**的上限。
  *
- * 为什么比文件小得多：视频是**内联**下发的（要“像图片一样在对话框里直接看”），
- * 字节会进每次快照，而快照有 8MB 硬上限。这个值必须与主机侧
- * `src/main/remote/video-refs.ts` 的 REMOTE_VIDEO_FILE_MAX_BYTES 一致——
+ * 为什么比文件小得多：PWA 选中的视频是走 `videos` 通道 base64 内联上传的（要“像图片一样在
+ * 对话框里直接看”），整帧受 8MB envelope 硬上限制约。这个值必须与主机侧
+ * `src/main/remote/video-refs.ts` 的 REMOTE_VIDEO_INLINE_MAX_BYTES 一致——
  * scripts/test-remote-video.mjs 会直接读本文件做漂移守卫。
+ *
+ * 更大的视频仍然可看：桌面端拖进来的大视频会以 `attach="video"` 引用存进主机附件区，
+ * 三端气泡里都显示可点开的卡片，点开时才按需拉字节（host 的 attachment.fetch）。
  */
 const MAX_VIDEO_BYTES = 3_000_000;
 
@@ -380,17 +383,37 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
     return <img className="msg-image" src={src} alt={block.mimeType || "image"} />;
   }
   if (block.type === "video") {
-    // 本体可能缺：实时事件通道刻意剥掉大帧（照图片的语义），或超出快照视频预算。
-    // 这时给占位卡片而不是空白——否则用户会以为消息丢了。
+    const meta = [block.size ? formatSize(block.size) : "", (block.mimeType || "").replace("video/", "")].filter(Boolean).join(" · ");
+    // 本体可能缺：实时事件通道刻意剥掉大帧（照图片的语义），或本次快照只给了占位——
+    // 大视频改成**点开才拉**（见 lib/attachment-fetch.ts），不再随快照下发几 MB 字节。
     if (!block.data) {
+      // 没有名字（历史遗留消息 / 附件已被清理）→ 真占位卡片，点了也没得拉。
+      if (!block.name) {
+        return (
+          <div className="msg-video-placeholder">
+            <span className="mvp-icon" aria-hidden="true">🎬</span>
+            <span className="mvp-text">
+              <strong>视频</strong>
+              {block.size ? ` · ${formatSize(block.size)}` : ""}
+              <em>{block.text || "视频未随本次同步下发"}</em>
+            </span>
+          </div>
+        );
+      }
+      // 可点开的懒加载卡片：深色框 + ▶，点击时按需拉字节（拉完直接全屏播）。
+      // data-* 属性供滚动容器上的事件委托读取（与图片点击同一套路，不把回调穿进 Block）。
       return (
-        <div className="msg-video-placeholder">
-          <span className="mvp-icon" aria-hidden="true">🎬</span>
-          <span className="mvp-text">
-            <strong>{block.name || "视频"}</strong>
-            {block.size ? ` · ${formatSize(block.size)}` : ""}
-            <em>{block.text || "视频未随本次同步下发"}</em>
+        <div
+          className="msg-video-card msg-video-card--lazy"
+          data-lazy-video={block.name}
+          data-lazy-mime={block.mimeType || "video/mp4"}
+          title={block.name}
+        >
+          <span className="msg-video-play" aria-hidden="true">
+            ▶
           </span>
+          {meta ? <span className="msg-video-meta">{meta}</span> : null}
+          <span className="msg-video-lazy-hint">点击播放</span>
         </div>
       );
     }
@@ -398,7 +421,6 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
     // 飞书式：气泡里**只给一个视频框**（首帧当封面 + 中央 ▶），点一下直接全屏播。
     // 这里的 <video> 只负责出首帧（无 controls、静音、`#t=0.1` 促帧）——不在列表里常驻
     // 一个可控播放器，也就不存在“先点播放再点全屏”的两跳。
-    const meta = [block.size ? formatSize(block.size) : "", (block.mimeType || "").replace("video/", "")].filter(Boolean).join(" · ");
     return (
       <div className="msg-video-card">
         <video className="msg-video-poster" src={`${src}#t=0.1`} muted playsInline preload="metadata" tabIndex={-1} />
@@ -909,6 +931,9 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   // 视频全屏预览（气泡里的播放器在竖屏手机上太小）。
   const [videoPreviewSrc, setVideoPreviewSrc] = useState<string | null>(null);
+  // 大视频按需拉取（点开才拉）：进度 + 取消。null = 当前没有进行中的拉取。
+  const [lazyVideo, setLazyVideo] = useState<{ name: string; loaded: number; total: number; error?: string } | null>(null);
+  const lazyAbortRef = useRef<AbortController | null>(null);
 
   // 切会话：载入该会话的草稿 + 把顶层配置回收到当前快照值。
   const threadIdRef = useRef(view.threadId);
@@ -997,11 +1022,53 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     // 视频框点击 → 直接全屏播（飞书式）。从框里的 <video> 取 src（不把 data URL 再塞一份进
     // DOM 属性——一段 3MB 视频的 base64 复制到属性里是实打实的内存与解析开销）。
     if (target instanceof HTMLElement && target.closest(".msg-video-card")) {
+      const lazy = target.closest<HTMLElement>(".msg-video-card--lazy");
+      // 懒加载卡片（快照里只有占位，没有字节）：点开才按需拉。
+      if (lazy?.dataset.lazyVideo) {
+        void openLazyVideo(lazy.dataset.lazyVideo, lazy.dataset.lazyMime || "video/mp4");
+        return;
+      }
       const poster = target.closest(".msg-video-card")?.querySelector("video");
       // 去掉促帧用的 #t=0.1，全屏播放从 0 开始。
       if (poster?.src) setVideoPreviewSrc(poster.src.split("#")[0]);
     }
   };
+
+  /**
+   * 点开大视频：按需把字节拉回来（附件不再随快照下发）→ 拉完直接全屏播。
+   *
+   * 单片几百 KB、一个几十 MB 的视频要几十片，所以必须有进度与取消：否则弱网下用户
+   * 只能盯着一个没有任何反馈的深色框（真机反馈里最容易被当成“卡死”的形态）。
+   * 拉失败就退化成卡片上的提示——附件被清理（NOT_FOUND）是预期内的一种结局。
+   */
+  const openLazyVideo = async (name: string, mimeType: string): Promise<void> => {
+    if (!actions || lazyVideo) return;
+    lazyAbortRef.current?.abort();
+    const controller = new AbortController();
+    lazyAbortRef.current = controller;
+    setLazyVideo({ name, loaded: 0, total: 0 });
+    try {
+      const url = await actions.fetchAttachmentUrl(name, mimeType, {
+        signal: controller.signal,
+        onProgress: (loaded, total) => setLazyVideo({ name, loaded, total }),
+      });
+      setLazyVideo(null);
+      setVideoPreviewSrc(url);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLazyVideo({
+        name,
+        loaded: 0,
+        total: 0,
+        error: message.includes("NOT_FOUND") ? "附件已不可用（可能已被清理）" : `获取失败：${message}`,
+      });
+    } finally {
+      lazyAbortRef.current = null;
+    }
+  };
+
+  // 卸载（切会话 / 关页面）时放弃在途的拉取：objectURL 与分片循环都不该在后台悬着。
+  useEffect(() => () => lazyAbortRef.current?.abort(), []);
 
   const scrollToBottom = () => {
     const el = scrollRef.current;
@@ -1778,6 +1845,38 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       )}
 
       {toast && <div className="toast">{toast}</div>}
+
+      {/* 大视频按需拉取：进度 + 取消（拉的是附件字节，几十 MB 也要有反馈）。 */}
+      {lazyVideo && (
+        <div className="video-fetch" role="status" aria-live="polite">
+          {lazyVideo.error ? (
+            <>
+              <span className="vf-text">{lazyVideo.error}</span>
+              <button type="button" className="vf-cancel" onClick={() => setLazyVideo(null)}>
+                知道了
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="vf-text">
+                正在获取视频
+                {lazyVideo.total > 0 ? ` ${Math.min(99, Math.floor((lazyVideo.loaded / lazyVideo.total) * 100))}%` : "…"}
+                {lazyVideo.total > 0 ? `（${formatSize(lazyVideo.loaded)} / ${formatSize(lazyVideo.total)}）` : ""}
+              </span>
+              <button
+                type="button"
+                className="vf-cancel"
+                onClick={() => {
+                  lazyAbortRef.current?.abort();
+                  setLazyVideo(null);
+                }}
+              >
+                取消
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* 图片全屏预览（z-index 高于审批卡/抽屉——打开时它就是最上层） */}
       {previewSrc && <ImagePreview src={previewSrc} onClose={() => setPreviewSrc(null)} />}

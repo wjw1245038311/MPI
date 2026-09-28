@@ -3,8 +3,16 @@ package com.mpi.app.data
 import com.mpi.app.protocol.RemotePermission
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import java.io.BufferedOutputStream
+import java.io.File
+import java.io.FileOutputStream
 
 /** 发送模式：空闲 → prompt；运行中 → steer；排队到本轮之后 → followUp。 */
 enum class SendMode(val method: String) {
@@ -56,6 +64,57 @@ class ThreadActions(
     }
 
     suspend fun abort(): JsonElement? = writeRequest("thread.abort", buildJsonObject { }, "abort")
+
+    /**
+     * 按需取回附件字节，**直接写进目标文件**（视频原片不再随快照下发后的取字节入口）。
+     *
+     * 只读，**不需要写租约**（与 `stt.transcribe` 同类）：拉字节不该抢会话的编辑权。
+     * 作用域校验在主机侧：附件必须被这个会话引用过，否则 NOT_FOUND。
+     *
+     * 服务端每片最多回几百 KB，由响应里的 `length`/`eof` 驱动循环（客户端不自己算分片边界）。
+     * 直接落文件而不是先拼进内存：几十 MB 的视频不该在堆上过一遍。
+     *
+     * @param onProgress (已写字节, 总字节) —— 总字节首片之前为 0。
+     * @return 写入的总字节数
+     */
+    suspend fun fetchAttachmentTo(name: String, target: File, onProgress: (Long, Long) -> Unit = { _, _ -> }): Long {
+        // 名字由主机生成（uuid-原名），但仍守住底线：绝不能含路径成分。
+        require(name.isNotEmpty() && name.none { it == '/' || it == '\\' }) { "非法附件名" }
+        target.parentFile?.mkdirs()
+        var offset = 0L
+        var total = 0L
+        var chunks = 0
+        val sink = BufferedOutputStream(FileOutputStream(target))
+        try {
+            while (true) {
+                if (chunks++ > MAX_ATTACHMENT_CHUNKS) throw IllegalStateException("附件分片数量异常")
+                val payload = buildJsonObject {
+                    put("name", name)
+                    put("offset", offset)
+                }
+                val chunk = request("attachment.fetch", payload, threadId, ATTACHMENT_CHUNK_TIMEOUT_MS)
+                    ?.jsonObject?.get("chunk")?.jsonObject
+                    ?: throw IllegalStateException("附件响应格式不对")
+                val data = chunk["data"]?.jsonPrimitive?.contentOrNull
+                    ?: throw IllegalStateException("附件响应缺少数据")
+                // 用 java.util.Base64（API 26+，本项目 minSdk=26）而不是 android.util.Base64：
+                // 后者在 JVM 单测里是“not mocked”的 android.jar 存根，整条分片循环就没法单测了
+                // （而它正是“视频播不播得出来”的全部逻辑）。
+                val bytes = java.util.Base64.getDecoder().decode(data)
+                chunk["size"]?.jsonPrimitive?.longOrNull?.let { if (it > 0) total = it }
+                if (bytes.isNotEmpty()) {
+                    sink.write(bytes)
+                    offset += bytes.size
+                    onProgress(offset, total)
+                }
+                if (chunk["eof"]?.jsonPrimitive?.booleanOrNull == true) return offset
+                // 防护：主机若一直回空片且不置 eof，循环会一直请求下去（与 PWA 同一护栏）。
+                if (bytes.isEmpty()) throw IllegalStateException("附件分片无进展")
+            }
+        } finally {
+            runCatching { sink.close() }
+        }
+    }
 
     /** 重命名会话（需要写租约）。 */
     suspend fun renameThread(name: String): JsonElement? = writeRequest(
@@ -172,5 +231,11 @@ class ThreadActions(
         const val THREAD_BUSY = "THREAD_BUSY"
 
         const val COMPACT_TIMEOUT_MS = 180_000L
+
+        /** 单片附件的请求超时（几百 KB，弱网下别用默认超时误杀）。 */
+        const val ATTACHMENT_CHUNK_TIMEOUT_MS = 30_000L
+
+        /** 分片循环的硬上限（防死循环护栏）。512KB × 4096 片 = 2GB，正常永远走不到。 */
+        const val MAX_ATTACHMENT_CHUNKS = 4096
     }
 }

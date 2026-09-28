@@ -193,13 +193,13 @@ import {
 } from "./system-notifications";
 import {
   REMOTE_VIDEO_BASE64_BUDGET,
-  REMOTE_VIDEO_FILE_MAX_BYTES,
+  VIDEO_REF_ATTR,
   splitVideoRefs,
   videoMimeForPath,
   videoRefEnvelope,
 } from "./remote/video-refs";
-import { adoptChatVideo, isVideoFile, stageChatVideoBytes } from "./chat-attachment-store";
-import {
+import { fillInlineVideoBytes } from "./remote/video-inline";
+import { ATTACHMENT_FETCH_CHUNK_BYTES, adoptChatVideo, isVideoFile, readAttachmentSlice, stageChatVideoBytes } from "./chat-attachment-store";import {
   RemoteProtocolError,
   type RemoteFileArtifact,
   type RemoteFileInput,
@@ -213,6 +213,7 @@ import {
   type RemoteContextUsage,
   type RemoteThreadSnapshot,
   type RemoteVideoInput,
+  type RemoteAttachmentChunk,
   type RemoteThreadState,
 } from "./remote/protocol";
 import { buildConfigPatch, planModeApplication, resolveModeById, type ConfigChangeOrigin, type ThreadConfigPatch } from "./thread-config";
@@ -1858,36 +1859,31 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       });
     });
     flushAssistantRound();
-    // 视频字节回填：**最新优先**。单个超过上限（客户端/主机只保证 ≤3MB，但临时目录里的
-    // 文件可能被人换过）或超出快照预算的，保留 `omitted` 占位块 + 一句说明，客户端显示灰卡。
-    let videoBudget = REMOTE_VIDEO_BASE64_BUDGET;
-    let videoBytes = 0;
-    for (let i = pendingVideos.length - 1; i >= 0; i--) {
-      const { block, path } = pendingVideos[i];
-      if (videoBudget <= 0) {
-        block.text = "视频未随快照下发（超出本次快照预算）";
-        continue;
-      }
-      try {
-        const size = statSync(path).size;
-        if (size <= 0 || size > REMOTE_VIDEO_FILE_MAX_BYTES) {
-          block.text = `视频未随快照下发（大小 ${Math.round(size / 1000)}KB 超出上限）`;
-          continue;
-        }
-        const data = readFileSync(path).toString("base64");
-        if (data.length > videoBudget) {
-          block.text = "视频未随快照下发（超出本次快照预算）";
-          continue;
-        }
-        videoBudget -= data.length;
-        videoBytes += size;
-        block.data = data;
-        block.size = size;
-        block.omitted = false;
-      } catch {
-        block.text = "视频文件已不在主机上（临时目录被清理）";
-      }
-    }
+    // 视频字节回填：**最新优先**。只有小视频（≤ 内联阈值）才下发字节；更大的与超出快照
+    // 预算的都保留 `omitted` 占位块（带 name + size），客户端点开时按需拉
+    // （attachment.fetch）。所以这里不再是「降级成灰卡」，而是「换成懒加载」。
+    // 判定逻辑本身在 remote/video-inline.ts（纯函数，单独单测）。
+    const inlineResult = fillInlineVideoBytes(
+      pendingVideos.map(({ block, path }) => ({
+        path,
+        setSize: (size: number) => {
+          block.size = size;
+        },
+        setData: (base64: string) => {
+          block.data = base64;
+          block.omitted = false;
+        },
+        setNote: (text: string) => {
+          block.text = text;
+        },
+      })),
+      {
+        budget: REMOTE_VIDEO_BASE64_BUDGET,
+        sizeOf: (path) => statSync(path).size,
+        readBase64: (path) => readFileSync(path).toString("base64"),
+      },
+    );
+    const videoBytes = inlineResult.inlinedBytes;
     // 裁剪流水线（条数 → 估算 → 真实长度 → 单帧兜底）；客户端对解密后的内层 envelope
     // 有硬上限，超了一律丢帧（2026-09-24 真机：订阅响应被丢 → 10s 超时 → 重握手 →
     // 重连风暴）。顺序与兜底细节见 remote/history-limit.ts 的 prepareRemoteHistory。
@@ -2028,6 +2024,75 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
    */
   let lastKnownPiModels: unknown[] = [];
 
+  /**
+   * 哪些附件名被哪个会话**引用过**（`attachment.fetch` 的作用域校验）。
+   *
+   * 为什么不能只校验文件名：附件区是一个平面目录（所有会话的视频都在里面），
+   * 若仅凭名字就能取，任何配对设备都能拿着名字把别人的附件全拉走。所以以会话为界：
+   * 只有出现在**这个会话**里的附件才允许取。两个登记点（快照生成、视频落盘）都是零成本，
+   * 剩下的漏网情况由 attachmentNameAllowed 回源扫描兜底（跨重启）。
+   */
+  const remoteAttachmentAllow = new Map<string, Set<string>>();
+
+  function rememberAttachmentNames(threadId: string, names: Iterable<string>): void {
+    let entry: Set<string> | undefined;
+    for (const name of names) {
+      if (!name) continue;
+      entry ||= remoteAttachmentAllow.get(threadId) ?? new Set<string>();
+      entry.add(name);
+    }
+    if (entry) remoteAttachmentAllow.set(threadId, entry);
+  }
+
+  /** 从 pi 原始消息里取出所有 `<file … attach="video" />` 引用的文件名（不回填字节）。 */
+  function videoRefNamesInMessages(messages: any[]): string[] {
+    const names: string[] = [];
+    const collect = (text: unknown): void => {
+      if (typeof text !== "string" || !text.includes(VIDEO_REF_ATTR)) return;
+      splitVideoRefs(text).refs.forEach((ref) => names.push(ref.name));
+    };
+    for (const message of messages || []) {
+      const content = message?.content;
+      if (typeof content === "string") {
+        collect(content);
+        continue;
+      }
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (block?.type === "text") collect(block.text);
+      }
+    }
+    return names;
+  }
+
+  /**
+   * 附件名作用域校验：先看快照/落盘时登记过的（命中是常态），未命中才回源扫描该会话消息。
+   *
+   * 回源路径只跑一次（扫到就登记），而它只在「主机重启后、客户端直接拉旧视频」时才走到；
+   * 正常流程（收到快照 → 点击播放）总是命中缓存。
+   */
+  async function attachmentNameAllowed(threadId: string, name: string): Promise<boolean> {
+    if (remoteAttachmentAllow.get(threadId)?.has(name)) return true;
+    try {
+      const ref = await remoteThread(threadId);
+      const handle = ref.localId ? bridges.get(ref.localId) : undefined;
+      let messages: any[] = [];
+      if (handle) {
+        const gathered: any = await gatherThread(handle.bridge, handle.getId(), handle.permission);
+        messages = gathered?.messages || [];
+      } else if (ref.sessionFile) {
+        messages = (await readThreadHistory(ref.sessionFile))?.messages || [];
+      }
+      const names = videoRefNamesInMessages(messages);
+      if (!names.includes(name)) return false;
+      rememberAttachmentNames(threadId, names);
+      return true;
+    } catch {
+      // 读不到就按「不允许」处理（宁可不给，也不放行没验证过的名字）。
+      return false;
+    }
+  }
+
   async function remoteSnapshot(threadId: string, options: { live?: boolean; haveMessageId?: string } = {}): Promise<RemoteThreadSnapshot> {
     const ref = await remoteThread(threadId);
     const configuredModels = configuredRemoteModelOptions();
@@ -2066,6 +2131,8 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     if (live) {
       const gathered: any = await gatherThread(live.bridge, live.getId(), live.permission);
       const messages = remoteMessages(gathered.messages, ref.cwd);
+      // 快照生成即登记本会话引用过的附件（`attachment.fetch` 的作用域校验用）。
+      rememberAttachmentNames(threadId, videoRefNamesInMessages(gathered.messages));
       const state = remoteState(!!gathered.isStreaming, messages.length > 0);
       return {
         id: threadId,
@@ -2102,6 +2169,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       history = { cwd: null, sessionName: null, model: null, thinkingLevel: null, messages: [], branchMessages: [] };
     }
     const messages = remoteMessages(history.messages, ref.cwd);
+    rememberAttachmentNames(threadId, videoRefNamesInMessages(history.messages));
     // 已打开的桥能直接给出真实用量与实时配置（不额外冷启动）。
     // 这里必须优先用桥的状态：否则手机切完模型后重新 subscribe（只走磁盘快照）
     // 会拿回 session 文件里的旧模型 —— 就是「切走再切回来变回刷新前」的根因。
@@ -2260,12 +2328,15 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
    * 两件事：① agent 只能读文件、看不了视频，所以引用必须留着（否则模型不知道有这个视频）；
    * ② 引用带 `attach="video"` 标记，远程快照据此把它换成可播放的 video 块（见 remoteMessages）。
    */
-  const stageRemoteVideos = (videos?: RemoteVideoInput[]): string =>
+  const stageRemoteVideos = (threadId: string, videos?: RemoteVideoInput[]): string =>
     (videos ?? [])
       .map((video) => {
         // 落在 <userData>/chat-attachments（**持久**区，不是 %TEMP%）：消息里的视频引用
         // 属于会话历史，文件被清理掉就只剩占位卡片。见 chat-attachment-store.ts。
         const staged = stageChatVideoBytes({ name: undefined, mimeType: video.mimeType, data: video.data });
+        // 落盘即登记：发送端（或任何已订阅的设备）收到快照后马上就能按需拉取，
+        // 不必等下一次快照生成替它登记。
+        rememberAttachmentNames(threadId, [staged.name]);
         return videoRefEnvelope(staged.name, staged.abs);
       })
       .join("");
@@ -2331,7 +2402,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       const tBridge = Date.now();
       // 文件先落盘，再按桌面同款规则内联/引用（图片仍直传模型）；视频另走一条：
       // 落盘 + 带标记的引用（客户端把它换成可播放的 video 块）。
-      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(videos));
+      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(threadId, videos));
       let queuedAs: "followUp" | undefined;
       try {
         await bridge.bridge.prompt(staged.text, [...(images ?? []), ...staged.images]);
@@ -2370,13 +2441,13 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     },
     async (threadId, text, images, files, videos) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
-      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(videos));
+      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(threadId, videos));
       await bridge.bridge.steer(staged.text, [...(images ?? []), ...staged.images]);
       return { ok: true };
     },
     async (threadId, text, images, files, videos) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
-      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(videos));
+      const staged = processAttachments(stageRemoteFiles(files), text + stageRemoteVideos(threadId, videos));
       await bridge.bridge.followUp(staged.text, [...(images ?? []), ...staged.images]);
       return { ok: true };
     },
@@ -2627,6 +2698,29 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     },
     fileTree: (projectId, relativePath) => filePreviewService.tree(projectId, relativePath),
     filePreview: (projectId, relativePath) => filePreviewService.preview(projectId, relativePath),
+    fetchAttachment: async (threadId, name, offset): Promise<RemoteAttachmentChunk> => {
+      // 作用域校验在前：不区分「名字非法」「文件已被清理」「不属于该会话」——
+      // 一律 NOT_FOUND，避免这个接口变成探测附件区是否存在某个名字的工具。
+      if (!(await attachmentNameAllowed(threadId, name))) {
+        throw new RemoteProtocolError("NOT_FOUND", "Attachment is not available for this thread");
+      }
+      const slice = readAttachmentSlice(name, offset, ATTACHMENT_FETCH_CHUNK_BYTES);
+      if (!slice) throw new RemoteProtocolError("NOT_FOUND", "Attachment is no longer available");
+      // 取证：一次播放有几十片，只记起始片与末片，否则日志会被刷爆。
+      if (slice.offset === 0 || slice.eof) {
+        appendDiagLog(
+          `remote-attach fetch name=${name.slice(0, 48)} off=${slice.offset} len=${slice.data.length} size=${slice.size} eof=${slice.eof}`,
+        );
+      }
+      return {
+        name,
+        size: slice.size,
+        offset: slice.offset,
+        length: slice.data.length,
+        eof: slice.eof,
+        data: slice.data.toString("base64"),
+      };
+    },
     respondUi: async (threadId, requestId, payload) => {
       const pending = remoteUiRequests.get(requestId);
       if (!pending || pending.threadId !== threadId) throw new RemoteProtocolError("NOT_FOUND", "UI request is no longer pending");

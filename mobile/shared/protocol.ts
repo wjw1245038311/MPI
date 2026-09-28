@@ -40,6 +40,9 @@ export const REMOTE_REQUEST_TYPES = [
   "stt.transcribe",
   "file.tree",
   "file.preview",
+  // 按需取**附件字节**（视频原片不再内联进快照后，这是客户端唯一的取字节入口）。
+  // 分片由客户端按 offset 推进，服务端回传实际长度与 eof。
+  "attachment.fetch",
   "ui.respond",
 ] as const;
 
@@ -81,6 +84,25 @@ export interface RemoteVideoInput {
   mimeType: string;
   /** 原始字节数（客户端上报，主机只用于显示与预算判断） */
   size?: number;
+}
+
+/**
+ * `attachment.fetch` 的一片响应（与桌面侧 src/main/remote/protocol.ts 同源）。
+ *
+ * 客户端只需按 `offset + length` 循环请求，直到 `eof` 为真。
+ */
+export interface RemoteAttachmentChunk {
+  name: string;
+  /** 附件总字节数（客户端据此显示进度） */
+  size: number;
+  /** 本片在文件中的起始偏移 */
+  offset: number;
+  /** 本片实际字节数（原始，非 base64） */
+  length: number;
+  /** 是否已到末尾（false → 继续按 offset + length 请求） */
+  eof: boolean;
+  /** 本片字节（base64） */
+  data: string;
 }
 
 export type RemoteEnvelope<T = unknown> = {

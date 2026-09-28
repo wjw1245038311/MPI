@@ -9,6 +9,7 @@ import {
   responseFor,
   type RemotePermission,
   type RemotePushSubscription,
+  type RemoteAttachmentChunk,
   type RemoteThreadEventPayload,
   type RemoteThreadSnapshot,
 } from "./protocol";
@@ -50,6 +51,14 @@ export interface RemoteBackend {
   deleteThread(threadId: string): Promise<unknown>;
   fileTree(projectId: string, relativePath?: string): Promise<unknown>;
   filePreview(projectId: string, relativePath: string): Promise<unknown>;
+  /**
+   * 按需取附件的一段字节（远程客户端播放视频原片用）。
+   *
+   * **作用域校验在 backend 内**：名字必须出现在这个会话里（引用过才算），
+   * 否则任何配对设备都能拿名字遍历整个附件区（见 ipc.ts 的附件允许表）。
+   * 名字非法 / 文件已被清理 / 不属于该会话 → 抛 NOT_FOUND。
+   */
+  fetchAttachment(threadId: string, name: string, offset: number): Promise<RemoteAttachmentChunk>;
   respondUi(threadId: string, requestId: string, payload: Record<string, unknown>): Promise<unknown>;
   /** S7 WebPush：store the device's PushSubscription and sync it to the relay. */
   storePushSubscription(deviceId: string, subscription: RemotePushSubscription): Promise<unknown>;
@@ -108,6 +117,14 @@ const MAX_REMOTE_IMAGE_DATA_TOTAL = 1_500_000;
 const MAX_REMOTE_VIDEOS = 1;
 const MAX_REMOTE_VIDEO_DATA = 4_200_000;
 
+/**
+ * 不进 request 缓存（去重重试缓存）的请求类型。
+ *
+ * `attachment.fetch` 的响应是几百 KB 的分片，而缓存上限是 500 条 —— 一个 20MB 的
+ * 视频就有 40 片，几轮下来能把内存吃掉几百 MB。取字节是幂等的，重试的代价只是再读一次盘。
+ */
+const NON_CACHED_REQUEST_TYPES = new Set<string>(["attachment.fetch"]);
+
 export class RemoteService {
   private readonly subscriptions = new Map<string, Map<string, () => void>>();
   private readonly claims = new Map<string, Claim>();
@@ -145,7 +162,9 @@ export class RemoteService {
     try {
       const result = await this.dispatch(request, context);
       if (!result) return;
-      if (cacheKey) this.requests.set(cacheKey, result);
+      // 分片响应动辄几百 KB，而请求缓存能存 500 条（约等于几百 MB 内存）——
+      // 只对**幂等的取字节**这一条不缓存：重试的成本只是再读一次盘。
+      if (cacheKey && !NON_CACHED_REQUEST_TYPES.has(request.type)) this.requests.set(cacheKey, result);
       context.send(result);
       this.trimRequestCache();
     } catch (error) {
@@ -326,6 +345,19 @@ export class RemoteService {
         return responseFor(request, await this.backend.fileTree(this.requiredString(payload, "projectId"), this.optionalString(payload, "relativePath")));
       case "file.preview":
         return responseFor(request, await this.backend.filePreview(this.requiredString(payload, "projectId"), this.requiredString(payload, "relativePath")));
+      case "attachment.fetch": {
+        // 只读取字节：不要写租约（读字节不该抢会话的编辑权），但必须带 threadId——
+        // 作用域校验以它为界（「这个附件被这个会话引用过吗」）。
+        const threadId = this.requiredThread(request);
+        const name = this.requiredShortString(payload, "name");
+        const rawOffset = payload.offset ?? 0;
+        if (typeof rawOffset !== "number" || !Number.isFinite(rawOffset) || rawOffset < 0) {
+          throw new RemoteProtocolError("INVALID_REQUEST", "offset must be a non-negative number");
+        }
+        return responseFor(request, {
+          chunk: await this.backend.fetchAttachment(threadId, name, Math.floor(rawOffset)),
+        });
+      }
       case "ui.respond": {
         const threadId = this.requiredThread(request);
         this.assertWriter(threadId, context);

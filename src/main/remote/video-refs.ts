@@ -19,10 +19,21 @@ export const VIDEO_REF_ATTR = 'attach="video"';
 const VIDEO_REF_RE = /<file\s+name="([^"]*)"\s+path="([^"]*)"\s+attach="video"[^>]*\/>/g;
 
 /**
- * 单个视频的**原始字节**上限（与 service.ts 的 MAX_REMOTE_VIDEO_DATA 对应：
- * base64 长度 ≈ 原始 × 4/3 ≈ 4.2MB）。
+ * 单个视频可以**内联进快照**的原始字节上限（base64 后 ≈4MB）。
+ *
+ * 超过它的视频照样作为视频附件保存、照样生成 `attach="video"` 引用（客户端点开就按需拉，
+ * 见 attachment.fetch），只是不再随快照下发字节而已——这是 2026-09-28 之后的大小分界：
+ * 快照再也不会被几 MB 的视频撑爆，也不必再把大视频降级成普通文件卡片。
  */
-export const REMOTE_VIDEO_FILE_MAX_BYTES = 3_000_000;
+export const REMOTE_VIDEO_INLINE_MAX_BYTES = 3_000_000;
+
+/**
+ * 能被当作「视频附件」处理的原始字节上限（落盘附件区 + 生成引用 + 客户端可点开播放）。
+ *
+ * 超过这个值仍走普通 `<file>` 引用（不进附件区、气泡里不可播）——那是给 agent 读的文件，
+ * 不是给用户看的媒体。128MB 是「手机上看一段录屏/短片」的现实上限，也远低于附件区总量上限。
+ */
+export const REMOTE_VIDEO_MAX_BYTES = 128 * 1024 * 1024;
 
 /**
  * 一次快照里视频字节的**总预算**（base64 字符），**最新优先**。
@@ -30,6 +41,9 @@ export const REMOTE_VIDEO_FILE_MAX_BYTES = 3_000_000;
  * 为什么单独预算：快照总预算只有 7.6MB（MAX_INNER_ENVELOPE_BYTES 去掉 headroom），
  * 而视频是最容易把它撑爆的东西，又是用户希望保留的内容——超出预算时宁可把**更早的**
  * 视频降级成占位卡片（`omitted: true`），也不让它去挤历史。
+ *
+ * 自 2026-09-28 起这个预算只服务于**小视频的内联**（≤ REMOTE_VIDEO_INLINE_MAX_BYTES）；
+ * 大视频一律走按需拉取，不占这里。
  */
 export const REMOTE_VIDEO_BASE64_BUDGET = 4_500_000;
 

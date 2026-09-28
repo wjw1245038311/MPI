@@ -113,6 +113,20 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
+ * 大视频**按需拉取**的实现（点开才拉）。由 AppViewModel 通过 CompositionLocalProvider 提供
+ * （见 MpiApp），默认实现返回 null＝不可用。
+ *
+ * 为什么走 CompositionLocal 而不是逐层传参：视频块嵌在「消息行 → 块列表 → Block 分发」
+ * 好几层里，逐层加参数会污染每个中间组件的签名（PWA 侧用滚动容器上的事件委托避开同一问题）。
+ * 参数：(附件名, 目标文件, 进度回调) → 是否成功。目标文件已存在且非空时实现方应直接返回 true
+ * （拉过的视频缓在 cacheDir，下次点开不应再走网络）。
+ */
+val LocalVideoFetcher = staticCompositionLocalOf<suspend (String, File, (Long, Long) -> Unit) -> Boolean> {
+    // 外层是 defaultFactory: () -> T，内层才是真正的拉取函数（默认不可用）。
+    { _, _, _ -> false }
+}
+
+/**
  * 会话视图（§4.4）：顶栏 + 消息流。
  *
  * 错误一律**顶部横幅 + 可操作按钮**（§1.1），不遮住内容；滚动跟随在用户手动上滑时
@@ -1548,12 +1562,56 @@ private fun ImagePreviewOverlay(bitmap: ImageBitmap, onClose: () -> Unit) {
 private fun VideoBlock(block: MessageBlock) {
     val context = LocalContext.current
     // block.data 变了才重写文件（列表滚动会导致重组）。
-    val source = remember(block.data) { block.data?.let { writeVideoCacheFile(context, it, block.mimeType) } }
+    val inlineSource = remember(block.data) { block.data?.let { writeVideoCacheFile(context, it, block.mimeType) } }
+
+    // 大视频**按需拉**：快照里只有占位（没有 data），但带了名字——点开才把字节拉回来。
+    // 拉取实现由 AppViewModel 通过 CompositionLocal 提供（见 LocalVideoFetcher 的注释）。
+    val fetchVideo = LocalVideoFetcher.current
+    val scope = rememberCoroutineScope()
+    // 拉回来的视频缓在 cacheDir/video-attachments/（与内联视频同一目录）。
+    val videoDir = remember(context) { File(context.cacheDir, "video-attachments").apply { mkdirs() } }
+    var fetchedSource by remember(block.name) { mutableStateOf<File?>(null) }
+    var fetching by remember(block.name) { mutableStateOf(false) }
+    var fetchError by remember(block.name) { mutableStateOf<String?>(null) }
+    var fetchedBytes by remember(block.name) { mutableStateOf(0L) }
+    var totalBytes by remember(block.name) { mutableStateOf(block.size?.toLong() ?: 0L) }
+    val source = inlineSource ?: fetchedSource
 
     if (source == null) {
-        // 本体没下发（实时事件通道剥大帧 / 超出快照视频预算）或解码失败 → 占位卡片，
-        // 不能留一块空白（用户会以为消息丢了）。
-        VideoPlaceholder(block)
+        // 没名字（历史遗留 / 附件已被清理）→ 真占位，点了也没得拉。
+        if (block.name == null) {
+            VideoPlaceholder(block)
+            return
+        }
+        LazyVideoCard(
+            block = block,
+            fetching = fetching,
+            error = fetchError,
+            loaded = fetchedBytes,
+            total = totalBytes,
+            onPlay = {
+                if (fetching) return@LazyVideoCard
+                val name = block.name ?: return@LazyVideoCard
+                fetching = true
+                fetchError = null
+                fetchedBytes = 0L
+                scope.launch {
+                    val target = File(videoDir, name)
+                    val ok = runCatching {
+                        fetchVideo(name, target, { loaded, total ->
+                            fetchedBytes = loaded
+                            if (total > 0) totalBytes = total
+                        })
+                    }.getOrElse { false }
+                    fetching = false
+                    if (ok && target.length() > 0) {
+                        fetchedSource = target
+                    } else {
+                        fetchError = "附件已不可用（可能已被清理）"
+                    }
+                }
+            },
+        )
         return
     }
 
@@ -1597,6 +1655,70 @@ private fun VideoBlock(block: MessageBlock) {
                 ) { Text("关闭", color = Color.White) }
             }
         }
+    }
+}
+
+/**
+ * 大视频的**懒加载卡片**：快照里只给了占位（没有字节）但带了附件名——点开才按需拉。
+ *
+ * 为什么需要一个单独的卡片：与有字节的卡片观感一致（深色 16:9 框 + ▶），但没首帧可铺，
+ * 所以多一行提示，并在拉取期间把进度写在框里——否则拉几十 MB 时用户只能盯着一块
+ * 没有任何反馈的深色方框（真机反馈里最容易被当成“卡死”的形态）。
+ */
+@Composable
+private fun LazyVideoCard(
+    block: MessageBlock,
+    fetching: Boolean,
+    error: String?,
+    loaded: Long,
+    total: Long,
+    onPlay: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .widthIn(max = 300.dp)
+            .aspectRatio(16f / 9f)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.Black)
+            .clickable(enabled = !fetching) { onPlay() },
+        contentAlignment = Alignment.Center,
+    ) {
+        when {
+            error != null -> Text(
+                text = error,
+                modifier = Modifier.padding(horizontal = 12.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.85f),
+            )
+            fetching -> {
+                val percent = if (total > 0) ((loaded * 100) / total).toInt().coerceIn(0, 99) else 0
+                Text(
+                    text = if (total > 0) "正在获取视频 $percent%" else "正在获取视频…",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                )
+            }
+            else -> Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.42f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("▶", color = Color.White, fontSize = 16.sp)
+            }
+        }
+        Text(
+            text = formatVideoMeta(block),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(6.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color.Black.copy(alpha = 0.55f))
+                .padding(horizontal = 6.dp, vertical = 1.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White,
+        )
     }
 }
 

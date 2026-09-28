@@ -545,7 +545,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   font-size: 11px;
   line-height: 16px;
 }
-/* 本体没下发时的占位卡片（实时事件通道剥大帧 / 超出快照视频预算）。 */
+/* 本体没下发时的占位卡片（实时事件通道剥大帧 / 快照没给字节且没名字）。 */
 .msg-video-placeholder {
   display: flex;
   align-items: center;
@@ -562,6 +562,57 @@ button:disabled { opacity: 0.5; cursor: default; }
 .msg-video-placeholder .mvp-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .msg-video-placeholder .mvp-text strong { color: var(--text); font-weight: 600; }
 .msg-video-placeholder .mvp-text em { font-style: normal; opacity: 0.8; }
+
+/* 大视频的**懒加载**卡片：快照里只有占位，点开才按需拉字节（lib/attachment-fetch.ts）。
+   观感上仍是一个深色视频框，但没首帧可铺——加一层微亮的渐变底，避免死黑的空洞感。 */
+.msg-video-card--lazy {
+  background: linear-gradient(140deg, #1b1b1f, #000);
+}
+.msg-video-card--lazy .msg-video-play {
+  /* 有字节的卡片靠首帧吸引点击，这里只能靠这个圆钮，稍微提亮一点 */
+  background: rgba(0, 0, 0, 0.42);
+}
+.msg-video-lazy-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+/* 按需拉取进度条（底部悬浮；拉几十 MB 的视频时必须有反馈与取消）。 */
+.video-fetch {
+  position: fixed;
+  left: 50%;
+  bottom: 76px;
+  transform: translateX(-50%);
+  z-index: 140;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 24px));
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel, #1c1c1f);
+  color: var(--text);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+}
+.video-fetch .vf-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-fetch .vf-cancel {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--control);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
 
 /* 全屏视频预览（Esc / × / 点空白关闭）。 */
 .video-preview {

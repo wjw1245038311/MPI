@@ -14,10 +14,10 @@
  * 为什么支持 Range：视频要拖进度条。没有 206 就只能整段读完再播。
  */
 import { protocol } from "electron";
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { extname } from "node:path";
 import { appendDiagLog } from "./diag-log";
-import { resolveChatAttachment } from "./chat-attachment-store";
+import { readSlice, resolveChatAttachment } from "./chat-attachment-store";
 
 const SCHEME = "chatatt";
 // 附件的落盘目录、文件名白名单与合法性校验都在 chat-attachment-store.ts——这里只管协议。
@@ -60,19 +60,7 @@ export function parseRange(header: string | null, size: number): { start: number
   return { start, end: Math.min(end, size - 1) };
 }
 
-/** 只读需要的区间，不把整个文件读进内存（拖动进度条会连发 Range 请求）。 */
-function readSlice(path: string, start: number, end: number): Buffer {
-  const length = end - start + 1;
-  const buffer = Buffer.allocUnsafe(length);
-  const fd = openSync(path, "r");
-  try {
-    readSync(fd, buffer, 0, length, start);
-  } finally {
-    closeSync(fd);
-  }
-  return buffer;
-}
-
+// readSlice 与附件区间读取都放在 chat-attachment-store.ts（按需取字节那条链路共用）。
 export function registerChatAttachmentScheme(): void {
   protocol.registerSchemesAsPrivileged([
     { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },

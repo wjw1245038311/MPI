@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -190,82 +191,85 @@ fun MpiApp(container: AppContainer) {
                     if (state.openThreadId != null && openThread != null) {
                         // 返回键的处理已上提到 DrawerHost 的 PredictiveBackHandler（它需要先看
                         // 手势来自哪一侧）；这里不再重复注册，避免两处抢同一个返回。
-                        ThreadScreen(
-                            view = openThread,
-                            draft = state.draft,
-                            sending = state.sending,
-                            responding = state.responding,
-                            respondError = state.respondError,
-                            onBack = openDrawer,
-                            onResync = viewModel::resyncThread,
-                            onDraftChange = viewModel::updateDraft,
-                            onSend = viewModel::sendDraft,
-                            onAbort = viewModel::abortThread,
-                            onRetry = viewModel::retrySend,
-                            onRespond = { response ->
-                                openThread.pendingUi?.let { request ->
-                                    viewModel.respondUi(request.id, response)
-                                }
-                            },
-                            onSendChoice = viewModel::sendChoice,
-                            onOpenSettings = { settingsOpen = true },
-                            onOpenSearch = { searchOpen = true },
-                            onRenameTitle = { name -> viewModel.renameThread(openThread.threadId, name) },
-                            showToolCalls = settings.showToolCalls,
-                            showThinking = settings.showThinking,
-                            speakTurnComplete = settings.speakTurnComplete,
-                            voiceSpeechContent = settings.voiceSpeechContent,
-                            speakDuringCall = settings.speakDuringCall,
-                            onSetSpeakTurnComplete = container.settingsStore::setSpeakTurnComplete,
-                            onSetVoiceSpeechContent = container.settingsStore::setVoiceSpeechContent,
-                            onSetSpeakDuringCall = container.settingsStore::setSpeakDuringCall,
-                            choiceDrafts = state.choiceDrafts,
-                            onChoiceDraftChange = viewModel::setChoiceDraft,
-                            onClearChoiceDrafts = viewModel::clearChoiceDrafts,
-                            attachments = state.attachments,
-                            attachmentBusy = state.attachmentBusy,
-                            attachmentError = state.attachmentError,
-                            onPickImage = viewModel::addImageAttachment,
-                            onPickFile = viewModel::addFileAttachment,
-                            onAttachmentPermissionDenied = {
-                                viewModel.reportAttachmentError("没有相机权限，无法拍照")
-                            },
-                            onRemoveAttachment = viewModel::removeAttachment,
-                            onDismissAttachmentError = viewModel::dismissAttachmentError,
-                            recording = state.recording,
-                            transcribing = state.transcribing,
-                            voiceError = state.voiceError,
-                            onStartVoice = viewModel::startRecording,
-                            onStopVoice = viewModel::stopRecording,
-                            onCancelVoice = viewModel::cancelRecording,
-                            onStartVoiceChat = viewModel::startVoiceChat,
-                            onVoicePermissionDenied = {
-                                viewModel.reportVoiceError("没有麦克风权限，无法语音输入")
-                            },
-                            onDismissVoiceError = viewModel::dismissVoiceError,
-                            voiceChat = state.voiceChat,
-                            voiceChatText = state.voiceChatText,
-                            onStopVoiceChat = viewModel::stopVoiceChat,
-                            nodePanel = nodePanel,
-                            pendingFollowUp = state.pendingFollowUp,
-                            sendError = state.sendError,
-                            sendNote = state.sendNote,
-                            onDismissSendNote = viewModel::dismissSendNote,
-                            onSteerPending = viewModel::steerPendingFollowUp,
-                            onReEditPending = viewModel::reEditPendingFollowUp,
-                            onDismissSendError = viewModel::dismissSendError,
-                            configSheetOpen = state.configSheetOpen,
-                            configBusy = state.configBusy,
-                            configError = state.configError,
-                            onOpenConfigSheet = viewModel::openConfigSheet,
-                            onDismissConfigSheet = viewModel::closeConfigSheet,
-                            onDismissConfigError = viewModel::dismissConfigError,
-                            onSetPermission = viewModel::setPermission,
-                            onSetModel = viewModel::setModel,
-                            onSetThinking = viewModel::setThinking,
-                            onSetMode = viewModel::setMode,
-                            onCompact = viewModel::compactContext,
-                        )
+                        // 大视频按需拉：把实现注入给 ThreadScreen 里的视频块（见 LocalVideoFetcher）。
+                        CompositionLocalProvider(LocalVideoFetcher provides viewModel::fetchVideoAttachment) {
+                            ThreadScreen(
+                                view = openThread,
+                                draft = state.draft,
+                                sending = state.sending,
+                                responding = state.responding,
+                                respondError = state.respondError,
+                                onBack = openDrawer,
+                                onResync = viewModel::resyncThread,
+                                onDraftChange = viewModel::updateDraft,
+                                onSend = viewModel::sendDraft,
+                                onAbort = viewModel::abortThread,
+                                onRetry = viewModel::retrySend,
+                                onRespond = { response ->
+                                    openThread.pendingUi?.let { request ->
+                                        viewModel.respondUi(request.id, response)
+                                    }
+                                },
+                                onSendChoice = viewModel::sendChoice,
+                                onOpenSettings = { settingsOpen = true },
+                                onOpenSearch = { searchOpen = true },
+                                onRenameTitle = { name -> viewModel.renameThread(openThread.threadId, name) },
+                                showToolCalls = settings.showToolCalls,
+                                showThinking = settings.showThinking,
+                                speakTurnComplete = settings.speakTurnComplete,
+                                voiceSpeechContent = settings.voiceSpeechContent,
+                                speakDuringCall = settings.speakDuringCall,
+                                onSetSpeakTurnComplete = container.settingsStore::setSpeakTurnComplete,
+                                onSetVoiceSpeechContent = container.settingsStore::setVoiceSpeechContent,
+                                onSetSpeakDuringCall = container.settingsStore::setSpeakDuringCall,
+                                choiceDrafts = state.choiceDrafts,
+                                onChoiceDraftChange = viewModel::setChoiceDraft,
+                                onClearChoiceDrafts = viewModel::clearChoiceDrafts,
+                                attachments = state.attachments,
+                                attachmentBusy = state.attachmentBusy,
+                                attachmentError = state.attachmentError,
+                                onPickImage = viewModel::addImageAttachment,
+                                onPickFile = viewModel::addFileAttachment,
+                                onAttachmentPermissionDenied = {
+                                    viewModel.reportAttachmentError("没有相机权限，无法拍照")
+                                },
+                                onRemoveAttachment = viewModel::removeAttachment,
+                                onDismissAttachmentError = viewModel::dismissAttachmentError,
+                                recording = state.recording,
+                                transcribing = state.transcribing,
+                                voiceError = state.voiceError,
+                                onStartVoice = viewModel::startRecording,
+                                onStopVoice = viewModel::stopRecording,
+                                onCancelVoice = viewModel::cancelRecording,
+                                onStartVoiceChat = viewModel::startVoiceChat,
+                                onVoicePermissionDenied = {
+                                    viewModel.reportVoiceError("没有麦克风权限，无法语音输入")
+                                },
+                                onDismissVoiceError = viewModel::dismissVoiceError,
+                                voiceChat = state.voiceChat,
+                                voiceChatText = state.voiceChatText,
+                                onStopVoiceChat = viewModel::stopVoiceChat,
+                                nodePanel = nodePanel,
+                                pendingFollowUp = state.pendingFollowUp,
+                                sendError = state.sendError,
+                                sendNote = state.sendNote,
+                                onDismissSendNote = viewModel::dismissSendNote,
+                                onSteerPending = viewModel::steerPendingFollowUp,
+                                onReEditPending = viewModel::reEditPendingFollowUp,
+                                onDismissSendError = viewModel::dismissSendError,
+                                configSheetOpen = state.configSheetOpen,
+                                configBusy = state.configBusy,
+                                configError = state.configError,
+                                onOpenConfigSheet = viewModel::openConfigSheet,
+                                onDismissConfigSheet = viewModel::closeConfigSheet,
+                                onDismissConfigError = viewModel::dismissConfigError,
+                                onSetPermission = viewModel::setPermission,
+                                onSetModel = viewModel::setModel,
+                                onSetThinking = viewModel::setThinking,
+                                onSetMode = viewModel::setMode,
+                                onCompact = viewModel::compactContext,
+                            )
+                        }
                     } else {
                         HomeScreen(
                             state = state,

@@ -26,6 +26,7 @@ import com.mpi.app.data.SendMode
 import com.mpi.app.data.SettingsStore
 import com.mpi.app.data.Speaker
 import com.mpi.app.data.ThreadActions
+import java.io.File
 import com.mpi.app.data.ThreadCache
 import com.mpi.app.data.ThreadSession
 import com.mpi.app.data.ThreadView
@@ -672,6 +673,32 @@ class AppViewModel(
     /** 手动重新同步（错误横幅上的按钮）。 */
     fun resyncThread() {
         scope.launch { runCatching { threadSession?.resync() } }
+    }
+
+    /**
+     * 按需取回视频附件（大视频不再随快照下发；快照里只留占位 + 附件名）。
+     *
+     * 先写 `.part` 再改名：中途断网 / 退出时不会留下一个「看着有、实际半截」的缓存文件
+     * （那种文件的表现是视频能列出但播到一半报错，很难归因）。
+     * 目标文件已存在且非空 → 直接算成功（拉过一次就缓在 cacheDir，不该再走网络）。
+     *
+     * @return 是否成功（false = 附件已被清理 / 主机报错 / 当前没有会话）
+     */
+    suspend fun fetchVideoAttachment(name: String, target: File, onProgress: (Long, Long) -> Unit): Boolean {
+        val actions = threadActions ?: return false
+        if (target.length() > 0) return true
+        val part = File(target.parentFile, "${target.name}.part")
+        return try {
+            actions.fetchAttachmentTo(name, part, onProgress)
+            part.renameTo(target) || target.length() > 0
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        } finally {
+            // 成功改名后这个文件已经不存在；失败/取消时把它清掉，别把垃圾留在缓存里。
+            runCatching { part.delete() }
+        }
     }
 
     // ---- 发送控制 ----

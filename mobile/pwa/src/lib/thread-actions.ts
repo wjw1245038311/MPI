@@ -13,13 +13,17 @@
  */
 
 import type { RemotePermission } from "../../../shared/protocol";
+import type { RemoteAttachmentChunk } from "../../../shared/protocol";
 import { Requester, type RequestTransport } from "./requester";
+import { fetchAttachmentBytes, fetchAttachmentUrl, type AttachmentFetchOptions } from "./attachment-fetch";
 
 export type SendMode = "prompt" | "steer" | "followUp";
 
 const DEFAULT_LEASE_MS = 30_000; // host-side lease (service.ts)
 /** Re-claim proactively once we've used up this fraction of the lease. */
 const REFRESH_FRACTION = 0.8;
+/** 单片附件的请求超时（几百 KB，弱网下别用默认 10s 误杀）。 */
+const ATTACHMENT_CHUNK_TIMEOUT_MS = 30_000;
 
 function isProtocolError(error: unknown, code: string): boolean {
   return error instanceof Error && error.message.startsWith(`${code}: `);
@@ -134,6 +138,32 @@ export class ThreadActions {
 
   abort(): Promise<unknown> {
     return this.writeRequest("thread.abort", {}, "abort");
+  }
+
+  /**
+   * 按需取回一个附件的字节，拼成 objectURL（点开视频才拉）。
+   *
+   * 只读、不需要写租约（与 stt.transcribe 同类）：拉字节不该抢会话的编辑权。
+   * 作用域校验在主机侧（附件必须被这个会话引用过，见 ipc.ts 的 attachmentNameAllowed）。
+   */
+  fetchAttachmentUrl(name: string, mimeType: string, options: AttachmentFetchOptions = {}): Promise<string> {
+    return fetchAttachmentUrl((target, offset) => this.fetchAttachmentChunk(target, offset), name, mimeType, options);
+  }
+
+  /** 拉字节那一半（测试与调试用；界面走 fetchAttachmentUrl 拿可播放的 URL）。 */
+  fetchAttachmentBytes(name: string, options: AttachmentFetchOptions = {}): Promise<Uint8Array> {
+    return fetchAttachmentBytes((target, offset) => this.fetchAttachmentChunk(target, offset), name, options);
+  }
+
+  private async fetchAttachmentChunk(name: string, offset: number): Promise<RemoteAttachmentChunk> {
+    const payload = await this.requester.request<{ chunk?: RemoteAttachmentChunk }>(
+      "attachment.fetch",
+      { name, offset },
+      "attachFetch",
+      ATTACHMENT_CHUNK_TIMEOUT_MS,
+    );
+    if (!payload?.chunk) throw new Error("attachment.fetch returned no chunk");
+    return payload.chunk;
   }
 
   /** Switch sandbox/full; resolves with the updated snapshot. */
