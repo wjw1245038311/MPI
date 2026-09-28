@@ -26,6 +26,12 @@ export interface VideoPoster {
   mimeType: string;
 }
 
+/** 按 MIME/扩展名判断是不是视频（决定要不要抽封面；与主机 isVideoFile 同一集合）。 */
+export function looksLikeVideo(file: File): boolean {
+  if (file.type.startsWith("video/")) return true;
+  return /\.(mp4|m4v|webm|mov|mkv|avi)$/i.test(file.name || "");
+}
+
 const rawBytesOf = (base64: string): number => Math.floor((base64.length * 3) / 4);
 
 function canvasBase64(canvas: HTMLCanvasElement, quality: number): string {

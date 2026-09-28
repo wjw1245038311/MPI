@@ -10,7 +10,7 @@ import type { RemotePermission, RemoteThreadState, RemoteUiRequest } from "../..
 import type { ThreadActions, SendMode } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
 import { compressImageFile, type CompressedImage } from "./lib/image-attach";
-import { extractVideoPoster } from "./lib/video-attach";
+import { extractVideoPoster, looksLikeVideo } from "./lib/video-attach";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
 import { withChoiceSegments } from "./lib/choice-block";
@@ -42,6 +42,9 @@ interface PickedFile {
   mimeType: string;
   data: string;
   size: number;
+  /** 视频经 📎「文件」入口上传时也要带封面（主机同样会把它当成视频附件）。 */
+  poster?: string;
+  posterMimeType?: string;
 }
 
 /**
@@ -1290,10 +1293,22 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       }
       try {
         const data = arrayBufferToBase64(await file.arrayBuffer());
+        // 视频走📎「文件」通道时也会被主机当成视频附件（按扩展名识别），所以封面同样要抽：
+        // 不抽的话别人看到的就是一块黑框（虽然仍可点开拉）。
+        const poster = looksLikeVideo(file) ? await extractVideoPoster(file).catch(() => null) : null;
         setFiles((prev) =>
           prev.length >= MAX_FILES
             ? prev
-            : [...prev, { name: file.name || "file", mimeType: file.type || "application/octet-stream", data, size: file.size }],
+            : [
+                ...prev,
+                {
+                  name: file.name || "file",
+                  mimeType: file.type || "application/octet-stream",
+                  data,
+                  size: file.size,
+                  ...(poster ? { poster: poster.data, posterMimeType: poster.mimeType } : {}),
+                },
+              ],
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
