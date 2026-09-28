@@ -18,6 +18,7 @@ import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
 import { splitChoiceSegments } from "../lib/choice-block";
 import { ChoicePanel } from "./ChoicePanel";
+import { chatAttachmentUrl, splitVideoRefs } from "../lib/chat-attachments";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
 import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
@@ -1333,7 +1334,10 @@ function MessageGroupInner({
 
   if (group.role === "user") {
     const m = group.items[0];
-    const parsedHtml = m.text ? parseHtmlReferenceText(m.text) : { text: "", references: [] };
+    // 视频附件：先把 `<file … attach="video" … />` 引用剥出来（否则用户会在自己气泡里
+    // 看到那一整行原始标签），再交给 <UserVideo> 内联播放。
+    const videoSplit = m.text ? splitVideoRefs(m.text) : { text: "", refs: [] };
+    const parsedHtml = videoSplit.text ? parseHtmlReferenceText(videoSplit.text) : { text: "", references: [] };
     const skillBlock = parsedHtml.text ? parseSkillBlock(parsedHtml.text) : null;
     const openAttachment = async (attachment: NonNullable<ViewMessage["attachments"]>[number]) => {
       if (!attachment.path) return;
@@ -1375,6 +1379,13 @@ function MessageGroupInner({
               <div className="msg-html-references" aria-label={language === "zh" ? "HTML 元素引用" : "HTML element references"}>
                 {parsedHtml.references.map((reference) => (
                   <HtmlReferenceCard key={reference.id} reference={reference} language={language} />
+                ))}
+              </div>
+            )}
+            {videoSplit.refs.length > 0 && (
+              <div className="msg-user-videos" aria-label={language === "zh" ? "视频附件" : "Video attachments"}>
+                {videoSplit.refs.map((ref, index) => (
+                  <UserVideo key={`${ref.name}-${index}`} name={ref.name} path={ref.path} language={language} />
                 ))}
               </div>
             )}
@@ -1891,6 +1902,40 @@ const SkillInvocation = memo(function SkillInvocation({ name, language }: { name
     </div>
   );
 });
+
+/**
+ * 用户消息里的视频附件：内联播放器。
+ *
+ * 文件由主机 stageClipboardFile 落在 `%TEMP%/mpi-clipboard`，渲染层通过 `chatatt://` 协议取
+ * （支持 Range → 能拖进度条）。临时目录被系统清理 / 文件被删时退化成占位卡片，
+ * 而不是一块空白（否则用户以为消息丢了）。
+ */
+function UserVideo({ name, path, language }: { name: string; path: string; language: "en" | "zh" }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div className="msg-user-video-missing" title={path}>
+        <span className="msg-user-video-icon" aria-hidden="true">
+          🎬
+        </span>
+        <span className="msg-user-video-copy">
+          <strong>{language === "zh" ? "视频无法播放" : "Video unavailable"}</strong>
+          <span>{language === "zh" ? "临时文件已被清理" : "Temporary file was cleaned up"}</span>
+          <em>{name}</em>
+        </span>
+      </div>
+    );
+  }
+  return (
+    <video
+      className="msg-user-video"
+      src={chatAttachmentUrl(name)}
+      controls
+      preload="metadata"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 const HtmlReferenceCard = memo(function HtmlReferenceCard({
   reference,

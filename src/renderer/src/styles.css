@@ -1240,6 +1240,53 @@ body.sidebar-resizing * {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
+/* ---- 视频附件（手机端发来的，内联播放；见 chat-attachment-protocol.ts）-------- */
+.msg-user-videos {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  justify-items: start;
+}
+.msg-user-video {
+  display: block;
+  max-width: min(420px, 100%);
+  max-height: 320px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #000;
+}
+/* 临时目录被清理 / 文件被删时的占位卡片——不能只剩一块空白。 */
+.msg-user-video-missing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.msg-user-video-icon {
+  font-size: 18px;
+}
+.msg-user-video-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.msg-user-video-copy strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.msg-user-video-copy em {
+  font-style: normal;
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .msg-user-files {
   display: grid;
   gap: 6px;

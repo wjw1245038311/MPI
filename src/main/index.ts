@@ -12,6 +12,7 @@ import { cleanupOldRuntimes } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
 import { registerPdfViewerProtocol, registerPdfViewerScheme } from "./pdf-viewer-protocol";
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
+import { registerChatAttachmentProtocol, registerChatAttachmentScheme } from "./chat-attachment-protocol";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
 import { stopMemoryEndpoint } from "./memory-endpoint";
 import { disposeMemoryIndex } from "./memory-service";
@@ -40,6 +41,8 @@ if (process.platform === "win32") app.setAppUserModelId(APP_USER_MODEL_ID);
 registerHtmlPreviewScheme();
 registerPdfViewerScheme();
 registerTodoAttachmentScheme();
+// 聊天里的视频附件（渲染层 <video src=chatatt://…>，见 chat-attachment-protocol.ts）
+registerChatAttachmentScheme();
 
 // Keep the legacy resources/bundled lookup available for older developer
 // builds. New packaged releases carry the standalone runtime archive in the
@@ -277,6 +280,7 @@ if (!gotLock) {
     registerHtmlPreviewProtocol();
     registerPdfViewerProtocol();
     registerTodoAttachmentProtocol();
+    registerChatAttachmentProtocol();
     // Remove runtime trees superseded by an in-app core update (they may have
     // been locked by pi child processes during the previous run; nothing holds
     // them now). Best effort — leftovers simply wait for the next launch.
