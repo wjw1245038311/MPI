@@ -2,9 +2,14 @@ package com.mpi.app.data
 
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
@@ -38,6 +43,31 @@ const val DIRECT_REQUEST_TIMEOUT_MS = 20_000L
 
 /** 单片上传的超时（4MB 在弱网下可能慢，比默认 10s 宽）。 */
 private const val DIRECT_CHUNK_TIMEOUT_MS = 60_000L
+
+/**
+ * 同时在途的分片数。
+ *
+ * 为什么要并发：单片 4MB、串行发，吞吐被「单连接 / RTT」卡死——手机走 Tailscale 中继时
+ * 实测 RTT 58–350ms（有时近 1s），串行只能到 1.1MB/s。3 片在途把这条链路的吞吐拉回数倍，
+ * 代价只是内存里同时驻留几片（≤ 12MB），不上传完不入盘。
+ */
+const val DIRECT_UPLOAD_CONCURRENCY = 3
+
+/**
+ * 上传计划：中间分片可**并发**发，最后一片必须**等其它全部成功之后再发**。
+ *
+ * 为什么最后一片要单独拿出来（客户端屏障）：主机的收齐判定是
+ * `received = max(offset+len)`（临时文件的大小），并不记「哪些区间到了」。乱序并发下，
+ * 若最高偏移那片提前到达，主机就会**误判收齐并定稿**，剩下的片写进已改名的成品之外。
+ * 把最后一片当屏障，收齐这件事就由客户端保证——不用改主机、PWA 也能照用。
+ */
+internal data class UploadPlan(val parallel: List<Pair<Long, Long>>, val last: Pair<Long, Long>?)
+
+internal fun directUploadPlan(total: Long, chunk: Int = DIRECT_UPLOAD_CHUNK_BYTES): UploadPlan {
+    val bounds = directChunkBounds(total, chunk)
+    if (bounds.isEmpty()) return UploadPlan(emptyList(), null)
+    return UploadPlan(bounds.dropLast(1), bounds.last())
+}
 
 /** 主机签发的直连目标（`attachment.url` 的回包）。 */
 data class DirectTarget(
@@ -126,6 +156,10 @@ class DirectAttachments(
     /**
      * 上传一个视频（直连）：分片 PUT **流式读源**（不在内存里囤整段）+ 送首帧封面。
      *
+     * 读源是**顺序**的、发送是**并发**的：单条输入流不能多线程读，所以由一个生产者顺序
+     * 读出分片、交给 [DIRECT_UPLOAD_CONCURRENCY] 个 worker 并行 PUT（队列做背压，
+     * 内存里同时最多几片）；最后一片走客户端屏障（见 [directUploadPlan]）。
+     *
      * @param open 每次调用返回一个**新的**输入流（分片循环只开一次，失败即整体失败）。
      * @return 主机侧的附件名（消息里只带它）；任何一步失败 → null，调用方走内联回落。
      */
@@ -147,21 +181,56 @@ class DirectAttachments(
             size = size,
         ) ?: return null
 
+        val plan = directUploadPlan(size)
+        val sent = AtomicLong(0)
+        val failed = AtomicBoolean(false)
+        var lastBytes: ByteArray? = null
+
         try {
-            open().use { input ->
-                for ((start, end) in directChunkBounds(size)) {
-                    val length = (end - start + 1).toInt()
-                    val buffer = ByteArray(length)
-                    var read = 0
-                    while (read < length) {
-                        val n = input.read(buffer, read, length - read)
-                        // 源流提前结束（文件被改/读失败）→ 收不齐，直接放弃这次直连上传
-                        if (n <= 0) return null
-                        read += n
+            coroutineScope {
+                val queue = Channel<PendingChunk>(capacity = DIRECT_UPLOAD_CONCURRENCY)
+                // 生产者：顺序读源 → 入队（队列满时自动背压）；最后一片不排队，留在手上等屏障。
+                val producer = launch {
+                    // 顺序依次读出全部片，但只把中间片入队；最后一片留在手上等屏障。
+                    val order = plan.parallel + listOfNotNull(plan.last)
+                    try {
+                        open().use { input ->
+                            for ((offset, end) in order) {
+                                val length = (end - offset + 1).toInt()
+                                val buffer = ByteArray(length)
+                                var read = 0
+                                while (read < length) {
+                                    val n = input.read(buffer, read, length - read)
+                                    // 源流提前结束（文件被改/读失败）→ 收不齐，直接放弃这次直连上传
+                                    if (n <= 0) {
+                                        failed.set(true)
+                                        return@launch
+                                    }
+                                    read += n
+                                }
+                                if (end == plan.last?.second) lastBytes = buffer else queue.send(PendingChunk(offset, end, buffer))
+                            }
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } finally {
+                        queue.close()
                     }
-                    if (!putChunk(target.url, buffer, start, end, size)) return null
-                    onProgress(end + 1, size)
                 }
+                val workers = List(DIRECT_UPLOAD_CONCURRENCY) {
+                    launch(Dispatchers.IO) {
+                        for (pending in queue) {
+                            if (failed.get()) break
+                            if (!putChunk(target.url, pending.bytes, pending.offset, pending.end, size)) {
+                                failed.set(true)
+                                break
+                            }
+                            onProgress(sent.addAndGet(pending.bytes.size.toLong()), size)
+                        }
+                    }
+                }
+                producer.join()
+                workers.forEach { it.join() }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -169,12 +238,22 @@ class DirectAttachments(
             return null
         }
 
+        if (failed.get()) return null
+
+        // 屏障：中间分片全部 200 之后才发最后一片（它触发主机侧的收齐与定稿）。
+        val last = lastBytes ?: return target.name
+        if (!putChunk(target.url, last, plan.last!!.first, plan.last.second, size)) return null
+        onProgress(sent.addAndGet(last.size.toLong()), size)
+
         // 封面是观感优化：送失败不算上传失败（消息里还会再带一份，主机侧幂等）。
         if (posterB64 != null) {
             runCatching { postPoster(target.url, posterB64) }
         }
         return target.name
     }
+
+    /** 一片待发的分片（生产者在内存里拿着，worker 发出后即释放）。 */
+    private class PendingChunk(val offset: Long, val end: Long, val bytes: ByteArray)
 
     /** 换一个可直接喂给播放器的读 URL（原生 Range / 可 seek）。不可用 → null。 */
     suspend fun playbackUrl(threadId: String, name: String, mimeType: String?): String? =

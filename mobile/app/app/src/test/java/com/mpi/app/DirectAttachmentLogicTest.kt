@@ -1,8 +1,10 @@
 package com.mpi.app
 
 import com.mpi.app.data.DIRECT_UPLOAD_CHUNK_BYTES
+import com.mpi.app.data.DIRECT_UPLOAD_CONCURRENCY
 import com.mpi.app.data.contentRangeHeader
 import com.mpi.app.data.directChunkBounds
+import com.mpi.app.data.directUploadPlan
 import com.mpi.app.data.mimeTypeFromName
 import com.mpi.app.data.parseDirectTarget
 import com.mpi.app.ui.VideoUpload
@@ -10,6 +12,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -63,6 +66,51 @@ class DirectAttachmentLogicTest {
     @Test
     fun `a custom chunk size is honoured`() {
         assertEquals(listOf(0L to 1L, 2L to 3L, 4L to 4L), directChunkBounds(5, chunk = 2))
+    }
+
+    // ---- 并发上传计划（客户端屏障） ----
+
+    /**
+     * 最后一片必须单独拿出来屏障——否则乱序并发下，最高偏移那片提前到达会让主机
+     * （收齐判据 = 临时文件大小）**误判定稿**，剩下的片就写上了一个已经被改名的成品之外。
+     */
+    @Test
+    fun `the last chunk is held back for the barrier`() {
+        val total = DIRECT_UPLOAD_CHUNK_BYTES * 3L
+        val plan = directUploadPlan(total)
+        assertEquals(2, plan.parallel.size)
+        assertEquals(0L, plan.parallel.first().first)
+        assertEquals(DIRECT_UPLOAD_CHUNK_BYTES * 2L - 1, plan.parallel.last().second)
+        assertEquals(DIRECT_UPLOAD_CHUNK_BYTES * 2L, plan.last!!.first)
+        assertEquals(total - 1, plan.last!!.second)
+    }
+
+    @Test
+    fun `a single chunk is only the barrier chunk`() {
+        val plan = directUploadPlan(1024)
+        assertEquals(emptyList<Pair<Long, Long>>(), plan.parallel)
+        assertEquals(0L to 1023L, plan.last)
+    }
+
+    @Test
+    fun `an empty upload has no plan`() {
+        assertEquals(emptyList<Pair<Long, Long>>(), directUploadPlan(0).parallel)
+        assertNull(directUploadPlan(0).last)
+    }
+
+    @Test
+    fun `parallel chunks plus the barrier chunk still cover everything exactly once`() {
+        val total = DIRECT_UPLOAD_CHUNK_BYTES * 4L + 7L
+        val plan = directUploadPlan(total)
+        val ordered = plan.parallel + listOfNotNull(plan.last)
+        assertEquals(directChunkBounds(total), ordered)
+    }
+
+    /** 并发度太小等于串行，太大则手机内存里同时叠好几十 MB——写成单测防手滑调大。 */
+    @Test
+    fun `upload concurrency stays in a sane range`() {
+        assertTrue("至少要真的并发", DIRECT_UPLOAD_CONCURRENCY >= 2)
+        assertTrue("同时驻留的分片内存别超 32MB", DIRECT_UPLOAD_CONCURRENCY <= 8)
     }
 
     // ---- Content-Range ----
