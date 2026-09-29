@@ -4,7 +4,11 @@ import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.E2EFrame
 import com.mpi.app.protocol.Envelope
 import com.mpi.app.protocol.RemoteEnvelope
+import com.mpi.app.protocol.decodeBinaryFrame
 import com.mpi.app.protocol.decryptFrame
+import com.mpi.app.protocol.decryptFrameBytes
+import com.mpi.app.protocol.encodeBinaryFrame
+import com.mpi.app.protocol.encryptFrameBytes
 import com.mpi.app.protocol.encryptFrame
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineScope
@@ -94,6 +98,14 @@ class HostSession(
     @Volatile
     private var aesKey: ByteArray? = null
 
+    /**
+     * 是否与主机协商了**二进制 E2E 帧**（去 base64 的 33% 膨胀，见 protocol/E2eBinary.kt）。
+     *
+     * 只有两端在配对时都声明了 e2e-bin 才为 true；否则一律走 JSON 版（老端行为完全不变）。
+     */
+    @Volatile
+    private var binaryFrames: Boolean = false
+
     private var authJob: Job? = null
     private var reconnectJob: Job? = null
     private var attempt = 0
@@ -108,6 +120,8 @@ class HostSession(
     private var stopped = false
 
     private val unsubscribeFrame = client.onFrame { raw -> handleFrame(raw) }
+    /** 二进制帧入口（与主机协商成功后才会有）。 */
+    private val unsubscribeBinaryFrame = client.onBinaryFrame { bytes -> handleBinaryFrame(bytes) }
 
     private val unsubscribeState = client.onState { relayState -> handleRelayState(relayState) }
 
@@ -187,8 +201,30 @@ class HostSession(
     /** 发送一条已构建的 envelope（[Requester] 用这条）。 */
     override fun sendEnvelope(envelope: RemoteEnvelope): Boolean {
         val key = aesKey ?: return false
+        // 二进制帧：同一把密钥、同一套 AES-GCM，只是不套 base64/JSON 外壳。
+        if (binaryFrames) {
+            val (nonce, body) = encryptFrameBytes(key, Envelope.encode(envelope))
+            return client.sendBinary(encodeBinaryFrame("{}", nonce, body))
+        }
         val frame = encryptFrame(key, Envelope.encode(envelope))
         return client.send(Envelope.json.encodeToString(E2EFrame.serializer(), frame))
+    }
+
+    /** 二进制帧入站：解码 → 解密 → 交给订阅者（与 JSON 路径同一条投递链）。 */
+    private fun handleBinaryFrame(bytes: ByteArray) {
+        val decoded = decodeBinaryFrame(bytes)
+        val key = aesKey
+        if (decoded == null || key == null) {
+            reportProblem("收到无法解析的二进制帧（" + bytes.size + " 字节）")
+            return
+        }
+        val envelope = try {
+            Envelope.parse(decryptFrameBytes(key, decoded.nonce, decoded.body))
+        } catch (e: Exception) {
+            reportProblem("二进制帧解密失败（密钥不匹配或数据被篡改）：" + e.message)
+            return
+        }
+        envelopeListeners.forEach { runCatching { it(envelope) } }
     }
 
     /** 便捷发送：按字段构建再发。 */
@@ -362,6 +398,7 @@ class HostSession(
                     deviceName = deviceName,
                 )
                 aesKey = result.aesKey
+                binaryFrames = result.binaryFrames
                 attempt = 0
                 authAttempts = 0
                 authDeniedCount = 0

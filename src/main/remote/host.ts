@@ -11,6 +11,7 @@ import {
 } from "./protocol";
 import { deviceIdFor, fingerprintFor, loadOrCreateIdentity, saveIdentity, signText, verifyText, type HostIdentity, type TrustedRemoteDevice } from "./identity";
 import { hostProofText, verifyDeviceProof } from "./pairing-proof";
+import { E2E_BINARY_CAP } from "./e2e-binary";
 import { RemoteService } from "./service";
 import { appendDiagLog } from "../diag-log";
 
@@ -34,7 +35,7 @@ export interface RelayOutbound {
    * （见 remote/pairing-proof.ts。之前是上行自己在收到 pair.hello 时抢先派生，
    * 于是中继塞一个自己的公钥就能拿到会话密钥）。
    */
-  activateE2E?(deviceId: string, deviceX25519Pub: string): void;
+  activateE2E?(deviceId: string, deviceX25519Pub: string, caps?: unknown): void;
   /** 撤销/断开时丢掉会话。 */
   deactivateE2E?(deviceId: string): void;
 }
@@ -408,7 +409,14 @@ export class RemoteHost {
   /** pair.accepted payload; relay connections additionally carry the stable
    * deviceToken so the PWA can re-auth with `hello` after reconnects. */
   private acceptedPayload(connection: ConnectionState): Record<string, unknown> {
-    const payload: Record<string, unknown> = { hostId: this.identity.hostId, deviceId: connection.deviceId, directOnly: true };
+    const payload: Record<string, unknown> = {
+      hostId: this.identity.hostId,
+      deviceId: connection.deviceId,
+      directOnly: true,
+      // 能力协商：告诉设备本主机支持二进制 E2E 帧（去掉 base64 的 33% 膨胀，见 e2e-binary.ts）。
+      // 设备只在自己也支持时报同样的 cap，两边都支持才切——老客户端行为不变。
+      caps: [E2E_BINARY_CAP],
+    };
     if (connection.viaRelay && this.options.relay) {
       const token = this.options.relay.deviceToken(connection.deviceId!);
       if (token) payload.deviceToken = token;
@@ -719,7 +727,7 @@ export class RemoteHost {
     connection.deviceName = deviceName;
     connection.publicKeyPem = publicKeyPem;
     // 验签通过后才把 E2E 会话建在**这个已认证的公钥**上。
-    if (deviceX25519Pub) this.options.relay?.activateE2E?.(deviceId, deviceX25519Pub);
+    if (deviceX25519Pub) this.options.relay?.activateE2E?.(deviceId, deviceX25519Pub, payload.caps);
     const trusted = this.identity.trustedDevices.find((device) => device.deviceId === deviceId);
     if (trusted && trusted.publicKeyPem === publicKeyPem) {
       trusted.lastSeenAt = Date.now();

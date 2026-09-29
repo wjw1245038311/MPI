@@ -305,6 +305,86 @@ function send(ws, obj) {
   }
 }
 
+// --- 二进制 E2E 帧（2026-09-30，去 base64 的 33% 膨胀）------------------------------
+// 布局：`[版本=1][头长 N][JSON 头][nonce 12B + 密文 + tag 16B]`。
+// 中继只解头部（路由元数据 from/to），载荷始终是密文——与 JSON 版行为一致。
+const BIN_VERSION = 1;
+
+/** 读头部；不是本格式 → null。 */
+function readBinaryFrame(data) {
+  if (!data || data.length < 2 || data[0] !== BIN_VERSION) return null;
+  const headerLength = data[1];
+  if (data.length < 2 + headerLength) return null;
+  let header = {};
+  if (headerLength > 0) {
+    try {
+      header = JSON.parse(data.subarray(2, 2 + headerLength).toString("utf8"));
+    } catch {
+      return null;
+    }
+  }
+  return { header, body: data.subarray(2 + headerLength) };
+}
+
+/** 拼一条二进制帧（头部换了、载荷原样）。 */
+function rebuildBinaryFrame(header, body) {
+  const head = Buffer.from(JSON.stringify(header), "utf8");
+  if (head.length > 255) return null;
+  return Buffer.concat([Buffer.from([BIN_VERSION, head.length]), head, body]);
+}
+
+/** 发一条二进制帧。 */
+function sendBinary(ws, buf) {
+  if (!isWsOpen(ws)) return false;
+  try {
+    ws.send(buf, { binary: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 二进制 E2E 帧的路由（设备↔主机）。载荷不解、只改头部。
+ *
+ * 设备→主机：给头部补 `from`（上行靠它把帧映射到具体连接），跟 JSON 版一样只做路由元数据。
+ * 主机→设备：按头部的 `to` 找设备。未批准的设备与 JSON 路径同规矩。
+ */
+function handleBinaryMessage(conn, data) {
+  const decoded = readBinaryFrame(data);
+  if (!decoded) {
+    send(conn.ws, { type: "relay.error", code: "INVALID_FRAME" });
+    return;
+  }
+  if (conn.role === "host") {
+    const to = str(decoded.header.to, 128);
+    const rec = to ? devices.get(devKey(conn.id, to)) : undefined;
+    if (!rec || !isWsOpen(rec.ws)) {
+      send(conn.ws, { type: "relay.error", code: "DEVICE_OFFLINE" });
+      return;
+    }
+    const out = rebuildBinaryFrame({ to }, decoded.body);
+    if (out) sendBinary(rec.ws, out);
+    return;
+  }
+  if (conn.role === "device") {
+    const rec = conn.authHostId ? devices.get(devKey(conn.authHostId, conn.id)) : undefined;
+    if (!rec || rec.status !== "approved") {
+      send(conn.ws, { type: "relay.error", code: "NOT_AUTHENTICATED" });
+      return;
+    }
+    const host = hosts.get(rec.hostId);
+    if (!isWsOpen(host?.ws)) {
+      send(conn.ws, { type: "relay.error", code: "HOST_OFFLINE" });
+      return;
+    }
+    const out = rebuildBinaryFrame({ from: conn.id }, decoded.body);
+    if (out) sendBinary(host.ws, out);
+    return;
+  }
+  tryClose(conn.ws, CLOSE_BAD_FIRST_FRAME, "BAD_FIRST_FRAME");
+}
+
 function tryClose(ws, code, reason) {
   try {
     ws.close(code, reason);
@@ -604,7 +684,17 @@ wss.on("connection", (ws) => {
     ws.isAlive = true;
   });
 
-  ws.on("message", (data) => {
+  ws.on("message", (data, isBinary) => {
+    // 二进制 = E2E 数据帧（中继只解头部、不碰载荷，与 JSON 版同样的路由规矩）。
+    if (isBinary) {
+      if (data.length > MAX_FRAME_BYTES) {
+        send(ws, { type: "relay.error", code: "PAYLOAD_TOO_LARGE" });
+        tryClose(ws, CLOSE_TOO_LARGE, "PAYLOAD_TOO_LARGE");
+        return;
+      }
+      handleBinaryMessage(conn, data);
+      return;
+    }
     const raw = data.toString();
     if (raw.length > MAX_FRAME_BYTES) {
       send(ws, { type: "relay.error", code: "PAYLOAD_TOO_LARGE" });

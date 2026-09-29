@@ -71,3 +71,19 @@ fun decryptFrame(key: ByteArray, frame: E2EFrame): String {
 }
 
 private fun randomNonce(): ByteArray = ByteArray(GCM_NONCE_LENGTH).also { java.security.SecureRandom().nextBytes(it) }
+
+/**
+ * 原始字节加密（二进制帧用，2026-09-30）：返回 `nonce to (密文‖tag)`，不做 base64。
+ *
+ * 密码学与 [encryptFrame] 完全一致，只是把「base64url + JSON 外壳」换成了裸字节——
+ * 省掉 33% 膨胀（见 [encodeBinaryFrame] 与 E2eBinaryTest 的跨端向量）。
+ */
+fun encryptFrameBytes(key: ByteArray, plaintextJson: String, nonce: ByteArray = randomNonce()): Pair<ByteArray, ByteArray> =
+    nonce to aesGcmEncrypt(key, plaintextJson.toByteArray(Charsets.UTF_8), nonce)
+
+/** 二进制帧解密（body = 密文‖tag）；篡改时抛异常。 */
+fun decryptFrameBytes(key: ByteArray, nonce: ByteArray, body: ByteArray): String {
+    require(nonce.size == GCM_NONCE_LENGTH) { "invalid E2E nonce length" }
+    require(body.size >= 17) { "E2E frame too short" }
+    return aesGcmDecrypt(key, body, nonce).toString(Charsets.UTF_8)
+}

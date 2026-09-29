@@ -19,6 +19,7 @@ import { join } from "node:path";
 import WebSocket from "ws";
 import { appendDiagLog } from "../diag-log";
 import { decryptFrame, deriveAesKey, encryptFrame } from "./e2e-crypto";
+import { decodeBinaryFrame, decryptFrameRaw, encodeBinaryFrame, encryptFrameRaw, supportsBinaryFrames } from "./e2e-binary";
 import { x25519SharedSecret } from "./identity";
 import type { RemotePushSubscription } from "./protocol";
 import type { RemoteHost, RelayOutbound } from "./host";
@@ -85,7 +86,7 @@ export class RelayUplink implements RelayOutbound {
    */
   private readonly bootId = randomBytes(12).toString("base64url");
   /** deviceId → E2E session: key derived at pair.hello, activated once pair.accepted is sent. */
-  private readonly e2eSessions = new Map<string, { key: Buffer; active: boolean }>();
+  private readonly e2eSessions = new Map<string, { key: Buffer; active: boolean; binary: boolean }>();
   /** In-memory mirror of the token file. */
   private tokens: Record<string, string> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -148,12 +149,25 @@ export class RelayUplink implements RelayOutbound {
     this.observeOutbound(deviceId, parsed);
     if (!this.isOpen()) return; // dropped while offline — PWA resyncs via thread.resync on reconnect
     const session = this.e2eSessions.get(deviceId);
-    let outbound: string;
     if (session?.active && !PLAINTEXT_FRAME_TYPES.has(String(parsed.type))) {
-      outbound = JSON.stringify({ ...encryptFrame(session.key, frame), to: deviceId });
-    } else {
-      outbound = JSON.stringify({ ...parsed, to: deviceId });
+      // 二进制帧（2026-09-30）：只给声明了能力的设备用，否则继续走 JSON（旧客户端行为不变）。
+      if (session.binary === true) {
+        try {
+          this.ws!.send(encodeBinaryFrame({ to: deviceId }, encryptFrameRaw(session.key, frame)));
+          return;
+        } catch (error) {
+          console.error("[relay-uplink] binary sendToDevice failed, falling back to json:", error);
+        }
+      }
+      const outbound = JSON.stringify({ ...encryptFrame(session.key, frame), to: deviceId });
+      try {
+        this.ws!.send(outbound);
+      } catch (error) {
+        console.error("[relay-uplink] sendToDevice failed:", error);
+      }
+      return;
     }
+    const outbound = JSON.stringify({ ...parsed, to: deviceId });
     try {
       this.ws!.send(outbound);
     } catch (error) {
@@ -259,7 +273,12 @@ export class RelayUplink implements RelayOutbound {
       this.startHeartbeat(ws);
     });
 
-    ws.on("message", (data) => {
+    ws.on("message", (data, isBinary) => {
+      // 二进制 E2E 帧（去掉 base64 的 33% 膨胀）：头部带 from，载荷是 nonce‖密文‖tag。
+      if (isBinary) {
+        this.handleBinaryFrame(data as Buffer);
+        return;
+      }
       const raw = data.toString();
       let msg: Record<string, unknown> | null = null;
       try {
@@ -392,12 +411,13 @@ export class RelayUplink implements RelayOutbound {
    *
    * 幂等：同一设备重连时用同一公钥会算出同一把密钥，只是把它重新置为 active。
    */
-  activateE2E(deviceId: string, deviceX25519Pub: string): void {
+  activateE2E(deviceId: string, deviceX25519Pub: string, caps?: unknown): void {
     if (!deviceId || !deviceX25519Pub) return;
     try {
       const shared = x25519SharedSecret(this.options.x25519PrivB64u, deviceX25519Pub);
-      this.e2eSessions.set(deviceId, { key: deriveAesKey(shared, this.options.hostId, deviceId), active: true });
-      appendDiagLog(`relay e2e activated device=${deviceId.slice(0, 12)}`);
+      const binary = supportsBinaryFrames(caps);
+      this.e2eSessions.set(deviceId, { key: deriveAesKey(shared, this.options.hostId, deviceId), active: true, binary });
+      appendDiagLog(`relay e2e activated device=${deviceId.slice(0, 12)} binary=${binary ? 1 : 0}`);
     } catch (error) {
       console.error(`[relay-uplink] activateE2E failed for ${deviceId}:`, error);
     }
@@ -422,6 +442,41 @@ export class RelayUplink implements RelayOutbound {
   // 派生逻辑已上提到公开方法 activateE2E（只在主机验签通过后调用）。
   // 历史上这里有个 private deriveE2ESession(msg, deviceId) 会在收到明文 pair.hello 时
   // 抢先派生 —— 那正是中继换公钥就能拿到会话密钥的原因，已删。
+
+  /**
+   * 二进制 E2E 帧（设备→主机）：解码 → 用已认证的会话解密 → 交给主机。
+   *
+   * 与 JSON 路径的区别只有编码：密码学、会话校验与投递完全一致（都走 handleTransportFrame）。
+   */
+  private handleBinaryFrame(data: Buffer): void {
+    const decoded = decodeBinaryFrame(data);
+    if (!decoded) {
+      appendDiagLog(`relay-in DROPPED-BIN bytes=${data.length} reason=bad-frame`);
+      return;
+    }
+    const from = typeof decoded.header.from === "string" ? decoded.header.from : "";
+    const connectionId = from ? this.deviceToConnection.get(from) : undefined;
+    if (!connectionId) {
+      console.warn(`[relay-uplink] dropping binary frame from unknown device ${from || "?"}`);
+      return;
+    }
+    const session = this.e2eSessions.get(from);
+    if (!session?.active) {
+      appendDiagLog(`relay-in DROPPED-BIN from=${from} bytes=${data.length} reason=no-active-e2e`);
+      return;
+    }
+    let plaintext: string;
+    try {
+      plaintext = decryptFrameRaw(session.key, decoded.frame.nonce, decoded.frame.body);
+    } catch (error) {
+      appendDiagLog(`relay-in DROPPED-BIN from=${from} reason=decrypt-failed`);
+      console.error(`[relay-uplink] binary E2E decrypt failed for ${from}:`, error);
+      return;
+    }
+    void this.options.getHost()?.handleTransportFrame(connectionId, plaintext).catch((error) => {
+      console.error("[relay-uplink] handleTransportFrame failed:", error);
+    });
+  }
 
   // --- retry / heartbeat -----------------------------------------------------------
 

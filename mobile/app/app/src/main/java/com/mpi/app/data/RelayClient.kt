@@ -8,6 +8,8 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
+import okio.ByteString.Companion.toByteString
 
 /**
  * 与中继的连接状态。
@@ -59,6 +61,7 @@ class RelayClient(
         .build()
 
     private val frameListeners = CopyOnWriteArrayList<(String) -> Unit>()
+    private val binaryListeners = CopyOnWriteArrayList<(ByteArray) -> Unit>()
     private val stateListeners = CopyOnWriteArrayList<(RelayState) -> Unit>()
 
     /** 当前 socket 的世代号；[connect]/[close] 各自增一次，旧 socket 的回调据此失效。 */
@@ -111,6 +114,12 @@ class RelayClient(
                     frameListeners.forEach { runCatching { it(text) } }
                 }
 
+                /** 二进制帧（去 base64 的 33% 膨胀，见 protocol/E2eBinary.kt）。 */
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    if (!isCurrent()) return
+                    binaryListeners.forEach { runCatching { it(bytes.toByteArray()) } }
+                }
+
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     if (!isCurrent()) return
                     webSocket.close(NORMAL_CLOSURE, null)
@@ -136,6 +145,15 @@ class RelayClient(
 
     /** 发送一条 JSON 文本帧；返回 false 表示未连接或发送队列已满。 */
     fun send(rawJson: String): Boolean = socket?.send(rawJson) ?: false
+
+    /** 发送一条二进制帧（E2E 数据帧的紧凑编码）；未连接 → false。 */
+    fun sendBinary(bytes: ByteArray): Boolean = socket?.send(bytes.toByteString()) ?: false
+
+    /** 订阅二进制帧；返回取消订阅的句柄。 */
+    fun onBinaryFrame(listener: (ByteArray) -> Unit): () -> Unit {
+        binaryListeners += listener
+        return { binaryListeners -= listener }
+    }
 
     /**
      * 主动放弃当前 socket（kick 重建 / 停止 / 换设备）。

@@ -1,6 +1,8 @@
 package com.mpi.app.data
 
 import com.mpi.app.protocol.Base64Url
+import com.mpi.app.protocol.E2E_BINARY_CAP
+import com.mpi.app.protocol.supportsBinaryFrames
 import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.Envelope
 import com.mpi.app.protocol.X25519
@@ -50,6 +52,8 @@ class PairingException(message: String, cause: Throwable? = null) : Exception(me
 /** 配对/重认证的产物。 */
 class PairingResult(
     val deviceToken: String,
+    /** 主机是否支持二进制 E2E 帧（能力协商；见 protocol/E2eBinary.kt）。 */
+    val binaryFrames: Boolean = false,
     /** 主机 X25519 公钥（b64url）。持久化它即可——会话密钥可随时本地复算，无需重新协商。 */
     val hostX25519PubB64u: String,
     /** 已派生的 AES-256-GCM 会话密钥。 */
@@ -180,6 +184,8 @@ object Pairing {
                     put("ticket", ticket)
                     // E2E：主机据此派生会话密钥
                     put("x25519Pub", identity.x25519PubB64u)
+                    // 能力协商：本端支持二进制 E2E 帧（去 base64 的 33% 膨胀）
+                    put("caps", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(E2E_BINARY_CAP))))
                 },
             ),
         )
@@ -208,7 +214,13 @@ object Pairing {
         }
 
         onStage(PairingStage.Approved)
-        return PairingResult(deviceToken = deviceToken, hostX25519PubB64u = hostX25519Pub, aesKey = aesKey)
+        return PairingResult(
+            deviceToken = deviceToken,
+            hostX25519PubB64u = hostX25519Pub,
+            aesKey = aesKey,
+            // 只有主机也声明了 e2e-bin 才切二进制（否则保持 JSON，老主机不受影响）
+            binaryFrames = supportsBinaryFrames(acceptedPayload["caps"]),
+        )
     }
 
     private suspend fun connectAndAwaitOpen(client: RelayClient) {
