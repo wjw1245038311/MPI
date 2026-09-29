@@ -3040,6 +3040,8 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     stunUrls: [...BUILT_IN_REMOTE_STUN_URLS],
     sendToRenderer: send,
     service: remoteService,
+    // 配对票里给手机的地址（空 = 沿用 uplink 自己那条）。
+    mobileRelayUrl: () => getConfig().mobileRelayUrl || "",
   });
   activeRemoteHost = remoteHost;
   remoteHost.start();

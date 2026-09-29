@@ -38,6 +38,13 @@ export interface RemoteHostOptions {
   service: RemoteService;
   /** Optional mobile relay transport; undefined = WebRTC-only mode. */
   relay?: RelayOutbound | null;
+  /**
+   * 配对二维码/配对票里**告诉手机的中继地址**（默认就取 uplink 自己那条）。
+   *
+   * 为什么需要它：主机自己走哪条中继（tailnet wss）和手机该走哪条（公网 ws，因为国内链路会
+   * 按 TLS 握手指纹掐掉安卓的 wss）可以不同；两者指向**同一个中继进程**即可互通。
+   */
+  mobileRelayUrl?: () => string;
 }
 
 interface PairingTicket {
@@ -232,6 +239,7 @@ export class RemoteHost {
     // Mobile relay: register the ticket so pair.request can be routed to us.
     this.options.relay?.sendControl({ type: "ticket.register", ticket, expiresAt });
     const relay = this.options.relay;
+    const phoneRelayUrl = this.options.mobileRelayUrl?.() || (relay?.relayUrl && relay.relayUrl() ? relay.relayUrl() : "");
     return {
       hostId: this.identity.hostId,
       hostName: hostname(),
@@ -239,7 +247,7 @@ export class RemoteHost {
       hostPublicKeyPem: this.identity.publicKeyPem,
       signalingUrl: this.options.signalingUrl,
       stunUrls: [...this.options.stunUrls],
-      ...(relay?.relayUrl && relay.relayUrl() ? { relayUrl: relay.relayUrl() } : {}),
+      ...(phoneRelayUrl ? { relayUrl: phoneRelayUrl } : {}),
       ticket,
       expiresAt,
       protocol: 1,

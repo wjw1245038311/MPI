@@ -102,6 +102,13 @@ export interface AppConfig {
    */
   attachmentBaseUrl?: string;
   /**
+   * 配对时**告诉手机的中继地址**（可选）。留空 = 用主机自己那条（tailnet wss）。
+   *
+   * 手机不装 Tailscale 时填公网明文那条，例如 `ws://47.97.28.110:10445/ws`
+   * （用 IP 而不是域名：阿里云会按 Host 头里的未备案域名返回备案拦截页）。
+   */
+  mobileRelayUrl?: string;
+  /**
    * 附件服务的 TLS 证书与私钥（可选，PEM 路径）。
    *
    * 两个都给，主机才会额外起一个 **https 监听**（默认 127.0.0.1:8898）：
@@ -711,6 +718,8 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (pinnedProjects) out.pinnedProjects = pinnedProjects;
   const attachmentBaseUrl = typeof p.attachmentBaseUrl === "string" ? p.attachmentBaseUrl.trim() : "";
   if (attachmentBaseUrl) out.attachmentBaseUrl = attachmentBaseUrl;
+  const mobileRelayUrl = typeof p.mobileRelayUrl === "string" ? p.mobileRelayUrl.trim() : "";
+  if (mobileRelayUrl) out.mobileRelayUrl = mobileRelayUrl;
   for (const key of ["attachmentCertFile", "attachmentKeyFile"] as const) {
     const value = typeof p[key] === "string" ? (p[key] as string).trim() : "";
     if (value) out[key] = value;
