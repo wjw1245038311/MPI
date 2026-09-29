@@ -14,7 +14,7 @@
  * 不该再受「能不能内联」制约。
  */
 import { app } from "electron";
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, constants as fsConstants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME, VIDEO_POSTER_MAX_BYTES, VIDEO_POSTER_MIME_TYPES, posterNameFor } from "./remote/video-refs";
@@ -209,7 +209,11 @@ export function uploadPartPath(name: string): string | null {
 export function writeUploadChunk(name: string, offset: number, chunk: Buffer): number {
   const target = uploadPartPath(name);
   if (!target) throw new Error("invalid upload name");
-  const fd = openSync(target, "a+");
+  // ⚠️ 这里**不能**用 `openSync(target, "a+")`：追加模式下写位置会被忽略（Windows 上尤其如此），
+  // 分片就按**到达顺序**被拼起来。手机端是 3 片并发发的（0.5.112 起），到达顺序不是 0/1/2，
+  // 结果落盘的视频整段错位——主机侧一切“成功”，客户端播不了（2026-09-29 真机「不能看」根因）。
+  // 用 O_RDWR|O_CREAT（文件不存在则创建、存在则原样保留）取代 "a+"，位置才会被尊重。
+  const fd = openSync(target, fsConstants.O_RDWR | fsConstants.O_CREAT, 0o666);
   try {
     writeSync(fd, chunk, 0, chunk.length, offset);
   } finally {

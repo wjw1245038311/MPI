@@ -130,6 +130,40 @@ try {
   });
   assert.equal(overflow.status, 400, "超过声明长度的分片必须被拒");
 
+  // ---- 2.1b 乱序分片：到达顺序 ≠ 偏移顺序时，必须仍按偏移定位写 ----
+  // 手机端是 3 片并发发的（0.5.112 起），到达顺序不保证是 0/1/2；一旦主机侧退化成「按到达顺序追加」，
+  // 视频会整段错位（客户端播不了），而所有日志都显示成功。2026-09-29 真机「不能看」就是这个根因
+  // （Windows 上 openSync("a+") 会忽略 writeSync 的 position），所以这里钉死乱序语义。
+  {
+    const CH = 4096;
+    const src = Buffer.alloc(CH * 3 + 777);
+    for (let i = 0; i < src.length; i += 1) src[i] = i % 251;
+    const tok = tokens.mint({
+      mode: "write",
+      threadId: "t-1",
+      deviceId: "dev-1",
+      name: store.reserveVideoName("out-of-order.mp4", "video/mp4"),
+      size: src.length,
+    });
+    const bounds = [];
+    for (let off = 0; off < src.length; off += CH) bounds.push([off, Math.min(off + CH, src.length) - 1]);
+    // 故意乱序（中间片先到、尾片最后到，保留「尾片当屏障」的语义）。
+    for (const i of [2, 0, 1, 3]) {
+      const [off, end] = bounds[i];
+      const res = await fetch(`${base}/att/${tok.token}`, {
+        method: "PUT",
+        headers: { "Content-Range": `bytes ${off}-${end}/${src.length}` },
+        body: src.subarray(off, end + 1),
+      });
+      assert.equal(res.status, 200, `乱序分片 offset=${off} 应被接受`);
+    }
+    assert.ok(existsSync(join(TEMP, "chat-attachments", tok.name)), "尾片到达应触发定稿（乱序不影响收齐判定）");
+    assert.ok(
+      readFileSync(join(TEMP, "chat-attachments", tok.name)).equals(src),
+      "乱序到达的分片必须按偏移定位写入——按到达顺序追加会让视频整段错位",
+    );
+  }
+
   // ---- 2.2 封面（POST，数据收齐后单独送）----
   const poster = await fetch(putUrl, {
     method: "POST",

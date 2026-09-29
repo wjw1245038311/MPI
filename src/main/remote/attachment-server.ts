@@ -202,10 +202,11 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
         };
         const range = parseRange(req.headers.range ?? null, size);        token.hits += 1;
         // 取证：**直连下行到底有没有被用上**。一次播放有几十条 Range 请求，全记会刷爆日志，
-        // 只记这条令牌的第一次命中——排查时「有这行 = 走了直连 / 没有 = 客户端回落了中继」。
+        // 所以只记前几次 + 每 16 次一记。**不能只记第一次**：那样看到「只有一次 GET」会误判成
+        // 「手机只请求了一片就放弃」（2026-09-29 就这么误判过，白花半天找「下行解密失败」）。
         const firstHit = token.hits === 1;
-        if (firstHit) {
-          log(`attachment-http GET name=${token.name.slice(0, 48)} size=${size} range=${req.headers.range ?? "-"}`);
+        if (token.hits <= 3 || token.hits % 16 === 0) {
+          log(`attachment-http GET hit=${token.hits} name=${token.name.slice(0, 48)} size=${size} range=${req.headers.range ?? "-"}`);
         }
         const startedAt = Date.now();
         if (firstHit) {
