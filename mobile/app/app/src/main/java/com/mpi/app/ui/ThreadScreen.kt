@@ -996,11 +996,23 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
             is Attachment.Image -> {
                 // 已压缩到 ≤280KB，解码成缩略图不会爆内存（最多 3 张）
                 val bitmap = remember(attachment.bytesB64) {
-                    runCatching {
-                        val bytes = android.util.Base64.decode(attachment.bytesB64, android.util.Base64.NO_WRAP)
-                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-                    }.getOrNull()
+                    decodeThumb(attachment.bytesB64)?.asImageBitmap()
                 }
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap,
+                        contentDescription = "图片附件",
+                        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(MpiTheme.colors.control))
+                }
+            }
+
+            is Attachment.ImageKeyed -> {
+                // P3：原图已在主机上，本地只剩缩略图（同样是压过的 JPEG，解码很安全）。
+                val bitmap = remember(attachment.thumbB64) { decodeThumb(attachment.thumbB64)?.asImageBitmap() }
                 if (bitmap != null) {
                     Image(
                         bitmap = bitmap,
@@ -2006,6 +2018,12 @@ private fun VideoPlaceholder(block: MessageBlock) {
 /** 附件小卡片上的一行大小（与视频块同一口径）。 */
 private fun chipBytes(bytes: Long): String =
     if (bytes >= 1_000_000) String.format("%.1fMB", bytes / 1_000_000.0) else "${(bytes + 1023) / 1024}KB"
+
+/** base64 图片 → Bitmap（失败 → null）；仅供附件小卡片的缩略图使用。 */
+private fun decodeThumb(b64: String): android.graphics.Bitmap? = runCatching {
+    val bytes = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP)
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+}.getOrNull()
 
 private fun formatVideoMeta(block: MessageBlock): String {
     val size = block.size

@@ -1,9 +1,14 @@
 package com.mpi.app
 
+import com.mpi.app.data.Attachment
 import com.mpi.app.data.MAX_RAW_BYTES
+import com.mpi.app.data.THUMB_MAX_BYTES
+import com.mpi.app.data.imagePayloads
 import com.mpi.app.data.looksLikeVideo
 import com.mpi.app.data.nextQuality
 import com.mpi.app.data.sampleSize
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -61,5 +66,38 @@ class AttachmentLogicTest {
         assertFalse("普通文件不是视频", looksLikeVideo("report.pdf", "application/pdf"))
         assertFalse("没有扩展名又没有 mime → 不当视频处理", looksLikeVideo("README", null))
         assertFalse("扩展名只是包含 mp4 不算（避免 .mp4.txt 误判）", looksLikeVideo("a.mp4.txt", null))
+    }
+
+    // ---- P3：图片的两种载荷形状（直连 keyed / 内联回落）----
+
+    @Test
+    fun `keyed images send a key plus thumbnail instead of the original bytes`() {
+        val key = "a".repeat(64)
+        val payloads = imagePayloads(
+            listOf(
+                Attachment.ImageKeyed(key = key, thumbB64 = "THUMB", mimeType = "image/png", size = 5_000_000),
+                Attachment.Image(bytesB64 = "ORIGINAL", mimeType = "image/jpeg"),
+                // 非图片附件不该混进 images[]
+                Attachment.WorkspaceFile(name = "x.bin", path = "/ws/mpi-inbox/x.bin", size = 1),
+            ),
+        )
+        assertEquals("只有图片进 images[]", 2, payloads.size)
+        val keyed = payloads[0]
+        assertEquals("原图不再内联（主机从对象库读）", "", keyed["data"]?.jsonPrimitive?.content)
+        assertEquals(key, keyed["key"]?.jsonPrimitive?.content)
+        assertEquals("THUMB", keyed["thumbnail"]?.jsonPrimitive?.content)
+        assertEquals("image/jpeg", keyed["thumbnailMimeType"]?.jsonPrimitive?.content)
+        assertEquals("内联回落保持老形状", "ORIGINAL", payloads[1]["data"]?.jsonPrimitive?.content)
+        assertEquals("image/jpeg", payloads[1]["mimeType"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `the thumbnail budget is tighter than the inline budget`() {
+        assertTrue(THUMB_MAX_BYTES < MAX_RAW_BYTES)
+        assertTrue(nextQuality(THUMB_MAX_BYTES - 1, 0.8, THUMB_MAX_BYTES).first)
+        assertFalse(nextQuality(THUMB_MAX_BYTES * 3, 0.8, THUMB_MAX_BYTES).first)
+        // 未显式给上限时仍是老口径（内联 ≤280KB），不能因为加了缩略图而改掉老路径
+        assertTrue(nextQuality(MAX_RAW_BYTES - 1, 0.8).first)
+        assertFalse(nextQuality(MAX_RAW_BYTES * 2, 0.8).first)
     }
 }

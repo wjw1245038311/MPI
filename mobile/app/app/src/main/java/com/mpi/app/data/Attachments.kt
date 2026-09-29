@@ -10,6 +10,9 @@ import java.io.ByteArrayOutputStream
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * 待发送的附件（已压缩 + base64）—— M4 原生能力第一项，对齐 PWA `lib/image-attach.ts`
@@ -58,6 +61,22 @@ sealed interface Attachment {
     ) : Attachment
 
     /**
+     * 已**直连上传**到主机附件区的图片（P3）：prompt 里只带**缩略图**与内容 key，
+     * 原图由主机从对象库读回嗂给模型（agent 拿全分辨率），其它客户端也能按 key 拉原图。
+     *
+     * 与 [Image] 分开的原因：Image 是内联回落（受单张 base64 上限约束、会把大图塞进
+     * 每一帧快照），ImageKeyed 的字节早已经在主机磁盘上了。
+     */
+    data class ImageKeyed(
+        /** 内容 key（SHA-256 小写 hex）。 */
+        val key: String,
+        /** 缩略图（base64 JPEG）：快照/气泡画面用它，也当作乐观上屏的临时画面。 */
+        val thumbB64: String,
+        val mimeType: String,
+        val size: Long,
+    ) : Attachment
+
+    /**
      * 已经**降落到主机工作区**的文件（P3-S2，>6MB 的文件走这条）：
      * 主机把它放进了 `<会话 cwd>/mpi-inbox/`，消息里带绝对路径，agent 直接就能读。
      *
@@ -74,6 +93,49 @@ sealed interface Attachment {
 
 /** 文件元信息（不读字节）。 */
 data class FileMeta(val name: String, val mimeType: String?, val size: Long)
+
+/** 附件小卡片上的一行大小 */
+
+/**
+ * 待发送附件里的**图片** → 协议 `images[]` 条目（纯函数，可单测）。
+ *
+ * keyed 的走「内容 key + 缩略图」（`data` 为空串：主机从对象库读原图嗂给模型）；
+ * 内联的走老路（`data` = 压缩后的 base64）。两者共用同一个 `type` 字段，所以**只有直连上传
+ * 成功后才用 keyed 形式**——否则老主机会因为 data 为空而报错（回落见 AppViewModel）。
+ */
+internal fun imagePayloads(attachments: List<Attachment>): List<JsonObject> =
+    attachments.mapNotNull { attachment ->
+        when (attachment) {
+            is Attachment.Image ->
+                buildJsonObject {
+                    put("type", "image")
+                    put("data", attachment.bytesB64)
+                    put("mimeType", attachment.mimeType)
+                }
+            is Attachment.ImageKeyed ->
+                buildJsonObject {
+                    put("type", "image")
+                    // 空串是故意的：原图已在主机对象库里，主机自己读，不必再传一遍。
+                    put("data", "")
+                    put("mimeType", attachment.mimeType)
+                    put("key", attachment.key)
+                    put("thumbnail", attachment.thumbB64)
+                    put("thumbnailMimeType", "image/jpeg")
+                }
+            else -> null
+        }
+    }
+
+/** 直连上传需要的图片元信息（**不读字节**，字节由 [ImageSource.open] 流式读）。 */
+data class ImageSource(
+    val name: String,
+    val mimeType: String,
+    val size: Long,
+    /** 每次调用返回一个新的输入流（分片上传是流式读源）。 */
+    val open: () -> java.io.InputStream,
+    /** 缩略图（base64 JPEG，≤[THUMB_MAX_BYTES]）：prompt 里只带它。 */
+    val thumbB64: String,
+)
 
 /** 直连上传需要的视频元信息（**不读字节**，字节由 [VideoSource.open] 流式读）。 */
 data class VideoSource(
@@ -134,18 +196,47 @@ internal fun mimeTypeFromName(name: String): String? =
 /**
  * 质量循环的一步：是否已够小，以及下一步的 quality（纯函数，可单测）。
  */
-internal fun nextQuality(rawBytes: Int, quality: Double): Pair<Boolean, Double> {
-    if (rawBytes <= MAX_RAW_BYTES || quality <= MIN_QUALITY) return true to quality
+internal fun nextQuality(rawBytes: Int, quality: Double, maxBytes: Int = MAX_RAW_BYTES): Pair<Boolean, Double> {
+    if (rawBytes <= maxBytes || quality <= MIN_QUALITY) return true to quality
     return false to (Math.round((quality - 0.1) * 100) / 100.0)
 }
 
+/** 缩略图顶点（P3）：快照里只发它，原图客户端按 key 拉。 */
+const val THUMB_EDGE = 640
+
+/** 缩略图的**原始字节**上限：base64 后约 200k 字符，远小于主机单张上限。 */
+const val THUMB_MAX_BYTES = 150 * 1024
+
+/** 把位图最长边缩到 [maxEdge] 以内（已够小就原样返回）。 */
+internal fun scaleToMaxEdge(bitmap: Bitmap, maxEdge: Int): Bitmap {
+    val longest = max(bitmap.width, bitmap.height)
+    if (longest <= maxEdge) return bitmap
+    val scale = maxEdge.toDouble() / longest
+    val targetW = max(1, (bitmap.width * scale).roundToInt())
+    val targetH = max(1, (bitmap.height * scale).roundToInt())
+    return Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+}
+
+/** 按质量递减压成 JPEG，直到不超过 [maxBytes]（或到下限）。 */
+internal fun jpegUnder(bitmap: Bitmap, maxBytes: Int, startQuality: Double = START_QUALITY): ByteArray {
+    var quality = startQuality
+    while (true) {
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, (quality * 100).roundToInt(), stream)
+        val out = stream.toByteArray()
+        val step = nextQuality(out.size, quality, maxBytes)
+        if (step.first) return out
+        quality = step.second
+    }
+}
+
 /** 解码 → 缩放（最长边 ≤ [MAX_EDGE]）→ JPEG 质量循环。失败返回 null。 */
-internal fun compressToJpeg(bytes: ByteArray): ByteArray? {
+internal fun compressToJpeg(bytes: ByteArray, maxEdge: Int = MAX_EDGE, maxBytes: Int = MAX_RAW_BYTES): ByteArray? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
-    val scale = min(1.0, MAX_EDGE.toDouble() / max(bounds.outWidth, bounds.outHeight))
+    val scale = min(1.0, maxEdge.toDouble() / max(bounds.outWidth, bounds.outHeight))
     val targetW = max(1, (bounds.outWidth * scale).roundToInt())
     val targetH = max(1, (bounds.outHeight * scale).roundToInt())
 
@@ -160,17 +251,7 @@ internal fun compressToJpeg(bytes: ByteArray): ByteArray? {
         decoded
     }
 
-    var quality = START_QUALITY
-    var out = ByteArray(0)
-    while (true) {
-        val stream = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, (quality * 100).roundToInt(), stream)
-        out = stream.toByteArray()
-        val step = nextQuality(out.size, quality)
-        if (step.first) break
-        quality = step.second
-    }
-
+    val out = jpegUnder(scaled, maxBytes)
     if (scaled !== decoded) scaled.recycle()
     decoded.recycle()
     return out
@@ -202,6 +283,40 @@ class AttachmentLoader(private val context: Context) {
         val jpeg = compressToJpeg(bytes) ?: error("这不是可识别的图片")
         Attachment.Image(Base64.encodeToString(jpeg, Base64.NO_WRAP), "image/jpeg")
     }
+
+    /**
+     * 读一张图的元信息 + **缩略图**（P3），不把原图整段读进内存。
+     *
+     * 两趟流式读：第一趟只拿尺寸（inJustDecodeBounds），第二趟按采样率解码——手机上一张
+     * 12MP 原图直接解码就是几十 MB，三张就是 OOM。
+     */
+    fun loadImageSource(uri: Uri): Result<ImageSource> = runCatching {
+        val meta = fileMeta(uri) ?: error("无法读取这张图片")
+        val thumb = thumbnailB64(uri) ?: error("这不是可识别的图片")
+        ImageSource(
+            name = meta.name,
+            mimeType = meta.mimeType?.takeIf { it.startsWith("image/") } ?: "image/jpeg",
+            size = meta.size,
+            open = { openStream(uri) },
+            thumbB64 = thumb,
+        )
+    }
+
+    /** 缩略图：最长边 ≤ [THUMB_EDGE]、JPEG ≤ [THUMB_MAX_BYTES]，base64（失败 → null）。 */
+    private fun thumbnailB64(uri: Uri): String? = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+        val sample = sampleSize(bounds.outWidth, bounds.outHeight, THUMB_EDGE, THUMB_EDGE)
+        val decoded = context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        } ?: return@runCatching null
+        val scaled = scaleToMaxEdge(decoded, THUMB_EDGE)
+        val jpeg = jpegUnder(scaled, THUMB_MAX_BYTES)
+        if (scaled !== decoded) scaled.recycle()
+        decoded.recycle()
+        Base64.encodeToString(jpeg, Base64.NO_WRAP)
+    }.getOrNull()
 
     /**
      * 读一个视频的元信息（名字 / mime / 大小 / 封面），**不把字节读进内存**。

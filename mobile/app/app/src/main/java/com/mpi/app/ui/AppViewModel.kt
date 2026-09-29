@@ -11,6 +11,8 @@ import com.mpi.app.data.AttachmentCrypto
 import com.mpi.app.data.DirectAttachments
 import com.mpi.app.data.DirectUploadException
 import com.mpi.app.data.MAX_FILE_BYTES
+import com.mpi.app.data.imagePayloads
+
 import com.mpi.app.data.HostRepository
 import com.mpi.app.data.HostSession
 import com.mpi.app.data.HostSnapshot
@@ -807,8 +809,75 @@ class AppViewModel(
 
     // ---- 附件（M4 原生能力）----
 
-    /** 相册/相机选到的图片：压缩后加入待发送附件。 */
-    fun addImageAttachment(uri: android.net.Uri) = loadAttachment { attachmentLoader.loadImage(uri) }
+    /**
+     * 相册/相机选到的图片（P3）：
+     * ① 原图走**直连上传**（内容寻址、去重、可被其它会话复用）；
+     * ② prompt 里只带**缩略图**与 key（主机从对象库读原图嗂给模型）；
+     * ③ 直连不可用 / 上传失败 → 回落内联（压缩到 ≤280KB，与旧行为一致）。
+     *
+     * 图片不像大文件那样可以“失败了就叫用户重试”：内联本来就装得下（≤1.2MB base64），
+     * 所以这里失败了就静静地走老路，不弹错。
+     */
+    fun addImageAttachment(uri: android.net.Uri) {
+        val direct = directAttachments
+        val threadId = _ui.value.openThreadId
+        val source = attachmentLoader.loadImageSource(uri).getOrElse {
+            // 读不出缩略图（格式不支持等）→ 老路（内联）自己会给出可读错误。
+            loadAttachment { attachmentLoader.loadImage(uri) }
+            return
+        }
+        if (direct == null || threadId == null) {
+            loadAttachment { attachmentLoader.loadImage(uri) }
+            return
+        }
+        if (_ui.value.videoUpload != null || _ui.value.attachmentBusy) return
+        if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
+            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
+            return
+        }
+        _ui.update { it.copy(attachmentError = null, videoUpload = VideoUpload(source.name, 0, source.size)) }
+        videoUploadJob = scope.launch {
+            try {
+                val upload = direct.uploadMedia(
+                    threadId = threadId,
+                    originalName = source.name,
+                    mimeType = source.mimeType,
+                    size = source.size,
+                    open = source.open,
+                    sessionKey = session?.sessionKeyOrNull(),
+                    onProgress = { loaded, total ->
+                        _ui.update { state -> state.copy(videoUpload = state.videoUpload?.copy(loaded = loaded, total = total)) }
+                    },
+                )
+                if (upload == null) {
+                    // 直连不可用（老主机/未开服务）→ 回落内联。
+                    _ui.update { it.copy(videoUpload = null) }
+                    loadAttachment { attachmentLoader.loadImage(uri) }
+                    return@launch
+                }
+                _ui.update { state ->
+                    state.copy(
+                        videoUpload = null,
+                        attachments = state.attachments + Attachment.ImageKeyed(
+                            key = upload.name,
+                            thumbB64 = source.thumbB64,
+                            mimeType = source.mimeType,
+                            size = source.size,
+                        ),
+                    )
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                _ui.update { it.copy(videoUpload = null) }
+                throw cancelled
+            } catch (_: Exception) {
+                // 任何失败都静静回落内联（图片内联本来就装得下）。
+                _ui.update { it.copy(videoUpload = null) }
+                loadAttachment { attachmentLoader.loadImage(uri) }
+            } finally {
+                videoUploadJob = null
+            }
+        }
+    }
 
     /** 文件选择器选到的文件：≤6MB 走内联（老路）；更大的走**直连 + 降落到工作区**（P3-S2）。 */
     fun addFileAttachment(uri: android.net.Uri) {
@@ -1402,15 +1471,11 @@ class AppViewModel(
     private fun send(text: String, mode: SendMode, clearDraft: Boolean = true, retried: Boolean = false) {
         val session = threadSession ?: return
         val actions = threadActions ?: return
-        // 附件：图片与文件分别按协议形状打包（主机端会逐项校验）
+        // 附件：图片与文件分别按协议形状打包（主机端会逐项校验）。
+        // 图片（P3）：直连上传成功的是「key + 缩略图」，未成功的是内联 base64——由
+        // imagePayloads 统一组装（纯函数，单测钉住了两种形状）。
         val pending = _ui.value.attachments
-        val images = pending.filterIsInstance<Attachment.Image>().map { image ->
-            kotlinx.serialization.json.buildJsonObject {
-                put("type", "image")
-                put("data", image.bytesB64)
-                put("mimeType", image.mimeType)
-            }
-        }
+        val images = imagePayloads(pending)
         val files = pending.filterIsInstance<Attachment.File>().map { file ->
             kotlinx.serialization.json.buildJsonObject {
                 put("name", file.name)
@@ -1440,8 +1505,15 @@ class AppViewModel(
         // 先乐观上屏（§1.1：点击到视觉反馈 < 100ms），失败再标红留在原位
         // 图片用**本地字节**上屏：事件通道会把大 base64 截断（会变成「图片无法显示」），
         // 主机那份完整的图由随后的快照替换。
-        val localImageBlocks = pending.filterIsInstance<Attachment.Image>().map { image ->
-            MessageBlock(type = BlockType.Image, data = image.bytesB64, mimeType = image.mimeType)
+        val localImageBlocks = pending.mapNotNull { image ->
+            when (image) {
+                is Attachment.Image ->
+                    MessageBlock(type = BlockType.Image, data = image.bytesB64, mimeType = image.mimeType)
+                // keyed 图片：本地只有缩略图，先拿它顶上（快照回来前不空缺）。
+                is Attachment.ImageKeyed ->
+                    MessageBlock(type = BlockType.Image, data = image.thumbB64, mimeType = "image/jpeg")
+                else -> null
+            }
         }
         // 视频同理：气泡先上封面（快照回来前不空缺）。名字用主机的附件名（就是它以后取字节的 key），
         // 所以点开就能直连播——不必等快照。
