@@ -191,8 +191,12 @@ fun MpiApp(container: AppContainer) {
                     if (state.openThreadId != null && openThread != null) {
                         // 返回键的处理已上提到 DrawerHost 的 PredictiveBackHandler（它需要先看
                         // 手势来自哪一侧）；这里不再重复注册，避免两处抢同一个返回。
-                        // 大视频按需拉：把实现注入给 ThreadScreen 里的视频块（见 LocalVideoFetcher）。
-                        CompositionLocalProvider(LocalVideoFetcher provides viewModel::fetchVideoAttachment) {
+                        // 大视频：优先直连（LocalDirectPlaybackUrl，P2），拿不到才回落中继分片
+                        // （LocalVideoFetcher）。两个实现都注入到视频块里。
+                        CompositionLocalProvider(
+                            LocalVideoFetcher provides viewModel::fetchVideoAttachment,
+                            LocalDirectPlaybackUrl provides viewModel::directPlaybackUrl,
+                        ) {
                             ThreadScreen(
                                 view = openThread,
                                 draft = state.draft,
@@ -228,8 +232,11 @@ fun MpiApp(container: AppContainer) {
                                 attachments = state.attachments,
                                 attachmentBusy = state.attachmentBusy,
                                 attachmentError = state.attachmentError,
+                                videoUpload = state.videoUpload,
                                 onPickImage = viewModel::addImageAttachment,
                                 onPickFile = viewModel::addFileAttachment,
+                                onPickVideo = viewModel::addVideoAttachment,
+                                onCancelVideoUpload = viewModel::cancelVideoUpload,
                                 onAttachmentPermissionDenied = {
                                     viewModel.reportAttachmentError("没有相机权限，无法拍照")
                                 },

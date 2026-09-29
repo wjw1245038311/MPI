@@ -7,6 +7,8 @@ import com.mpi.app.AppContainer
 import com.mpi.app.AppVisibility
 import com.mpi.app.data.Attachment
 import com.mpi.app.data.AttachmentLoader
+import com.mpi.app.data.DirectAttachments
+import com.mpi.app.data.MAX_FILE_BYTES
 import com.mpi.app.data.HostRepository
 import com.mpi.app.data.HostSession
 import com.mpi.app.data.HostSnapshot
@@ -148,6 +150,11 @@ data class AppUiState(
     val attachmentBusy: Boolean = false,
     /** 附件读取失败原因（可关闭）。 */
     val attachmentError: String? = null,
+    /**
+     * 正在直连上传的视频（null = 没有）。带进度供输入条显示「正在上传视频 N%」——
+     * 几十 MB 的上传要几分钟，没有反馈的形态最容易被当成卡死。
+     */
+    val videoUpload: VideoUpload? = null,
     /** 正在录音（原生 AudioRecord）。 */
     val recording: Boolean = false,
     /** 正在把录音送去识别。 */
@@ -176,6 +183,17 @@ data class AppUiState(
     val showPairing: Boolean
         get() = pairings.isEmpty() || addingHost
 }
+
+/** 直连上传的进度状态（只用于 UI 显示与取消）。 */
+data class VideoUpload(val name: String, val loaded: Long, val total: Long) {
+    /** 0–99 的整百分比；总长未知时返回 null（显示成不定进度）。 */
+    val percent: Int?
+        get() = if (total > 0) ((loaded * 100) / total).toInt().coerceIn(0, 99) else null
+}
+
+/** 人类可读大小（与 ThreadScreen.formatVideoMeta 同一口径：MB/KB）。 */
+private fun formatMb(bytes: Long): String =
+    if (bytes >= 1_000_000) String.format("%.1fMB", bytes / 1_000_000.0) else "${(bytes + 1023) / 1024}KB"
 
 /**
  * 应用级状态机（M1-5）：持有设备身份、配对记录、主机会话与数据仓库，
@@ -214,6 +232,10 @@ class AppViewModel(
     private var repository: HostRepository? = null
     private var threadSession: ThreadSession? = null
     private var threadActions: ThreadActions? = null
+    /** 附件直连（P2）：上行分片 PUT / 下行换读 URL。与 [threadActions] 同生命周期。 */
+    private var directAttachments: DirectAttachments? = null
+    /** 正在跑的上传作业（点「取消上传」/ 关会话时取消）。 */
+    private var videoUploadJob: Job? = null
     /**
      * 本回合是**手机自己发起**的吗？发送成功后置起，回合结束时消费掉。
      * 「对话完成」通知只对手机发起的回合发——桌面发起的没必要响（见 [notifyTurnComplete]）。
@@ -592,6 +614,10 @@ class AppViewModel(
             threadId = threadId,
             request = { type, payload, tid, timeoutMs -> requesterRef.request(type, payload, threadId = tid, timeoutMs = timeoutMs) },
         )
+        // 附件直连：与写操作共用同一条请求通道（令牌只能由主机签发，见 DirectAttachments 注释）。
+        directAttachments = DirectAttachments(
+            request = { type, payload, tid, timeoutMs -> requesterRef.request(type, payload, threadId = tid, timeoutMs = timeoutMs) },
+        )
         _ui.update {
             it.copy(
                 openThreadId = threadId,
@@ -667,7 +693,10 @@ class AppViewModel(
         threadSession?.detach()
         threadSession = null
         threadActions = null
-        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, configSheetOpen = false, configBusy = false, configError = null, pendingFollowUp = null, sendError = null, attachments = emptyList(), attachmentBusy = false, attachmentError = null, recording = false, transcribing = false, voiceError = null) }
+        videoUploadJob?.cancel()
+        videoUploadJob = null
+        directAttachments = null
+        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, configSheetOpen = false, configBusy = false, configError = null, pendingFollowUp = null, sendError = null, attachments = emptyList(), attachmentBusy = false, attachmentError = null, videoUpload = null, recording = false, transcribing = false, voiceError = null) }
     }
 
     /** 手动重新同步（错误横幅上的按钮）。 */
@@ -767,6 +796,106 @@ class AppViewModel(
 
     /** 文件选择器选到的文件：原样读入（≤6MB）。 */
     fun addFileAttachment(uri: android.net.Uri) = loadAttachment { attachmentLoader.loadFile(uri) }
+
+    /**
+     * 相册/文件选到的**视频**：先走直连分片上传（P2，可到 128MB），不可用再回落内联（≤6MB）。
+     *
+     * 为什么不先看大小：直连是否可用只取决于主机（tailnet / 转发 / 在线），与文件大小无关；
+     * 先试直连、失败再按大小决定「内联」还是「给一句能归因的错误」，对用户只需一条路径。
+     *
+     * 字节**始终流式读**（不在内存里拼整段）：128MB 的视频拼成 ByteArray 就是一次 OOM。
+     */
+    fun addVideoAttachment(uri: android.net.Uri) {
+        val direct = directAttachments
+        val threadId = _ui.value.openThreadId
+        if (direct == null || threadId == null) {
+            reportAttachmentError("先打开一个会话再选视频")
+            return
+        }
+        if (_ui.value.videoUpload != null || _ui.value.attachmentBusy) return
+        if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
+            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
+            return
+        }
+        val source = attachmentLoader.loadVideoSource(uri).getOrElse { error ->
+            reportAttachmentError(error.message ?: "无法读取这个视频")
+            return
+        }
+        _ui.update { it.copy(attachmentError = null, videoUpload = VideoUpload(source.name, 0, source.size)) }
+        videoUploadJob = scope.launch {
+            try {
+                val storedName = direct.uploadVideo(
+                    threadId = threadId,
+                    originalName = source.name,
+                    mimeType = source.mimeType,
+                    size = source.size,
+                    open = source.open,
+                    posterB64 = source.posterB64,
+                    onProgress = { loaded, total ->
+                        _ui.update { state -> state.copy(videoUpload = state.videoUpload?.copy(loaded = loaded, total = total)) }
+                    },
+                )
+                if (storedName != null) {
+                    _ui.update { state ->
+                        state.copy(
+                            videoUpload = null,
+                            attachments = state.attachments + Attachment.Video(
+                                storedName = storedName,
+                                originalName = source.name,
+                                mimeType = source.mimeType,
+                                size = source.size,
+                                posterB64 = source.posterB64,
+                            ),
+                        )
+                    }
+                    return@launch
+                }
+                // 直连不可用 → 内联回落（受主机 8MB 内层信封限制，与旧行为一致）
+                if (source.size > MAX_FILE_BYTES) {
+                    _ui.update {
+                        it.copy(
+                            videoUpload = null,
+                            attachmentError = "视频太大（${formatMb(source.size)}）：直连上传不可用，" +
+                                "内联上限只有 6MB。请检查主机是否在线、Tailscale 是否通。",
+                        )
+                    }
+                    return@launch
+                }
+                val inline = attachmentLoader.loadFile(uri)
+                _ui.update { state ->
+                    inline.fold(
+                        onSuccess = { state.copy(videoUpload = null, attachments = state.attachments + it) },
+                        onFailure = { state.copy(videoUpload = null, attachmentError = it.message ?: "视频读取失败") },
+                    )
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                _ui.update { it.copy(videoUpload = null) }
+                throw cancelled
+            } catch (error: Exception) {
+                _ui.update { it.copy(videoUpload = null, attachmentError = error.message ?: "视频上传失败") }
+            } finally {
+                videoUploadJob = null
+            }
+        }
+    }
+
+    /** 取消正在跑的直连上传（输入条上的「取消」）。 */
+    fun cancelVideoUpload() {
+        videoUploadJob?.cancel()
+        videoUploadJob = null
+        _ui.update { it.copy(videoUpload = null, attachmentError = "已取消上传") }
+    }
+
+    /**
+     * 取一个**直连播放 URL**（点开视频时先试它；拿不到就回落中继分片）。
+     *
+     * 只读、不需写租约；主机不可达 / 未开通转发 / 令牌取失败一律返回 null。
+     */
+    suspend fun directPlaybackUrl(name: String, mimeType: String?): String? {
+        val direct = directAttachments ?: return null
+        val threadId = _ui.value.openThreadId ?: return null
+        return direct.playbackUrl(threadId, name, mimeType)
+    }
 
     fun removeAttachment(index: Int) {
         _ui.update { state ->
@@ -1191,13 +1320,40 @@ class AppViewModel(
                 }
             }
         }
+        // 直连上传完成的视频：字节已在主机附件区，消息里**只带主机的附件名**（零字节）。
+        val videos = pending.filterIsInstance<Attachment.Video>().map { video ->
+            kotlinx.serialization.json.buildJsonObject {
+                put("type", "video")
+                put("mimeType", video.mimeType)
+                put("data", "")
+                put("size", video.size)
+                put("storedName", video.storedName)
+                video.posterB64?.let { poster ->
+                    put("poster", poster)
+                    put("posterMimeType", "image/jpeg")
+                }
+            }
+        }
         // 先乐观上屏（§1.1：点击到视觉反馈 < 100ms），失败再标红留在原位
         // 图片用**本地字节**上屏：事件通道会把大 base64 截断（会变成「图片无法显示」），
         // 主机那份完整的图由随后的快照替换。
         val localImageBlocks = pending.filterIsInstance<Attachment.Image>().map { image ->
             MessageBlock(type = BlockType.Image, data = image.bytesB64, mimeType = image.mimeType)
         }
-        val localId = session.echoUserMessage(text, localImageBlocks)
+        // 视频同理：气泡先上封面（快照回来前不空缺）。名字用主机的附件名（就是它以后取字节的 key），
+        // 所以点开就能直连播——不必等快照。
+        val localVideoBlocks = pending.filterIsInstance<Attachment.Video>().map { video ->
+            MessageBlock(
+                type = BlockType.Video,
+                name = video.storedName,
+                mimeType = video.mimeType,
+                size = video.size,
+                poster = video.posterB64,
+                posterMimeType = "image/jpeg",
+                omitted = true,
+            )
+        }
+        val localId = session.echoUserMessage(text, localImageBlocks + localVideoBlocks)
         // 后台/锁屏播报保活：**点击就抢锁**，而不是等 send RPC 回来。
         // 用户按下 home/锁屏只发生在发出后的几十毫秒内，等成功后（几百 ms）再 acquire
         // 会赶不及——2026-09-26 真机就是切后台 ~1s 内被中继判 relay-device-offline。
@@ -1215,7 +1371,7 @@ class AppViewModel(
             // 已订阅时是纯本地判断，零往返。
             runCatching { session.ensureSubscribed() }
             try {
-                val result = actions.send(text, mode, images, files)
+                val result = actions.send(text, mode, images, files, videos)
                 // 手机发起的回合：现在只影响「是否语音播报」（完成通知与谁发起无关，见
                 // notifyFinishedTurns 的飞书已读口径）。
                 phoneTurnStarted = true

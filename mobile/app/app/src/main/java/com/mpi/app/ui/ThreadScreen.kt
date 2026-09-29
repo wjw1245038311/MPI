@@ -127,6 +127,16 @@ val LocalVideoFetcher = staticCompositionLocalOf<suspend (String, File, (Long, L
 }
 
 /**
+ * 附件**直连播放 URL**（P2 安卓端）：拿不到就返回 null（调用方回落 [LocalVideoFetcher] 的中继分片）。
+ *
+ * 为什么走直连：URL 直接喂 ExoPlayer，原生 Range、可 seek、**不必先下完整段**；中继分片要拉完才能播、
+ * 且不能拖进度条。参数：(附件名, mimeType) → URL。
+ */
+val LocalDirectPlaybackUrl = staticCompositionLocalOf<suspend (String, String?) -> String?> {
+    { _, _ -> null }
+}
+
+/**
  * 会话视图（§4.4）：顶栏 + 消息流。
  *
  * 错误一律**顶部横幅 + 可操作按钮**（§1.1），不遮住内容；滚动跟随在用户手动上滑时
@@ -168,8 +178,13 @@ fun ThreadScreen(
     attachments: List<Attachment>,
     attachmentBusy: Boolean,
     attachmentError: String?,
+    /** 正在直连上传的视频（null = 没有）；有值时输入条显示「正在上传视频 N%」。 */
+    videoUpload: VideoUpload?,
     onPickImage: (Uri) -> Unit,
     onPickFile: (Uri) -> Unit,
+    /** 相册里选到的视频（P2：直连分片上传，可到 128MB）。 */
+    onPickVideo: (Uri) -> Unit,
+    onCancelVideoUpload: () -> Unit,
     onAttachmentPermissionDenied: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
     onDismissAttachmentError: () -> Unit,
@@ -436,8 +451,11 @@ fun ThreadScreen(
             attachments = attachments,
             attachmentBusy = attachmentBusy,
             attachmentError = attachmentError,
+            videoUpload = videoUpload,
             onPickImage = onPickImage,
             onPickFile = onPickFile,
+            onPickVideo = onPickVideo,
+            onCancelVideoUpload = onCancelVideoUpload,
             onAttachmentPermissionDenied = onAttachmentPermissionDenied,
             onRemoveAttachment = onRemoveAttachment,
             onDismissAttachmentError = onDismissAttachmentError,
@@ -502,8 +520,13 @@ private fun Composer(
     attachments: List<Attachment>,
     attachmentBusy: Boolean,
     attachmentError: String?,
+    /** 正在直连上传的视频（null = 没有）：显示进度 + 可取消。 */
+    videoUpload: VideoUpload?,
     onPickImage: (Uri) -> Unit,
     onPickFile: (Uri) -> Unit,
+    /** 相册里选到的视频（P2：直连分片上传，可到 128MB）。 */
+    onPickVideo: (Uri) -> Unit,
+    onCancelVideoUpload: () -> Unit,
     onAttachmentPermissionDenied: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
     onDismissAttachmentError: () -> Unit,
@@ -562,7 +585,7 @@ private fun Composer(
 
     val pickImages = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(3),
-    ) { uris -> uris.forEach(onPickImage) }
+    ) { uris -> uris.forEach { uri -> if (isVideoUri(context, uri)) onPickVideo(uri) else onPickImage(uri) } }
     val pickFiles = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris -> uris.forEach(onPickFile) }
@@ -620,6 +643,10 @@ private fun Composer(
 
         if (attachments.isNotEmpty()) {
             AttachmentBar(attachments = attachments, onRemove = onRemoveAttachment)
+        }
+        // 直连上传进度：几十 MB 要几分钟，没反馈的形态最容易被当成卡死（与 PWA 同一文案）。
+        if (videoUpload != null) {
+            VideoUploadRow(upload = videoUpload, onCancel = onCancelVideoUpload)
         }
         // 发送 / 停止失败贴输入框显示（PWA 语义）：这里才是手指所在的位置。
         if (sendNote != null) {
@@ -710,7 +737,7 @@ private fun Composer(
                 Box {
                     RoundIconButton(
                         onClick = { attachMenuOpen = true },
-                        enabled = !attachmentBusy && attachments.size < 3,
+                        enabled = !attachmentBusy && videoUpload == null && attachments.size < 3,
                         background = MpiTheme.colors.control,
                     ) {
                         if (attachmentBusy) {
@@ -733,11 +760,12 @@ private fun Composer(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("相册") },
+                            text = { Text("相册 / 视频") },
                             onClick = {
                                 attachMenuOpen = false
+                                // ImageAndVideo：照片与视频同一个入口（视频按 mime 分流到直连上传）
                                 pickImages.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
                                 )
                             },
                         )
@@ -894,7 +922,52 @@ private fun PendingFollowUpBanner(text: String, onReEdit: () -> Unit, onSteer: (
     }
 }
 
-/** 待发送附件条（图片显缩略图、文件显名字）——每个都带移除按钮。 */
+/**
+ * 系统选择器回来的 URI 是不是视频：先看 ContentResolver 给的 mime，给不出再看扩展名。
+ *
+ * 分类错的表现很具体：视频被当成图片送进 JPEG 压缩链路（变成一张静止图），
+ * 或图片被当成视频去抽帧（报「无法读取这个视频」）。
+ */
+private fun isVideoUri(context: android.content.Context, uri: Uri): Boolean {
+    val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()
+    if (!mime.isNullOrEmpty()) return mime.startsWith("video/")
+    val name = runCatching {
+        context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { if (it.moveToFirst()) it.getString(0) else null }
+    }.getOrNull()
+    return com.mpi.app.data.looksLikeVideo(name, null)
+}
+
+/**
+ * 直连上传进度行（贴在输入条上方）。
+ *
+ * 给「取消」是因为真实场景：选错了 80MB 的视频、或在信号差的地方开始传，用户需要一个
+ * 能立刻停下的按钮（停下的代价只是这文件白传一半，主机侧的临时分片有令牌超时兜底）。
+ */
+@Composable
+private fun VideoUploadRow(upload: VideoUpload, onCancel: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MpiTheme.colors.bg)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+        Text(
+            text = "正在上传视频 " + (upload.percent?.let { "$it%" } ?: "…") + " · ${upload.name}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MpiTheme.colors.textDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onCancel) { Text("取消") }
+    }
+}
+
+/** 待发送附件条（图片显缩略图、文件/视频显名字）——每个都带移除按钮。 */
 @Composable
 private fun AttachmentBar(attachments: List<Attachment>, onRemove: (Int) -> Unit) {
     Row(
@@ -951,6 +1024,39 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            is Attachment.Video -> {
+                // 已直连上传：字节在主机上，本地只剩封面可显（没封面就不显缩略图）。
+                val bitmap = remember(attachment.posterB64) {
+                    attachment.posterB64?.let {
+                        runCatching {
+                            val bytes = android.util.Base64.decode(it, android.util.Base64.NO_WRAP)
+                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                        }.getOrNull()
+                    }
+                }
+                Box(Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(Color.Black)) {
+                    if (bitmap != null) {
+                        Image(
+                            bitmap = bitmap,
+                            contentDescription = "视频附件",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                    Text(
+                        text = "视频",
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(3.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .padding(horizontal = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
                     )
                 }
             }
@@ -1576,8 +1682,12 @@ private fun VideoBlock(block: MessageBlock) {
     var fetchedBytes by remember(block.name) { mutableStateOf(0L) }
     var totalBytes by remember(block.name) { mutableStateOf(block.size?.toLong() ?: 0L) }
     val source = inlineSource ?: fetchedSource
+    // 直连（P2）：拿到读 URL 就直接喂 ExoPlayer（原生 Range、可 seek、**不必先下完整段**）；
+    // 拿不到（主机未开直连/不在线/令牌被拒）才回落中继分片（见 startFetch）。
+    val resolveDirect = LocalDirectPlaybackUrl.current
+    var directUrl by remember(block.name, block.mimeType) { mutableStateOf<String?>(null) }
 
-    /** 点开→按需拉字节（快照只给了封面/名字，视频本体由客户端自己拉）。 */
+    /** 点开→取字节（快照只给了封面/名字，视频本体由客户端自己取）。 */
     val startFetch: () -> Unit = {
         if (!fetching) {
             val name = block.name
@@ -1588,6 +1698,14 @@ private fun VideoBlock(block: MessageBlock) {
                 fetchError = null
                 fetchedBytes = 0L
                 scope.launch {
+                    // 先试直连：不落盘、可拖进度条，拿到 URL 后由上面的 LaunchedEffect 自动全屏。
+                    val direct = runCatching { resolveDirect(name, block.mimeType) }.getOrNull()
+                    if (direct != null) {
+                        fetching = false
+                        directUrl = direct
+                        return@launch
+                    }
+                    // 回落：中继分片（拉完才能播，但主机离线/未开通转发也能工作）。
                     val target = File(videoDir, name)
                     val ok = runCatching {
                         fetchVideo(name, target, { loaded, total ->
@@ -1606,7 +1724,7 @@ private fun VideoBlock(block: MessageBlock) {
         }
     }
 
-    if (source == null) {
+    if (source == null && directUrl == null) {
         // 没名字（历史遗留 / 附件已被清理）→ 真占位，点了也没得拉。
         if (block.name == null) {
             VideoPlaceholder(block)
@@ -1631,13 +1749,18 @@ private fun VideoBlock(block: MessageBlock) {
 
     // 飞书式：气泡里只给一个视频框（首帧当封面 + 中央 ▶），点一下**直接全屏**。
     // 播放器只在全屏期间存在，所以列表里不会积一堆 ExoPlayer。
-    var playing by remember(source) { mutableStateOf(false) }
-    val player = remember(source, playing) {
-        if (!playing) {
+    // 直连时 url 直接交给 ExoPlayer（它自己做 Range 请求）；回落路径才是本地文件。
+    val playUri: Uri? = directUrl?.let { Uri.parse(it) } ?: source?.let { Uri.fromFile(it) }
+    var playing by remember(playUri) { mutableStateOf(false) }
+    // 直连 URL 一到就自动全屏：用户点的是「播放」，不该再点第二次。
+    LaunchedEffect(directUrl) { if (directUrl != null) playing = true }
+    val player = remember(playUri, playing) {
+        val uri = playUri
+        if (!playing || uri == null) {
             null
         } else {
             ExoPlayer.Builder(context).build().apply {
-                setMediaItem(MediaItem.fromUri(Uri.fromFile(source)))
+                setMediaItem(MediaItem.fromUri(uri))
                 prepare()
                 playWhenReady = true
             }
@@ -1648,8 +1771,10 @@ private fun VideoBlock(block: MessageBlock) {
         onDispose { player?.release() }
     }
 
-    // 首帧当封面：用 MediaMetadataRetriever 抽一帧（不建播放器），失败就只剩深色底。
-    val poster = remember(source) { extractFirstFrame(source) }
+    // 首帧当封面：本地文件抽一帧；直连时只能用手上有的快照封面（不为了封面先下载整段）。
+    val poster = remember(source, block.poster) {
+        source?.let { extractFirstFrame(it) } ?: block.poster?.let { decodePosterFrame(it) }
+    }
     VideoPosterCard(block = block, poster = poster, onPlay = { playing = true })
 
     if (playing && player != null) {

@@ -44,21 +44,25 @@ class ThreadActions(
 ) {
     private var claimedAt = 0L
 
-    /** 发一条消息（可带图片/文件附件）。mode 决定走 prompt / steer / followUp。 */
+    /** 发一条消息（可带图片/文件/视频附件）。mode 决定走 prompt / steer / followUp。 */
     suspend fun send(
         text: String,
         mode: SendMode,
         images: List<JsonObject> = emptyList(),
         files: List<JsonObject> = emptyList(),
+        videos: List<JsonObject> = emptyList(),
     ): JsonElement? {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() && images.isEmpty() && files.isEmpty()) {
+        if (trimmed.isEmpty() && images.isEmpty() && files.isEmpty() && videos.isEmpty()) {
             throw IllegalArgumentException("消息不能为空")
         }
         val payload = buildJsonObject {
             put("text", trimmed)
             if (images.isNotEmpty()) put("images", kotlinx.serialization.json.JsonArray(images))
             if (files.isNotEmpty()) put("files", kotlinx.serialization.json.JsonArray(files))
+            // 视频单独走 videos：主机据此当成**可播放媒体**（files 里的视频只是给 agent 读的文件），
+            // 且接受 `storedName`（直连上传完成，字节不进这一帧）。见 PWA thread-actions.ts。
+            if (videos.isNotEmpty()) put("videos", kotlinx.serialization.json.JsonArray(videos))
         }
         return writeRequest("thread.${mode.method}", payload, mode.method)
     }

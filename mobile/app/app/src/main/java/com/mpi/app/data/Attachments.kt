@@ -40,7 +40,33 @@ sealed interface Attachment {
         val bytesB64: String,
         val posterB64: String? = null,
     ) : Attachment
+
+    /**
+     * 已**直连上传**到主机附件区的视频（P2）：消息里只带 `storedName`，零字节。
+     *
+     * 与 [File] 分开的原因：File 走内联（受 6MB 限制、字节要进那一帧），Video 的字节早就
+     * 在主机磁盘上了；两者的上限、失败处置与回落路径都不同（见 AppViewModel.addVideoAttachment）。
+     */
+    data class Video(
+        /** 主机侧附件名（写令牌预分配，形如 `uuid-原名`）。 */
+        val storedName: String,
+        val originalName: String,
+        val mimeType: String,
+        val size: Long,
+        /** 首帧封面（base64 JPEG）；抽不到就是深色卡片。 */
+        val posterB64: String? = null,
+    ) : Attachment
 }
+
+/** 直连上传需要的视频元信息（**不读字节**，字节由 [VideoSource.open] 流式读）。 */
+data class VideoSource(
+    val name: String,
+    val mimeType: String,
+    val size: Long,
+    /** 每次调用返回一个新的输入流（分片循环流式读，几十 MB 不进内存）。 */
+    val open: () -> java.io.InputStream,
+    val posterB64: String?,
+)
 
 // ---- 图片压缩（与 PWA 同一口径）----
 
@@ -70,6 +96,23 @@ internal fun looksLikeVideo(name: String?, mimeType: String?): Boolean {
     val ext = name?.substringAfterLast('.', "")?.lowercase() ?: ""
     return ext in VIDEO_EXTENSIONS
 }
+
+/**
+ * 文件名 → `video/` 前缀的 mime（`contentResolver.getType` 常给不出 mime 时的兜底）。
+ *
+ * 与主机 `attachment-server.ts` 的 MIME 表同一口径：mime 不对时主机把附件当
+ * `application/octet-stream` 下发，播放器照样能播，但 `videos[]` 通道会直接拒（必须是视频类型）。
+ */
+internal fun mimeTypeFromName(name: String): String? =
+    when (name.substringAfterLast('.', "").lowercase()) {
+        "mp4" -> "video/mp4"
+        "m4v" -> "video/x-m4v"
+        "webm" -> "video/webm"
+        "mov" -> "video/quicktime"
+        "mkv" -> "video/x-matroska"
+        "avi" -> "video/x-msvideo"
+        else -> null
+    }
 
 /**
  * 质量循环的一步：是否已够小，以及下一步的 quality（纯函数，可单测）。
@@ -141,6 +184,28 @@ class AttachmentLoader(private val context: Context) {
             ?: error("无法读取这张图片")
         val jpeg = compressToJpeg(bytes) ?: error("这不是可识别的图片")
         Attachment.Image(Base64.encodeToString(jpeg, Base64.NO_WRAP), "image/jpeg")
+    }
+
+    /**
+     * 读一个视频的元信息（名字 / mime / 大小 / 封面），**不把字节读进内存**。
+     *
+     * 直连上行按 4MB 分片流式读，所以这里只给一个「开流」函数：128MB 的视频也不该在
+     * 手机上先拼成一个大 ByteArray（那是 OOM 与卡顿的来源）。
+     */
+    fun loadVideoSource(uri: Uri): Result<VideoSource> = runCatching {
+        val size = context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
+        if (size <= 0L) error("这个视频读不出大小（可能不是本地文件）")
+        val name = (displayName(uri) ?: "视频").take(180)
+        val mimeType = context.contentResolver.getType(uri)
+            ?: mimeTypeFromName(name)
+            ?: "video/mp4"
+        VideoSource(
+            name = name,
+            mimeType = if (mimeType.startsWith("video/")) mimeType else "video/mp4",
+            size = size,
+            open = { context.contentResolver.openInputStream(uri) ?: error("无法读取这个视频") },
+            posterB64 = videoPosterB64(uri),
+        )
     }
 
     fun loadFile(uri: Uri): Result<Attachment.File> = runCatching {

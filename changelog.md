@@ -33,6 +33,13 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run typecheck` + `npm run test:attachment-direct`（令牌作用域/过期/撤销、上传分片偏移与收齐、Range 206 与首尾边界、上传超限、CORS 预检）+ `npm run test:pwa-shared` + `mobile/pwa` 的 `tsc --noEmit`。应用内（手机浏览器 / PWA，**先硬刷新**——service worker 会缓存旧包）：① 发大视频 —— 🎬 选一个 20–50MB 的 mp4 → 出现「正在上传视频 N%」→ 发送后气泡里是首帧封面；主机日志应有 `attachment-direct mint write name=… dev=…` + `attachment-http upload done name=… size=…`。② 播大视频 —— 点开该视频应立即开始播、且**能拖进度条**；主机日志应有 `attachment-direct mint read name=…` 与 `attachment-http GET name=… range=bytes=…`（**没有 GET 那行 = 回落到了中继**，此时会看到一长串 `remote-attach fetch` 且要等整段下完）。③ 反向 —— 桌面端拖一个大视频发出 → 手机 PWA 上同样点开即播。④ 回落 —— 把手机 Tailscale 关掉再点开视频，应仍能播（走中继，慢但可用）。
 
+4. **安卓端也接上附件直连：手机能发大视频、看大视频（P2）**——此前安卓端发视频走 📎「文件」内联通道，被 8MB 内层信封卡在 6MB（`MAX_FILE_BYTES`），超了直接拒；看视频只能按中继分片拉，拉完才播、且不能拖进度条。现在两端都接上主机 P1 那套直连：
+   - **上行**：选到视频先申请写令牌 → 按 4MB 分片 `PUT`（`Content-Range`）→ 单文件上限 **128MB**、消息里只带 `storedName`（零字节）。字节**流式读**（128MB 不在内存里拼整段），并带进度与「取消」；直连不可用自动回落内联（≤6MB），超限时给一句能归因的错误而不是静默失败
+   - **下行**：点开视频先换一个读 URL **直接喂 ExoPlayer**（原生 Range、可 seek、边下边播），拿不到才回落原来的中继分片
+   - **入口**：`＋ →「相册 / 视频」`（`ImageAndVideo`，照片与视频同一个入口，按 mime 分流）；上传期间输入条上显示「正在上传视频 N% · 文件名」+ 取消；已上传的视频在待发送区显示封面缩略图
+
+   验证方式：（手机端）`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（新增 `DirectAttachmentLogicTest`：分片边界无缝隙/Content-Range 声明/令牌回包容错/入口 mime 兜底/进度百分比）。真机：① 相册选一个 20–50MB 的 mp4 → 输入条出现上传百分比 → 发送后气泡里是首帧封面，主机日志有 `attachment-direct mint write …` + `attachment-http upload done …`；② 点开该视频应**立即开始播且能拖进度条**，主机日志 `attachment-direct mint read` + `attachment-http GET …`（没有 GET 那行 = 回落了中继）；③ 关掉手机 Tailscale 再选同一个大视频 → 应提示「视频太大…直连上传不可用」，而不是没反应或上传到一半失败。
+
 ## v0.9.2（2026-09-26）
 
 1. **本地模型 prefill 等待指示器**——本地模型（如 LM Studio）处理长上下文时，首个 token 到达前可能长达数十秒；这段时间 pi 还没发出 assistant 消息事件，聊天区此前没有任何反馈（只有输入框的发送键变成停止），看起来像卡死。现在当「agent 在跑 + assistant 消息尚未开始 + 非压缩中 + 无工具卡在运行」时，聊天区显示带动画圆点和已等待秒数的占位行（「思考中 · 12s」/ “Thinking… 12s”），覆盖三个窗口：发送后 → LLM 响应头到达（含冷启动建桥）、以及每轮工具执行完后的下一轮 prefill。顺带把消息内既有的硬编码「思考中」文案 i18n 化（英文界面显示 “Thinking…”）。
