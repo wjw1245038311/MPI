@@ -161,8 +161,20 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
         token.hits += 1;
         // 取证：**直连下行到底有没有被用上**。一次播放有几十条 Range 请求，全记会刷爆日志，
         // 只记这条令牌的第一次命中——排查时「有这行 = 走了直连 / 没有 = 客户端回落了中继」。
-        if (token.hits === 1) {
+        const firstHit = token.hits === 1;
+        if (firstHit) {
           log(`attachment-http GET name=${token.name.slice(0, 48)} size=${size} range=${req.headers.range ?? "-"}`);
+        }
+        const startedAt = Date.now();
+        if (firstHit) {
+          // 首次命中往往是播放器的「整段探测」（不带 Range），它直接量出这条链路的**下行**速率；
+          // 有了这一行，就不必靠“感觉快慢”或推测。
+          const sent = range ? range.end - range.start + 1 : size;
+          res.on("finish", () => {
+            const ms = Date.now() - startedAt;
+            const mbs = ms > 0 ? (sent / 1048576) / (ms / 1000) : 0;
+            log(`attachment-http GET done name=${token.name.slice(0, 48)} bytes=${sent} ms=${ms} mbs=${mbs.toFixed(2)}`);
+          });
         }
         if (range) {
           const length = range.end - range.start + 1;
@@ -179,6 +191,7 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
 
       // ---- 上行：PUT 分片 ----
       if (req.method === "PUT") {
+        const reqStartedAt = Date.now();
         if (token.mode !== "write") {
           sendJson(res, 403, { error: "read token" });
           return;
@@ -194,6 +207,8 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
           sendJson(res, 413, { error: "chunk is too large" });
           return;
         }
+        // 取证：每片耗时（含收包）——分辨「网慢」与「服务端写盘慢」就靠这一行。
+        const chunkMs = Date.now() - reqStartedAt;
         const total = declared.total ?? token.size ?? null;
         if (token.size && declared.offset + body.length > token.size) {
           sendJson(res, 400, { error: "chunk exceeds declared size" });
@@ -221,6 +236,9 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
           log(`attachment-http upload done name=${token.name.slice(0, 36)} size=${completed.size}`);
           options.onUploadComplete?.({ name: token.name, size: completed.size, threadId: token.threadId, deviceId: token.deviceId });
         }
+        log(
+          `attachment-http PUT name=${token.name.slice(0, 36)} off=${declared.offset} len=${body.length} ms=${chunkMs} cum=${token.received}/${total ?? "?"}`,
+        );
         sendJson(res, 200, { name: token.name, received: token.received, size: total, done });
         return;
       }
