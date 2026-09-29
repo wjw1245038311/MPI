@@ -56,7 +56,24 @@ sealed interface Attachment {
         /** 首帧封面（base64 JPEG）；抽不到就是深色卡片。 */
         val posterB64: String? = null,
     ) : Attachment
+
+    /**
+     * 已经**降落到主机工作区**的文件（P3-S2，>6MB 的文件走这条）：
+     * 主机把它放进了 `<会话 cwd>/mpi-inbox/`，消息里带绝对路径，agent 直接就能读。
+     *
+     * 为什么不用 [File] 内联：内联受 8MB 信封限制（实际上限 6MB），大文件根本发不出去。
+     */
+    data class WorkspaceFile(
+        /** 可读文件名（主机侧同名/加后缀后的名字）。 */
+        val name: String,
+        /** 主机上的绝对路径（写进 prompt 的 `<file path="…">`）。 */
+        val path: String,
+        val size: Long,
+    ) : Attachment
 }
+
+/** 文件元信息（不读字节）。 */
+data class FileMeta(val name: String, val mimeType: String?, val size: Long)
 
 /** 直连上传需要的视频元信息（**不读字节**，字节由 [VideoSource.open] 流式读）。 */
 data class VideoSource(
@@ -209,21 +226,33 @@ class AttachmentLoader(private val context: Context) {
     }
 
     fun loadFile(uri: Uri): Result<Attachment.File> = runCatching {
-        val size = context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
-        if (size > MAX_FILE_BYTES) error("文件太大（上限 6MB）")
+        val meta = fileMeta(uri) ?: error("无法读取这个文件")
+        if (meta.size > MAX_FILE_BYTES) error("文件太大（上限 6MB）")
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: error("无法读取这个文件")
         if (bytes.size > MAX_FILE_BYTES) error("文件太大（上限 6MB）")
-        val name = displayName(uri)?.take(180) ?: "附件"
-        val mimeType = context.contentResolver.getType(uri)
         Attachment.File(
-            name = name,
-            mimeType = mimeType,
+            name = meta.name,
+            mimeType = meta.mimeType,
             bytesB64 = Base64.encodeToString(bytes, Base64.NO_WRAP),
             // 视频：顺手拍一张首帧当封面（抽不出来就 null，不算失败）。
-            posterB64 = if (looksLikeVideo(name, mimeType)) videoPosterB64(uri) else null,
+            posterB64 = if (looksLikeVideo(meta.name, meta.mimeType)) videoPosterB64(uri) else null,
         )
     }
+
+    /** 每次调用返回一个**新的**输入流（直连分片上传是流式读源，多个 worker 不能共用一条流）。 */
+    fun openStream(uri: Uri): java.io.InputStream =
+        context.contentResolver.openInputStream(uri) ?: error("无法读取这个文件")
+
+    /** 只读元信息（不读字节）：大文件走直连时需要先知道大小与名字。 */
+    fun fileMeta(uri: Uri): FileMeta? = runCatching {
+        val size = context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
+        FileMeta(
+            name = displayName(uri)?.take(180) ?: "附件",
+            mimeType = context.contentResolver.getType(uri),
+            size = if (size > 0) size else -1L,
+        )
+    }.getOrNull()
 
     /**
      * 抽视频首帧并压成 ≤ POSTER_MAX_BYTES 的 JPEG（base64）。

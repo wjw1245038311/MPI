@@ -181,7 +181,7 @@ data class AppUiState(
 ) {
     val activeHost: PairingRecord?
         get() = pairings.firstOrNull { it.hostId == activeHostId }
-
+    /** 正在直连上传的视频（null = 没有）；有值时输入条显示「正在上传视频 N%」。 */
     val showPairing: Boolean
         get() = pairings.isEmpty() || addingHost
 }
@@ -810,8 +810,71 @@ class AppViewModel(
     /** 相册/相机选到的图片：压缩后加入待发送附件。 */
     fun addImageAttachment(uri: android.net.Uri) = loadAttachment { attachmentLoader.loadImage(uri) }
 
-    /** 文件选择器选到的文件：原样读入（≤6MB）。 */
-    fun addFileAttachment(uri: android.net.Uri) = loadAttachment { attachmentLoader.loadFile(uri) }
+    /** 文件选择器选到的文件：≤6MB 走内联（老路）；更大的走**直连 + 降落到工作区**（P3-S2）。 */
+    fun addFileAttachment(uri: android.net.Uri) {
+        val direct = directAttachments
+        val threadId = _ui.value.openThreadId
+        val meta = attachmentLoader.fileMeta(uri)
+        // 拿不到元信息 / 读不到大小 / 不大 / 直连不可用 → 都走内联老路（那里有 6MB 检查与明确报错）。
+        if (meta == null || meta.size <= MAX_FILE_BYTES || direct == null || threadId == null) {
+            loadAttachment { attachmentLoader.loadFile(uri) }
+            return
+        }
+        if (_ui.value.videoUpload != null || _ui.value.attachmentBusy) return
+        if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
+            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
+            return
+        }
+        // 进度条复用视频那条（上传状态本来就只能有一个）。
+        _ui.update { it.copy(attachmentError = null, videoUpload = VideoUpload(meta.name, 0, meta.size)) }
+        videoUploadJob = scope.launch {
+            try {
+                val upload = direct.uploadMedia(
+                    threadId = threadId,
+                    originalName = meta.name,
+                    mimeType = meta.mimeType ?: "application/octet-stream",
+                    size = meta.size,
+                    open = { attachmentLoader.openStream(uri) },
+                    sessionKey = session?.sessionKeyOrNull(),
+                    // 关键：让主机把文件放进 <会话 cwd>/mpi-inbox/，并把绝对路径回给我们。
+                    workspace = true,
+                    onProgress = { loaded, total ->
+                        _ui.update { state -> state.copy(videoUpload = state.videoUpload?.copy(loaded = loaded, total = total)) }
+                    },
+                )
+                val path = upload?.workspacePath
+                if (path == null) {
+                    // 主机回的路径缺失（版本过旧/会话工作目录解析不到）：不静默降级成内联，如实报错。
+                    _ui.update {
+                        it.copy(
+                            videoUpload = null,
+                            attachmentError = "大文件已传到主机，但没拿到工作区路径（主机版本过旧？）——请升级主机再试",
+                        )
+                    }
+                    return@launch
+                }
+                _ui.update { state ->
+                    state.copy(
+                        videoUpload = null,
+                        attachments = state.attachments + Attachment.WorkspaceFile(
+                            name = upload?.workspaceName ?: meta.name,
+                            path = path,
+                            size = meta.size,
+                        ),
+                    )
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                _ui.update { it.copy(videoUpload = null) }
+                throw cancelled
+            } catch (error: DirectUploadException) {
+                _ui.update { it.copy(videoUpload = null, attachmentError = "文件上传失败：${error.message}") }
+            } catch (error: Exception) {
+                _ui.update { it.copy(videoUpload = null, attachmentError = error.message ?: "文件上传失败") }
+            } finally {
+                videoUploadJob = null
+            }
+        }
+    }
 
     /**
      * 相册/文件选到的**视频**：先走直连分片上传（P2，可到 128MB），不可用再回落内联（≤6MB）。
@@ -1393,6 +1456,12 @@ class AppViewModel(
                 omitted = true,
             )
         }
+        // 大文件（P3-S2）：字节已经在主机的工作目录里，消息里只需带**绝对路径**。
+        // 信封写进 text（与桌面端拖入文件同一形式），agent 用文件工具就能读。
+        val workspaceFiles = pending.filterIsInstance<Attachment.WorkspaceFile>()
+        val workspaceEnvelopes = workspaceFiles.joinToString("") { file ->
+            "\n\n<file name=\"${file.name.replace("\"", "&quot;")}\" path=\"${file.path.replace("\"", "&quot;")}\" note=\"attached file; read it with file tools\" />"
+        }
         val localId = session.echoUserMessage(text, localImageBlocks + localVideoBlocks)
         // 后台/锁屏播报保活：**点击就抢锁**，而不是等 send RPC 回来。
         // 用户按下 home/锁屏只发生在发出后的几十毫秒内，等成功后（几百 ms）再 acquire
@@ -1411,7 +1480,7 @@ class AppViewModel(
             // 已订阅时是纯本地判断，零往返。
             runCatching { session.ensureSubscribed() }
             try {
-                val result = actions.send(text, mode, images, files, videos)
+                val result = actions.send(text + workspaceEnvelopes, mode, images, files, videos)
                 // 手机发起的回合：现在只影响「是否语音播报」（完成通知与谁发起无关，见
                 // notifyFinishedTurns 的飞书已读口径）。
                 phoneTurnStarted = true

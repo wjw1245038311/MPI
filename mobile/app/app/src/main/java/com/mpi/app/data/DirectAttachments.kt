@@ -13,6 +13,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -96,6 +97,23 @@ data class DirectTarget(
     val label: String? = null,
     /** 内容去重命中：字节已在主机 → **不要上传**，直接用 [name]。老主机没有这个字段（= null）。 */
     val deduped: Boolean? = null,
+    /**
+     * 「降落到工作区」（P3-S2）命中去重时才由 mint 直接回报的路径：
+     * 内容已在库 → 主机不需要收字节，已经在 mint 阶段就把文件放进了 `mpi-inbox/`。
+     */
+    val workspacePath: String? = null,
+    val workspaceName: String? = null,
+)
+
+/** 一次媒体上传的结果（P3：图/音/视/文件共用一套通道）。 */
+data class MediaUpload(
+    /** 主机侧的名字：内容寻址后就是内容 key。 */
+    val name: String,
+    /** 内容已在主机（零字节上传）。 */
+    val deduped: Boolean,
+    /** 「降落到工作区」后的绝对路径（agent 用它读文件）；未请求或主机不支持时为 null。 */
+    val workspacePath: String? = null,
+    val workspaceName: String? = null,
 )
 
 /**
@@ -138,6 +156,8 @@ internal fun parseDirectTarget(payload: JsonElement?): DirectTarget? {
         key = runCatching { direct["key"]?.jsonPrimitive?.contentOrNull }.getOrNull(),
         label = runCatching { direct["label"]?.jsonPrimitive?.contentOrNull }.getOrNull(),
         deduped = deduped,
+        workspacePath = runCatching { direct["workspacePath"]?.jsonPrimitive?.contentOrNull }.getOrNull(),
+        workspaceName = runCatching { direct["workspaceName"]?.jsonPrimitive?.contentOrNull }.getOrNull(),
     )
 }
 
@@ -183,6 +203,8 @@ class DirectAttachments(
         size: Long? = null,
         /** 内容寻址（P1）：整文件 SHA-256（小写 hex）。写方向才带，主机据此去重与校验。 */
         sha256: String? = null,
+        /** 「降落到工作区」（P3-S2）：写方向才带。主机把文件放进 <会话 cwd>/mpi-inbox/。 */
+        workspace: Boolean = false,
     ): DirectTarget? {
         val payload = buildJsonObject {
             put("mode", mode)
@@ -191,6 +213,7 @@ class DirectAttachments(
             mimeType?.let { put("mimeType", it) }
             size?.let { put("size", it) }
             sha256?.let { put("sha256", it) }
+            if (workspace && mode == "write") put("workspace", true)
         }
         return try {
             parseDirectTarget(request("attachment.url", payload, threadId, DIRECT_REQUEST_TIMEOUT_MS))
@@ -243,9 +266,78 @@ class DirectAttachments(
         // 封面也不用重传：主机上的那个对象本来就有封面（首次上传时落的）。
         if (target.deduped == true) return target.name
 
+        // 分片上传 + 末片屏障（与图/音/文件共用同一套实现）。
+        val outcome = putAllChunks(target, size, open, sessionKey, onProgress)
+        if (outcome.problem != null) throw DirectUploadException(outcome.problem)
+
+        // 封面是观感优化：送失败不算上传失败（消息里还会再带一份，主机侧幂等）。
+        if (posterB64 != null) {
+            runCatching { postPoster(target.url, posterB64) }
+        }
+        return target.name
+    }
+
+    /**
+     * 上传一段**媒体字节**（P3：图/音/视/文件共用一套通道）。
+     *
+     * 与 [uploadVideo] 的区别只有两处：① 不需要首帧封面；② 可以请求「降落到工作区」
+     * （`workspace=true` → 主机把文件放进 `<会话 cwd>/mpi-inbox/` 并回报绝对路径）。
+     *
+     * @param workspace 大文件给 agent 读时用：拿回来的 [MediaUpload.workspacePath] 直接写进
+     *   prompt 的 `<file path="…">`。
+     * @return null 表示直连不可用（调用方走内联/给能归因的错误）。
+     */
+    suspend fun uploadMedia(
+        threadId: String,
+        originalName: String,
+        mimeType: String,
+        size: Long,
+        open: () -> InputStream,
+        sessionKey: ByteArray? = null,
+        workspace: Boolean = false,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): MediaUpload? {
+        if (size <= 0L) return null
+        val contentHash = sha256OfStream(open)
+            ?: throw DirectUploadException("无法读取文件以计算校验值（文件被移动或权限不足？）")
+        val target = requestTarget(
+            threadId = threadId,
+            mode = "write",
+            originalName = originalName,
+            mimeType = mimeType,
+            size = size,
+            sha256 = contentHash,
+            workspace = workspace,
+        ) ?: return null
+        // 去重命中：字节已在主机。请求了工作区时不等于“什么都不做”——主机在 mint 阶段
+        // 就已经把文件放进 mpi-inbox 并把路径回给你了（见 ipc.ts 的 deduped 分支）。
+        if (target.deduped == true) {
+            return MediaUpload(target.name, deduped = true, target.workspacePath, target.workspaceName)
+        }
+        val outcome = putAllChunks(target, size, open, sessionKey, onProgress)
+        if (outcome.problem != null) throw DirectUploadException(outcome.problem)
+        return MediaUpload(
+            name = target.name,
+            deduped = false,
+            workspacePath = outcome.workspacePath,
+            workspaceName = outcome.workspaceName,
+        )
+    }
+
+    /**
+     * 分片上传全量：生产者顺序读源 + N 片并发 PUT + 末片屏障。
+     *
+     * 抽出来是因为媒体（P3）与视频走的是同一套并发/屏障/加密语义——复制一份就等于以后
+     * 修一处忘一处（那次「a+ 追加导致落盘错位」的教训还包括「两处实现很容易漂移」）。
+     */
+    private suspend fun putAllChunks(
+        target: DirectTarget,
+        size: Long,
+        open: () -> InputStream,
+        sessionKey: ByteArray?,
+        onProgress: (Long, Long) -> Unit,
+    ): PutOutcome {
         val plan = directUploadPlan(size)
-        // 主机说“要加密”（v1）就派生本方向的密钥；拿不到会话密钥时**必须失败**，
-        // 不能默默传明文（那样用户以为加密了，实际把视频交给了链路上的任何人）。
         val enc = if (target.enc == AttachmentCrypto.VERSION) {
             val key = sessionKey ?: throw DirectUploadException("主机要求加密，但本机没有 E2E 会话密钥（重新配对后再试）")
             EncContext(
@@ -258,7 +350,6 @@ class DirectAttachments(
         }
         val sent = AtomicLong(0)
         var lastBytes: ByteArray? = null
-
         try {
             coroutineScope {
                 val queue = Channel<PendingChunk>(capacity = DIRECT_UPLOAD_CONCURRENCY)
@@ -268,7 +359,6 @@ class DirectAttachments(
                 // send() 会被取消、join() 不会永远阻塞。（旧写法只 break → 队列无人接收时
                 // producer 永久卡在 send()：表现就是进度永远 0% 且连错误都不弹。）
                 val producer = launch {
-                    // 顺序依次读出全部片，但只把中间片入队；最后一片留在手上等屏障。
                     val order = plan.parallel + listOfNotNull(plan.last)
                     try {
                         open().use { input ->
@@ -279,7 +369,7 @@ class DirectAttachments(
                                 while (read < length) {
                                     val n = input.read(buffer, read, length - read)
                                     // 源流提前结束（文件被改/读失败）→ 收不齐，直接放弃这次直连上传
-                                    if (n <= 0) throw DirectUploadException("读取视频中断（已读 ${offset + read} / $size 字节）")
+                                    if (n <= 0) throw DirectUploadException("读取文件中断（已读 ${offset + read} / $size 字节）")
                                     read += n
                                 }
                                 if (end == plan.last?.second) lastBytes = buffer else queue.send(PendingChunk(offset, end, buffer))
@@ -292,8 +382,8 @@ class DirectAttachments(
                 val workers = List(DIRECT_UPLOAD_CONCURRENCY) {
                     launch(Dispatchers.IO) {
                         for (pending in queue) {
-                            val problem = putChunk(target.url, pending.bytes, pending.offset, pending.end, size, enc)
-                            if (problem != null) throw DirectUploadException(problem)
+                            val outcome = putChunk(target.url, pending.bytes, pending.offset, pending.end, size, enc)
+                            if (outcome.problem != null) throw DirectUploadException(outcome.problem)
                             onProgress(sent.addAndGet(pending.bytes.size.toLong()), size)
                         }
                     }
@@ -304,23 +394,21 @@ class DirectAttachments(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: DirectUploadException) {
-            // 带上原因上抛：让界面能告知「为什么传不上去」（网络？令牌？）
             throw error
         } catch (_: Exception) {
-            return null
+            throw DirectUploadException("上传失败（网络中断或主机不可达）")
         }
+        val last = lastBytes ?: return PutOutcome(null, null, null)
+        val outcome = putChunk(target.url, last, plan.last!!.first, plan.last.second, size, enc)
+        if (outcome.problem == null) onProgress(sent.addAndGet(last.size.toLong()), size)
+        return outcome
+    }
 
-        // 屏障：中间分片全部 200 之后才发最后一片（它触发主机侧的收齐与定稿）。
-        val last = lastBytes ?: return target.name
-        val lastProblem = putChunk(target.url, last, plan.last!!.first, plan.last.second, size, enc)
-        if (lastProblem != null) throw DirectUploadException(lastProblem)
-        onProgress(sent.addAndGet(last.size.toLong()), size)
-
-        // 封面是观感优化：送失败不算上传失败（消息里还会再带一份，主机侧幂等）。
-        if (posterB64 != null) {
-            runCatching { postPoster(target.url, posterB64) }
-        }
-        return target.name
+    /** 一次分片 PUT 的结果：problem 非空 = 失败；body 是成功时的主机回执（末片要看工作区路径）。 */
+    internal class PutOutcome(val problem: String?, val body: String?, private val workspace: String? = null) {
+        /** 「降落到工作区」后的绝对路径（主机在末片回执里给的）。 */
+        val workspacePath: String? get() = workspace ?: null
+        val workspaceName: String? get() = workspacePath?.substringAfterLast('\\')?.substringAfterLast('/')
     }
 
     /** 一片待发的分片（生产者在内存里拿着，worker 发出后即释放）。 */
@@ -438,7 +526,7 @@ class DirectAttachments(
         end: Long,
         total: Long,
         enc: EncContext?,
-    ): String? =
+    ): PutOutcome =
         withContext(Dispatchers.IO) {
             val plainLength = bytes.size
             val body = if (enc == null) {
@@ -460,22 +548,29 @@ class DirectAttachments(
             try {
                 call.execute().use { response ->
                     if (response.isSuccessful) {
-                        null
+                        // 回执里可能带 workspacePath（「降落到工作区」）；解析失败不影响上传成功。
+                        val text = runCatching { response.body?.string() }.getOrNull()
+                        PutOutcome(null, text, text?.let(::parseWorkspacePath))
                     } else {
                         // 状态码 + 响应体片段带回界面：403/404 是令牌与作用域的事，
                         // 连接超时/握手失败是网络的事——没这句就只能看到「0% 不动」。
                         val body = runCatching { response.body?.string()?.take(120) }.getOrNull().orEmpty()
-                        "分片上传被拒：HTTP ${response.code} $body"
+                        PutOutcome("分片上传被拒：HTTP ${response.code} $body", null)
                     }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                "分片上传失败：${error.javaClass.simpleName} ${error.message.orEmpty().take(80)}"
+                PutOutcome("分片上传失败：${error.javaClass.simpleName} ${error.message.orEmpty().take(80)}", null)
             } finally {
                 handle?.dispose()
             }
         }
+
+    /** 从末片回执里取 `workspacePath`（没有/解析不了 → null）。 */
+    private fun parseWorkspacePath(body: String): String? = runCatching {
+        Json.parseToJsonElement(body).jsonObject["workspacePath"]?.jsonPrimitive?.contentOrNull
+    }.getOrNull()
 
     private suspend fun postPoster(url: String, posterB64: String): Boolean = withContext(Dispatchers.IO) {
         val body = buildJsonObject {

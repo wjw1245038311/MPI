@@ -194,6 +194,34 @@ class DirectAttachmentLogicTest {
         assertNull("老主机没有 deduped", parseDirectTarget(buildJsonObject { put("direct", buildJsonObject { put("url", "https://h/att/t"); put("name", "uuid-x.mp4") }) })?.deduped)
     }
 
+    // ---- 「降落到工作区」（P3-S2）：大文件给 agent 读的那条路 ----
+
+    @Test
+    fun `a workspace payload exposes the materialized path`() {
+        val key = "e".repeat(64)
+        val payload = buildJsonObject {
+            put("direct", buildJsonObject {
+                put("url", "")
+                put("token", "")
+                put("name", key)
+                put("deduped", true)
+                put("workspacePath", "C:\\ws\\mpi-inbox\\报表.xlsx")
+                put("workspaceName", "报表.xlsx")
+            })
+        }
+        val target = parseDirectTarget(payload)
+        assertEquals("去重命中时主机在 mint 阶段就把文件放进工作区了", "C:\\ws\\mpi-inbox\\报表.xlsx", target?.workspacePath)
+        assertEquals("报表.xlsx", target?.workspaceName)
+    }
+
+    @Test
+    fun `submission result picks the file name out of a windows path`() {
+        val outcome = com.mpi.app.data.DirectAttachments.PutOutcome(null, "{}", "C:\\ws\\mpi-inbox\\data.bin")
+        assertEquals("C:\\ws\\mpi-inbox\\data.bin", outcome.workspacePath)
+        assertEquals("从末片回执的绝对路径里取文件名（POSIX 与 Windows 都要能取）", "data.bin", outcome.workspaceName)
+        assertNull(com.mpi.app.data.DirectAttachments.PutOutcome(null, "{}", null).workspacePath)
+    }
+
     @Test
     fun `sha256 of a stream matches the known vector`() {
         // 钉死的向量："hello world\n" 的 SHA-256（避免哈希实现悄悄改口径）。

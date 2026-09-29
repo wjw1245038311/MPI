@@ -99,6 +99,7 @@ import java.io.File
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -181,7 +182,7 @@ fun ThreadScreen(
     attachments: List<Attachment>,
     attachmentBusy: Boolean,
     attachmentError: String?,
-    /** 正在直连上传的视频（null = 没有）；有值时输入条显示「正在上传视频 N%」。 */
+    /** 正在直连上传的视频/大文件（null = 没有）；有值时输入条显示「正在上传 N% · 名字」。 */
     videoUpload: VideoUpload?,
     onPickImage: (Uri) -> Unit,
     onPickFile: (Uri) -> Unit,
@@ -959,7 +960,7 @@ private fun VideoUploadRow(upload: VideoUpload, onCancel: () -> Unit) {
     ) {
         CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
         Text(
-            text = "正在上传视频 " + (upload.percent?.let { "$it%" } ?: "…") + " · ${upload.name}",
+            text = "正在上传 " + (upload.percent?.let { "$it%" } ?: "…") + " · ${upload.name}",
             style = MaterialTheme.typography.labelMedium,
             color = MpiTheme.colors.textDim,
             maxLines = 1,
@@ -1060,6 +1061,21 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
                             .padding(horizontal = 4.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White,
+                    )
+                }
+            }
+
+            is Attachment.WorkspaceFile -> {
+                // 大文件（P3-S2）：字节已经在主机的工作目录里，本地只剩一个「已上传」的标识。
+                Box(
+                    Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(MpiTheme.colors.surfaceMuted),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "📄 " + attachment.name.take(12) + "\n" + chipBytes(attachment.size),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MpiTheme.colors.textDim,
+                        textAlign = TextAlign.Center,
                     )
                 }
             }
@@ -1986,6 +2002,10 @@ private fun VideoPlaceholder(block: MessageBlock) {
         }
     }
 }
+
+/** 附件小卡片上的一行大小（与视频块同一口径）。 */
+private fun chipBytes(bytes: Long): String =
+    if (bytes >= 1_000_000) String.format("%.1fMB", bytes / 1_000_000.0) else "${(bytes + 1023) / 1024}KB"
 
 private fun formatVideoMeta(block: MessageBlock): String {
     val size = block.size

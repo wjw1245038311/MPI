@@ -115,6 +115,17 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run test:chat-attachments`（新增三组：别名解析 / 块序置换合并（含拒绝异内容 + 回收字节）/ 引用感知 GC（被引用保留、无人引用回收、拿不到引用集合则一个都不删））。该用例还抓到并修掉一个真缺陷：GC 删除对象时把绝对路径又 `join` 了一次，导致**对象永远删不掉**（只删得了遗留平铺文件）。维护工具用法：`node --experimental-transform-types scripts/chat-attachments-maintenance.mjs --user-data "<userData>" [--merge <保留> <重复...>] [--gc --max-mb 1024] [--apply]`。
 
+15. **附件走向「内容寻址 + 一切都按需拉」：媒体不再只收视频，大文件能直接送到工作区（P3 前三片）**——P1/P2 把视频那条路埋顺了，这一轮把**图/音/文件**也纳进同一套（方案与接口见 `docs/attachment-content-addressing.md`）：
+   - **主机侧通用化**：引用新增 `attach="media" kind="image|audio|video|file" thumb="<key>.thumb.jpg"`（老的 `attach="video"` + `poster` 照旧解析）；媒体类型表覆盖图/音/视/常见文档（认不出的 mime 用原名后缀，再不行 `.bin`——不再一律写成 `.mp4`）；缩略图统一 `<key>.thumb.<ext>`（查找时兼容老 poster 名）
+   - **大文件「降落到工作区」**：`attachment.url` 新增可选 `workspace`——上传完不仅进对象库，还复制一份到 **`<会话 cwd>/mpi-inbox/`**，末片回执里给出**绝对路径**；客户端拿它写 `<file path=…>`，agent 用文件工具就能读。目标目录由主机从会话解析（客户端不能指定路径），同名依次加 `-1`/`-2` 不覆盖，相对路径一律拒；**去重命中不会吃掉降落**（内容已在库时在 mint 阶段就放好文件并把路径一并回给客户端）
+   - **给 agent 的图片字节从对象库回读**：图片可以只传缩略图 + 内容 key，主机把**原图**读回来喂给 pi（agent 拿全分辨率），>12MB 一律不喂（宁可模型看小图，也不能把上下文打爆），拿不到就回落到客户端内联数据
+   - **安卓**：上传核心抽出通用的 `uploadMedia`（图/音/视/文件共用并发分片 + 末片屏障 + 加密）；📎 选到的文件 **>6MB 自动走大文件通道**（不再直接报「文件太大（上限 6MB）」），完成后消息里带工作区路径；上传条文案改为「正在上传 N% · 名字」
+   - 本机实测：同一段 34MB 视频的 5 份副本早已合并为 1 份（P2），附件区 286MB → 156MB；本片不再重复验证
+
+   验证方式：`npm run test:chat-attachments`（新增 P3 三组：媒体大类推定 / media 引用往返 / 图与音按 mime 落盘与缩略图查找 + 非媒体对象入库与 `mpi-inbox` 降落（同名加后缀/目录不逃逸/相对路径拒绝）+ agent 取图走对象库）+ `npm run test:attachment-direct`（新增第 7 组：末片回报工作区绝对路径与可读名、未声明 workspace 者不降落）+ `test:remote-video` / `test:remote-attach` / `test:remote-files` / `test:migration` + `npm run typecheck`；安卓 `./gradlew assembleDebug :app:testDebugUnitTest`（新增两例：带 workspacePath 的回包解析、末片回执里从绝对路径取文件名）。真机（待发 0.5.117）：📎 选一个 >6MB 的文件 → 上传完成 → 主机 `<会话 cwd>/mpi-inbox/` 下出现该文件、消息里带路径、agent 能读到；重发同一文件应零字节完成但仍会落进 mpi-inbox。
+
+   仍未完成（P3 后半）：图片改为「原图上传 + 缩略图进快照」（主机侧已就绪，安卓/桌面/PWA 待接入）、音频附件入口、快照侧的缩略图替换。
+
 ## v0.9.2（2026-09-26）
 
 1. **本地模型 prefill 等待指示器**——本地模型（如 LM Studio）处理长上下文时，首个 token 到达前可能长达数十秒；这段时间 pi 还没发出 assistant 消息事件，聊天区此前没有任何反馈（只有输入框的发送键变成停止），看起来像卡死。现在当「agent 在跑 + assistant 消息尚未开始 + 非压缩中 + 无工具卡在运行」时，聊天区显示带动画圆点和已等待秒数的占位行（「思考中 · 12s」/ “Thinking… 12s”），覆盖三个窗口：发送后 → LLM 响应头到达（含冷启动建桥）、以及每轮工具执行完后的下一轮 prefill。顺带把消息内既有的硬编码「思考中」文案 i18n 化（英文界面显示 “Thinking…”）。
