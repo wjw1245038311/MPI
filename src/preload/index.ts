@@ -216,6 +216,13 @@ const api = {
         todoBytes?: number;
         errors: string[];
       } | null;
+      chatAttachments: {
+        totalBytes: number;
+        maxBytes: number;
+        objectCount: number;
+        legacyCount: number;
+        overCapacity: boolean;
+      };
     }> => ipcRenderer.invoke("data-migration:status"),
     preview: (kind: "sessions" | "todos", dir: string | null) =>
       ipcRenderer.invoke("data-migration:preview", kind, dir) as Promise<{

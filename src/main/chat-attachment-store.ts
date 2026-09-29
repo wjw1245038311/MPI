@@ -26,7 +26,7 @@ export const CHAT_ATTACHMENT_DIR = "chat-attachments";
  * 从 300MB 提到 1GB：视频不再内联后，附件区是它们唯一的家（消息里只留名字），
  * 删掉就是真的“看不了”；而 128MB 的单文件上限下，300MB 只装得下两三个视频。
  */
-const MAX_DIR_BYTES = 1024 * 1024 * 1024;
+export const MAX_DIR_BYTES = 1024 * 1024 * 1024;
 
 const VIDEO_EXTS = new Set([".mp4", ".m4v", ".webm", ".mov", ".mkv", ".avi"]);
 /** 同一个集合的数组形式（需要遍历 / `.some()` 的地方用）。 */
@@ -787,7 +787,10 @@ export async function pruneChatAttachments(maxBytes = MAX_DIR_BYTES, options: At
   }
 }
 
-/** 附件区现状（诊断 / 维护脚本用）。 */
+/** 附件区现状（诊断 / 维护脚本 / 设置页用）。
+ *
+ * **不能抛**：它会被设置页的「数据管理」状态接口调用，而那里（以及某些单测环境）可能
+ * 拿不到 userData 路径——拿不到就报全 0，而不是把设置面板弄崩。 */
 export function attachmentStorageReport(): {
   totalBytes: number;
   objectBytes: number;
@@ -796,33 +799,38 @@ export function attachmentStorageReport(): {
   aliasCount: number;
   legacyCount: number;
 } {
-  const file = readIndexFile();
-  const objects = listObjects();
-  const target = dir(false);
-  let legacyBytes = 0;
-  let legacyCount = 0;
-  if (existsSync(target)) {
-    for (const name of readdirSync(target)) {
-      if (!VIDEO_EXT_LIST.some((ext) => name.toLowerCase().endsWith(ext))) continue;
-      try {
-        const stats = statSync(join(target, name));
-        if (!stats.isFile()) continue;
-        legacyBytes += stats.size;
-        legacyCount += 1;
-      } catch {
-        /* 忽略 */
+  const empty = { totalBytes: 0, objectBytes: 0, legacyBytes: 0, objectCount: 0, aliasCount: 0, legacyCount: 0 };
+  try {
+    const file = readIndexFile();
+    const objects = listObjects();
+    const target = dir(false);
+    let legacyBytes = 0;
+    let legacyCount = 0;
+    if (existsSync(target)) {
+      for (const name of readdirSync(target)) {
+        if (!VIDEO_EXT_LIST.some((ext) => name.toLowerCase().endsWith(ext))) continue;
+        try {
+          const stats = statSync(join(target, name));
+          if (!stats.isFile()) continue;
+          legacyBytes += stats.size;
+          legacyCount += 1;
+        } catch {
+          /* 忽略 */
+        }
       }
     }
+    const objectBytes = objects.reduce((sum, entry) => sum + entry.size, 0);
+    return {
+      totalBytes: objectBytes + legacyBytes,
+      objectBytes,
+      legacyBytes,
+      objectCount: objects.length,
+      aliasCount: Object.keys(file.aliases || {}).length,
+      legacyCount,
+    };
+  } catch {
+    return empty;
   }
-  const objectBytes = objects.reduce((sum, entry) => sum + entry.size, 0);
-  return {
-    totalBytes: objectBytes + legacyBytes,
-    objectBytes,
-    legacyBytes,
-    objectCount: objects.length,
-    aliasCount: Object.keys(file.aliases || {}).length,
-    legacyCount,
-  };
 }
 
 // ---- 存量去重（P2）----------------------------------------------------------------

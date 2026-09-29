@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
+import { MAX_DIR_BYTES, attachmentStorageReport } from "./chat-attachment-store";
 import { getConfig, getConfigDir, updateConfig, type AppConfig, type PendingDataMigration } from "./config";
 import { defaultSessionsDir, getAgentDir, getSessionsDir, listAllSessionFiles } from "./session-store";
 import { getTrashDir } from "./trash-store";
@@ -472,10 +473,22 @@ export interface DataMigrationStatus {
   pendingSessions: boolean;
   pendingTodos: boolean;
   lastSummary: MigrationSummary | null;
+  /**
+   * 聊天附件区现状（P2 引用感知 GC 的**可见面**）：总量超上限时用户要能看到，
+   * 而不是只在诊断日志里静静地超着（超出部分因为被会话引用而不自动删）。
+   */
+  chatAttachments: {
+    totalBytes: number;
+    maxBytes: number;
+    objectCount: number;
+    legacyCount: number;
+    overCapacity: boolean;
+  };
 }
 
 export function getDataMigrationStatus(): DataMigrationStatus {
   const cfg = getConfig();
+  const storage = attachmentStorageReport();
   return {
     sessionStorageDir: cfg.sessionStorageDir || null,
     defaultSessionsDir: defaultSessionsDir(),
@@ -485,6 +498,13 @@ export function getDataMigrationStatus(): DataMigrationStatus {
     pendingSessions: Boolean(cfg.pendingDataMigration?.sessions),
     pendingTodos: Boolean(cfg.pendingDataMigration?.todos),
     lastSummary: getLastMigrationSummary(),
+    chatAttachments: {
+      totalBytes: storage.totalBytes,
+      maxBytes: MAX_DIR_BYTES,
+      objectCount: storage.objectCount,
+      legacyCount: storage.legacyCount,
+      overCapacity: storage.totalBytes > MAX_DIR_BYTES,
+    },
   };
 }
 

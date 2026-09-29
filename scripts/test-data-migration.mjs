@@ -7,7 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Source files use bundler-style extensionless imports; resolve them for node.
-register(new URL("./ts-ext-loader.mjs", import.meta.url));
+// 用共享的 electron stub 加载器：`data-migration` 会（经 chat-attachment-store）间接用到
+// `app.getPath`，而 ts-ext-loader 不做 electron 映射，会去加载真实 electron 包而报
+// “does not provide an export named 'app'”（2026-09-29 踩到）。
+register(new URL("./electron-stub-loader.mjs", import.meta.url));
 
 const root = mkdtempSync(join(tmpdir(), "mpi-mig-"));
 // Point pi's agent dir at a sandbox BEFORE any config/session-store calls so

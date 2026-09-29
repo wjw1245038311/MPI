@@ -971,6 +971,14 @@ interface DataMigrationStatus {
     todoBytes?: number;
     errors: string[];
   } | null;
+  /** 聊天附件区（P2）：总量超上限时在这里提醒（超出部分因被会话引用而不自动删）。 */
+  chatAttachments: {
+    totalBytes: number;
+    maxBytes: number;
+    objectCount: number;
+    legacyCount: number;
+    overCapacity: boolean;
+  };
 }
 
 interface NewProviderDraft {
@@ -3320,6 +3328,29 @@ export function Settings() {
             {tab === "data" && (
               <div className="set-card">
                 <div className="set-card-title">{language === "zh" ? "存储位置" : "Storage locations"}</div>
+                <Field
+                  label={language === "zh" ? "聊天附件区" : "Chat attachments"}
+                  hint={
+                    language === "zh"
+                      ? "会话里收发的视频等附件落盘在这里（同一份内容只存一份）。清理只会删「没有任何会话引用」的文件：被引用的不会自动删，所以总量可能超过上限。"
+                      : "Where attachment media (videos etc.) lives — one copy per unique content. Cleanup only removes files no session references any more, so the total can exceed the limit."
+                  }
+                >
+                  <div className="set-path-row">
+                    <span className="set-path-value">
+                      {migStatus?.chatAttachments
+                        ? `${formatBytes(migStatus.chatAttachments.totalBytes)} / ${formatBytes(migStatus.chatAttachments.maxBytes)}`
+                        : "…"}
+                    </span>
+                  </div>
+                  {migStatus?.chatAttachments?.overCapacity && (
+                    <div className="set-hint" style={{ color: "#c0392b" }}>
+                      {language === "zh"
+                        ? "已超过上限：剩下的附件都还被会话引用着（自动清理不会动它们，删了历史消息就只剩占位卡片）。要腾空间请删除不再看的会话。"
+                        : "Over the limit: the remaining attachments are still referenced by sessions (cleanup will not touch them). Delete sessions you no longer need to free space."}
+                    </div>
+                  )}
+                </Field>
                 <Field
                   label={language === "zh" ? "会话存储位置" : "Session storage location"}
                   hint={
