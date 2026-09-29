@@ -14,6 +14,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -84,11 +85,17 @@ class DirectUploadException(message: String) : Exception(message)
 data class DirectTarget(
     val url: String,
     val token: String,
-    /** 写：主机预分配的附件名（消息里只带它）；读：附件名。 */
+    /** 写：主机预分配的附件名（消息里只带它）；读：附件名。内容寻址后**就是内容 key**。 */
     val name: String,
     val expiresAt: Long,
     /** 主机声明本次载荷必须加密（`v1`）——客户端据此带 `X-MPI-Enc` 头，见 [AttachmentCrypto]。 */
     val enc: String? = null,
+    /** `sha256:<hex>`（内容寻址后才有；老主机没有这个字段）。 */
+    val key: String? = null,
+    /** 可读的原文件名（`name` 是 64 位哈希时，界面展示靠它）。 */
+    val label: String? = null,
+    /** 内容去重命中：字节已在主机 → **不要上传**，直接用 [name]。老主机没有这个字段（= null）。 */
+    val deduped: Boolean? = null,
 )
 
 /**
@@ -118,15 +125,39 @@ internal fun parseDirectTarget(payload: JsonElement?): DirectTarget? {
     val direct = runCatching { payload?.jsonObject?.get("direct")?.jsonObject }.getOrNull() ?: return null
     val url = runCatching { direct["url"]?.jsonPrimitive?.contentOrNull }.getOrNull()
     val name = runCatching { direct["name"]?.jsonPrimitive?.contentOrNull }.getOrNull()
-    if (url.isNullOrEmpty() || name.isNullOrEmpty()) return null
+    // name 为空时只有在「去重命中」时才是合法的（那时主机不回 url，只回 key/name）。
+    val deduped = runCatching { direct["deduped"]?.jsonPrimitive?.booleanOrNull }.getOrNull()
+    if (name.isNullOrEmpty()) return null
+    if (url.isNullOrEmpty() && deduped != true) return null
     return DirectTarget(
-        url = url,
+        url = url.orEmpty(),
         token = runCatching { direct["token"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "",
         name = name,
         expiresAt = runCatching { direct["expiresAt"]?.jsonPrimitive?.longOrNull }.getOrNull() ?: 0L,
         enc = runCatching { direct["enc"]?.jsonPrimitive?.contentOrNull }.getOrNull(),
+        key = runCatching { direct["key"]?.jsonPrimitive?.contentOrNull }.getOrNull(),
+        label = runCatching { direct["label"]?.jsonPrimitive?.contentOrNull }.getOrNull(),
+        deduped = deduped,
     )
 }
+
+/**
+ * 流式计算 SHA-256（1MB 一块，128MB 不整读进内存）——内容寻址的 key 就来自它。
+ *
+ * 读不出来（IO 异常）→ null，调用方据此报「无法读取视频」而不是默默上传一份算不出 key 的字节。
+ */
+internal fun sha256OfStream(open: () -> InputStream): String? = runCatching {
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(1024 * 1024)
+    open().use { input ->
+        while (true) {
+            val read = input.read(buffer)
+            if (read <= 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+}.getOrNull()
 
 /**
  * 直连客户端：申请令牌 → 分片 PUT → 送封面 / 换取读 URL。
@@ -150,6 +181,8 @@ class DirectAttachments(
         originalName: String? = null,
         mimeType: String? = null,
         size: Long? = null,
+        /** 内容寻址（P1）：整文件 SHA-256（小写 hex）。写方向才带，主机据此去重与校验。 */
+        sha256: String? = null,
     ): DirectTarget? {
         val payload = buildJsonObject {
             put("mode", mode)
@@ -157,6 +190,7 @@ class DirectAttachments(
             originalName?.let { put("originalName", it) }
             mimeType?.let { put("mimeType", it) }
             size?.let { put("size", it) }
+            sha256?.let { put("sha256", it) }
         }
         return try {
             parseDirectTarget(request("attachment.url", payload, threadId, DIRECT_REQUEST_TIMEOUT_MS))
@@ -189,13 +223,25 @@ class DirectAttachments(
         onProgress: (Long, Long) -> Unit = { _, _ -> },
     ): String? {
         if (size <= 0L) return null
+        // 先算整文件 SHA-256（内容 key）：
+        //   ① 主机已有同一内容 → mint 回 deduped，**一个字节都不用传**（重发同一个视频秒完成）；
+        //   ② 否则主机收齐后会自己再算一遍比对，不符就拒——落盘错位/链路损坏会当场暴露
+        //      （2026-09-29 的「不能看」事故就是缺了这一步）。
+        // 代价是多读一遍文件（128MB 本地读 1–2s），换来去重与损坏必拒。
+        val contentHash = sha256OfStream(open)
+            ?: throw DirectUploadException("无法读取视频以计算校验值（文件被移动或权限不足？）")
         val target = requestTarget(
             threadId = threadId,
             mode = "write",
             originalName = originalName,
             mimeType = mimeType,
             size = size,
+            sha256 = contentHash,
         ) ?: return null
+
+        // 去重命中：字节已在主机（可能是别的会话、甚至别的设备上传的同一份内容）→ 直接交名下。
+        // 封面也不用重传：主机上的那个对象本来就有封面（首次上传时落的）。
+        if (target.deduped == true) return target.name
 
         val plan = directUploadPlan(size)
         // 主机说“要加密”（v1）就派生本方向的密钥；拿不到会话密钥时**必须失败**，

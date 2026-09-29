@@ -164,16 +164,30 @@ export class ThreadActions {
     originalName?: string;
     mimeType?: string;
     size?: number;
-  }): Promise<{ url: string; token: string; name: string; expiresAt: number }> {
-    const payload = await this.requester.request<{ direct?: { url?: string; token?: string; name?: string; expiresAt?: number } }>(
+    /** 内容寻址（P1）：整文件 SHA-256（小写 hex）。写方向才带。 */
+    sha256?: string;
+  }): Promise<{ url: string; token: string; name: string; expiresAt: number; key?: string; label?: string; deduped?: boolean }> {
+    const payload = await this.requester.request<{
+      direct?: { url?: string; token?: string; name?: string; expiresAt?: number; key?: string; label?: string; deduped?: boolean };
+    }>(
       "attachment.url",
       input,
       "attachUrl",
       20_000,
     );
     const direct = payload?.direct;
-    if (!direct?.url || !direct.name) throw new Error("attachment.url returned no url");
-    return { url: direct.url, token: direct.token || "", name: direct.name, expiresAt: direct.expiresAt || 0 };
+    if (!direct?.name) throw new Error("attachment.url returned no name");
+    // 去重命中时主机**不回 url**（字节已在库，不需要传）——这不是错误。
+    if (!direct.url && direct.deduped !== true) throw new Error("attachment.url returned no url");
+    return {
+      url: direct.url || "",
+      token: direct.token || "",
+      name: direct.name,
+      expiresAt: direct.expiresAt || 0,
+      ...(direct.key ? { key: direct.key } : {}),
+      ...(direct.label ? { label: direct.label } : {}),
+      ...(direct.deduped === undefined ? {} : { deduped: direct.deduped }),
+    };
   }
 
   /** 拉字节那一半（测试与调试用；界面走 fetchAttachmentUrl 拿可播放的 URL）。 */  fetchAttachmentBytes(name: string, options: AttachmentFetchOptions = {}): Promise<Uint8Array> {

@@ -18,9 +18,15 @@ export const DIRECT_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
 export interface DirectTarget {
   url: string;
   token: string;
-  /** 写：主机预分配的附件名（消息里只带它）；读：附件名。 */
+  /** 写：主机预分配的附件名（消息里只带它）；读：附件名。内容寻址后就**就是内容 key**。 */
   name: string;
   expiresAt: number;
+  /** `sha256:<hex>`（内容寻址后才有；老主机没有）。 */
+  key?: string;
+  /** 可读的原文件名（`name` 是 64 位哈希时界面展示靠它）。 */
+  label?: string;
+  /** 内容去重命中：字节已在主机 → 不要上传，直接用 [name]。 */
+  deduped?: boolean;
 }
 
 export interface DirectUploadResult {
@@ -35,10 +41,29 @@ export interface DirectUploadResult {
  */
 export async function requestDirectTarget(
   actions: ThreadActions,
-  input: { mode: "read" | "write"; name?: string; originalName?: string; mimeType?: string; size?: number },
+  input: { mode: "read" | "write"; name?: string; originalName?: string; mimeType?: string; size?: number; sha256?: string },
 ): Promise<DirectTarget | null> {
   try {
     return await actions.requestAttachmentUrl(input);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 整段字节的 SHA-256（小写 hex）——内容寻址的 key。
+ *
+ * 浏览器里用 Web Crypto（拿到的字节本来就在内存里，不用再读一遍盘）；
+ * 环境没有 subtle（旧测试运行时）→ null，调用方按「老客户端」走（不上报哈希，主机也就无法去重）。
+ */
+export async function contentHashOf(bytes: Uint8Array): Promise<string | null> {
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) return null;
+    const digest = await subtle.digest("SHA-256", bytes as unknown as BufferSource);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
   } catch {
     return null;
   }
@@ -121,8 +146,12 @@ export async function uploadVideoDirect(
     originalName: input.file.name || "video.mp4",
     mimeType: input.mimeType,
     size: input.bytes.byteLength,
+    // 先算内容哈希（拿不到就按老客户端走：主机无法去重，但仍会校验落盘结果）。
+    ...(await contentHashOf(input.bytes).then((hash) => (hash ? { sha256: hash } : {})).catch(() => ({}))),
   });
   if (!target) return null;
+  // 去重命中：字节已在主机 → 一个字节都不用传（重发同一个视频秒完成），封面也已在主机上。
+  if (target.deduped === true) return { storedName: target.name, posterStored: false };
   if (!(await putChunks(target.url, input.bytes, onProgress, signal))) return null;
   const posterStored = input.poster ? await postPoster(target.url, input.poster.data, input.poster.mimeType) : false;
   return { storedName: target.name, posterStored };

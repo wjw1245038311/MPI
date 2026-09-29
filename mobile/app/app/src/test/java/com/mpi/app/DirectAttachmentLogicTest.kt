@@ -8,6 +8,7 @@ import com.mpi.app.data.directChunkBounds
 import com.mpi.app.data.directUploadPlan
 import com.mpi.app.data.mimeTypeFromName
 import com.mpi.app.data.parseDirectTarget
+import com.mpi.app.data.sha256OfStream
 import com.mpi.app.ui.VideoUpload
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -150,6 +151,64 @@ class DirectAttachmentLogicTest {
         assertNull("名字缺失", parseDirectTarget(buildJsonObject { put("direct", buildJsonObject { put("url", "https://h/att/t") }) }))
         assertNull("direct 不是对象", parseDirectTarget(buildJsonObject { put("direct", "nope") }))
         assertNull("payload 为 null", parseDirectTarget(null))
+    }
+
+    // ---- 内容寻址（P1）：deduped / key / label ----
+
+    @Test
+    fun `a deduped payload has no url but is still usable`() {
+        val key = "a".repeat(64)
+        val payload = buildJsonObject {
+            put("direct", buildJsonObject {
+                put("url", "")
+                put("token", "")
+                put("name", key)
+                put("key", "sha256:$key")
+                put("label", "clip.mp4")
+                put("deduped", true)
+            })
+        }
+        val target = parseDirectTarget(payload)
+        assertEquals("去重命中也要能用（消息里带的就是 name）", key, target?.name)
+        assertEquals(true, target?.deduped)
+        assertEquals("sha256:$key", target?.key)
+        assertEquals("clip.mp4", target?.label)
+    }
+
+    @Test
+    fun `a key based upload target carries sha256 fields`() {
+        val key = "b".repeat(64)
+        val payload = buildJsonObject {
+            put("direct", buildJsonObject {
+                put("url", "http://47.97.28.110:10444/att/tok")
+                put("token", "tok")
+                put("name", key)
+                put("key", "sha256:$key")
+                put("deduped", false)
+            })
+        }
+        val target = parseDirectTarget(payload)
+        assertEquals(key, target?.name)
+        assertEquals(false, target?.deduped)
+        // 老主机（无 key/deduped 字段）：仍必须解析出可用目标，照旧走上传。
+        assertNull("老主机没有 deduped", parseDirectTarget(buildJsonObject { put("direct", buildJsonObject { put("url", "https://h/att/t"); put("name", "uuid-x.mp4") }) })?.deduped)
+    }
+
+    @Test
+    fun `sha256 of a stream matches the known vector`() {
+        // 钉死的向量："hello world\n" 的 SHA-256（避免哈希实现悄悄改口径）。
+        val bytes = "hello world\n".toByteArray(Charsets.UTF_8)
+        assertEquals(
+            "a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447",
+            sha256OfStream { java.io.ByteArrayInputStream(bytes) },
+        )
+        // 大一点、跨读块边界（1MB 块）：内容相同 → 结果与一次性算的一致
+        val big = ByteArray(1024 * 1024 * 2 + 7) { (it % 251).toByte() }
+        val expected = java.security.MessageDigest.getInstance("SHA-256").digest(big)
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        assertEquals(expected, sha256OfStream { java.io.ByteArrayInputStream(big) })
+        // 读不出来 → null（调用方据此报「无法读取视频」，而不是传一份算不出 key 的字节）
+        assertNull(sha256OfStream { throw java.io.IOException("boom") })
     }
 
     @Test
