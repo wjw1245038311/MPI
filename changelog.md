@@ -124,7 +124,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run test:chat-attachments`（新增 P3 三组：媒体大类推定 / media 引用往返 / 图与音按 mime 落盘与缩略图查找 + 非媒体对象入库与 `mpi-inbox` 降落（同名加后缀/目录不逃逸/相对路径拒绝）+ agent 取图走对象库）+ `npm run test:attachment-direct`（新增第 7 组：末片回报工作区绝对路径与可读名、未声明 workspace 者不降落）+ `test:remote-video` / `test:remote-attach` / `test:remote-files` / `test:migration` + `npm run typecheck`；安卓 `./gradlew assembleDebug :app:testDebugUnitTest`（新增两例：带 workspacePath 的回包解析、末片回执里从绝对路径取文件名）。真机（待发 0.5.117）：📎 选一个 >6MB 的文件 → 上传完成 → 主机 `<会话 cwd>/mpi-inbox/` 下出现该文件、消息里带路径、agent 能读到；重发同一文件应零字节完成但仍会落进 mpi-inbox。
 
-   仍未完成（P3 后半）：图片改为「原图上传 + 缩略图进快照」（主机侧已就绪，安卓/桌面/PWA 待接入）、音频附件入口、快照侧的缩略图替换。
+   - **安卓（第二批）**：发图改为「原图走直连上传（内容寻址、去重）+ prompt 只带缩略图（≤640px/≤150KB）与 key」；主机从对象库把原图读回来嗂给模型（agent 拿全分辨率），其它客户端可按 key 拉原图。失败一律静静回落内联（图片内联装得下，不像大文件必须报错）。附件小卡片与乐观上屏都改用缩略图
+
+   已接：安卓的大文件与图片。仍未完成（P3 后半）：安卓音频入口、桌面/PWA 接入、快照侧把图片块换成缩略图（现在 pi 消息里存的还是原图 base64，快照会照原样下发）。
 
 ## v0.9.2（2026-09-26）
 
