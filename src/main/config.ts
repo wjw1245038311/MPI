@@ -239,6 +239,12 @@ export interface AppConfig {
   remoteRelayUrl: string;
   /** Whether the mobile relay uplink should stay connected across restarts. */
   remoteRelayEnabled: boolean;
+  /**
+   * 中继准入 token（P1，见 docs/RELAY-SHARING.md §3.1）：中继侧配了 RELAY_HOST_TOKENS 时，
+   * 主机注册必须带上它。**只用于 host→relay 注册**，绝不进配对票（否则设备也拿到主机凭证）。
+   * 空 = 中继未启用准入（自用/局域网内嵌中继）。
+   */
+  remoteRelayToken: string;
   /** Feishu message channel (导航栏 → 消息接入). Absent = off. The app secret
    * stays local to this machine and is never part of backup imports. */
   feishuChannel?: FeishuChannelConfig;
@@ -420,6 +426,7 @@ const DEFAULTS: AppConfig = {
   remoteStunUrls: [...BUILT_IN_REMOTE_STUN_URLS],
   remoteRelayUrl: "",
   remoteRelayEnabled: false,
+  remoteRelayToken: "",
 };
 
 let cached: AppConfig | null = null;
@@ -533,6 +540,7 @@ export function loadConfig(userDataDir: string): AppConfig {
           ? parsed.remoteSignalingEnabled
           : DEFAULTS.remoteSignalingEnabled,
         remoteRelayUrl: typeof parsed.remoteRelayUrl === "string" ? parsed.remoteRelayUrl.trim() : DEFAULTS.remoteRelayUrl,
+        remoteRelayToken: typeof parsed.remoteRelayToken === "string" ? parsed.remoteRelayToken.trim() : DEFAULTS.remoteRelayToken,
         remoteRelayEnabled: typeof parsed.remoteRelayEnabled === "boolean"
           ? parsed.remoteRelayEnabled
           : DEFAULTS.remoteRelayEnabled,
@@ -820,6 +828,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   }
   if (typeof p.remoteSignalingEnabled === "boolean") out.remoteSignalingEnabled = p.remoteSignalingEnabled;
   if (typeof p.remoteRelayUrl === "string") out.remoteRelayUrl = p.remoteRelayUrl.trim();
+  if (typeof p.remoteRelayToken === "string") out.remoteRelayToken = p.remoteRelayToken.trim();
   if (typeof p.remoteRelayEnabled === "boolean") out.remoteRelayEnabled = p.remoteRelayEnabled;
 
   // Voice settings are portable (no machine-specific paths); the API key is a

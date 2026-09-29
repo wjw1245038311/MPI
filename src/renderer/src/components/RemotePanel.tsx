@@ -128,6 +128,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [signalingUrl, setSignalingUrl] = useState(DEFAULT_SIGNALING_URL);
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
   const [relayUrl, setRelayUrl] = useState("");
+  /** 中继准入 token（P1）：与地址一起保存，不回显已有值的提示（避免在界面上留明文）。 */
+  const [relayToken, setRelayToken] = useState("");
   const [busy, setBusy] = useState(false);
 
   const refresh = async (syncSignalUrl = true) => {
@@ -238,7 +240,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const saveRelayUrl = async () => {
     setBusy(true);
     try {
-      await window.pi.app.setConfig({ remoteRelayUrl: relayUrl.trim() });
+      await window.pi.app.setConfig({ remoteRelayUrl: relayUrl.trim(), remoteRelayToken: relayToken.trim() });
       await refresh(false);
     } finally {
       setBusy(false);
@@ -350,8 +352,23 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
             spellCheck={false}
           />
         </label>
+        <label className="set-addprov-field wide">
+          <span>{zh ? "中继准入 token（服务方要求时填）" : "Relay access token (if required)"}</span>
+          <input
+            className="set-input"
+            value={relayToken}
+            onChange={(event) => setRelayToken(event.target.value)}
+            placeholder={zh ? "留空 = 中继未启用准入" : "Empty = relay has no allowlist"}
+            spellCheck={false}
+          />
+        </label>
+        <div className="set-hint">
+          {zh
+            ? "token 只用于主机向中继注册（服务方在 RELAY_HOST_TOKENS 里配）；它不会进配对票，设备拿不到它。"
+            : "The token only authenticates this host to the relay (RELAY_HOST_TOKENS on the relay); it never goes into the pairing ticket."}
+        </div>
         <button className="set-btn primary" style={{ marginTop: 10 }} onClick={saveRelayUrl} disabled={busy || !relayUrl.trim()}>
-          {zh ? "保存地址" : "Save URL"}
+          {zh ? "保存地址与 token" : "Save URL & token"}
         </button>
         <div className="set-remote-toggle-row">
           <div className="set-remote-toggle-copy">

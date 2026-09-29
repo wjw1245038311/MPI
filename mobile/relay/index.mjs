@@ -44,6 +44,7 @@ import { fileURLToPath } from "node:url";
 import http from "node:http";
 import https from "node:https";
 import { readFileSync } from "node:fs";
+import { timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { WebSocketServer, WebSocket } from "ws";
 import { encryptWebPushPayload, loadOrCreateVapidKey, vapidJwt, webPushHeaders } from "./vapid.mjs";
@@ -198,7 +199,69 @@ const CLOSE_HEARTBEAT_TIMEOUT = 4005;
 const CLOSE_REPLACED = 4006;
 /** 主机进程换了（真重启）：该主机的设备必须重连重认证——主机内存里的 E2E 会话
  * 密钥已随进程消失，旧连接上的设备再怎么发主机也解不开。见 host.register 的 bootId。 */
+/**
+ * 主机准入（P1，2026-09-30）：中继对外提供服务时，不能让任何人白用。
+ *
+ * 规则（"给了 token 列表才启用"）：
+ *   · `RELAY_HOST_TOKENS=token1,token2` 或 `RELAY_TOKEN_FILE=/path`（每行一个，`#` 开头为注释）
+ *   · 两个都没给 / 列表为空 → **开放模式**（自用、局域网内嵌中继、测试）；
+ *   · 给了列表 → `host.register` 必须带 `token` 且命中列表，否则
+ *     `relay.error{code:"HOST_UNAUTHORIZED"}` + 断开（4003）。
+ *
+ * 为什么要一朋友一 token：可精确吊销、后续可接用量统计；token 只用于 **host→relay 注册**，
+ * **绝不能进配对票**（否则朋友的手机也拿到主机凭证）。见 docs/RELAY-SHARING.md §3.1。
+ */
+const HOST_TOKENS_ENV = (process.env.RELAY_HOST_TOKENS || "")
+  .split(",")
+  .map((token) => token.trim())
+  .filter(Boolean);
+const HOST_TOKEN_FILE = process.env.RELAY_TOKEN_FILE || "";
+
+function loadHostTokens() {
+  const tokens = new Set(HOST_TOKENS_ENV);
+  if (HOST_TOKEN_FILE) {
+    try {
+      for (const line of readFileSync(HOST_TOKEN_FILE, "utf8").split(/\r?\n/)) {
+        const token = line.trim();
+        if (token && !token.startsWith("#")) tokens.add(token);
+      }
+    } catch (error) {
+      log(`host token file unreadable (${HOST_TOKEN_FILE}): ${error?.message || error}`);
+    }
+  }
+  return tokens;
+}
+
+/** 每 5s 重读一次 token 文件：吊销/新增不用重启中继（env 那份不可热改）。 */
+let hostTokens = loadHostTokens();
+function refreshHostTokens() {
+  if (!HOST_TOKEN_FILE) return;
+  hostTokens = loadHostTokens();
+}
+
+/** 常量时间比较（避免用时长泄露 token 前缀）。 */
+function tokenMatches(candidate) {
+  if (typeof candidate !== "string" || !candidate) return false;
+  const a = Buffer.from(candidate);
+  let matched = false;
+  for (const token of hostTokens) {
+    const b = Buffer.from(token);
+    if (a.length === b.length && timingSafeEqual(a, b)) matched = true;
+  }
+  return matched;
+}
+
+const hostAuthRequired = () => hostTokens.size > 0;
+
+/** 检查结果：ok / 拒因（调用方负责回错并断开）。 */
+function checkHostAuth(frame) {
+  if (!hostAuthRequired()) return { ok: true };
+  return tokenMatches(frame.token) ? { ok: true } : { ok: false };
+}
+
 const CLOSE_HOST_RESTARTED = 4007;
+/** 主机凭证不对（P1 准入）。 */
+const CLOSE_HOST_UNAUTHORIZED = 4003;
 
 // --- routing table ---------------------------------------------------------------
 /** hostId -> { ws } */
@@ -558,6 +621,13 @@ wss.on("connection", (ws) => {
       if (type === "host.register") {
         const hostId = str(frame.hostId, 64);
         if (!hostId) return tryClose(ws, CLOSE_BAD_FIRST_FRAME, "BAD_FIRST_FRAME");
+        // P1 准入：给了 token 列表就必须命中（开放模式直接放行）。
+        const auth = checkHostAuth(frame);
+        if (!auth.ok) {
+          log(`host ${hostId} rejected (unauthorized)`);
+          send(ws, { type: "relay.error", code: "HOST_UNAUTHORIZED" });
+          return tryClose(ws, CLOSE_HOST_UNAUTHORIZED, "HOST_UNAUTHORIZED");
+        }
         const bootId = str(frame.bootId, 64);
         const previous = hosts.get(hostId);
         const existing = previous;
@@ -603,6 +673,11 @@ wss.on("connection", (ws) => {
   ws.on("error", () => { /* close follows */ });
 });
 
+// 主机准入：token 文件每 5s 重读一次（吊销/新增不用重启；env 那份不可热改）。
+if (HOST_TOKEN_FILE) {
+  setInterval(refreshHostTokens, 5_000).unref();
+}
+
 // Heartbeat: ping every PING_MS; a socket that misses DEAD_MS/PING_MS pings is dead.
 const heartbeat = setInterval(() => {
   wss.clients.forEach((ws) => {
@@ -620,7 +695,9 @@ const heartbeat = setInterval(() => {
 server.listen(PORT, HOST, () => {
   const actual = server.address()?.port ?? PORT;
   const scheme = tlsOptions ? "wss" : "ws";
-  log(`ready ${scheme}://${HOST}:${actual}/ws (ping ${PING_MS}ms, dead ~${DEAD_MS}ms${STATIC_DIR ? ", static: " + STATIC_DIR : ""})`);
+  log(
+    `ready ${scheme}://${HOST}:${actual}/ws (ping ${PING_MS}ms, dead ~${DEAD_MS}ms${STATIC_DIR ? ", static: " + STATIC_DIR : ""}, hosts: ${hostAuthRequired() ? `${hostTokens.size} token(s)` : "OPEN"})`,
+  );
 });
 
 // 第二个监听：公网明文（同一个 wss / 同一套路由）。手机从公网只能走明文，见文件头注释。

@@ -1185,6 +1185,8 @@ function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
     const cryptoMaterial = remoteHost.getRelayCryptoMaterial();
     activeRelayUplink = new RelayUplink({
       relayUrl: cfg.remoteRelayUrl,
+      // P1 准入（见 docs/RELAY-SHARING.md §3.1）：中继配了允许列表时必须带。
+      ...(cfg.remoteRelayToken ? { relayToken: cfg.remoteRelayToken } : {}),
       hostId: remoteHost.getStatus().hostId,
       userDataDir: getConfigDir(),
       x25519PrivB64u: cryptoMaterial.x25519PrivB64u,

@@ -50,6 +50,11 @@ export interface RelayUplinkStatus {
 
 export interface RelayUplinkOptions {
   relayUrl: string;
+  /**
+   * 中继准入 token（P1）：中继配了允许列表时必须带（否则注册被拒 4003 HOST_UNAUTHORIZED）。
+   * 空 = 中继未启用准入。**只用于 host→relay 注册**，不会进配对票。
+   */
+  relayToken?: string;
   hostId: string;
   /** userData dir — device tokens persist in remote-relay-tokens.json. */
   userDataDir: string;
@@ -233,7 +238,15 @@ export class RelayUplink implements RelayOutbound {
       this.retryCount = 0;
       this.setState("connected", null);
       try {
-        ws.send(JSON.stringify({ type: "host.register", hostId: this.options.hostId, bootId: this.bootId }));
+        ws.send(
+          JSON.stringify({
+            type: "host.register",
+            hostId: this.options.hostId,
+            bootId: this.bootId,
+            // P1 准入：没配 token 就不带这个字段（中继开放模式不认它）。
+            ...(this.options.relayToken ? { token: this.options.relayToken } : {}),
+          }),
+        );
       } catch { /* ignore */ }
       // Re-register device tokens so `hello` re-auth works after a relay restart.
       for (const [deviceId, token] of Object.entries(this.loadTokens())) {
