@@ -92,6 +92,15 @@ export interface AppConfig {
    * 两者都不可用 → 直连关闭（客户端回落内联/中继分片，功能不坏）。
    */
   tailscaleBin?: string;
+  /**
+   * 附件直连的**基地址覆盖**（可选）。
+   *
+   * 默认是自动检测：读 `tailscale status --json` 的主机名拼 `https://<名字>:<对外端口>`。
+   * 但若要经**已有的反向代理**暴露（例如 Seafile 的 Caddy 在 443 上转发 `/att/*`），
+   * 就把这里填成那个基地址（如 `https://workstation.tail38d5a.ts.net`）——服务仍只绑本机
+   * 127.0.0.1，对外由代理转发。环境变量 `MPI_ATTACHMENT_BASE_URL` 优先级更高（临时覆盖用）。
+   */
+  attachmentBaseUrl?: string;
   /** Projects the user explicitly pinned; shown at the top of the sidebar. */
   pinnedProjects: string[];
   /** Internal migration marker for the explicit project-pin behavior. */
@@ -691,6 +700,8 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
 
   const pinnedProjects = strList(p.pinnedProjects);
   if (pinnedProjects) out.pinnedProjects = pinnedProjects;
+  const attachmentBaseUrl = typeof p.attachmentBaseUrl === "string" ? p.attachmentBaseUrl.trim() : "";
+  if (attachmentBaseUrl) out.attachmentBaseUrl = attachmentBaseUrl;
   const pinnedThreads = strList(p.pinnedThreads);
   if (pinnedThreads) out.pinnedThreads = pinnedThreads;
   const archivedProjects = strList(p.archivedProjects);

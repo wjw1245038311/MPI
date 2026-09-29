@@ -2356,7 +2356,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
    * 优先级：环境变量覆盖（开发/测试） > tailscale CLI 读取 `Self.DNSName`。
    */
   async function resolveAttachmentBaseUrl(): Promise<string | null> {
-    const override = process.env.MPI_ATTACHMENT_BASE_URL;
+    const override = process.env.MPI_ATTACHMENT_BASE_URL || getConfig().attachmentBaseUrl;
     if (override) return override.replace(/\/+$/, "");
     if (attachmentBaseUrlResolved) return attachmentBaseUrl;
     attachmentBaseUrlResolved = true;

@@ -30,6 +30,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    - PWA：选视频**先申请写令牌直传**（消息里只带名字、零字节），不可用自动回落内联（≤3MB）；点开视频**先申请读令牌喂给 `<video>`**（原生 Range、可 seek），拿不到才回落原来的中继分片
    - 为什么必须 https：PWA 从 https 页面加载，http 的附件 URL 会被浏览器按**混合内容**直接拦掉（媒体属于可拦类型）
    - 诊断日志（排「慢」用）：上行每片记 `attachment-http PUT … off/len/ms/cum`，下行首次命中在完成后记 `attachment-http GET done … bytes/ms/mbs`——一眼能分辨是**链路慢**还是**服务端写盘/发数据慢**
+   - 可选的 `attachmentBaseUrl` 配置：默认自动读 tailnet 主机名拼 `https://<名>:<对外端口>`；填了就用它（例如指向已有的反向代理：Caddy 把 `/att/*` 转发到本机 8899）。服务始终只绑 `127.0.0.1`，对外由代理转发。实测结论：**换暴露方式（tailscale serve / 内核监听 / Caddy）对本项目链路的吞吐没有影响**（手机经中继上行均为 ~1.1–1.2MB/s），这项能力留给「需要复用现成代理与证书」的场景
    - 已知限制：**安卓端还没接直连**（P2 待做）——手机 App 看大视频仍走中继分片、发大视频仍受 6MB 上限；桌面端无需改动（本机走 `chatatt://`，本就带 Range）
 
    验证方式：`npm run typecheck` + `npm run test:attachment-direct`（令牌作用域/过期/撤销、上传分片偏移与收齐、Range 206 与首尾边界、上传超限、CORS 预检）+ `npm run test:pwa-shared` + `mobile/pwa` 的 `tsc --noEmit`。应用内（手机浏览器 / PWA，**先硬刷新**——service worker 会缓存旧包）：① 发大视频 —— 🎬 选一个 20–50MB 的 mp4 → 出现「正在上传视频 N%」→ 发送后气泡里是首帧封面；主机日志应有 `attachment-direct mint write name=… dev=…` + `attachment-http upload done name=… size=…`。② 播大视频 —— 点开该视频应立即开始播、且**能拖进度条**；主机日志应有 `attachment-direct mint read name=…` 与 `attachment-http GET name=… range=bytes=…`（**没有 GET 那行 = 回落到了中继**，此时会看到一长串 `remote-attach fetch` 且要等整段下完）。③ 反向 —— 桌面端拖一个大视频发出 → 手机 PWA 上同样点开即播。④ 回落 —— 把手机 Tailscale 关掉再点开视频，应仍能播（走中继，慢但可用）。
