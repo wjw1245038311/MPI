@@ -8,6 +8,7 @@ import com.mpi.app.AppVisibility
 import com.mpi.app.data.Attachment
 import com.mpi.app.data.AttachmentLoader
 import com.mpi.app.data.DirectAttachments
+import com.mpi.app.data.DirectUploadException
 import com.mpi.app.data.MAX_FILE_BYTES
 import com.mpi.app.data.HostRepository
 import com.mpi.app.data.HostSession
@@ -861,21 +862,39 @@ class AppViewModel(
                     }
                     return@launch
                 }
-                val inline = attachmentLoader.loadFile(uri)
-                _ui.update { state ->
-                    inline.fold(
-                        onSuccess = { state.copy(videoUpload = null, attachments = state.attachments + it) },
-                        onFailure = { state.copy(videoUpload = null, attachmentError = it.message ?: "视频读取失败") },
-                    )
-                }
+                inlineFallback(uri, source.size)
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 _ui.update { it.copy(videoUpload = null) }
                 throw cancelled
+            } catch (error: DirectUploadException) {
+                // 直连跑到一半失败：**把原因说出来**（HTTP 状态 / 连接错误），
+                // 否则用户只看得到一个停在 0% 的进度条。小文件仍回落到内联。
+                if (source.size <= MAX_FILE_BYTES) {
+                    inlineFallback(uri, source.size)
+                } else {
+                    _ui.update {
+                        it.copy(
+                            videoUpload = null,
+                            attachmentError = "直连上传失败：${error.message}",
+                        )
+                    }
+                }
             } catch (error: Exception) {
                 _ui.update { it.copy(videoUpload = null, attachmentError = error.message ?: "视频上传失败") }
             } finally {
                 videoUploadJob = null
             }
+        }
+    }
+
+    /** 直连不可用时的回落：内联上传（自带 6MB 上限检查）。 */
+    private fun inlineFallback(uri: android.net.Uri, size: Long) {
+        val inline = attachmentLoader.loadFile(uri)
+        _ui.update { state ->
+            inline.fold(
+                onSuccess = { state.copy(videoUpload = null, attachments = state.attachments + it) },
+                onFailure = { state.copy(videoUpload = null, attachmentError = it.message ?: "视频读取失败") },
+            )
         }
     }
 

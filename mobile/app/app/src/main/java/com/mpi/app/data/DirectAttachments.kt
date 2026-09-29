@@ -69,6 +69,9 @@ internal fun directUploadPlan(total: Long, chunk: Int = DIRECT_UPLOAD_CHUNK_BYTE
     return UploadPlan(bounds.dropLast(1), bounds.last())
 }
 
+/** 直连上传失败（带原因，供界面如实告知）。 */
+class DirectUploadException(message: String) : Exception(message)
+
 /** 主机签发的直连目标（`attachment.url` 的回包）。 */
 data class DirectTarget(
     val url: String,
@@ -183,13 +186,16 @@ class DirectAttachments(
 
         val plan = directUploadPlan(size)
         val sent = AtomicLong(0)
-        val failed = AtomicBoolean(false)
         var lastBytes: ByteArray? = null
 
         try {
             coroutineScope {
                 val queue = Channel<PendingChunk>(capacity = DIRECT_UPLOAD_CONCURRENCY)
                 // 生产者：顺序读源 → 入队（队列满时自动背压）；最后一片不排队，留在手上等屏障。
+                //
+                // 失败传播：worker 一失败就**抛异常**（而不是 break 退出），这样 producer 的
+                // send() 会被取消、join() 不会永远阻塞。（旧写法只 break → 队列无人接收时
+                // producer 永久卡在 send()：表现就是进度永远 0% 且连错误都不弹。）
                 val producer = launch {
                     // 顺序依次读出全部片，但只把中间片入队；最后一片留在手上等屏障。
                     val order = plan.parallel + listOfNotNull(plan.last)
@@ -202,17 +208,12 @@ class DirectAttachments(
                                 while (read < length) {
                                     val n = input.read(buffer, read, length - read)
                                     // 源流提前结束（文件被改/读失败）→ 收不齐，直接放弃这次直连上传
-                                    if (n <= 0) {
-                                        failed.set(true)
-                                        return@launch
-                                    }
+                                    if (n <= 0) throw DirectUploadException("读取视频中断（已读 ${offset + read} / $size 字节）")
                                     read += n
                                 }
                                 if (end == plan.last?.second) lastBytes = buffer else queue.send(PendingChunk(offset, end, buffer))
                             }
                         }
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
                     } finally {
                         queue.close()
                     }
@@ -220,11 +221,8 @@ class DirectAttachments(
                 val workers = List(DIRECT_UPLOAD_CONCURRENCY) {
                     launch(Dispatchers.IO) {
                         for (pending in queue) {
-                            if (failed.get()) break
-                            if (!putChunk(target.url, pending.bytes, pending.offset, pending.end, size)) {
-                                failed.set(true)
-                                break
-                            }
+                            val problem = putChunk(target.url, pending.bytes, pending.offset, pending.end, size)
+                            if (problem != null) throw DirectUploadException(problem)
                             onProgress(sent.addAndGet(pending.bytes.size.toLong()), size)
                         }
                     }
@@ -234,15 +232,17 @@ class DirectAttachments(
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (error: DirectUploadException) {
+            // 带上原因上抛：让界面能告知「为什么传不上去」（网络？令牌？）
+            throw error
         } catch (_: Exception) {
             return null
         }
 
-        if (failed.get()) return null
-
         // 屏障：中间分片全部 200 之后才发最后一片（它触发主机侧的收齐与定稿）。
         val last = lastBytes ?: return target.name
-        if (!putChunk(target.url, last, plan.last!!.first, plan.last.second, size)) return null
+        val lastProblem = putChunk(target.url, last, plan.last!!.first, plan.last.second, size)
+        if (lastProblem != null) throw DirectUploadException(lastProblem)
         onProgress(sent.addAndGet(last.size.toLong()), size)
 
         // 封面是观感优化：送失败不算上传失败（消息里还会再带一份，主机侧幂等）。
@@ -259,7 +259,7 @@ class DirectAttachments(
     suspend fun playbackUrl(threadId: String, name: String, mimeType: String?): String? =
         requestTarget(threadId = threadId, mode = "read", name = name, mimeType = mimeType)?.url
 
-    private suspend fun putChunk(url: String, bytes: ByteArray, offset: Long, end: Long, total: Long): Boolean =
+    private suspend fun putChunk(url: String, bytes: ByteArray, offset: Long, end: Long, total: Long): String? =
         withContext(Dispatchers.IO) {
             val httpRequest = Request.Builder()
                 .url(url)
@@ -271,9 +271,20 @@ class DirectAttachments(
             // 否则那 4MB 会一直传到超时为止。
             val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
             try {
-                call.execute().use { it.isSuccessful }
-            } catch (_: Exception) {
-                false
+                call.execute().use { response ->
+                    if (response.isSuccessful) {
+                        null
+                    } else {
+                        // 状态码 + 响应体片段带回界面：403/404 是令牌与作用域的事，
+                        // 连接超时/握手失败是网络的事——没这句就只能看到「0% 不动」。
+                        val body = runCatching { response.body?.string()?.take(120) }.getOrNull().orEmpty()
+                        "分片上传被拒：HTTP ${response.code} $body"
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                "分片上传失败：${error.javaClass.simpleName} ${error.message.orEmpty().take(80)}"
             } finally {
                 handle?.dispose()
             }
