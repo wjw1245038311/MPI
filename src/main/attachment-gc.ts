@@ -62,7 +62,7 @@ export async function collectReferencedAttachmentNames(options: CollectReference
           if (!text.includes(VIDEO_REF_ATTR)) continue;
           for (const ref of splitVideoRefs(text).refs) {
             if (ref.name) names.add(ref.name);
-            if (ref.poster) names.add(ref.poster);
+            if (ref.thumb) names.add(ref.thumb);
           }
         }
       });

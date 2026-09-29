@@ -425,7 +425,7 @@ try {
     const modern = splitVideoRefs(videoRefEnvelope(key, "/tmp/x.mp4", `${key}.poster.jpg`, { key: `sha256:${key}`, label: "我的录屏.mp4" }));
     assert.equal(modern.refs[0].key, `sha256:${key}`, "新引用要带 key");
     assert.equal(modern.refs[0].label, "我的录屏.mp4", "新引用要带可读名");
-    assert.equal(modern.refs[0].poster, `${key}.poster.jpg`, "封面属性要能单独取到");
+    assert.equal(modern.refs[0].thumb, `${key}.poster.jpg`, "缩略图属性要能单独取到");
     const legacy = splitVideoRefs(videoRefEnvelope("2f1c-uuid-original.mp4", "/tmp/y.mp4", "2f1c-uuid-original.mp4.poster.jpg"));
     assert.equal(legacy.refs[0].name, "2f1c-uuid-original.mp4", "老引用仍要能解析");
     assert.equal(legacy.refs[0].key, undefined, "老引用没有 key");

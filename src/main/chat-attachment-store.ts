@@ -17,7 +17,7 @@ import { app } from "electron";
 import { closeSync, constants as fsConstants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME, VIDEO_POSTER_MAX_BYTES, VIDEO_POSTER_MIME_TYPES, posterNameFor, videoMimeForPath } from "./remote/video-refs";
+import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME, VIDEO_POSTER_MAX_BYTES, VIDEO_POSTER_MIME_TYPES, mediaExtForMime, posterNameFor, thumbNameFor, videoMimeForPath } from "./remote/video-refs";
 
 export const CHAT_ATTACHMENT_DIR = "chat-attachments";
 /**
@@ -238,16 +238,21 @@ export function isContentKey(name: string): boolean {
   return SHA256_RE.test(String(name || "").toLowerCase()) && String(name || "") === String(name || "").toLowerCase();
 }
 
-/** 对象查找时按顺序探测的扩展名（与视频扩展名同一份定义，避免两处漂移）。 */
-const OBJECT_EXT_CANDIDATES = VIDEO_EXT_LIST;
-
-/** 对象的扩展名：优先用调用方给的 mime，其次查索引，最后 .mp4。
+/**
+ * 对象查找时按顺序探测的扩展名。
  *
- * 为什么对象文件名要带扩展名：服务端靠它给 Content-Type（网页端 <video> 不吃 octet-stream），
- * 快照也靠它推视频 mime——key 本身没有任何可读信息。 */
+ * P3 起附件不止视频（图/音/文件），所以探测表要盖住全部可能的后缀；平时第一次候选
+ * （由索引里的 mime 推出）就会命中，探测只是索引缺失时的兜底。
+ */
+const OBJECT_EXT_CANDIDATES = [...new Set([...VIDEO_EXT_LIST, ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif", ".avif", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".weba", ".pdf", ".zip", ".json", ".txt", ".csv", ".md", ".bin"])];
+
+/** 对象的扩展名：优先用调用方给的 mime，其次查索引，最后按原名后缀，再不行 .bin。
+ *
+ * 为什么对象文件名要带扩展名：服务端靠它给 Content-Type（网页端 <video>/<img> 不吃
+ * octet-stream），快照也靠它推 mime——key 本身没有任何可读信息。 */
 function objectExtFor(key: string, mimeHint?: string): string {
-  const mime = String(mimeHint || readIndex()[key]?.mime || "").toLowerCase();
-  return VIDEO_EXT_BY_MIME[mime] || ".mp4";
+  const record = readIndex()[key];
+  return mediaExtForMime(mimeHint || record?.mime, record?.label);
 }
 
 /** 对象所在的分片目录（`objects/<前两位>`，避免单目录堆几十万文件）。 */
@@ -566,15 +571,44 @@ export function storeVideoPoster(videoName: string, poster?: VideoPosterInput): 
 }
 
 /**
- * 找已存在的封面文件名（上传完成后回填信封时用）。
+ * 缩略图落盘（P3）：`<key>.thumb.<ext>`。
  *
- * 封面扩展名取决于上传时的 MIME，所以三个候选都要看（不能拿 .jpg hardcode）。
+ * 与视频封面（`<key>.poster.<ext>`）分开命名，是为了让客户端能一眼区分「这是缩略图」——
+ * 图片的缩略图与视频的首帧封面是同一个东西，但存量的视频引用写的是 `poster`，所以两种都认。
+ */
+export function storeThumbnail(name: string, thumb?: VideoPosterInput): string | null {
+  if (!thumb || typeof thumb.data !== "string" || !thumb.data) return null;
+  const mimeType = String(thumb.mimeType || "image/jpeg").toLowerCase();
+  if (!VIDEO_POSTER_MIME_TYPES.has(mimeType)) return null;
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(thumb.data, "base64");
+  } catch {
+    return null;
+  }
+  if (!bytes.length || bytes.length > VIDEO_POSTER_MAX_BYTES) return null;
+  const name_ = thumbNameFor(name, mimeType);
+  try {
+    writeFileSync(join(dir(), name_), bytes);
+    return name_;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 找已存在的缩略图/封面名（图/视有，音/文件无）。
+ *
+ * P3 起新写的是 `<key>.thumb.<ext>`；视频历史名是 `<key>.poster.<ext>`——两种都要认，
+ * **不迁移存量**（存量引用里写的就是老名字）。
  */
 export function findVideoPoster(videoName: string): string | null {
-  const base = posterNameFor(videoName, "image/jpeg").replace(/\.jpg$/i, "");
-  for (const extension of [".jpg", ".png", ".webp"]) {
-    const candidate = `${base}${extension}`;
-    if (resolveChatAttachment(candidate)) return candidate;
+  for (const suffix of ["thumb", "poster"]) {
+    const base = `${videoName}.${suffix}`;
+    for (const extension of [".jpg", ".png", ".webp"]) {
+      const candidate = `${base}${extension}`;
+      if (resolveChatAttachment(candidate)) return candidate;
+    }
   }
   return null;
 }

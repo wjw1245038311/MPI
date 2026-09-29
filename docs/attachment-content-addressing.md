@@ -45,7 +45,47 @@
 - `objects/` 的物理目录搬迁对**旧**平铺文件是惰性的：老消息按名读、老文件不搬（P2 的存量去重时再处理）。
 - 手机端缓存挪 `filesDir` + 断点续传：与内容寻址独立，排在 P3 之后（用户已知）。
 
-## 五、风险
+## 六、P3：图片 / 音频 / 文件（已拍板）
+
+用户选择（2026-09-29）：① 图片＝**发送端生成缩略图**；② 音频**本轮一起做**；③ 「给 agent 的输入文件」**连大文件上传一起做**。
+
+### 6.1 分层（不能一锅端）
+
+| 层 | 内容 | 通道 | 生命周期 |
+|---|---|---|---|
+| **媒体附件** | 图 / 音 / 视 | `/att/<token>` + objects 库（加密、去重、引用感知 GC 一视同仁） | 跟会话走，被引用就留 |
+| **agent 输入文件** | 代码/文档/大文件 | 先走同一条上传通道（去重利器），收齐后主机**落一份到会话工作目录**，prompt 里仍然只给 `<file path="…">` | 跟工作区走（GC 不管） |
+
+要点：**agent 的图片输入不变**（pi 的图片是以 base64 进 prompt 的，不能改成路径），P3 只把**客户端展示**那份从「原图 base64 进快照」改成「缩略图进快照 + 原图按 key 拉」。
+
+### 6.2 引用格式（向后兼容，必须三端一致）
+
+```
+新：<file name="<key>" label="p.jpg" path="…" attach="media" kind="image|audio|video|file" key="sha256:…" thumb="<key>.thumb.jpg" size="…" />
+旧：<file name="…" label="…" path="…" attach="video" key="…" poster="…" />      ← 仍然解析，等价于 kind=video、thumb=poster
+```
+
+- `kind` 缺失 → 按扩展名/mime 推定（`.mp4/.mov/…` → video）
+- 缩略图统一叫 `<key>.thumb.<ext>`；视频的老名 `<key>.poster.jpg` 继续写、继续认（不迁移存量）
+- 音频/文件没有缩略图（客户端给图标/波形/文件名）
+
+### 6.3 分片交付
+
+| 片 | 内容 | 验收 |
+|---|---|---|
+| **S1 主机侧** | store 的 mime→扩展名通用化（不再只认视频）；`attach="media" kind/thumb` 引用读写（兼容旧格式）；缩略图落盘；objects 库对图/音/文件一视同仁 | `test:chat-attachments` + `test:attachment-direct` 新增用例 |
+| **S2 大文件通道** | 新 mint 模式：上传完不仅入 objects，还要**落一份到会话工作目录**（文件名安全化 + 同名不覆盖），prompt 里仍给 `<file path=…>` | 新增用例：落盘路径在工作目录内、同名加后缀、超大文件有限额 |
+| **S3 安卓** | 图片缩略图（Bitmap 降采样）＋ 音频附件（录音/文件）＋ 大文件上传入口 | `assembleDebug :app:testDebugUnitTest` + 真机 |
+| **S4 桌面** | 拖入图片/音频/文件走同一条（缩略图用 canvas）；快照只发缩略图 | `test:remote-video`/`history` + 手动 |
+| **S5 PWA** | 同上（canvas 缩略图） | `test:pwa-*` |
+
+### 6.4 S1 完成后的接口变化（客户端照它改）
+
+- 主机写引用：视频仍发 `attach="video"`（存量客户端兼容），图/音/文件发 `attach="media" kind=… thumb=…`；
+- 快照里的块：`video` 块保持不变（`poster` 字段不变）；**新增 `image`/`audio`/`file` 块的按需拉**重用同一条 `/att/<token>`（客户端拿 read token 即可）；
+- 上传/下载协议**不变**（`attachment.url` + 分片 PUT + Range GET + 加密 + `deduped`）。
+
+## 七、风险
 
 - 内容去重会泄露「同内容是否已存在」这一比特（跨会话的 CAS 侧信道）。缓解：只有**同一配对设备自己的会话**才可能命中；不同设备永远当作新对象。
 - live-set 扫描要读会话文件（成本随历史增长）。缓解：结果按会话缓存 + 去抖，GC 只在启动与超限时跑。

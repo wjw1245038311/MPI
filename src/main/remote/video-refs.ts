@@ -19,14 +19,8 @@ import { extname } from "node:path";
 
 /** 标记普通 <file> 引用与“可播放视频引用”的属性。 */
 export const VIDEO_REF_ATTR = 'attach="video"';
-/**
- * 视频引用。属性顺序固定：`name` › 可选 `label` › `path` › `attach` › 可选 `key` › 可选 `poster`。
- *
- * 内容寻址（P1）后：`name` 就是 SHA-256 key（老消息里是 `<uuid>-原名.mp4`），`key="sha256:…"`
- * 显式带一份（便于迁移期区分「已内容寻址」与「尚未」），`label` 给出可读的文件名。
- * 三个新属性全部可选 → 历史消息永远不需要重写。
- */
-const VIDEO_REF_RE = /<file\s+name="([^"]*)"(?:\s+label="([^"]*)")?\s+path="([^"]*)"\s+attach="video"(?:\s+key="([^"]*)")?(?:\s+poster="([^"]*)")?[^>]*\/>/g;
+/** 媒体引用的标记（P3 起统一形式）：与 `attach="video"` 并列存在，两者都要认。 */
+export const MEDIA_REF_ATTR = 'attach="media"';
 
 /**
  * 单个视频可以**整帧内联上传**的原始字节上限（base64 后 ≈4MB）。
@@ -103,6 +97,82 @@ export const VIDEO_EXT_BY_MIME: Record<string, string> = {
 
 export const videoMimeForPath = (path: string): string => VIDEO_MIME_BY_EXT[extname(path).toLowerCase()] || "video/mp4";
 
+/**
+ * 媒体附件（P3）的**通用**扩展名表：图 / 音 / 视 / 常见文档。
+ *
+ * 为什么需要它：内容寻址的对象文件名带扩展名（服务端靠它给 Content-Type，快照靠它推 mime），
+ * 而视频那张表（VIDEO_EXT_BY_MIME）对图片/音频一无所知——不补就会把 png/音频都落成 `.mp4`。
+ */
+export const MEDIA_EXT_BY_MIME: Record<string, string> = {
+  ...VIDEO_EXT_BY_MIME,
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "image/bmp": ".bmp",
+  "image/heic": ".heic",
+  "image/heif": ".heif",
+  "image/avif": ".avif",
+  "audio/mpeg": ".mp3",
+  "audio/mp3": ".mp3",
+  "audio/mp4": ".m4a",
+  "audio/x-m4a": ".m4a",
+  "audio/aac": ".aac",
+  "audio/ogg": ".ogg",
+  "audio/opus": ".opus",
+  "audio/flac": ".flac",
+  "audio/wav": ".wav",
+  "audio/x-wav": ".wav",
+  "audio/webm": ".weba",
+  "application/pdf": ".pdf",
+  "application/zip": ".zip",
+  "application/json": ".json",
+  "application/octet-stream": ".bin",
+  "text/plain": ".txt",
+  "text/csv": ".csv",
+  "text/markdown": ".md",
+};
+
+/** 附件大类（决定客户端怎么展示：图/音/视/普通文件）。 */
+export type MediaKind = "image" | "audio" | "video" | "file";
+
+/** 按 mime 给大类；mime 缺失/不认识 → 看扩展名；都不认识 → file。 */
+export function mediaKindForMime(mimeType: string | undefined, name?: string): MediaKind {
+  const mime = String(mimeType || "").toLowerCase();
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  if (!mime && name) {
+    const ext = extname(String(name)).toLowerCase();
+    if (IMAGE_EXTS.has(ext)) return "image";
+    if (AUDIO_EXTS.has(ext)) return "audio";
+    if (Object.values(VIDEO_EXT_BY_MIME).includes(ext)) return "video";
+  }
+  return "file";
+}
+
+/** mime → 落盘扩展名（不认识就给 .bin，不猜）。 */
+export const mediaExtForMime = (mimeType: string | undefined, name?: string): string => {
+  const mime = String(mimeType || "").toLowerCase();
+  const known = MEDIA_EXT_BY_MIME[mime];
+  if (known) return known;
+  // mime 不认识时用原名后缀（比如 .docx/.xlsx 这种没必要穷举的）
+  const ext = name ? extname(String(name)).toLowerCase() : "";
+  return /^\.[a-z0-9]{1,8}$/.test(ext) ? ext : ".bin";
+};
+
+/** 图片/音频扩展名集合（仅用于在 mime 缺失时按名字推大类）。 */
+export const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif", ".avif"]);
+export const AUDIO_EXTS = new Set([".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".weba"]);
+
+export const isImageFile = (name: string): boolean => IMAGE_EXTS.has(extname(String(name || "")).toLowerCase());
+export const isAudioFile = (name: string): boolean => AUDIO_EXTS.has(extname(String(name || "")).toLowerCase());
+
+/** 缩略图文件名（P3）：`<name>.thumb.<ext>`。视频的历史名是 `<name>.poster.jpg`，两者都要认。 */
+export const thumbNameFor = (name: string, mimeType = "image/jpeg"): string =>
+  `${name}.thumb${posterExtForMime(mimeType)}`;
+
 /** <file> 属性值转义（会话名等也可能含引号，与 ipc.ts 的 attr 同规则）。 */
 const attr = (value: string): string => String(value).replace(/"/g, "&quot;");
 
@@ -119,38 +189,89 @@ export function videoRefEnvelope(
   return `\n\n<file name="${attr(name)}"${label} path="${attr(abs)}" attach="video"${key}${poster} note="video attachment; inline-playable in MPI clients" />`;
 }
 
-/** 一条视频引用的解析结果。 */
-export interface VideoRef {
+/** 一条媒体引用的解析结果。 */
+export interface MediaRef {
   name: string;
   path: string;
-  poster?: string;
+  /** 大类（P3）：客户端据此选展示方式（图/音/视/普通文件）。 */
+  kind: MediaKind;
+  /** 缩略图文件名（图/视有；音/文件无）。视频的历史属性叫 `poster`，统一映射到这里。 */
+  thumb?: string;
   /** `sha256:<hex>`（内容寻址后才带；老消息没有）。 */
   key?: string;
   /** 可读的原文件名（老消息没有，从 key 也推不出来）。 */
   label?: string;
 }
 
+/** 兼容别名：历史上这里只有视频。 */
+export type VideoRef = MediaRef;
+
+/** 生成给 agent 看的媒体引用（P3 统一形式；图/音/视/文件都用它）。 */
+export function mediaRefEnvelope(args: {
+  name: string;
+  abs: string;
+  kind: MediaKind;
+  key?: string;
+  label?: string;
+  thumb?: string;
+  size?: number;
+}): string {
+  const parts = [
+    `name="${attr(args.name)}"`,
+    args.label ? `label="${attr(args.label)}"` : "",
+    `path="${attr(args.abs)}"`,
+    'attach="media"',
+    `kind="${args.kind}"`,
+    args.key ? `key="${attr(args.key)}"` : "",
+    args.thumb ? `thumb="${attr(args.thumb)}"` : "",
+    args.size ? `size="${Math.floor(args.size)}"` : "",
+    'note="media attachment; playable/viewable in MPI clients"',
+  ].filter(Boolean);
+  return `\n\n<file ${parts.join(" ")} />`;
+}
+
 /**
- * 把文本里的视频引用剥出来（只对带 `attach="video"` 的引用生效）。
+ * 把文本里的媒体引用剥出来（`attach="video"` 或 `attach="media"`）。
  *
- * 返回清理后的文本（去掉引用后 trim）与引用列表（含可选封面文件名）；
- * 没有标记时原样返回，零成本。
+ * 实现从「一条巨长的正则」改成了「先括出 `<file … />` 标签，再逐个解析属性」：
+ * P3 的属性变多了（kind/thumb/size），顺序也不再固定，巨正则太难维护。
+ * 没带标记的普通 `<file>` 引用**原样保留**（它们是给 agent 的输入文件，不是媒体）。
  */
-export function splitVideoRefs(text: string): { text: string; refs: VideoRef[] } {
-  if (!text || !text.includes(VIDEO_REF_ATTR)) return { text, refs: [] };
-  const refs: VideoRef[] = [];
-  const cleaned = text.replace(
-    VIDEO_REF_RE,
-    (_all, name: string, label: string | undefined, path: string, key: string | undefined, poster: string | undefined) => {
-      refs.push({
-        name: String(name),
-        path: String(path),
-        ...(poster ? { poster: String(poster) } : {}),
-        ...(key ? { key: String(key) } : {}),
-        ...(label ? { label: String(label) } : {}),
-      });
-      return "";
-    },
-  );
+export function splitMediaRefs(text: string): { text: string; refs: MediaRef[] } {
+  if (!text || (!text.includes(VIDEO_REF_ATTR) && !text.includes(MEDIA_REF_ATTR))) return { text, refs: [] };
+  const refs: MediaRef[] = [];
+  const cleaned = text.replace(FILE_TAG_RE, (all: string, rawAttrs: string) => {
+    const attrs: Record<string, string> = {};
+    for (const match of rawAttrs.matchAll(ATTR_RE)) attrs[match[1]] = match[2];
+    const attach = attrs.attach || "";
+    if (attach !== "video" && attach !== "media") return all;
+    const name = attrs.name || "";
+    const path = attrs.path || "";
+    if (!name || !path) return all;
+    const declared = attrs.kind as MediaKind | undefined;
+    const kind: MediaKind =
+      attach === "video"
+        ? "video"
+        : declared && ["image", "audio", "video", "file"].includes(declared)
+          ? declared
+          : mediaKindForMime(undefined, attrs.label || name);
+    const thumb = attrs.thumb || attrs.poster || undefined;
+    refs.push({
+      name,
+      path,
+      kind,
+      ...(thumb ? { thumb } : {}),
+      ...(attrs.key ? { key: attrs.key } : {}),
+      ...(attrs.label ? { label: attrs.label } : {}),
+    });
+    return "";
+  });
   return { text: refs.length ? cleaned.trim() : text, refs };
 }
+
+/** 兼容别名（旧调用方名字；行为已泛化到媒体）。 */
+export const splitVideoRefs = splitMediaRefs;
+
+/** `<file … />` 标签与属性解析（两段式：先括标签，再逐个取属性）。 */
+const FILE_TAG_RE = /<file\s+([^>]*?)\s*\/>/g;
+const ATTR_RE = /([A-Za-z_][A-Za-z0-9_-]*)="([^"]*)"/g;

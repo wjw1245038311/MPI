@@ -57,9 +57,9 @@ assert.equal(staged.posterName, hostSide.posterNameFor(durableName, "image/jpeg"
   const parsedRef = hostSide.splitVideoRefs(`看这个${envelopeText}`);
   assert.equal(parsedRef.text, "看这个", "带封面的引用也要从可见文本里剔掉");
   assert.deepEqual(
-    { name: parsedRef.refs[0].name, poster: parsedRef.refs[0].poster },
-    { name: durableName, poster: staged.posterName },
-    "poster 属性必须原样往返",
+    { name: parsedRef.refs[0].name, thumb: parsedRef.refs[0].thumb },
+    { name: durableName, thumb: staged.posterName },
+    "封面属性必须原样往返（内部字段统一叫 thumb；wire 上视频仍写 poster）",
   );
 
   // 超大封面必须被丢掉（不能让它变成新的“大字节”），但视频本身照常落盘。
@@ -201,6 +201,57 @@ assert.equal(gcNoLiveSet.liveSetAvailable, false, "引用集合拿不到要如�
 assert.equal(gcNoLiveSet.removed.length, 0, "拿不到引用集合时**一个都不删**（宁可不腾空间）");
 assert.equal(gcNoLiveSet.overCapacity, true, "超上限要报出来，交给用户处理");
 console.log("ok - P2：别名解析 / 块序置换合并（含拒绝异内容）/ 引用感知 GC");
+
+// --- 5. P3：媒体类型（图/音/文件）不再是只认视频 ---------------------------------
+{
+  const { mediaRefEnvelope, splitMediaRefs, mediaKindForMime, mediaExtForMime } = hostSide;
+  assert.equal(mediaKindForMime("image/png"), "image");
+  assert.equal(mediaKindForMime("audio/mpeg"), "audio");
+  assert.equal(mediaKindForMime("video/mp4"), "video");
+  assert.equal(mediaKindForMime("application/pdf"), "file", "认不出的 mime 归到普通文件");
+  assert.equal(mediaKindForMime(undefined, "photo.JPG"), "image", "mime 缺失时按扩展名推（大小写不敏感）");
+  assert.equal(mediaExtForMime("image/png"), ".png");
+  assert.equal(mediaExtForMime(undefined, "报表.xlsx"), ".xlsx", "不认识的 mime 用原名后缀（不穷举）");
+  assert.equal(mediaExtForMime(undefined, undefined), ".bin", "什么都没有就 .bin（不猜）");
+
+  // 媒体引用往返：kind/thumb/key/label 都要能解回来
+  const imgKey = "c".repeat(64);
+  const envelope = mediaRefEnvelope({
+    name: imgKey,
+    abs: "/tmp/x.png",
+    kind: "image",
+    key: `sha256:${imgKey}`,
+    label: "照片.png",
+    thumb: `${imgKey}.thumb.jpg`,
+    size: 1234,
+  });
+  const parsed = splitMediaRefs(`看图${envelope}`);
+  assert.equal(parsed.text, "看图", "媒体引用也要从可见文本里剔掉");
+  assert.deepEqual(
+    parsed.refs,
+    [{ name: imgKey, path: "/tmp/x.png", kind: "image", thumb: `${imgKey}.thumb.jpg`, key: `sha256:${imgKey}`, label: "照片.png" }],
+    "媒体引用原样往返",
+  );
+  // 老视频引用（attach="video" + poster）仍然解成 kind=video，且缩略图映射到 thumb
+  const legacyVideo = splitMediaRefs(hostSide.videoRefEnvelope("v.mp4", "/tmp/v.mp4", "v.mp4.poster.jpg"));
+  assert.equal(legacyVideo.refs[0].kind, "video", "老格式必须仍被认作视频");
+  assert.equal(legacyVideo.refs[0].thumb, "v.mp4.poster.jpg", "poster 属性映射到统一字段 thumb");
+  // 普通 <file> 引用不受影响（它们是给 agent 的输入文件）
+  assert.equal(splitMediaRefs("<file name=\"a.txt\" path=\"/p/a.txt\" note=\"x\" />").refs.length, 0);
+
+  // 图片对象按自己的扩展名落盘（不能都写成 .mp4）
+  const image = storeSide.storeObject({ bytes: Buffer.alloc(512, 4), label: "p.png", mime: "image/png" });
+  assert.ok(image, "图片也应能入对象库");
+  assert.ok(storeSide.resolveChatAttachment(image.name)?.endsWith(".png"), "对象的扩展名要跟着 mime 走");
+  assert.equal(storeSide.objectMeta(image.name)?.label, "p.png", "可读名要存下来（key 本身没有人看得懂）");
+  const audio = storeSide.storeObject({ bytes: Buffer.alloc(256, 2), label: "voice.m4a", mime: "audio/mp4" });
+  assert.ok(storeSide.resolveChatAttachment(audio.name)?.endsWith(".m4a"), "音频同理");
+  const thumb = storeSide.storeThumbnail(image.name, { data: Buffer.alloc(64, 1).toString("base64"), mimeType: "image/jpeg" });
+  assert.equal(thumb, `${image.name}.thumb.jpg`, "缩略图命名 `<key>.thumb.<ext>`");
+  assert.ok(storeSide.resolveChatAttachment(thumb), "缩略图要能按名字解析（客户端要拉它）");
+  assert.ok(storeSide.findVideoPoster(image.name), "统一的缩略图查找要能同时认新名与老 poster 名");
+  console.log("ok - P3：媒体大类推定 / media 引用往返（含 thumb）/ 图与音对象按 mime 落盘");
+}
 
 rmSync(TEMP, { recursive: true, force: true });
 console.log("chat-attachments tests passed");

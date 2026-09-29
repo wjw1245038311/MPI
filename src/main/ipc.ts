@@ -1857,7 +1857,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
           ...(ref.label ? { label: ref.label } : {}),
           omitted: true,
         };
-        pendingVideos.push({ block, path: ref.path, ...(ref.poster ? { posterName: ref.poster } : {}) });
+        pendingVideos.push({ block, path: ref.path, ...(ref.thumb ? { posterName: ref.thumb } : {}) });
         return block;
       });
       const allBlocks = [...blocks, ...videoBlocks];
@@ -2065,7 +2065,11 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     const names: string[] = [];
     const collect = (text: unknown): void => {
       if (typeof text !== "string" || !text.includes(VIDEO_REF_ATTR)) return;
-      splitVideoRefs(text).refs.forEach((ref) => names.push(ref.name));
+      for (const ref of splitVideoRefs(text).refs) {
+        names.push(ref.name);
+        // 缩略图也登记：P3 起客户端会按名字拉图片缩略图（视频的封面仍由主机内联下发）。
+        if (ref.thumb) names.push(ref.thumb);
+      }
     };
     for (const message of messages || []) {
       const content = message?.content;

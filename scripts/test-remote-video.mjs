@@ -39,7 +39,7 @@ const ROOT = resolve(import.meta.dirname, "..");
   const envelope = videoRefEnvelope("video-1.mp4", "/tmp/x/video-1.mp4");
   const split = splitVideoRefs(`看看这个${envelope}`);
   assert.equal(split.text, "看看这个", "引用被剥掉且文本已 trim");
-  assert.deepEqual(split.refs, [{ name: "video-1.mp4", path: "/tmp/x/video-1.mp4" }], "引用能原样解回来（写入/解析同源）");
+  assert.deepEqual(split.refs, [{ name: "video-1.mp4", path: "/tmp/x/video-1.mp4", kind: "video" }], "引用能原样解回来（写入/解析同源；kind 默认 video）");
 
   // 混合：普通文件引用必须留下，视频引用必须剥走。
   const mixed = `先看文件 <file name="a.pdf" path="/p/a.pdf" note="attached (binary or large; not inlined)" />${videoRefEnvelope("v.webm", "/tmp/v.webm")}`;
@@ -52,15 +52,15 @@ const ROOT = resolve(import.meta.dirname, "..");
   const two = splitVideoRefs(`${videoRefEnvelope("a.mp4", "/tmp/a.mp4")}${videoRefEnvelope("b.mp4", "/tmp/b.mp4")}`);
   assert.deepEqual(two.refs.map((r) => r.name), ["a.mp4", "b.mp4"]);
 
-  // 封面（poster 属性）能原样往返；没有 poster 的老信封仍照旧解析。
+  // 封面（wire 上仍叫 poster，内部字段统一叫 thumb）能原样往返；没有 poster 的老信封仍照旧解析。
   const withPoster = splitVideoRefs(`看${videoRefEnvelope("v.mp4", "/tmp/v.mp4", "v.mp4.poster.jpg")}`);
   assert.deepEqual(
     withPoster.refs,
-    [{ name: "v.mp4", path: "/tmp/v.mp4", poster: "v.mp4.poster.jpg" }],
-    "带封面的信封要能解出 poster（快照据此去读封面文件）",
+    [{ name: "v.mp4", path: "/tmp/v.mp4", kind: "video", thumb: "v.mp4.poster.jpg" }],
+    "带封面的信封要能解出缩略图名（快照据此去读封面文件）",
   );
   const noPoster = splitVideoRefs(videoRefEnvelope("v.mp4", "/tmp/v.mp4"));
-  assert.equal(noPoster.refs[0].poster, undefined, "旧信封没有 poster 属性，不能凭空造一个");
+  assert.equal(noPoster.refs[0].thumb, undefined, "旧信封没有 poster 属性，不能凭空造一个");
   assert.equal(noPoster.text, "", "带 note 的信封仍要整条剥走（poster 子句是可选的，不能把后面的属性吞掉）");
 
   // 名字里带引号不能破坏解析（attr 转义）。
