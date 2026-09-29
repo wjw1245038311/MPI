@@ -364,7 +364,10 @@ function handleBinaryMessage(conn, data) {
       return;
     }
     const out = rebuildBinaryFrame({ to }, decoded.body);
-    if (out) sendBinary(rec.ws, out);
+    if (out) {
+      log(`bin ${decoded.body.length}B host→${to}`);
+      sendBinary(rec.ws, out);
+    }
     return;
   }
   if (conn.role === "device") {
@@ -379,7 +382,10 @@ function handleBinaryMessage(conn, data) {
       return;
     }
     const out = rebuildBinaryFrame({ from: conn.id }, decoded.body);
-    if (out) sendBinary(host.ws, out);
+    if (out) {
+      log(`bin ${decoded.body.length}B ${conn.id}→host`);
+      sendBinary(host.ws, out);
+    }
     return;
   }
   tryClose(conn.ws, CLOSE_BAD_FIRST_FRAME, "BAD_FIRST_FRAME");
