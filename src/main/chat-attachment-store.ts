@@ -15,7 +15,7 @@
  */
 import { app } from "electron";
 import { closeSync, constants as fsConstants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
-import { basename, extname, join } from "node:path";
+import { basename, extname, isAbsolute, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME, VIDEO_POSTER_MAX_BYTES, VIDEO_POSTER_MIME_TYPES, mediaExtForMime, posterNameFor, thumbNameFor, videoMimeForPath } from "./remote/video-refs";
 
@@ -819,6 +819,64 @@ export async function pruneChatAttachments(maxBytes = MAX_DIR_BYTES, options: At
     /* 清理失败不能影响启动 */
     return report;
   }
+}
+
+/**
+ * 把对象（或遗留附件）**复制**一份到会话工作目录的 `mpi-inbox/`（P3-S2）。
+ *
+ * 为什么要复制而不是硬链接：工作区那份是**给 agent 读、用户可能编辑**的，而对象库那份
+ * 是内容寻址、多会话共享的——编辑任何一个都不能污染另一个，所以宁可多占一份空间。
+ *
+ * @returns 落盘后的绝对路径与文件名（同名不覆盖，依次加 `-1`/`-2`…）。
+ */
+export function materializeIntoWorkspace(args: {
+  name: string;
+  workspaceDir: string;
+  /** 目录名（默认 `mpi-inbox`，允许调用方自定义以便测试）。 */
+  inbox?: string;
+}): { abs: string; name: string; size: number } | null {
+  const source = resolveChatAttachment(args.name);
+  if (!source) return null;
+  if (!args.workspaceDir || !isAbsolute(args.workspaceDir)) return null;
+  const inbox = safeFileSegment(args.inbox || "mpi-inbox");
+  const dirPath = join(args.workspaceDir, inbox);
+  // 文件名安全化：只留 basename，剔掉路径分隔符与 Windows 禁用字符（不能让人写穿目录）。
+  const label = objectMeta(args.name)?.label || "";
+  const wanted = safeFileName(label || args.name);
+  try {
+    mkdirSync(dirPath, { recursive: true });
+    let target = join(dirPath, wanted);
+    const extension = extname(wanted);
+    const stem = extension ? wanted.slice(0, -extension.length) : wanted;
+    for (let attempt = 1; attempt <= 50 && existsSync(target); attempt += 1) {
+      target = join(dirPath, `${stem}-${attempt}${extension}`);
+    }
+    if (existsSync(target)) return null;
+    copyFileSync(source, target);
+    const stats = statSync(target);
+    return { abs: target, name: basename(target), size: stats.size };
+  } catch {
+    return null;
+  }
+}
+
+/** 一个路径段的安全化（目录名用）。 */
+function safeFileSegment(value: string): string {
+  const cleaned = String(value || "")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\.+$/g, "")
+    .trim();
+  return cleaned.slice(0, 60) || "mpi-inbox";
+}
+
+/** 文件名的安全化（去掉路径成分与禁用字符，保留扩展名）。 */
+function safeFileName(value: string): string {
+  const base = basename(String(value || "file"));
+  const cleaned = base
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\.+$/g, "")
+    .trim();
+  return cleaned.slice(0, 180) || "file.bin";
 }
 
 /** 附件区现状（诊断 / 维护脚本 / 设置页用）。

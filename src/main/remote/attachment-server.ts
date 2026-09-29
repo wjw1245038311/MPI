@@ -27,6 +27,7 @@ import {
   abandonUpload,
   completeUploadedVideo,
   finalizeUploadedObject,
+  materializeIntoWorkspace,
   readSlice,
   reserveVideoName,
   resolveChatAttachment,
@@ -87,6 +88,13 @@ export interface AttachmentServerOptions {
   keyFor?: (deviceId: string, token: string) => Buffer | null;
   /** 诊断日志（主机的 appendDiagLog；测试里可传空函数）。 */
   log?: (line: string) => void;
+  /**
+   * 「降落到工作区」（P3-S2）：给定会话 id，返回它的工作目录（cwd）。
+   *
+   * 为什么不传目标路径而是传会话 id：让**主机**自己算 cwd，客户端不能指定要往哪个目录写
+   * （否则就成了任意写入口子）。不提供 = 本主机不支持工作区降落（加密/媒体附件不受影响）。
+   */
+  workspaceDirFor?: (threadId: string) => string | null | Promise<string | null>;
   /** 字节收齐时回调：调用方据此把附件登记到作用域允许表（ipc.ts 用）。 */
   onUploadComplete?: (info: { name: string; size: number; threadId: string; deviceId: string }) => void;
 }
@@ -303,6 +311,9 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
           return;
         }
         const done = total !== null ? token.received >= total : false;
+        // 「降落到工作区」的结果：收齐后复制一份到 <会话 cwd>/mpi-inbox/，
+        // 并把绝对路径回报给客户端（它要把它写进 prompt 的 <file path="…">，agent 靠它读文件）。
+        let workspace: { abs: string; name: string } | null = null;
         if (done) {
           if (token.sha256) {
             // 内容寻址：主机**自己算一遍**落盘明文的 SHA-256 与客户端声明比对。
@@ -344,7 +355,22 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
         log(
           `attachment-http PUT name=${token.name.slice(0, 36)} off=${declared.offset} len=${plain.length} ms=${chunkMs} cum=${token.received}/${total ?? "?"}`,
         );
-        sendJson(res, 200, { name: token.name, received: token.received, size: total, done });
+        // 工作区降落放在**响应之前**：客户端拿到响应就能直接引用路径（否则要再问一次）。
+        if (done && token.workspace) {
+          // 会话 → 工作目录这一步要走主机现有的会话解析（可能是异步的），所以这里 await。
+          const workspaceDir = (await options.workspaceDirFor?.(token.threadId)) || null;
+          workspace = workspaceDir ? materializeIntoWorkspace({ name: token.name, workspaceDir }) : null;
+          log(
+            `attachment-http workspace ${workspace ? `ok name=${workspace.name.slice(0, 40)}` : "failed"} thread=${token.threadId}`,
+          );
+        }
+        sendJson(res, 200, {
+          name: token.name,
+          received: token.received,
+          size: total,
+          done,
+          ...(workspace ? { workspacePath: workspace.abs, workspaceName: workspace.name } : {}),
+        });
         return;
       }
 

@@ -6,7 +6,7 @@
 //   2. 主进程能按文件名安全地把它递给 <video>，且支持 Range（拖进度条）。
 // 这里钉死三件事：两侧解析规则不能漂移、文件名白名单挡得住路径穿越、Range 解析正确。
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { register } from "node:module";
@@ -251,6 +251,38 @@ console.log("ok - P2：别名解析 / 块序置换合并（含拒绝异内容）
   assert.ok(storeSide.resolveChatAttachment(thumb), "缩略图要能按名字解析（客户端要拉它）");
   assert.ok(storeSide.findVideoPoster(image.name), "统一的缩略图查找要能同时认新名与老 poster 名");
   console.log("ok - P3：媒体大类推定 / media 引用往返（含 thumb）/ 图与音对象按 mime 落盘");
+}
+
+// --- 6. P3：媒体的缩略图 / 工作区降落（store 级） ---------------------------
+{
+  const workspace = join(TEMP, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  const bytes = Buffer.from("报表内容".repeat(50));
+  const key = storeSide.sha256OfBytes(bytes);
+  const entry = storeSide.storeObject({ bytes, label: "季度报表.xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  assert.ok(entry, "非媒体文件也应能入对象库（P3 后不再只收视频）");
+
+  const landed = storeSide.materializeIntoWorkspace({ name: key, workspaceDir: workspace });
+  assert.ok(landed, "应能降落到工作区");
+  assert.equal(landed.name, "季度报表.xlsx", "落到工作区的名字应该是可读的原名（不是 64 位哈希）");
+  assert.ok(landed.abs.startsWith(join(workspace, "mpi-inbox")), "必须落在 <cwd>/mpi-inbox/ 下");
+  assert.ok(readFileSync(landed.abs).equals(bytes), "落下去的字节要与上传的一模一样");
+
+  const second = storeSide.materializeIntoWorkspace({ name: key, workspaceDir: workspace });
+  assert.equal(second.name, "季度报表-1.xlsx", "同名不能覆盖（依次加后缀）");
+
+  // 名字里带路径成分不能写穿目录：目录名 `../escape` 会被安全化成普通段，仍在工作目录内。
+  const evil = storeSide.materializeIntoWorkspace({ name: key, workspaceDir: workspace, inbox: "../escape" });
+  assert.ok(evil && evil.abs.startsWith(workspace), `目录名要安全化，路径必须仍在工作目录内（实际：${evil?.abs}）`);
+  assert.ok(!existsSync(join(workspace, "..", "escape")), "不能写到工作区外面");
+
+  // 可读名里的路径成分同样被剔掉（只取 basename）
+  const traversal = storeSide.storeObject({ bytes: Buffer.from("x"), label: "../../evil.txt", mime: "text/plain" });
+  const landedTraversal = storeSide.materializeIntoWorkspace({ name: traversal.name, workspaceDir: workspace });
+  assert.ok(landedTraversal && !landedTraversal.abs.includes(".."), `可读名不能带路径成分（实际：${landedTraversal?.name}）`);
+  assert.equal(storeSide.materializeIntoWorkspace({ name: key, workspaceDir: "relative/dir" }), null, "相对路径一律拒（不能猜工作目录）");
+  assert.equal(storeSide.materializeIntoWorkspace({ name: "0".repeat(64), workspaceDir: workspace }), null, "对象不存在 → null");
+  console.log("ok - P3：非媒体对象入库 + 降落到 <cwd>/mpi-inbox/（同名加后缀 / 目录不逃逸 / 相对路径拒绝）");
 }
 
 rmSync(TEMP, { recursive: true, force: true });

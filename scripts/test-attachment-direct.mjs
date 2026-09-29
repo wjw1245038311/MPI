@@ -380,7 +380,8 @@ try {
         body: payload.subarray(off, end + 1),
       });
     }
-    if (last.status !== 200) {
+    // 失败时才打印（带主机日志）——用 MPI_TEST_DEBUG=1 打开，平时保持输出干净。
+    if (last.status !== 200 && process.env.MPI_TEST_DEBUG) {
       console.log(`[debug] 末片 ${last.status}: ${await last.clone().text().catch(() => "")}`);
       console.log(`[debug] 主机日志：\n${logs6.slice(-4).join("\n")}`);
     }
@@ -443,6 +444,70 @@ try {
     await new Promise((resolve) => server.close(resolve));
   }
   console.log("ok 6 - 内容寻址：哈希校验必拒 + 对象库 + 去重不存第二份 + 新旧引用格式兼容");
+}
+
+// ---- 7. P3-S2：工作区降落（服务端级）------------------------------------------
+// 手机发大文件给 agent 读的那条路：上传完不仅进对象库，还要在 <会话 cwd>/mpi-inbox/ 里
+// 出现一份，并把**绝对路径**回报给客户端（prompt 里要用它写 <file path="…">）。
+{
+  const { createHash } = await import("node:crypto");
+  const workspace = join(TEMP, "ws2");
+  mkdirSync(workspace, { recursive: true });
+  const server = createAttachmentServer({
+    tokens,
+    host: "127.0.0.1",
+    port: 0,
+    log: () => {},
+    workspaceDirFor: async () => workspace,
+  });
+  await new Promise((resolve) => server.once("listening", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const bytes = Buffer.alloc(6000, 11);
+    const key = createHash("sha256").update(bytes).digest("hex");
+    const tok = tokens.mint({
+      mode: "write",
+      threadId: "t-1",
+      deviceId: "dev-1",
+      name: key,
+      size: bytes.length,
+      sha256: key,
+      mimeType: "application/octet-stream",
+      label: "data.bin",
+      workspace: true,
+    });
+    let last = null;
+    for (let off = 0; off < bytes.length; off += 4096) {
+      const end = Math.min(off + 4096, bytes.length) - 1;
+      last = await fetch(`${base}/att/${tok.token}`, {
+        method: "PUT",
+        headers: { "Content-Range": `bytes ${off}-${end}/${bytes.length}` },
+        body: bytes.subarray(off, end + 1),
+      });
+    }
+    const body = await last.json();
+    assert.equal(body.done, true, "末片应触发定稿");
+    assert.ok(
+      typeof body.workspacePath === "string" && body.workspacePath.startsWith(join(workspace, "mpi-inbox")),
+      `末片响应要回报工作区绝对路径（实际：${body.workspacePath}）`,
+    );
+    assert.equal(body.workspaceName, "data.bin", "文件名用可读名（不是 64 位 key）");
+    assert.ok(readFileSync(body.workspacePath).equals(bytes), "工作区里的字节必须与上传一致");
+
+    // 没声明 workspace 的普通上传：不能往工作区写东西
+    const plainKey = createHash("sha256").update(Buffer.from("plain")).digest("hex");
+    const plainTok = tokens.mint({ mode: "write", threadId: "t-1", deviceId: "dev-1", name: plainKey, size: 5, sha256: plainKey, label: "plain.bin" });
+    const plainPut = await fetch(`${base}/att/${plainTok.token}`, {
+      method: "PUT",
+      headers: { "Content-Range": "bytes 0-4/5" },
+      body: Buffer.from("plain"),
+    });
+    const plainBody = await plainPut.json();
+    assert.equal(plainBody.workspacePath, undefined, "没声明 workspace 就不该降落（不能被误当成大文件通道）");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  console.log("ok 7 - P3-S2：工作区降落（末片回报绝对路径与可读名、字节一致；未声明者不降落）");
 }
 
 console.log("\nattachment-direct: 全部通过");

@@ -37,6 +37,14 @@ export interface AttachmentToken {
   sha256?: string;
   /** 可读的原文件名（key 本身没有可读信息，界面展示靠它）。 */
   label?: string;
+  /**
+   * 「降落到工作区」（P3-S2）：收齐后除了进对象库，还要**复制一份到会话工作目录的 `mpi-inbox/`**，
+   * 并在完成响应里回报 `workspacePath`。
+   *
+   * 为什么需要：给 agent 读的文件必须是**磁盘上的真实路径**（它用文件工具去读），而内联通道
+   * 撞 8MB 信封上限（手机上 >6MB 的文件根本发不出去），落在剪贴板临时目录也不适合长期引用。
+   */
+  workspace?: boolean;
   /** 写令牌：已收字节数（最后一个分片落盘后仍会写一次）。 */
   received: number;
   mimeType?: string;
@@ -54,6 +62,7 @@ export interface MintAttachmentTokenInput {
   mimeType?: string;
   sha256?: string;
   label?: string;
+  workspace?: boolean;
 }
 
 /** 令牌默认寿命：足够传完一个大文件，又不会长期有效。 */
@@ -80,6 +89,7 @@ export class AttachmentTokenStore {
       ...(input.mimeType ? { mimeType: input.mimeType } : {}),
       ...(input.sha256 ? { sha256: input.sha256.toLowerCase() } : {}),
       ...(input.label ? { label: input.label } : {}),
+      ...(input.workspace ? { workspace: true } : {}),
       received: 0,
       hits: 0,
       expiresAt: this.clock() + this.ttlMs,

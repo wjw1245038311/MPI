@@ -199,7 +199,7 @@ import {
   videoRefEnvelope,
 } from "./remote/video-refs";
 import { fillVideoPosters } from "./remote/video-poster";
-import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, findVideoPoster, hasObject, isContentKey, isVideoFile, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeVideoPoster } from "./chat-attachment-store";
+import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, findVideoPoster, hasObject, isContentKey, isVideoFile, materializeIntoWorkspace, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeVideoPoster } from "./chat-attachment-store";
 import { createAttachmentServer } from "./remote/attachment-server";
 import { AttachmentTokenStore } from "./remote/attachment-tokens";
 import type { Server } from "node:http";import {
@@ -2411,6 +2411,15 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       const shared = {
         tokens: attachmentTokens,
         log: appendDiagLog,
+        // 「降落到工作区」（P3-S2）：会话 → 工作目录。拿不到（草稿会话/已删）→ null，
+        // 客户端收到的是「上传成功但没落到工作区」，由它自己决定要不要提示。
+        workspaceDirFor: async (threadId: string): Promise<string | null> => {
+          try {
+            return (await remoteThread(threadId)).cwd || null;
+          } catch {
+            return null;
+          }
+        },
         onUploadComplete: ({ name, threadId, deviceId }: { name: string; threadId: string; deviceId: string }) => {
           // 字节到齐才登记：此后 `storedName` 引用与客户端的按需拉取都能过作用域校验。
           uploadedAttachments.set(name, { threadId, deviceId, at: Date.now() });
@@ -2932,13 +2941,23 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       const contentKey =
         typeof input.sha256 === "string" && SHA256_RE.test(input.sha256.toLowerCase()) ? input.sha256.toLowerCase() : "";
       const label = input.originalName ? basename(String(input.originalName)) : "";
+      // 「降落到工作区」（P3-S2）：目标目录由**主机**从会话解析（客户端只能给 threadId，
+      // 不能指定往哪个目录写——否则就是个任意写入口子）。
+      const wantsWorkspace = input.workspace === true;
+      const workspaceDir = wantsWorkspace ? (await remoteThread(threadId)).cwd : "";
       if (contentKey && hasObject(contentKey)) {
         // 同一内容已在库（可能是别的会话/别的设备上传的）：只登记本会话的引用权，不落新文件。
         // 同时登记进 uploadedAttachments —— 客户端随后发消息时会带 `storedName`（就是这把 key），
         // 消息拼装靠它才能把视频引用还原出来。
         uploadedAttachments.set(contentKey, { threadId, deviceId, at: Date.now() });
         rememberAttachmentNames(threadId, [contentKey]);
-        appendDiagLog(`attachment-direct mint write key=${contentKey.slice(0, 16)} dev=${deviceId.slice(0, 12)} deduped=1`);
+        // ⚠️ 「降落到工作区」不能被去重短路：去重省的只是**传输**，文件仍然要出现在工作目录里
+        // （除非如此，重发同一份大文件时 agent 就看不到它了）。
+        const materialized =
+          wantsWorkspace && workspaceDir ? materializeIntoWorkspace({ name: contentKey, workspaceDir }) : null;
+        appendDiagLog(
+          `attachment-direct mint write key=${contentKey.slice(0, 16)} dev=${deviceId.slice(0, 12)} deduped=1${materialized ? " workspace=1" : ""}`,
+        );
         return {
           url: "",
           token: "",
@@ -2947,6 +2966,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
           ...(label ? { label } : {}),
           deduped: true,
           expiresAt: 0,
+          ...(materialized ? { workspacePath: materialized.abs, workspaceName: materialized.name } : {}),
         };
       }
       // 名字由主机预分配（客户端无法自己指定名字，也就无法覆盖别人的附件）；内容寻址时就是 key 本身。
@@ -2960,6 +2980,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         ...(input.mimeType ? { mimeType: input.mimeType } : {}),
         ...(contentKey ? { sha256: contentKey } : {}),
         ...(label ? { label } : {}),
+        ...(wantsWorkspace ? { workspace: true } : {}),
       });
       appendDiagLog(
         `attachment-direct mint write ${contentKey ? `key=${contentKey.slice(0, 16)}` : `name=${name.slice(0, 36)}`} dev=${deviceId.slice(0, 12)} size=${input.size ?? "?"}`,
@@ -2969,6 +2990,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         token: token.token,
         name,
         ...(contentKey ? { key: `sha256:${contentKey}`, deduped: false } : {}),
+        ...(wantsWorkspace ? { workspace: true } : {}),
         expiresAt: token.expiresAt,
         ...attachmentEncField(deviceId),
       };
