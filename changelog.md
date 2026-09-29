@@ -86,6 +86,13 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：（手机端）`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（新增：密钥派生跨端向量、帧往返、单 bit 篡改与换方向必须解不开）+ 主机 `npm run test:attachment-direct`。真机：把 `attachmentBaseUrl` 指向公网明文入口（如 `http://whomidas.cn:10444`）→ 发一个 20–50MB 视频 → 主机日志出现 `attachment-http PUT … `（len 为**明文**长度）且附件区文件与发送端逐字节一致；点开播放 → 日志出现 `attachment-http GET … `（带 `X-MPI-Enc`）。
 
+11. **更新下载改走公网，不再挤 Tailscale/DERP**——此前清单与安装包都在中继的 tailnet 端点上（`aliyun-ecs…:9443`，只绑 tailnet），手机下载 30MB 要经 DERP 中继（实测 ~1MB/s，半分钟起）。现在中继**同时开两个监听**（tailnet TLS 给主机、**公网明文**给手机，同一进程/同一套路由，否则两个实例的设备互相看不见），发布的 APK 也一并推到中继下载目录，**中继版清单的 `url` 指向公网端点**：
+   - 手机侧：`http://<域名>:10445/download/MPI-Android-Native-<版本>.apk`，走公网直连（预期 3–4MB/s，且不需要 Tailscale）
+   - Seafile 目录那份清单仍是分享链（局域网/人工分发用），两者互不影响
+   - 发布脚本新增 `--public-base` / `MPI_PUBLIC_DOWNLOAD_BASE`（域名属机器私有信息，仓库里不留）
+
+   验证方式：`node scripts/dev-publish-android.mjs --no-bump --no-build` 应打印「✓ APK 已推到中继（公网可下）」；手机上点「检测更新」→ 下载速度应明显快于此前（主机侧可对比中继日志与手机耗时）。
+
 ## v0.9.2（2026-09-26）
 
 1. **本地模型 prefill 等待指示器**——本地模型（如 LM Studio）处理长上下文时，首个 token 到达前可能长达数十秒；这段时间 pi 还没发出 assistant 消息事件，聊天区此前没有任何反馈（只有输入框的发送键变成停止），看起来像卡死。现在当「agent 在跑 + assistant 消息尚未开始 + 非压缩中 + 无工具卡在运行」时，聊天区显示带动画圆点和已等待秒数的占位行（「思考中 · 12s」/ “Thinking… 12s”），覆盖三个窗口：发送后 → LLM 响应头到达（含冷启动建桥）、以及每轮工具执行完后的下一轮 prefill。顺带把消息内既有的硬编码「思考中」文案 i18n 化（英文界面显示 “Thinking…”）。

@@ -212,10 +212,14 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
           // 首次命中往往是播放器的「整段探测」（不带 Range），它直接量出这条链路的**下行**速率；
           // 有了这一行，就不必靠“感觉快慢”或推测。
           const sent = range ? range.end - range.start + 1 : size;
+          // 加密时实际发出的字节 = 明文 + nonce/tag 开销；两栏都记，否则「bytes」会被误读成明文长度。
+          const payloadBytes = encSessionKey ? sent + ATTACHMENT_ENC_OVERHEAD : sent;
           res.on("finish", () => {
             const ms = Date.now() - startedAt;
-            const mbs = ms > 0 ? (sent / 1048576) / (ms / 1000) : 0;
-            log(`attachment-http GET done name=${token.name.slice(0, 48)} bytes=${sent} ms=${ms} mbs=${mbs.toFixed(2)}`);
+            const mbs = ms > 0 ? (payloadBytes / 1048576) / (ms / 1000) : 0;
+            log(
+              `attachment-http GET done name=${token.name.slice(0, 48)} bytes=${payloadBytes} enc=${encSessionKey ? 1 : 0} plain=${sent} ms=${ms} mbs=${mbs.toFixed(2)}`,
+            );
           });
         }
         if (range) {

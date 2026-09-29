@@ -728,7 +728,7 @@ class AppViewModel(
             if (direct != null && threadId != null && key != null) {
                 val readTarget = direct.requestTarget(threadId, "read", name = name)
                 if (readTarget?.enc == AttachmentCrypto.VERSION) {
-                    if (direct.downloadEncrypted(readTarget, key, part, onProgress = onProgress)) {
+                    if (direct.downloadEncrypted(readTarget, key, part, onProgress = onProgress, onError = { msg -> reportAttachmentError("加密直连下载失败：$msg") })) {
                         return part.renameTo(target) || target.length() > 0
                     }
                     return false

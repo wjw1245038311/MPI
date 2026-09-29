@@ -52,6 +52,14 @@ const noBuild = has("--no-build");
 const noPush = has("--no-push");
 const dryRun = has("--dry-run");
 const shareBase = (valueOf("--share") || process.env.MPI_SEAFILE_SHARE || "").replace(/\/+$/, "");
+/**
+ * 公网明文下载基地址（可选）。设了就：
+ *   ① 把 APK 一并推到中继的下载目录（ECS，公网可下）
+ *   ② **中继那份清单**的 url 指向它 —— 手机因此不再走 Tailscale/DERP 下载更新（实测从 ~1MB/s 提到 3–4MB/s）
+ * 为什么不写死：域名/端口是机器私有信息，仓库里不留；用环境变量传。
+ *   MPI_PUBLIC_DOWNLOAD_BASE=http://<域名>:10445/download
+ */
+const publicBase = (valueOf("--public-base") || process.env.MPI_PUBLIC_DOWNLOAD_BASE || "").replace(/\/+$/, "");
 
 const log = (m) => console.log(m);
 const sha256Upper = (file) => createHash("sha256").update(readFileSync(file)).digest("hex").toUpperCase();
@@ -138,10 +146,15 @@ function main() {
     github: "",
   };
   const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
+  // 中继那份清单用**公网地址**（手机从 ECS 直接下，不经 Tailscale）；Seafile 目录那份保持分享链。
+  const relayManifestJson = publicBase
+    ? `${JSON.stringify({ ...manifest, url: `${publicBase}/${apkName}` }, null, 2)}\n`
+    : manifestJson;
   if (!dryRun) {
     writeFileSync(join(PUBLISH_DIR, "mpi-android-native.json"), manifestJson);
     writeFileSync(join(SHARE_DIR, "mpi-android-native.json"), manifestJson);
   }
+  if (publicBase) log(`   中继版清单 url → ${publicBase}/${apkName}（公网直下）`);
   log(manifestJson.split("\n").filter(Boolean).map((line) => `   ${line}`).join("\n"));
 
   log("  [5/5] 推清单到中继（APP 从 GitHub 清单落到中继那份时才会看到）");
@@ -151,7 +164,14 @@ function main() {
     log(`     scp "${join(SHARE_DIR, "mpi-android-native.json")}" ${remote}/mpi-native.tmp`);
     log(`     ssh ${RELAY_HOST} 'mv ${RELAY_DOWNLOAD}/mpi-native.tmp ${RELAY_DOWNLOAD}/mpi-android-native.json'`);
   } else {
-    const scp = spawnSync("scp", ["-o", "BatchMode=yes", join(SHARE_DIR, "mpi-android-native.json"), `${remote}/mpi-native.tmp`], { stdio: "inherit" });
+    if (publicBase) {
+      // 先把 APK 推到中继的下载目录（公网明文端点会服务 /download/*）
+      const scpApk = spawnSync("scp", ["-o", "BatchMode=yes", DEBUG_APK, `${remote}/${apkName}`], { stdio: "inherit" });
+      log(scpApk.status === 0 ? `   ✓ APK 已推到中继（公网可下，${(size / 1048576).toFixed(1)}MB）` : "   ✗ APK 推送失败（清单仍指向分享链）");
+    }
+    const relayManifestPath = join(PUBLISH_DIR, "mpi-native-relay.json");
+    writeFileSync(relayManifestPath, relayManifestJson);
+    const scp = spawnSync("scp", ["-o", "BatchMode=yes", relayManifestPath, `${remote}/mpi-native.tmp`], { stdio: "inherit" });
     const mv = scp.status === 0
       ? spawnSync("ssh", ["-o", "BatchMode=yes", RELAY_HOST, `mv ${RELAY_DOWNLOAD}/mpi-native.tmp ${RELAY_DOWNLOAD}/mpi-android-native.json`], { stdio: "inherit" })
       : { status: 1 };

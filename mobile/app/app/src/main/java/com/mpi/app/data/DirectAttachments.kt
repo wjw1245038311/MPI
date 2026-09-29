@@ -301,8 +301,13 @@ class DirectAttachments(
         output: File,
         chunkBytes: Int = 512 * 1024,
         onProgress: (Long, Long) -> Unit = { _, _ -> },
+        /** 失败原因（给界面显示）——排查时没有它就只能看到「附件不可用」这种无信息量的提示。 */
+        onError: (String) -> Unit = {},
     ): Boolean {
-        if (target.enc != AttachmentCrypto.VERSION) return false
+        if (target.enc != AttachmentCrypto.VERSION) {
+            onError("主机未声明加密（enc=${target.enc}）")
+            return false
+        }
         val key = AttachmentCrypto.deriveKey(sessionKey, target.token, AttachmentCrypto.DOWN, target.name)
         output.parentFile?.mkdirs()
         var offset = 0L
@@ -310,15 +315,27 @@ class DirectAttachments(
         try {
             FileOutputStream(output).use { sink ->
                 while (total == 0L || offset < total) {
-                    val slice = fetchRangeSlice(target.url, offset, chunkBytes) ?: return false
+                    val slice = fetchRangeSlice(target.url, offset, chunkBytes)
+                    if (slice == null) {
+                        onError("取片失败：offset=$offset（网络/令牌/主机不可达）")
+                        return false
+                    }
                     if (slice.total > 0L) total = slice.total
-                    val plain = AttachmentCrypto.decrypt(
-                        key,
-                        slice.body,
-                        AttachmentCrypto.aad(AttachmentCrypto.DOWN, target.name, offset, slice.plainLength),
-                    )
+                    val plain = try {
+                        AttachmentCrypto.decrypt(
+                            key,
+                            slice.body,
+                            AttachmentCrypto.aad(AttachmentCrypto.DOWN, target.name, offset, slice.plainLength),
+                        )
+                    } catch (error: Exception) {
+                        onError("解密失败：offset=$offset bodyLen=${slice.body.size} plain=${slice.plainLength} ${error.javaClass.simpleName} ${error.message.orEmpty().take(60)}")
+                        return false
+                    }
                     // 没进展就停：否则主机一直回空片会把这个循环转成死循环（与分片拉取同一护栏）。
-                    if (plain.isEmpty()) return false
+                    if (plain.isEmpty()) {
+                        onError("解密得到空片：offset=$offset")
+                        return false
+                    }
                     sink.write(plain)
                     offset += plain.size.toLong()
                     onProgress(offset, total)
@@ -326,7 +343,8 @@ class DirectAttachments(
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            onError("下载异常：${error.javaClass.simpleName} ${error.message.orEmpty().take(60)}")
             return false
         }
         return true

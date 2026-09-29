@@ -31,6 +31,13 @@
  *   RELAY_TLS_CERT / RELAY_TLS_KEY — PEM paths; serve wss:// + https instead of ws://.
  *   RELAY_STATIC_DIR — directory with the built PWA; unknown GET paths fall back to
  *     index.html (SPA deep links like /thread/<id>). Path traversal is rejected.
+ *
+ * **第二个监听（公网明文）**：`RELAY_PLAIN_PORT`（可选）+ `RELAY_PLAIN_HOST`（默认 0.0.0.0）。
+ *   为什么需要（2026-09-29）：国内链路会**按 TLS 握手指纹**给连接注入 RST（安卓 OkHttp 被掐、
+ *   Chrome/OpenSSL 放行），所以手机从公网只能走**明文** ws/http；而主机（在 Tailscale 里）
+ *   继续用 tailnet 上那条 TLS 监听。两个监听**共用同一个进程/同一套路由表**——
+ *   否则分属两个中继实例的设备根本互相看不见（帧路由是按连接登记的）。
+ *   明文侧同样服务 `/ws` 与 `/download/*`，于是手机的「控制通道」和「更新下载」都不再依赖 Tailscale。
  */
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +50,9 @@ import { encryptWebPushPayload, loadOrCreateVapidKey, vapidJwt, webPushHeaders }
 
 const PORT = Number(process.env.RELAY_PORT || 9001);
 const HOST = process.env.RELAY_HOST || "0.0.0.0";
+/** 可选的第二个监听：公网明文（0 / 未设 = 不开）。见文件头注释。 */
+const PLAIN_PORT = Number(process.env.RELAY_PLAIN_PORT || 0);
+const PLAIN_HOST = process.env.RELAY_PLAIN_HOST || "0.0.0.0";
 const PING_MS = Math.max(500, Number(process.env.RELAY_PING_MS || 20_000));
 /** A socket that misses DEAD_MS/PING_MS consecutive pings is dead (default ~60s). */
 const DEAD_MS = Math.max(PING_MS * 2, Number(process.env.RELAY_DEAD_MS || 60_000));
@@ -509,14 +519,19 @@ const server = tlsOptions ? https.createServer(tlsOptions, onRequest) : http.cre
 
 const wss = new WebSocketServer({ noServer: true });
 
-server.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url || "/", "http://localhost");
-  if (url.pathname !== "/ws") {
-    socket.destroy();
-    return;
-  }
-  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
-});
+/** 给一个 HTTP(S) server 挂上 `/ws` 升级处理（两个监听共用同一个 wss ⇒ 设备互相可见）。 */
+function attachUpgrade(target) {
+  target.on("upgrade", (req, socket, head) => {
+    const url = new URL(req.url || "/", "http://localhost");
+    if (url.pathname !== "/ws") {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+  });
+}
+
+attachUpgrade(server);
 
 wss.on("connection", (ws) => {
   const conn = { role: null, id: "", authHostId: "", ws };
@@ -608,10 +623,22 @@ server.listen(PORT, HOST, () => {
   log(`ready ${scheme}://${HOST}:${actual}/ws (ping ${PING_MS}ms, dead ~${DEAD_MS}ms${STATIC_DIR ? ", static: " + STATIC_DIR : ""})`);
 });
 
+// 第二个监听：公网明文（同一个 wss / 同一套路由）。手机从公网只能走明文，见文件头注释。
+let plainServer = null;
+if (PLAIN_PORT) {
+  plainServer = http.createServer(onRequest);
+  attachUpgrade(plainServer);
+  plainServer.listen(PLAIN_PORT, PLAIN_HOST, () => {
+    const actual = plainServer.address()?.port ?? PLAIN_PORT;
+    log(`ready ws://${PLAIN_HOST}:${actual}/ws (plain, public listener${STATIC_DIR ? ", static: " + STATIC_DIR : ""})`);
+  });
+}
+
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
     clearInterval(heartbeat);
     wss.clients.forEach((ws) => ws.close(1001, "relay shutting down"));
+    plainServer?.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2_000).unref();
   });
