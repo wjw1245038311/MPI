@@ -339,6 +339,23 @@ const api = {
     getTransportConfig: () => ipcRenderer.invoke("remote:getTransportConfig"),
     setConfig: (patch: { signalingUrl?: string }) => ipcRenderer.invoke("remote:setConfig", patch),
     getRelayStatus: () => ipcRenderer.invoke("remote:getRelayStatus"),
+    /** 局域网直连模式（P2）：开关 + 当前地址。 */
+    getLanMode: (): Promise<{
+      enabled: boolean;
+      url: string | null;
+      attachmentBase: string | null;
+      port: number;
+      address: string | null;
+      lastError: string | null;
+    }> => ipcRenderer.invoke("lanmode:status"),
+    setLanMode: (args: { enabled?: boolean; port?: number }): Promise<{
+      enabled: boolean;
+      url: string | null;
+      attachmentBase: string | null;
+      port: number;
+      address: string | null;
+      lastError: string | null;
+    }> => ipcRenderer.invoke("lanmode:set", args),
     onRelayState: (cb: (p: { state: string; relayUrl: string; lastError: string | null }) => void) => on("remote:relay-state", cb),
     transportOpen: (args: { connectionId: string; sessionId?: string }) => ipcRenderer.invoke("remote:transportOpen", args),
     transportClose: (args: { connectionId: string; reason?: string }) => ipcRenderer.invoke("remote:transportClose", args),

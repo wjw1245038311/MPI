@@ -149,6 +149,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
 
   useEffect(() => {
     void refresh();
+    void refreshLanMode();
     const timer = window.setInterval(() => void refresh(false), 1500);
     const off = window.pi.remote.onPairingRequest(() => void refresh(false));
     return () => {
@@ -242,6 +243,31 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     try {
       await window.pi.app.setConfig({ remoteRelayUrl: relayUrl.trim(), remoteRelayToken: relayToken.trim() });
       await refresh(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** 局域网模式（P2）：开关 + 当前地址。 */
+  const [lanMode, setLanMode] = useState<{
+    enabled: boolean;
+    url: string | null;
+    attachmentBase: string | null;
+    port: number;
+    address: string | null;
+    lastError: string | null;
+  } | null>(null);
+  const refreshLanMode = async () => {
+    try {
+      setLanMode(await window.pi.remote.getLanMode());
+    } catch {
+      setLanMode(null);
+    }
+  };
+  const toggleLanMode = async () => {
+    setBusy(true);
+    try {
+      setLanMode(await window.pi.remote.setLanMode({ enabled: !lanMode?.enabled }));
     } finally {
       setBusy(false);
     }
@@ -385,6 +411,49 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
              aria-label={zh ? "切换中继 uplink" : "Toggle relay uplink"}
             onClick={() => void toggleRelay()}
             disabled={busy || !relayUrl.trim()}
+          >
+            <span className="set-toggle-knob" />
+          </button>
+        </div>
+      </div>
+
+      <div className="set-card">
+        <div className="set-card-head">
+          <span className="set-card-icon"><Plug size={14} /></span>
+          <div className="set-card-title">{zh ? "局域网模式（手机同网段直连）" : "LAN mode (same network)"}</div>
+        </div>
+        <div className="set-hint">
+          {zh
+            ? "开启后桌面端自己起一个只绑局域网的中继，手机连内网地址即可远控：不依赖 Tailscale、不经公网中继，附件也走内网（更快）。代价：手机在后台收不到推送通知，只能回前台时同步。"
+            : "Starts a LAN-only relay inside the desktop app so the phone can reach it on the local network: no Tailscale, no public relay, attachments go over the LAN. Trade-off: no background push notifications."}
+        </div>
+        {lanMode?.url && (
+          <div className="set-hint" style={{ wordBreak: "break-all" }}>
+            {zh ? "手机填写地址：" : "Phone relay URL: "}<code>{lanMode.url}</code>
+            {lanMode.attachmentBase ? (
+              <>
+                <br />
+                {zh ? "附件直连：" : "Attachments: "}<code>{lanMode.attachmentBase}</code>
+              </>
+            ) : null}
+          </div>
+        )}
+        {lanMode?.lastError && <div className="set-hint" style={{ color: "#c0392b" }}>{lanMode.lastError}</div>}
+        <div className="set-remote-toggle-row">
+          <div className="set-remote-toggle-copy">
+            <span className="set-remote-toggle-label">{zh ? "局域网模式" : "LAN mode"}</span>
+            <span className="set-remote-toggle-state">
+              {lanMode?.enabled ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}
+            </span>
+          </div>
+          <button
+            type="button"
+            className={`set-toggle ${lanMode?.enabled ? "on" : ""}`}
+            role="switch"
+            aria-checked={!!lanMode?.enabled}
+            aria-label={zh ? "切换局域网模式" : "Toggle LAN mode"}
+            onClick={() => void toggleLanMode()}
+            disabled={busy}
           >
             <span className="set-toggle-knob" />
           </button>

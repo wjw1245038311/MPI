@@ -203,6 +203,12 @@ import {
 import { snapshotImagePayload } from "./remote/image-thumbs";
 import { fillVideoPosters } from "./remote/video-poster";
 import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, agentImageFor, findVideoPoster, hasObject, isContentKey, isVideoFile, materializeIntoWorkspace, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeThumbnail, storeVideoPoster } from "./chat-attachment-store";
+import {
+  LAN_RELAY_PORT,
+  resolveLanRelayEntry,
+  startLanRelay,
+  type LanRelayStatus,
+} from "./lan-mode";
 import { createAttachmentServer } from "./remote/attachment-server";
 import { AttachmentTokenStore } from "./remote/attachment-tokens";
 import type { Server } from "node:http";import {
@@ -1170,6 +1176,53 @@ export function stopRemoteHost(): void {
   activeRemoteHost = null;
   activeRelayUplink?.stop();
   activeRelayUplink = null;
+  stopLanMode();
+}
+
+// ---- 局域网直连模式（P2，见 docs/RELAY-SHARING.md §3.2）------------------------------
+// 桌面端自己起一个中继子进程，手机连它的内网地址：不依赖 Tailscale 与公网，附件走内网。
+let lanRelay: ReturnType<typeof startLanRelay> | null = null;
+
+/** 当前 LAN 模式状态（给设置页与诊断用）。 */
+function lanModeStatus(): LanRelayStatus {
+  const cfg = getConfig();
+  const port = cfg.lanModePort && cfg.lanModePort > 0 ? cfg.lanModePort : LAN_RELAY_PORT;
+  if (lanRelay) return lanRelay.status;
+  return {
+    enabled: false,
+    url: null,
+    attachmentBase: null,
+    port,
+    address: null,
+    lastError: cfg.lanModeEnabled ? "未启动（检查日志）" : null,
+  };
+}
+
+/** 按配置启/停局域网中继（幂等）；配置变化与启动时各调一次。 */
+function applyLanMode(): LanRelayStatus {
+  const cfg = getConfig();
+  const port = cfg.lanModePort && cfg.lanModePort > 0 ? cfg.lanModePort : LAN_RELAY_PORT;
+  if (!cfg.lanModeEnabled) {
+    stopLanMode();
+    return lanModeStatus();
+  }
+  if (lanRelay && lanRelay.status.port === port) return lanRelay.status;
+  stopLanMode();
+  const entryPath = resolveLanRelayEntry({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath || "",
+    appPath: app.getAppPath(),
+  });
+  lanRelay = startLanRelay({ entryPath, port, log: appendDiagLog });
+  appendDiagLog(
+    `lan-mode ${lanRelay.status.enabled ? "on" : "failed"}${lanRelay.status.url ? ` url=${lanRelay.status.url}` : ""}${lanRelay.status.lastError ? ` err=${lanRelay.status.lastError}` : ""}`,
+  );
+  return lanRelay.status;
+}
+
+function stopLanMode(): void {
+  lanRelay?.stop();
+  lanRelay = null;
 }
 
 /** Start/stop/re-point the mobile relay uplink from config (S1, docs/MOBILE-DESIGN.md §5). */
@@ -2417,6 +2470,10 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
    * 优先级：环境变量覆盖（开发/测试） > tailscale CLI 读取 `Self.DNSName`。
    */
   async function resolveAttachmentBaseUrl(): Promise<string | null> {
+    // LAN 模式优先：同网段直连内网地址（快、不占公网、不需要反向隧道）。
+    // 这是「一键局域网」的核心——开了就把附件从公网入口切到内网。
+    const lan = lanModeStatus().attachmentBase;
+    if (lan) return lan;
     const override = process.env.MPI_ATTACHMENT_BASE_URL || getConfig().attachmentBaseUrl;
     if (override) return override.replace(/\/+$/, "");
     if (attachmentBaseUrlResolved) return attachmentBaseUrl;
@@ -3200,11 +3257,14 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     stunUrls: [...BUILT_IN_REMOTE_STUN_URLS],
     sendToRenderer: send,
     service: remoteService,
-    // 配对票里给手机的地址（空 = 沿用 uplink 自己那条）。
-    mobileRelayUrl: () => getConfig().mobileRelayUrl || "",
+    // 配对票里给手机的地址（empty = 沿用 uplink 自己那条）。
+    // LAN 模式开着时优先给**内网地址**：手机就在同一网段，直连更快且不占公网。
+    mobileRelayUrl: () => lanModeStatus().url || getConfig().mobileRelayUrl || "",
   });
   activeRemoteHost = remoteHost;
   remoteHost.start();
+  // 局域网模式（P2）：配了就在启动时把内嵌中继拉起来（幂等）。
+  applyLanMode();
   // 附件服务：配了公网入口/证书就**预热**起来。
   // 为什么不靠懒启动：公网入口（反向隧道绑在 ECS 上的端口）在 App 起来后就该可用——
   // 否则隧道指向的本地端口没人监听，第一次访问直接失败（用户看到的是「附件直连坏了」，
@@ -3399,6 +3459,15 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     const cfg = getConfig();
     if (cfg.feishuChannel?.appSecret) return { ...cfg, feishuChannel: { ...cfg.feishuChannel, appSecret: "" } };
     return cfg;
+  });
+  ipcMain.handle("lanmode:status", () => lanModeStatus());
+  ipcMain.handle("lanmode:set", (_e, args: { enabled?: boolean; port?: number }) => {
+    // 设置页开关：先落盘配置再应用（与其它配置项一致，失败也不静默）。
+    updateConfig({
+      ...(typeof args?.enabled === "boolean" ? { lanModeEnabled: args.enabled } : {}),
+      ...(typeof args?.port === "number" && args.port > 0 && args.port < 65536 ? { lanModePort: Math.floor(args.port) } : {}),
+    });
+    return applyLanMode();
   });
   ipcMain.handle("app:setConfig", (_e, patch) => {
     const prevCli = getConfig().piCliPath;

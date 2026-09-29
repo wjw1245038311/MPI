@@ -245,6 +245,13 @@ export interface AppConfig {
    * 空 = 中继未启用准入（自用/局域网内嵌中继）。
    */
   remoteRelayToken: string;
+  /**
+   * 局域网直连模式（P2，见 docs/RELAY-SHARING.md §3.2）：桌面端自己起一个只绑局域网的中继，
+   * 手机连内网地址 → 不依赖 Tailscale/公网，附件也走内网。**代价是没有推送通道**。
+   */
+  lanModeEnabled: boolean;
+  /** 局域网中继端口（默认 9001）。 */
+  lanModePort: number;
   /** Feishu message channel (导航栏 → 消息接入). Absent = off. The app secret
    * stays local to this machine and is never part of backup imports. */
   feishuChannel?: FeishuChannelConfig;
@@ -427,6 +434,8 @@ const DEFAULTS: AppConfig = {
   remoteRelayUrl: "",
   remoteRelayEnabled: false,
   remoteRelayToken: "",
+  lanModeEnabled: false,
+  lanModePort: 9001,
 };
 
 let cached: AppConfig | null = null;
@@ -541,6 +550,11 @@ export function loadConfig(userDataDir: string): AppConfig {
           : DEFAULTS.remoteSignalingEnabled,
         remoteRelayUrl: typeof parsed.remoteRelayUrl === "string" ? parsed.remoteRelayUrl.trim() : DEFAULTS.remoteRelayUrl,
         remoteRelayToken: typeof parsed.remoteRelayToken === "string" ? parsed.remoteRelayToken.trim() : DEFAULTS.remoteRelayToken,
+        lanModeEnabled: typeof parsed.lanModeEnabled === "boolean" ? parsed.lanModeEnabled : DEFAULTS.lanModeEnabled,
+        lanModePort:
+          typeof parsed.lanModePort === "number" && parsed.lanModePort > 0 && parsed.lanModePort < 65536
+            ? Math.floor(parsed.lanModePort)
+            : DEFAULTS.lanModePort,
         remoteRelayEnabled: typeof parsed.remoteRelayEnabled === "boolean"
           ? parsed.remoteRelayEnabled
           : DEFAULTS.remoteRelayEnabled,
@@ -829,6 +843,8 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (typeof p.remoteSignalingEnabled === "boolean") out.remoteSignalingEnabled = p.remoteSignalingEnabled;
   if (typeof p.remoteRelayUrl === "string") out.remoteRelayUrl = p.remoteRelayUrl.trim();
   if (typeof p.remoteRelayToken === "string") out.remoteRelayToken = p.remoteRelayToken.trim();
+  if (typeof p.lanModeEnabled === "boolean") out.lanModeEnabled = p.lanModeEnabled;
+  if (typeof p.lanModePort === "number" && p.lanModePort > 0 && p.lanModePort < 65536) out.lanModePort = Math.floor(p.lanModePort);
   if (typeof p.remoteRelayEnabled === "boolean") out.remoteRelayEnabled = p.remoteRelayEnabled;
 
   // Voice settings are portable (no machine-specific paths); the API key is a
