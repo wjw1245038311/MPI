@@ -19,8 +19,14 @@ import { extname } from "node:path";
 
 /** 标记普通 <file> 引用与“可播放视频引用”的属性。 */
 export const VIDEO_REF_ATTR = 'attach="video"';
-/** `poster="…"` 子句（可选）：没有它时只匹配到 attach，不会吃掉后面的属性。 */
-const VIDEO_REF_RE = /<file\s+name="([^"]*)"\s+path="([^"]*)"\s+attach="video"(?:\s+poster="([^"]*)")?[^>]*\/>/g;
+/**
+ * 视频引用。属性顺序固定：`name` › 可选 `label` › `path` › `attach` › 可选 `key` › 可选 `poster`。
+ *
+ * 内容寻址（P1）后：`name` 就是 SHA-256 key（老消息里是 `<uuid>-原名.mp4`），`key="sha256:…"`
+ * 显式带一份（便于迁移期区分「已内容寻址」与「尚未」），`label` 给出可读的文件名。
+ * 三个新属性全部可选 → 历史消息永远不需要重写。
+ */
+const VIDEO_REF_RE = /<file\s+name="([^"]*)"(?:\s+label="([^"]*)")?\s+path="([^"]*)"\s+attach="video"(?:\s+key="([^"]*)")?(?:\s+poster="([^"]*)")?[^>]*\/>/g;
 
 /**
  * 单个视频可以**整帧内联上传**的原始字节上限（base64 后 ≈4MB）。
@@ -100,10 +106,28 @@ export const videoMimeForPath = (path: string): string => VIDEO_MIME_BY_EXT[extn
 /** <file> 属性值转义（会话名等也可能含引号，与 ipc.ts 的 attr 同规则）。 */
 const attr = (value: string): string => String(value).replace(/"/g, "&quot;");
 
-/** 生成给 agent 看的视频引用（带 `attach="video"` 标记与可选封面名）。 */
-export function videoRefEnvelope(name: string, abs: string, posterName?: string): string {
+/** 生成给 agent 看的视频引用（带 `attach="video"` 标记与可选封面名 / 内容 key / 可读名）。 */
+export function videoRefEnvelope(
+  name: string,
+  abs: string,
+  posterName?: string,
+  extra?: { key?: string; label?: string },
+): string {
+  const label = extra?.label ? ` label="${attr(extra.label)}"` : "";
+  const key = extra?.key ? ` key="${attr(extra.key)}"` : "";
   const poster = posterName ? ` poster="${attr(posterName)}"` : "";
-  return `\n\n<file name="${attr(name)}" path="${attr(abs)}" attach="video"${poster} note="video attachment; inline-playable in MPI clients" />`;
+  return `\n\n<file name="${attr(name)}"${label} path="${attr(abs)}" attach="video"${key}${poster} note="video attachment; inline-playable in MPI clients" />`;
+}
+
+/** 一条视频引用的解析结果。 */
+export interface VideoRef {
+  name: string;
+  path: string;
+  poster?: string;
+  /** `sha256:<hex>`（内容寻址后才带；老消息没有）。 */
+  key?: string;
+  /** 可读的原文件名（老消息没有，从 key 也推不出来）。 */
+  label?: string;
 }
 
 /**
@@ -112,12 +136,21 @@ export function videoRefEnvelope(name: string, abs: string, posterName?: string)
  * 返回清理后的文本（去掉引用后 trim）与引用列表（含可选封面文件名）；
  * 没有标记时原样返回，零成本。
  */
-export function splitVideoRefs(text: string): { text: string; refs: Array<{ name: string; path: string; poster?: string }> } {
+export function splitVideoRefs(text: string): { text: string; refs: VideoRef[] } {
   if (!text || !text.includes(VIDEO_REF_ATTR)) return { text, refs: [] };
-  const refs: Array<{ name: string; path: string; poster?: string }> = [];
-  const cleaned = text.replace(VIDEO_REF_RE, (_all, name: string, path: string, poster: string | undefined) => {
-    refs.push({ name: String(name), path: String(path), ...(poster ? { poster: String(poster) } : {}) });
-    return "";
-  });
+  const refs: VideoRef[] = [];
+  const cleaned = text.replace(
+    VIDEO_REF_RE,
+    (_all, name: string, label: string | undefined, path: string, key: string | undefined, poster: string | undefined) => {
+      refs.push({
+        name: String(name),
+        path: String(path),
+        ...(poster ? { poster: String(poster) } : {}),
+        ...(key ? { key: String(key) } : {}),
+        ...(label ? { label: String(label) } : {}),
+      });
+      return "";
+    },
+  );
   return { text: refs.length ? cleaned.trim() : text, refs };
 }

@@ -26,6 +26,7 @@ import { parseRange } from "../chat-attachment-protocol";
 import {
   abandonUpload,
   completeUploadedVideo,
+  finalizeUploadedObject,
   readSlice,
   reserveVideoName,
   resolveChatAttachment,
@@ -289,8 +290,13 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
           sendJson(res, 400, { error: "chunk exceeds total size" });
           return;
         }
+        // 分片临时文件：内容寻址的上传按**令牌**命名（同一内容可能被两个客户端同时重传，
+        // 用 key 当临时名会互相踩；令牌是每次 mint 唯一的）。
+        // 前缀 `part-` 不能省：令牌是 base64url，**可能以 `-`/`_` 开头**，而 NAME_RE 要求首字符
+        // 是字母数字——直接用令牌名会让约占 3% 的上传以「invalid upload name」500（2026-09-29 被测试抓到）。
+        const partName = token.sha256 ? `part-${token.token}` : token.name;
         try {
-          token.received = Math.max(token.received, writeUploadChunk(token.name, declared.offset, plain));
+          token.received = Math.max(token.received, writeUploadChunk(partName, declared.offset, plain));
         } catch (error) {
           log(`attachment-http PUT failed name=${token.name.slice(0, 36)} err=${String((error as Error)?.message).slice(0, 60)}`);
           sendJson(res, 500, { error: "could not store chunk" });
@@ -298,14 +304,42 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
         }
         const done = total !== null ? token.received >= total : false;
         if (done) {
-          const completed = completeUploadedVideo(token.name);
-          if (!completed) {
-            log(`attachment-http finalize failed name=${token.name.slice(0, 36)}`);
-            sendJson(res, 500, { error: "could not finalize upload" });
-            return;
+          if (token.sha256) {
+            // 内容寻址：主机**自己算一遍**落盘明文的 SHA-256 与客户端声明比对。
+            // 不符一律拒（删掉临时文件、不留成品）——2026-09-29 的「落盘错位」事故就靠这一步当场暴露。
+            const finalized = finalizeUploadedObject(partName, token.sha256, {
+              ...(token.mimeType ? { mime: token.mimeType } : {}),
+              ...(token.label ? { label: token.label } : {}),
+            });
+            if (!finalized.ok) {
+              abandonUpload(partName);
+              log(
+                `attachment-http upload rejected key=${token.sha256.slice(0, 16)} reason=${finalized.reason} expect=${token.sha256.slice(0, 12)}`,
+              );
+              sendJson(res, 400, {
+                error: finalized.reason === "checksum" ? "upload checksum mismatch" : "upload could not be finalized",
+              });
+              return;
+            }
+            log(
+              `attachment-http upload done key=${finalized.key.slice(0, 16)} size=${finalized.size}${finalized.deduped ? " deduped=1" : ""}`,
+            );
+            options.onUploadComplete?.({
+              name: finalized.key,
+              size: finalized.size,
+              threadId: token.threadId,
+              deviceId: token.deviceId,
+            });
+          } else {
+            const completed = completeUploadedVideo(token.name);
+            if (!completed) {
+              log(`attachment-http finalize failed name=${token.name.slice(0, 36)}`);
+              sendJson(res, 500, { error: "could not finalize upload" });
+              return;
+            }
+            log(`attachment-http upload done name=${token.name.slice(0, 36)} size=${completed.size}`);
+            options.onUploadComplete?.({ name: token.name, size: completed.size, threadId: token.threadId, deviceId: token.deviceId });
           }
-          log(`attachment-http upload done name=${token.name.slice(0, 36)} size=${completed.size}`);
-          options.onUploadComplete?.({ name: token.name, size: completed.size, threadId: token.threadId, deviceId: token.deviceId });
         }
         log(
           `attachment-http PUT name=${token.name.slice(0, 36)} off=${declared.offset} len=${plain.length} ms=${chunkMs} cum=${token.received}/${total ?? "?"}`,

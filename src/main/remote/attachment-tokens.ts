@@ -28,6 +28,15 @@ export interface AttachmentToken {
   name: string;
   /** 写令牌：客户端声明的原始字节数（用于收齐判定与限额）。 */
   size?: number;
+  /**
+   * 内容寻址（P1）：客户端**先算好**的整文件 SHA-256（小写 hex）。
+   *
+   * 给了它就表示这是内容寻址的上传：临时文件按令牌命名、收齐后主机自己算一遍哈希比对
+   * （不符则拒收），成品进 `objects/` 并且 `name` 就是这把 key（见 docs/attachment-content-addressing.md）。
+   */
+  sha256?: string;
+  /** 可读的原文件名（key 本身没有可读信息，界面展示靠它）。 */
+  label?: string;
   /** 写令牌：已收字节数（最后一个分片落盘后仍会写一次）。 */
   received: number;
   mimeType?: string;
@@ -43,6 +52,8 @@ export interface MintAttachmentTokenInput {
   name: string;
   size?: number;
   mimeType?: string;
+  sha256?: string;
+  label?: string;
 }
 
 /** 令牌默认寿命：足够传完一个大文件，又不会长期有效。 */
@@ -67,6 +78,8 @@ export class AttachmentTokenStore {
       name: input.name,
       ...(input.size ? { size: input.size } : {}),
       ...(input.mimeType ? { mimeType: input.mimeType } : {}),
+      ...(input.sha256 ? { sha256: input.sha256.toLowerCase() } : {}),
+      ...(input.label ? { label: input.label } : {}),
       received: 0,
       hits: 0,
       expiresAt: this.clock() + this.ttlMs,

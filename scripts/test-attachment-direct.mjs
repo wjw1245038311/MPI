@@ -10,7 +10,8 @@
  *   3. **Range**：下行必须支持 206（播放器靠它 seek），且字节要对得上。
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { register } from "node:module";
@@ -18,7 +19,10 @@ import { register } from "node:module";
 register(new URL("./electron-stub-loader.mjs", import.meta.url));
 
 // 沙盒：附件区必须隔离，否则会读写真实机器上的 userData。
-const TEMP = join(tmpdir(), `mpi-attach-direct-${process.pid}`);
+// 目录带随机后缀并先清空：按 PID 命名时，连续两次运行可能复用同一个 PID，
+// 上一轮留下的对象库/index.json 会让本轮用例“莫名通过或莫名失败”（2026-09-29 踩到）。
+const TEMP = join(tmpdir(), `mpi-attach-direct-${process.pid}-${randomUUID().slice(0, 8)}`);
+rmSync(TEMP, { recursive: true, force: true });
 process.env.MPI_TEST_USER_DATA = TEMP;
 process.env.MPI_TEST_TEMP = join(TEMP, "sys-temp");
 mkdirSync(join(TEMP, "chat-attachments"), { recursive: true });
@@ -348,6 +352,97 @@ try {
     await new Promise((resolve) => encServer.close(resolve));
   }
   console.log("ok 5 - 加密载荷走真实 HTTP：落盘明文 + Range 解密 + 无会话密钥拒收");
+}
+
+// ---- 6. 内容寻址（P1）：哈希校验 / 对象库 / 去重 / 引用格式 -------------------
+// 见 docs/attachment-content-addressing.md：附件名 = 内容的 SHA-256。
+// 这里钉死三件最容易退化的：① 收齐时主机**自己算**哈希并比对（不符必拒）；
+// ② 同一内容只存一份，重传不再落新文件；③ 老的 `<uuid>-原名` 引用仍然能读。
+{
+  const { createHash } = await import("node:crypto");
+  const logs6 = [];
+  const server = createAttachmentServer({ tokens, host: "127.0.0.1", port: 0, log: (line) => logs6.push(line) });
+  await new Promise((resolve) => server.once("listening", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const body = Buffer.alloc(4096 * 2 + 321);
+  for (let i = 0; i < body.length; i += 1) body[i] = (i * 7) % 251;
+  const key = createHash("sha256").update(body).digest("hex");
+  const chunk = 4096;
+  const bounds = [];
+  for (let off = 0; off < body.length; off += chunk) bounds.push([off, Math.min(off + chunk, body.length) - 1]);
+
+  const uploadAll = async (token, payload) => {
+    let last = null;
+    for (const [off, end] of bounds) {
+      last = await fetch(`${base}/att/${token.token}`, {
+        method: "PUT",
+        headers: { "Content-Range": `bytes ${off}-${end}/${payload.length}` },
+        body: payload.subarray(off, end + 1),
+      });
+    }
+    if (last.status !== 200) {
+      console.log(`[debug] 末片 ${last.status}: ${await last.clone().text().catch(() => "")}`);
+      console.log(`[debug] 主机日志：\n${logs6.slice(-4).join("\n")}`);
+    }
+    return last;
+  };
+
+  try {
+    // 6.1 声明的哈希与实际字节不符 → 末片直接 400，且**不留成品**（宁可重传也不存坏字节）
+    const bogusKey = "0".repeat(64);
+    const bad = tokens.mint({ mode: "write", threadId: "t-1", deviceId: "dev-1", name: bogusKey, size: body.length, sha256: bogusKey });
+    const badRes = await uploadAll(bad, body);
+    assert.equal(badRes.status, 400, "哈希不符必须拒（这就是 2026-09-29 落盘错位事故的自动报警）");
+    assert.ok(!store.hasObject(bogusKey), "校验失败的字节不能进对象库");
+
+    // 6.2 正确哈希 → 进 objects/<前两位>/<key>.mp4，按 key 能原样读回（含 Range）
+    const good = tokens.mint({ mode: "write", threadId: "t-1", deviceId: "dev-1", name: key, size: body.length, sha256: key, mimeType: "video/mp4", label: "clip.mp4" });
+    const goodRes = await uploadAll(good, body);
+    const goodStatus = goodRes.status;
+    const goodBody = goodStatus === 200 ? "" : await goodRes.text().catch(() => "");
+    assert.equal(goodStatus, 200, `哈希正确应被接收（实际 ${goodStatus}: ${goodBody}）`);
+    assert.ok(store.hasObject(key), "收齐后对象应在库（objects/<前两位>/<key>）");
+    const objectPath = store.resolveChatAttachment(key);
+    assert.ok(objectPath && objectPath.endsWith(join(key.slice(0, 2), `${key}.mp4`)), `对象路径应按分片目录落盘，实际：${objectPath}`);
+    assert.ok(readFileSync(objectPath).equals(body), "对象库里的字节必须与上传的逐字节一致");
+    assert.equal(store.objectMeta(key)?.label, "clip.mp4", "可读名要存进索引（key 本身没法给人看）");
+
+    const read = tokens.mint({ mode: "read", threadId: "t-1", deviceId: "dev-1", name: key });
+    const ranged = await fetch(`${base}/att/${read.token}`, { headers: { Range: "bytes=100-199" } });
+    assert.equal(ranged.status, 206, "按 key 读也要支持 Range");
+    assert.ok(Buffer.from(await ranged.arrayBuffer()).equals(body.subarray(100, 200)), "按 key 读回的 Range 字节要对");
+
+    // 6.3 去重：同一内容再传一遍 → 不新增物理文件（只丢临时文件、补登记）
+    const again = tokens.mint({ mode: "write", threadId: "t-2", deviceId: "dev-1", name: key, size: body.length, sha256: key, mimeType: "video/mp4", label: "same-content-other-thread.mp4" });
+    const againRes = await uploadAll(again, body);
+    assert.equal(againRes.status, 200, "重复内容也应被接受（只是不存第二份）");
+    const objectsInShard = readdirSync(join(TEMP, "chat-attachments", "objects", key.slice(0, 2)));
+    assert.equal(objectsInShard.length, 1, `同一内容只能有一份物理文件，实际：${objectsInShard.join(",")}`);
+    assert.equal(store.objectMeta(key)?.label, "clip.mp4", "重复上传不能把首次登记的可读名改掉");
+
+    // 6.4 引用格式：key/label 可解析，老格式（无 key/label）仍然照旧
+    const { videoRefEnvelope, splitVideoRefs } = await import("../src/main/remote/video-refs.ts");
+    const modern = splitVideoRefs(videoRefEnvelope(key, "/tmp/x.mp4", `${key}.poster.jpg`, { key: `sha256:${key}`, label: "我的录屏.mp4" }));
+    assert.equal(modern.refs[0].key, `sha256:${key}`, "新引用要带 key");
+    assert.equal(modern.refs[0].label, "我的录屏.mp4", "新引用要带可读名");
+    assert.equal(modern.refs[0].poster, `${key}.poster.jpg`, "封面属性要能单独取到");
+    const legacy = splitVideoRefs(videoRefEnvelope("2f1c-uuid-original.mp4", "/tmp/y.mp4", "2f1c-uuid-original.mp4.poster.jpg"));
+    assert.equal(legacy.refs[0].name, "2f1c-uuid-original.mp4", "老引用仍要能解析");
+    assert.equal(legacy.refs[0].key, undefined, "老引用没有 key");
+
+    // 6.5 老名字回退：`<uuid>-原名.mp4` 平铺文件仍然读得到（历史消息不能变成占位卡）
+    const legacyName = store.reserveVideoName("legacy.mp4", "video/mp4");
+    const legacyWrite = tokens.mint({ mode: "write", threadId: "t-1", deviceId: "dev-1", name: legacyName, size: 8 });
+    await fetch(`${base}/att/${legacyWrite.token}`, {
+      method: "PUT",
+      headers: { "Content-Range": "bytes 0-7/8" },
+      body: Buffer.alloc(8, 9),
+    });
+    assert.ok(store.resolveChatAttachment(legacyName), "老格式（无 sha256）仍按平铺名落盘且可读");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  console.log("ok 6 - 内容寻址：哈希校验必拒 + 对象库 + 去重不存第二份 + 新旧引用格式兼容");
 }
 
 console.log("\nattachment-direct: 全部通过");

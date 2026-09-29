@@ -199,7 +199,7 @@ import {
   videoRefEnvelope,
 } from "./remote/video-refs";
 import { fillVideoPosters } from "./remote/video-poster";
-import { ATTACHMENT_FETCH_CHUNK_BYTES, adoptChatVideo, findVideoPoster, isVideoFile, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeVideoPoster } from "./chat-attachment-store";
+import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, findVideoPoster, hasObject, isContentKey, isVideoFile, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeVideoPoster } from "./chat-attachment-store";
 import { createAttachmentServer } from "./remote/attachment-server";
 import { AttachmentTokenStore } from "./remote/attachment-tokens";
 import type { Server } from "node:http";import {
@@ -481,7 +481,11 @@ function processAttachments(attachments: Attachment[] | undefined, text: string)
         if (isVideoFile(a.name || a.abs)) {
           const adopted = adoptChatVideo(a.abs, a.poster);
           if (adopted) {
-            extra += videoRefEnvelope(adopted.name, adopted.abs, adopted.posterName ?? undefined);
+            // 内容寻址（P1）：adopted.name 就是内容的 SHA-256 → 引用里带 key 与可读名。
+            extra += videoRefEnvelope(adopted.name, adopted.abs, adopted.posterName ?? undefined, {
+              ...(isContentKey(adopted.name) ? { key: `sha256:${adopted.name}` } : {}),
+              ...(a.name ? { label: a.name } : {}),
+            });
             continue;
           }
           // 复制失败（太大/读不到）→ 退回普通引用，至少 agent 还能读到原文件
@@ -1846,7 +1850,13 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       // 否则气泡里会露出引用原文。从**未截断**的原文里取引用，避免长文把末尾的引用切掉。
       const videoSource = splitVideoRefs(remoteText(message?.content));
       const videoBlocks = videoSource.refs.map((ref): RemoteBlock => {
-        const block: RemoteBlock = { type: "video", name: ref.name, mimeType: videoMimeForPath(ref.path), omitted: true };
+        const block: RemoteBlock = {
+          type: "video",
+          name: ref.name,
+          mimeType: videoMimeForPath(ref.path),
+          ...(ref.label ? { label: ref.label } : {}),
+          omitted: true,
+        };
         pendingVideos.push({ block, path: ref.path, ...(ref.poster ? { posterName: ref.poster } : {}) });
         return block;
       });
@@ -2458,7 +2468,12 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     if (!uploadedAttachments.has(storedName)) return null;
     const abs = resolveChatAttachment(storedName);
     if (!abs) return null;
-    return videoRefEnvelope(storedName, abs, findVideoPoster(storedName) ?? undefined);
+    // 内容寻址（P1）：外部名字就是 key，引用里显式带上 key 与可读名（界面展示用）。
+    const meta = isContentKey(storedName) ? objectMeta(storedName) : null;
+    return videoRefEnvelope(storedName, abs, findVideoPoster(storedName) ?? undefined, {
+      ...(isContentKey(storedName) ? { key: `sha256:${storedName}` } : {}),
+      ...(meta?.label ? { label: meta.label } : {}),
+    });
   }
 
   /**
@@ -2905,8 +2920,33 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         appendDiagLog(`attachment-direct mint read name=${name.slice(0, 36)} dev=${deviceId.slice(0, 12)}`);
         return { url: `${base}/att/${token.token}`, token: token.token, name, expiresAt: token.expiresAt, ...attachmentEncField(deviceId) };
       }
-      // 写入令牌：名字由主机预分配（客户端无法自己指定名字，也就无法覆盖别人的附件）。
-      const name = reserveVideoName(input.originalName, input.mimeType);
+      // 写入令牌。
+      // 内容寻址（P1，见 docs/attachment-content-addressing.md）：客户端**先算好**整文件 SHA-256 再 mint →
+      //   ① 主机已有该对象 → 直接回 deduped（客户端一个字节都不用传，重发同一视频秒完成）；
+      //   ② 否则令牌里带上哈希，收齐时主机自己再算一遍比对（不符则拒），成品进 objects/，name 就是 key。
+      // 老客户端不发 sha256 → 走老路（主机预分配 `<uuid>-原名`，平铺落盘）。
+      const contentKey =
+        typeof input.sha256 === "string" && SHA256_RE.test(input.sha256.toLowerCase()) ? input.sha256.toLowerCase() : "";
+      const label = input.originalName ? basename(String(input.originalName)) : "";
+      if (contentKey && hasObject(contentKey)) {
+        // 同一内容已在库（可能是别的会话/别的设备上传的）：只登记本会话的引用权，不落新文件。
+        // 同时登记进 uploadedAttachments —— 客户端随后发消息时会带 `storedName`（就是这把 key），
+        // 消息拼装靠它才能把视频引用还原出来。
+        uploadedAttachments.set(contentKey, { threadId, deviceId, at: Date.now() });
+        rememberAttachmentNames(threadId, [contentKey]);
+        appendDiagLog(`attachment-direct mint write key=${contentKey.slice(0, 16)} dev=${deviceId.slice(0, 12)} deduped=1`);
+        return {
+          url: "",
+          token: "",
+          name: contentKey,
+          key: `sha256:${contentKey}`,
+          ...(label ? { label } : {}),
+          deduped: true,
+          expiresAt: 0,
+        };
+      }
+      // 名字由主机预分配（客户端无法自己指定名字，也就无法覆盖别人的附件）；内容寻址时就是 key 本身。
+      const name = contentKey || reserveVideoName(input.originalName, input.mimeType);
       const token = attachmentTokens.mint({
         mode: "write",
         threadId,
@@ -2914,9 +2954,20 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         name,
         ...(input.size ? { size: input.size } : {}),
         ...(input.mimeType ? { mimeType: input.mimeType } : {}),
+        ...(contentKey ? { sha256: contentKey } : {}),
+        ...(label ? { label } : {}),
       });
-      appendDiagLog(`attachment-direct mint write name=${name.slice(0, 36)} dev=${deviceId.slice(0, 12)} size=${input.size ?? "?"}`);
-      return { url: `${base}/att/${token.token}`, token: token.token, name, expiresAt: token.expiresAt, ...attachmentEncField(deviceId) };
+      appendDiagLog(
+        `attachment-direct mint write ${contentKey ? `key=${contentKey.slice(0, 16)}` : `name=${name.slice(0, 36)}`} dev=${deviceId.slice(0, 12)} size=${input.size ?? "?"}`,
+      );
+      return {
+        url: `${base}/att/${token.token}`,
+        token: token.token,
+        name,
+        ...(contentKey ? { key: `sha256:${contentKey}`, deduped: false } : {}),
+        expiresAt: token.expiresAt,
+        ...attachmentEncField(deviceId),
+      };
     },
     fetchAttachment: async (threadId, name, offset): Promise<RemoteAttachmentChunk> => {
       // 作用域校验在前：不区分「名字非法」「文件已被清理」「不属于该会话」——

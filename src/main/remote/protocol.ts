@@ -194,6 +194,11 @@ export interface RemoteMessage {
      */
     poster?: string;
     posterMimeType?: string;
+    /**
+     * 可读的原文件名（内容寻址后 `name` 是 64 位哈希，界面上显示它就没有意义了）。
+     * 老消息没这个字段 → 客户端本来就只显示封面，不会退化成坏体验。
+     */
+    label?: string;
     /** 实时事件通道刻意剥掉本体（防大帧）——照图片语义。 */
     omitted?: boolean;
   }>;

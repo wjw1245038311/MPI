@@ -14,10 +14,10 @@
  * 不该再受「能不能内联」制约。
  */
 import { app } from "electron";
-import { closeSync, constants as fsConstants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, constants as fsConstants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { randomUUID } from "node:crypto";
-import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME, VIDEO_POSTER_MAX_BYTES, VIDEO_POSTER_MIME_TYPES, posterNameFor } from "./remote/video-refs";
+import { createHash, randomUUID } from "node:crypto";
+import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME, VIDEO_POSTER_MAX_BYTES, VIDEO_POSTER_MIME_TYPES, posterNameFor, videoMimeForPath } from "./remote/video-refs";
 
 export const CHAT_ATTACHMENT_DIR = "chat-attachments";
 /**
@@ -88,11 +88,15 @@ export function stageChatVideoBytes(args: { name?: string; mimeType?: string; da
   const bytes = Buffer.from(String(args.data || ""), "base64");
   if (!bytes.length) throw new Error("video attachment is empty");
   if (bytes.length > REMOTE_VIDEO_MAX_BYTES) throw new Error("video attachment is too large");
-  const extension = VIDEO_EXT_BY_MIME[String(args.mimeType || "").toLowerCase()] || ".mp4";
-  const name = stagedName(args.name || `video-${Date.now()}${extension}`);
-  const abs = join(dir(), name);
-  writeFileSync(abs, bytes, { flag: "wx" });
-  return { abs, name, size: bytes.length, posterName: writePoster(name, args.poster) };
+  // 走内容寻址：同一份视频（已在库）不再重复落盘，只登记引用；回来的是 **key**（不是 uuid 名）。
+  const stored = storeObject({
+    bytes,
+    ...(args.name ? { label: args.name } : {}),
+    ...(args.mimeType ? { mime: args.mimeType } : {}),
+    ...(args.poster ? { poster: args.poster } : {}),
+  });
+  if (!stored) throw new Error("video attachment could not be stored");
+  return stored;
 }
 
 /**
@@ -108,10 +112,14 @@ export function adoptChatVideo(filePath: string, poster?: VideoPosterInput): { a
   try {
     const stats = statSync(filePath);
     if (!stats.isFile() || stats.size <= 0 || stats.size > REMOTE_VIDEO_MAX_BYTES) return null;
-    const name = stagedName(basename(filePath));
-    const abs = join(dir(), name);
-    copyFileSync(filePath, abs);
-    return { abs, name, size: stats.size, posterName: writePoster(name, poster) };
+    // 内容寻址：先算哈希；同一内容（含手机端已上传过的同一视频）直接命中，不再复制一份。
+    const stored = storeObject({
+      sourcePath: filePath,
+      label: basename(filePath),
+      mime: videoMimeForPath(filePath),
+      ...(poster ? { poster } : {}),
+    });
+    return stored;
   } catch {
     return null;
   }
@@ -124,6 +132,16 @@ const LEGACY_TEMP_DIR = "mpi-clipboard";
 /** 按文件名解析成磁盘路径（chatatt:// 协议用）；不合法或不存在 → null。 */
 export function resolveChatAttachment(name: string): string | null {
   if (!name || !NAME_RE.test(name) || name.includes("..")) return null;
+  // 内容寻址的对象（P1+，见 docs/attachment-content-addressing.md）：名字本身就是 SHA-256。
+  if (isContentKey(name)) {
+    const abs = objectExistingPath(String(name).toLowerCase());
+    if (abs) {
+      touchObject(name);
+      return abs;
+    }
+    // 没落盘（上传中途/已清理）→ 按 404 处理
+    return null;
+  }
   const candidates = [join(dir(false), name), join(app.getPath("temp"), LEGACY_TEMP_DIR, name)];
   for (const target of candidates) {
     if (basename(target) !== name) continue;
@@ -188,6 +206,247 @@ export function readAttachmentSlice(
 
 /** 上传分包的后缀（收齐后原子改名成正式名）。与 NAME_RE 兼容，不会与正式名撞。 */
 export const UPLOAD_PART_SUFFIX = ".part";
+
+// ---------------------------------------------------------------------------------------------
+// 内容寻址对象层（P1）：附件名 = 内容的 SHA-256（小写 hex）。
+//
+// 为什么要它：同一个视频在两个会话各发一次，旧做法是两份物理副本（各占一遍空间，且手机端
+// 按「附件名」缓存 → 两遍下载）；而且主机侧一旦写坏字节，客户端只能看到一个「播不了」的
+// 黑盒。改成内容寻址后：① 同一内容只有一份；② 客户端缓存 key 换成哈希，跨会话共享；
+// ③ 收齐时主机自己算一遍哈希与客户端声明比对 —— 写坏/链路损坏会**在上传时就失败**
+// （2026-09-29 的落盘错位事故就是缺了这一步才让主机「一切成功」地写坏了视频）。
+//
+// 兼容：老消息引用的是 `<uuid>-原名.mp4`（平铺在根目录），仍然照旧可读，不搬不重写。
+// ---------------------------------------------------------------------------------------------
+
+/** 内容 key：SHA-256 小写 hex（恰好 64 位）。 */
+export const SHA256_RE = /^[a-f0-9]{64}$/;
+
+/** 一个对外名字是不是内容 key（老消息里是 `<uuid>-原名.mp4`，两种都得能读）。 */
+export function isContentKey(name: string): boolean {
+  return SHA256_RE.test(String(name || "").toLowerCase()) && String(name || "") === String(name || "").toLowerCase();
+}
+
+/** 对象查找时按顺序探测的扩展名（索引里没记 mime 时的兜底）。 */
+const OBJECT_EXT_CANDIDATES = [".mp4", ".m4v", ".webm", ".mov", ".mkv", ".avi"];
+
+/** 对象的扩展名：优先用调用方给的 mime，其次查索引，最后 .mp4。
+ *
+ * 为什么对象文件名要带扩展名：服务端靠它给 Content-Type（网页端 <video> 不吃 octet-stream），
+ * 快照也靠它推视频 mime——key 本身没有任何可读信息。 */
+function objectExtFor(key: string, mimeHint?: string): string {
+  const mime = String(mimeHint || readIndex()[key]?.mime || "").toLowerCase();
+  return VIDEO_EXT_BY_MIME[mime] || ".mp4";
+}
+
+/** 对象所在的分片目录（`objects/<前两位>`，避免单目录堆几十万文件）。 */
+function objectShardDir(key: string): string {
+  return join(dir(false), "objects", key.slice(0, 2));
+}
+
+/** 对象的落盘路径（含扩展名；不建目录，建目录由写入方负责）。 */
+function objectPath(key: string, mimeHint?: string): string {
+  return join(objectShardDir(key), key + objectExtFor(key, mimeHint));
+}
+
+/** 已存在的对象文件（索引里的 mime 优先，其次探测候选扩展名）；没有 → null。 */
+function objectExistingPath(key: string): string | null {
+  const candidates = [objectPath(key), ...OBJECT_EXT_CANDIDATES.map((ext) => join(objectShardDir(key), key + ext))];
+  for (const candidate of candidates) {
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* 试下一个 */
+    }
+  }
+  return null;
+}
+
+interface AttachmentObjectRecord {
+  size: number;
+  mime?: string;
+  /** 可读的原文件名（界面展示用；key 本身没有可读信息）。 */
+  label?: string;
+  createdAt: number;
+  lastUsedAt: number;
+}
+
+interface AttachmentIndexFile {
+  version: 1;
+  objects: Record<string, AttachmentObjectRecord>;
+}
+
+const indexFilePath = (): string => join(dir(true), "index.json");
+
+function readIndex(): Record<string, AttachmentObjectRecord> {
+  try {
+    const parsed = JSON.parse(readFileSync(indexFilePath(), "utf8")) as AttachmentIndexFile;
+    if (parsed && typeof parsed === "object" && parsed.objects && typeof parsed.objects === "object") return parsed.objects;
+  } catch {
+    /* 没索引 / 解析失败 → 当作空索引（对象仍可按物理文件读） */
+  }
+  return {};
+}
+
+function writeIndex(objects: Record<string, AttachmentObjectRecord>): void {
+  try {
+    const payload: AttachmentIndexFile = { version: 1, objects };
+    writeFileSync(indexFilePath(), JSON.stringify(payload, null, 2), "utf8");
+  } catch {
+    /* 索引写失败不能影响读写本体：它是元数据（可读名/lastUsedAt），不是真相源 */
+  }
+}
+
+/** 流式计算文件 SHA-256（1MB 一块，不把 128MB 读进内存）。失败 → null。 */
+export function sha256OfFile(abs: string): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(abs, "r");
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    for (;;) {
+      const read = readSync(fd, buffer, 0, buffer.length, null);
+      if (read <= 0) break;
+      hash.update(buffer.subarray(0, read));
+    }
+    return hash.digest("hex");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+/** 内存里的字节 → SHA-256。 */
+export function sha256OfBytes(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/** 该对象是否已经在库（以物理文件为准，索引可能滞后）。 */
+export function hasObject(key: string): boolean {
+  if (!isContentKey(key)) return false;
+  return objectExistingPath(String(key).toLowerCase()) !== null;
+}
+
+/** 读取对象元数据（不存在 → null；以物理文件为准）。 */
+export function objectMeta(key: string): AttachmentObjectRecord | null {
+  if (!hasObject(key)) return null;
+  return readIndex()[key] || { size: 0, createdAt: 0, lastUsedAt: 0 };
+}
+
+/** 登记/更新对象元数据（label 只在首次登记时写入，后来的同内容上传不覆盖它）。 */
+export function registerObject(key: string, meta: { size?: number; mime?: string; label?: string }): void {
+  const value = String(key || "").toLowerCase();
+  if (!isContentKey(value)) return;
+  const objects = readIndex();
+  const now = Date.now();
+  const previous = objects[value];
+  objects[value] = {
+    size: meta.size ?? previous?.size ?? 0,
+    ...(meta.mime || previous?.mime ? { mime: meta.mime || previous?.mime } : {}),
+    ...(previous?.label || meta.label ? { label: previous?.label || meta.label } : {}),
+    createdAt: previous?.createdAt || now,
+    lastUsedAt: now,
+  };
+  writeIndex(objects);
+}
+
+/**
+ * 读过的对象刷一次 lastUsedAt（GC 排序用）。
+ *
+ * 只在「超过一小时没动过」时才写盘：按需播放一次几十个 Range 请求，每个都写索引会把盘写爆。
+ */
+function touchObject(key: string): void {
+  const value = String(key || "").toLowerCase();
+  if (!isContentKey(value)) return;
+  const objects = readIndex();
+  const record = objects[value];
+  const now = Date.now();
+  if (record && now - record.lastUsedAt < 60 * 60 * 1000) return;
+  objects[value] = { ...(record || { size: 0, createdAt: now }), lastUsedAt: now };
+  writeIndex(objects);
+}
+
+/**
+ * 收齐一个**内容寻址**的上传：先校哈希，再进对象库。
+ *
+ * 校验放这里（而不是调用方）是因为它要读整个分片临时文件；调用方只拿一个三态结果。
+ * 哈希不符 → **不落成品**并删临时文件：宁可让客户端重传，也不能把坏字节当成成品存档。
+ */
+export function finalizeUploadedObject(
+  partName: string,
+  expectedKey: string,
+  meta: { mime?: string; label?: string } = {},
+): { ok: true; key: string; abs: string; size: number; deduped: boolean } | { ok: false; reason: "checksum" | "missing" | "io" } {
+  const key = String(expectedKey || "").toLowerCase();
+  if (!isContentKey(key)) return { ok: false, reason: "io" };
+  const part = uploadPartPath(partName);
+  if (!part) return { ok: false, reason: "io" };
+  try {
+    if (!existsSync(part)) return { ok: false, reason: "missing" };
+    const actual = sha256OfFile(part);
+    if (!actual) return { ok: false, reason: "io" };
+    if (actual !== key) return { ok: false, reason: "checksum" };
+    const size = statSync(part).size;
+    // 并发重传同一内容：先到的那份已经进库 → 直接丢掉这一份（内容相同，没有信息损失）。
+    if (hasObject(key)) {
+      unlinkSync(part);
+      registerObject(key, { size, ...meta });
+      return { ok: true, key, abs: objectExistingPath(key) as string, size, deduped: true };
+    }
+    mkdirSync(objectShardDir(key), { recursive: true });
+    const abs = objectPath(key, meta.mime);
+    renameSync(part, abs);
+    registerObject(key, { size, ...meta });
+    return { ok: true, key, abs, size, deduped: false };
+  } catch {
+    return { ok: false, reason: "io" };
+  }
+}
+
+/**
+ * 本地已有的字节/文件 → 对象库（桌面端拖入与 PWA 内联上传都走这里）。
+ *
+ * 已有同一内容 → **不重复落盘**，只登记引用（这正是「相同文件不重复存放」）。
+ */
+export function storeObject(args: {
+  bytes?: Buffer;
+  sourcePath?: string;
+  label?: string;
+  mime?: string;
+  poster?: VideoPosterInput;
+}): { abs: string; name: string; size: number; posterName: string | null; deduped: boolean } | null {
+  try {
+    let key: string;
+    let size: number;
+    const source = args.sourcePath;
+    if (source) {
+      const stats = statSync(source);
+      if (!stats.isFile() || stats.size <= 0) return null;
+      size = stats.size;
+      const hashed = sha256OfFile(source);
+      if (!hashed) return null;
+      key = hashed;
+    } else {
+      const bytes = args.bytes;
+      if (!bytes || !bytes.length) return null;
+      size = bytes.length;
+      key = sha256OfBytes(bytes);
+    }
+    const known = hasObject(key);
+    if (!known) {
+      mkdirSync(objectShardDir(key), { recursive: true });
+      const abs = objectPath(key, args.mime);
+      if (source) copyFileSync(source, abs);
+      else writeFileSync(abs, args.bytes as Buffer, { flag: "wx" });
+    }
+    registerObject(key, { size, ...(args.mime ? { mime: args.mime } : {}), ...(args.label ? { label: args.label } : {}) });
+    // 封面按 key 命名（`<key>.poster.jpg`，与老命名规则同形，所以老解析路径不用改）。
+    return { abs: objectExistingPath(key) as string, name: key, size, posterName: writePoster(key, args.poster), deduped: known };
+  } catch {
+    return null;
+  }
+}
 
 /** 为一个即将上传的视频**预分配**名字（客户端拿到它才是要 PUT 的目标）。 */
 export function reserveVideoName(originalName?: string, mimeType?: string): string {

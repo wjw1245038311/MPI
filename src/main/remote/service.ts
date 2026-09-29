@@ -69,8 +69,8 @@ export interface RemoteBackend {
   issueAttachmentUrl(
     threadId: string,
     deviceId: string,
-    input: { mode: "read" | "write"; name?: string; originalName?: string; mimeType?: string; size?: number },
-  ): Promise<{ url: string; token: string; name: string; expiresAt: number }>;
+    input: { mode: "read" | "write"; name?: string; originalName?: string; mimeType?: string; size?: number; sha256?: string },
+  ): Promise<{ url: string; token: string; name: string; expiresAt: number; key?: string; label?: string; deduped?: boolean }>;
   respondUi(threadId: string, requestId: string, payload: Record<string, unknown>): Promise<unknown>;
   /** S7 WebPush：store the device's PushSubscription and sync it to the relay. */
   storePushSubscription(deviceId: string, subscription: RemotePushSubscription): Promise<unknown>;
@@ -378,6 +378,9 @@ export class RemoteService {
         const mimeType = this.optionalString(payload, "mimeType");
         const rawSize = payload.size;
         const size = typeof rawSize === "number" && Number.isFinite(rawSize) && rawSize > 0 ? Math.floor(rawSize) : undefined;
+        // 内容寻址（P1）：客户端先算好的整文件 SHA-256（小写 hex，64 位）；形状不对就当作没给。
+        const rawSha = typeof payload.sha256 === "string" ? payload.sha256.trim().toLowerCase() : "";
+        const sha256 = /^[a-f0-9]{64}$/.test(rawSha) ? rawSha : undefined;
         if (size !== undefined && size > MAX_DIRECT_UPLOAD_BYTES) {
           throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", `Attachment is too large (maximum ${Math.floor(MAX_DIRECT_UPLOAD_BYTES / 1024 / 1024)} MB)`);
         }
@@ -388,6 +391,7 @@ export class RemoteService {
             ...(originalName ? { originalName } : {}),
             ...(mimeType ? { mimeType } : {}),
             ...(size ? { size } : {}),
+            ...(sha256 ? { sha256 } : {}),
           }),
         });
       }
