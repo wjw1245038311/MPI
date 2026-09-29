@@ -13,7 +13,9 @@ import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-p
 import { registerPdfViewerProtocol, registerPdfViewerScheme } from "./pdf-viewer-protocol";
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
 import { registerChatAttachmentProtocol, registerChatAttachmentScheme } from "./chat-attachment-protocol";
+import { collectReferencedAttachmentNames } from "./attachment-gc";
 import { pruneChatAttachments } from "./chat-attachment-store";
+import { appendDiagLog } from "./diag-log";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
 import { stopMemoryEndpoint } from "./memory-endpoint";
 import { disposeMemoryIndex } from "./memory-service";
@@ -282,9 +284,23 @@ if (!gotLock) {
     registerPdfViewerProtocol();
     registerTodoAttachmentProtocol();
     registerChatAttachmentProtocol();
-    // 聊天附件区按总量上限清理最旧的（视频会积累；历史引用失去文件就退化成占位卡片，
-    // 所以这里只删到限额内、而不是全清）。
-    pruneChatAttachments();
+    // 聊天附件区按总量上限清理（视频会积累）。
+    // P2 起：**只清没有任何会话引用的**——被引用的永不自动删（删了历史消息就只剩占位卡片，
+    // 而主机应当是最全的备份）。超上限且无可删对象时不再静默删别人的附件，只报告出来。
+    void pruneChatAttachments(undefined, {
+      collectReferenced: () => collectReferencedAttachmentNames(),
+      onOverCapacity: (report) => {
+        const mb = (n: number) => (n / 1048576).toFixed(0);
+        appendDiagLog(
+          `chat-attachments over-capacity total=${mb(report.totalBytes)}MB max=${mb(report.maxBytes)}MB ` +
+            `protected=${mb(report.protectedBytes)}MB liveSet=${report.liveSetAvailable ? 1 : 0}`,
+        );
+        console.warn(
+          `[chat-attachments] 超过上限（${mb(report.totalBytes)}MB / ${mb(report.maxBytes)}MB）：` +
+            `${mb(report.protectedBytes)}MB 仍被会话引用，已跳过删除。需要腾空间请手动清理不再看的会话。`,
+        );
+      },
+    });
     // Remove runtime trees superseded by an in-app core update (they may have
     // been locked by pi child processes during the previous run; nothing holds
     // them now). Best effort — leftovers simply wait for the next launch.

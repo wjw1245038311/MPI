@@ -147,5 +147,60 @@ assert.equal(protocolSide.parseRange("bytes=100-50", SIZE), null, "起止颠倒 
 assert.equal(protocolSide.parseRange(null, SIZE), null, "没带 Range → 走 200 全量");
 assert.equal(protocolSide.parseRange("items=0-1", SIZE), null, "非 bytes 单位不认");
 
+// --- 4. P2：别名 / 存量合并 / 引用感知 GC --------------------------------------
+// 这三件事都是「动真实数据」的，所以把三条安全边界钉死：
+//   ① 合并前后的老名字必须照旧解析（历史消息永不重写）；
+//   ② 只有「同一内容的块序置换」才允许合并（否则拒绝）；
+//   ③ GC 不碰任何被会话引用的附件。
+const { createHash, randomUUID } = await import("node:crypto");
+const CH = 4 * 1024 * 1024;
+const content = Buffer.alloc(CH * 2 + 512);
+for (let i = 0; i < content.length; i += 1) content[i] = (i * 13) % 251;
+// 正确顺序的副本 + 一份「块序错位」的副本（各 4MB 块相同、顺序不同——就是 2026-09-29 事故的形态）。
+// ⚠️ 置换必须**按 4MB 块对齐**：把尾块移走会改变后续块的边界，那就不是同一个多重集了。
+const keepBytes = content;
+const scrambled = Buffer.concat([
+  content.subarray(CH, CH * 2),
+  content.subarray(0, CH),
+  content.subarray(CH * 2),
+]);
+const keepEntry = storeSide.storeObject({ bytes: keepBytes, label: "keep.mp4", mime: "video/mp4" });
+const dupLegacyName = `${randomUUID()}-dup.mp4`;
+writeFileSync(join(TEMP, "chat-attachments", dupLegacyName), scrambled);
+assert.ok(keepEntry, "保留副本应能落盘");
+const mergeDry = storeSide.mergeDuplicateAttachments(keepEntry.name, [dupLegacyName]);
+assert.equal(mergeDry.ok, true, `块序置换应允许合并（实际：${mergeDry.reason}）`);
+const unrelatedName = `${randomUUID()}-other.mp4`;
+writeFileSync(join(TEMP, "chat-attachments", unrelatedName), Buffer.alloc(content.length, 3));
+assert.equal(
+  storeSide.mergeDuplicateAttachments(keepEntry.name, [unrelatedName]).ok,
+  false,
+  "内容不同的两份绝不能合并（宁可浪费空间，也不能把两份不同内容错当一份）",
+);
+const mergeApplied = storeSide.mergeDuplicateAttachments(keepEntry.name, [dupLegacyName], { apply: true });
+assert.equal(mergeApplied.ok, true, "合并应成功");
+assert.ok(mergeApplied.reclaimedBytes >= scrambled.length, "应回收副本的字节");
+assert.ok(!existsSync(join(TEMP, "chat-attachments", dupLegacyName)), "副本物理文件应已删除");
+assert.ok(
+  storeSide.resolveChatAttachment(dupLegacyName)?.endsWith(`${mergeApplied.key}.mp4`),
+  "老名字（副本名）必须仍能解析到对象——历史消息不动也能继续播",
+);
+assert.equal(storeSide.aliasFor(dupLegacyName), mergeApplied.key, "别名表应有这条映射");
+
+// GC：被引用的不动，没人引用的才清；超上限时给出报告而不是静默删
+const orphan = storeSide.storeObject({ bytes: Buffer.alloc(2048, 9), label: "orphan.mp4", mime: "video/mp4" });
+assert.ok(orphan);
+const gcReport = await storeSide.pruneChatAttachments(1024 * 1024, {
+  collectReferenced: async () => new Set([keepEntry.name]),
+});
+assert.equal(gcReport.liveSetAvailable, true, "引用集合可用");
+assert.ok(storeSide.hasObject(keepEntry.name), "被引用的对象必须留下");
+assert.ok(!storeSide.hasObject(orphan.name), "无人引用的对象应被回收");
+const gcNoLiveSet = await storeSide.pruneChatAttachments(1, { collectReferenced: async () => null });
+assert.equal(gcNoLiveSet.liveSetAvailable, false, "引用集合拿不到要如实上报");
+assert.equal(gcNoLiveSet.removed.length, 0, "拿不到引用集合时**一个都不删**（宁可不腾空间）");
+assert.equal(gcNoLiveSet.overCapacity, true, "超上限要报出来，交给用户处理");
+console.log("ok - P2：别名解析 / 块序置换合并（含拒绝异内容）/ 引用感知 GC");
+
 rmSync(TEMP, { recursive: true, force: true });
 console.log("chat-attachments tests passed");

@@ -29,6 +29,8 @@ export const CHAT_ATTACHMENT_DIR = "chat-attachments";
 const MAX_DIR_BYTES = 1024 * 1024 * 1024;
 
 const VIDEO_EXTS = new Set([".mp4", ".m4v", ".webm", ".mov", ".mkv", ".avi"]);
+/** 同一个集合的数组形式（需要遍历 / `.some()` 的地方用）。 */
+const VIDEO_EXT_LIST: string[] = [...VIDEO_EXTS];
 
 /** 是不是「可内联播放的视频」文件（按扩展名）。 */
 export const isVideoFile = (name: string): boolean => VIDEO_EXTS.has(extname(name).toLowerCase());
@@ -142,6 +144,15 @@ export function resolveChatAttachment(name: string): string | null {
     // 没落盘（上传中途/已清理）→ 按 404 处理
     return null;
   }
+  // 存量去重（P2）后的遗留名：盘上那份已被合并进对象库，靠别名解析（会话文件不动）。
+  const aliased = aliasFor(name);
+  if (aliased) {
+    const abs = objectExistingPath(aliased);
+    if (abs) {
+      touchObject(aliased);
+      return abs;
+    }
+  }
   const candidates = [join(dir(false), name), join(app.getPath("temp"), LEGACY_TEMP_DIR, name)];
   for (const target of candidates) {
     if (basename(target) !== name) continue;
@@ -227,8 +238,8 @@ export function isContentKey(name: string): boolean {
   return SHA256_RE.test(String(name || "").toLowerCase()) && String(name || "") === String(name || "").toLowerCase();
 }
 
-/** 对象查找时按顺序探测的扩展名（索引里没记 mime 时的兜底）。 */
-const OBJECT_EXT_CANDIDATES = [".mp4", ".m4v", ".webm", ".mov", ".mkv", ".avi"];
+/** 对象查找时按顺序探测的扩展名（与视频扩展名同一份定义，避免两处漂移）。 */
+const OBJECT_EXT_CANDIDATES = VIDEO_EXT_LIST;
 
 /** 对象的扩展名：优先用调用方给的 mime，其次查索引，最后 .mp4。
  *
@@ -274,27 +285,67 @@ interface AttachmentObjectRecord {
 interface AttachmentIndexFile {
   version: 1;
   objects: Record<string, AttachmentObjectRecord>;
+  /**
+   * 遗留名（`<uuid>-原名.mp4`）→ 内容 key 的别名。
+   *
+   * 存量去重（P2）后，老消息里写的是遗留名，而盘上只剩一份内容对象——别名就是两者之间的桥：
+   * **不动会话文件**（历史消息永不重写），只把名字映射到对象上。删除对象前应先查别名。
+   */
+  aliases?: Record<string, string>;
 }
 
 const indexFilePath = (): string => join(dir(true), "index.json");
 
-function readIndex(): Record<string, AttachmentObjectRecord> {
+function readIndexFile(): AttachmentIndexFile {
   try {
     const parsed = JSON.parse(readFileSync(indexFilePath(), "utf8")) as AttachmentIndexFile;
-    if (parsed && typeof parsed === "object" && parsed.objects && typeof parsed.objects === "object") return parsed.objects;
+    if (parsed && typeof parsed === "object") {
+      return {
+        version: 1,
+        objects: parsed.objects && typeof parsed.objects === "object" ? parsed.objects : {},
+        aliases: parsed.aliases && typeof parsed.aliases === "object" ? parsed.aliases : {},
+      };
+    }
   } catch {
     /* 没索引 / 解析失败 → 当作空索引（对象仍可按物理文件读） */
   }
-  return {};
+  return { version: 1, objects: {}, aliases: {} };
+}
+
+function writeIndexFile(file: AttachmentIndexFile): void {
+  try {
+    writeFileSync(indexFilePath(), JSON.stringify({ version: 1, objects: file.objects, aliases: file.aliases ?? {} }, null, 2), "utf8");
+  } catch {
+    /* 索引写失败不能影响读写本体：它是元数据（可读名/lastUsedAt/别名），不是真相源 */
+  }
+}
+
+function readIndex(): Record<string, AttachmentObjectRecord> {
+  return readIndexFile().objects;
 }
 
 function writeIndex(objects: Record<string, AttachmentObjectRecord>): void {
-  try {
-    const payload: AttachmentIndexFile = { version: 1, objects };
-    writeFileSync(indexFilePath(), JSON.stringify(payload, null, 2), "utf8");
-  } catch {
-    /* 索引写失败不能影响读写本体：它是元数据（可读名/lastUsedAt），不是真相源 */
-  }
+  const file = readIndexFile();
+  file.objects = objects;
+  writeIndexFile(file);
+}
+
+/** 遗留名 → 内容 key（没有别名 → null）。 */
+export function aliasFor(name: string): string | null {
+  const value = String(name || "");
+  if (!value) return null;
+  const key = readIndexFile().aliases?.[value];
+  return key && isContentKey(key) ? key : null;
+}
+
+/** 记一条别名（把老名字指到内容对象上）。 */
+export function setAlias(legacyName: string, key: string): void {
+  const name = String(legacyName || "");
+  const value = String(key || "").toLowerCase();
+  if (!name || !isContentKey(value)) return;
+  const file = readIndexFile();
+  file.aliases = { ...(file.aliases || {}), [name]: value };
+  writeIndexFile(file);
 }
 
 /** 流式计算文件 SHA-256（1MB 一块，不把 128MB 读进内存）。失败 → null。 */
@@ -528,12 +579,117 @@ export function findVideoPoster(videoName: string): string | null {
   return null;
 }
 
-/** 启动时按总量上限清理最旧的附件（尽力而为，失败不影响启动）。 */
-export function pruneChatAttachments(maxBytes = MAX_DIR_BYTES): void {
+/** GC 报告（也是「超上限提示」的数据来源）。 */
+export interface AttachmentGcReport {
+  totalBytes: number;
+  maxBytes: number;
+  freedBytes: number;
+  removed: string[];
+  /** 因为「被会话引用」而没动的大小（字节）。 */
+  protectedBytes: number;
+  /** 清完无人引用的仍超上限 → 需要用户自己处理（不再静默删别人的附件）。 */
+  overCapacity: boolean;
+  /** 引用集合是否可用；不可用时**不删任何东西**（宁可不腾空间，也不能删掉还在用的附件）。 */
+  liveSetAvailable: boolean;
+}
+
+export interface AttachmentGcOptions {
+  /** 收集「被会话引用过的名字」（视频名 + 封面名）。不提供 = 没启用引用保护。 */
+  collectReferenced?: () => Promise<Set<string> | null>;
+  /** 超上限且无可删对象时的回调（用户可见的提示）。 */
+  onOverCapacity?: (report: AttachmentGcReport) => void;
+}
+
+/** 对象目录下的全部对象（key 从文件名去掉扩展名得到）。 */
+function listObjects(): Array<{ key: string; abs: string; size: number; lastUsedAt: number }> {
+  const out: Array<{ key: string; abs: string; size: number; lastUsedAt: number }> = [];
+  const root = join(dir(false), "objects");
+  if (!existsSync(root)) return out;
+  const index = readIndex();
+  for (const shard of readdirSync(root)) {
+    const shardDir = join(root, shard);
+    let files: string[];
+    try {
+      files = readdirSync(shardDir);
+    } catch {
+      continue;
+    }
+    for (const name of files) {
+      const key = name.replace(/\.[A-Za-z0-9]+$/, "");
+      if (!isContentKey(key)) continue;
+      try {
+        const stats = statSync(join(shardDir, name));
+        if (!stats.isFile()) continue;
+        out.push({ key, abs: join(shardDir, name), size: stats.size, lastUsedAt: index[key]?.lastUsedAt || stats.mtimeMs });
+      } catch {
+        /* 列目录期间被删了 → 忽略 */
+      }
+    }
+  }
+  return out;
+}
+
+/** 名字 → 它所属的「附件名」（封面名去掉 `.poster.<ext>` 后缀；其他原样）。 */
+export function ownerNameOf(name: string): string {
+  return String(name || "").replace(/\.poster\.(jpg|jpeg|png|webp)$/i, "");
+}
+
+/** 把一个视频名/内容 key 对应的封面候选名（与老命名规则一致）。 */
+export function posterNamesFor(name: string): string[] {
+  return [posterNameFor(name, "image/jpeg"), posterNameFor(name, "image/png"), posterNameFor(name, "image/webp")];
+}
+
+/**
+ * 按总量上限清理附件（启动时调用）。
+ *
+ * **P2 起的行为变化**：不再做「按 mtime 从旧到新删」——那样会把别的会话还在引用的附件
+ * 静默删掉（消息变成占位卡片）。现在只删**没有任何会话引用**的吗？不是——只删引用集合里
+ * 没有的那些；引用集合拿不到就**一个都不删**（宁可不腾空间）。超上限剩下的部分交给用户。
+ */
+export async function pruneChatAttachments(maxBytes = MAX_DIR_BYTES, options: AttachmentGcOptions = {}): Promise<AttachmentGcReport> {
+  const report: AttachmentGcReport = {
+    totalBytes: 0,
+    maxBytes,
+    freedBytes: 0,
+    removed: [],
+    protectedBytes: 0,
+    overCapacity: false,
+    liveSetAvailable: false,
+  };
   try {
     const target = dir(false);
-    if (!existsSync(target)) return;
-    const entries = readdirSync(target)
+    if (!existsSync(target)) return report;
+
+    // 先清掉没人的上传残留（.part）：它们只可能是「上传中途程序退出」留下的。
+    const cleanupPart = (name: string): boolean => {
+      try {
+        unlinkSync(join(target, name));
+        report.removed.push(name);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const staleCutoff = Date.now() - 60 * 60 * 1000;
+    for (const name of readdirSync(target)) {
+      if (!name.endsWith(UPLOAD_PART_SUFFIX)) continue;
+      try {
+        const stats = statSync(join(target, name));
+        if (!stats.isFile() || stats.mtimeMs > staleCutoff) continue;
+        const size = stats.size;
+        if (cleanupPart(name)) report.freedBytes += size;
+      } catch {
+        /* 忽略 */
+      }
+    }
+
+    const objects = listObjects();
+    const legacy = readdirSync(target)
+      .filter((name) => {
+        const lower = name.toLowerCase();
+        if (name.endsWith(UPLOAD_PART_SUFFIX) || name.endsWith(".json")) return false;
+        return VIDEO_EXT_LIST.some((ext) => lower.endsWith(ext)) || /\.poster\.(jpg|jpeg|png|webp)$/i.test(lower);
+      })
       .map((name) => {
         try {
           const stats = statSync(join(target, name));
@@ -543,26 +699,228 @@ export function pruneChatAttachments(maxBytes = MAX_DIR_BYTES): void {
         }
       })
       .filter((entry): entry is { name: string; size: number; mtime: number } => entry !== null);
-    // 先清掉没人的上传残留（.part）：它们只可能是「上传中途程序退出」留下的，
-    // 留着会占配额，而且永远不会被收尾。
-    const staleCutoff = Date.now() - 60 * 60 * 1000;
-    const parts = entries.filter((entry) => entry.name.endsWith(UPLOAD_PART_SUFFIX) && entry.mtime < staleCutoff);
-    for (const part of parts) {
-      try {
-        unlinkSync(join(target, part.name));
-      } catch {
-        /* 删不掉就继续（下次启动再试） */
+
+    report.totalBytes =
+      objects.reduce((sum, entry) => sum + entry.size, 0) + legacy.reduce((sum, entry) => sum + entry.size, 0);
+    if (report.totalBytes <= maxBytes) return report;
+
+    const live = options.collectReferenced ? await options.collectReferenced() : null;
+    report.liveSetAvailable = live !== null;
+    if (!live) {
+      // 引用集合不可用：**什么都不删**。老行为（mtime LRU）会把在用的附件删掉，
+      // 而「主机是最全备份」的前提恰恰是不能静默删。宁可超着，让用户自己清。
+      report.overCapacity = true;
+      options.onOverCapacity?.(report);
+      return report;
+    }
+
+    // 引用集合 → 受保护的 key 集合（直接引用的 key、封面指向的 key、以及遗留名别名到的 key）
+    const protectedKeys = new Set<string>();
+    const protectedNames = new Set<string>();
+    for (const raw of live) {
+      const name = String(raw || "");
+      if (!name) continue;
+      protectedNames.add(name);
+      const owner = ownerNameOf(name);
+      protectedNames.add(owner);
+      if (isContentKey(name)) protectedKeys.add(name);
+      else {
+        const aliased = aliasFor(name);
+        if (aliased) protectedKeys.add(aliased);
+      }
+      if (isContentKey(owner)) protectedKeys.add(owner);
+      else {
+        const aliased = aliasFor(owner);
+        if (aliased) protectedKeys.add(aliased);
       }
     }
-    const live = parts.length ? entries.filter((entry) => !parts.includes(entry)) : entries;
-    let total = live.reduce((sum, entry) => sum + entry.size, 0);
-    if (total <= maxBytes) return;
-    for (const entry of live.sort((a, b) => a.mtime - b.mtime)) {
-      if (total <= maxBytes) break;
-      unlinkSync(join(target, entry.name));
-      total -= entry.size;
+
+    const deletable = legacy
+      .filter((entry) => {
+        const owner = ownerNameOf(entry.name);
+        // 视频名或它的封面名任一被引用 → 整个附件都留着。
+        return !protectedNames.has(entry.name) && !protectedNames.has(owner);
+      })
+      .map((entry) => ({ kind: "legacy" as const, name: entry.name, size: entry.size, order: entry.mtime }));
+    const deletableObjects = objects
+      .filter((entry) => !protectedKeys.has(entry.key))
+      .map((entry) => ({ kind: "object" as const, name: entry.key, size: entry.size, order: entry.lastUsedAt, abs: entry.abs }));
+
+    report.protectedBytes =
+      report.totalBytes - [...deletable, ...deletableObjects].reduce((sum, entry) => sum + entry.size, 0);
+
+    let remaining = report.totalBytes;
+    const candidates = [...deletable, ...deletableObjects].sort((a, b) => a.order - b.order);
+    for (const entry of candidates) {
+      if (remaining <= maxBytes) break;
+      try {
+        // ⚠️ 对象的路径已经是绝对路径，**不能**再 `join(target, …)`（那样会拼出一个
+        // 不存在的路径，删除永远失败——2026-09-29 被单测抓到：对象因此永远清不掉）。
+        if (entry.kind === "legacy") unlinkSync(join(target, entry.name));
+        else unlinkSync(entry.abs);
+      } catch {
+        continue;
+      }
+      report.removed.push(entry.name);
+      report.freedBytes += entry.size;
+      remaining -= entry.size;
+      // 跟着删它的封面（封面不被别处引用时）
+      for (const posterName of posterNamesFor(entry.name)) {
+        if (protectedNames.has(posterName)) continue;
+        try {
+          const stats = statSync(join(target, posterName));
+          unlinkSync(join(target, posterName));
+          report.freedBytes += stats.size;
+          remaining -= stats.size;
+        } catch {
+          /* 没封面就算了 */
+        }
+      }
     }
+    report.totalBytes = remaining;
+    report.overCapacity = remaining > maxBytes;
+    if (report.overCapacity) options.onOverCapacity?.(report);
+    return report;
   } catch {
     /* 清理失败不能影响启动 */
+    return report;
   }
+}
+
+/** 附件区现状（诊断 / 维护脚本用）。 */
+export function attachmentStorageReport(): {
+  totalBytes: number;
+  objectBytes: number;
+  legacyBytes: number;
+  objectCount: number;
+  aliasCount: number;
+  legacyCount: number;
+} {
+  const file = readIndexFile();
+  const objects = listObjects();
+  const target = dir(false);
+  let legacyBytes = 0;
+  let legacyCount = 0;
+  if (existsSync(target)) {
+    for (const name of readdirSync(target)) {
+      if (!VIDEO_EXT_LIST.some((ext) => name.toLowerCase().endsWith(ext))) continue;
+      try {
+        const stats = statSync(join(target, name));
+        if (!stats.isFile()) continue;
+        legacyBytes += stats.size;
+        legacyCount += 1;
+      } catch {
+        /* 忽略 */
+      }
+    }
+  }
+  const objectBytes = objects.reduce((sum, entry) => sum + entry.size, 0);
+  return {
+    totalBytes: objectBytes + legacyBytes,
+    objectBytes,
+    legacyBytes,
+    objectCount: objects.length,
+    aliasCount: Object.keys(file.aliases || {}).length,
+    legacyCount,
+  };
+}
+
+// ---- 存量去重（P2）----------------------------------------------------------------
+
+/** 去重校验的块大小：与上传分片一致（4MB）——损坏就是按这个粒度错位的。 */
+const MERGE_CHUNK_BYTES = 4 * 1024 * 1024;
+
+/** 逐个 4MB 块的 sha1（用于「这两份文件是不是同一内容的块序置换」）。 */
+function chunkDigests(abs: string): string[] | null {
+  try {
+    const size = statSync(abs).size;
+    const out: string[] = [];
+    for (let offset = 0; offset < size; offset += MERGE_CHUNK_BYTES) {
+      const slice = readSlice(abs, offset, Math.min(offset + MERGE_CHUNK_BYTES, size) - 1);
+      out.push(createHash("sha1").update(slice).digest("hex"));
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** 两个多重集是否相等（顺序无关）。 */
+function sameMultiset(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const counts = new Map<string, number>();
+  for (const item of a) counts.set(item, (counts.get(item) || 0) + 1);
+  for (const item of b) {
+    const next = (counts.get(item) || 0) - 1;
+    if (next < 0) return false;
+    counts.set(item, next);
+  }
+  return true;
+}
+
+/**
+ * 合并「同一内容的多个副本」（含块序错位的那种）。
+ *
+ * 用法：`keep` 是正确的那一份，`duplicates` 是重复/损坏的副本。校验方式是**逐 4MB 块的多重集
+ * 相等**（块序可以不同）——这正是 2026-09-29 那次「a+ 追加导致落盘错位」的形态：所有块都在，
+ * 只是顺序错了。校验不过就**拒绝合并**（宁可浪费空间，也不能把两份不同内容错当一份）。
+ *
+ * 合并不是改会话文件：老名字会写进别名表（`index.json` 的 `aliases`），所以历史消息照旧能解析。
+ */
+export function mergeDuplicateAttachments(
+  keep: string,
+  duplicates: string[],
+  options: { apply?: boolean } = {},
+): { ok: boolean; reason?: string; key?: string; reclaimedBytes: number; aliased: string[]; merged: string[] } {
+  const result = { ok: false, reclaimedBytes: 0, aliased: [] as string[], merged: [] as string[] };
+  const keepPath = resolveChatAttachment(keep);
+  if (!keepPath) return { ...result, reason: "keep-not-found" };
+  const keepChunks = chunkDigests(keepPath);
+  if (!keepChunks) return { ...result, reason: "keep-unreadable" };
+  // 先全量校验，再动磁盘：半途失败最坏的不一致就是「别名已改但文件还在」，那也无害。
+  const checked: Array<{ name: string; path: string; size: number }> = [];
+  for (const duplicate of duplicates) {
+    if (duplicate === keep) continue;
+    const path = resolveChatAttachment(duplicate);
+    if (!path) return { ...result, reason: `duplicate-not-found:${duplicate}` };
+    const size = statSync(path).size;
+    if (size !== statSync(keepPath).size) return { ...result, reason: `size-mismatch:${duplicate}` };
+    const chunks = chunkDigests(path);
+    if (!chunks || !sameMultiset(keepChunks, chunks)) return { ...result, reason: `content-mismatch:${duplicate}` };
+    checked.push({ name: duplicate, path, size });
+  }
+
+  const key = isContentKey(keep) ? keep : (sha256OfFile(keepPath) as string | null);
+  if (!key) return { ...result, reason: "keep-hash-failed" };
+  if (!options.apply) return { ok: true, key, reclaimedBytes: checked.reduce((sum, item) => sum + item.size, 0), aliased: [], merged: [] };
+
+  // ① 把 keep 收进对象库（已经是对象就只需要补登记）
+  if (!hasObject(key)) {
+    try {
+      mkdirSync(objectShardDir(key), { recursive: true });
+      if (isContentKey(keep)) {
+        // 理论到不了这里（是 key 却 hasObject=false）——当作失败而不猜。
+        return { ...result, reason: "keep-object-missing" };
+      }
+      renameSync(keepPath, objectPath(key));
+      registerObject(key, { size: statSync(objectPath(key)).size });
+    } catch {
+      return { ...result, reason: "promote-failed" };
+    }
+  }
+  if (!isContentKey(keep)) setAlias(keep, key);
+
+  // ② 副本：写别名（历史消息仍指向老名字）+ 删文件（内容已是同一份，不丢数据）
+  for (const item of checked) {
+    setAlias(item.name, key);
+    try {
+      unlinkSync(item.path);
+      result.reclaimedBytes += item.size;
+      result.merged.push(item.name);
+    } catch {
+      /* 删不掉就留着（别名已经生效，不丢功能，只多占空间） */
+    }
+    result.aliased.push(item.name);
+  }
+  return { ...result, ok: true, key };
 }
