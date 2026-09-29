@@ -15,10 +15,20 @@
  *   MPI_SEAFILE_SHARE="http://workstation.tail38d5a.ts.net/d/<token>" \
  *     node scripts/dev-publish-android.mjs
  *
+ *   # 只用公网点分发（没装 SeaDrive 的机器、或不想走 Seafile 时）：
+ *   MPI_PUBLIC_DOWNLOAD_BASE="http://<域名或 IP>:10445/download" \
+ *     node scripts/dev-publish-android.mjs
+ *
  *   --no-bump    不动 gradle 版本号
  *   --no-build   复用现有 app-debug.apk（快；**与版本自增互斥**）
  *   --no-push    只生成产物，不推到中继
  *   --dry-run    只打印将要写的内容，不落盘、不推送
+ *
+ * Seafile 与公网点二者**至少给一个**：
+ *   · 给了分享链 → 额外把 APK 放进本机 SeaDrive 同步目录（分享链服务的就是它），
+ *     并写一份用分享链的清单（局域网/人工分发用）；
+ *   · 给了公网点 → 把 APK 推到 ECS 下载目录，清单 url 指向公网（手机不经 Tailscale 直下）。
+ *   两者都给 → 一份 APK 两个分发点，清单各自指向自己（中继那份用公网）。
  *
  * 注意：
  *   · APP 先看 GitHub 清单、版本不更新时才落到中继那份。开发期你装的一定比 GitHub 上的
@@ -86,14 +96,17 @@ function bumpVersion() {
 }
 
 function main() {
-  if (!shareBase) {
-    log("缺少 Seafile 分享链接。用法：");
+  if (!shareBase && !publicBase) {
+    log("需要至少一个分发点：Seafile 分享链（MPI_SEAFILE_SHARE）或公网下载基地址（MPI_PUBLIC_DOWNLOAD_BASE）。用法：");
+    log('  MPI_PUBLIC_DOWNLOAD_BASE="http://<域名或 IP>:10445/download" node scripts/dev-publish-android.mjs');
     log('  MPI_SEAFILE_SHARE="http://workstation.tail38d5a.ts.net/d/<token>" node scripts/dev-publish-android.mjs');
     process.exit(64);
   }
-  log("dev-publish-android：开发期一键发布（APK 走 Seafile 分享链）\n");
-  log(`   分享基数：${shareBase}`);
-  log(`   分发目录：${SHARE_DIR}\n`);
+  log("dev-publish-android：开发期一键发布\n");
+  log(`   分发点：${[shareBase ? "Seafile 分享链" : null, publicBase ? "ECS 公网点" : null].filter(Boolean).join(" + ")}`);
+  if (shareBase) log(`   分享基数：${shareBase}`);
+  if (shareBase) log(`   分发目录：${SHARE_DIR}\n`);
+  else log("   未给分享链 → 跳过 SeaDrive 目录与那份清单\n");
 
   log("  [1/5] 版本号");
   // ⚠️ 自增版本号却跳过构建 = 清单写 0.5.37、而 APK 内部的 versionName 还是 0.5.36
@@ -127,58 +140,62 @@ function main() {
   const sha = sha256Upper(DEBUG_APK);
   if (!dryRun) {
     mkdirSync(PUBLISH_DIR, { recursive: true });
-    mkdirSync(SHARE_DIR, { recursive: true });
     copyFileSync(DEBUG_APK, join(PUBLISH_DIR, apkName));
-    copyFileSync(DEBUG_APK, join(SHARE_DIR, apkName));
-    writeFileSync(join(SHARE_DIR, `${apkName}.sha256`), `${sha}  ${apkName}\n`);
+    if (shareBase) {
+      mkdirSync(SHARE_DIR, { recursive: true });
+      copyFileSync(DEBUG_APK, join(SHARE_DIR, apkName));
+      writeFileSync(join(SHARE_DIR, `${apkName}.sha256`), `${sha}  ${apkName}\n`);
+    }
   }
   log(`   ${apkName}  ${(size / 1048576).toFixed(1)} MB`);
   log(`   sha256 ${sha}`);
 
   log("  [4/5] 写清单（url 字段 = 绝对地址）");
+  // 优先用公网点：手机不经 Tailscale/DERP 直下（实测 ~1MB/s → 3–4MB/s）。
+  // 没给公网点就回落分享链（只在局域网/人工分发时用）。
+  const downloadUrl = publicBase
+    ? `${publicBase}/${apkName}`
+    : `${shareBase}/files/?p=/${encodeURIComponent(apkName)}&dl=1`;
   const manifest = {
     version,
-    file: apkName, // 相对名（中继兜底用；本轮会被 url 覆盖）
-    url: `${shareBase}/files/?p=/${encodeURIComponent(apkName)}&dl=1`,
+    file: apkName, // 相对名（中继兜底用；通常会被 url 覆盖）
+    url: downloadUrl,
     size,
     sha256: sha,
     publishedAt: new Date().toISOString().slice(0, 10),
     github: "",
   };
   const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
-  // 中继那份清单用**公网地址**（手机从 ECS 直接下，不经 Tailscale）；Seafile 目录那份保持分享链。
-  const relayManifestJson = publicBase
-    ? `${JSON.stringify({ ...manifest, url: `${publicBase}/${apkName}` }, null, 2)}\n`
-    : manifestJson;
   if (!dryRun) {
     writeFileSync(join(PUBLISH_DIR, "mpi-android-native.json"), manifestJson);
-    writeFileSync(join(SHARE_DIR, "mpi-android-native.json"), manifestJson);
+    if (shareBase) writeFileSync(join(SHARE_DIR, "mpi-android-native.json"), manifestJson);
   }
-  if (publicBase) log(`   中继版清单 url → ${publicBase}/${apkName}（公网直下）`);
+  log(`   清单 url → ${downloadUrl}`);
   log(manifestJson.split("\n").filter(Boolean).map((line) => `   ${line}`).join("\n"));
 
   log("  [5/5] 推清单到中继（APP 从 GitHub 清单落到中继那份时才会看到）");
   const remote = `${RELAY_HOST}:${RELAY_DOWNLOAD}`;
   if (noPush || dryRun) {
     log("   已跳过（--no-push / --dry-run）。手动命令：");
-    log(`     scp "${join(SHARE_DIR, "mpi-android-native.json")}" ${remote}/mpi-native.tmp`);
+    log(`     scp "${join(PUBLISH_DIR, "mpi-android-native.json")}" ${remote}/mpi-native.tmp`);
     log(`     ssh ${RELAY_HOST} 'mv ${RELAY_DOWNLOAD}/mpi-native.tmp ${RELAY_DOWNLOAD}/mpi-android-native.json'`);
   } else {
     if (publicBase) {
       // 先把 APK 推到中继的下载目录（公网明文端点会服务 /download/*）
       const scpApk = spawnSync("scp", ["-o", "BatchMode=yes", DEBUG_APK, `${remote}/${apkName}`], { stdio: "inherit" });
       log(scpApk.status === 0 ? `   ✓ APK 已推到中继（公网可下，${(size / 1048576).toFixed(1)}MB）` : "   ✗ APK 推送失败（清单仍指向分享链）");
+      if (scpApk.status !== 0) return;
     }
-    const relayManifestPath = join(PUBLISH_DIR, "mpi-native-relay.json");
-    writeFileSync(relayManifestPath, relayManifestJson);
-    const scp = spawnSync("scp", ["-o", "BatchMode=yes", relayManifestPath, `${remote}/mpi-native.tmp`], { stdio: "inherit" });
+    const scp = spawnSync("scp", ["-o", "BatchMode=yes", join(PUBLISH_DIR, "mpi-android-native.json"), `${remote}/mpi-native.tmp`], { stdio: "inherit" });
     const mv = scp.status === 0
       ? spawnSync("ssh", ["-o", "BatchMode=yes", RELAY_HOST, `mv ${RELAY_DOWNLOAD}/mpi-native.tmp ${RELAY_DOWNLOAD}/mpi-android-native.json`], { stdio: "inherit" })
       : { status: 1 };
     log(mv.status === 0 ? "   ✓ 清单已就位（手机点「检测更新」即可）" : "   ✗ 推送失败，见上面输出");
   }
 
-  log("\n手机侧预期：检测到 v" + version + `，从 Seafile 下 ${(size / 1048576).toFixed(1)}MB（实测 6MB/s ≈ ${Math.round(size / 6291456)} 秒）`);
+  log("\n手机侧预期：检测到 v" + version + (publicBase
+    ? `，从公网（ECS）下 ${(size / 1048576).toFixed(1)}MB（实测 3–4MB/s ≈ ${Math.round(size / 3670016)} 秒）`
+    : `，从 Seafile 下 ${(size / 1048576).toFixed(1)}MB（实测 6MB/s ≈ ${Math.round(size / 6291456)} 秒）`));
   if (!noBump) log("提醒：gradle 版本号已自增（开发期改动，之后自行 revert 或提交）。");
 }
 
