@@ -40,6 +40,14 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：（手机端）`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（新增 `DirectAttachmentLogicTest`：分片边界无缝隙/Content-Range 声明/令牌回包容错/入口 mime 兜底/进度百分比）。真机：① 相册选一个 20–50MB 的 mp4 → 输入条出现上传百分比 → 发送后气泡里是首帧封面，主机日志有 `attachment-direct mint write …` + `attachment-http upload done …`；② 点开该视频应**立即开始播且能拖进度条**，主机日志 `attachment-direct mint read` + `attachment-http GET …`（没有 GET 那行 = 回落了中继）；③ 关掉手机 Tailscale 再选同一个大视频 → 应提示「视频太大…直连上传不可用」，而不是没反应或上传到一半失败。
 
+5. **安卓端：看过的视频本地缓存，第二次点开不再重下**——直连播放是把读 URL 交给 ExoPlayer 流式拉（Range），播完字节就没了，于是同一个视频**每次点开都要重下一遍**（手机走中继时这一条特别刺眼）。现在给播放器包了一层磁盘缓存：
+   - ExoPlayer `SimpleCache`，上限 **512MB**、LRU 淘汰，落在系统可回收的 `cacheDir`（临时文件，不会让手机存储无限涨）
+   - **缓存 key 用附件名，不用 URL**：直连 URL 每次都换 token（`/att/<24 字节随机>`），拿 URL 当 key 等于永远不命中
+   - 第一次边播边存；之后从本地读——首帧瞬间出来、也能拖动而不必回源
+   - 点开前先看本地有没有（含之前走**中继分片**拉下来的整文件），有就直接播、一个包都不发
+
+   验证方式：（手机端）`./gradlew assembleDebug :app:testDebugUnitTest`。真机：点开一个大视频看完 → 关闭 → **再点开应瞬间起播**；主机日志里第二次**不再出现新的 `attachment-http GET`**（缓存命中就不回源）。若第二次仍然慢且日志里又有 GET，说明缓存没命中，需要查 key 与 `cacheDir` 体积。
+
 ## v0.9.2（2026-09-26）
 
 1. **本地模型 prefill 等待指示器**——本地模型（如 LM Studio）处理长上下文时，首个 token 到达前可能长达数十秒；这段时间 pi 还没发出 assistant 消息事件，聊天区此前没有任何反馈（只有输入框的发送键变成停止），看起来像卡死。现在当「agent 在跑 + assistant 消息尚未开始 + 非压缩中 + 无工具卡在运行」时，聊天区显示带动画圆点和已等待秒数的占位行（「思考中 · 12s」/ “Thinking… 12s”），覆盖三个窗口：发送后 → LLM 响应头到达（含冷启动建桥）、以及每轮工具执行完后的下一轮 prefill。顺带把消息内既有的硬编码「思考中」文案 i18n 化（英文界面显示 “Thinking…”）。

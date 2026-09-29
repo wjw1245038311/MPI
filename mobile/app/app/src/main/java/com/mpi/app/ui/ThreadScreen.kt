@@ -90,7 +90,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.MediaItem
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import android.content.Context
 import java.io.File
@@ -102,6 +104,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mpi.app.data.Attachment
 import com.mpi.app.data.ThreadView
+import com.mpi.app.data.VideoMediaCache
 import com.mpi.app.data.VoiceSpeechContent
 import com.mpi.app.protocol.BlockType
 import com.mpi.app.protocol.MessageBlock
@@ -1698,6 +1701,13 @@ private fun VideoBlock(block: MessageBlock) {
                 fetchError = null
                 fetchedBytes = 0L
                 scope.launch {
+                    // 本地已有（上次中继分片拉过 / 之前看过）→ 直接播，一个包都不发。
+                    val cached = File(videoDir, name)
+                    if (cached.length() > 0) {
+                        fetching = false
+                        fetchedSource = cached
+                        return@launch
+                    }
                     // 先试直连：不落盘、可拖进度条，拿到 URL 后由上面的 LaunchedEffect 自动全屏。
                     val direct = runCatching { resolveDirect(name, block.mimeType) }.getOrNull()
                     if (direct != null) {
@@ -1759,7 +1769,22 @@ private fun VideoBlock(block: MessageBlock) {
         if (!playing || uri == null) {
             null
         } else {
-            ExoPlayer.Builder(context).build().apply {
+            val remoteName = if (directUrl != null) block.name else null
+            val builder = ExoPlayer.Builder(context)
+            if (remoteName != null) {
+                // 直连播放包一层磁盘缓存：第一次边播边存，第二次直接读本地。
+                // **key 用附件名而不是 URL**——直连 URL 每次申请都是新 token，拿它当 key 永远不会命中。
+                builder.setMediaSourceFactory(
+                    DefaultMediaSourceFactory(
+                        VideoMediaCache.dataSourceFactory(
+                            context = context,
+                            keyOf = { _ -> VideoMediaCache.keyForAttachment(remoteName) },
+                            upstream = DefaultDataSource.Factory(context),
+                        ),
+                    ),
+                )
+            }
+            builder.build().apply {
                 setMediaItem(MediaItem.fromUri(uri))
                 prepare()
                 playWhenReady = true
