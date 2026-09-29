@@ -53,8 +53,17 @@ export type RemotePermission = "sandbox" | "full";
 
 export interface RemoteImageInput {
   type: "image";
+  /** base64。P3 起可为空串：那时用 `key` 让主机从对象库取原图（见下）。 */
   data: string;
   mimeType: string;
+  /**
+   * 内容 key（P3-S3a）：给了它，主机就从对象库读**原图**喂给模型，而 prompt 里只带缩略图。
+   * 好处：客户端只传一遍（去重、可跨会话复用），快照也不会被大图擑爆。
+   */
+  key?: string;
+  /** 缩略图（base64，小图）：落盘供快照/客户端用；主机读不到原图时也拿它当回落。 */
+  thumbnail?: string;
+  thumbnailMimeType?: string;
 }
 
 /**

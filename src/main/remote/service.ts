@@ -513,17 +513,38 @@ export class RemoteService {
       if (image.type !== undefined && image.type !== "image") {
         throw new RemoteProtocolError("INVALID_REQUEST", `images[${index}].type must be image`);
       }
+      // P3-S3a：带内容 key 的图片可以**不带 base64**（主机从对象库取原图）。
+      const rawKey = typeof image.key === "string" ? image.key.trim().toLowerCase() : "";
+      const key = /^[a-f0-9]{64}$/.test(rawKey) ? rawKey : undefined;
+      const rawThumb = typeof image.thumbnail === "string" ? image.thumbnail : "";
+      const thumbnail =
+        rawThumb && rawThumb.length <= MAX_REMOTE_IMAGE_DATA && /^[A-Za-z0-9+/]*={0,2}$/.test(rawThumb) ? rawThumb : undefined;
       const data = image.data;
       const mimeType = image.mimeType;
-      if (typeof data !== "string" || data.length === 0 || data.length > MAX_REMOTE_IMAGE_DATA || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
+      if (typeof data !== "string" || data.length > MAX_REMOTE_IMAGE_DATA) {
         throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", `images[${index}] has invalid or oversized base64 data`);
+      }
+      if (!data && !key) {
+        throw new RemoteProtocolError("INVALID_REQUEST", `images[${index}] needs either inline data or a content key`);
+      }
+      if (data && !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
+        throw new RemoteProtocolError("INVALID_REQUEST", `images[${index}] has invalid base64 data`);
       }
       if (typeof mimeType !== "string" || !REMOTE_IMAGE_MIME_TYPES.has(mimeType)) {
         throw new RemoteProtocolError("INVALID_REQUEST", `images[${index}] has an unsupported MIME type`);
       }
-      total += data.length;
+      total += data.length + (thumbnail?.length || 0);
       if (total > MAX_REMOTE_IMAGE_DATA_TOTAL) throw new RemoteProtocolError("PAYLOAD_TOO_LARGE", "Image attachments are too large");
-      return { type: "image", data, mimeType };
+      return {
+        type: "image",
+        data,
+        mimeType,
+        ...(key ? { key } : {}),
+        ...(thumbnail ? { thumbnail } : {}),
+        ...(typeof image.thumbnailMimeType === "string" && REMOTE_IMAGE_MIME_TYPES.has(image.thumbnailMimeType)
+          ? { thumbnailMimeType: image.thumbnailMimeType }
+          : {}),
+      };
     });
   }
 

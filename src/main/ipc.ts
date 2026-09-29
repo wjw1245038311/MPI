@@ -194,18 +194,20 @@ import {
 import {
   VIDEO_POSTER_BASE64_BUDGET,
   VIDEO_REF_ATTR,
+  mediaRefEnvelope,
   splitVideoRefs,
   videoMimeForPath,
   videoRefEnvelope,
 } from "./remote/video-refs";
 import { fillVideoPosters } from "./remote/video-poster";
-import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, findVideoPoster, hasObject, isContentKey, isVideoFile, materializeIntoWorkspace, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeVideoPoster } from "./chat-attachment-store";
+import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, agentImageFor, findVideoPoster, hasObject, isContentKey, isVideoFile, materializeIntoWorkspace, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeThumbnail, storeVideoPoster } from "./chat-attachment-store";
 import { createAttachmentServer } from "./remote/attachment-server";
 import { AttachmentTokenStore } from "./remote/attachment-tokens";
 import type { Server } from "node:http";import {
   RemoteProtocolError,
   type RemoteFileArtifact,
   type RemoteFileInput,
+  type RemoteImageInput,
   type RemoteMessage,
   type RemoteModelOption,
   type RemotePermission,
@@ -2548,6 +2550,47 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       })
       .join("");
 
+  /**
+   * P3-S3a：把「带内容 key 的图片」解析成喂给模型的图片。
+   *
+   * 客户端（S3 起）发图的姿势：原图走直连通道上传（内容寻址、去重），prompt 里只带一张小缩略图
+   * + key。主机在这里把**原图**从对象库读回来喂给 pi（agent 拿全分辨率），并把 key/缩略图写成
+   * media 信封（快照与其它客户端靠它按需拉原图）。
+   *
+   * 回落：没 key（老客户端）/ 对象已不在 / 大得离谱——统统用客户端带来的内联数据。
+   */
+  const resolveKeyedImages = (images: RemoteImageInput[] | undefined): { images: RemoteImageInput[]; envelopes: string } => {
+    if (!images?.length) return { images: [], envelopes: "" };
+    const out: RemoteImageInput[] = [];
+    let envelopes = "";
+    for (const image of images) {
+      const fromObject = image.key ? agentImageFor(image.key) : null;
+      if (!fromObject) {
+        if (image.data) {
+          out.push({ type: "image", data: image.data, mimeType: image.mimeType });
+        } else {
+          appendDiagLog(`remote image key=${String(image.key || "-").slice(0, 16)} unavailable → skipped`);
+        }
+        continue;
+      }
+      const thumbName = image.thumbnail
+        ? storeThumbnail(image.key as string, { data: image.thumbnail, mimeType: image.thumbnailMimeType || "image/jpeg" })
+        : null;
+      out.push({ type: "image", data: fromObject.data, mimeType: image.mimeType || fromObject.mime });
+      envelopes += mediaRefEnvelope({
+        name: image.key as string,
+        abs: fromObject.abs,
+        kind: "image",
+        key: `sha256:${image.key}`,
+        ...(fromObject.label ? { label: fromObject.label } : {}),
+        ...(thumbName || fromObject.thumb ? { thumb: thumbName || (fromObject.thumb as string) } : {}),
+        size: Math.floor((fromObject.data.length * 3) / 4),
+      });
+      appendDiagLog(`remote image from object key=${String(image.key).slice(0, 16)} thumb=${thumbName ? 1 : 0}`);
+    }
+    return { images: out, envelopes };
+  };
+
   const threadService = new ThreadService(
     (threadId) => remoteSnapshot(threadId),
     async (projectId, name, permission = "sandbox") => {
@@ -2610,13 +2653,14 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       // 文件先落盘，再按桌面同款规则内联/引用（图片仍直传模型）；视频另走一条：
       // 落盘 + 带标记的引用（客户端把它换成可播放的 video 块）。
       const directFiles = splitStoredFiles(files);
+      const keyed = resolveKeyedImages(images);
       const staged = processAttachments(
         stageRemoteFiles(directFiles.inline),
-        text + directFiles.envelopes + stageRemoteVideos(threadId, videos),
+        text + directFiles.envelopes + stageRemoteVideos(threadId, videos) + keyed.envelopes,
       );
       let queuedAs: "followUp" | undefined;
       try {
-        await bridge.bridge.prompt(staged.text, [...(images ?? []), ...staged.images]);
+        await bridge.bridge.prompt(staged.text, [...keyed.images, ...staged.images]);
       } catch (error) {
         // 手机端的 running 状态滞后于主机（冷启动建桥 / agent_start 事件未到达的窗口内连发），
         // 裸 prompt 撞上运行中的回合会被 SDK 拒绝。回退 followUp：排队到当前回合结束再投递——
@@ -2625,7 +2669,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         const detail = error instanceof Error ? error.message : String(error);
         if (!/already processing/i.test(detail)) throw error;
         appendDiagLog(`remote prompt busy → queued as followUp (${threadId.slice(0, 12)})`);
-        await bridge.bridge.followUp(staged.text, [...(images ?? []), ...staged.images]);
+        await bridge.bridge.followUp(staged.text, [...keyed.images, ...staged.images]);
         queuedAs = "followUp";
       }
       const tSent = Date.now();
@@ -2653,21 +2697,23 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     async (threadId, text, images, files, videos) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
       const directFiles = splitStoredFiles(files);
+      const keyed = resolveKeyedImages(images);
       const staged = processAttachments(
         stageRemoteFiles(directFiles.inline),
-        text + directFiles.envelopes + stageRemoteVideos(threadId, videos),
+        text + directFiles.envelopes + stageRemoteVideos(threadId, videos) + keyed.envelopes,
       );
-      await bridge.bridge.steer(staged.text, [...(images ?? []), ...staged.images]);
+      await bridge.bridge.steer(staged.text, [...keyed.images, ...staged.images]);
       return { ok: true };
     },
     async (threadId, text, images, files, videos) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
       const directFiles = splitStoredFiles(files);
+      const keyed = resolveKeyedImages(images);
       const staged = processAttachments(
         stageRemoteFiles(directFiles.inline),
-        text + directFiles.envelopes + stageRemoteVideos(threadId, videos),
+        text + directFiles.envelopes + stageRemoteVideos(threadId, videos) + keyed.envelopes,
       );
-      await bridge.bridge.followUp(staged.text, [...(images ?? []), ...staged.images]);
+      await bridge.bridge.followUp(staged.text, [...keyed.images, ...staged.images]);
       return { ok: true };
     },
     async (threadId) => {

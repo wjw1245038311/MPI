@@ -879,6 +879,38 @@ function safeFileName(value: string): string {
   return cleaned.slice(0, 180) || "file.bin";
 }
 
+/**
+ * 给 agent 用的图片字节（P3-S3a）：从对象库读出**原图**并转 base64。
+ *
+ * 为什么不让客户端把原图 base64 直接塞进 prompt：那就得传两遍（上传一份 + prompt 一份），
+ * 而且大图会把每一帧 envelope 顶到 8MB 上限。现在客户端只传缩略图，原图由主机从对象库取。
+ *
+ * 上限：超过 [MAX_AGENT_IMAGE_BYTES] 一律不喂——模型看大图的收益有限，而把几百 MB 塞进
+ * 上下文是灾难性的；调用方拿到 null 后回落到客户端带来的缩略图/内联数据。
+ */
+export const MAX_AGENT_IMAGE_BYTES = 12 * 1024 * 1024;
+
+export function agentImageFor(key: string): { data: string; mime: string; abs: string; label?: string; thumb?: string } | null {
+  const abs = resolveChatAttachment(key);
+  if (!abs) return null;
+  try {
+    const stats = statSync(abs);
+    if (!stats.isFile() || stats.size <= 0 || stats.size > MAX_AGENT_IMAGE_BYTES) return null;
+    const meta = objectMeta(key);
+    const bytes = readFileSync(abs);
+    const thumb = findVideoPoster(key) || undefined;
+    return {
+      data: bytes.toString("base64"),
+      mime: meta?.mime || "image/png",
+      abs,
+      ...(meta?.label ? { label: meta.label } : {}),
+      ...(thumb ? { thumb } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** 附件区现状（诊断 / 维护脚本 / 设置页用）。
  *
  * **不能抛**：它会被设置页的「数据管理」状态接口调用，而那里（以及某些单测环境）可能

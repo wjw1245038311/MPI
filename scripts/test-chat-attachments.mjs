@@ -285,5 +285,23 @@ console.log("ok - P2：别名解析 / 块序置换合并（含拒绝异内容）
   console.log("ok - P3：非媒体对象入库 + 降落到 <cwd>/mpi-inbox/（同名加后缀 / 目录不逃逸 / 相对路径拒绝）");
 }
 
+// --- 7. P3-S3a：给 agent 的图片字节从对象库回读 -------------------------------
+// 客户端（S3 起）发图：原图走直连上传，prompt 里只带缩略图 + key；主机在这里把原图读回来
+// 喂给 pi。这条逻辑退化的后果很隐蔽：agent 只看到一张缩略图还以为看到了全图。
+{
+  const pixels = Buffer.alloc(2048, 0x42);
+  const img = storeSide.storeObject({ bytes: pixels, label: "shot.png", mime: "image/png" });
+  assert.ok(img, "图片应能入对象库");
+  const thumbName = storeSide.storeThumbnail(img.name, { data: Buffer.alloc(64, 7).toString("base64"), mimeType: "image/jpeg" });
+  const forAgent = storeSide.agentImageFor(img.name);
+  assert.ok(forAgent, "对象在库 → 应能取到给 agent 的图片");
+  assert.ok(Buffer.from(forAgent.data, "base64").equals(pixels), "喂给模型的字节必须是**原图**（不是缩略图）");
+  assert.equal(forAgent.mime, "image/png", "mime 沿用上传时的");
+  assert.equal(forAgent.label, "shot.png", "可读名要带回去（信封里要用）");
+  assert.equal(forAgent.thumb, thumbName, "缩略图名一并带回去");
+  assert.equal(storeSide.agentImageFor("d".repeat(64)), null, "对象不在 → null（调用方回落到客户端内联数据）");
+  console.log("ok - P3-S3a：agent 取图走对象库（原图字节 / mime / 可读名 / 缩略图名 / 缺失返回 null）");
+}
+
 rmSync(TEMP, { recursive: true, force: true });
 console.log("chat-attachments tests passed");
