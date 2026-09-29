@@ -284,9 +284,12 @@ export class RelayUplink implements RelayOutbound {
         console.warn(`[relay-uplink] dropping ${type || "<no-type>"} frame from unknown device ${from || "?"}`);
         return;
       }
-      // pair.hello carries the device's X25519 public key — derive the session
-      // now (deterministic, so trusted reconnects re-derive the same key).
-      if (type === "pair.hello") this.deriveE2ESession(msg, from);
+      // ⚠️ **不在这里派生 E2E 会话**（2026-09-30 审计修正）：pair.hello 是**明文帧**，
+      // 之前收到它就抢先派生，等于把会话密钥交到「往这个字段里塞自己公钥」的中继手里。
+      // 现在由主机**验签通过后**调 activateE2E（见 pairing-proof.ts 与 host.ts 的 handleHello）。
+      if (type === "pair.hello") {
+        appendDiagLog(`relay-in pair.hello from=${from} (E2E 会话等主机验签后建立)`);
+      }
       // E2E-encrypted data frame: decrypt before handing to the host.
       if (msg.e === 1) {
         const session = this.e2eSessions.get(from);
@@ -381,8 +384,28 @@ export class RelayUplink implements RelayOutbound {
     if (!payload.x25519Pub) payload.x25519Pub = this.options.x25519PubB64u;
     const token = this.deviceToken(acceptedDevice);
     if (token) this.sendControl({ type: "pair.approved", deviceId: acceptedDevice, deviceToken: token });
-    const session = this.e2eSessions.get(acceptedDevice);
-    if (session) session.active = true;
+    // 注意：不在这里把会话置为 active——激活只发生在主机验签通过（activateE2E）之后。
+  }
+
+  /**
+   * **主机验签通过后**启用某设备的 E2E 会话（见 pairing-proof.ts）。
+   *
+   * 幂等：同一设备重连时用同一公钥会算出同一把密钥，只是把它重新置为 active。
+   */
+  activateE2E(deviceId: string, deviceX25519Pub: string): void {
+    if (!deviceId || !deviceX25519Pub) return;
+    try {
+      const shared = x25519SharedSecret(this.options.x25519PrivB64u, deviceX25519Pub);
+      this.e2eSessions.set(deviceId, { key: deriveAesKey(shared, this.options.hostId, deviceId), active: true });
+      appendDiagLog(`relay e2e activated device=${deviceId.slice(0, 12)}`);
+    } catch (error) {
+      console.error(`[relay-uplink] activateE2E failed for ${deviceId}:`, error);
+    }
+  }
+
+  /** 撤销/断开时丢掉会话。 */
+  deactivateE2E(deviceId: string): void {
+    this.e2eSessions.delete(deviceId);
   }
 
   /**
@@ -396,18 +419,9 @@ export class RelayUplink implements RelayOutbound {
     return this.e2eSessions.get(deviceId)?.key ?? null;
   }
 
-  /** Derive the per-device AES key from pair.hello's x25519Pub (§4.2). */
-  private deriveE2ESession(msg: Record<string, unknown>, deviceId: string): void {
-    const payload = (msg.payload || {}) as Record<string, unknown>;
-    const theirPub = typeof payload.x25519Pub === "string" ? payload.x25519Pub : "";
-    if (!theirPub) return; // pre-E2E device — stays plaintext
-    try {
-      const shared = x25519SharedSecret(this.options.x25519PrivB64u, theirPub);
-      this.e2eSessions.set(deviceId, { key: deriveAesKey(shared, this.options.hostId, deviceId), active: false });
-    } catch (error) {
-      console.error(`[relay-uplink] E2E session derivation failed for ${deviceId}:`, error);
-    }
-  }
+  // 派生逻辑已上提到公开方法 activateE2E（只在主机验签通过后调用）。
+  // 历史上这里有个 private deriveE2ESession(msg, deviceId) 会在收到明文 pair.hello 时
+  // 抢先派生 —— 那正是中继换公钥就能拿到会话密钥的原因，已删。
 
   // --- retry / heartbeat -----------------------------------------------------------
 

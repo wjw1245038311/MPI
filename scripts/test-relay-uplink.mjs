@@ -118,12 +118,16 @@ class Phone {
 /** Ed25519 device identity mirroring src/main/remote/identity.ts. */
 function makeDeviceIdentity() {
   const pair = generateKeyPairSync("ed25519");
+  // 配对证明 v2：把自己的 E2E 公钥绑进签名（见 docs/RELAY-SHARING.md §9）
+  const x = generateKeyPairSync("x25519");
+  const x25519PubB64u = x.publicKey.export({ type: "spki", format: "der" }).subarray(-32).toString("base64url");
   const publicKeyPem = pair.publicKey.export({ type: "spki", format: "pem" }).toString();
   const deviceId = `device-${createHash("sha256").update(publicKeyPem).digest("base64url").slice(0, 24)}`;
   return {
     privateKey: pair.privateKey,
     publicKeyPem,
     deviceId,
+    x25519PubB64u,
     signText: (text) => sign(null, Buffer.from(text, "utf8"), pair.privateKey).toString("base64url"),
   };
 }
@@ -149,7 +153,11 @@ function helloFor(phone, device, hostId, challengeEnvelope, ticket) {
       deviceId: device.deviceId,
       deviceName: "test-phone",
       publicKeyPem: device.publicKeyPem,
-      signature: device.signText(`mpi-remote-v1|${hostId}|${p.connectionId}|${p.challenge}|${device.deviceId}`),
+      // v2：把设备自己的 E2E 公钥也签进去（否则主机会以 e2e-key-not-signed 拒收）
+      signature: device.signText(
+        `mpi-remote-v2-device|${hostId}|${p.connectionId}|${p.challenge}|${device.deviceId}|${device.x25519PubB64u}`,
+      ),
+      x25519Pub: device.x25519PubB64u,
       ticket,
     },
   });

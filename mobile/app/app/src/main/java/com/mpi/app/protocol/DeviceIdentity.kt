@@ -59,6 +59,45 @@ fun ed25519Sign(seed: ByteArray, message: ByteArray): ByteArray {
     return signer.generateSignature()
 }
 
+/**
+ * Ed25519 **验签**（配对时验主机身份，见 docs/RELAY-SHARING.md §9）。
+ *
+ * 之前安卓端压根没验过主机签名：`pair.challenge` 里的 `signature`/`hostPublicKeyPem` 被读出来后
+ * 直接丢掉 —— 于是任何一个能冒充中继的人都能让手机把会话密钥交给它。
+ */
+fun ed25519Verify(publicKey32: ByteArray, message: ByteArray, signature: ByteArray): Boolean = runCatching {
+    if (publicKey32.size != 32 || signature.size != 64) {
+        false
+    } else {
+        val verifier = Ed25519Signer()
+        verifier.init(false, org.bouncycastle.crypto.params.Ed25519PublicKeyParameters(publicKey32, 0))
+        verifier.update(message, 0, message.size)
+        verifier.verifySignature(signature)
+    }
+}.getOrDefault(false)
+
+/** SPKI PEM → raw 32B 公钥（验签用）。格式对不上 → null。 */
+fun ed25519RawFromPem(pem: String): ByteArray? = runCatching {
+    val b64 = pem
+        .replace("-----BEGIN PUBLIC KEY-----", "")
+        .replace("-----END PUBLIC KEY-----", "")
+        .replace(Regex("\\s"), "")
+    val der = java.util.Base64.getDecoder().decode(b64)
+    if (der.size != ED25519_SPKI_PREFIX.size + 32) null else der.copyOfRange(ED25519_SPKI_PREFIX.size, der.size)
+}.getOrNull()
+
+/**
+ * 配对证明 v2（与主机 `remote/pairing-proof.ts` 逐字节一致）：把 E2E 公钥绑进签名。
+ *
+ * v1 的签名文本不含 X25519 公钥，而两端的公钥都走**明文**中继帧 —— 中继把自己的公钥分别塞给
+ * 两端就能解开全部「加密」流量。v2 把各自的公钥写进被签名的文本，换公钥就必须伪造签名。
+ */
+fun hostProofText(hostId: String, connectionId: String, challenge: String, hostX25519Pub: String): String =
+    "mpi-remote-v2-host|$hostId|$connectionId|$challenge|$hostX25519Pub"
+
+fun deviceProofText(hostId: String, connectionId: String, challenge: String, deviceId: String, deviceX25519Pub: String): String =
+    "mpi-remote-v2-device|$hostId|$connectionId|$challenge|$deviceId|$deviceX25519Pub"
+
 /** 新建身份；传入 seedB64u 则从已存种子恢复。 */
 fun createDeviceIdentity(seedB64u: String? = null): DeviceIdentity {
     val seed = if (seedB64u != null) Base64Url.decode(seedB64u) else randomSeedBytes()

@@ -10,6 +10,7 @@ import {
   type RemoteEnvelope,
 } from "./protocol";
 import { deviceIdFor, fingerprintFor, loadOrCreateIdentity, saveIdentity, signText, verifyText, type HostIdentity, type TrustedRemoteDevice } from "./identity";
+import { hostProofText, verifyDeviceProof } from "./pairing-proof";
 import { RemoteService } from "./service";
 import { appendDiagLog } from "../diag-log";
 
@@ -28,6 +29,14 @@ export interface RelayOutbound {
   deviceToken(deviceId: string): string | null;
   /** Drop the stored token when a device is revoked. */
   notifyRevoked?(deviceId: string): void;
+  /**
+   * **设备证明验签通过后**才调用：把 E2E 会话建立在已认证的 X25519 公钥上
+   * （见 remote/pairing-proof.ts。之前是上行自己在收到 pair.hello 时抢先派生，
+   * 于是中继塞一个自己的公钥就能拿到会话密钥）。
+   */
+  activateE2E?(deviceId: string, deviceX25519Pub: string): void;
+  /** 撤销/断开时丢掉会话。 */
+  deactivateE2E?(deviceId: string): void;
 }
 
 export interface RemoteHostOptions {
@@ -289,7 +298,18 @@ export class RemoteHost {
       challenge: connection.challenge,
       connectionId: connection.connectionId,
       hostPublicKeyPem: this.identity.publicKeyPem,
-      signature: signText(this.identity.privateKeyPem, `mpi-remote-v1|${this.identity.hostId}|${connection.connectionId}|${connection.challenge}`),
+      // v2（见 remote/pairing-proof.ts）：主机把自己的 E2E 公钥也放进**被签名的文本**，
+      // 于是中继无法在 pair.accepted 里把它换成自己的公钥（换了签名就对不上）。
+      hostX25519Pub: this.identity.x25519PubB64u,
+      signature: signText(
+        this.identity.privateKeyPem,
+        hostProofText({
+          hostId: this.identity.hostId,
+          connectionId: connection.connectionId,
+          challenge: connection.challenge,
+          hostX25519Pub: this.identity.x25519PubB64u,
+        }),
+      ),
       directOnly: true,
     }));
   }
@@ -663,13 +683,43 @@ export class RemoteHost {
       return;
     }
     const signed = `mpi-remote-v1|${this.identity.hostId}|${connection.connectionId}|${connection.challenge}|${deviceId}`;
-    if (!verifyText(publicKeyPem, signed, signature)) {
-      this.sendFrame(connection, errorFor(request, "AUTH_REQUIRED", "Device signature is invalid"));
+    // v2：把设备的 E2E 公钥绑进签名（防中继换公钥 MITM）；带公钥却只签 v1 的旧客户端默认拒收。
+    const deviceX25519Pub = typeof payload.x25519Pub === "string" ? payload.x25519Pub : "";
+    const proof = verifyDeviceProof({
+      publicKeyPem,
+      signature,
+      proof: {
+        hostId: this.identity.hostId,
+        connectionId: connection.connectionId,
+        challenge: connection.challenge,
+        deviceId,
+        deviceX25519Pub,
+      },
+    });
+    if (!proof.ok) {
+      appendDiagLog(
+        `pair proof rejected device=${deviceId.slice(0, 12)} reason=${proof.reason || "unknown"} v1=${verifyText(publicKeyPem, signed, signature) ? 1 : 0}`,
+      );
+      this.sendFrame(
+        connection,
+        errorFor(
+          request,
+          "AUTH_REQUIRED",
+          proof.reason === "e2e-key-not-signed"
+            ? "This client does not sign its encryption key - please upgrade the app"
+            : "Device signature is invalid",
+        ),
+      );
       return;
+    }
+    if (proof.mode === "legacy") {
+      appendDiagLog(`pair proof legacy device=${deviceId.slice(0, 12)} reason=${proof.reason || "legacy"}`);
     }
     connection.deviceId = deviceId;
     connection.deviceName = deviceName;
     connection.publicKeyPem = publicKeyPem;
+    // 验签通过后才把 E2E 会话建在**这个已认证的公钥**上。
+    if (deviceX25519Pub) this.options.relay?.activateE2E?.(deviceId, deviceX25519Pub);
     const trusted = this.identity.trustedDevices.find((device) => device.deviceId === deviceId);
     if (trusted && trusted.publicKeyPem === publicKeyPem) {
       trusted.lastSeenAt = Date.now();

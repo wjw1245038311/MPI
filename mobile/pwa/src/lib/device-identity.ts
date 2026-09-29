@@ -57,6 +57,62 @@ function utf8Bytes(text: string): Uint8Array {
   return new TextEncoder().encode(text);
 }
 
+/**
+ * 配对证明 v2（见 docs/RELAY-SHARING.md §9）：把 E2E 公钥绑进签名。
+ *
+ * v1 的签名文本不含 X25519 公钥，而两端的公钥都走**明文**中继帧 → 一个不可信的中继可以把
+ * 自己的公钥分别塞给两端，各自与中继派生会话密钥，从而解开全部「加密」流量。
+ * v2 把各自的公钥写进被签名的文本，换公钥就必须伪造签名（中继没有私钥）。
+ */
+export function hostProofText(hostId: string, connectionId: string, challenge: string, hostX25519Pub: string): string {
+  return `mpi-remote-v2-host|${hostId}|${connectionId}|${challenge}|${hostX25519Pub}`;
+}
+
+export function deviceProofText(
+  hostId: string,
+  connectionId: string,
+  challenge: string,
+  deviceId: string,
+  deviceX25519Pub: string,
+): string {
+  return `mpi-remote-v2-device|${hostId}|${connectionId}|${challenge}|${deviceId}|${deviceX25519Pub}`;
+}
+
+function base64UrlToBytes(value: string): Uint8Array {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  const binary = atob(padded);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+/** SPKI PEM → raw 32B 公钥（验签用）。 */
+export function ed25519RawFromPem(pem: string): Uint8Array | null {
+  try {
+    const b64 = pem
+      .replace("-----BEGIN PUBLIC KEY-----", "")
+      .replace("-----END PUBLIC KEY-----", "")
+      .replace(/\s+/g, "");
+    const der = base64UrlToBytes(b64.replace(/\+/g, "-").replace(/\//g, "_"));
+    if (der.length !== ED25519_SPKI_PREFIX.length + 32) return null;
+    return der.slice(ED25519_SPKI_PREFIX.length);
+  } catch {
+    return null;
+  }
+}
+
+/** 用主机身份公钥验签（配对时验主机身份与它的 E2E 公钥）。失败一律 false。 */
+export function verifyHostSignature(publicKeyPem: string, text: string, signatureB64u: string): boolean {
+  try {
+    const raw = ed25519RawFromPem(publicKeyPem);
+    if (!raw) return false;
+    return ed25519.verify(base64UrlToBytes(signatureB64u), new TextEncoder().encode(text), raw);
+  } catch {
+    return false;
+  }
+}
+
 /** Standard PEM with 64-char base64 lines — byte-identical to Node's spki/pem export. */
 export function ed25519SpkiPem(publicKey32: Uint8Array): string {
   const der = new Uint8Array(ED25519_SPKI_PREFIX.length + publicKey32.length);

@@ -8,7 +8,7 @@
 // Relative (not an alias) so node-based tests can import this module directly.
 // src/lib → pwa → mobile → shared
 import { makeEnvelope } from "../../../shared/protocol";
-import type { DeviceIdentity } from "./device-identity";
+import { deviceProofText, hostProofText, verifyHostSignature, type DeviceIdentity } from "./device-identity";
 import {
   deriveAesKeyRaw,
   decryptFrame as e2eDecrypt,
@@ -131,7 +131,14 @@ async function answerChallenge(
   if (!connectionId || !challengeValue) throw new Error("malformed pair.challenge");
 
   onStage?.("waiting-approval");
-  const signedText = `mpi-remote-v1|${hostId}|${connectionId}|${challengeValue}|${identity.deviceId}`;
+  // v2（见 docs/RELAY-SHARING.md §9）：先验主机身份与它的 E2E 公钥，再签自己的（含自己的公钥）。
+  const hostPublicKeyPem = String(cp.hostPublicKeyPem ?? "");
+  const hostSignature = String(cp.signature ?? "");
+  const hostX25519Pub = String(cp.hostX25519Pub ?? "");
+  if (!hostX25519Pub || !verifyHostSignature(hostPublicKeyPem, hostProofText(hostId, connectionId, challengeValue, hostX25519Pub), hostSignature)) {
+    throw new Error("主机身份校验失败（可能存在中间人）——请确认连接的是你自己的桌面端");
+  }
+  const signedText = deviceProofText(hostId, connectionId, challengeValue, identity.deviceId, identity.x25519PubB64u);
   client.send(
     makeEnvelope("pair.hello", String(challenge.sessionId), {
       deviceId: identity.deviceId,
@@ -149,6 +156,10 @@ async function answerChallenge(
   const ap = (accepted.payload || {}) as Record<string, unknown>;
   const deviceToken = typeof ap.deviceToken === "string" ? ap.deviceToken : "";
   const hostX25519PubB64u = typeof ap.x25519Pub === "string" ? ap.x25519Pub : "";
+  // 配对票里的公钥必须就是**被主机签名覆盖**的那一个；否则就是中继在替换公钥（MITM）。
+  if (hostX25519PubB64u && hostX25519PubB64u !== hostX25519Pub) {
+    throw new Error("主机公钥与签名不符（可能存在中间人）——已拒绝建立会话");
+  }
 
   // E2E session: X25519 → HKDF-SHA256 → AES-256-GCM (§4.2). Deterministic, so a
   // reconnect re-auth (fresh pair.accepted) re-installs the same key.

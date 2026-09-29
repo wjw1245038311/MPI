@@ -6,11 +6,16 @@ import com.mpi.app.data.RelayState
 import com.mpi.app.protocol.Base64Url
 import com.mpi.app.protocol.Envelope
 import com.mpi.app.protocol.RemoteEnvelope
+import com.mpi.app.data.PairingException
 import com.mpi.app.protocol.X25519
 import com.mpi.app.protocol.createDeviceIdentity
 import com.mpi.app.protocol.decryptFrame
 import com.mpi.app.protocol.deriveAesKey
 import com.mpi.app.protocol.encryptFrame
+import com.mpi.app.protocol.deviceProofText
+import com.mpi.app.protocol.ed25519Sign
+import com.mpi.app.protocol.ed25519SpkiPem
+import com.mpi.app.protocol.hostProofText
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -43,6 +48,8 @@ class PairingTest : RelayTestBase() {
     private val connectionId = "conn-1"
     private val challengeValue = "challenge-abc"
     private val deviceToken = "device-token-from-host"
+    private val hostSeed = ByteArray(32) { 0x21.toByte() }
+    private val hostPublicKeyPem = ed25519SpkiPem(org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters(hostSeed, 0).generatePublicKey().encoded)
     private val hostX25519Priv = Base64Url.encode(ByteArray(32) { 0x33.toByte() })
     private val hostX25519Pub = Base64Url.encode(X25519.publicKeyFromPrivate(Base64Url.decode(hostX25519Priv)))
 
@@ -78,7 +85,13 @@ class PairingTest : RelayTestBase() {
                     "pair.hello" -> {
                         val payload = frame["payload"]?.jsonObject ?: continue
                         val deviceId = payload.str("deviceId").orEmpty()
-                        val signedText = Pairing.signedText(hostId, connectionId, challengeValue, deviceId)
+                        val signedText = deviceProofText(
+                            hostId,
+                            connectionId,
+                            challengeValue,
+                            deviceId,
+                            payload.str("x25519Pub").orEmpty(),
+                        )
                         val verified = verifyEd25519(
                             publicKeyFromSpkiPem(payload.str("publicKeyPem").orEmpty()),
                             signedText.toByteArray(Charsets.UTF_8),
@@ -142,6 +155,15 @@ class PairingTest : RelayTestBase() {
         payload = buildJsonObject {
             put("connectionId", connectionId)
             put("challenge", challengeValue)
+            // v2：主机身份 + 主机 E2E 公钥都被签名覆盖（见 docs/RELAY-SHARING.md §9）
+            put("hostPublicKeyPem", hostPublicKeyPem)
+            put("hostX25519Pub", hostX25519Pub)
+            put(
+                "signature",
+                Base64Url.encode(
+                    ed25519Sign(hostSeed, hostProofText(hostId, connectionId, challengeValue, hostX25519Pub).toByteArray(Charsets.UTF_8)),
+                ),
+            )
         },
         to = deviceId,
     )
@@ -155,4 +177,70 @@ class PairingTest : RelayTestBase() {
         },
         to = deviceId,
     )
+
+    /**
+     * 中继替换主机 E2E 公钥（MITM）必须被拒（见 docs/RELAY-SHARING.md §9）。
+     *
+     * 场景：pair.challenge 里的主机证明是对 `hostX25519Pub` 签的（真主机），而 `pair.accepted`
+     * 里送来的却是另一把公钥（中继自己的）。手机如果照用，就等于把会话密钥交给中继。
+     */
+    @Test
+    fun `a relay swapping the host encryption key is rejected`() = runBlocking {
+        val hostClient = RelayClient(url())
+        val hostRecording = Recording().attach(hostClient)
+        val hostInbox = Channel<JsonObject>(Channel.UNLIMITED)
+        hostClient.onFrame { raw ->
+            (runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull())?.let { hostInbox.trySend(it) }
+        }
+        hostClient.connect()
+        hostRecording.awaitState(RelayState.Open::class.java)
+        assertTrue(hostClient.send(EnvelopeSource.hostRegister(hostId)))
+        hostRecording.awaitFrame("relay.ok")
+        assertTrue(hostClient.send(EnvelopeSource.ticketRegister(ticket)))
+        hostRecording.awaitFrame("relay.ok")
+
+        val relayX25519Pub = Base64Url.encode(X25519.publicKeyFromPrivate(ByteArray(32) { 0x77 }))
+        val hostJob = launch {
+            while (isActive) {
+                val frame = hostInbox.receive()
+                when (frame.str("type")) {
+                    "pair.request", "device.online" -> {
+                        val deviceId = frame.str("deviceId") ?: continue
+                        hostClient.send(Envelope.encode(hostChallenge(deviceId)))
+                    }
+
+                    "pair.hello" -> {
+                        val deviceId = frame["payload"]?.jsonObject?.str("deviceId").orEmpty()
+                        hostClient.send(EnvelopeSource.pairApproved(deviceId, deviceToken))
+                        // ★ 中继把公钥换成了自己的（签名仍是被测主机那把）
+                        hostClient.send(
+                            Envelope.encode(
+                                Envelope.make(
+                                    type = "pair.accepted",
+                                    sessionId = frame.str("sessionId").orEmpty(),
+                                    payload = buildJsonObject {
+                                        put("deviceToken", deviceToken)
+                                        put("x25519Pub", relayX25519Pub)
+                                    },
+                                    to = deviceId,
+                                ),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+        val deviceClient = RelayClient(url())
+        deviceClient.connect()
+        Recording().attach(deviceClient).awaitState(RelayState.Open::class.java)
+        val identity = createDeviceIdentity()
+        val failure = runCatching { Pairing.run(deviceClient, hostId, ticket, identity, "测试手机") }.exceptionOrNull()
+        assertTrue("换公钥必须被拒（实际：${failure?.javaClass?.simpleName}）", failure is PairingException)
+        assertTrue(
+            "错误要说清是身份/公钥不符（实际：${failure?.message}）",
+            (failure?.message ?: "").contains("中间人"),
+        )
+        hostJob.cancel()
+    }
 }

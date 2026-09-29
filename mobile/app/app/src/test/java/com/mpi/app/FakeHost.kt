@@ -8,6 +8,10 @@ import com.mpi.app.protocol.E2EFrame
 import com.mpi.app.protocol.Envelope
 import com.mpi.app.protocol.RemoteEnvelope
 import com.mpi.app.protocol.X25519
+import com.mpi.app.protocol.deviceProofText
+import com.mpi.app.protocol.ed25519Sign
+import com.mpi.app.protocol.ed25519SpkiPem
+import com.mpi.app.protocol.hostProofText
 import com.mpi.app.protocol.decryptFrame
 import com.mpi.app.protocol.deriveAesKey
 import com.mpi.app.protocol.encryptFrame
@@ -42,6 +46,9 @@ class FakeHost(
     private val connectionId: String = "conn-test",
     private val challengeValue: String = "challenge-test",
 ) {
+    /** 主机身份密钥（Ed25519）：签 v2 证明用（见 docs/RELAY-SHARING.md §9）。 */
+    private val hostSeed = ByteArray(32) { 0x21.toByte() }
+    val hostPublicKeyPem: String = ed25519SpkiPem(org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters(hostSeed, 0).generatePublicKey().encoded)
     private val x25519PrivB64u: String = Base64Url.encode(ByteArray(32) { 0x33.toByte() })
     val x25519PubB64u: String = Base64Url.encode(X25519.publicKeyFromPrivate(Base64Url.decode(x25519PrivB64u)))
 
@@ -173,6 +180,10 @@ class FakeHost(
                     payload = buildJsonObject {
                         put("connectionId", connectionId)
                         put("challenge", challengeValue)
+                        // v2：主机身份 + 主机 E2E 公钥都被签名覆盖（换公钥就验不过）
+                        put("hostPublicKeyPem", hostPublicKeyPem)
+                        put("hostX25519Pub", x25519PubB64u)
+                        put("signature", Base64Url.encode(ed25519Sign(hostSeed, hostProofText(hostId, connectionId, challengeValue, x25519PubB64u).toByteArray(Charsets.UTF_8))))
                     },
                     to = deviceId,
                 ),
@@ -185,7 +196,8 @@ class FakeHost(
         val id = payload.str("deviceId").orEmpty()
         deviceId = id
 
-        val signedText = Pairing.signedText(hostId, connectionId, challengeValue, id)
+        val devicePub = payload.str("x25519Pub").orEmpty()
+        val signedText = deviceProofText(hostId, connectionId, challengeValue, id, devicePub)
         signatureChecks += verifyEd25519(
             publicKeyFromSpkiPem(payload.str("publicKeyPem").orEmpty()),
             signedText.toByteArray(Charsets.UTF_8),

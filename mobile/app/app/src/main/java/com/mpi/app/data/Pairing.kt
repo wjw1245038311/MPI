@@ -5,6 +5,10 @@ import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.Envelope
 import com.mpi.app.protocol.X25519
 import com.mpi.app.protocol.deriveAesKey
+import com.mpi.app.protocol.deviceProofText
+import com.mpi.app.protocol.ed25519RawFromPem
+import com.mpi.app.protocol.ed25519Verify
+import com.mpi.app.protocol.hostProofText
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.selects.select
@@ -144,8 +148,26 @@ object Pairing {
         val connectionId = payload.str("connectionId") ?: throw PairingException("pair.challenge 缺少 connectionId")
         val challengeValue = payload.str("challenge") ?: throw PairingException("pair.challenge 缺少 challenge")
 
+        // v2（见 docs/RELAY-SHARING.md §9）：**先验主机身份与它的 E2E 公钥**，再签自己的。
+        // 不验的话，任何能冒充中继的人都能让手机把会话密钥交给它（内容端到端加密就形同虚设）。
+        val hostPem = payload.str("hostPublicKeyPem").orEmpty()
+        val hostSig = payload.str("signature").orEmpty()
+        val hostX25519PubFromChallenge = payload.str("hostX25519Pub").orEmpty()
+        val hostRawKey = ed25519RawFromPem(hostPem)
+        val hostProofOk = hostRawKey != null && hostX25519PubFromChallenge.isNotEmpty() &&
+            ed25519Verify(
+                hostRawKey,
+                hostProofText(hostId, connectionId, challengeValue, hostX25519PubFromChallenge).toByteArray(Charsets.UTF_8),
+                runCatching { Base64Url.decode(hostSig) }.getOrDefault(ByteArray(0)),
+            )
+        if (!hostProofOk) {
+            throw PairingException("主机身份校验失败（可能存在中间人）——请确认连接的是你自己的桌面端")
+        }
+
         onStage(PairingStage.WaitingApproval)
-        val signature = identity.signText(signedText(hostId, connectionId, challengeValue, identity.deviceId))
+        val signature = identity.signText(
+            deviceProofText(hostId, connectionId, challengeValue, identity.deviceId, identity.x25519PubB64u),
+        )
         val hello = Envelope.encode(
             Envelope.make(
                 type = "pair.hello",
@@ -170,6 +192,10 @@ object Pairing {
         val deviceToken = acceptedPayload.str("deviceToken").orEmpty()
         if (deviceToken.isEmpty()) throw PairingException("pair.accepted 未返回 deviceToken")
         val hostX25519Pub = acceptedPayload.str("x25519Pub").orEmpty()
+        // 配对票里的公钥必须就是**被主机签名覆盖**的那一个；否则就是中继在替换公钥（MITM）。
+        if (hostX25519Pub.isNotEmpty() && hostX25519Pub != hostX25519PubFromChallenge) {
+            throw PairingException("主机公钥与签名不符（可能存在中间人）——已拒绝建立会话")
+        }
 
         val aesKey = if (hostX25519Pub.isEmpty()) {
             ByteArray(0)
