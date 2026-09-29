@@ -1,5 +1,7 @@
 package com.mpi.app.data
 
+import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -69,6 +71,12 @@ internal fun directUploadPlan(total: Long, chunk: Int = DIRECT_UPLOAD_CHUNK_BYTE
     return UploadPlan(bounds.dropLast(1), bounds.last())
 }
 
+/** 从 `Content-Range: bytes 0-1023/4096` 里取总长度（取不到 → 0）。 */
+internal fun parseRangeTotal(contentRange: String?): Long {
+    val value = contentRange ?: return 0L
+    return value.substringAfterLast('/', "").trim().toLongOrNull() ?: 0L
+}
+
 /** 直连上传失败（带原因，供界面如实告知）。 */
 class DirectUploadException(message: String) : Exception(message)
 
@@ -79,6 +87,8 @@ data class DirectTarget(
     /** 写：主机预分配的附件名（消息里只带它）；读：附件名。 */
     val name: String,
     val expiresAt: Long,
+    /** 主机声明本次载荷必须加密（`v1`）——客户端据此带 `X-MPI-Enc` 头，见 [AttachmentCrypto]。 */
+    val enc: String? = null,
 )
 
 /**
@@ -114,6 +124,7 @@ internal fun parseDirectTarget(payload: JsonElement?): DirectTarget? {
         token = runCatching { direct["token"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "",
         name = name,
         expiresAt = runCatching { direct["expiresAt"]?.jsonPrimitive?.longOrNull }.getOrNull() ?: 0L,
+        enc = runCatching { direct["enc"]?.jsonPrimitive?.contentOrNull }.getOrNull(),
     )
 }
 
@@ -173,6 +184,8 @@ class DirectAttachments(
         size: Long,
         open: () -> InputStream,
         posterB64: String? = null,
+        /** E2E 会话密钥（配对时协商、从不过网）；主机声明需要加密时必填。 */
+        sessionKey: ByteArray? = null,
         onProgress: (Long, Long) -> Unit = { _, _ -> },
     ): String? {
         if (size <= 0L) return null
@@ -185,6 +198,18 @@ class DirectAttachments(
         ) ?: return null
 
         val plan = directUploadPlan(size)
+        // 主机说“要加密”（v1）就派生本方向的密钥；拿不到会话密钥时**必须失败**，
+        // 不能默默传明文（那样用户以为加密了，实际把视频交给了链路上的任何人）。
+        val enc = if (target.enc == AttachmentCrypto.VERSION) {
+            val key = sessionKey ?: throw DirectUploadException("主机要求加密，但本机没有 E2E 会话密钥（重新配对后再试）")
+            EncContext(
+                key = AttachmentCrypto.deriveKey(key, target.token, AttachmentCrypto.UP, target.name),
+                token = target.token,
+                name = target.name,
+            )
+        } else {
+            null
+        }
         val sent = AtomicLong(0)
         var lastBytes: ByteArray? = null
 
@@ -221,7 +246,7 @@ class DirectAttachments(
                 val workers = List(DIRECT_UPLOAD_CONCURRENCY) {
                     launch(Dispatchers.IO) {
                         for (pending in queue) {
-                            val problem = putChunk(target.url, pending.bytes, pending.offset, pending.end, size)
+                            val problem = putChunk(target.url, pending.bytes, pending.offset, pending.end, size, enc)
                             if (problem != null) throw DirectUploadException(problem)
                             onProgress(sent.addAndGet(pending.bytes.size.toLong()), size)
                         }
@@ -241,7 +266,7 @@ class DirectAttachments(
 
         // 屏障：中间分片全部 200 之后才发最后一片（它触发主机侧的收齐与定稿）。
         val last = lastBytes ?: return target.name
-        val lastProblem = putChunk(target.url, last, plan.last!!.first, plan.last.second, size)
+        val lastProblem = putChunk(target.url, last, plan.last!!.first, plan.last.second, size, enc)
         if (lastProblem != null) throw DirectUploadException(lastProblem)
         onProgress(sent.addAndGet(last.size.toLong()), size)
 
@@ -255,17 +280,115 @@ class DirectAttachments(
     /** 一片待发的分片（生产者在内存里拿着，worker 发出后即释放）。 */
     private class PendingChunk(val offset: Long, val end: Long, val bytes: ByteArray)
 
+    /** 加密上下文：把 token/附件名/密钥打包，避免每处都传四个参数。 */
+    private class EncContext(val key: ByteArray, val token: String, val name: String)
+
     /** 换一个可直接喂给播放器的读 URL（原生 Range / 可 seek）。不可用 → null。 */
     suspend fun playbackUrl(threadId: String, name: String, mimeType: String?): String? =
         requestTarget(threadId = threadId, mode = "read", name = name, mimeType = mimeType)?.url
 
-    private suspend fun putChunk(url: String, bytes: ByteArray, offset: Long, end: Long, total: Long): String? =
+    /**
+     * **加密直连下载**：按 Range 取回加密分片 → 解密 → 追加写入本地文件。
+     *
+     * 为什么不把 URL 直接喂 ExoPlayer：载荷是密文，播放器解不了；解密必须由我们做。
+     * 代价是「边下边播」变成「下完再播」（与中继分片那条路一致），换来的是**明文链路上内容也不外泄**。
+     *
+     * @return 是否成功（主机/网络/解密任一步失败即 false，调用方回落中继）
+     */
+    suspend fun downloadEncrypted(
+        target: DirectTarget,
+        sessionKey: ByteArray,
+        output: File,
+        chunkBytes: Int = 512 * 1024,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): Boolean {
+        if (target.enc != AttachmentCrypto.VERSION) return false
+        val key = AttachmentCrypto.deriveKey(sessionKey, target.token, AttachmentCrypto.DOWN, target.name)
+        output.parentFile?.mkdirs()
+        var offset = 0L
+        var total = 0L
+        try {
+            FileOutputStream(output).use { sink ->
+                while (total == 0L || offset < total) {
+                    val slice = fetchRangeSlice(target.url, offset, chunkBytes) ?: return false
+                    if (slice.total > 0L) total = slice.total
+                    val plain = AttachmentCrypto.decrypt(
+                        key,
+                        slice.body,
+                        AttachmentCrypto.aad(AttachmentCrypto.DOWN, target.name, offset, slice.plainLength),
+                    )
+                    // 没进展就停：否则主机一直回空片会把这个循环转成死循环（与分片拉取同一护栏）。
+                    if (plain.isEmpty()) return false
+                    sink.write(plain)
+                    offset += plain.size.toLong()
+                    onProgress(offset, total)
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return false
+        }
+        return true
+    }
+
+    /** 取一片加密载荷（含解密所需元数据）。失败 → null。 */
+    private suspend fun fetchRangeSlice(url: String, offset: Long, chunkBytes: Int): RangeSlice? =
         withContext(Dispatchers.IO) {
-            val httpRequest = Request.Builder()
+            val request = Request.Builder()
                 .url(url)
-                .put(bytes.toRequestBody(OCTET_STREAM))
-                .header("Content-Range", contentRangeHeader(offset, end, total))
+                .header(AttachmentCrypto.HEADER, AttachmentCrypto.VERSION)
+                .header("Range", "bytes=$offset-${offset + chunkBytes - 1}")
                 .build()
+            val call = http.newCall(request)
+            val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
+            try {
+                call.execute().use { response ->
+                    val body = if (response.isSuccessful) response.body?.bytes() else null
+                    if (body == null) {
+                        null
+                    } else {
+                        RangeSlice(
+                            body = body,
+                            plainLength = response.header("X-MPI-Len")?.toIntOrNull() ?: (body.size - AttachmentCrypto.OVERHEAD),
+                            total = parseRangeTotal(response.header("Content-Range")),
+                        )
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            } finally {
+                handle?.dispose()
+            }
+        }
+
+    /** 一片加密载荷。 */
+    private class RangeSlice(val body: ByteArray, val plainLength: Int, val total: Long)
+
+    private suspend fun putChunk(
+        url: String,
+        bytes: ByteArray,
+        offset: Long,
+        end: Long,
+        total: Long,
+        enc: EncContext?,
+    ): String? =
+        withContext(Dispatchers.IO) {
+            val plainLength = bytes.size
+            val body = if (enc == null) {
+                bytes.toRequestBody(OCTET_STREAM)
+            } else {
+                AttachmentCrypto.encrypt(enc.key, bytes, AttachmentCrypto.aad(AttachmentCrypto.UP, enc.name, offset, plainLength))
+                    .toRequestBody(OCTET_STREAM)
+            }
+            val builder = Request.Builder()
+                .url(url)
+                .put(body)
+                .header("Content-Range", contentRangeHeader(offset, end, total))
+            if (enc != null) builder.header(AttachmentCrypto.HEADER, AttachmentCrypto.VERSION)
+            val httpRequest = builder.build()
             val call = http.newCall(httpRequest)
             // 协程被取消（用户点「取消上传」/离开会话）→ 立刻掐断在途的请求，
             // 否则那 4MB 会一直传到超时为止。

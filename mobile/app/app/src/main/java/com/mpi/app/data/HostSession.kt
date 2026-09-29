@@ -174,6 +174,14 @@ class HostSession(
     val isAuthenticated: Boolean
         get() = aesKey != null && _state.value is SessionState.Connected
 
+    /**
+     * 取 E2E 会话密钥（附件应用层加密的 ikm，见 `AttachmentCrypto`）。
+     *
+     * 为什么可以从这里拿：会话密钥由配对时的 X25519 共享密钥派生，主机公钥一直在本地，
+     * 密钥可随时本地复算；它**从不经过网络**，所以即使附件走明文 HTTP，内容也不外泄。
+     */
+    fun sessionKeyOrNull(): ByteArray? = aesKey
+
     override fun isOpen(): Boolean = client.isOpen()
 
     /** 发送一条已构建的 envelope（[Requester] 用这条）。 */

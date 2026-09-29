@@ -1,5 +1,6 @@
 package com.mpi.app
 
+import com.mpi.app.data.AttachmentCrypto
 import com.mpi.app.data.DIRECT_UPLOAD_CHUNK_BYTES
 import com.mpi.app.data.DIRECT_UPLOAD_CONCURRENCY
 import com.mpi.app.data.contentRangeHeader
@@ -10,6 +11,7 @@ import com.mpi.app.data.parseDirectTarget
 import com.mpi.app.ui.VideoUpload
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -180,5 +182,51 @@ class DirectAttachmentLogicTest {
         // 主机报的 total 可能大于已传字节（尚未收齐）→ 仍显示 99，别显示 100
         assertEquals(99, VideoUpload("a", 100, 100).percent)
         assertNull("总长未知 → 不定进度", VideoUpload("a", 0, 0).percent)
+    }
+
+    // ---- 应用层加密：与主机（Node）逐字节对齐 ----
+
+    /**
+     * **跨端测试向量**：同一组固定输入，主机侧（`src/main/remote/attachment-crypto.ts`）派生出
+     * `82873c46…`；安卓这边必须一模一样——不一致的表现是「加密上传全部 400」，而现场很难看出根因。
+     * （生成命令见提交信息；与 `scripts/test-e2e-crypto.mjs` 的跨端钉法同一套路。）
+     */
+    @Test
+    fun `attachment key derivation matches the host byte for byte`() {
+        val sessionKey = ByteArray(32) { 0x5a.toByte() }
+        val key = AttachmentCrypto.deriveKey(sessionKey, "tok-1", AttachmentCrypto.UP, "clip.mp4")
+        assertEquals(
+            "82873c461956178b1807e11c1d0b90b77e2a194e7c38d8629e844bf0344ddc53",
+            key.joinToString("") { "%02x".format(it) },
+        )
+        assertEquals("mpi-attachment-v1|up|clip.mp4", AttachmentCrypto.infoString(AttachmentCrypto.UP, "clip.mp4"))
+        assertEquals("v1|up|clip.mp4|4194304|5", AttachmentCrypto.aad(AttachmentCrypto.UP, "clip.mp4", 4_194_304, 5))
+    }
+
+    @Test
+    fun `attachment frame round trips and rejects tampering`() {
+        val sessionKey = ByteArray(32) { 0x5a.toByte() }
+        val key = AttachmentCrypto.deriveKey(sessionKey, "tok-1", AttachmentCrypto.DOWN, "clip.mp4")
+        val plain = "一份不该被别人看到的视频字节".toByteArray(Charsets.UTF_8)
+        val aad = AttachmentCrypto.aad(AttachmentCrypto.DOWN, "clip.mp4", 1024, plain.size)
+        val frame = AttachmentCrypto.encrypt(key, plain, aad)
+
+        assertEquals("帧 = nonce(12) + 密文 + tag(16)", plain.size + AttachmentCrypto.OVERHEAD, frame.size)
+        assertArrayEquals(plain, AttachmentCrypto.decrypt(key, frame, aad))
+
+        val tampered = frame.copyOf()
+        tampered[tampered.size - 1] = (tampered[tampered.size - 1] + 1).toByte()
+        try {
+            AttachmentCrypto.decrypt(key, tampered, aad)
+            org.junit.Assert.fail("改一个 bit 就必须解不开")
+        } catch (_: Exception) {
+            // 预期
+        }
+        try {
+            AttachmentCrypto.decrypt(key, frame, AttachmentCrypto.aad(AttachmentCrypto.UP, "clip.mp4", 1024, plain.size))
+            org.junit.Assert.fail("方向写进 AAD，换方向必须解不开")
+        } catch (_: Exception) {
+            // 预期
+        }
     }
 }

@@ -7,6 +7,7 @@ import com.mpi.app.AppContainer
 import com.mpi.app.AppVisibility
 import com.mpi.app.data.Attachment
 import com.mpi.app.data.AttachmentLoader
+import com.mpi.app.data.AttachmentCrypto
 import com.mpi.app.data.DirectAttachments
 import com.mpi.app.data.DirectUploadException
 import com.mpi.app.data.MAX_FILE_BYTES
@@ -719,6 +720,20 @@ class AppViewModel(
         if (target.length() > 0) return true
         val part = File(target.parentFile, "${target.name}.part")
         return try {
+            // 先试**加密直连**（手机不装 Tailscale 时走它：公网明文 HTTP + 应用层加密）。
+            // 拿到令牌但主机没要求加密 → 这条路不适用，回落中继分片（保持原有行为）。
+            val direct = directAttachments
+            val threadId = _ui.value.openThreadId
+            val key = session?.sessionKeyOrNull()
+            if (direct != null && threadId != null && key != null) {
+                val readTarget = direct.requestTarget(threadId, "read", name = name)
+                if (readTarget?.enc == AttachmentCrypto.VERSION) {
+                    if (direct.downloadEncrypted(readTarget, key, part, onProgress = onProgress)) {
+                        return part.renameTo(target) || target.length() > 0
+                    }
+                    return false
+                }
+            }
             actions.fetchAttachmentTo(name, part, onProgress)
             part.renameTo(target) || target.length() > 0
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -832,6 +847,8 @@ class AppViewModel(
                     size = source.size,
                     open = source.open,
                     posterB64 = source.posterB64,
+                    // 主机声明要加密时用会话密钥派生的密钥；没有就报错，绝不默默传明文。
+                    sessionKey = session?.sessionKeyOrNull(),
                     onProgress = { loaded, total ->
                         _ui.update { state -> state.copy(videoUpload = state.videoUpload?.copy(loaded = loaded, total = total)) }
                     },
@@ -913,7 +930,11 @@ class AppViewModel(
     suspend fun directPlaybackUrl(name: String, mimeType: String?): String? {
         val direct = directAttachments ?: return null
         val threadId = _ui.value.openThreadId ?: return null
-        return direct.playbackUrl(threadId, name, mimeType)
+        val target = direct.requestTarget(threadId, "read", name = name, mimeType = mimeType) ?: return null
+        // 主机要求加密时**不能**把 URL 交给播放器（密文它解不了）：返回 null，让界面走
+        // 「取回并解密到本地文件再播」那条路（见 fetchVideoAttachment）。
+        if (target.enc == AttachmentCrypto.VERSION) return null
+        return target.url
     }
 
     fun removeAttachment(index: Int) {

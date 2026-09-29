@@ -78,6 +78,14 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run test:attachment-direct` 新增两组 —— 纯逻辑（GCM 往返 / 单 bit 篡改 / AAD 方向与 offset 绑定 / 换密钥解不开）与真实 HTTP（加密 PUT 落盘为明文、加密 GET 带 Range 解回原文、无会话密钥 400）；`npm run typecheck`。
 
+10. **安卓端：附件走「公网明文 + 应用层加密」（v1 客户端）**——接上一条：主机已支持加密载荷，这版把安卓端补齐，于是**手机不装 Tailscale** 也能安全地收发附件（国内链路会按 TLS 握手指纹注入 RST，所以这条路只能明文传输，安全性由应用层保证）：
+   - 上行：主机在 `attachment.url` 回包声明 `enc: v1` 后，分片先按 `HKDF(会话密钥, salt=令牌, info="mpi-attachment-v1|up|<附件名>")` 派生密钥做 AES-256-GCM 加密再 PUT（附 `X-MPI-Enc: v1`）；拿不到会话密钥直接报错，**绝不默默传明文**
+   - 下行：密文不能喂播放器，改为按 Range 取回 → 逐片解密 → 落盘 → 播放（与中继分片同一条交互：有进度、可取消；代价是回到「下完再播」）
+   - 密钥永不过网：会话密钥来自配对时的 X25519 协商（主机公钥一直在本地、可随时复算），明文链路上的令牌只当 salt/命名空间
+   - 跨端一致性由固定向量钉住：同一组输入，主机（Node）与安卓（Kotlin）必须派生出同一把密钥（`82873c46…`）
+
+   验证方式：（手机端）`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（新增：密钥派生跨端向量、帧往返、单 bit 篡改与换方向必须解不开）+ 主机 `npm run test:attachment-direct`。真机：把 `attachmentBaseUrl` 指向公网明文入口（如 `http://whomidas.cn:10444`）→ 发一个 20–50MB 视频 → 主机日志出现 `attachment-http PUT … `（len 为**明文**长度）且附件区文件与发送端逐字节一致；点开播放 → 日志出现 `attachment-http GET … `（带 `X-MPI-Enc`）。
+
 ## v0.9.2（2026-09-26）
 
 1. **本地模型 prefill 等待指示器**——本地模型（如 LM Studio）处理长上下文时，首个 token 到达前可能长达数十秒；这段时间 pi 还没发出 assistant 消息事件，聊天区此前没有任何反馈（只有输入框的发送键变成停止），看起来像卡死。现在当「agent 在跑 + assistant 消息尚未开始 + 非压缩中 + 无工具卡在运行」时，聊天区显示带动画圆点和已等待秒数的占位行（「思考中 · 12s」/ “Thinking… 12s”），覆盖三个窗口：发送后 → LLM 响应头到达（含冷启动建桥）、以及每轮工具执行完后的下一轮 prefill。顺带把消息内既有的硬编码「思考中」文案 i18n 化（英文界面显示 “Thinking…”）。

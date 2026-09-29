@@ -2441,6 +2441,16 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
   }
 
   /**
+   * 告诉客户端「本设备的附件载荷该不该加密」（见 attachment-crypto.ts）。
+   *
+   * 为什么由主机说：主机知道该设备有没有 E2E 会话密钥。客户端据此决定带 `X-MPI-Enc: v1`，
+   * 而不是自己猜（猜错的结果是载荷被拒，或者更糟——客户端以为加密了、实际走了明文）。
+   */
+  function attachmentEncField(deviceId: string): { enc?: string } {
+    return activeRelayUplink?.e2eSessionKeyFor(deviceId) ? { enc: "v1" } : {};
+  }
+
+  /**
    * 直连上传完成的附件 → 直接拼信封（字节已经在附件区，**不能再 adopt 一次**，
    * 否则会复制成第二个文件 + 历史里出现两个名字）。
    */
@@ -2893,7 +2903,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         }
         const token = attachmentTokens.mint({ mode: "read", threadId, deviceId, name, ...(input.mimeType ? { mimeType: input.mimeType } : {}) });
         appendDiagLog(`attachment-direct mint read name=${name.slice(0, 36)} dev=${deviceId.slice(0, 12)}`);
-        return { url: `${base}/att/${token.token}`, token: token.token, name, expiresAt: token.expiresAt };
+        return { url: `${base}/att/${token.token}`, token: token.token, name, expiresAt: token.expiresAt, ...attachmentEncField(deviceId) };
       }
       // 写入令牌：名字由主机预分配（客户端无法自己指定名字，也就无法覆盖别人的附件）。
       const name = reserveVideoName(input.originalName, input.mimeType);
@@ -2906,7 +2916,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         ...(input.mimeType ? { mimeType: input.mimeType } : {}),
       });
       appendDiagLog(`attachment-direct mint write name=${name.slice(0, 36)} dev=${deviceId.slice(0, 12)} size=${input.size ?? "?"}`);
-      return { url: `${base}/att/${token.token}`, token: token.token, name, expiresAt: token.expiresAt };
+      return { url: `${base}/att/${token.token}`, token: token.token, name, expiresAt: token.expiresAt, ...attachmentEncField(deviceId) };
     },
     fetchAttachment: async (threadId, name, offset): Promise<RemoteAttachmentChunk> => {
       // 作用域校验在前：不区分「名字非法」「文件已被清理」「不属于该会话」——
