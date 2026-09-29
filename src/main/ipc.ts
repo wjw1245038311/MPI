@@ -195,10 +195,12 @@ import {
   VIDEO_POSTER_BASE64_BUDGET,
   VIDEO_REF_ATTR,
   mediaRefEnvelope,
+  type MediaRef,
   splitVideoRefs,
   videoMimeForPath,
   videoRefEnvelope,
 } from "./remote/video-refs";
+import { snapshotImagePayload } from "./remote/image-thumbs";
 import { fillVideoPosters } from "./remote/video-poster";
 import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, agentImageFor, findVideoPoster, hasObject, isContentKey, isVideoFile, materializeIntoWorkspace, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeThumbnail, storeVideoPoster } from "./chat-attachment-store";
 import { createAttachmentServer } from "./remote/attachment-server";
@@ -1700,6 +1702,21 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     // while text blocks preserve the actual thinking/tool/reply order in the
     // mobile renderer.
     let imageBudget = 400_000;
+    /**
+     * 读缩略图并转 base64（P3）；读不到 → null（调用方回落到「内联小原图」那条老路）。
+     *
+     * 缩略图是主机自己在收到图片时落盘的（`<key>.thumb.jpg`，见 resolveKeyedImages），
+     * 所以这里只是一次本地读盘，不涉及网络。
+     */
+    const readThumbnailBase64 = (name: string): string | null => {
+      try {
+        const abs = resolveChatAttachment(name);
+        if (!abs) return null;
+        return readFileSync(abs).toString("base64");
+      } catch {
+        return null;
+      }
+    };
     // 手机端「往上拉不动」的根因就是这里的 -80：更早的消息根本没下发。
     // 注意 source 是**原始 pi 条目**（含 toolResult），与用户看到的会话条目不是
     // 一回事（2026-09-16 取证：400 原始条目 → 17 条会话消息）。这里只控制解析
@@ -1723,12 +1740,14 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       }
     }
 
-    const blocksFor = (message: any): RemoteBlock[] => {
+    const blocksFor = (message: any, imageRefs: MediaRef[] = []): RemoteBlock[] => {
       if (typeof message?.content === "string") {
         const text = splitVideoRefs(message.content).text.slice(0, 12_000);
         return text ? [{ type: "text", text }] : [];
       }
       if (!Array.isArray(message?.content)) return [];
+      // 图片引用（P3）按**顺序**与图片块一一对应：发送端就是按这个顺序 pui 的。
+      const refs = [...imageRefs];
       return message.content.slice(0, 24).map((block: any): RemoteBlock | null => {
         if (block?.type === "text") return { type: "text", text: splitVideoRefs(String(block.text || "")).text.slice(0, 12_000) };
         // thinking **不设逐块上限**（2026-09-25）：实测它在一次会话里占下发字节的 62%，
@@ -1746,12 +1765,26 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
             args: toolArgsSummary(block.arguments),
           };
         }
-        if (block?.type === "image" && typeof block.data === "string" && block.data.length <= 400_000 && imageBudget >= block.data.length) {
-          imageBudget -= block.data.length;
-          const mimeType = typeof block.mimeType === "string" && /^image\/(jpeg|png|webp|gif)$/.test(block.mimeType)
-            ? block.mimeType
-            : "image/jpeg";
-          return { type: "image", data: block.data, mimeType };
+        if (block?.type === "image" && typeof block.data === "string") {
+          // P3：有缩略图就下发缩略图（几十 KB），原图由客户端按 key 拉；
+          // 没有缩略图（老消息）才照旧内联小原图。决策表在 remote/image-thumbs.ts。
+          const ref = refs.shift();
+          const thumbnail = ref?.thumb ? readThumbnailBase64(ref.thumb) : null;
+          const decision = snapshotImagePayload(block.data, thumbnail, imageBudget);
+          if (!decision) return null;
+          imageBudget -= decision.data.length;
+          const mimeType = decision.kind === "thumb"
+            ? "image/jpeg"
+            : typeof block.mimeType === "string" && /^image\/(jpeg|png|webp|gif)$/.test(block.mimeType)
+              ? block.mimeType
+              : "image/jpeg";
+          return {
+            type: "image",
+            data: decision.data,
+            mimeType,
+            ...(ref?.name ? { key: ref.name } : {}),
+            ...(ref?.label ? { label: ref.label } : {}),
+          };
         }
         return null;
       }).filter((block: RemoteBlock | null): block is RemoteBlock => block !== null);
@@ -1845,12 +1878,14 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
 
       flushAssistantRound();
       const role = message?.role === "user" || message?.role === "system" ? message.role : "system";
-      const blocks = blocksFor(message);
       const artifacts = artifactsByMessage.get(index);
       // 视频附件：把 host 自己写在用户消息里的 `<file … attach="video" poster="…" />` 引用剥出来，
       // 换成 video 块（封面在本函数末尾按预算从盘上回填）；文本同时清干净，
       // 否则气泡里会露出引用原文。从**未截断**的原文里取引用，避免长文把末尾的引用切掉。
+      // 图片引用（kind=image）也在这里取——要**先于** blocksFor，因为块要用缩略图替换原图。
       const videoSource = splitVideoRefs(remoteText(message?.content));
+      const imageRefs = videoSource.refs.filter((ref) => ref.kind === "image" && ref.thumb);
+      const blocks = blocksFor(message, imageRefs);
       const videoBlocks = videoSource.refs.map((ref): RemoteBlock => {
         const block: RemoteBlock = {
           type: "video",

@@ -73,6 +73,25 @@ const ROOT = resolve(import.meta.dirname, "..");
   assert.equal(videoMimeForPath("/tmp/a.unknown"), "video/mp4", "未知扩展名兜底 mp4（浏览器至少会试着解）");
 }
 
+// --- 5. P3：快照里的图片载荷决策（缩略图优先）-------------------------------
+// 手机发图后 prompt 里带的是**原图**（给模型看），但快照不该跟着下发原图——
+// 有缩略图就发缩略图，原图由客户端按 key 拉。这张决策表退化的表现是「快照悄悄变回几 MB」。
+{
+  const { snapshotImagePayload, INLINE_IMAGE_MAX_CHARS } = await import("../src/main/remote/image-thumbs.ts");
+  const original = "O".repeat(2_000_000);
+  const thumb = "T".repeat(40_000);
+  assert.deepEqual(snapshotImagePayload(original, thumb, 400_000), { data: thumb, kind: "thumb" }, "有缩略图就发缩略图");
+  assert.deepEqual(
+    snapshotImagePayload("small", null, 400_000),
+    { data: "small", kind: "original" },
+    "没有缩略图（老消息）→ 小原图照旧内联",
+  );
+  assert.equal(snapshotImagePayload("O".repeat(INLINE_IMAGE_MAX_CHARS + 1), null, 400_000), null, "大原图又没有缩略图 → 不下发");
+  assert.equal(snapshotImagePayload(original, "T".repeat(500_000), 400_000), null, "预算不够时连缩略图也不硬塞（交给预算裁剪）");
+  assert.equal(snapshotImagePayload(original, null, 400_000), null, "没缩略图、原图又大 → 不下发");
+  console.log("ok 5 - 快照图片载荷：缩略图优先 / 老消息内联小原图 / 其余按预算丢弃");
+}
+
 // --- 2. 收缩器不能破坏媒体本体 ------------------------------------------------
 
 {

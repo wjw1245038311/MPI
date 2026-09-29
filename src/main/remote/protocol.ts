@@ -208,6 +208,11 @@ export interface RemoteMessage {
      * 老消息没这个字段 → 客户端本来就只显示封面，不会退化成坏体验。
      */
     label?: string;
+    /**
+     * 内容寻址的 key（P3，image 块用）：快照只下发**缩略图**（几十 KB），原图由客户端
+     * 拿这个 key 去申请读令牌按需拉（url 对 key 来说没有可读信息，但它是唯一标识）。
+     */
+    key?: string;
     /** 实时事件通道刻意剥掉本体（防大帧）——照图片语义。 */
     omitted?: boolean;
   }>;
