@@ -19,6 +19,7 @@
  * 已经判过一次）；不做 TLS（Tailscale 负责）；不做用户认证（令牌即凭证）。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { readFileSync, statSync } from "node:fs";
 import { extname } from "node:path";
 import { parseRange } from "../chat-attachment-protocol";
@@ -56,9 +57,17 @@ const MIME_TYPES: Record<string, string> = {
 
 export interface AttachmentServerOptions {
   tokens: AttachmentTokenStore;
-  /** 监听地址（默认只绑本机，由 tailscale serve 转发到 tailnet）。 */
+  /** 监听地址（默认只绑本机，由 tailscale serve 或反向代理转发到外网）。 */
   host?: string;
   port?: number;
+  /**
+   * 可选：用 TLS 直起（不经 tailscale serve / 反向代理）。
+   *
+   * 用途：把附件服务经**公网**暴露（例如反向 SSH 隧道绑到 ECS 的公网端口）时，
+   * TLS 必须由我们自己终结——客户端（安卓 OkHttp、PWA）都要求受信证书。
+   * 证书通常是腾讯云免费 DV 或 Let's Encrypt 签发的单个域名证书。
+   */
+  tls?: { certFile: string; keyFile: string };
   /** 诊断日志（主机的 appendDiagLog；测试里可传空函数）。 */
   log?: (line: string) => void;
   /** 字节收齐时回调：调用方据此把附件登记到作用域允许表（ipc.ts 用）。 */
@@ -118,7 +127,7 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
     return token ? { token, raw } : null;
   };
 
-  const server = createServer((req, res) => {
+  const handle = (req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
       if (req.method === "OPTIONS") {
@@ -279,13 +288,22 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
         /* 响应可能已经开始写了 */
       }
     });
-  });
+  };
+
+  // TLS 是可选的：走 tailscale serve / 内网反向代理时保持明文 http（由那层终结 TLS），
+  // 经公网隧道暴露时才需要自己终结（证书文件不存在就让 readFileSync 抛，不静默降级成明文）。
+  const server = options.tls
+    ? createHttpsServer(
+        { cert: readFileSync(options.tls.certFile), key: readFileSync(options.tls.keyFile) },
+        handle,
+      )
+    : createServer(handle);
 
   server.on("clientError", (_err, socket) => socket.destroy());
   server.listen(port, host, () => {
     const address = server.address();
     const actual = typeof address === "object" && address ? address.port : port;
-    log(`attachment-http listening http://${host}:${actual}`);
+    log(`attachment-http listening ${options.tls ? "https" : "http"}://${host}:${actual}`);
   });
   return server;
 }

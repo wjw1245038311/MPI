@@ -2336,12 +2336,20 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
   /** 直连令牌（能力 URL）：绑定 会话/设备/方向/时限，见 remote/attachment-tokens.ts。 */
   const attachmentTokens = new AttachmentTokenStore();
   let attachmentServer: Server | null = null;
+  let attachmentHttpsServer: Server | null = null;
   let attachmentServerReady: Promise<boolean> | null = null;
   let attachmentBaseUrl: string | null = null;
   let attachmentBaseUrlResolved = false;
   /** 本进程内经写令牌上传完成的附件（名字 → 归属），消息里带 storedName 时据此放行。 */
   const uploadedAttachments = new Map<string, { threadId: string; deviceId: string; at: number }>();
   const ATTACHMENT_HTTP_PORT = Number(process.env.MPI_ATTACHMENT_PORT || 8899);
+  /**
+   * 带 TLS 的第二个监听（仅在配置了证书时启用）。
+   *
+   * 用途：经**公网**反向隧道暴露附件服务时（例如 ssh -R 绑到 ECS 的公网端口），
+   * 客户端要求受信证书、且不能依赖 tailscale serve/反向代理→ 由我们自己终结 TLS。
+   */
+  const ATTACHMENT_HTTPS_PORT = Number(process.env.MPI_ATTACHMENT_HTTPS_PORT || 8898);
   /** tailnet 侧的对外端口（由 `scripts/setup-attachment-serve.sh` 的 --https 转发指向内部端口）。 */
   const ATTACHMENT_PUBLIC_PORT = Number(process.env.MPI_ATTACHMENT_PUBLIC_PORT || 8443);
 
@@ -2386,16 +2394,16 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     const base = await resolveAttachmentBaseUrl();
     if (!base) return null;
     if (!attachmentServer) {
-      const server = createAttachmentServer({
+      const shared = {
         tokens: attachmentTokens,
-        port: ATTACHMENT_HTTP_PORT,
         log: appendDiagLog,
-        onUploadComplete: ({ name, threadId, deviceId }) => {
+        onUploadComplete: ({ name, threadId, deviceId }: { name: string; threadId: string; deviceId: string }) => {
           // 字节到齐才登记：此后 `storedName` 引用与客户端的按需拉取都能过作用域校验。
           uploadedAttachments.set(name, { threadId, deviceId, at: Date.now() });
           rememberAttachmentNames(threadId, [name]);
         },
-      });
+      };
+      const server = createAttachmentServer({ ...shared, port: ATTACHMENT_HTTP_PORT });
       attachmentServer = server;
       attachmentServerReady = new Promise<boolean>((resolve) => {
         server.once("listening", () => resolve(true));
@@ -2404,6 +2412,23 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
           resolve(false);
         });
       });
+      // 配了证书就再起一个 https 监听（同一套 handler / 同一批 token，公网隧道走它）。
+      // 证书读不到只是这条路不可用（日志留证），不影响 http 那条。
+      const config = getConfig();
+      if (config.attachmentCertFile && config.attachmentKeyFile) {
+        try {
+          attachmentHttpsServer = createAttachmentServer({
+            ...shared,
+            port: ATTACHMENT_HTTPS_PORT,
+            tls: { certFile: config.attachmentCertFile, keyFile: config.attachmentKeyFile },
+          });
+          attachmentHttpsServer.on("error", (error) =>
+            appendDiagLog(`attachment-https listen failed: ${String((error as Error)?.message).slice(0, 60)}`),
+          );
+        } catch (error) {
+          appendDiagLog(`attachment-https disabled: ${String((error as Error)?.message).slice(0, 60)}`);
+        }
+      }
     }
     if (attachmentServerReady && !(await attachmentServerReady)) return null;
     return base;
@@ -3002,6 +3027,13 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
   });
   activeRemoteHost = remoteHost;
   remoteHost.start();
+  // 附件服务：配了公网入口/证书就**预热**起来。
+  // 为什么不靠懒启动：公网入口（反向隧道绑在 ECS 上的端口）在 App 起来后就该可用——
+  // 否则隧道指向的本地端口没人监听，第一次访问直接失败（用户看到的是「附件直连坏了」，
+  // 而日志里什么都不留）。
+  if (getConfig().attachmentBaseUrl || (getConfig().attachmentCertFile && getConfig().attachmentKeyFile)) {
+    void ensureAttachmentServer().catch(() => {});
+  }
   if (getConfig().remoteSignalingEnabled) remoteHost.enableSignaling(true);
   applyRelayUplinkConfig(remoteHost);
 

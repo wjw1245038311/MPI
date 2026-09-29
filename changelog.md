@@ -56,6 +56,13 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：（手机端）`./gradlew assembleDebug :app:testDebugUnitTest`（新增并发计划用例：最后一片被屏障持有、单片/空文件边界、并发+屏障与串行覆盖完全一致、并发度护栏）。真机：发同一个 20–50MB 视频，与上一版耗时对比（流量 / 中继下应明显变快）；主机日志里 `attachment-direct mint write` 与 `attachment-http upload done` 的时间差应缩短，且**不出现** `chunk exceeds` / `bad-range` 这类 400。
 
+7. **附件服务支持「公网入口」：自带 TLS 监听 + 启动即监听（为绕开 DERP 中继铺路）**——公司网络里的工作站既没有公网入站、也改不了公司路由器，手机流量只能挤 Tailscale 的 DERP 中继（实测上限 ~1.2MB/s，加并发也无效）。现在主机可以自己终结 TLS、把服务交给**反向隧道**暴露到有公网 IP 的机器上：
+   - 新增配置 `attachmentCertFile` / `attachmentKeyFile`：两个都配就额外起一个 **https 监听**（默认 `127.0.0.1:8898`，与 http 那条共用同一套令牌与处理逻辑）——经反向隧道（如 `ssh -R 0.0.0.0:10443:127.0.0.1:8898`）暴露到公网时，TLS 由主机自己终结（这条路上没有 `tailscale serve` 或反向代理可依赖，而安卓与 PWA 都要求受信证书）
+   - 配了 `attachmentBaseUrl` 或证书时，附件服务**启动即监听**（不再等第一次请求）：公网入口指向的本地端口要是没人监听，第一次访问直接失败且日志里什么都不留
+   - 实测链路：`https://<域名>:10443/att/<token>` → 公网 → ECS → 反向隧道 → 主机 `127.0.0.1:8898`，返回主机的 403（无效令牌），往返 0.29s
+
+   验证方式：`npm run typecheck` + `npm run test:attachment-direct`。本机：`curl -k https://127.0.0.1:8898/att/xyz` 应得 403；主机日志应出现两行 `attachment-http listening http://127.0.0.1:8899` 与 `… https://127.0.0.1:8898`（启动时就该有，不必先有请求）。
+
 ## v0.9.2（2026-09-26）
 
 1. **本地模型 prefill 等待指示器**——本地模型（如 LM Studio）处理长上下文时，首个 token 到达前可能长达数十秒；这段时间 pi 还没发出 assistant 消息事件，聊天区此前没有任何反馈（只有输入框的发送键变成停止），看起来像卡死。现在当「agent 在跑 + assistant 消息尚未开始 + 非压缩中 + 无工具卡在运行」时，聊天区显示带动画圆点和已等待秒数的占位行（「思考中 · 12s」/ “Thinking… 12s”），覆盖三个窗口：发送后 → LLM 响应头到达（含冷启动建桥）、以及每轮工具执行完后的下一轮 prefill。顺带把消息内既有的硬编码「思考中」文案 i18n 化（英文界面显示 “Thinking…”）。

@@ -101,6 +101,15 @@ export interface AppConfig {
    * 127.0.0.1，对外由代理转发。环境变量 `MPI_ATTACHMENT_BASE_URL` 优先级更高（临时覆盖用）。
    */
   attachmentBaseUrl?: string;
+  /**
+   * 附件服务的 TLS 证书与私钥（可选，PEM 路径）。
+   *
+   * 两个都给，主机才会额外起一个 **https 监听**（默认 127.0.0.1:8898）：
+   * 经公网反向隧道（如 `ssh -R <公网端口>:127.0.0.1:8898`）暴露附件服务时，
+   * 客户端要求受信证书，而且这条路上没有 tailscale serve / 反向代理帮我们终结 TLS。
+   */
+  attachmentCertFile?: string;
+  attachmentKeyFile?: string;
   /** Projects the user explicitly pinned; shown at the top of the sidebar. */
   pinnedProjects: string[];
   /** Internal migration marker for the explicit project-pin behavior. */
@@ -702,6 +711,10 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (pinnedProjects) out.pinnedProjects = pinnedProjects;
   const attachmentBaseUrl = typeof p.attachmentBaseUrl === "string" ? p.attachmentBaseUrl.trim() : "";
   if (attachmentBaseUrl) out.attachmentBaseUrl = attachmentBaseUrl;
+  for (const key of ["attachmentCertFile", "attachmentKeyFile"] as const) {
+    const value = typeof p[key] === "string" ? (p[key] as string).trim() : "";
+    if (value) out[key] = value;
+  }
   const pinnedThreads = strList(p.pinnedThreads);
   if (pinnedThreads) out.pinnedThreads = pinnedThreads;
   const archivedProjects = strList(p.archivedProjects);
