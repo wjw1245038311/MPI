@@ -372,6 +372,17 @@ export class RelayUplink implements RelayOutbound {
     if (session) session.active = true;
   }
 
+  /**
+   * 取某设备的 **E2E 会话密钥**（附件应用层加密的 ikm，见 attachment-crypto.ts）。
+   *
+   * 为什么要暴露它：附件服务跑在明文 HTTP 上（绕开 DPI），保密性必须由应用层保证，
+   * 而**密钥不能来自随明文传输的令牌**——只有配对时建立的会话密钥从不过网。
+   * 没建好会话（旧客户端 / 未握手）→ null，附件服务会拒绝其加密载荷。
+   */
+  e2eSessionKeyFor(deviceId: string): Buffer | null {
+    return this.e2eSessions.get(deviceId)?.key ?? null;
+  }
+
   /** Derive the per-device AES key from pair.hello's x25519Pub (§4.2). */
   private deriveE2ESession(msg: Record<string, unknown>, deviceId: string): void {
     const payload = (msg.payload || {}) as Record<string, unknown>;

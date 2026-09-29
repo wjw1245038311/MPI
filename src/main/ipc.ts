@@ -2403,7 +2403,13 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
           rememberAttachmentNames(threadId, [name]);
         },
       };
-      const server = createAttachmentServer({ ...shared, port: ATTACHMENT_HTTP_PORT });
+      const server = createAttachmentServer({
+        ...shared,
+        port: ATTACHMENT_HTTP_PORT,
+        // 附件载荷的应用层加密（见 attachment-crypto.ts）：ikm 用该设备的 E2E 会话密钥
+        // （配对时协商、永不经过网络）；没建好会话的设备拿不到密钥 → 加密请求被拒。
+        keyFor: (deviceId) => activeRelayUplink?.e2eSessionKeyFor(deviceId) ?? null,
+      });
       attachmentServer = server;
       attachmentServerReady = new Promise<boolean>((resolve) => {
         server.once("listening", () => resolve(true));

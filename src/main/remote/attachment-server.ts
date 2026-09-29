@@ -34,6 +34,15 @@ import {
 } from "./../chat-attachment-store";
 import type { AttachmentToken, AttachmentTokenStore } from "./attachment-tokens";
 import { parseUploadOffset } from "./attachment-tokens";
+import {
+  ATTACHMENT_ENC_HEADER,
+  ATTACHMENT_ENC_OVERHEAD,
+  attachmentAad,
+  decryptAttachmentBody,
+  deriveAttachmentKey,
+  encryptAttachmentBody,
+  wantsEncryption,
+} from "./attachment-crypto";
 
 /** 单个上传的最大原始字节（与 REMOTE_VIDEO_MAX_BYTES 一致：128MB）。 */
 export const ATTACHMENT_UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
@@ -68,6 +77,13 @@ export interface AttachmentServerOptions {
    * 证书通常是腾讯云免费 DV 或 Let's Encrypt 签发的单个域名证书。
    */
   tls?: { certFile: string; keyFile: string };
+  /**
+   * 取某个设备的 E2E 会话密钥（用于附件载荷的**应用层加密**，见 attachment-crypto.ts）。
+   *
+   * 返回 null = 该设备没有会话密钥（旧客户端/未建立 E2E）→ 加密请求一律拒（不能静默降级成明文，
+   * 否则客户端以为内容被加密了）。不提供本选项 = 本主机不支持加密载荷（只服务明文请求）。
+   */
+  keyFor?: (deviceId: string, token: string) => Buffer | null;
   /** 诊断日志（主机的 appendDiagLog；测试里可传空函数）。 */
   log?: (line: string) => void;
   /** 字节收齐时回调：调用方据此把附件登记到作用域允许表（ipc.ts 用）。 */
@@ -166,8 +182,25 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
           "Content-Type": MIME_TYPES[extname(abs).toLowerCase()] || "application/octet-stream",
           "Accept-Ranges": "bytes",
         };
-        const range = parseRange(req.headers.range ?? null, size);
-        token.hits += 1;
+        // 应用层加密的下行（客户端自愿开启）：按 per-device 会话密钥加密本次响应的字节，
+        // AAD 绑住 (方向, 附件名, 起始偏移, 明文长度) → 中间人改不了 Range 也无法重排。
+        const encRequested = wantsEncryption(req.headers[ATTACHMENT_ENC_HEADER]);
+        const encSessionKey = encRequested ? options.keyFor?.(token.deviceId, resolved.raw) : undefined;
+        if (encRequested && !encSessionKey) {
+          log(`attachment-http enc reject name=${token.name.slice(0, 36)} reason=no-session-key`);
+          sendJson(res, 400, { error: "encrypted payload is not supported for this device" });
+          return;
+        }
+        const encryptSlice = (plaintext: Buffer, start: number): Buffer => {
+          headers["X-MPI-Enc"] = "v1";
+          headers["X-MPI-Len"] = String(plaintext.length);
+          return encryptAttachmentBody(
+            deriveAttachmentKey(encSessionKey as Buffer, resolved.raw, "down", token.name),
+            plaintext,
+            attachmentAad("down", token.name, start, plaintext.length),
+          );
+        };
+        const range = parseRange(req.headers.range ?? null, size);        token.hits += 1;
         // 取证：**直连下行到底有没有被用上**。一次播放有几十条 Range 请求，全记会刷爆日志，
         // 只记这条令牌的第一次命中——排查时「有这行 = 走了直连 / 没有 = 客户端回落了中继」。
         const firstHit = token.hits === 1;
@@ -186,15 +219,16 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
           });
         }
         if (range) {
-          const length = range.end - range.start + 1;
-          const body = req.method === "HEAD" ? "" : readSlice(abs, range.start, range.end);
-          res.writeHead(206, { ...headers, "Content-Range": `bytes ${range.start}-${range.end}/${size}`, "Content-Length": String(length) });
-          res.end(body as unknown as Buffer);
+          const slice = req.method === "HEAD" ? Buffer.alloc(0) : readSlice(abs, range.start, range.end);
+          const payload = encSessionKey ? encryptSlice(slice, range.start) : slice;
+          res.writeHead(206, { ...headers, "Content-Range": `bytes ${range.start}-${range.end}/${size}`, "Content-Length": String(payload.length) });
+          res.end(payload as unknown as Buffer);
           return;
         }
-        const full = req.method === "HEAD" ? "" : readFileSync(abs);
-        res.writeHead(200, { ...headers, "Content-Length": String(size) });
-        res.end(full as unknown as Buffer);
+        const full = req.method === "HEAD" ? Buffer.alloc(0) : readFileSync(abs);
+        const payload = encSessionKey ? encryptSlice(full, 0) : full;
+        res.writeHead(200, { ...headers, "Content-Length": String(payload.length) });
+        res.end(payload as unknown as Buffer);
         return;
       }
 
@@ -211,24 +245,47 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
           sendJson(res, 400, { error: "Content-Range or X-MPI-Offset is required" });
           return;
         }
-        const body = await readBody(req, ATTACHMENT_UPLOAD_CHUNK_BYTES + 64 * 1024);
+        const body = await readBody(req, ATTACHMENT_UPLOAD_CHUNK_BYTES + 64 * 1024 + ATTACHMENT_ENC_OVERHEAD);
         if (!body) {
           sendJson(res, 413, { error: "chunk is too large" });
           return;
         }
         // 取证：每片耗时（含收包）——分辨「网慢」与「服务端写盘慢」就靠这一行。
         const chunkMs = Date.now() - reqStartedAt;
+        // 应用层加密载荷：按令牌+方向+附件名派生密钥，AAD 绑住片位置（防重排/改标）。
+        // 解不开一律 400——不静默当作明文写盘（那会把垃圾写进附件区）。
+        let plain = body;
+        if (wantsEncryption(req.headers[ATTACHMENT_ENC_HEADER])) {
+          const sessionKey = options.keyFor?.(token.deviceId, resolved.raw);
+          if (!sessionKey) {
+            log(`attachment-http enc reject name=${token.name.slice(0, 36)} reason=no-session-key`);
+            sendJson(res, 400, { error: "encrypted payload is not supported for this device" });
+            return;
+          }
+          if (body.length < ATTACHMENT_ENC_OVERHEAD) {
+            sendJson(res, 400, { error: "encrypted chunk is too short" });
+            return;
+          }
+          try {
+            const aad = attachmentAad("up", token.name, declared.offset, body.length - ATTACHMENT_ENC_OVERHEAD);
+            plain = decryptAttachmentBody(deriveAttachmentKey(sessionKey, resolved.raw, "up", token.name), body, aad);
+          } catch (error) {
+            log(`attachment-http enc decrypt failed name=${token.name.slice(0, 36)} err=${String((error as Error)?.message).slice(0, 40)}`);
+            sendJson(res, 400, { error: "could not decrypt chunk" });
+            return;
+          }
+        }
         const total = declared.total ?? token.size ?? null;
-        if (token.size && declared.offset + body.length > token.size) {
+        if (token.size && declared.offset + plain.length > token.size) {
           sendJson(res, 400, { error: "chunk exceeds declared size" });
           return;
         }
-        if (total !== null && declared.offset + body.length > total) {
+        if (total !== null && declared.offset + plain.length > total) {
           sendJson(res, 400, { error: "chunk exceeds total size" });
           return;
         }
         try {
-          token.received = Math.max(token.received, writeUploadChunk(token.name, declared.offset, body));
+          token.received = Math.max(token.received, writeUploadChunk(token.name, declared.offset, plain));
         } catch (error) {
           log(`attachment-http PUT failed name=${token.name.slice(0, 36)} err=${String((error as Error)?.message).slice(0, 60)}`);
           sendJson(res, 500, { error: "could not store chunk" });
@@ -246,7 +303,7 @@ export function createAttachmentServer(options: AttachmentServerOptions): Server
           options.onUploadComplete?.({ name: token.name, size: completed.size, threadId: token.threadId, deviceId: token.deviceId });
         }
         log(
-          `attachment-http PUT name=${token.name.slice(0, 36)} off=${declared.offset} len=${body.length} ms=${chunkMs} cum=${token.received}/${total ?? "?"}`,
+          `attachment-http PUT name=${token.name.slice(0, 36)} off=${declared.offset} len=${plain.length} ms=${chunkMs} cum=${token.received}/${total ?? "?"}`,
         );
         sendJson(res, 200, { name: token.name, received: token.received, size: total, done });
         return;
