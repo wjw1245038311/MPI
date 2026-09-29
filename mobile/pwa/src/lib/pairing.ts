@@ -9,9 +9,12 @@
 // src/lib → pwa → mobile → shared
 import { makeEnvelope } from "../../../shared/protocol";
 import { deviceProofText, hostProofText, verifyHostSignature, type DeviceIdentity } from "./device-identity";
+import { E2E_BINARY_CAP, decodeBinaryFrame, encodeBinaryFrame, supportsBinaryFrames } from "./e2e-binary";
 import {
   deriveAesKeyRaw,
   decryptFrame as e2eDecrypt,
+  decryptFrameRaw,
+  encryptFrameRaw,
   encryptFrame as e2eEncrypt,
   importAesKey,
   x25519SharedSecretRaw,
@@ -148,6 +151,8 @@ async function answerChallenge(
       ticket,
       // E2E (S3): the host derives the session key from this on pair.hello.
       x25519Pub: identity.x25519PubB64u,
+      // 能力协商：本端支持二进制 E2E 帧（去 base64 的 33% 膨胀，见 e2e-binary.ts）
+      caps: [E2E_BINARY_CAP],
     }),
   );
 
@@ -167,9 +172,22 @@ async function answerChallenge(
     const shared = x25519SharedSecretRaw(identity.x25519PrivB64u, hostX25519PubB64u);
     const cryptoKey = await importAesKey(deriveAesKeyRaw(shared, hostId, identity.deviceId));
     // Adapter between RelayClient.FrameCrypto and the concrete E2EFrame types.
+    // 两端都声明了 e2e-bin 才切二进制；否则继续 JSON（老主机/老端行为不变）。
+    const binary = supportsBinaryFrames(ap.caps);
     client.setFrameCrypto({
+      binary,
       encrypt: async (plain) => (await e2eEncrypt(cryptoKey, plain)) as unknown as Record<string, unknown>,
       decrypt: (frame) => e2eDecrypt(cryptoKey, frame as Pick<E2EFrame, "n" | "c">),
+      encryptBinary: async (plain) => {
+        const { nonce, body } = await encryptFrameRaw(cryptoKey, plain);
+        // 设备→主机：头部可空（中继会补 from）；空头部省字节。
+        return encodeBinaryFrame({}, nonce, body);
+      },
+      decryptBinary: async (bytes) => {
+        const decoded = decodeBinaryFrame(bytes);
+        if (!decoded) throw new Error("invalid binary E2E frame");
+        return decryptFrameRaw(cryptoKey, decoded.nonce, decoded.body);
+      },
     });
   }
   return { deviceToken, hostX25519PubB64u };

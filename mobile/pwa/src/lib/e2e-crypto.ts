@@ -61,3 +61,22 @@ export async function decryptFrame(key: CryptoKey, frame: Pick<E2EFrame, "n" | "
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: asBuffer(nonce) }, key, asBuffer(data));
   return new TextDecoder().decode(plain);
 }
+
+/**
+ * 原始字节加密（二进制帧用，2026-09-30）：返回 `{nonce, body}`（body = 密文‖tag）。
+ *
+ * 与 [encryptFrame] 同一套 AES-GCM，只是不套 base64/JSON 外壳——省掉 33% 膨胀。
+ * 跨端逐字节一致（向量见 `scripts/test-pwa-binary.mjs` 与主机侧 e2e-binary.ts）。
+ */
+export async function encryptFrameRaw(key: CryptoKey, plaintextJson: string): Promise<{ nonce: Uint8Array; body: Uint8Array }> {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const body = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: asBuffer(nonce) }, key, new TextEncoder().encode(plaintextJson)));
+  return { nonce, body };
+}
+
+/** 二进制帧解密（body = 密文‖tag）；篡改时抛。 */
+export async function decryptFrameRaw(key: CryptoKey, nonce: Uint8Array, body: Uint8Array): Promise<string> {
+  if (nonce.length !== 12 || body.length < 16) throw new Error("invalid e2e frame");
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: asBuffer(nonce) }, key, asBuffer(body));
+  return new TextDecoder().decode(plain);
+}

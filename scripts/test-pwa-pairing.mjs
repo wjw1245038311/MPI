@@ -100,12 +100,16 @@ async function main() {
     // relay runs in a child process, so only host→relay frames are captured).
     const WS = (await import("ws")).default;
     const hostOutboundRaw = [];
+    /** 二进制 E2E 帧（协商后主机也发二进制）：线上是 Buffer，不是 JSON。 */
+    const hostOutboundBinary = [];
     const origWsSend = WS.prototype.send;
     WS.prototype.send = function patchedSend(data, ...rest) {
       try {
         const obj = JSON.parse(String(data));
         if (obj && typeof obj === "object" && typeof obj.to === "string") hostOutboundRaw.push(obj);
-      } catch { /* non-JSON — ignore */ }
+      } catch {
+        if (Buffer.isBuffer(data) || data instanceof Uint8Array) hostOutboundBinary.push(Buffer.from(data));
+      }
       return origWsSend.call(this, data, ...rest);
     };
 
@@ -139,6 +143,16 @@ async function main() {
     const stages = [];
     const pwaOutboundRaw = []; // exact bytes the PWA puts on the wire
     const client = new RelayClient({ url, onSend: (raw) => pwaOutboundRaw.push(raw) });
+    // PWA 用原生 WebSocket：二进制帧不走 onSend 文本钩子，得单独抓。
+    const pwaOutboundFrames = [];
+    const NativeWS = globalThis.WebSocket;
+    const origNativeSend = NativeWS.prototype.send;
+    NativeWS.prototype.send = function patchedNativeSend(data, ...rest) {
+      pwaOutboundFrames.push(
+        typeof data === "string" ? { kind: "text", text: data } : { kind: "binary", bytes: Buffer.from(data) },
+      );
+      return origNativeSend.call(this, data, ...rest);
+    };
     clients.push(client);
     const resultPromise = runPairing(client, payload, identity, "test-pwa", (s) => stages.push(s));
 
@@ -164,19 +178,40 @@ async function main() {
       const off = client.onFrame((f) => { if (f.type === "projects.list.result") { off(); resolve(f); } });
     });
     assert.equal(await client.sendData(reqEnvelope), true, "sendData accepted");
-    const lastPwaWire = JSON.parse(pwaOutboundRaw[pwaOutboundRaw.length - 1]);
-    assert.equal(lastPwaWire.e, 1, "device→host data frame is E2E-encrypted on the wire");
-    assert.ok(typeof lastPwaWire.n === "string" && typeof lastPwaWire.c === "string", "{e,n,c} shape");
-    assert.equal(lastPwaWire.type, undefined, "no plaintext envelope fields leak to the relay");
+    const lastPwaData = [...pwaOutboundFrames]
+      .reverse()
+      .find((f) => f.kind === "binary" || (f.text || "").includes(String.fromCharCode(34) + "v" + String.fromCharCode(34) + ":1"));
+    assert.ok(lastPwaData, "PWA 应发出一条数据帧");
+    if (lastPwaData.kind === "binary") {
+      assert.equal(lastPwaData.bytes[0], 1, "device→host 数据帧是二进制 E2E 帧（版本 1）");
+      assert.ok(!lastPwaData.bytes.includes(Buffer.from("projects.list")), "线上不能出现明文请求类型");
+    } else {
+      assert.equal(JSON.parse(lastPwaData.text).e, 1, "device→host 数据帧是 E2E 密文（JSON 形式）");
+    }
+    // 密文形状：JSON 版必须是 {e,n,c}；二进制版没有可读字段（上面已断言不含明文类型）。
+    if (lastPwaData.kind !== "binary") {
+      const lastPwaWire = JSON.parse(lastPwaData.text);
+      assert.ok(typeof lastPwaWire.n === "string" && typeof lastPwaWire.c === "string", "{e,n,c} shape");
+      assert.equal(lastPwaWire.type, undefined, "no plaintext envelope fields leak to the relay");
+    }
 
     await waitFor(() => handledEnvelopes.some((r) => r.type === "projects.list"), "host service receives decrypted projects.list");
     const seen = handledEnvelopes.find((r) => r.type === "projects.list");
     assert.equal(seen.requestId, reqEnvelope.requestId, "host decrypted the exact envelope (requestId intact)");
 
     // Host response comes back encrypted on the wire and is transparently decrypted by the PWA.
-    await waitFor(() => hostOutboundRaw.some((f) => f.e === 1), "host→device encrypted frame on the wire");
-    const encResponseOnWire = hostOutboundRaw.find((f) => f.e === 1);
-    assert.equal(encResponseOnWire.type, undefined, "host response is ciphertext on the wire");
+    await waitFor(
+      () => hostOutboundRaw.some((f) => f.e === 1) || hostOutboundBinary.length > 0,
+      "host→device encrypted frame on the wire",
+    );
+    if (hostOutboundRaw.some((f) => f.e === 1)) {
+      const encResponseOnWire = hostOutboundRaw.find((f) => f.e === 1);
+      assert.equal(encResponseOnWire.type, undefined, "host response is ciphertext on the wire");
+    } else {
+      const binary = hostOutboundBinary.at(-1);
+      assert.equal(binary[0], 1, "host→device 也是二进制 E2E 帧");
+      assert.ok(!binary.includes(Buffer.from("projects.list")), "线上不能出现明文（二进制路径）");
+    }
     const decResponse = await responsePromise;
     assert.equal(decResponse.requestId, reqEnvelope.requestId, "PWA decrypted the host response (requestId intact)");
 

@@ -17,6 +17,15 @@ export interface FrameCrypto {
   encrypt(plaintextJson: string): Promise<Record<string, unknown>>;
   /** {e,n,c} frame → plaintext envelope JSON (throws on tamper). */
   decrypt(frame: Record<string, unknown>): Promise<string>;
+  /**
+   * 二进制帧（2026-09-30，去 base64 的 33% 膨胀）：两端都声明了 `e2e-bin` 时为 true。
+   * 为 true 时发送走 [encryptBinary]、入站二进制消息走 [decryptBinary]，JSON 两条路仍保留作兼容。
+   */
+  binary?: boolean;
+  /** 明文 envelope JSON → 完整的 WebSocket 二进制消息（含路由头部）。 */
+  encryptBinary?(plaintextJson: string): Promise<Uint8Array>;
+  /** 二进制消息 → 明文 envelope JSON（throws on tamper / 格式不对）。 */
+  decryptBinary?(bytes: Uint8Array): Promise<string>;
 }
 
 export interface RelayClientOptions {
@@ -165,6 +174,10 @@ export class RelayClient {
     }
     if (this.frameCrypto && record.v === 1) {
       try {
+        // 协商了二进制就走二进制（同样一把密钥，只是不套 base64）；否则 JSON（老端兼容）。
+        if (this.frameCrypto.binary && this.frameCrypto.encryptBinary) {
+          return this.sendRawBinary(await this.frameCrypto.encryptBinary(JSON.stringify(obj)));
+        }
         return this.sendRaw(JSON.stringify(await this.frameCrypto.encrypt(JSON.stringify(obj))));
       } catch (error) {
         this.lastError = error instanceof Error ? error.message : String(error);
@@ -223,6 +236,18 @@ export class RelayClient {
     }
   }
 
+  /** 发送一条二进制帧（E2E 数据帧的紧凑编码，去 base64 的 33% 膨胀）。 */
+  private sendRawBinary(bytes: Uint8Array): boolean {
+    if (!this.isOpen()) return false;
+    try {
+      this.ws!.send(bytes);
+      return true;
+    } catch (error) {
+      this.lastError = error instanceof Error ? error.message : String(error);
+      return false;
+    }
+  }
+
   // --- control frames -----------------------------------------------------------
 
   /** Store credentials used for re-auth on (re)connect; sent automatically on open.
@@ -254,6 +279,8 @@ export class RelayClient {
     let ws: WebSocket;
     try {
       ws = new WebSocket(this.options.url);
+      // 二进制帧要拿到 ArrayBuffer（不是 Blob）——否则要先 await blob.arrayBuffer()，多一次异步。
+      ws.binaryType = "arraybuffer";
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
       this.setState("closed", this.lastError);
@@ -270,6 +297,24 @@ export class RelayClient {
     };
 
     ws.onmessage = (event: MessageEvent) => {
+      // 二进制消息 = 协商后的 E2E 数据帧；解出明文后再走与 JSON 帧一样的派发。
+      if (event.data instanceof ArrayBuffer) {
+        const crypto = this.frameCrypto;
+        if (!crypto?.decryptBinary) {
+          console.warn("[relay-client] binary frame without binary crypto — dropped");
+          return;
+        }
+        void crypto
+          .decryptBinary(new Uint8Array(event.data))
+          .then((plaintext) => {
+            const parsed: unknown = JSON.parse(plaintext);
+            if (!parsed || typeof parsed !== "object") return;
+            this.options.onFrame?.(parsed as Record<string, unknown>);
+            for (const listener of [...this.listeners]) listener(parsed as Record<string, unknown>);
+          })
+          .catch((error) => console.error("[relay-client] binary E2E decrypt failed:", error));
+        return;
+      }
       let frame: Record<string, unknown>;
       try {
         const parsed: unknown = JSON.parse(String(event.data));
