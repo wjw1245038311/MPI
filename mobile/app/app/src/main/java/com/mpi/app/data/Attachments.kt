@@ -7,9 +7,13 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -436,6 +440,35 @@ class AttachmentLoader(private val context: Context) {
     /** 每次调用返回一个**新的**输入流（直连分片上传是流式读源，多个 worker 不能共用一条流）。 */
     fun openStream(uri: Uri): java.io.InputStream =
         context.contentResolver.openInputStream(uri) ?: error("无法读取这个文件")
+
+    /**
+     * 把刚选中的文件**原样复制**到本地附件缓存（`cacheDir/<dir>/<name>`）。
+     *
+     * 为什么要这一步（真机 2026-09-30）：音频/视频上传给主机后，**发送方自己再点开**
+     * 却要从主机下回来（18MB 实测白等 3–20 秒）——而这时手机本地就有原文件。
+     * 往与取回路径**同一个目录、同一个键**（主机附件名 = 内容 key）写一份，
+     * 播放/打开时直接命中本地缓存，一个包不发。
+     *
+     * 失败不算错误（只退化成「点开要重新下载」），所以返回 Boolean 而不抛。
+     * 先写 `.part` 再改名：中断/取消不会留下一个看似可用的半截文件。
+     */
+    suspend fun cacheLocally(uri: Uri, dirName: String, name: String): Boolean =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val dir = File(context.cacheDir, dirName).apply { mkdirs() }
+                val target = File(dir, name)
+                if (target.length() > 0L) return@runCatching true
+                val part = File(dir, "${target.name}.part")
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(part).use { output -> input.copyTo(output) }
+                    } ?: error("无法读取这个文件")
+                    part.renameTo(target) || target.length() > 0L
+                } finally {
+                    if (part.exists()) part.delete()
+                }
+            }.getOrDefault(false)
+        }
 
     /** 只读元信息（不读字节）：大文件走直连时需要先知道大小与名字。 */
     fun fileMeta(uri: Uri): FileMeta? = runCatching {

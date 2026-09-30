@@ -1001,6 +1001,8 @@ class AppViewModel(
                             ),
                         )
                     }
+                    // 同理：自己发的视频点开也直接命中本地缓存（避免白下一遭）。
+                    scope.launch { runCatching { attachmentLoader.cacheLocally(uri, "video-attachments", storedName) } }
                     return@launch
                 }
                 // 直连不可用 → 内联回落（受主机 8MB 内层信封限制，与旧行为一致）
@@ -1096,6 +1098,10 @@ class AppViewModel(
                         ),
                     )
                 }
+                // 本地留一份：自己发的音频点开应该**立即播放**——手机本地本来就有这个文件，
+                // 不该再「上传完从主机下回来」（真机实测 18MB 白等 3–20 秒）。
+                // 写在与取回路径同一个目录（audio-attachments）+ 同一个键（主机附件名）。
+                scope.launch { runCatching { attachmentLoader.cacheLocally(uri, "audio-attachments", upload.name) } }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 _ui.update { it.copy(videoUpload = null) }
                 throw cancelled
