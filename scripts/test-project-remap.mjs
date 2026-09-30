@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Source files use bundler-style extensionless imports; resolve them for node.
-register(new URL("./ts-ext-loader.mjs", import.meta.url));
+// 用 electron-stub-loader 而不是 ts-ext-loader：本测试间接加载的 data-migration.ts
+// 会 import chat-attachment-store.ts（它 import electron），没有 stub 会在
+// `import { app } from "electron"` 上直接抛 SyntaxError。stub loader 是自包含的
+// （同时补 .ts 后缀），所以换掉这一行就够。
+register(new URL("./electron-stub-loader.mjs", import.meta.url));
 
 // Point pi's agent dir (session store) at a throwaway location BEFORE any
 // module reads it — getAgentDir() resolves the env var on every call.
