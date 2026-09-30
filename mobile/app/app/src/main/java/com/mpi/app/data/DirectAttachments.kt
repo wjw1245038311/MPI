@@ -3,15 +3,23 @@ package com.mpi.app.data
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -56,6 +64,24 @@ private const val DIRECT_CHUNK_TIMEOUT_MS = 60_000L
  * 代价只是内存里同时驻留几片（≤ 12MB），不上传完不入盘。
  */
 const val DIRECT_UPLOAD_CONCURRENCY = 3
+
+/**
+ * 下行（加密直连取回）的并发分片数。
+ *
+ * 与上行同一个道理：单片串行取只能到 ~0.9MB/s（实测 18MB 音频要 19 秒），
+ * 4 片在途把链路吞吐拉回数倍。写盘用 `FileChannel.write(buf, position)`——
+ * 按绝对位置写、不改 channel 位置，所以多线程同时写互不干扰，
+ * 也不会破坏「AAD 绑 offset」的逐片解密。
+ */
+const val DIRECT_DOWNLOAD_CONCURRENCY = 4
+
+/**
+ * 下行分片（512KB → 2MB）：Range 往返次数少 4 倍。
+ *
+ * 服务端 GET 对 Range 无上限（只 clamp 到文件大小），所以 2MB 安全；
+ * 代价是单片失败要重传 2MB（与本来的 512KB 同级，且失败本来就是错）。
+ */
+const val DIRECT_DOWNLOAD_CHUNK_BYTES = 2 * 1024 * 1024
 
 /**
  * 上传计划：中间分片可**并发**发，最后一片必须**等其它全部成功之后再发**。
@@ -429,11 +455,22 @@ class DirectAttachments(
      *
      * @return 是否成功（主机/网络/解密任一步失败即 false，调用方回落中继）
      */
+    /**
+     * 下行：按 Range 把加密载荷取回来并**解密落到 output**（调用方给的是 `.part`）。
+     *
+     * 并发模型与上行对称：第一片用来定 total（顺便解密），剩下的片交给
+     * [DIRECT_DOWNLOAD_CONCURRENCY] 个 worker 并行取。两处细节值得留意：
+     *   · 写盘用 `FileChannel.write(buf, position)`——按**绝对位置**写，多线程互不干扰；
+     *   · `onProgress` 由**调用者 context**（主线程）上的 ticker 上报，worker 只累加
+     *     AtomicLong——Compose 的 state 不能从 IO 线程写。
+     *
+     * @return 是否成功（失败时 output 已删除，且原因已经过 onError 说明）
+     */
     suspend fun downloadEncrypted(
         target: DirectTarget,
         sessionKey: ByteArray,
         output: File,
-        chunkBytes: Int = 512 * 1024,
+        chunkBytes: Int = DIRECT_DOWNLOAD_CHUNK_BYTES,
         onProgress: (Long, Long) -> Unit = { _, _ -> },
         /** 失败原因（给界面显示）——排查时没有它就只能看到「附件不可用」这种无信息量的提示。 */
         onError: (String) -> Unit = {},
@@ -444,44 +481,106 @@ class DirectAttachments(
         }
         val key = AttachmentCrypto.deriveKey(sessionKey, target.token, AttachmentCrypto.DOWN, target.name)
         output.parentFile?.mkdirs()
-        var offset = 0L
-        var total = 0L
+        var ok = false
         try {
-            FileOutputStream(output).use { sink ->
-                while (total == 0L || offset < total) {
-                    val slice = fetchRangeSlice(target.url, offset, chunkBytes)
-                    if (slice == null) {
-                        onError("取片失败：offset=$offset（网络/令牌/主机不可达）")
-                        return false
-                    }
-                    if (slice.total > 0L) total = slice.total
-                    val plain = try {
-                        AttachmentCrypto.decrypt(
-                            key,
-                            slice.body,
-                            AttachmentCrypto.aad(AttachmentCrypto.DOWN, target.name, offset, slice.plainLength),
-                        )
-                    } catch (error: Exception) {
-                        onError("解密失败：offset=$offset bodyLen=${slice.body.size} plain=${slice.plainLength} ${error.javaClass.simpleName} ${error.message.orEmpty().take(60)}")
-                        return false
-                    }
-                    // 没进展就停：否则主机一直回空片会把这个循环转成死循环（与分片拉取同一护栏）。
-                    if (plain.isEmpty()) {
-                        onError("解密得到空片：offset=$offset")
-                        return false
-                    }
-                    sink.write(plain)
-                    offset += plain.size.toLong()
-                    onProgress(offset, total)
-                }
+            // 第一片：既定 total，也直接拿来写（少一次往返）。
+            val head = fetchRangeSlice(target.url, 0, chunkBytes)
+            if (head == null) {
+                onError("取片失败：offset=0（网络/令牌/主机不可达）")
+                return false
             }
+            val total = head.total
+            val headPlain = decryptSlice(key, target.name, 0, head, onError) ?: return false
+            if (total <= 0L || headPlain.size.toLong() >= total) {
+                // 单片就够（或服务端没回 total）：顺序写完收工（断网/旧主机下的保守路径）。
+                FileOutputStream(output).use { it.write(headPlain) }
+                onProgress(headPlain.size.toLong(), maxOf(total, headPlain.size.toLong()))
+                ok = true
+                return true
+            }
+            RandomAccessFile(output, "rw").use { raf ->
+                raf.setLength(total)
+                val channel = raf.channel
+                writeAt(channel, headPlain, 0L)
+                val done = AtomicLong(headPlain.size.toLong())
+                onProgress(done.get(), total)
+                val offsets = downloadOffsets(total, headPlain.size.toLong(), chunkBytes.toLong())
+                val failure = AtomicReference<String?>(null)
+                coroutineScope {
+                    val ticker = launch {
+                        while (isActive) {
+                            delay(150)
+                            onProgress(done.get(), total)
+                        }
+                    }
+                    try {
+                        val gate = Semaphore(DIRECT_DOWNLOAD_CONCURRENCY)
+                        for (offset in offsets) {
+                            launch(Dispatchers.IO) {
+                                gate.withPermit {
+                                    if (failure.get() != null) return@withPermit
+                                    val slice = fetchRangeSlice(target.url, offset, chunkBytes)
+                                    if (slice == null) {
+                                        failure.compareAndSet(null, "取片失败：offset=$offset（网络/令牌/主机不可达）")
+                                        return@withPermit
+                                    }
+                                    val plain = decryptSlice(key, target.name, offset, slice, { msg -> failure.compareAndSet(null, msg) })
+                                        ?: return@withPermit
+                                    if (plain.isEmpty()) {
+                                        failure.compareAndSet(null, "解密得到空片：offset=$offset")
+                                        return@withPermit
+                                    }
+                                    writeAt(channel, plain, offset)
+                                    done.addAndGet(plain.size.toLong())
+                                }
+                            }
+                        }
+                    } finally {
+                        ticker.cancel()
+                    }
+                }
+                failure.get()?.let { message ->
+                    onError(message)
+                    return false
+                }
+                onProgress(done.get(), total)
+            }
+            ok = true
+            return true
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
             onError("下载异常：${error.javaClass.simpleName} ${error.message.orEmpty().take(60)}")
             return false
+        } finally {
+            // 失败/取消后不留半截：那种文件的表现是「能列出但播到一半报错」，很难归因。
+            if (!ok) runCatching { output.delete() }
         }
-        return true
+    }
+
+    /** 解一片（失败就把可读原因写进 onError，返回 null）。 */
+    private fun decryptSlice(
+        key: ByteArray,
+        name: String,
+        offset: Long,
+        slice: RangeSlice,
+        onError: (String) -> Unit,
+    ): ByteArray? = try {
+        AttachmentCrypto.decrypt(
+            key,
+            slice.body,
+            AttachmentCrypto.aad(AttachmentCrypto.DOWN, name, offset, slice.plainLength),
+        )
+    } catch (error: Exception) {
+        onError("解密失败：offset=$offset bodyLen=${slice.body.size} plain=${slice.plainLength} ${error.javaClass.simpleName} ${error.message.orEmpty().take(60)}")
+        null
+    }
+
+    /** 按**绝对位置**写整块（FileChannel.write 可能部分写，循环到写完）。 */
+    private fun writeAt(channel: FileChannel, bytes: ByteArray, position: Long) {
+        val buffer = ByteBuffer.wrap(bytes)
+        var at = position
+        while (buffer.hasRemaining()) at += channel.write(buffer, at)
     }
 
     /** 取一片加密载荷（含解密所需元数据）。失败 → null。 */
@@ -598,4 +697,21 @@ class DirectAttachments(
             .writeTimeout(DIRECT_CHUNK_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .build()
     }
+}
+
+/**
+ * 下行分片偏移列表（**不含**已写好的第一片）：从 [firstLen] 起每 [chunkBytes] 一片，直到 [total]。
+ *
+ * 纯函数（与 [directUploadPlan] 对称），单独单测：边界错了会漏拉尾部（文件短一截）
+ * 或空拉一次（白跑一趟往返），而这两类错误在真机上只表现为「播不了」。
+ */
+internal fun downloadOffsets(total: Long, firstLen: Long, chunkBytes: Long): List<Long> {
+    if (total <= 0L || chunkBytes <= 0L || firstLen <= 0L || firstLen >= total) return emptyList()
+    val offsets = mutableListOf<Long>()
+    var offset = firstLen
+    while (offset < total) {
+        offsets.add(offset)
+        offset += chunkBytes
+    }
+    return offsets
 }

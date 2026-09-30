@@ -1,11 +1,14 @@
 package com.mpi.app
 
 import com.mpi.app.data.AttachmentCrypto
+import com.mpi.app.data.DIRECT_DOWNLOAD_CHUNK_BYTES
+import com.mpi.app.data.DIRECT_DOWNLOAD_CONCURRENCY
 import com.mpi.app.data.DIRECT_UPLOAD_CHUNK_BYTES
 import com.mpi.app.data.DIRECT_UPLOAD_CONCURRENCY
 import com.mpi.app.data.contentRangeHeader
 import com.mpi.app.data.directChunkBounds
 import com.mpi.app.data.directUploadPlan
+import com.mpi.app.data.downloadOffsets
 import com.mpi.app.data.mimeTypeFromName
 import com.mpi.app.data.parseDirectTarget
 import com.mpi.app.data.sha256OfStream
@@ -315,5 +318,38 @@ class DirectAttachmentLogicTest {
         } catch (_: Exception) {
             // 预期
         }
+    }
+
+    // ---- 下行并发（18MB 音频：串行 19s → 并发 3s 级）---------------------------
+
+    /** 分片必须刚好铺满 [0, total) 一次：漏一片尾部就短一截，重叠一片就多跑一趟。 */
+    @Test
+    fun `download offsets tile the whole file exactly once`() {
+        val total = 18_135_572L
+        val chunk = DIRECT_DOWNLOAD_CHUNK_BYTES.toLong()
+        val offsets = downloadOffsets(total, chunk, chunk)
+        assertEquals("18MB / 2MB = 第一片 + 8 片", 8, offsets.size)
+        var covered = chunk
+        for (offset in offsets) {
+            assertEquals("每片必须接在上一片之后（无缝）", covered, offset)
+            covered += chunk
+        }
+        assertTrue("最后一片覆盖到文件尾", covered >= total)
+    }
+
+    /** 这几类边界错了不会报错，只会「白跑一趟」或「永远循环」。 */
+    @Test
+    fun `download offsets stay empty when the first chunk already holds everything`() {
+        assertEquals(emptyList<Long>(), downloadOffsets(100, 100, 64))
+        assertEquals("第一片超出 total（服务端 clamp 前）不再排片", emptyList<Long>(), downloadOffsets(100, 150, 64))
+        assertEquals("total 未知 → 保守走单片路径", emptyList<Long>(), downloadOffsets(0, 64, 64))
+        assertEquals("分片为 0 会死循环，必须排空", emptyList<Long>(), downloadOffsets(100, 32, 0))
+    }
+
+    @Test
+    fun `downlink uses the tuned chunk size and concurrency`() {
+        assertTrue("并发太小没提速、太大打满内存与连接池", DIRECT_DOWNLOAD_CONCURRENCY in 2..8)
+        assertEquals(2L * 1024 * 1024, DIRECT_DOWNLOAD_CHUNK_BYTES.toLong())
+        assertTrue("比旧的 512KB 大（Range 往返次数少 4 倍）", DIRECT_DOWNLOAD_CHUNK_BYTES > 512 * 1024)
     }
 }

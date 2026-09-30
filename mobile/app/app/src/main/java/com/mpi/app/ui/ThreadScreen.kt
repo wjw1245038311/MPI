@@ -2005,6 +2005,9 @@ private fun AudioBlock(block: MessageBlock) {
     var prepared by remember(block.name) { mutableStateOf(false) }
     var position by remember(block.name) { mutableStateOf(0) }
     var duration by remember(block.name) { mutableStateOf(0) }
+    // 首次拉取的进度（并发下行也有一段等）：没有它用户只能看到一个转圈。
+    var fetchLoaded by remember(block.name) { mutableStateOf(0L) }
+    var fetchTotal by remember(block.name) { mutableStateOf(0L) }
 
     val playUri = directUrl?.let { Uri.parse(it) } ?: source?.let { Uri.fromFile(it) }
     val player = remember(playUri) {
@@ -2025,10 +2028,12 @@ private fun AudioBlock(block: MessageBlock) {
                         duration = mp.duration.coerceAtLeast(0)
                         prepared = true
                     }
-                    setOnCompletionListener {
+                    setOnCompletionListener { mp ->
                         playing = false
                         wantPlay = false
                         position = 0
+                        // 回到开头：否则第二次点 ▶ 会停在末尾（MediaPlayer 播完后位置就在 EOF）。
+                        runCatching { mp.seekTo(0) }
                     }
                     setOnErrorListener { _, _, _ ->
                         fetchError = "无法播放这个音频"
@@ -2082,7 +2087,14 @@ private fun AudioBlock(block: MessageBlock) {
                 return@launch
             }
             val target = File(audioDir, name)
-            val ok = runCatching { fetchVideo(name, target, { _, _ -> }) }.getOrElse { false }
+            fetchLoaded = 0L
+            fetchTotal = block.size ?: 0L
+            val ok = runCatching {
+                fetchVideo(name, target, { loaded, total ->
+                    fetchLoaded = loaded
+                    if (total > 0) fetchTotal = total
+                })
+            }.getOrElse { false }
             fetching = false
             if (ok && target.length() > 0) source = target else fetchError = "附件已不可用（可能已被清理）"
         }
@@ -2125,7 +2137,11 @@ private fun AudioBlock(block: MessageBlock) {
             )
             Text(
                 text = fetchError
-                    ?: if (duration > 0) "${formatClock(position)} / ${formatClock(duration)}" else formatVideoMeta(block),
+                    ?: when {
+                        fetching && fetchTotal > 0 -> "正在获取 ${(fetchLoaded * 100 / fetchTotal).toInt()}%"
+                        duration > 0 -> "${formatClock(position)} / ${formatClock(duration)}"
+                        else -> formatVideoMeta(block)
+                    },
                 style = MaterialTheme.typography.labelSmall,
                 color = if (fetchError != null) MaterialTheme.colorScheme.error else MpiTheme.colors.textFaint,
                 maxLines = 1,

@@ -134,6 +134,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    - **快照只发元数据**（可读名 / 大小 / mime），字节**点播放才拉**（直连读 URL 优先、中继分片回落），不再让音频字节拖在每次同步里
    - **附件菜单合并成一个「附件」**（原来是拍照 / 相册·视频 / 文件三项）——类型由 mime 自动判定，用户不必替程序做分类，以后新增类型也不用改 UI
    - 顺带修掉一个快照缺陷：带内容 key 的图片引用曾被**额外**当成一个 `video` 块下发（名字是 64 位哈希、mime 是 `video/mp4`，点开必然失败），现在按 `kind` 分发，图片只出 image 块
+   - 顺带把**加密直连下行**从逐片串行改成「4 并发 + 2MB 分片」：18MB 音频首次取回实测 19 秒（逐片 512KB × 35 次往返），现在预期 3 秒级；写盘用 `FileChannel.write(buf, position)`，不破坏逐片 AAD 绑定。加密视频首次播放走同一条路，一并受益；播放条同时显示「正在获取 N%」而不是干转圈
 
    验证方式：`npm run typecheck` + `npm test`（`test:remote-files` 新增 `media[]` 校验与「第 6 个参数必须原样到达 backend」的贯通断言 + `videos` 兼容别名仍在；`test:chat-attachments` 新增音频引用往返与 `size` 字段解析）+（手机端）`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（新增三例：音频识别 / mime 回退 / media[] 载荷形状）。应用内：手机「＋ → 附件」选一段音频 → 发送 → 气泡里出现「🎵 名字」播放条 → 点 ▶ 开始播放（首次拉字节约一秒）；主机日志应有 `attachment-direct mint write key=…` 与随后的 `attachment-direct mint read name=…`，附件区 `objects/<aa>/<key>.<ext>` 下能看到该音频。PWA 上同一条消息显示「🎵 音频附件」占位（PWA 播放器留给 S5）。
 
