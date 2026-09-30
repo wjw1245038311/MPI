@@ -1,10 +1,11 @@
 package com.mpi.app.ui
 
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -51,6 +52,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -184,10 +186,8 @@ fun ThreadScreen(
     attachmentError: String?,
     /** 正在直连上传的视频/大文件（null = 没有）；有值时输入条显示「正在上传 N% · 名字」。 */
     videoUpload: VideoUpload?,
-    onPickImage: (Uri) -> Unit,
-    onPickFile: (Uri) -> Unit,
-    /** 相册里选到的视频（P2：直连分片上传，可到 128MB）。 */
-    onPickVideo: (Uri) -> Unit,
+    /** 系统选择器选到的**任意附件**：按 mime 自动分流（图/视/音/文件）。 */
+    onPickAttachment: (Uri) -> Unit,
     onCancelVideoUpload: () -> Unit,
     onAttachmentPermissionDenied: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
@@ -456,9 +456,7 @@ fun ThreadScreen(
             attachmentBusy = attachmentBusy,
             attachmentError = attachmentError,
             videoUpload = videoUpload,
-            onPickImage = onPickImage,
-            onPickFile = onPickFile,
-            onPickVideo = onPickVideo,
+            onPickAttachment = onPickAttachment,
             onCancelVideoUpload = onCancelVideoUpload,
             onAttachmentPermissionDenied = onAttachmentPermissionDenied,
             onRemoveAttachment = onRemoveAttachment,
@@ -526,10 +524,8 @@ private fun Composer(
     attachmentError: String?,
     /** 正在直连上传的视频（null = 没有）：显示进度 + 可取消。 */
     videoUpload: VideoUpload?,
-    onPickImage: (Uri) -> Unit,
-    onPickFile: (Uri) -> Unit,
-    /** 相册里选到的视频（P2：直连分片上传，可到 128MB）。 */
-    onPickVideo: (Uri) -> Unit,
+    /** 系统选择器选到的**任意附件**：按 mime 自动分流（图/视/音/文件）。 */
+    onPickAttachment: (Uri) -> Unit,
     onCancelVideoUpload: () -> Unit,
     onAttachmentPermissionDenied: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
@@ -568,7 +564,7 @@ private fun Composer(
     ) { ok ->
         val uri = photoUri
         photoUri = null
-        if (ok && uri != null) onPickImage(uri)
+        if (ok && uri != null) onPickAttachment(uri)
     }
 
     fun launchPhoto() {
@@ -587,12 +583,11 @@ private fun Composer(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> if (granted) launchPhoto() else onAttachmentPermissionDenied() }
 
-    val pickImages = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(3),
-    ) { uris -> uris.forEach { uri -> if (isVideoUri(context, uri)) onPickVideo(uri) else onPickImage(uri) } }
-    val pickFiles = rememberLauncherForActivityResult(
+    // 一个入口吃所有类型：图/视/音/文件的区分交给 mime（见 AppViewModel.addPickedAttachment），
+    // 菜单因此只剩「拍照 / 附件」两项——用户不必替程序做分类，新增类型也不用改 UI。
+    val pickAny = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments(),
-    ) { uris -> uris.forEach(onPickFile) }
+    ) { uris -> uris.forEach(onPickAttachment) }
     // 已授权时 RequestPermission 会立即回调 true，无需先查权限
     // 长按 3 秒的语音模式：与普通点击共用同一个权限申请，用一个标记区分拿到权限后干什么
     var pendingVoiceChat by remember { mutableStateOf(false) }
@@ -764,20 +759,11 @@ private fun Composer(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("相册 / 视频") },
+                            text = { Text("附件") },
                             onClick = {
                                 attachMenuOpen = false
-                                // ImageAndVideo：照片与视频同一个入口（视频按 mime 分流到直连上传）
-                                pickImages.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
-                                )
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("文件") },
-                            onClick = {
-                                attachMenuOpen = false
-                                pickFiles.launch(arrayOf("*/*"))
+                                // 图 / 音 / 视 / 文件同一个入口，类型由 mime 决定。
+                                pickAny.launch(arrayOf("*/*"))
                             },
                         )
                     }
@@ -927,22 +913,6 @@ private fun PendingFollowUpBanner(text: String, onReEdit: () -> Unit, onSteer: (
 }
 
 /**
- * 系统选择器回来的 URI 是不是视频：先看 ContentResolver 给的 mime，给不出再看扩展名。
- *
- * 分类错的表现很具体：视频被当成图片送进 JPEG 压缩链路（变成一张静止图），
- * 或图片被当成视频去抽帧（报「无法读取这个视频」）。
- */
-private fun isVideoUri(context: android.content.Context, uri: Uri): Boolean {
-    val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()
-    if (!mime.isNullOrEmpty()) return mime.startsWith("video/")
-    val name = runCatching {
-        context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
-            ?.use { if (it.moveToFirst()) it.getString(0) else null }
-    }.getOrNull()
-    return com.mpi.app.data.looksLikeVideo(name, null)
-}
-
-/**
  * 直连上传进度行（贴在输入条上方）。
  *
  * 给「取消」是因为真实场景：选错了 80MB 的视频、或在信号差的地方开始传，用户需要一个
@@ -1073,6 +1043,26 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
                             .padding(horizontal = 4.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White,
+                    )
+                }
+            }
+
+            is Attachment.Audio -> {
+                // 音频没有本地预览（字节在主机上）：只显示类型 + 可读名 + 大小。
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MpiTheme.colors.surfaceMuted)
+                        .padding(5.dp),
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text("🎵 音频", style = MaterialTheme.typography.labelSmall, color = MpiTheme.colors.textFaint)
+                    Text(
+                        text = attachment.originalName,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -1423,6 +1413,7 @@ private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit, on
                             BlockType.Text -> MessageText(block.text.orEmpty(), color = MaterialTheme.colorScheme.onSurface, fillWidth = false)
                             BlockType.Image -> ImageBlock(block)
                             BlockType.Video -> VideoBlock(block)
+                            BlockType.Audio -> AudioBlock(block)
                             else -> Unit
                         }
                     }
@@ -1491,6 +1482,7 @@ private fun AssistantMessageRow(
                     BlockType.Thinking -> ThinkingBlockRow(block, key = "${message.id}-think-$index")
                     BlockType.Image -> ImageBlock(block)
                     BlockType.Video -> VideoBlock(block)
+                    BlockType.Audio -> AudioBlock(block)
                     BlockType.Text -> if (!block.text.isNullOrBlank()) {
                         // 定稿的 assistant 文本才认 choices 面板（流式中间态仍按代码块）
                         if (finalized) {
@@ -1988,6 +1980,165 @@ private fun extractFirstFrame(file: File): ImageBitmap? {
             // release 失败无需处理
         }
     }
+}
+
+/**
+ * 消息里的**音频**块（P3）：主机只下发元数据（name/label/size），字节**点播放才拉**。
+ *
+ * 与 VideoBlock 共用同一条取字节路径（直连读 URL 优先 → 中继分片回落，缓存在 cacheDir），
+ * 但播放用 MediaPlayer：音频没有画面，不需要全屏 Dialog，只做一条「▶/⏸ + 进度 + 时间」的细条。
+ */
+@Composable
+private fun AudioBlock(block: MessageBlock) {
+    val context = LocalContext.current
+    val fetchVideo = LocalVideoFetcher.current
+    val resolveDirect = LocalDirectPlaybackUrl.current
+    val scope = rememberCoroutineScope()
+    val audioDir = remember(context) { File(context.cacheDir, "audio-attachments").apply { mkdirs() } }
+    var source by remember(block.name) { mutableStateOf<File?>(null) }
+    var directUrl by remember(block.name) { mutableStateOf<String?>(null) }
+    var fetching by remember(block.name) { mutableStateOf(false) }
+    var fetchError by remember(block.name) { mutableStateOf<String?>(null) }
+    // 用户意图（要播 / 不要播）。字节还没到就先用它挂起，等 playUri 就绪再由下面的效果启动。
+    var wantPlay by remember(block.name) { mutableStateOf(false) }
+    var playing by remember(block.name) { mutableStateOf(false) }
+    var prepared by remember(block.name) { mutableStateOf(false) }
+    var position by remember(block.name) { mutableStateOf(0) }
+    var duration by remember(block.name) { mutableStateOf(0) }
+
+    val playUri = directUrl?.let { Uri.parse(it) } ?: source?.let { Uri.fromFile(it) }
+    val player = remember(playUri) {
+        val uri = playUri
+        if (uri == null) {
+            null
+        } else {
+            MediaPlayer().apply {
+                runCatching {
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build(),
+                    )
+                    setDataSource(context, uri)
+                    setOnPreparedListener { mp ->
+                        duration = mp.duration.coerceAtLeast(0)
+                        prepared = true
+                    }
+                    setOnCompletionListener {
+                        playing = false
+                        wantPlay = false
+                        position = 0
+                    }
+                    setOnErrorListener { _, _, _ ->
+                        fetchError = "无法播放这个音频"
+                        playing = false
+                        wantPlay = false
+                        true
+                    }
+                    prepareAsync()
+                }.onFailure { fetchError = "无法播放这个音频" }
+            }
+        }
+    }
+    // 离开组合（滚出屏幕/切会话/退出）时释放——否则解码器泄漏。
+    DisposableEffect(player) { onDispose { player?.release() } }
+
+    LaunchedEffect(player, prepared, wantPlay) {
+        val mp = player ?: return@LaunchedEffect
+        if (!prepared) return@LaunchedEffect
+        if (wantPlay && !playing) {
+            runCatching { mp.start() }.onSuccess { playing = true }
+        } else if (!wantPlay && playing) {
+            runCatching { mp.pause() }
+            playing = false
+        }
+    }
+    // 播放中每 400ms 刷一次进度（一个会话里音频条通常只有一两个，开销可忽略）。
+    LaunchedEffect(playing) {
+        while (playing) {
+            player?.let { position = runCatching { it.currentPosition }.getOrDefault(position) }
+            delay(400)
+        }
+    }
+
+    /** 点播放时先确保字节到手：本地缓存 → 直连 URL → 中继分片。 */
+    fun ensureBytes() {
+        if (playUri != null || fetching) return
+        val name = block.name ?: return
+        fetching = true
+        fetchError = null
+        scope.launch {
+            val cached = File(audioDir, name)
+            if (cached.length() > 0) {
+                fetching = false
+                source = cached
+                return@launch
+            }
+            val direct = runCatching { resolveDirect(name, block.mimeType) }.getOrNull()
+            if (direct != null) {
+                fetching = false
+                directUrl = direct
+                return@launch
+            }
+            val target = File(audioDir, name)
+            val ok = runCatching { fetchVideo(name, target, { _, _ -> }) }.getOrElse { false }
+            fetching = false
+            if (ok && target.length() > 0) source = target else fetchError = "附件已不可用（可能已被清理）"
+        }
+    }
+
+    val label = block.label ?: block.name ?: "音频"
+    Row(
+        modifier = Modifier
+            .widthIn(max = 320.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MpiTheme.colors.control)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        IconButton(
+            onClick = {
+                wantPlay = !wantPlay
+                if (wantPlay) ensureBytes()
+            },
+            modifier = Modifier.size(32.dp),
+        ) {
+            if (fetching) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            } else {
+                Text(if (playing) "⏸" else "▶", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = "🎵 $label",
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val progress = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
+            Text(
+                text = fetchError
+                    ?: if (duration > 0) "${formatClock(position)} / ${formatClock(duration)}" else formatVideoMeta(block),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (fetchError != null) MaterialTheme.colorScheme.error else MpiTheme.colors.textFaint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** 毫秒 → `m:ss`（音频时间轴）。 */
+private fun formatClock(ms: Int): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    return "%d:%02d".format(total / 60, total % 60)
 }
 
 /** 没有本体时的占位（不静默丢消息）。 */

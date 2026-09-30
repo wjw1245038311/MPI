@@ -233,9 +233,7 @@ fun MpiApp(container: AppContainer) {
                                 attachmentBusy = state.attachmentBusy,
                                 attachmentError = state.attachmentError,
                                 videoUpload = state.videoUpload,
-                                onPickImage = viewModel::addImageAttachment,
-                                onPickFile = viewModel::addFileAttachment,
-                                onPickVideo = viewModel::addVideoAttachment,
+                                onPickAttachment = viewModel::addPickedAttachment,
                                 onCancelVideoUpload = viewModel::cancelVideoUpload,
                                 onAttachmentPermissionDenied = {
                                     viewModel.reportAttachmentError("没有相机权限，无法拍照")

@@ -117,6 +117,21 @@ export interface RemoteVideoInput {
 }
 
 /**
+ * 统一的**媒体附件**载荷（P3）：图 / 音 / 视 / 文件共用一条通道，`kind` 由 mime 推导。
+ *
+ * 与桌面侧 `src/main/remote/protocol.ts` 的 RemoteMediaInput 同源。`videos[]` 保留为
+ * 兼容别名；`images[]` 单独保留（图片是模型输入契约，不是展示媒体）。
+ */
+export interface RemoteMediaInput {
+  /** 主机附件名（内容寻址后就是 sha256 key）。 */
+  storedName: string;
+  /** 主机据此推 kind（`audio/*` → audio…）。缺失时按 label/扩展名推。 */
+  mimeType?: string;
+  /** 可读原名。 */
+  label?: string;
+}
+
+/**
  * `attachment.fetch` 的一片响应（与桌面侧 src/main/remote/protocol.ts 同源）。
  *
  * 客户端只需按 `offset + length` 循环请求，直到 `eof` 为真。
@@ -174,7 +189,7 @@ export interface RemoteMessage {
   role: "user" | "assistant" | "system" | "tool";
   text?: string;
   blocks?: Array<{
-    type: "text" | "thinking" | "tool" | "image" | "video";
+    type: "text" | "thinking" | "tool" | "image" | "video" | "audio";
     text?: string;
     name?: string;
     running?: boolean;
@@ -186,6 +201,8 @@ export interface RemoteMessage {
     mimeType?: string;
     /** 视频原始字节数（image/video 块用）。video 块缺 data 时，客户端显示占位卡片。 */
     size?: number;
+    /** 可读的原文件名（内容寻址后 `name` 是 64 位哈希，界面上显示它没有意义）。 */
+    label?: string;
     /** 实时事件通道里刻意剥掉了本体（防大帧）——照图片的语义。true 表示这不是 blob 缺失。 */
     omitted?: boolean;
   }>;

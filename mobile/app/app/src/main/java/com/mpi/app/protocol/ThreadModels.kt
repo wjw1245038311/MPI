@@ -20,6 +20,11 @@ enum class BlockType {
     Image,
     /** 视频附件（主机内联下发的 base64）。UI 侧渲染成播放器，见 ThreadScreen 的 VideoBlock。 */
     Video,
+    /**
+     * 音频附件（P3）：主机只下发**元数据**（name/label/size），字节点开/播放时才拉。
+     * 与视频同一套取字节入口（直连读 URL 优先、中继分片回落）。
+     */
+    Audio,
     ;
 
     companion object {
@@ -30,6 +35,7 @@ enum class BlockType {
             "tool" -> Tool
             "image" -> Image
             "video" -> Video
+            "audio" -> Audio
             else -> Text
         }
     }
@@ -58,6 +64,11 @@ data class MessageBlock(
     val posterMimeType: String? = null,
     /** 主机刻意没下发本体（实时事件通道防大帧，或超出快照视频预算）→ 渲染占位卡片。 */
     val omitted: Boolean = false,
+    /**
+     * 可读的原文件名（P3）：内容寻址后 `name` 是 64 位哈希，界面上显示它没有意义。
+     * 老消息没这个字段 → 回落到 `name`。
+     */
+    val label: String? = null,
     /** 工具调用 id —— 流式事件按它定位到具体块。 */
     val id: String? = null,
     /** 工具是否以失败结束。 */
@@ -173,6 +184,7 @@ internal data class BlockDto(
     val size: Long? = null,
     val poster: String? = null,
     val posterMimeType: String? = null,
+    val label: String? = null,
     val omitted: Boolean? = null,
     val isError: Boolean? = null,
     val id: String? = null,
@@ -360,6 +372,7 @@ object ThreadModels {
             size = size,
             poster = poster,
             posterMimeType = posterMimeType,
+            label = label,
             omitted = omitted == true,
             id = id,
             isError = isError == true,

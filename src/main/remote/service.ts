@@ -3,6 +3,7 @@ import {
   makeEnvelope,
   type RemoteEnvelope,
   type RemoteFileInput,
+  type RemoteMediaInput,
   type RemoteVideoInput,
   type RemoteImageInput,
   RemoteProtocolError,
@@ -39,9 +40,9 @@ export interface RemoteBackend {
    * 症状极其难查：客户端发了 285KB 帧、主机日志记着 `videos=1`，但落盘/引用全都没有。
    * 改成必填后，同一类漏传会直接**编译失败**。
    */
-  prompt(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined): Promise<unknown>;
-  steer(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined): Promise<unknown>;
-  followUp(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined): Promise<unknown>;
+  prompt(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined): Promise<unknown>;
+  steer(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined): Promise<unknown>;
+  followUp(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined): Promise<unknown>;
   abort(threadId: string): Promise<unknown>;
   /** 重命名会话（pi RPC `set_session_name`）。 */
   renameThread(threadId: string, name: string): Promise<unknown>;
@@ -139,6 +140,12 @@ const MAX_REMOTE_IMAGE_DATA_TOTAL = 1_500_000;
  */
 const MAX_REMOTE_VIDEOS = 1;
 const MAX_REMOTE_VIDEO_DATA = 4_200_000;
+/**
+ * 统一媒体通道的条数上限（与 files 一致）。
+ *
+ * 只承载**直连上传的产物**（storedName），不带内联字节，所以不存在体积预算问题。
+ */
+const MAX_REMOTE_MEDIA = 3;
 
 /**
  * 首帧封面的 base64 上限（与 video-refs.ts 的 VIDEO_POSTER_MAX_BYTES 对应，
@@ -329,6 +336,7 @@ export class RemoteService {
             ` payload=${JSON.stringify(payload).length}B keys=${Object.keys(payload).join(",").slice(0, 80)}` +
             ` images=${Array.isArray(payload.images) ? payload.images.length : 0}` +
             ` videos=${Array.isArray(payload.videos) ? payload.videos.length : 0}` +
+            ` media=${Array.isArray(payload.media) ? payload.media.length : 0}` +
             ` files=${Array.isArray(payload.files) ? payload.files.length : 0}`,
         );
         this.assertWriter(threadId, context);
@@ -338,15 +346,16 @@ export class RemoteService {
         const images = this.optionalImages(payload);
         const files = this.optionalFiles(payload);
         const videos = this.optionalVideos(payload);
-        if (!rawText && !images?.length && !files?.length && !videos?.length) {
-          throw new RemoteProtocolError("INVALID_REQUEST", "text, images, files or videos is required");
+        const media = this.optionalMedia(payload);
+        if (!rawText && !images?.length && !files?.length && !videos?.length && !media?.length) {
+          throw new RemoteProtocolError("INVALID_REQUEST", "text, images, files, videos or media is required");
         }
         const text = rawText;
         const result = request.type === "thread.prompt"
-          ? await this.backend.prompt(threadId, text, images, files, videos)
+          ? await this.backend.prompt(threadId, text, images, files, videos, media)
           : request.type === "thread.steer"
-            ? await this.backend.steer(threadId, text, images, files, videos)
-            : await this.backend.followUp(threadId, text, images, files, videos);
+            ? await this.backend.steer(threadId, text, images, files, videos, media)
+            : await this.backend.followUp(threadId, text, images, files, videos, media);
         return responseFor(request, result);
       }
       case "thread.abort": {
@@ -662,6 +671,35 @@ export class RemoteService {
         ...(storedName ? { storedName } : {}),
         ...poster,
       };
+    });
+  }
+
+  /**
+   * 统一媒体附件校验（P3）：只收**直连上传的产物**（`storedName`）。
+   *
+   * 为什么不在这一层收内联字节：图片要 base64 进 prompt（故有 images），视频内联有它自己的
+   * 体积预算（videos）。音频/文件不需要内联——它们本来就走直连分片上传，主机只收一个名字。
+   * 名字的合法性（附件区白名单 + 本会话上传登记）由后端校验，这里只做形状限制。
+   */
+  private optionalMedia(payload: Record<string, unknown>): RemoteMediaInput[] | undefined {
+    const value = payload.media;
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.length > MAX_REMOTE_MEDIA) {
+      throw new RemoteProtocolError("INVALID_REQUEST", `media must contain at most ${MAX_REMOTE_MEDIA} items`);
+    }
+    return value.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new RemoteProtocolError("INVALID_REQUEST", `media[${index}] is invalid`);
+      }
+      const entry = item as Record<string, unknown>;
+      const storedName = typeof entry.storedName === "string" ? entry.storedName.trim() : "";
+      if (!storedName || storedName.length > REMOTE_FILE_NAME_MAX) {
+        throw new RemoteProtocolError("INVALID_REQUEST", `media[${index}].storedName is invalid`);
+      }
+      const mimeType = typeof entry.mimeType === "string" ? entry.mimeType.slice(0, 120) : undefined;
+      const label = typeof entry.label === "string" ? entry.label.slice(0, REMOTE_FILE_NAME_MAX) : undefined;
+      const poster = this.optionalPoster(entry, `media[${index}]`);
+      return { storedName, ...(mimeType ? { mimeType } : {}), ...(label ? { label } : {}), ...poster };
     });
   }
 

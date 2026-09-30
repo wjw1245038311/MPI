@@ -61,6 +61,20 @@ sealed interface Attachment {
     ) : Attachment
 
     /**
+     * 已**直连上传**到主机附件区的**音频**（P3 统一媒体通道）：prompt 里只带 `storedName`（零字节）。
+     *
+     * 为什么不做内联回落：音频没有“小到内联也装得下”的保证，且主机把 files/videos 里的内联音频
+     * 当普通文件处理（不可播）。直连不可用时如实报错，比发出去一个放不了的附件好。
+     */
+    data class Audio(
+        /** 主机侧附件名（内容寻址后就是 sha256 key）。 */
+        val storedName: String,
+        val originalName: String,
+        val mimeType: String,
+        val size: Long,
+    ) : Attachment
+
+    /**
      * 已**直连上传**到主机附件区的图片（P3）：prompt 里只带**缩略图**与内容 key，
      * 原图由主机从对象库读回嗂给模型（agent 拿全分辨率），其它客户端也能按 key 拉原图。
      *
@@ -126,6 +140,25 @@ internal fun imagePayloads(attachments: List<Attachment>): List<JsonObject> =
         }
     }
 
+/**
+ * 待发送附件里的**统一媒体** → 协议 `media[]` 条目（纯函数，可单测）。
+ *
+ * 本轮只有音频走这条通道（图片走 `images[]`、视频走 `videos[]`——它们是历史通道，保留）。
+ * 只带 `storedName`：字节已在主机附件区，主机从对象库还原 label/size（同一条路以后给桌面 / PWA 复用）。
+ */
+internal fun mediaPayloads(attachments: List<Attachment>): List<JsonObject> =
+    attachments.mapNotNull { attachment ->
+        when (attachment) {
+            is Attachment.Audio ->
+                buildJsonObject {
+                    put("storedName", attachment.storedName)
+                    put("mimeType", attachment.mimeType)
+                    put("label", attachment.originalName)
+                }
+            else -> null
+        }
+    }
+
 /** 直连上传需要的图片元信息（**不读字节**，字节由 [ImageSource.open] 流式读）。 */
 data class ImageSource(
     val name: String,
@@ -145,6 +178,14 @@ data class VideoSource(
     /** 每次调用返回一个新的输入流（分片循环流式读，几十 MB 不进内存）。 */
     val open: () -> java.io.InputStream,
     val posterB64: String?,
+)
+
+/** 直连上传需要的**音频**元信息（不读字节，字节由 [AudioSource.open] 流式读）。 */
+data class AudioSource(
+    val name: String,
+    val mimeType: String,
+    val size: Long,
+    val open: () -> java.io.InputStream,
 )
 
 // ---- 图片压缩（与 PWA 同一口径）----
@@ -169,6 +210,16 @@ const val POSTER_MAX_BYTES = 160_000
 /** 视频文件扩展名（与主机 isVideoFile 同一集合）。 */
 private val VIDEO_EXTENSIONS = setOf("mp4", "m4v", "webm", "mov", "mkv", "avi")
 
+/** 音频文件扩展名（与主机 AUDIO_EXTS 同一集合）。 */
+private val AUDIO_EXTENSIONS = setOf("mp3", "m4a", "aac", "ogg", "opus", "flac", "wav", "weba")
+
+/** 按 MIME/文件名判断是不是音频（附件菜单分流用）。 */
+internal fun looksLikeAudio(name: String?, mimeType: String?): Boolean {
+    if (mimeType?.startsWith("audio/") == true) return true
+    val ext = name?.substringAfterLast('.', "")?.lowercase() ?: ""
+    return ext in AUDIO_EXTENSIONS
+}
+
 /** 按 MIME/文件名判断是不是视频（决定要不要抽封面）。 */
 internal fun looksLikeVideo(name: String?, mimeType: String?): Boolean {
     if (mimeType?.startsWith("video/") == true) return true
@@ -190,6 +241,20 @@ internal fun mimeTypeFromName(name: String): String? =
         "mov" -> "video/quicktime"
         "mkv" -> "video/x-matroska"
         "avi" -> "video/x-msvideo"
+        else -> null
+    }
+
+/** 文件名 → `audio/` 前缀的 mime（`contentResolver.getType` 常给不出 mime 时的兜底）。 */
+internal fun audioMimeTypeFromName(name: String): String? =
+    when (name.substringAfterLast('.', "").lowercase()) {
+        "mp3" -> "audio/mpeg"
+        "m4a" -> "audio/mp4"
+        "aac" -> "audio/aac"
+        "ogg" -> "audio/ogg"
+        "opus" -> "audio/opus"
+        "flac" -> "audio/flac"
+        "wav" -> "audio/wav"
+        "weba" -> "audio/webm"
         else -> null
     }
 
@@ -338,6 +403,19 @@ class AttachmentLoader(private val context: Context) {
             open = { context.contentResolver.openInputStream(uri) ?: error("无法读取这个视频") },
             posterB64 = videoPosterB64(uri),
         )
+    }
+
+    /**
+     * 读一个音频的元信息（名字 / mime / 大小），**不把字节读进内存**：
+     * 直连分片上传是流式读源（几十 MB 的音频不该先拼成一个大 ByteArray）。
+     */
+    fun loadAudioSource(uri: Uri): Result<AudioSource> = runCatching {
+        val meta = fileMeta(uri) ?: error("无法读取这个音频")
+        if (meta.size <= 0L) error("这个音频读不出大小（可能不是本地文件）")
+        val mimeType = meta.mimeType?.takeIf { it.startsWith("audio/") }
+            ?: audioMimeTypeFromName(meta.name)
+            ?: "audio/mpeg"
+        AudioSource(name = meta.name, mimeType = mimeType, size = meta.size, open = { openStream(uri) })
     }
 
     fun loadFile(uri: Uri): Result<Attachment.File> = runCatching {

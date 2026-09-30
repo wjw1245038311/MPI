@@ -25,7 +25,7 @@ const SNAPSHOT_TIMEOUT_MS = 60_000;
 
 export interface ViewBlock {
   id?: string; // tool block identity (toolCallId)
-  type: "text" | "thinking" | "tool" | "image" | "video";
+  type: "text" | "thinking" | "tool" | "image" | "video" | "audio";
   text?: string; // text/thinking content, or tool result preview
   name?: string; // tool name
   argsText?: string; // compact argument summary for tools
@@ -35,6 +35,8 @@ export interface ViewBlock {
   mimeType?: string;
   /** 视频原始字节数（video 块用，用于占位卡片显示大小） */
   size?: number;
+  /** 可读原名（P3，audio 块用；内容寻址后 name 是哈希）。 */
+  label?: string;
   /** 视频**首帧封面**（base64 图片）：快照不再下发视频本体后，气泡里的画面就是它。 */
   poster?: string;
   posterMimeType?: string;
@@ -152,11 +154,13 @@ function mapRemoteMessage(m: RemoteMessage): ViewMessage {
           ? ("image" as const)
           : b.type === "video"
             ? ("video" as const)
-            : b.type === "tool"
-              ? ("tool" as const)
-              : b.type === "thinking"
-                ? ("thinking" as const)
-                : ("text" as const),
+            : b.type === "audio"
+              ? ("audio" as const)
+              : b.type === "tool"
+                ? ("tool" as const)
+                : b.type === "thinking"
+                  ? ("thinking" as const)
+                  : ("text" as const),
       // 工具块的正文是 result（曾经写成 b.text → 展开后什么都没有），
       // 其余块用 text。视频块的 text 是占位说明（如“超出本次快照预算”）。
       text: b.type === "tool" ? b.result : b.text,
@@ -166,6 +170,8 @@ function mapRemoteMessage(m: RemoteMessage): ViewMessage {
       data: b.data,
       mimeType: b.mimeType,
       size: b.size,
+      /** 可读原名（P3；audio 块靠它显示文件名）。 */
+      label: b.label,
       omitted: b.omitted,
     })),
     artifacts: m.artifacts,

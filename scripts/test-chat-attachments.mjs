@@ -229,9 +229,20 @@ console.log("ok - P2：别名解析 / 块序置换合并（含拒绝异内容）
   assert.equal(parsed.text, "看图", "媒体引用也要从可见文本里剔掉");
   assert.deepEqual(
     parsed.refs,
-    [{ name: imgKey, path: "/tmp/x.png", kind: "image", thumb: `${imgKey}.thumb.jpg`, key: `sha256:${imgKey}`, label: "照片.png" }],
-    "媒体引用原样往返",
+    [{ name: imgKey, path: "/tmp/x.png", kind: "image", thumb: `${imgKey}.thumb.jpg`, key: `sha256:${imgKey}`, label: "照片.png", size: 1234 }],
+    "媒体引用原样往返（含 P3 新增的 size）",
   );
+  // 音频（本轮）：kind=audio 引用带 size，客户端靠它显示时长/大小
+  const audioKey = "d".repeat(64);
+  const audioParsed = splitMediaRefs(
+    `听${mediaRefEnvelope({ name: audioKey, abs: "/tmp/voice.m4a", kind: "audio", key: `sha256:${audioKey}`, label: "录音.m4a", size: 999 })}`,
+  );
+  assert.equal(audioParsed.refs[0].kind, "audio", "音频引用要解成 kind=audio");
+  assert.equal(audioParsed.refs[0].size, 999, "size 属性要能解回来");
+  assert.equal(audioParsed.refs[0].label, "录音.m4a");
+  assert.equal(hostSide.mediaMimeForPath("/x/objects/ab/abcd.m4a"), "audio/mp4", "对象库路径 → mime 反查（快照 audio 块用它）");
+  assert.equal(hostSide.mediaMimeForPath("/x/objects/ab/abcd.mp4"), "video/mp4");
+  assert.equal(hostSide.mediaMimeForPath("/x/objects/ab/abcd.unknown"), "application/octet-stream", "认不出就给 octet-stream（不猜）");
   // 老视频引用（attach="video" + poster）仍然解成 kind=video，且缩略图映射到 thumb
   const legacyVideo = splitMediaRefs(hostSide.videoRefEnvelope("v.mp4", "/tmp/v.mp4", "v.mp4.poster.jpg"));
   assert.equal(legacyVideo.refs[0].kind, "video", "老格式必须仍被认作视频");

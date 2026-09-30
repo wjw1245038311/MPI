@@ -169,6 +169,20 @@ export const AUDIO_EXTS = new Set([".mp3", ".m4a", ".aac", ".ogg", ".opus", ".fl
 export const isImageFile = (name: string): boolean => IMAGE_EXTS.has(extname(String(name || "")).toLowerCase());
 export const isAudioFile = (name: string): boolean => AUDIO_EXTS.has(extname(String(name || "")).toLowerCase());
 
+/**
+ * 对象库路径 → MIME（按扩展名反查 MEDIA_EXT_BY_MIME）。
+ *
+ * 快照里音/文件块的 `mimeType` 用它推（客户端据此选渲染器）。重名扩展名取先登记的那个
+ * （如 `.m4a` → `audio/mp4`），足够客户端判断大类。
+ */
+export function mediaMimeForPath(path: string): string {
+  const ext = extname(String(path || "")).toLowerCase();
+  for (const [mime, candidate] of Object.entries(MEDIA_EXT_BY_MIME)) {
+    if (candidate === ext) return mime;
+  }
+  return "application/octet-stream";
+}
+
 /** 缩略图文件名（P3）：`<name>.thumb.<ext>`。视频的历史名是 `<name>.poster.jpg`，两者都要认。 */
 export const thumbNameFor = (name: string, mimeType = "image/jpeg"): string =>
   `${name}.thumb${posterExtForMime(mimeType)}`;
@@ -201,6 +215,8 @@ export interface MediaRef {
   key?: string;
   /** 可读的原文件名（老消息没有，从 key 也推不出来）。 */
   label?: string;
+  /** 原始字节数（`size` 属性；老引用没有 → undefined）。 */
+  size?: number;
 }
 
 /** 兼容别名：历史上这里只有视频。 */
@@ -256,6 +272,7 @@ export function splitMediaRefs(text: string): { text: string; refs: MediaRef[] }
           ? declared
           : mediaKindForMime(undefined, attrs.label || name);
     const thumb = attrs.thumb || attrs.poster || undefined;
+    const size = Number.parseInt(attrs.size || "", 10);
     refs.push({
       name,
       path,
@@ -263,6 +280,7 @@ export function splitMediaRefs(text: string): { text: string; refs: MediaRef[] }
       ...(thumb ? { thumb } : {}),
       ...(attrs.key ? { key: attrs.key } : {}),
       ...(attrs.label ? { label: attrs.label } : {}),
+      ...(Number.isFinite(size) && size > 0 ? { size } : {}),
     });
     return "";
   });

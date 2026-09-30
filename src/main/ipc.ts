@@ -194,6 +194,9 @@ import {
 import {
   VIDEO_POSTER_BASE64_BUDGET,
   VIDEO_REF_ATTR,
+  MEDIA_REF_ATTR,
+  mediaKindForMime,
+  mediaMimeForPath,
   mediaRefEnvelope,
   type MediaRef,
   splitVideoRefs,
@@ -216,6 +219,7 @@ import type { Server } from "node:http";import {
   type RemoteFileArtifact,
   type RemoteFileInput,
   type RemoteImageInput,
+  type RemoteMediaInput,
   type RemoteMessage,
   type RemoteModelOption,
   type RemotePermission,
@@ -1938,25 +1942,40 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       // 换成 video 块（封面在本函数末尾按预算从盘上回填）；文本同时清干净，
       // 否则气泡里会露出引用原文。从**未截断**的原文里取引用，避免长文把末尾的引用切掉。
       // 图片引用（kind=image）也在这里取——要**先于** blocksFor，因为块要用缩略图替换原图。
-      const videoSource = splitVideoRefs(remoteText(message?.content));
-      const imageRefs = videoSource.refs.filter((ref) => ref.kind === "image" && ref.thumb);
+      const { text: mediaText, refs: mediaRefs } = splitVideoRefs(remoteText(message?.content));
+      const imageRefs = mediaRefs.filter((ref) => ref.kind === "image" && ref.thumb);
       const blocks = blocksFor(message, imageRefs);
-      const videoBlocks = videoSource.refs.map((ref): RemoteBlock => {
-        const block: RemoteBlock = {
-          type: "video",
-          name: ref.name,
-          mimeType: videoMimeForPath(ref.path),
-          ...(ref.label ? { label: ref.label } : {}),
-          omitted: true,
-        };
-        pendingVideos.push({ block, path: ref.path, ...(ref.thumb ? { posterName: ref.thumb } : {}) });
-        return block;
-      });
-      const allBlocks = [...blocks, ...videoBlocks];
+      // 按 kind 分发块：video 走 video 块（封面在函数末尾按预算回填），audio 走 audio 块。
+      // **图片引用在这里排掉**——它们已经由上面的 blocksFor 用缩略图替换成 image 块；
+      // 从前这里会把 image 引用也生成一个 video 块（哈希名 + video/mp4），点开必失败。
+      const mediaBlocks = mediaRefs
+        .filter((ref) => ref.kind !== "image")
+        .map((ref): RemoteBlock => {
+          if (ref.kind === "audio") {
+            return {
+              type: "audio",
+              name: ref.name,
+              mimeType: mediaMimeForPath(ref.path),
+              ...(ref.label ? { label: ref.label } : {}),
+              ...(ref.size ? { size: ref.size } : {}),
+              omitted: true,
+            };
+          }
+          const block: RemoteBlock = {
+            type: "video",
+            name: ref.name,
+            mimeType: videoMimeForPath(ref.path),
+            ...(ref.label ? { label: ref.label } : {}),
+            omitted: true,
+          };
+          pendingVideos.push({ block, path: ref.path, ...(ref.thumb ? { posterName: ref.thumb } : {}) });
+          return block;
+        });
+      const allBlocks = [...blocks, ...mediaBlocks];
       output.push({
         id: String(message?.id || `${role}-${index}`),
         role,
-        text: videoSource.text.slice(0, 12_000) || undefined,
+        text: mediaText.slice(0, 12_000) || undefined,
         blocks: allBlocks.length ? allBlocks : undefined,
         artifacts: artifacts?.length ? artifacts : undefined,
         timestamp: typeof message?.timestamp === "number" ? message.timestamp : undefined,
@@ -2152,11 +2171,18 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     if (entry) remoteAttachmentAllow.set(threadId, entry);
   }
 
-  /** 从 pi 原始消息里取出所有 `<file … attach="video" />` 引用的文件名（不回填字节）。 */
+  /** 从 pi 原始消息里取出所有媒体引用的名字（`attach="video"` 与 P3 的 `attach="media"`）。 */
   function videoRefNamesInMessages(messages: any[]): string[] {
     const names: string[] = [];
     const collect = (text: unknown): void => {
-      if (typeof text !== "string" || !text.includes(VIDEO_REF_ATTR)) return;
+      // 两种标记都要认：audio/图走 `attach="media"`（P3），只查 video 会让重启后的
+      // 音频播放被作用域校验拒掉（fetchAttachment / issueAttachmentUrl 都走这里）。
+      if (
+        typeof text !== "string" ||
+        (!text.includes(VIDEO_REF_ATTR) && !text.includes(MEDIA_REF_ATTR))
+      ) {
+        return;
+      }
       for (const ref of splitVideoRefs(text).refs) {
         names.push(ref.name);
         // 缩略图也登记：P3 起客户端会按名字拉图片缩略图（视频的封面仍由主机内联下发）。
@@ -2612,23 +2638,12 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
    * 两件事：① agent 只能读文件、看不了视频，所以引用必须留着（否则模型不知道有这个视频）；
    * ② 引用带 `attach="video"` 标记，远程快照据此把它换成可播放的 video 块（见 remoteMessages）。
    *
-   * 直连上传（`storedName`，P1）走同一条出口：字节早已在附件区，只需拼信封。
+   * 只处理**内联**字节（直连产物走 stageRemoteMedia 的统一通道，见下）。
    */
   const stageRemoteVideos = (threadId: string, videos?: RemoteVideoInput[]): string =>
     (videos ?? [])
+      .filter((video) => !video.storedName)
       .map((video) => {
-        if (video.storedName) {
-          // 直连上传时封面走的是 POST /att/<token>；万一那一步失败，消息里还会再带一份
-          // （客户端不知道主机到底写没写成）——这里补写一次，写入是幂等的。
-          if (video.poster) {
-            storeVideoPoster(video.storedName, { data: video.poster, mimeType: video.posterMimeType });
-          }
-          const direct = storedVideoEnvelope(video.storedName);
-          if (direct) return direct;
-          // 令牌过期/文件被清 → 当作没传过（不静默丢消息：客户端会看到视频块缺失）
-          appendDiagLog(`attachment stored-ref dropped name=${video.storedName.slice(0, 36)}`);
-          return "";
-        }
         // 落在 <userData>/chat-attachments（**持久**区，不是 %TEMP%）：消息里的视频引用
         // 属于会话历史，文件被清理掉就只剩占位卡片。见 chat-attachment-store.ts。
         const staged = stageChatVideoBytes({
@@ -2643,6 +2658,76 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         return videoRefEnvelope(staged.name, staged.abs, staged.posterName ?? undefined);
       })
       .join("");
+
+  /**
+   * 统一**媒体**通道（P3）：`media[]` 的全部 + `videos[]` 里的直连产物 → 一条媒体引用。
+   *
+   * kind 由 mime 推（`mediaKindForMime`）：video 仍写 `attach="video"`（存量客户端与旧引用格式
+   * 原样兼容）；audio / file 写 `attach="media" kind=…`（快照据此生成对应的块）。
+   *
+   * `videos[]` 是**兼容别名**：旧客户端只发它，主机内部折算进同一条路，所以新通道上线不需要
+   * 客户端同步升级。
+   */
+  const stageRemoteMedia = (media: RemoteMediaInput[] | undefined, videos: RemoteVideoInput[] | undefined): string => {
+    const entries: RemoteMediaInput[] = [
+      ...(media ?? []),
+      ...(videos ?? [])
+        .filter((video) => Boolean(video.storedName))
+        .map((video) => ({
+          storedName: video.storedName as string,
+          ...(video.mimeType ? { mimeType: video.mimeType } : {}),
+          ...(video.poster ? { poster: video.poster } : {}),
+          ...(video.posterMimeType ? { posterMimeType: video.posterMimeType } : {}),
+        })),
+    ];
+    const out: string[] = [];
+    for (const entry of entries) {
+      if (!entry.storedName) continue;
+      const kind = mediaKindForMime(entry.mimeType, entry.label);
+      if (kind === "video") {
+        // 直连上传时封面走的是 POST /att/<token>；万一那一步失败，消息里还会再带一份
+        // （客户端不知道主机到底写没写成）——这里补写一次，写入是幂等的。
+        if (entry.poster) {
+          storeVideoPoster(entry.storedName, { data: entry.poster, mimeType: entry.posterMimeType });
+        }
+        const direct = storedVideoEnvelope(entry.storedName);
+        if (direct) out.push(direct);
+        // 令牌过期/文件被清 → 当作没传过（不静默丢消息：客户端会看到块缺失）
+        else appendDiagLog(`attachment stored-ref dropped name=${entry.storedName.slice(0, 36)}`);
+        continue;
+      }
+      // 音/图/文件：统一 media 引用。字节已由直连上传登记过，这里只还原引用。
+      if (!uploadedAttachments.has(entry.storedName)) {
+        appendDiagLog(`attachment media dropped name=${entry.storedName.slice(0, 36)}`);
+        continue;
+      }
+      const abs = resolveChatAttachment(entry.storedName);
+      if (!abs) {
+        appendDiagLog(`attachment media missing name=${entry.storedName.slice(0, 36)}`);
+        continue;
+      }
+      const meta = isContentKey(entry.storedName) ? objectMeta(entry.storedName) : null;
+      const label = entry.label || meta?.label || "";
+      if (kind === "file") {
+        // 普通文件（非媒体）：给 agent 一条可读引用就行。**不带** `attach` 标记，
+        // 快照因此不会为它生成块（与桌面拖入文件同一形式）。
+        const esc = (value: string) => String(value).replace(/"/g, "&quot;");
+        out.push(`\n\n<file name="${esc(label || entry.storedName)}" path="${esc(abs)}" note="attached file; read it with file tools" />`);
+        continue;
+      }
+      out.push(
+        mediaRefEnvelope({
+          name: entry.storedName,
+          abs,
+          kind,
+          ...(isContentKey(entry.storedName) ? { key: `sha256:${entry.storedName}` } : {}),
+          ...(label ? { label } : {}),
+          ...(meta?.size ? { size: meta.size } : {}),
+        }),
+      );
+    }
+    return out.join("");
+  };
 
   /**
    * P3-S3a：把「带内容 key 的图片」解析成喂给模型的图片。
@@ -2738,7 +2823,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         throw error;
       }
     },
-    async (threadId, text, images, files, videos) => {
+    async (threadId, text, images, files, videos, media) => {
       // 手机端「点发送卡五六秒」的取证点：建桥（冷启动 pi）与真正投递分两段计时。
       const t0 = Date.now();
       const ref = await remoteThread(threadId);
@@ -2750,7 +2835,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       const keyed = resolveKeyedImages(images);
       const staged = processAttachments(
         stageRemoteFiles(directFiles.inline),
-        text + directFiles.envelopes + stageRemoteVideos(threadId, videos) + keyed.envelopes,
+        text + directFiles.envelopes + stageRemoteVideos(threadId, videos) + stageRemoteMedia(media, videos) + keyed.envelopes,
       );
       let queuedAs: "followUp" | undefined;
       try {
@@ -2788,24 +2873,24 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       invalidateRemoteProjects();
       return queuedAs ? { ok: true, queuedAs } : { ok: true };
     },
-    async (threadId, text, images, files, videos) => {
+    async (threadId, text, images, files, videos, media) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
       const directFiles = splitStoredFiles(files);
       const keyed = resolveKeyedImages(images);
       const staged = processAttachments(
         stageRemoteFiles(directFiles.inline),
-        text + directFiles.envelopes + stageRemoteVideos(threadId, videos) + keyed.envelopes,
+        text + directFiles.envelopes + stageRemoteVideos(threadId, videos) + stageRemoteMedia(media, videos) + keyed.envelopes,
       );
       await bridge.bridge.steer(staged.text, [...keyed.images, ...staged.images]);
       return { ok: true };
     },
-    async (threadId, text, images, files, videos) => {
+    async (threadId, text, images, files, videos, media) => {
       const bridge = await ensureRemoteBridge(await remoteThread(threadId));
       const directFiles = splitStoredFiles(files);
       const keyed = resolveKeyedImages(images);
       const staged = processAttachments(
         stageRemoteFiles(directFiles.inline),
-        text + directFiles.envelopes + stageRemoteVideos(threadId, videos) + keyed.envelopes,
+        text + directFiles.envelopes + stageRemoteVideos(threadId, videos) + stageRemoteMedia(media, videos) + keyed.envelopes,
       );
       await bridge.bridge.followUp(staged.text, [...keyed.images, ...staged.images]);
       return { ok: true };
@@ -3021,9 +3106,9 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       );
       return remoteSnapshot(threadId, { live: true });
     },
-    prompt: (threadId, text, images, files, videos) => threadService.prompt(threadId, text, images, files, videos),
-    steer: (threadId, text, images, files, videos) => threadService.steer(threadId, text, images, files, videos),
-    followUp: (threadId, text, images, files, videos) => threadService.followUp(threadId, text, images, files, videos),
+    prompt: (threadId, text, images, files, videos, media) => threadService.prompt(threadId, text, images, files, videos, media),
+    steer: (threadId, text, images, files, videos, media) => threadService.steer(threadId, text, images, files, videos, media),
+    followUp: (threadId, text, images, files, videos, media) => threadService.followUp(threadId, text, images, files, videos, media),
     abort: (threadId) => threadService.abort(threadId),
     renameThread: async (threadId, name) => {
       const ref = await remoteThread(threadId);

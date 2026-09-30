@@ -3,8 +3,11 @@ package com.mpi.app
 import com.mpi.app.data.Attachment
 import com.mpi.app.data.MAX_RAW_BYTES
 import com.mpi.app.data.THUMB_MAX_BYTES
+import com.mpi.app.data.audioMimeTypeFromName
 import com.mpi.app.data.imagePayloads
+import com.mpi.app.data.looksLikeAudio
 import com.mpi.app.data.looksLikeVideo
+import com.mpi.app.data.mediaPayloads
 import com.mpi.app.data.nextQuality
 import com.mpi.app.data.sampleSize
 import kotlinx.serialization.json.contentOrNull
@@ -99,5 +102,48 @@ class AttachmentLogicTest {
         // 未显式给上限时仍是老口径（内联 ≤280KB），不能因为加了缩略图而改掉老路径
         assertTrue(nextQuality(MAX_RAW_BYTES - 1, 0.8).first)
         assertFalse(nextQuality(MAX_RAW_BYTES * 2, 0.8).first)
+    }
+
+    // ---- 音频（P3 统一媒体通道）------------------------------------------------
+
+    /** 附件菜单合并成一个「附件」后，分流全靠这里：错判会把音频当文件（发出去放不了）。 */
+    @Test
+    fun `audio detection covers mime extensions and plain files`() {
+        assertTrue(looksLikeAudio("voice.m4a", null))
+        assertTrue(looksLikeAudio("VOICE.MP3", null))
+        assertTrue(looksLikeAudio("recording", "audio/mpeg"))
+        assertFalse("视频不能被当成音频", looksLikeAudio("clip.mp4", null))
+        assertFalse(looksLikeAudio("photo.jpg", "image/jpeg"))
+        assertFalse(looksLikeAudio("report.pdf", null))
+    }
+
+    @Test
+    fun `audio mime falls back to the file extension`() {
+        assertEquals("audio/mpeg", audioMimeTypeFromName("a.mp3"))
+        assertEquals("audio/mp4", audioMimeTypeFromName("a.m4a"))
+        assertEquals("audio/wav", audioMimeTypeFromName("A.WAV"))
+        assertEquals(null, audioMimeTypeFromName("a.txt"))
+    }
+
+    /**
+     * 音频走 media[]：**只有 storedName / mimeType / label**，一个字节都不带
+     * （原字节早就直连上传到主机附件区了）。混进旧通道会让主机按普通文件或视频处理。
+     */
+    @Test
+    fun `audio attachments go through the unified media channel with zero bytes`() {
+        val payloads = mediaPayloads(
+            listOf(
+                Attachment.Audio(storedName = "sha256key", originalName = "录音.m4a", mimeType = "audio/mp4", size = 12_345),
+                Attachment.Video(storedName = "v", originalName = "v.mp4", mimeType = "video/mp4", size = 1),
+                Attachment.Image(bytesB64 = "IMG", mimeType = "image/jpeg"),
+                Attachment.WorkspaceFile(name = "x.bin", path = "/ws/mpi-inbox/x.bin", size = 1),
+            ),
+        )
+        assertEquals("只有音频进 media[]", 1, payloads.size)
+        val audio = payloads[0]
+        assertEquals("sha256key", audio["storedName"]?.jsonPrimitive?.content)
+        assertEquals("audio/mp4", audio["mimeType"]?.jsonPrimitive?.content)
+        assertEquals("广播时可读名要带上（key 本身没人看得懂）", "录音.m4a", audio["label"]?.jsonPrimitive?.content)
+        assertFalse("不能带 data（字节已在主机）", audio.containsKey("data"))
     }
 }

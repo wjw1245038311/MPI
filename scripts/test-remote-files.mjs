@@ -29,9 +29,9 @@ const b64 = (text) => Buffer.from(text, "utf8").toString("base64");
     setPermission: async () => ({}),
     setModel: async () => ({}),
     setMode: async () => ({}),
-    prompt: async (id, text, images, files) => { calls.push(["prompt", id, text, images, files]); return {}; },
-    steer: async (id, text, images, files) => { calls.push(["steer", id, text, images, files]); return {}; },
-    followUp: async (id, text, images, files) => { calls.push(["followUp", id, text, images, files]); return {}; },
+    prompt: async (id, text, images, files, videos, media) => { calls.push(["prompt", id, text, images, files, videos, media]); return {}; },
+    steer: async (id, text, images, files, videos, media) => { calls.push(["steer", id, text, images, files, videos, media]); return {}; },
+    followUp: async (id, text, images, files, videos, media) => { calls.push(["followUp", id, text, images, files, videos, media]); return {}; },
     abort: async () => ({}),
     fileTree: async () => [],
     filePreview: async () => null,
@@ -106,6 +106,42 @@ const b64 = (text) => Buffer.from(text, "utf8").toString("base64");
 
   out = await send({ text: "看图", images: [{ type: "image", data: b64("img"), mimeType: "application/pdf" }] });
   assert.equal(out?.error?.code, "INVALID_REQUEST", "非图片 mime 必须拒绝");
+
+  // media[]（P3 统一媒体通道）：storedName 必填，且必须原样到 backend 的**第 6 个**参数。
+  // 这一条是 2026-09-28「视频被静默吞掉」事故的守望：贯通层少传一个新参数，TS 不会报错。
+  calls.length = 0;
+  const audioKey = "a".repeat(64);
+  out = await send({ text: "听", media: [{ storedName: audioKey, mimeType: "audio/mpeg", label: "录音.mp3" }] });
+  assert.equal(out.error, undefined, "media-only 消息必须合法（与 files-only 同理）");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(
+    calls[0][6],
+    [{ storedName: audioKey, mimeType: "audio/mpeg", label: "录音.mp3" }],
+    "media 必须原样到达 backend 第 6 个参数",
+  );
+  assert.equal(calls[0][5], undefined, "用 media 时 videos 为空（两条通道互不干扰）");
+
+  // 缺 storedName / 空串 / 超长名 → INVALID_REQUEST，且**不**打到 backend
+  calls.length = 0;
+  out = await send({ text: "x", media: [{ mimeType: "audio/mpeg" }] });
+  assert.equal(out?.error?.code, "INVALID_REQUEST", "缺 storedName 被拒");
+  out = await send({ text: "x", media: [{ storedName: "   " }] });
+  assert.equal(out?.error?.code, "INVALID_REQUEST", "空 storedName 被拒");
+  out = await send({ text: "x", media: [{ storedName: "n".repeat(181) }] });
+  assert.equal(out?.error?.code, "INVALID_REQUEST", "超长 storedName 被拒");
+  assert.equal(calls.length, 0, "校验失败不该打到 backend");
+
+  // 超过 3 个 → INVALID_REQUEST
+  out = await send({ text: "x", media: Array.from({ length: 4 }, () => ({ storedName: "b".repeat(64) })) });
+  assert.equal(out?.error?.code, "INVALID_REQUEST", "超过 3 个媒体被拒");
+  assert.match(out.error.message, /at most 3/);
+
+  // videos 兼容别名仍走第 5 个参数，行为不变（旧客户端不需要升级）
+  calls.length = 0;
+  out = await send({ text: "v", videos: [{ type: "video", data: b64("v"), mimeType: "video/mp4" }] });
+  assert.equal(out.error, undefined, "videos 通道必须继续可用（兼容别名）");
+  assert.equal(calls[0][5]?.length, 1, "videos 仍走第 5 个参数");
+  assert.equal(calls[0][6], undefined, "没发 media 时第 6 个参数为空");
 
   console.log("ok 1-3 - remote files: 校验（张数/名字/base64/体积）+ files-only 合法 + 原样透传");
 }

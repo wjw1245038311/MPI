@@ -447,6 +447,20 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
       </div>
     );
   }
+  if (block.type === "audio") {
+    // 手机端可以发音频（P3），PWA 本端暂**不做**播放器（S5）：这里只保证那条消息
+    // 不被静默吞掉——显示一条可读的占位（可读名 + 大小），真正播放留给 PWA 接入那一步。
+    const meta = [block.label || block.name || "", block.size ? formatSize(block.size) : ""].filter(Boolean).join(" · ");
+    return (
+      <div className="msg-video-placeholder">
+        <span className="mvp-icon" aria-hidden="true">🎵</span>
+        <span className="mvp-text">
+          <strong>音频附件</strong>
+          <em>{meta || "未命名"}</em>
+        </span>
+      </div>
+    );
+  }
   return <MessageText text={block.text ?? ""} choiceCtx={choiceCtx} />;
 }
 

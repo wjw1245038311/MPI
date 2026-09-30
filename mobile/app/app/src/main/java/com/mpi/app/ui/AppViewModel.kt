@@ -12,6 +12,9 @@ import com.mpi.app.data.DirectAttachments
 import com.mpi.app.data.DirectUploadException
 import com.mpi.app.data.MAX_FILE_BYTES
 import com.mpi.app.data.imagePayloads
+import com.mpi.app.data.looksLikeAudio
+import com.mpi.app.data.looksLikeVideo
+import com.mpi.app.data.mediaPayloads
 
 import com.mpi.app.data.HostRepository
 import com.mpi.app.data.HostSession
@@ -1036,6 +1039,97 @@ class AppViewModel(
         }
     }
 
+    /**
+     * 文件选择器选到的**音频**（P3 统一媒体通道）：先直连上传（内容寻址、可去重），
+     * 消息里只带 `storedName`，主机构成 `attach="media" kind="audio"` 引用 → 快照下发 audio 块。
+     *
+     * 不做内联回落：主机把内联音频当普通文件（不可播），宁可如实报错。
+     */
+    fun addAudioAttachment(uri: android.net.Uri) {
+        val direct = directAttachments
+        val threadId = _ui.value.openThreadId
+        if (direct == null || threadId == null) {
+            reportAttachmentError("先打开一个会话再选音频")
+            return
+        }
+        if (_ui.value.videoUpload != null || _ui.value.attachmentBusy) return
+        if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
+            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
+            return
+        }
+        val source = attachmentLoader.loadAudioSource(uri).getOrElse { error ->
+            reportAttachmentError(error.message ?: "无法读取这个音频")
+            return
+        }
+        // 进度条复用视频那条（上传状态本来就只能有一个）。
+        _ui.update { it.copy(attachmentError = null, videoUpload = VideoUpload(source.name, 0, source.size)) }
+        videoUploadJob = scope.launch {
+            try {
+                val upload = direct.uploadMedia(
+                    threadId = threadId,
+                    originalName = source.name,
+                    mimeType = source.mimeType,
+                    size = source.size,
+                    open = source.open,
+                    sessionKey = session?.sessionKeyOrNull(),
+                    onProgress = { loaded, total ->
+                        _ui.update { state -> state.copy(videoUpload = state.videoUpload?.copy(loaded = loaded, total = total)) }
+                    },
+                )
+                if (upload == null) {
+                    _ui.update {
+                        it.copy(
+                            videoUpload = null,
+                            attachmentError = "音频上传失败：直连不可用（检查主机是否在线 / Tailscale 是否通）",
+                        )
+                    }
+                    return@launch
+                }
+                _ui.update { state ->
+                    state.copy(
+                        videoUpload = null,
+                        attachments = state.attachments + Attachment.Audio(
+                            storedName = upload.name,
+                            originalName = source.name,
+                            mimeType = source.mimeType,
+                            size = source.size,
+                        ),
+                    )
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                _ui.update { it.copy(videoUpload = null) }
+                throw cancelled
+            } catch (error: DirectUploadException) {
+                _ui.update { it.copy(videoUpload = null, attachmentError = "音频上传失败：${error.message}") }
+            } catch (error: Exception) {
+                _ui.update { it.copy(videoUpload = null, attachmentError = error.message ?: "音频上传失败") }
+            } finally {
+                videoUploadJob = null
+            }
+        }
+    }
+
+    /**
+     * 系统选择器选到的**任意附件**（P3）：按 mime（拿不到就看扩展名）分流到图/视/音/文件。
+     *
+     * 为什么放在 ViewModel：判断要用 [attachmentLoader.fileMeta]（需要 Context 才能查
+     * ContentResolver），集中在这里才能让附件菜单只剩「拍照 / 附件」两项——用户不必替
+     * 程序做分类，而新增一种媒体类型也不用改 UI。
+     */
+    fun addPickedAttachment(uri: android.net.Uri) {
+        val meta = attachmentLoader.fileMeta(uri)
+        val mime = meta?.mimeType
+        val name = meta?.name
+        when {
+            mime?.startsWith("image/") == true -> addImageAttachment(uri)
+            mime?.startsWith("video/") == true -> addVideoAttachment(uri)
+            mime?.startsWith("audio/") == true -> addAudioAttachment(uri)
+            looksLikeVideo(name, mime) -> addVideoAttachment(uri)
+            looksLikeAudio(name, mime) -> addAudioAttachment(uri)
+            else -> addFileAttachment(uri)
+        }
+    }
+
     /** 直连不可用时的回落：内联上传（自带 6MB 上限检查）。 */
     private fun inlineFallback(uri: android.net.Uri, size: Long) {
         val inline = attachmentLoader.loadFile(uri)
@@ -1502,6 +1596,8 @@ class AppViewModel(
                 }
             }
         }
+        // P3 统一媒体通道：音频只带 storedName（纯函数组装，单测钉住形状）。
+        val media = mediaPayloads(pending)
         // 先乐观上屏（§1.1：点击到视觉反馈 < 100ms），失败再标红留在原位
         // 图片用**本地字节**上屏：事件通道会把大 base64 截断（会变成「图片无法显示」），
         // 主机那份完整的图由随后的快照替换。
@@ -1528,13 +1624,24 @@ class AppViewModel(
                 omitted = true,
             )
         }
+        // 音频同理：气泡先上一个占位条（可读名/大小），快照回来前不空缺。
+        val localAudioBlocks = pending.filterIsInstance<Attachment.Audio>().map { audio ->
+            MessageBlock(
+                type = BlockType.Audio,
+                name = audio.storedName,
+                mimeType = audio.mimeType,
+                size = audio.size,
+                label = audio.originalName,
+                omitted = true,
+            )
+        }
         // 大文件（P3-S2）：字节已经在主机的工作目录里，消息里只需带**绝对路径**。
         // 信封写进 text（与桌面端拖入文件同一形式），agent 用文件工具就能读。
         val workspaceFiles = pending.filterIsInstance<Attachment.WorkspaceFile>()
         val workspaceEnvelopes = workspaceFiles.joinToString("") { file ->
             "\n\n<file name=\"${file.name.replace("\"", "&quot;")}\" path=\"${file.path.replace("\"", "&quot;")}\" note=\"attached file; read it with file tools\" />"
         }
-        val localId = session.echoUserMessage(text, localImageBlocks + localVideoBlocks)
+        val localId = session.echoUserMessage(text, localImageBlocks + localVideoBlocks + localAudioBlocks)
         // 后台/锁屏播报保活：**点击就抢锁**，而不是等 send RPC 回来。
         // 用户按下 home/锁屏只发生在发出后的几十毫秒内，等成功后（几百 ms）再 acquire
         // 会赶不及——2026-09-26 真机就是切后台 ~1s 内被中继判 relay-device-offline。
@@ -1552,7 +1659,7 @@ class AppViewModel(
             // 已订阅时是纯本地判断，零往返。
             runCatching { session.ensureSubscribed() }
             try {
-                val result = actions.send(text + workspaceEnvelopes, mode, images, files, videos)
+                val result = actions.send(text + workspaceEnvelopes, mode, images, files, videos, media)
                 // 手机发起的回合：现在只影响「是否语音播报」（完成通知与谁发起无关，见
                 // notifyFinishedTurns 的飞书已读口径）。
                 phoneTurnStarted = true

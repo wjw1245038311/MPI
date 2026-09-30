@@ -126,6 +126,30 @@ export interface RemoteVideoInput {
 }
 
 /**
+ * 统一的**媒体附件**载荷（P3）：图 / 音 / 视 / 文件共用一条通道，`kind` 由 mime 推导。
+ *
+ * 为什么不按类型开通道：每加一种媒体就要动「校验 + 贯通签名 + 转发层 + 快照分发」四层，
+ * 是 O(n) 增长（2026-09-28 的漏传事故就发生在 videos 贯通时）。统一后加一种类型**只扩一个
+ * kind 枚举值**，协议与转发层一行不改。
+ *
+ * `videos[]` 保留为**兼容别名**：旧客户端照发，主机内部折算成 kind=video 走同一条路。
+ * `images[]` 单独保留——图片是 pi 的模型输入契约（base64 进 prompt），不是展示媒体。
+ *
+ * 本轮只收**直连上传的产物**（`storedName`）；内联字节仍走各自的旧通道（videos 的 data）。
+ */
+export interface RemoteMediaInput {
+  /** 主机附件名（内容寻址后就是 sha256 key；也可能是老的预留名）。 */
+  storedName: string;
+  /** 主机据此推 kind（`audio/*` → audio、`video/*` → video…）。缺失时按 label/扩展名推。 */
+  mimeType?: string;
+  /** 可读原名（主机也能从对象库 index 拿到，这里作兜底）。 */
+  label?: string;
+  /** 视频首帧封面（base64）；音频/其它不带。 */
+  poster?: string;
+  posterMimeType?: string;
+}
+
+/**
  * `attachment.fetch` 的一片响应。
  *
  * 为什么按片取：视频原片一旦不再内联进快照，客户端就得自己把字节拉回来；
@@ -185,7 +209,7 @@ export interface RemoteMessage {
   role: "user" | "assistant" | "system" | "tool";
   text?: string;
   blocks?: Array<{
-    type: "text" | "thinking" | "tool" | "image" | "video";
+    type: "text" | "thinking" | "tool" | "image" | "video" | "audio";
     text?: string;
     name?: string;
     running?: boolean;
