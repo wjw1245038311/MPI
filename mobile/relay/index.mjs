@@ -44,8 +44,9 @@ import { fileURLToPath } from "node:url";
 import http from "node:http";
 import https from "node:https";
 import { readFileSync } from "node:fs";
+import { createReadStream } from "node:fs";
 import { timingSafeEqual } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { WebSocketServer, WebSocket } from "ws";
 import { encryptWebPushPayload, loadOrCreateVapidKey, vapidJwt, webPushHeaders } from "./vapid.mjs";
 
@@ -97,7 +98,40 @@ const STATIC_TYPES = {
   ".webmanifest": "application/manifest+json",
   ".png": "image/png",
   ".ico": "image/x-icon",
+  // 桌面端自更新（electron-updater 的 generic provider）：latest.yml + 安装包。
+  // 未列出的扩展名一律 octet-stream（.exe / .blockmap 就是靠这条）。
+  ".yml": "text/yaml; charset=utf-8",
+  ".yaml": "text/yaml; charset=utf-8",
 };
+
+/**
+ * 解析单段 `Range: bytes=…`（多段只取第一段——浏览器与 electron-updater 都只发单段）。
+ * 返回 null 表示没有/不支持 Range（调用方回 200 全量），{invalid:true} 回 416。
+ *
+ * 为什么必须要它：安装包 138MB，而 elecron-updater 的**差量下载（.blockmap）与断点续传
+ * 都靠 Range**；没有 Range 就只能每次整包重下，而且旧实现 readFile 把整个文件吃进内存。
+ */
+function parseRange(header, size) {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(String(header).trim().split(",")[0].trim());
+  if (!match) return null;
+  const [, rawStart, rawEnd] = match;
+  if (rawStart === "" && rawEnd === "") return { invalid: true };
+  let start;
+  let end;
+  if (rawStart === "") {
+    // 后缀式：最后 N 字节
+    const suffix = Number(rawEnd);
+    if (!Number.isFinite(suffix) || suffix <= 0) return { invalid: true };
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(rawStart);
+    end = rawEnd === "" ? size - 1 : Number(rawEnd);
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) return { invalid: true };
+  return { start, end: Math.min(end, size - 1) };
+}
 
 /** Serve RELAY_STATIC_DIR for GETs that no API route claimed. Unknown paths fall
  * back to index.html (SPA deep links). Returns true when the request was handled.
@@ -123,16 +157,52 @@ function serveStatic(req, res) {
     return true;
   }
   const sendFile = (file) => {
-    readFile(file).then((buf) => {
-      const headers = { "content-type": STATIC_TYPES[extname(file)] || "application/octet-stream" };
+    stat(file).then((st) => {
+      if (st.isDirectory()) return sendFile(join(file, "index.html"));
+      const size = st.size;
+      const headers = {
+        "content-type": STATIC_TYPES[extname(file)] || "application/octet-stream",
+        "content-length": String(size),
+        // electron-updater 的差量下载与断点续传都依赖这个头。
+        "accept-ranges": "bytes",
+        "last-modified": st.mtime.toUTCString(),
+      };
       // index.html must never be cached (asset filenames are content-hashed).
       if (extname(file) === ".html") headers["cache-control"] = "no-cache";
+      const range = parseRange(req.headers.range, size);
+      if (range && range.invalid) {
+        res.writeHead(416, { ...headers, "content-range": `bytes */${size}`, "content-length": "0" });
+        res.end();
+        return;
+      }
+      if (range) {
+        headers["content-range"] = `bytes ${range.start}-${range.end}/${size}`;
+        headers["content-length"] = String(range.end - range.start + 1);
+        res.writeHead(206, headers);
+        if (headOnly) {
+          res.end();
+          return;
+        }
+        pipeFile(file, res, range);
+        return;
+      }
       res.writeHead(200, headers);
-      res.end(headOnly ? undefined : buf);
+      if (headOnly) {
+        res.end();
+        return;
+      }
+      pipeFile(file, res, null);
     }).catch(() => {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("not found");
     });
+  };
+  /** 流式发送（不再 readFile 整包进内存）；客户端断开时同步销毁读流。 */
+  const pipeFile = (file, res, range) => {
+    const source = createReadStream(file, range ? { start: range.start, end: range.end } : undefined);
+    source.on("error", () => res.destroy());
+    res.on("close", () => source.destroy());
+    source.pipe(res);
   };
   stat(filePath).then((st) => {
     if (st.isDirectory()) sendFile(join(filePath, "index.html"));

@@ -26,6 +26,14 @@ S8 部署模式（均可选，缺省关闭——测试保持 plain HTTP/ws）：
   路由（如 `/thread/<id>`）回退 `index.html`（SPA deep link），缺失资源返回真
   404，路径穿越 → 403。API 路由（`/healthz`、VAPID 端点）优先于静态。
 
+  同一目录也托管**桌面端安装包镜像**（`download/app/latest.yml` + `MPI-Setup-<v>.exe`
+  + `.blockmap`，由 `scripts/publish-release.mjs` 推送）——桌面自更新先问这里、
+  不可达才回 GitHub（`src/main/app-updater.ts`）。因此静态服务**支持 Range**
+  （`Accept-Ranges` / `206 Content-Range` / 越界 `416`），且走 `createReadStream`
+  而非整文件读内存：安装包 138MB，而 electron-updater 的差量下载（`.blockmap`）
+  与断点续传都依赖字节范围。`.yml` 按 `text/yaml` 发出，其余未知扩展名按
+  `application/octet-stream`。
+
 ```bash
 # aliyun-ecs 上的 systemd 服务形态（绑 Tailscale IP，仅 tailnet 可达）
 RELAY_PORT=9443 RELAY_HOST=<tailscale-ip> \

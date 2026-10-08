@@ -3,7 +3,7 @@
  * publish-release.mjs —— 一键发版：打 tag → push → GitHub Release（含附件上传）
  *
  * 用法:
- *   node scripts/publish-release.mjs <version> [--wait-ci [分钟]] [--seafile <dir>] [--no-push] [--force-upload]
+ *   node scripts/publish-release.mjs <version> [--wait-ci [分钟]] [--seafile <dir>] [--no-push] [--force-upload] [--no-relay]
  *   npm run release -- 0.6.2
  *
  * 示例:
@@ -32,6 +32,11 @@
  *        桥写心跳行，dev 应用的长任务监控会显示「正在等待 GitHub Actions 构建上传…」。
  *   6. 校验期望附件都在 Release 上（大小差异属正常——CI 与本地构建的 runtime 版本可能不同）；
  *      --seafile 时复制 exe + sha256 sidecar
+ *   7. 把 latest.yml + exe + .blockmap 镜像到中继静态目录（桌面端自更新的**主源**，
+ *      `scripts/dev-release.mjs` / `src/main/app-updater.ts` 都依赖这个约定）。
+ *      本地 release/ 没有产物时（--wait-ci）就从刚发布的 Release 下载再推。
+ *      **这一步失败默认中止发版**：ECS 上的 latest.yml 落后会让客户端永远看不到新版本。
+ *      --no-relay 显式跳过（客户端会直接回退 GitHub）。
  */
 import { execSync } from 'node:child_process';
 import fs, { createReadStream } from 'node:fs';
@@ -67,6 +72,7 @@ let version = null;
 let seafileDir = null;
 let noPush = false;
 let forceUpload = false;
+let noRelay = false;
 /** >0 → --wait-ci mode (minutes); don't upload locally, wait for GitHub Actions assets. */
 let waitCiMinutes = 0;
 for (let i = 0; i < argv.length; i++) {
@@ -74,6 +80,7 @@ for (let i = 0; i < argv.length; i++) {
   if (a === '--seafile') seafileDir = argv[++i];
   else if (a === '--no-push') noPush = true;
   else if (a === '--force-upload') forceUpload = true;
+  else if (a === '--no-relay') noRelay = true;
   else if (a === '--wait-ci') {
     const next = argv[i + 1] || '';
     waitCiMinutes = /^\d+$/.test(next) ? Number(argv[++i]) : 20;
@@ -81,10 +88,16 @@ for (let i = 0; i < argv.length; i++) {
   else if (!version) version = a;
 }
 if (!/^\d+\.\d+\.\d+$/.test(version || '')) {
-  console.error('用法: node scripts/publish-release.mjs <x.y.z> [--seafile <dir>] [--no-push] [--force-upload]');
+  console.error('用法: node scripts/publish-release.mjs <x.y.z> [--seafile <dir>] [--no-push] [--force-upload] [--no-relay]');
   process.exit(1);
 }
 const tag = `v${version}`;
+
+// ---------- 中继（桌面端自更新的主源）----------
+// 与 scripts/dev-publish-android.mjs 同一台机器/同一套约定：手机 APK 放 download/，
+// 桌面安装包镜像放 download/app/（electron-updater generic provider 读该目录下的 latest.yml）。
+const RELAY_HOST = process.env.MPI_RELAY_HOST || 'root@100.67.5.31';
+const RELAY_APP_DIR = process.env.MPI_RELAY_APP_DIR || '/var/www/mpi-mobile/download/app';
 
 // ---------- token / 仓库信息 ----------
 function getToken() {
@@ -283,6 +296,77 @@ async function waitForCiAssets(releaseId, expectedNames, minutes) {
   }
 }
 
+// ---------- 中继镜像（桌面端自更新的主源）----------
+/** 从刚发布的 Release 拉一个附件到本地（公开仓库，browser_download_url 无需 token）。 */
+function downloadReleaseAsset(rel, name, dest) {
+  const asset = (rel.assets || []).find((a) => a.name === name);
+  if (!asset) throw new Error(`Release 上没有 ${name}`);
+  const total = asset.size || 0;
+  return new Promise((resolve, reject) => {
+    const follow = (url, redirects = 0) => {
+      if (redirects > 5) return reject(new Error(`下载 ${name} 重定向过多`));
+      const u = new URL(url);
+      const req = https.get({ hostname: u.hostname, path: `${u.pathname}${u.search}`, headers: authHeaders() }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          return follow(new URL(res.headers.location, url).toString(), redirects + 1);
+        }
+        if (res.statusCode !== 200) { res.resume(); return reject(new Error(`下载 ${name} → HTTP ${res.statusCode}`)); }
+        const out = fs.createWriteStream(dest);
+        let done = 0;
+        let lastPct = -1;
+        res.on('data', (c) => {
+          done += c.length;
+          if (!total) return;
+          const pct = Math.floor((done / total) * 10) * 10;
+          if (pct !== lastPct) { lastPct = pct; console.log(`     … ${name} ${pct}%（${(done / 1048576).toFixed(1)}/${(total / 1048576).toFixed(1)} MB）`); }
+        });
+        out.on('error', reject);
+        out.on('finish', () => out.close(() => resolve()));
+        res.pipe(out);
+      });
+      req.on('error', reject);
+    };
+    follow(asset.browser_download_url);
+  });
+}
+
+/**
+ * 把 latest.yml + exe + .blockmap 推上中继静态目录。
+ *
+ * 客户端（src/main/app-updater.ts）先问 `<中继 http 源>/download/app/latest.yml`，不可达才回
+ * GitHub；所以这份 latest.yml 落后 == 客户端永远看不到新版本。失败一律中止发版，
+ * 不用“警告一下继续”的写法。
+ */
+async function mirrorToRelay(rel) {
+  console.log(`\n中继镜像 → ${RELAY_HOST}:${RELAY_APP_DIR}`);
+  let staging = null;
+  try {
+    const files = [];
+    for (const name of [`MPI-Setup-${version}.exe`, 'latest.yml', `MPI-Setup-${version}.exe.blockmap`]) {
+      const local = path.join(REPO_ROOT, 'release', name);
+      if (fs.existsSync(local)) { files.push(local); continue; }
+      staging = staging || fs.mkdtempSync(path.join(os.tmpdir(), 'mpi-relay-mirror-'));
+      const dest = path.join(staging, name);
+      console.log(`   · 本地没有 ${name}，从 Release 下载…`);
+      await downloadReleaseAsset(rel, name, dest);
+      files.push(dest);
+    }
+    const quoted = files.map((f) => `"${f}"`).join(' ');
+    execSync(`ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new ${RELAY_HOST} "mkdir -p ${RELAY_APP_DIR}"`, { stdio: 'inherit' });
+    console.log(`⬆ ${files.length} 个文件 → ${RELAY_HOST}（大文件可能需要几分钟）`);
+    execSync(`scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new ${quoted} ${RELAY_HOST}:${RELAY_APP_DIR}/`, { stdio: 'inherit' });
+    console.log('✓ 中继镜像完成（客户端将优先从它检查/下载更新）');
+  } catch (e) {
+    console.error(`✗ 中继镜像失败：${e.message}`);
+    console.error('  GitHub Release 已发布，但 ECS 上的 latest.yml 落后会让客户端检查不到新版本。');
+    console.error('  修好 SSH/目录后重跑本脚本（幂等），或加 --no-relay 显式跳过（客户端将回退 GitHub）。');
+    process.exit(1);
+  } finally {
+    if (staging) fs.rmSync(staging, { recursive: true, force: true });
+  }
+}
+
 // ---------- changelog 正文提取 ----------
 function changelogBody(v) {
   const md = fs.readFileSync(path.join(REPO_ROOT, 'changelog.md'), 'utf8');
@@ -403,6 +487,13 @@ function changelogBody(v) {
     console.log(`  ✓ ${name} (${(remote.size / 1048576).toFixed(1)} MB)${note}`);
   }
   if (!okAll) { console.error('✗ Release 缺少期望附件，请重新运行本脚本或检查 CI'); process.exit(1); }
+
+  // 7) 中继镜像（桌面端自更新的主源）。默认必须成功（见 mirrorToRelay 注释）。
+  if (noRelay) {
+    console.log('\n（--no-relay：跳过中继镜像，客户端会回退 GitHub）');
+  } else {
+    await mirrorToRelay(final);
+  }
 
   // seafile 分发副本（用本地产物；--wait-ci 且未本地构建时跳过并提示）
   if (seafileDir) {

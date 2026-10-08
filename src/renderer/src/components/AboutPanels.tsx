@@ -85,7 +85,7 @@ export function AppUpdatePanel() {
   const checkAppRelease = async () => {
     setAppUpdating(true);
     setAppUpdateError(null);
-    setAppUpdateProgress({ stage: "checking", message: language === "zh" ? "正在检查 GitHub 发布页最新版本…" : "Checking the latest GitHub Release…" });
+    setAppUpdateProgress({ stage: "checking", message: language === "zh" ? "正在检查最新版本…" : "Checking for updates…" });
     try {
       const status: any = await window.pi.app.checkAppUpdate();
       setAppUpdateStatus(status);
@@ -152,8 +152,8 @@ export function AppUpdatePanel() {
       <div className="set-card-title">{language === "zh" ? "MPI 应用更新" : "MPI app update"}</div>
       <div className="set-hint" style={{ marginBottom: 12 }}>
         {language === "zh"
-          ? "从 GitHub 发布页检查最新正式版本。发现新版本后，可在此下载 Windows 安装包并安装重启。"
-          : "Check the latest stable release from GitHub Releases. Download and install a Windows update here, then restart MPI."}
+          ? "检查最新正式版本（优先自建中继镜像，不可达时回退 GitHub Releases）。发现新版本后，可在此下载 Windows 安装包并安装重启。"
+          : "Check the latest stable release (self-hosted relay mirror first, GitHub Releases as fallback). Download and install a Windows update here, then restart MPI."}
       </div>
       <div className="set-diag-grid" style={{ marginBottom: 12 }}>
         <div className="set-diag-k">{language === "zh" ? "当前版本" : "Current version"}</div>
@@ -172,7 +172,13 @@ export function AppUpdatePanel() {
           )}
         </div>
         <div className="set-diag-k">{language === "zh" ? "来源" : "Source"}</div>
-        <div className="set-diag-v">{language === "zh" ? "GitHub 发布页" : "GitHub Releases"}</div>
+        <div className="set-diag-v">
+          {appUpdateStatus?.source === "relay"
+            ? language === "zh" ? "中继镜像" : "Relay mirror"
+            : appUpdateStatus?.source === "github"
+              ? language === "zh" ? "GitHub 发布页" : "GitHub Releases"
+              : "—"}
+        </div>
       </div>
       {appUpdateStatus && !appUpdateStatus.packaged && (
         <div className="set-hint" style={{ marginBottom: 12 }}>

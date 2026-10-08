@@ -6,7 +6,17 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 ## Unreleased
 
-1. **设置「手机远程控制」面板收敛：3 个二维码 → 2 个，删掉遗留的信令卡**——此前面板里平铺三张二维码（中继下载码、GitHub 下载码、配对码），外加一整张「信令配置」卡（信令地址 + 启用信令开关）。信令走的是 WebRTC 直连（`signaling/` 服务只转发票据/SDP/ICE，配对完就不再参与），而它早已是死路：默认地址为空（`DEFAULT_REMOTE_SIGNALING_URL = ""`），公网信令端点从未部署，三端（原生 App / 旧 WebView 壳 / PWA）现在全部只走中继，没有任何客户端会连它——那张卡点了不会有任何反应。现在：
+1. **桌面端自更新改成「中继镜像优先、GitHub 回退」**——此前应用更新只认 GitHub Releases（`electron-updater` + `provider: github`），国内网络下检查/下载经常卡住或超时；而自建中继（ECS）上早已在托管手机 APK（手机测约 1.85MB/s）。现在：
+   - **中继镜像**：`npm run release`（`scripts/publish-release.mjs`）在 GitHub Release 之外，把 `latest.yml` + `MPI-Setup-<v>.exe` + `.blockmap` 镜像到 `<中继>/download/app/`（env `MPI_RELAY_HOST` / `MPI_RELAY_APP_DIR`）。本地 `release/` 没有产物时（`--wait-ci` 模式）就从刚发布的 Release 下载再推。**这一步失败默认中止发版**——镜像里的 `latest.yml` 落后等于客户端永远查不到新版本；确实不需要时用 `--no-relay` 显式跳过
+   - **客户端逐源探测**（`src/main/app-updater.ts`）：中继 feed → 失败回 GitHub；未配中继（`remoteRelayUrl` 为空）时直接走 GitHub，别人装这台机器不受影响。检查期的探测失败不弹错（否则中继挂了会在 UI 里闪一下错又消失），两源都失败才报
+   - **防「镜像落后」**：若中继返回的版本号比当前版本还旧（说明镜像没跟上），不再信它，继续问 GitHub，两边都答不上来才用中继结果兜底。feed 地址推导抽成纯模块 `src/shared/app-update-feed.ts`（`wss://host/ws` → `https://host/download/app/`，保留端口），并有 L1 测试锁住与发布脚本的路径一致性
+   - 「关于 MPI」的说明、「来源」行与检查中文案同步（现在会显示「中继镜像 / GitHub 发布页」）
+
+2. **中继静态服务支持 Range（断点续传 + 差量下载），不再整文件读内存**——安装包 138MB，原先 `serveStatic` 用 `readFile` 把整个文件吃进内存、且**完全不支持 Range**，而 electron-updater 的差量下载（`.blockmap`）与断点续传都依赖字节范围；中继一旦要托管安装包，没 Range 就只能每次整包重下、ECS 侧一次性吃掉 138MB。现在：`Accept-Ranges: bytes`、单段 `Range` → `206 Content-Range`、后缀式（`bytes=-N`）与开区间（`bytes=N-`）都支持、越界 → `416` + `bytes */<size>`、`HEAD` 也认 Range 但不带体；传输改成 `createReadStream` 流式（客户端断开同步销毁读流），并补上 `.yml` → `text/yaml`（未知扩展名仍为 `application/octet-stream`）。
+
+   验证方式：`npm run typecheck` + `npm run test:app-update-feed` + `npm test -- relay`（6 项：`relay-tls-static` 已扩展覆盖全量/首段/开区间/后缀/越界 416/HEAD-Range/latest.yml 类型，另有 `relay-s0` / `relay-uplink` / `relay-device-lifecycle` / `relay-host-auth` / `stt-relay`）+ 全量 `npm test`。应用内：把「手机版云中继」的中继地址填上并启用 → 设置「关于 MPI」点「检查最新版本」→ 出结果后「来源」应显示**中继镜像**（中继没镜像安装包时自动回退 GitHub，来源显示 GitHub 发布页）；下载时能断点续传（中断后重试不从头下）。发版：`npm run release -- <版本>` 日志里出现「中继镜像 → root@…:/var/www/mpi-mobile/download/app」且以「✓ 中继镜像完成」结束；故意写错 `MPI_RELAY_HOST` 应看到「✗ 中继镜像失败」并中止发版。
+
+3. **设置「手机远程控制」面板收敛：3 个二维码 → 2 个，删掉遗留的信令卡**——此前面板里平铺三张二维码（中继下载码、GitHub 下载码、配对码），外加一整张「信令配置」卡（信令地址 + 启用信令开关）。信令走的是 WebRTC 直连（`signaling/` 服务只转发票据/SDP/ICE，配对完就不再参与），而它早已是死路：默认地址为空（`DEFAULT_REMOTE_SIGNALING_URL = ""`），公网信令端点从未部署，三端（原生 App / 旧 WebView 壳 / PWA）现在全部只走中继，没有任何客户端会连它——那张卡点了不会有任何反应。现在：
    - **下载码只留中继一个**（APK 从中继取）；GitHub 降级为一行文本备用地址，中继清单不可达时照样能看到地址（原来那种情况只剩 GitHub 码）
    - **删掉「信令配置」整卡**与摘要卡上的「信令连接状态」行，摘要卡改显示「中继连接状态」（含 lastError）
    - **配对卡补上可读的中继网页链接**：二维码内容（`https://<中继>/#pair=…`）现在同时以文本显示，带「复制链接」「在浏览器打开」；原来只显示 `mpi://` 长链接，桌面端根本看不到也点不开那个 https 地址

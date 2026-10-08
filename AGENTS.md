@@ -39,4 +39,10 @@ npm run test:zhiya   # 等价的单套件入口，名字见 package.json 的 scr
 - **不要等 GitHub 构建**：网络与上行不稳，等 CI 出包只会拖慢分发。本地包先发出去，CI 异步跑。
 - **GitHub 侧交给 CI**：版本提交与 tag（`v<版本>`）推送到 `main` 后，由 GitHub Actions 自动构建生成 Release 安装包；本机不做手工上传产物（`npm run dist` 只为本地 / Seafile 分发服务）。
 - **发版顺序**：① 改 `package.json` 版本 ② `changelog.md` 的 `Unreleased` 小节改名为 `## v<版本>（日期）` ③ `npm run dist` ④ 复制 exe + sha256 到 Seafile 并校验 ⑤ 提交、等确认后推送分支与 tag（触发 CI）。
+- **桌面端自更新走中继镜像优先**：`npm run release`（`scripts/publish-release.mjs`）在 GitHub Release
+  之外，还会把 `latest.yml` + `MPI-Setup-<v>.exe` + `.blockmap` scp 到中继静态目录
+  `/var/www/mpi-mobile/download/app/`（env：`MPI_RELAY_HOST` / `MPI_RELAY_APP_DIR`）。
+  客户端（`src/main/app-updater.ts`）先读 `<中继 http 源>/download/app/latest.yml`，不可达或
+  版本比当前旧时才回退 GitHub。**该步骤失败默认中止发版**（镜像落后 = 客户端永远看不到新版本）；
+  确实不推就加 `--no-relay`。
 - **可先行**：第 ④ 步不等 git（也不等 CI），本地包就绪即可分发——分发与代码提交解耦。

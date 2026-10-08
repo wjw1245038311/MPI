@@ -53,6 +53,7 @@
     "test:remote-files": "node --experimental-transform-types scripts/test-remote-files.mjs",
     "test:webpush": "node --experimental-transform-types scripts/test-webpush.mjs",
     "test:relay-tls-static": "node scripts/test-relay-tls-static.mjs",
+    "test:app-update-feed": "node --experimental-strip-types scripts/test-app-update-feed.mjs",
     "test:diff": "node --experimental-strip-types scripts/test-diff.mjs",
     "test:context-estimate": "node --experimental-strip-types scripts/test-context-estimate.mjs",
     "test:compactions": "node --experimental-strip-types scripts/test-compaction-stats.mjs",

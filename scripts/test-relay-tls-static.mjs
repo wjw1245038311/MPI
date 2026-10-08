@@ -4,6 +4,9 @@
  * Part 1 (plain HTTP): RELAY_STATIC_DIR serves the built PWA — index.html at /,
  *   correct content types, no-cache for html, SPA fallback for extension-less
  *   routes (/thread/<id>), real 404 for missing assets, path traversal → 403.
+ *   Also the desktop-installer mirror (latest.yml + MPI-Setup-*.exe): Range /
+ *   Content-Range / 416 / HEAD-with-Range — electron-updater's differential
+ *   download (.blockmap) and resume both need byte ranges.
  * Part 2 (TLS): RELAY_TLS_CERT/KEY switch the server to https/wss — healthz +
  *   static over TLS with an embedded self-signed cert, and a full WebSocket
  *   handshake (host.register → relay.ok) over wss://.
@@ -20,6 +23,9 @@ import WebSocket from "ws";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RELAY_ENTRY = join(ROOT, "mobile", "relay", "index.mjs");
+
+/** 假安装包字节（ASCII，便于逐段断言 Range 切片）。长度 20。 */
+const EXE_BYTES = Buffer.from("MPI-SETUP-0123456789");
 
 // Self-signed test cert (CN=localhost, SAN localhost/127.0.0.1, valid to 2036).
 const TEST_CERT_B64 =
@@ -55,6 +61,9 @@ function makeStaticDir() {
   writeFileSync(join(dir, "manifest.webmanifest"), JSON.stringify({ name: "MPI", start_url: "/" }));
   mkdirSync(join(dir, "assets"));
   writeFileSync(join(dir, "assets", "app.js"), "console.log('pwa');");
+  // 桌面端自更新镜像（electron-updater generic provider）。
+  writeFileSync(join(dir, "latest.yml"), "version: 0.9.4\npath: MPI-Setup-0.9.4.exe\n");
+  writeFileSync(join(dir, "MPI-Setup-0.9.4.exe"), EXE_BYTES);
   return dir;
 }
 
@@ -115,6 +124,50 @@ async function part1Static() {
     res = await fetch(`${base}/healthz`);
     assert.equal(res.status, 200);
     assert.deepEqual((await res.json()).ok, true);
+
+    // --- 桌面端自更新镜像：Range / 断点续传 ---------------------------------------
+    res = await fetch(`${base}/MPI-Setup-0.9.4.exe`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("accept-ranges"), "bytes");
+    assert.equal(res.headers.get("content-type"), "application/octet-stream");
+    assert.equal(Number(res.headers.get("content-length")), EXE_BYTES.length);
+    assert.deepEqual(Buffer.from(await res.arrayBuffer()), EXE_BYTES);
+
+    // 首段
+    res = await fetch(`${base}/MPI-Setup-0.9.4.exe`, { headers: { Range: "bytes=0-3" } });
+    assert.equal(res.status, 206);
+    assert.equal(res.headers.get("content-range"), `bytes 0-3/${EXE_BYTES.length}`);
+    assert.equal(res.headers.get("content-length"), "4");
+    assert.equal(await res.text(), "MPI-");
+
+    // 开区间：从中间到结尾
+    res = await fetch(`${base}/MPI-Setup-0.9.4.exe`, { headers: { Range: "bytes=4-" } });
+    assert.equal(res.status, 206);
+    assert.equal(res.headers.get("content-range"), `bytes 4-${EXE_BYTES.length - 1}/${EXE_BYTES.length}`);
+    assert.equal(await res.text(), EXE_BYTES.subarray(4).toString());
+
+    // 后缀式：最后 4 字节
+    res = await fetch(`${base}/MPI-Setup-0.9.4.exe`, { headers: { Range: "bytes=-4" } });
+    assert.equal(res.status, 206);
+    assert.equal(res.headers.get("content-range"), `bytes ${EXE_BYTES.length - 4}-${EXE_BYTES.length - 1}/${EXE_BYTES.length}`);
+    assert.equal(await res.text(), "6789");
+
+    // 越界 → 416 + 真实大小（下载器据此重试全量）
+    res = await fetch(`${base}/MPI-Setup-0.9.4.exe`, { headers: { Range: `bytes=${EXE_BYTES.length}-` } });
+    assert.equal(res.status, 416);
+    assert.equal(res.headers.get("content-range"), `bytes */${EXE_BYTES.length}`);
+
+    // HEAD 也认 Range（下载器与浏览器这么探测），但不带体
+    res = await fetch(`${base}/MPI-Setup-0.9.4.exe`, { method: "HEAD", headers: { Range: "bytes=0-3" } });
+    assert.equal(res.status, 206);
+    assert.equal(res.headers.get("content-length"), "4");
+    assert.equal(await res.text(), "");
+
+    // latest.yml：electron-updater 直接 parse 文本，类型要正确
+    res = await fetch(`${base}/latest.yml`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type"), /^text\/yaml/);
+    assert.match(await res.text(), /version: 0\.9\.4/);
   } finally {
     child.kill();
     rmSync(staticDir, { recursive: true, force: true });

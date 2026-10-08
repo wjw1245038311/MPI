@@ -1,15 +1,24 @@
 import { app } from "electron";
 import { autoUpdater, type ProgressInfo, type UpdateCheckResult, type UpdateInfo } from "electron-updater";
+import { getConfig } from "./config";
+import { relayAppUpdateFeedUrl } from "../shared/app-update-feed";
 import { beginTransfer, endTransfer, updateTransfer } from "./transfer-monitor";
 
-const REPOSITORY = "wjw1245038311/MPI";
+const OWNER = "wjw1245038311";
+const REPO = "MPI";
+const REPOSITORY = OWNER + "/" + REPO;
 const RELEASES_LATEST_URL = "https://github.com/" + REPOSITORY + "/releases/latest";
-// 应用自更新指向 MPI 自己的 GitHub 仓库（与 package.json build.publish 同源）。
-// 发布流程：大版本时把 dist/ 的 MPI-Setup-x.y.z.exe + latest.yml（+ .blockmap）
-// 作为附件挂到 github.com/wjw1245038311/MPI 的 Release 上，electron-updater 从那里检查更新。
+// 应用自更新：**中继镜像优先、GitHub 回退**。中继（用户的 ECS）在国内比 GitHub 快得多，
+// 但可能没部署/挂了，所以逐源探测，第一源成功就用它（下载也走同一源）。
+// 未配置中继（`remoteRelayUrl` 为空，例如别人装这台机器）时直接走 GitHub。
+// 发布流程：CI 把 dist/ 的 MPI-Setup-x.y.z.exe + latest.yml（+ .blockmap）挂到 GitHub Release，
+// 同时把同样三份文件推上中继的静态目录（路径见 shared/app-update-feed.ts，脚本见 scripts/publish-release.mjs）。
 // Pi 核心更新（core-updater.ts，走 npm registry）不受影响。
 
 export type AppUpdateStage = "checking" | "downloading" | "ready" | "installing" | "error";
+
+/** 本次检查/下载实际用的源：中继镜像还是 GitHub。 */
+export type AppUpdateSource = "relay" | "github";
 
 export interface AppUpdateProgress {
   stage: AppUpdateStage;
@@ -22,7 +31,7 @@ export interface AppUpdateStatus {
   current: string;
   latest: string | null;
   hasUpdate: boolean;
-  source: "github" | null;
+  source: AppUpdateSource | null;
   releaseUrl: string | null;
   assetName: string | null;
   /** Whether this platform has a supported installer asset. */
@@ -53,6 +62,22 @@ let downloadPromise: Promise<Array<string>> | null = null;
 let progressSink: ((progress: AppUpdateProgress) => void) | null = null;
 /** Active long-task-monitor entry for the in-flight app update download. */
 let appDownloadTransferId: string | null = null;
+/** 当前正在探测的源；探测失败时的 error 事件不报给 UI（否则中继挂了会先弹一次错，回退成功后又消失）。 */
+let probing = false;
+/** 上次成功的源（statusFromInfo 用它回填 source）。 */
+let activeSource: AppUpdateSource = "github";
+
+/**
+ * 中继镜像的 feed 地址（`<中继 http(s) 源>/download/app/`）；没有可用中继时返回 null。
+ *
+ * 从 `remoteRelayUrl`（wss://host/ws）推出来：把 ws(s) 换成 http(s)、丢掉路径。
+ * `MPI_APP_UPDATE_URL` 可覆盖（测试/临时换源用）。
+ */
+function relayUpdateFeedUrl(): string | null {
+  const override = (process.env.MPI_APP_UPDATE_URL || "").trim();
+  if (override) return override.endsWith("/") ? override : override + "/";
+  return relayAppUpdateFeedUrl(getConfig().remoteRelayUrl);
+}
 
 function normalizeVersion(raw: string): string {
   const value = String(raw || "").trim().replace(/^v/i, "");
@@ -121,7 +146,7 @@ function statusFromInfo(current: string, info: UpdateInfo): AppUpdateStatus {
     current,
     latest,
     hasUpdate,
-    source: "github",
+    source: activeSource,
     releaseUrl: releaseUrl(latest),
     assetName: updateAssetName(info),
     supported,
@@ -163,7 +188,7 @@ function configureUpdater(): void {
   };
 
   autoUpdater.on("checking-for-update", () => {
-    emitProgress({ stage: "checking", message: "正在检查 GitHub 发布页最新版本…" });
+    emitProgress({ stage: "checking", message: "正在检查最新版本…" });
   });
 
   autoUpdater.on("update-available", (info) => {
@@ -207,6 +232,8 @@ function configureUpdater(): void {
   });
 
   autoUpdater.on("error", (error, message) => {
+    // 探测期的失败不上报：中继挂了本来就要回退 GitHub，报出去只会在 UI 里闪一下错。
+    if (probing) return;
     lastUpdaterError = friendlyUpdaterError(message || error?.message || String(error));
     if (appDownloadTransferId) endTransfer(appDownloadTransferId);
     appDownloadTransferId = null;
@@ -223,6 +250,63 @@ async function checkWithUpdater(): Promise<UpdateCheckResult | null> {
   return checkPromise;
 }
 
+/** 把 provider 切到指定源并检查一次。返回 null 表示该源不可用（没配中继）。 */
+async function checkOnFeed(source: AppUpdateSource): Promise<UpdateCheckResult | null> {
+  if (source === "relay") {
+    const url = relayUpdateFeedUrl();
+    if (!url) return null;
+    // GenericProvider 会读 `<url>/latest.yml`（windows 的 channel 文件名）。
+    autoUpdater.setFeedURL({ provider: "generic", url, channel: "latest" });
+  } else {
+    autoUpdater.setFeedURL({ provider: "github", owner: OWNER, repo: REPO });
+  }
+  return await checkWithUpdater();
+}
+
+/**
+ * 逐源探测：中继镜像 → GitHub，用第一个成功的结果。
+ *
+ * 为什么不用 electron-updater 自带的回退：它没有多源概念（provider 只有一个），
+ * 「中继挂了再回 GitHub」必须自己写。探测期的 error 事件被 `probing` 抑制。
+ */
+async function checkWithFallback(): Promise<UpdateCheckResult | null> {
+  configureUpdater();
+  const current = normalizeVersion(app.getVersion());
+  const order: AppUpdateSource[] = relayUpdateFeedUrl() ? ["relay", "github"] : ["github"];
+  let firstError: string | null = null;
+  let staleRelay: UpdateCheckResult | null = null;
+  for (const source of order) {
+    probing = true;
+    try {
+      const result = await checkOnFeed(source);
+      if (result === null) continue; // 该源没配（理论上只有 relay 会这样）
+      probing = false;
+      // 防「镜像落后」：中继上的 latest.yml 比当前版本还旧，说明镜像没跟上（发版时推送失败 /
+      // 手工回滚过）。这份结果不能信——继续问 GitHub，两边都答不上来才用它兜底。
+      if (source === "relay" && compareVersions(normalizeVersion(result.updateInfo?.version || ""), current) < 0) {
+        staleRelay = result;
+        continue;
+      }
+      activeSource = source;
+      lastUpdaterError = null;
+      return result;
+    } catch (error: any) {
+      probing = false;
+      lastUpdaterError = null; // 探测期的错误不进 UI，两源都失败才报
+      if (!firstError) firstError = friendlyUpdaterError(error?.message || String(error));
+    }
+  }
+  if (staleRelay) {
+    // 回中继源，使 check 与后续 downloadUpdate 的 provider 一致。
+    const url = relayUpdateFeedUrl();
+    if (url) autoUpdater.setFeedURL({ provider: "generic", url, channel: "latest" });
+    activeSource = "relay";
+    lastUpdaterError = null;
+    return staleRelay;
+  }
+  throw new Error(firstError || "更新服务不可用");
+}
+
 export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
   configureUpdater();
   const current = normalizeVersion(app.getVersion());
@@ -234,7 +318,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
   }
 
   try {
-    const result = await checkWithUpdater();
+    const result = await checkWithFallback();
     const info = result?.updateInfo || latestUpdateInfo;
     return info ? statusFromInfo(current, info) : emptyStatus(current, lastUpdaterError || undefined);
   } catch (error: any) {
@@ -255,7 +339,8 @@ export async function downloadAppUpdate(onProgress?: (progress: AppUpdateProgres
       throw new Error("当前环境不能自动安装应用更新，请使用已安装的 MPI");
     }
 
-    const result = await checkWithUpdater();
+    // 同一源检查 + 下载：checkWithFallback 会把 provider 留在选中的那个源上。
+    const result = await checkWithFallback();
     const info = result?.updateInfo || latestUpdateInfo;
     if (!info) throw new Error("更新服务没有返回版本信息");
 
