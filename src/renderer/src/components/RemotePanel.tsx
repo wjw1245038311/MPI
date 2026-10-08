@@ -31,6 +31,8 @@ type RelayStatus = {
   state: "disabled" | "connecting" | "connected" | "error";
   relayUrl: string;
   lastError: string | null;
+  /** 配对票里给**手机**的中继地址（公网可达）；空 = 退回 relayUrl（手机可能连不上）。 */
+  mobileRelayUrl?: string;
 };
 
 /** 中继托管的手机 App 安装包清单（/download/mpi-android.json）；中继不可达时
@@ -93,6 +95,16 @@ function pairingScanUrl(pairing: Pairing, relayHttp: string | null): string {
   return relayHttp ? `${relayHttp}/#pair=${payload}` : pairingUri(pairing);
 }
 
+/** 手机（没有 Tailscale）大概率连不上的地址：tailnet 域名 / 100.x CGNAT / 内网段。 */
+function unreachableForPhone(url: string): boolean {
+  const value = (url || "").trim();
+  if (!value) return false;
+  return (
+    /\.ts\.net\b/i.test(value) ||
+    /\/\/(100\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.)/.test(value)
+  );
+}
+
 function statusClass(state: string): string {
   return ["connected", "connecting", "error", "disabled"].includes(state) ? state : "disabled";
 }
@@ -127,6 +139,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [appQr, setAppQr] = useState<string | null>(null);
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
   const [relayUrl, setRelayUrl] = useState("");
+  /** 配对票里给手机的地址（公网可达）。与 relayUrl 分开：主机走 tailnet，手机走公网。 */
+  const [mobileRelayUrl, setMobileRelayUrl] = useState("");
   /** 中继准入 token（P1）：与地址一起保存，不回显已有值的提示（避免在界面上留明文）。 */
   const [relayToken, setRelayToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -142,6 +156,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       const relay = (await window.pi.remote.getRelayStatus()) as RelayStatus;
       setRelayStatus(relay);
       if (syncRelayUrl) setRelayUrl(relay.relayUrl || "");
+      if (syncRelayUrl) setMobileRelayUrl(relay.mobileRelayUrl || "");
     } catch { /* same reload race */ }
   };
 
@@ -220,7 +235,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const saveRelayUrl = async () => {
     setBusy(true);
     try {
-      await window.pi.app.setConfig({ remoteRelayUrl: relayUrl.trim(), remoteRelayToken: relayToken.trim() });
+      await window.pi.app.setConfig({
+        remoteRelayUrl: relayUrl.trim(),
+        remoteRelayToken: relayToken.trim(),
+        mobileRelayUrl: mobileRelayUrl.trim(),
+      });
       await refresh(false);
     } finally {
       setBusy(false);
@@ -261,6 +280,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       setBusy(false);
     }
   };
+
+  const phoneNeedsAttention = !mobileRelayUrl.trim() && unreachableForPhone(relayUrl);
 
   return (
     <div className="set-remote-stack">
@@ -304,6 +325,28 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
             spellCheck={false}
           />
         </label>
+        <label className="set-addprov-field wide">
+          <span>{zh ? "手机通道地址（手机连的公网 WSS）" : "Phone-side relay URL (public WSS)"}</span>
+          <input
+            className="set-input"
+            value={mobileRelayUrl}
+            onChange={(event) => setMobileRelayUrl(event.target.value)}
+            placeholder="ws://<公网 IP 或域名>:10445/ws"
+            spellCheck={false}
+          />
+        </label>
+        <div className="set-hint">
+          {zh
+            ? "手机端没有 Tailscale，配对票里给它的必须是公网可达地址；留空则用上面的中继地址（只有当手机也能访问那个地址时才有效）。"
+            : "Phones have no Tailscale, so the pairing ticket must carry a publicly reachable address. Empty = reuse the relay URL above (only works when the phone can reach it too)."}
+        </div>
+        {phoneNeedsAttention && (
+          <div className="set-hint" style={{ color: "#c0392b" }}>
+            {zh
+              ? `⚠ 手机通道地址为空，会把「${relayUrl.trim()}」发给手机；tailnet/内网地址手机上连不上，配对会卡在“连不上中继”。请把上面的手机通道地址填成公网地址。`
+              : `⚠ No phone-side relay URL — the ticket will carry “${relayUrl.trim()}”, which a phone without Tailscale cannot reach. Set a public address above.`}
+          </div>
+        )}
         <label className="set-addprov-field wide">
           <span>{zh ? "中继准入 token（服务方要求时填）" : "Relay access token (if required)"}</span>
           <input

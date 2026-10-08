@@ -108,6 +108,15 @@ const remotePanel = readFileSync(resolve(root, "src", "renderer", "src", "compon
 assert.match(remotePanel, /Relay connection/);
 assert.doesNotMatch(remotePanel, /Signal connection|Signal settings|Enable Signal/);
 assert.doesNotMatch(remotePanel, />Host ID<|>Transport<|>Last error<|STUN URLs|stunText/);
+// 手机通道地址：面板必须能看/能改，并在会给手机 tailnet 地址时报警（否则手机端配对必失败）
+assert.match(remotePanel, /手机通道地址/, "面板必须暴露 mobileRelayUrl（手机连的公网地址）");
+assert.match(remotePanel, /unreachableForPhone/, "必须能识别手机大概率连不上的地址（tailnet/内网）");
+assert.match(remotePanel, /phoneNeedsAttention/, "必须把“会给手机 tailnet 地址”的情况报出来");
+assert.match(
+  readFileSync(resolve(root, "src", "main", "ipc.ts"), "utf8"),
+  /mobileRelayUrl: getConfig\(\)\.mobileRelayUrl/,
+  "getRelayStatus 必须回传 mobileRelayUrl",
+);
 
 const transport = readFileSync(resolve(root, "src", "renderer", "src", "remote", "transport.ts"), "utf8");
 assert.match(transport, /typ\\s\+relay/);

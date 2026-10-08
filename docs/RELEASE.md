@@ -156,5 +156,6 @@ CI：`tests.yml`（PR + main push：typecheck + 全量 L1）、`build-installers
 | 远端出现一个叫 `C:` 的怪目录 | Git Bash 把 argv/内联 env 里的 POSIX 路径改写成 Windows 路径。远端目录必须用 **spawn 的 env**（`MPI_RELAY_APP_DIR`）传，不要用 `VAR=/posix/path cmd` 这种内联写法；手动跑 `--dir /var/...` 先 `export MSYS_NO_PATHCONV=1` |
 | 客户端检查更新永远「已是最新」 | ECS 上的 `latest.yml` 落后（镜像没推成功）。重跑 `publish-release --local`；客户端侧也有「版本比当前旧就不信中继、转问 GitHub」的兜底 |
 | 安装包下载不能断点续传 | 中继旧代码（无 Range）。重部署 `mobile/relay/index.mjs` |
+| **在新机器上配对手机总是失败**（桌面二维码正常、中继日志里连 `pair.request` 都没有） | 配对票里给手机的地址是 `mobileRelayUrl`，**面板里叫「手机通道地址」**；它为空就退回主机自己的中继地址（通常是 `*.ts.net` tailnet 地址）——**手机没有 Tailscale，连不上**。填成公网地址（如 `ws://47.97.28.110:10445/ws`）即可。面板在中继地址是 tailnet/内网地址且未填该字段时会红字报警 |
 | `origin`（GitLab）与 `github` 不同步 | 小版本本来就不同步（`--no-github`）；大版本会推两个远端，手动发版别漏了 `git push github main` |
 | 中继代码改了但线上没生效 | 中继是独立进程：必须 scp + `systemctl restart mpi-relay` |

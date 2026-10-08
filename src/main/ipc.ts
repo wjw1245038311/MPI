@@ -3441,7 +3441,12 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
   }
 
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());
-  ipcMain.handle("remote:getRelayStatus", () => activeRelayUplink?.getStatus() ?? { state: "disabled" as const, relayUrl: getConfig().remoteRelayUrl, lastError: null });
+  ipcMain.handle("remote:getRelayStatus", () => ({
+    ...(activeRelayUplink?.getStatus() ?? { state: "disabled" as const, relayUrl: getConfig().remoteRelayUrl, lastError: null }),
+    // 手机该连的地址（与主机→中继的 remoteRelayUrl 可以不同：手机没有 Tailscale，
+    // 必须给公网可达地址）。面板需要回显它。
+    mobileRelayUrl: getConfig().mobileRelayUrl || "",
+  }));
   ipcMain.handle("remote:createPairing", (_e, args?: { autoApprove?: boolean }) => remoteHost.createPairingTicket({ autoApprove: args?.autoApprove === true }));
 
   /** 手机 App 安装包信息（relay 静态托管 /download/mpi-android.json）。在主进程取：
