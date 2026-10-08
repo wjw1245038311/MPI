@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.9.9（2026-10-09）
 
 1. **修正：重连时也刷新已信任设备的名字**——上一版把 PWA 设备名从写死的 `MPI PWA` 改成带短号的 `MPI PWA · Android/Chrome · 85pU`，但主机侧只有**配对**路径会更新名字（重连只刷新 `lastSeenAt`）——结果用户不重新配对就看不到新名字。现在重连验签通过后也会比对并更新（写 `mpi-diag.log` 的 `remote-rename`），设备改过名重连一次即生效。
 
