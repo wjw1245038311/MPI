@@ -92,11 +92,6 @@ function pairingScanUrl(pairing: Pairing, relayHttp: string | null): string {
   return relayHttp ? `${relayHttp}/#pair=${payload}` : pairingUri(pairing);
 }
 
-function formatSize(bytes: number): string {
-  if (!bytes) return "—";
-  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
-}
-
 function statusClass(state: string): string {
   return ["connected", "connecting", "error", "disabled"].includes(state) ? state : "disabled";
 }
@@ -388,23 +383,14 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         </div>
         {phoneApp?.ok ? (
           <div className="set-remote-pairing">
-            {appQr && (
+            {appQr ? (
               <div className="set-app-qrs">
                 <div className="set-app-qr">
-                  <img src={appQr} alt={zh ? "从中继下载手机 App" : "Download the app from the relay"} width={172} height={172} title={phoneApp.url} />
-                  <div className="set-hint">{zh ? "中继（推荐）" : "Relay (preferred)"}</div>
+                  <img src={appQr} alt={zh ? "下载安卓 App" : "Download the Android app"} width={172} height={172} title={phoneApp.url} />
                 </div>
               </div>
-            )}
-            <div className="set-hint">
-              {zh
-                ? `版本 ${phoneApp.version} · ${formatSize(phoneApp.size)}${phoneApp.stale ? " · 中继暂不可达，用下面的备用地址" : ""}`
-                : `Version ${phoneApp.version} · ${formatSize(phoneApp.size)}${phoneApp.stale ? " · relay unreachable, use the fallback below" : ""}`}
-            </div>
-            {phoneApp.sha256 && (
-              <div className="set-hint" title={phoneApp.sha256}>
-                {zh ? `SHA256 ${phoneApp.sha256.slice(0, 16)}…` : `SHA256 ${phoneApp.sha256.slice(0, 16)}…`}
-              </div>
+            ) : (
+              <div className="set-hint">{zh ? "中继暂不可达，用下面的备用地址" : "Relay unreachable — use the fallback below"}</div>
             )}
             {phoneApp.github && (
               <div className="set-hint" style={{ wordBreak: "break-all" }}>
@@ -412,16 +398,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
                 <a href={phoneApp.github} target="_blank" rel="noreferrer">{phoneApp.github}</a>
               </div>
             )}
-            <div className="set-hint">
-              {zh
-                ? `也可以直接在手机上打开 Seafile，从 Agent 目录下载 MPI-Android-${phoneApp.version}.apk（中继/GitHub 都可能慢）。`
-                : `Or open Seafile on the phone and grab MPI-Android-${phoneApp.version}.apk from the Agent folder.`}
-            </div>
           </div>
         ) : (
           <div className="set-hint">
             {zh
-              ? `暂未取到安装包信息${phoneApp && !phoneApp.ok ? `（${phoneApp.error}）` : ""}——先把 APK 发到中继的 /download/ 目录。`
+              ? `暂未取到安装包信息${phoneApp && !phoneApp.ok ? `（${phoneApp.error}）` : ""}`
               : `No package info${phoneApp && !phoneApp.ok ? ` (${phoneApp.error})` : ""}.`}
           </div>
         )}
