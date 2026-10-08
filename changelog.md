@@ -4,6 +4,20 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **设置页两处更新入口再精简：只留一个下载码 + 短链接文本**——① 手机远程控制 →「手机 App（安卓）」：卡片只剩**一个下载二维码**（中继源）与一个「**GitHub 下载**」超链接文本；删掉「中继（推荐）」标签、版本/大小行、SHA256 行与 Seafile 说明行（中继不可达时只留一行状态提示）。② 「关于 MPI → MPI 应用更新」：原来把整条 GitHub URL 当文本显示，现在改成「**打开发布页**」超链接（桌面默认 `releases/latest`，查到新版时指向该版本 tag 页）。两张卡都不再露出长地址。
+
+   验证方式：`npm run typecheck` + `npm test -- remote`（7/7）。应用内：设置 → 手机远程控制 →「手机 App（安卓）」应只有一个二维码 + 一个「GitHub 下载」链接（无版本号/SHA256/Seafile 文字）；设置 →「关于 MPI」→ 更新卡里是一行「GitHub | 打开发布页」，点开进对应发布页。
+
+2. **发版工具：`dev-release.mjs` 支持 `--minor` / `--major`**——默认仍是 patch（`0.9.5 → 0.9.6`），`--minor` → `0.9.6 → 0.10.0`、`--major` → `0.9.6 → 1.0.0`；大版本会在预检日志里提醒「应先跑全量测试」（脚本不自动跑）。除这三个开关与 `--help` 外的参数一律直接报错退出，不再静默忽略（以前手侍版本号会被无声吞掉，实际发的是 patch）。
+
+   验证方式：`node scripts/dev-release.mjs --help`（列出三个开关）；侍 `node scripts/dev-release.mjs 0.10.0` → 应报「未知参数」并 exit 1。
+
+3. **文档：新增 `docs/RELEASE.md` 与 `docs/DEV.md`；全量测试触发条件改为按版本量级**——① `docs/RELEASE.md`：发版铁律 5 条 / 一键与分步流程 / `publish-release` 参数表 / 4 个分发点 / 桌面与安卓两条发布线 / **工具清单**（发版·构建·调试·诊断基准·记忆池·测试）/ 常见坑对照表；`AGENTS.md` 顶部加了「发版铁律（只记这一句）」块，指向该文档。② `docs/DEV.md`：测试策略（分层 + 按爆炸半径的四条主表 + 常用命令 + 加测试纪律）、代码地图与改动纪律、调试取证手段。③ **全量测试不再看「是否发版」，改看版本量级**：大版本（minor/major）或本版含跨模块/共享基础设施改动 → 全量；小版本（patch）且都是局部改动 → 只跑相关套件。
+
+   验证方式：直接读 `docs/RELEASE.md`、`docs/DEV.md`；`node scripts/test-manual-sync.mjs` 应 8/8 全过。
+
 ## v0.9.6（2026-10-08）
 
 1. **发版不再等 GitHub CI：本地产物直接分发到中继镜像 + Seafile**——v0.9.5 发版时 `publish-release.mjs --wait-ci` 卡在等 CI 附件上（等了十几分钟），而发版约定本就是「本地打包 → Seafile，GitHub 交给 CI 异步」。现在新增 `--local`（**发版默认**）并给 `dev-release.mjs` 换上：
