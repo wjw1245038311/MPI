@@ -30,9 +30,10 @@ npm run test:zhiya   # 等价的单套件入口，名字见 package.json 的 scr
 | **小** | 单模块 / 单一功能域（如某个面板、某条 memory 链路） | `npm run typecheck` + 相关套件。套件名自描述（`test:<area>`，见 package.json scripts）；批量用子串过滤：`npm test -- memory` = 跑所有名字含 "memory" 的套件 |
 | **手机端（`mobile/app/`）** | Kotlin / Compose 改动 | `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（约 30s）。**桌面侧套件只在同时改了 `src/`、`protocol/`、`mobile/shared/` 时才跑** |
 | **大** | 跨模块，或动共享基础设施的**公共部分**（store.ts / main 入口 / pi-bridge / 构建配置 / package.json 依赖） | `npm run typecheck` + 全量 `npm test` |
-| **发版前** | 改版本号 / 打 tag / 出安装包 | 全量一次 |
+| **发大版本** | minor / major（`0.9.x → 0.10.0`、`1.0.0`），或本版含跨模块 / 共享基础设施改动 | `npm run typecheck` + **全量** `npm test` |
+| **发小版本** | patch（`0.9.5 → 0.9.6`）且本版都是局部改动 | `typecheck` + 按爆炸半径选相关套件（**不必全量**） |
 
-- **只有上面「大」与「发版前」才跑全量**。`push`、`commit`、「顺手验证一下」**都不是**全量的理由——按爆炸半径选完就跑，别抢跑；拿不准先问一句，不要默认全量。
+- **只有上面「大」与「发大版本」才跑全量；小版本（patch）按爆炸半径选。**`push`、`commit`、「顺手验证一下」**都不是**全量的理由——按爆炸半径选完就跑，别抢跑；拿不准先问一句，不要默认全量。
 - 反例（2026-09-24）：只改了手机端抽屉样式 + 一条图片渲染，却提前跑了全量 `npm test`（4–5 分钟），其中 `pool-write` 还是纯性能阈值抖动——浪费时间且制造噪声。
 
 - 按**爆炸半径**定范围，不按文件名：ipc.ts 里改一个局部函数（如某条远程广播）= 小改动 → typecheck + 相关套件（`npm test -- pwa`、`test:remote`），不跑全量；动它的共享状态/分发逻辑才算大。
