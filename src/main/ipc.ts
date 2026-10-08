@@ -235,6 +235,7 @@ import type { Server } from "node:http";import {
 } from "./remote/protocol";
 import { buildConfigPatch, planModeApplication, resolveModeById, type ConfigChangeOrigin, type ThreadConfigPatch } from "./thread-config";
 import { normalizeTaskModes, taskModeName, taskModeSummary } from "../shared/task-mode-catalog";
+import { stripImageDimensionNotes } from "../shared/image-notes";
 import {
   AGREEMENT_FILE,
   PERSONA_FILE,
@@ -1942,7 +1943,11 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       // 换成 video 块（封面在本函数末尾按预算从盘上回填）；文本同时清干净，
       // 否则气泡里会露出引用原文。从**未截断**的原文里取引用，避免长文把末尾的引用切掉。
       // 图片引用（kind=image）也在这里取——要**先于** blocksFor，因为块要用缩略图替换原图。
-      const { text: mediaText, refs: mediaRefs } = splitVideoRefs(remoteText(message?.content));
+      // pi 的图片缩放注解在这里先剥掉：手机气泡里不该出现这行机器文本（见 shared/image-notes.ts）。
+      const rawUserText = remoteText(message?.content);
+      const { text: mediaText, refs: mediaRefs } = splitVideoRefs(
+        role === "user" ? stripImageDimensionNotes(rawUserText) : rawUserText,
+      );
       const imageRefs = mediaRefs.filter((ref) => ref.kind === "image" && ref.thumb);
       const blocks = blocksFor(message, imageRefs);
       // 按 kind 分发块：video 走 video 块（封面在函数末尾按预算回填），audio 走 audio 块。

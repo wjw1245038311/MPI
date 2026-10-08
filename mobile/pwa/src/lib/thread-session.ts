@@ -18,6 +18,7 @@ import type {
   RemoteContextUsage, RemoteFileArtifact, RemoteMessage, RemoteModelOption, RemotePermission, RemoteTaskModeOption, RemoteThreadEventPayload, RemoteThreadSnapshot, RemoteThreadSummary, RemoteUiRequest } from "../../../shared/protocol";
 import type { RelayClient } from "./relay-client";
 import { Requester } from "./requester";
+import { stripImageDimensionNotes, stripImageHints } from "./user-text";
 
 /** Snapshot responses can be multi-MB (large session history); give them a long
  * transfer window instead of the default 10s request timeout. */
@@ -534,15 +535,24 @@ export class ThreadSession {
         const m = ev.message;
         if (!m) break;
         if (m.role === "user") {
-          const text = textOfContent(m.content).trim();
+          // 剥掉 pi 的图片注解：它只在图片被缩放/转换过时出现（大图必中），而下面
+          // 「乐观回显转正」是按文本相等对账的——不剥就会失配、同一条上屏两次。
+          // 显示用 dimension（`[Image omitted: …]` 保留），对账用 hints（全剥）。
+          const rawText = textOfContent(m.content);
+          const text = stripImageDimensionNotes(rawText).trim();
+          const compareText = stripImageHints(rawText).trim();
           const media = mediaPartsOfContent(m.content);
           if (text || media.length) {
             // 本地乐观回显先转正（否则同一条消息会上屏两次）。
             // 文本两侧都 trim：主机会把附件的 <file …/> 引用追加在文本末尾（并在下发时剥掉），
             // 对账不能因为一个换行就失配——那会让气泡重复一个。
-            const echo = [...this.view.messages]
-              .reverse()
-              .find((message) => message.pending && message.role === "user" && message.blocks.some((b) => b.type === "text" && (b.text || "").trim() === text));
+            const echo = compareText
+              ? [...this.view.messages]
+                  .reverse()
+                  .find((message) => message.pending && message.role === "user" && message.blocks.some((b) => b.type === "text" && (b.text || "").trim() === compareText))
+              : // 纯图片 / 纯文件消息：没有可比对的文本，只能认「最近一条待发的用户占位」
+                // （否则回显永远挂着 pending，主机那条又追加一个 → 两个气泡）。
+                [...this.view.messages].reverse().find((message) => message.pending && message.role === "user");
             if (echo) {
               this.patch({ messages: this.view.messages.map((message) => (message.id === echo.id ? { ...message, pending: false } : message)) });
             } else {

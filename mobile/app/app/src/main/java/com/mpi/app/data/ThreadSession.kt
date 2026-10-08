@@ -535,7 +535,13 @@ class ThreadSession(
         val message = event?.get("message") as? JsonObject ?: return
         val role = message.str("role").orEmpty()
         if (role == "user") {
-            val text = textOfContent(message["content"])
+            // 剥掉 pi 的图片注解：它只在图片被缩放/转换过时出现（大图必中），而下面
+            // 「乐观回显转正」是按文本相等对账的——不剥就永远失配，同一条消息会上屏两次。
+            // 显示用 dimension（`[Image omitted: …]` 保留，那是给用户看的原因说明），
+            // 对账用 hints（5 种注解全剥）。
+            val rawText = textOfContent(message["content"])
+            val text = stripImageDimensionNotes(rawText)
+            val compareText = stripImageHints(rawText)
             // 事件通道不带图片本体（主机只留 {type:image, omitted:true}）：带图的用户消息
             // 本地只能先建纯文本版，必须再拉一次全量快照把图片块补回来。
             val hasMediaPart = contentNeedsMediaBackfill(message["content"])
@@ -543,9 +549,9 @@ class ThreadSession(
             // 否则那条乐观回显会永远挂在「发送中」。
             val echo = _view.value.messages.lastOrNull { candidate ->
                 candidate.pending && candidate.role == "user" &&
-                    (text.isEmpty() || candidate.blocks.any { it.type == BlockType.Text && it.text == text })
+                    (compareText.isEmpty() || candidate.blocks.any { it.type == BlockType.Text && it.text == compareText })
             }
-            if (text.isEmpty() && echo == null) {
+            if (compareText.isEmpty() && echo == null) {
                 // 别的设备发的纯图片消息：本地没有可显示的文本版，但图片块仍要靠
                 // 全量快照补回来（否则要等下一次自然 resync 才可见）。
                 if (hasMediaPart) scheduleMediaBackfill()

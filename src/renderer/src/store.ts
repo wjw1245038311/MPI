@@ -36,6 +36,7 @@ import { cleanOutput, extensionsAlreadyLatest, hasLibuvAssertion, lastLine, stri
 import { playCompletionChime } from "./lib/sound";
 import { speakMessage } from "./lib/tts";
 import { parseSkillBlock } from "./lib/skill-block";
+import { stripImageDimensionNotes, stripImageHints } from "../../shared/image-notes";
 import type { ChoiceAnswer } from "./lib/choice-block";
 export type { ParsedSkillBlock } from "./lib/skill-block";
 
@@ -58,7 +59,9 @@ export interface ParsedUserMessage {
  * attachment metadata the renderer can display beside the user's text.
  */
 export function parseUserMessage(text: string): ParsedUserMessage {
-  const normalized = (text || "").replace(/\r\n/g, "\n");
+  // pi 的图片缩放注解（[Image: original …]）是给模型算坐标用的机器文本：留在可见
+  // 文本里既污染气泡，又会让「乐观回显 vs 主机回显」的文本对账失配 → 消息上屏两次。
+  const normalized = stripImageDimensionNotes((text || "").replace(/\r\n/g, "\n"));
   const attachments: ViewAttachment[] = [];
   // <file …/> | <file …>…</file> | <quote …>…</quote> — the quote block is
   // emitted by buildQuoteEnvelope() (src/main/quote-envelope.ts).
@@ -119,7 +122,9 @@ export function parseUserMessage(text: string): ParsedUserMessage {
  * before the first RPC event arrives. */
 function matchesOptimisticUserMessage(optimisticText: string, serverText: string): boolean {
   const normalize = (value: string) => value.replace(/\r\n/g, "\n").trim();
-  const visibleServerText = parseUserMessage(serverText).text;
+  // 对账前把所有图片注解剥干净（含「图片没能内联」那几条）：主机回显带着注解、
+  // 乐观回显不带，只要差一行就永远匹配不上 → 同一条消息上屏两次。
+  const visibleServerText = parseUserMessage(stripImageHints(serverText)).text;
   if (normalize(optimisticText) === normalize(visibleServerText)) return true;
 
   const skill = parseSkillBlock(visibleServerText);
