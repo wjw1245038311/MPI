@@ -4,6 +4,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **修正：重连时也刷新已信任设备的名字**——上一版把 PWA 设备名从写死的 `MPI PWA` 改成带短号的 `MPI PWA · Android/Chrome · 85pU`，但主机侧只有**配对**路径会更新名字（重连只刷新 `lastSeenAt`）——结果用户不重新配对就看不到新名字。现在重连验签通过后也会比对并更新（写 `mpi-diag.log` 的 `remote-rename`），设备改过名重连一次即生效。
+
+   验证方式：`npm run typecheck` + `npm run test:device-dedup` + `npm test -- remote`（8/8）。应用内：装新版后手机上重开 PWA（不用重新配对）→ 桌面端「已信任设备」里那条的名字应在一两秒内变成带短号的新名字，`mpi-diag.log` 出现 `remote-rename device=…`。
+
 ## v0.9.8（2026-10-08）
 
 1. **同一台手机不再重复绑定：名称可辨识 + 公钥 upsert + 同名离线替换**——网页端的设备身份（Ed25519 种子）存在**该网址 origin 的 IndexedDB** 里，换个地址打开（中继 `https://<域名>/` ↔ LAN `http://192.168.x.x:9001` ↔ 公网明文 `http://<ip>:10445`）就是另一套存储 → 生成全新身份；而名字又写死叫「MPI PWA」，于是「已信任设备」堆出一排一模一样的条目（实测本机 6 条记录 = 6 把不同公钥，其中 5 条同名）。现在三层处理：
