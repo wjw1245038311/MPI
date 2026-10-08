@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.9.6（2026-10-08）
 
 1. **发版不再等 GitHub CI：本地产物直接分发到中继镜像 + Seafile**——v0.9.5 发版时 `publish-release.mjs --wait-ci` 卡在等 CI 附件上（等了十几分钟），而发版约定本就是「本地打包 → Seafile，GitHub 交给 CI 异步」。现在新增 `--local`（**发版默认**）并给 `dev-release.mjs` 换上：
    - **本机不向 GitHub 传任何产物、也不轮询 CI**：安装包以 `release/` 下的本地产物分发——推中继镜像（`<中继>/download/app/`）+ 复制到 Seafile；GitHub Release 的附件由 CI 在构建完成后自行发布
