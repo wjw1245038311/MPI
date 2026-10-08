@@ -4,6 +4,9 @@ import type { Diagnostics } from "../lib/types";
 import { cleanOutput, hasLibuvAssertion, lastLine, stripAnsi } from "../lib/update";
 import { translateUiText } from "../lib/i18n";
 
+/* 应用更新卡片里对外给的地址（旧规约：不展示“从哪儿拿到这个版本”，直接给 GitHub 地址）。 */
+const RELEASES_URL = "https://github.com/wjw1245038311/MPI/releases/latest";
+
 /* Map each updater stage onto a slice of one continuous 0–100 bar, so the
  * fill never jumps backwards when a new stage starts. Stages without a
  * per-stage pct (checking / pruning / activating) render indeterminate. */
@@ -150,11 +153,6 @@ export function AppUpdatePanel() {
   return (
     <div className="set-card">
       <div className="set-card-title">{language === "zh" ? "MPI 应用更新" : "MPI app update"}</div>
-      <div className="set-hint" style={{ marginBottom: 12 }}>
-        {language === "zh"
-          ? "检查最新正式版本（优先自建中继镜像，不可达时回退 GitHub Releases）。发现新版本后，可在此下载 Windows 安装包并安装重启。"
-          : "Check the latest stable release (self-hosted relay mirror first, GitHub Releases as fallback). Download and install a Windows update here, then restart MPI."}
-      </div>
       <div className="set-diag-grid" style={{ marginBottom: 12 }}>
         <div className="set-diag-k">{language === "zh" ? "当前版本" : "Current version"}</div>
         <div className="set-diag-v">{appUpdateStatus?.current ? `v${appUpdateStatus.current}` : appVersion ? `v${appVersion}` : "—"}</div>
@@ -171,13 +169,11 @@ export function AppUpdatePanel() {
             </>
           )}
         </div>
-        <div className="set-diag-k">{language === "zh" ? "来源" : "Source"}</div>
-        <div className="set-diag-v">
-          {appUpdateStatus?.source === "relay"
-            ? language === "zh" ? "中继镜像" : "Relay mirror"
-            : appUpdateStatus?.source === "github"
-              ? language === "zh" ? "GitHub 发布页" : "GitHub Releases"
-              : "—"}
+        <div className="set-diag-k">GitHub</div>
+        <div className="set-diag-v" style={{ wordBreak: "break-all" }}>
+          <a href={appUpdateStatus?.releaseUrl || RELEASES_URL} target="_blank" rel="noreferrer">
+            {appUpdateStatus?.releaseUrl || RELEASES_URL}
+          </a>
         </div>
       </div>
       {appUpdateStatus && !appUpdateStatus.packaged && (

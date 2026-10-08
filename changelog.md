@@ -13,6 +13,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`node --check scripts/publish-release.mjs scripts/dev-release.mjs` + 下一次 `npm run release` 观察日志：出现「--local：跳过 GitHub 附件上传与 CI 等待」「中继镜像 → root@…:download/app」「✓ 中继镜像完成」「✓ 已复制到 Seafile 目录」，全程不出现「等待 GitHub Actions 附件」；再故意把 `release/MPI-Setup-<版本>.exe` 改名后重跑，应看到「✗ --local 要拿本地产物分发，但 release/ 下缺：…」并立即退出。也可以直接验证分发结果：`ssh root@100.67.5.31 'cat /var/www/mpi-mobile/download/app/latest.yml'` 的 `version` 应等于刚发的版本。
 
+2. **设置页两处更新入口精简：删掉说明段，「来源」行换成 GitHub 地址**——①「关于 MPI → MPI 应用更新」：删掉顶部那段「检查最新正式版本（优先自建中继镜像，不可达时回退 GitHub Releases）…」的说明，并把「来源（中继镜像 / GitHub 发布页）」一行改成直接给出 **GitHub 地址**（可点击，默认发布页 latest，查到新版本时指向该版本的 tag 页）；中继镜像优先的机制不变，只是不再把这层实现细节摆到界面上。②手机远程控制面板的「手机 App（安卓）」卡片：删掉顶部那段扫码说明，把「GitHub 备用源：<地址>」简化为「GitHub：<地址>」。
+
+   验证方式：`npm run typecheck`（两套 tsconfig）+ `npm test -- remote` + 应用内：设置 →「关于 MPI」→ 更新卡顶部不再有说明段，底部一行「GitHub https://github.com/wjw1245038311/MPI/releases/…」可点击打开；设置 → 手机远程控制 →「手机 App（安卓）」卡不再有说明段，GitHub 那行保留为可点地址。
+
 ## v0.9.5（2026-10-08）
 
 1. **桌面端自更新改成「中继镜像优先、GitHub 回退」**——此前应用更新只认 GitHub Releases（`electron-updater` + `provider: github`），国内网络下检查/下载经常卡住或超时；而自建中继（ECS）上早已在托管手机 APK（手机测约 1.85MB/s）。现在：

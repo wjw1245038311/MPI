@@ -386,11 +386,6 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
           <span className="set-card-icon"><Download size={14} /></span>
           <div className="set-card-title">{zh ? "手机 App（安卓）" : "Phone app (Android)"}</div>
         </div>
-        <div className="set-hint">
-          {zh
-            ? "扫下面的码从中继下载安装（支持覆盖升级）；中继不可达时用下面的 GitHub 备用地址。"
-            : "Scan the code below to install from the relay (in-place upgrades supported); use the GitHub fallback address when the relay is unreachable."}
-        </div>
         {phoneApp?.ok ? (
           <div className="set-remote-pairing">
             {appQr && (
@@ -413,7 +408,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
             )}
             {phoneApp.github && (
               <div className="set-hint" style={{ wordBreak: "break-all" }}>
-                {zh ? "GitHub 备用源：" : "GitHub fallback: "}
+                GitHub：
                 <a href={phoneApp.github} target="_blank" rel="noreferrer">{phoneApp.github}</a>
               </div>
             )}
