@@ -6520,8 +6520,8 @@ textarea.modal-input {
   flex-direction: column;
   gap: 12px;
 }
-/* Phone-app download codes: two side-by-side QR images (relay + GitHub fallback),
-   no URL text — the address lives in the img title only. */
+/* Phone-app download code: one QR image (relay only), no URL text — the address
+   lives in the img title, and GitHub stays as a plain text fallback link. */
 .set-app-qrs {
   display: flex;
   flex-wrap: wrap;

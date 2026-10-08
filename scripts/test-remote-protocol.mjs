@@ -104,7 +104,9 @@ for (const stunUrl of [
 }
 
 const remotePanel = readFileSync(resolve(root, "src", "renderer", "src", "components", "RemotePanel.tsx"), "utf8");
-assert.match(remotePanel, /Signal connection/);
+// 面板只展示中继连接状态（WebRTC/信令卡已删；后端代码仍在，只是没有 UI 入口）。
+assert.match(remotePanel, /Relay connection/);
+assert.doesNotMatch(remotePanel, /Signal connection|Signal settings|Enable Signal/);
 assert.doesNotMatch(remotePanel, />Host ID<|>Transport<|>Last error<|STUN URLs|stunText/);
 
 const transport = readFileSync(resolve(root, "src", "renderer", "src", "remote", "transport.ts"), "utf8");

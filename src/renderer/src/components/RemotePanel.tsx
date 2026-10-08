@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
+import { useStore } from "../store";
 import { Bell, Check, Cloud, Download, Plug, QrCode, Smartphone } from "./icons";
-
-const DEFAULT_SIGNALING_URL = "wss://mpi-remote.scholarcn.com/ws";
 
 type Pairing = {
   hostId: string;
@@ -120,30 +119,31 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [qr, setQr] = useState<string | null>(null);
+  /** 配对二维码的内容：有中继时是打开中继网页的 https 链接，无中继时是 mpi:// 链接。 */
+  const [scanUrl, setScanUrl] = useState<string | null>(null);
+  const pushToast = useStore((s) => s.pushToast);
   /** 扫码后是否免去桌面端再点一次「允许」（票=凭据，默认开）。 */
   const [autoApprove, setAutoApprove] = useState(true);
   const [phoneApp, setPhoneApp] = useState<PhoneAppInfo | null>(null);
-  /** 两张下载码：中继（主）+ GitHub（备选）。地址只放进 <img title>，不占版面。 */
-  const [appQrs, setAppQrs] = useState<{ relay: string | null; github: string | null }>({ relay: null, github: null });
-  const [signalingUrl, setSignalingUrl] = useState(DEFAULT_SIGNALING_URL);
+  /** 下载码只留一个：中继（主）；GitHub 降级为一行文本备用地址。地址只放进 <img title>，不占版面。 */
+  const [appQr, setAppQr] = useState<string | null>(null);
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
   const [relayUrl, setRelayUrl] = useState("");
   /** 中继准入 token（P1）：与地址一起保存，不回显已有值的提示（避免在界面上留明文）。 */
   const [relayToken, setRelayToken] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const refresh = async (syncSignalUrl = true) => {
+  const refresh = async (syncRelayUrl = true) => {
     try {
       const next = (await window.pi.remote.getStatus()) as RemoteStatus;
       setStatus(next);
-      if (syncSignalUrl) setSignalingUrl(next.signalingUrl || DEFAULT_SIGNALING_URL);
     } catch {
       // The panel can briefly outlive the Electron IPC bridge during reload.
     }
     try {
       const relay = (await window.pi.remote.getRelayStatus()) as RelayStatus;
       setRelayStatus(relay);
-      if (syncSignalUrl) setRelayUrl(relay.relayUrl || "");
+      if (syncRelayUrl) setRelayUrl(relay.relayUrl || "");
     } catch { /* same reload race */ }
   };
 
@@ -176,66 +176,40 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
 
   useEffect(() => {
     let alive = true;
-    const make = async (text?: string) =>
-      text ? QRCode.toDataURL(text, { width: 172, margin: 1, errorCorrectionLevel: "M" }).catch(() => null) : null;
     void (async () => {
-      if (!phoneApp?.ok) {
-        if (alive) setAppQrs({ relay: null, github: null });
-        return;
-      }
-      const relay = phoneApp.stale ? null : await make(phoneApp.url);
-      const github = await make(phoneApp.github || undefined);
-      if (alive) setAppQrs({ relay, github });
+      // 只发中继源的码。中继清单不可达（stale）时不生成码——下面的 GitHub 文本地址兜底。
+      const url = phoneApp?.ok && !phoneApp.stale ? phoneApp.url : "";
+      const image = url
+        ? await QRCode.toDataURL(url, { width: 172, margin: 1, errorCorrectionLevel: "M" }).catch(() => null)
+        : null;
+      if (alive) setAppQr(image);
     })();
     return () => {
       alive = false;
     };
   }, [phoneApp]);
 
-  const saveTransport = async () => {
-    setBusy(true);
-    try {
-      await window.pi.remote.setConfig({ signalingUrl: signalingUrl.trim() });
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const createPairing = async () => {
     setBusy(true);
     try {
       const next = (await window.pi.remote.createPairing(autoApprove)) as Pairing;
+      const url = pairingScanUrl(next, relayOrigin(relayUrl));
       setPairing(next);
-      setQr(await QRCode.toDataURL(pairingScanUrl(next, relayOrigin(relayUrl)), { width: 260, margin: 1, errorCorrectionLevel: "M" }));
+      setScanUrl(url);
+      setQr(await QRCode.toDataURL(url, { width: 260, margin: 1, errorCorrectionLevel: "M" }));
     } finally {
       setBusy(false);
     }
   };
 
-  const enableRemote = async () => {
-    setBusy(true);
+  const copyScanUrl = async () => {
+    if (!scanUrl) return;
     try {
-      await window.pi.remote.enableSignaling(true);
-      await refresh(false);
-    } finally {
-      setBusy(false);
+      await navigator.clipboard.writeText(scanUrl);
+      pushToast("success", zh ? "链接已复制" : "Link copied");
+    } catch {
+      pushToast("error", zh ? "复制失败" : "Copy failed");
     }
-  };
-
-  const disableRemote = async () => {
-    setBusy(true);
-    try {
-      await window.pi.remote.disableSignaling();
-      await refresh(false);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const toggleRemote = async () => {
-    if (status?.signalingEnabled) await disableRemote();
-    else await enableRemote();
   };
 
   const saveRelayUrl = async () => {
@@ -283,8 +257,6 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     }
   };
 
-  const state = status?.signalingState || "disabled";
-
   return (
     <div className="set-remote-stack">
       <div className="set-card">
@@ -294,59 +266,16 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         </div>
         <div className="set-hint">
           {zh
-             ? "使用 WSS 信令和 STUN 直连 WebRTC。信令服务不会接收提示词、代码、会话或文件；TURN/relay 候选会被拒绝。"
-            : "Uses WSS signaling and direct STUN WebRTC only. Signaling never receives prompts, code, sessions, or files; TURN/relay candidates are rejected."}
+             ? "手机经自建中继（或局域网直连）连到本机；中继只转发不解析，提示词、代码、会话与文件端到端加密。"
+            : "Phones reach this machine through the self-hosted relay (or over the LAN); the relay only forwards, prompts, code, sessions and files stay end-to-end encrypted."}
         </div>
         <div className="set-remote-status" aria-live="polite">
-          <span className="set-diag-k">{zh ? "信令连接状态" : "Signal connection"}</span>
-          <span className={`set-remote-status-value ${statusClass(state)}`}>
+          <span className="set-diag-k">{zh ? "中继连接状态" : "Relay connection"}</span>
+          <span className={`set-remote-status-value ${statusClass(relayStatus?.state || "disabled")}`}>
             <span className="set-remote-status-dot" aria-hidden="true" />
-            {statusLabel(state, zh)}
+            {statusLabel(relayStatus?.state || "disabled", zh)}
+            {relayStatus?.lastError ? ` · ${relayStatus.lastError}` : ""}
           </span>
-        </div>
-      </div>
-
-      <div className="set-card">
-        <div className="set-card-head">
-          <span className="set-card-icon"><Plug size={14} /></span>
-          <div className="set-card-title">{zh ? "信令配置" : "Signal settings"}</div>
-        </div>
-        <label className="set-addprov-field wide">
-           <span>{zh ? "信令地址（WSS）" : "Signal URL (WSS)"}</span>
-          <input
-            className="set-input"
-            value={signalingUrl}
-            onChange={(event) => setSignalingUrl(event.target.value)}
-            placeholder={DEFAULT_SIGNALING_URL}
-            spellCheck={false}
-          />
-        </label>
-        <button className="set-btn primary" style={{ marginTop: 10 }} onClick={saveTransport} disabled={busy || !signalingUrl.trim()}>
-          {zh ? "保存并重连" : "Save and reconnect"}
-        </button>
-        <div className="set-hint" style={{ marginTop: 10 }}>
-          {zh
-             ? "手动开启后信令会保持连接；配对或重连流程临时开启的信令会在直连认证完成后自动关闭。"
-            : "Signal stays connected when enabled manually; pairing or reconnect flows close it after direct authentication."}
-        </div>
-        <div className="set-remote-toggle-row">
-          <div className="set-remote-toggle-copy">
-            <span className="set-remote-toggle-label">{zh ? "启用信令" : "Enable Signal"}</span>
-            <span className="set-remote-toggle-state">
-              {status?.signalingEnabled ? (zh ? "已启用" : "On") : (zh ? "已关闭" : "Off")}
-            </span>
-          </div>
-          <button
-            type="button"
-            className={`set-toggle ${status?.signalingEnabled ? "on" : ""}`}
-            role="switch"
-            aria-checked={!!status?.signalingEnabled}
-             aria-label={zh ? "切换信令" : "Toggle Signal"}
-            onClick={() => void toggleRemote()}
-            disabled={busy || !signalingUrl.trim()}
-          >
-            <span className="set-toggle-knob" />
-          </button>
         </div>
       </div>
 
@@ -359,14 +288,6 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
           {zh
             ? "手机 PWA 经自建中继连接本机的 WSS uplink；中继只转发不解析，应用内容 E2E 加密（S3）。托盘驻留 + 常开即守护模式。"
             : "The phone PWA reaches this machine through the self-hosted relay over a persistent WSS uplink; the relay only forwards, content is E2E-encrypted (S3). Tray-resident + always-on = daemon mode."}
-        </div>
-        <div className="set-remote-status" aria-live="polite">
-          <span className="set-diag-k">{zh ? "中继连接状态" : "Relay connection"}</span>
-          <span className={`set-remote-status-value ${statusClass(relayStatus?.state || "disabled")}`}>
-            <span className="set-remote-status-dot" aria-hidden="true" />
-            {statusLabel(relayStatus?.state || "disabled", zh)}
-            {relayStatus?.lastError ? ` · ${relayStatus.lastError}` : ""}
-          </span>
         </div>
         <label className="set-addprov-field wide">
            <span>{zh ? "中继地址（WSS）" : "Relay URL (WSS)"}</span>
@@ -467,33 +388,33 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         </div>
         <div className="set-hint">
           {zh
-            ? "手机先加入同一个 Tailscale 网络，再用相机/扫码器扫下面的码下载安装（支持覆盖升级）。"
-            : "Join the same Tailscale network, then scan one of these with the camera to install the APK."}
+            ? "扫下面的码从中继下载安装（支持覆盖升级）；中继不可达时用下面的 GitHub 备用地址。"
+            : "Scan the code below to install from the relay (in-place upgrades supported); use the GitHub fallback address when the relay is unreachable."}
         </div>
         {phoneApp?.ok ? (
           <div className="set-remote-pairing">
-            <div className="set-app-qrs">
-              {appQrs.relay && !phoneApp.stale && (
+            {appQr && (
+              <div className="set-app-qrs">
                 <div className="set-app-qr">
-                  <img src={appQrs.relay} alt={zh ? "从中继下载手机 App" : "Download the app from the relay"} width={172} height={172} title={phoneApp.url} />
+                  <img src={appQr} alt={zh ? "从中继下载手机 App" : "Download the app from the relay"} width={172} height={172} title={phoneApp.url} />
                   <div className="set-hint">{zh ? "中继（推荐）" : "Relay (preferred)"}</div>
                 </div>
-              )}
-              {appQrs.github && (
-                <div className="set-app-qr">
-                  <img src={appQrs.github} alt={zh ? "从 GitHub 下载手机 App" : "Download the app from GitHub"} width={172} height={172} title={phoneApp.github} />
-                  <div className="set-hint">{zh ? "GitHub（备选）" : "GitHub (fallback)"}</div>
-                </div>
-              )}
-            </div>
+              </div>
+            )}
             <div className="set-hint">
               {zh
-                ? `版本 ${phoneApp.version} · ${formatSize(phoneApp.size)}${phoneApp.stale ? " · 中继暂不可达，用备选源" : ""}`
-                : `Version ${phoneApp.version} · ${formatSize(phoneApp.size)}${phoneApp.stale ? " · relay unreachable, use the fallback" : ""}`}
+                ? `版本 ${phoneApp.version} · ${formatSize(phoneApp.size)}${phoneApp.stale ? " · 中继暂不可达，用下面的备用地址" : ""}`
+                : `Version ${phoneApp.version} · ${formatSize(phoneApp.size)}${phoneApp.stale ? " · relay unreachable, use the fallback below" : ""}`}
             </div>
             {phoneApp.sha256 && (
               <div className="set-hint" title={phoneApp.sha256}>
                 {zh ? `SHA256 ${phoneApp.sha256.slice(0, 16)}…` : `SHA256 ${phoneApp.sha256.slice(0, 16)}…`}
+              </div>
+            )}
+            {phoneApp.github && (
+              <div className="set-hint" style={{ wordBreak: "break-all" }}>
+                {zh ? "GitHub 备用源：" : "GitHub fallback: "}
+                <a href={phoneApp.github} target="_blank" rel="noreferrer">{phoneApp.github}</a>
               </div>
             )}
             <div className="set-hint">
@@ -518,23 +439,32 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         </div>
         <div className="set-hint">
           {zh
-            ? "二维码包含短期票据、主机指纹、协议版本和连接地址，五分钟后失效。手机扫码即配对（需先装好上面的 App，或不装壳直接用浏览器打开）。"
-            : "The QR contains a short-lived ticket, host fingerprint, protocol, and endpoints. It expires after five minutes."}
+            ? "扫码打开中继网页并自动配对（安卓 App 里也可以点「扫码配对」扫同一个码）。二维码含 5 分钟有效的票据。"
+            : "Scanning opens the relay page and pairs automatically (the Android app's own scanner accepts the same code). The ticket expires after five minutes."}
         </div>
         <label className="set-check" style={{ marginTop: 10 }} title={zh ? "票在有效期内即代表你刚刚主动发起配对" : "The ticket itself is the credential"}>
           <input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} />
           <span>{zh ? "扫码后自动批准（无需在桌面点允许）" : "Auto-approve after scan"}</span>
         </label>
-        <button className="set-btn primary" style={{ marginTop: 12 }} onClick={createPairing} disabled={busy || !signalingUrl.trim()}>
+        <button className="set-btn primary" style={{ marginTop: 12 }} onClick={createPairing} disabled={busy}>
           {zh ? "生成配对二维码" : "Generate pairing QR"}
         </button>
         {pairing && (
           <div className="set-remote-pairing">
             {qr && <img src={qr} alt={zh ? "手机配对二维码" : "Phone pairing QR code"} width={260} height={260} />}
-            <div className="set-hint">
-            {zh ? "无法扫码时，可将下面的链接粘贴到 Android 应用。" : "If scanning is unavailable, paste this link into the Android app."}
+            {scanUrl && <div className="set-hint" style={{ wordBreak: "break-all" }}>{scanUrl}</div>}
+            <div className="set-diag-btns">
+              <button className="set-btn ghost" onClick={() => void copyScanUrl()}>{zh ? "复制链接" : "Copy link"}</button>
+              {scanUrl?.startsWith("http") && (
+                <a className="set-btn ghost" style={{ textDecoration: "none" }} href={scanUrl} target="_blank" rel="noreferrer">
+                  {zh ? "在浏览器打开" : "Open in browser"}
+                </a>
+              )}
             </div>
-            <textarea className="set-input" rows={4} readOnly value={pairingUri(pairing)} />
+            <details>
+              <summary className="set-hint">{zh ? "粘贴到安卓 App（mpi:// 链接）" : "Paste into the Android app (mpi:// link)"}</summary>
+              <textarea className="set-input" rows={4} readOnly value={pairingUri(pairing)} />
+            </details>
             <div className="set-hint">{zh ? `指纹：${pairing.fingerprint}` : `Fingerprint: ${pairing.fingerprint}`}</div>
           </div>
         )}
