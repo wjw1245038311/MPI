@@ -20,10 +20,18 @@
 ## 2. 发一版（默认路径）
 
 ```bash
-# 一键（推荐）：bump patch → changelog Unreleased 改名 → commit → push origin → npm run dist
+# 一键（推荐）：bump → changelog Unreleased 改名 → commit → push origin → npm run dist
 #               → publish-release --local（中继镜像 + Seafile）
-node scripts/dev-release.mjs
+node scripts/dev-release.mjs                 # 默认 patch：0.9.5 → 0.9.6
+node scripts/dev-release.mjs --minor         # 0.9.6 → 0.10.0（大版本：先跑全量测试）
+node scripts/dev-release.mjs --major         # 0.9.6 → 1.0.0 （大版本：先跑全量测试）
+node scripts/dev-release.mjs --help          # 只有这三个开关，其余参数直接报错不静默忽略
+```
 
+> 大版本（`--minor` / `--major`）发版前应先跑全量（`npm run typecheck` + `npm test`）；
+> 脚本**不会**自动跑，只会在预检日志里提醒。小版本（patch）按爆炸半径选相关套件即可。
+
+```bash
 # 分步（要精细控制时）
 #   ① 攒 changelog：把改动写进 changelog.md 的 ## Unreleased
 #   ② 改版本号：package.json 的 version（x.y.z）
@@ -65,7 +73,7 @@ node scripts/dev-release.mjs
 |---|---|---|
 | 版本号 | `package.json` version | `mobile/app/app/build.gradle.kts` 的 versionName/versionCode |
 | 出包 | `npm run dist` | `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug` |
-| 一键发布 | `node scripts/dev-release.mjs` | `node scripts/dev-publish-android.mjs`（开发期）/ `scripts/publish-android-github.mjs`（正式） |
+| 一键发布 | `node scripts/dev-release.mjs [--patch|--minor|--major]` | `node scripts/dev-publish-android.mjs`（开发期）/ `scripts/publish-android-github.mjs`（正式） |
 | 更新通道 | 中继 `download/app/latest.yml` → GitHub | 中继 `download/mpi-android-native.json` → GitHub（清单里 `url` 可为绝对地址） |
 | 校验 | `release/*.exe.sha256` | APK `.sha256` + 清单里的 `sha256` |
 
@@ -74,7 +82,7 @@ node scripts/dev-release.mjs
 ### 发版 / 分发
 | 工具 | 用途 |
 |---|---|
-| `scripts/dev-release.mjs` | 一键发版（bump → changelog → commit → push origin → dist → `--local` 分发） |
+| `scripts/dev-release.mjs` | 一键发版（bump → changelog → commit → push origin → dist → `--local` 分发）；`--patch`（默认）/ `--minor` / `--major` |
 | `scripts/publish-release.mjs` | 桌面发布：GitHub Release + 中继镜像 + Seafile（配合 `npm run release`） |
 | `scripts/write-sha256.mjs` | dist 流程里给每个安装包写 `.sha256` sidecar |
 | `scripts/dev-publish-android.mjs` | 开发期安卓发布：本机 SeaDrive + ECS 公网下载点，自动写清单 |

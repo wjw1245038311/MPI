@@ -22,7 +22,7 @@
 | **小** | 单模块 / 单一功能域（某个面板、某条链路） | `npm run typecheck` + **相关套件**（子串过滤：`npm test -- memory` = 跑所有名字含 "memory" 的套件） |
 | **手机端** | `mobile/app/`（Kotlin / Compose） | gradle 那条命令。**桌面侧套件只在同时改了 `src/` / `protocol/` / `mobile/shared/` 时才跑** |
 | **大** | 跨模块，或动共享基础设施的**公共部分**（`store.ts` / main 入口 / pi-bridge / 构建配置 / `package.json` 依赖） | `npm run typecheck` + **全量 `npm test`** |
-| **发大版本** | minor / major（`0.9.x → 0.10.0`、`1.0.0`），**或**这一版里含跨模块 / 共享基础设施改动 | `npm run typecheck` + **全量** `npm test` + `test-manual-sync`（≈4–5 min） |
+| **发大版本** | minor / major（`0.9.x → 0.10.0`、`1.0.0`，即 `dev-release.mjs --minor/--major`），**或**这一版里含跨模块 / 共享基础设施改动 | `npm run typecheck` + **全量** `npm test` + `test-manual-sync`（≈4–5 min） |
 | **发小版本** | patch（`0.9.5 → 0.9.6`）且本版都是局部改动 | `typecheck` + `test-manual-sync` + **按爆炸半径选相关套件**——不必全量 |
 
 **只有「大改动」与「发大版本」才跑全量；小版本（patch）按爆炸半径选。**

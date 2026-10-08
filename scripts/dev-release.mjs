@@ -3,11 +3,16 @@
  * dev-release.mjs —— MPI dev 一键发版流水线（独立脚本版）
  *
  * 由「发版评审会话」中的 agent 在用户明确确认后执行：
- *   node scripts/dev-release.mjs
+ *   node scripts/dev-release.mjs [--patch|--minor|--major]
+ *
+ * 版本推进（默认 patch）：
+ *   --patch（默认）  0.9.5 → 0.9.6
+ *   --minor          0.9.6 → 0.10.0   ← 大版本：发版前应先跑全量测试（本脚本不自动跑）
+ *   --major          0.9.6 → 1.0.0    ← 同上
  *
  * 流程（面板「发版评审」会话运行本脚本；src/main/dev-release.ts 为旧的应用内流水线，已不再使用）：
  *   [1/5] 预检（token / github remote / 版本号；工作区脏则自动 git stash -u）
- *   [2/5] bump patch + changelog Unreleased → vN（日期）
+ *   [2/5] bump（默认 patch）+ changelog Unreleased → vN（日期）
  *   [3/5] commit「release: vX——摘要」
  *   [4/5] push origin main+tag（触发 GitHub Actions 构建）+ 本地 npm run dist
  *   [5/5] publish-release.mjs --local：本地产物直接分发 → 中继镜像（ECS）+ Seafile
@@ -99,11 +104,39 @@ function hasToken() {
   }
 }
 
-function bumpPatch(version) {
+/** 版本推进：patch（默认）/ minor / major。返回 null = 版本号不是 x.y.z。 */
+function bumpVersion(version, kind = "patch") {
   const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
   if (!m) return null;
-  return `${m[1]}.${m[2]}.${Number(m[3]) + 1}`;
+  const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (kind === "major") return `${major + 1}.0.0`;
+  if (kind === "minor") return `${major}.${minor + 1}.0`;
+  return `${major}.${minor}.${patch + 1}`;
 }
+
+/** 命令行开关：只认 --patch / --minor / --major（默认 patch）；多余参数直接报错，不静默忽略。 */
+const RELEASE_KIND = (() => {
+  const argv = process.argv.slice(2);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    log(`用法: node scripts/dev-release.mjs [--patch|--minor|--major]
+
+  --patch（默认）  0.9.5 → 0.9.6
+  --minor          0.9.6 → 0.10.0
+  --major          0.9.6 → 1.0.0
+
+大版本（--minor / --major）发版前应先跑全量测试（npm run typecheck + npm test）——本脚本不自动跑。`);
+    process.exit(0);
+  }
+  const unknown = argv.filter((a) => !["--patch", "--minor", "--major"].includes(a));
+  if (unknown.length) {
+    console.error(`✗ 未知参数：${unknown.join(" ")}（只支持 --patch / --minor / --major；--help 看说明）`);
+    console.error("  想发指定版本：手改 package.json 的 version，或加 --minor / --major。");
+    process.exit(1);
+  }
+  if (argv.includes("--major")) return "major";
+  if (argv.includes("--minor")) return "minor";
+  return "patch";
+})();
 
 /** changelog.md：把 `## Unreleased` 改名为 `## v<version>（YYYY-MM-DD）`；
  *  没有该小节时在第一个版本标题前插入空小节。返回 { text, summary, hasEntries }。 */
@@ -171,9 +204,13 @@ async function main() {
   log(`   ✓ github remote: ${remoteUrl}`);
   // 预检只取版本号；不要持有这个对象——[2/5] 必须在 stash 之后重新读取（见下）。
   const currentVersion = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
-  nextVersion = bumpPatch(currentVersion);
+  nextVersion = bumpVersion(currentVersion, RELEASE_KIND);
   if (!nextVersion) throw new Error(`package.json 版本号不是 x.y.z：${currentVersion}`);
-  log(`   ✓ 版本 ${currentVersion} → ${nextVersion}（patch +1）`);
+  const kindLabel = RELEASE_KIND === "major" ? "major +1" : RELEASE_KIND === "minor" ? "minor +1" : "patch +1";
+  log(`   ✓ 版本 ${currentVersion} → ${nextVersion}（${kindLabel}）`);
+  if (RELEASE_KIND !== "patch") {
+    log("   ⚠ 大版本发版：按约定应先跑全量（npm run typecheck + npm test）——本脚本不自动跑，请确认已跑过");
+  }
 
   // 工作区脏不阻断：stash -u 暂存（含 untracked），构建只基于已提交代码；
   // finally 里自动恢复。放在预检最后——上面的硬性失败都不留副作用。
