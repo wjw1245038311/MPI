@@ -7,13 +7,15 @@
 
 1. **不等 GitHub 构建。**（反复踩过的坑）GitHub 只当异步备份：tag 推上去让 CI 自己出 Release 附件，
    本机**既不轮询、也不等待**。发版命令默认就是 `--local`，不要改成 `--wait-ci`。
-2. **本地包先发出去。**`npm run dist` 出包 → 直接分发到 **中继镜像（ECS）** 和 **Seafile**，
+2. **GitHub 只在大版本推。** 小版本（patch）走 `--no-github`：**不推 GitHub 分支/tag、不建 Release**，
+   只发中继镜像 + Seafile（`dev-release.mjs` 按版本量级自动决定）。大版本（`--minor` / `--major`）才推 GitHub。
+3. **本地包先发出去。**`npm run dist` 出包 → 直接分发到 **中继镜像（ECS）** 和 **Seafile**，
    与代码提交解耦（包好了就能发，不必等 commit / CI）。
-3. **每次都校哈希。** 分发后必须核对：ECS 上 `sha256sum` / 文件大小 == 本地 `release/*.sha256`。
-   对不上就是传坏了，重传。
-4. **推送要确认。** 可以 commit；`git push`（分支 / tag）必须先说明变更、等用户确认。
+4. **每次都校哈希。** 分发后必须核对：ECS 上 `sha256sum` / 文件大小 == 本地 `release/*.sha256`。
+   对不上就是传坏了，重传。（`relay-upload.mjs` 已自动做这一步）
+5. **推送要确认。** 可以 commit；`git push`（分支 / tag）必须先说明变更、等用户确认。
    例外：`journal/` 各设备自管目录可直接推。
-5. **验证看版本量级。**`npm run typecheck` + `node scripts/test-manual-sync.mjs` 每次都跑；
+6. **验证看版本量级。**`npm run typecheck` + `node scripts/test-manual-sync.mjs` 每次都跑；
    **大版本**（minor / major，或这一版含跨模块 / 共享基础设施改动）额外跑 **全量** `npm test`；
    **小版本**（patch、本版都是局部改动）按爆炸半径跑相关套件即可（判定见 `docs/DEV.md` §1）。
 
@@ -44,7 +46,8 @@ node scripts/dev-release.mjs --help          # 只有这三个开关，其余参
 
 | 参数 | 作用 |
 |---|---|
-| `--local` | **默认路径**：本机不传 GitHub、不等 CI；安装包走本地产物 → 中继镜像 + Seafile |
+| `--local` | **默认路径**：本机不传 GitHub 附件、不等 CI；安装包走本地产物 → 中继镜像 + Seafile |
+| `--no-github` | **小版本默认**（`dev-release.mjs` 自动加）：不推 GitHub 分支/tag、不建 Release；大版本才推 |
 | `--seafile <dir>` | 额外复制 exe + `.sha256` 到 Seafile 分发目录 |
 | `--no-relay` | 跳过中继镜像（客户端会回退 GitHub）。**只在确认不推 ECS 时用** |
 | `--no-push` | 不推分支 / tag |
@@ -61,7 +64,7 @@ node scripts/dev-release.mjs --help          # 只有这三个开关，其余参
 | **中继镜像（ECS）** `<中继>/download/app/` | `latest.yml` + `MPI-Setup-<v>.exe` + `.blockmap` | **桌面自更新主源**（`src/main/app-updater.ts`：中继优先 → GitHub 回退） |
 | **中继（ECS）** `/var/www/mpi-mobile/download/` | `mpi-android*.json` 清单 + APK + patch | 手机 App 更新主源 |
 | **Seafile** `E:/Seafile/wei_jw2/我的资料库/Agent` | 桌面 exe + `.sha256`、安卓 APK | 局域网分发 / 手机直接下 |
-| **GitHub Release** | 同上（CI 异步上传） | 公网备份、别人安装 |
+| **GitHub Release** | 同上（CI 异步上传） | 公网备份、别人安装；**只在大版本推** |
 | 中继静态服务本体 | `/var/www/mpi-mobile`（PWA + 上面两个 download 目录） | 手机 PWA / 附件 |
 
 **中继部署**：`scp mobile/relay/index.mjs root@<ecs>:/opt/mpi-relay/ && ssh root@<ecs> 'systemctl restart mpi-relay'`
@@ -82,7 +85,8 @@ node scripts/dev-release.mjs --help          # 只有这三个开关，其余参
 ### 发版 / 分发
 | 工具 | 用途 |
 |---|---|
-| `scripts/dev-release.mjs` | 一键发版（bump → changelog → commit → push origin → dist → `--local` 分发）；`--patch`（默认）/ `--minor` / `--major` |
+| `scripts/dev-release.mjs` | 一键发版（bump → changelog → commit → push origin → dist → `--local` 分发）；`--patch`（默认）/ `--minor` / `--major`；小版本自动带 `--no-github` |
+| `scripts/relay-upload.mjs` | 把产物推到中继静态目录；大文件（≥4MB）12 路并发分片 + ECS 侧合并 + sha256 校验。`--host/--port/--dir/--parts/--dry-run`；远端目录走 env `MPI_RELAY_APP_DIR`（`--dir` 传 POSIX 路径需先 `export MSYS_NO_PATHCONV=1`） |
 | `scripts/publish-release.mjs` | 桌面发布：GitHub Release + 中继镜像 + Seafile（配合 `npm run release`） |
 | `scripts/write-sha256.mjs` | dist 流程里给每个安装包写 `.sha256` sidecar |
 | `scripts/dev-publish-android.mjs` | 开发期安卓发布：本机 SeaDrive + ECS 公网下载点，自动写清单 |
@@ -148,7 +152,9 @@ CI：`tests.yml`（PR + main push：typecheck + 全量 L1）、`build-installers
 | 症状 | 原因 / 处理 |
 |---|---|
 | 发版卡在「等待 GitHub Actions 附件」 | 用了 `--wait-ci`。停掉，改默认 `--local` |
+| 上传到 ECS 只有 ~0.8MB/s（143MB 要 3.5 分钟） | 走了 **tailnet**（`100.x`）——那是单条 DERP 隧道，**多少路并发都上不去**。要走**公网 443**（默认 `MPI_RELAY_UPLOAD_HOST=root@47.97.28.110` + `MPI_RELAY_UPLOAD_PORT=443`），实测 12 路 ≈7–8.8MB/s |
+| 远端出现一个叫 `C:` 的怪目录 | Git Bash 把 argv/内联 env 里的 POSIX 路径改写成 Windows 路径。远端目录必须用 **spawn 的 env**（`MPI_RELAY_APP_DIR`）传，不要用 `VAR=/posix/path cmd` 这种内联写法；手动跑 `--dir /var/...` 先 `export MSYS_NO_PATHCONV=1` |
 | 客户端检查更新永远「已是最新」 | ECS 上的 `latest.yml` 落后（镜像没推成功）。重跑 `publish-release --local`；客户端侧也有「版本比当前旧就不信中继、转问 GitHub」的兜底 |
 | 安装包下载不能断点续传 | 中继旧代码（无 Range）。重部署 `mobile/relay/index.mjs` |
-| `origin`（GitLab）与 `github` 不同步 | 发版脚本会推两个远端；手动发版别漏了 `git push github main` |
+| `origin`（GitLab）与 `github` 不同步 | 小版本本来就不同步（`--no-github`）；大版本会推两个远端，手动发版别漏了 `git push github main` |
 | 中继代码改了但线上没生效 | 中继是独立进程：必须 scp + `systemctl restart mpi-relay` |

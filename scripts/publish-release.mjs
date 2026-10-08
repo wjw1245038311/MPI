@@ -3,7 +3,7 @@
  * publish-release.mjs —— 一键发版：打 tag → push → GitHub Release（含附件上传）
  *
  * 用法:
- *   node scripts/publish-release.mjs <version> [--local] [--wait-ci [分钟]] [--seafile <dir>] [--no-push] [--force-upload] [--no-relay]
+ *   node scripts/publish-release.mjs <version> [--local] [--no-github] [--wait-ci [分钟]] [--seafile <dir>] [--no-push] [--force-upload] [--no-relay]
  *   npm run release -- 0.6.2
  *
  * 示例:
@@ -29,18 +29,23 @@
  *        `release/` 下的本地产物分发（中继镜像 + Seafile），GitHub Release 的附件由 CI 异步发布。
  *        依据：发版约定（Agents.md 发版与分发）——家庭上行慢且不稳，等 CI 出包只会拖慢分发；
  *        GitHub 侧完全交给 CI。跳过 Release 附件校验（附件还没到位是预期状态）。
+ *      - --no-github：**小版本默认**——不推 GitHub 分支/tag、不建 Release，只发中继镜像 + Seafile。
+ *        大版本（minor/major）才推 GitHub 让 CI 出 Release 附件（dev-release.mjs 按版本量级自动决定）。
  *      - --wait-ci [分钟]（默认 20）：不本地上传——每 15s 轮询直到 CI 的三个附件就位再校验，
  *        超时则报错并提示去掉该参数走本地上传兜底。等待期间往 JSONL 桥写心跳行，
  *        dev 应用的长任务监控会显示「正在等待 GitHub Actions 构建上传…」。
  *   6. 校验期望附件都在 Release 上（大小差异属正常——CI 与本地构建的 runtime 版本可能不同）；
  *      --seafile 时复制 exe + sha256 sidecar
  *   7. 把 latest.yml + exe + .blockmap 镜像到中继静态目录（桌面端自更新的**主源**，
- *      `scripts/dev-release.mjs` / `src/main/app-updater.ts` 都依赖这个约定）。
- *      本地 release/ 没有产物时（--wait-ci / --local 且未本地构建）就从刚发布的 Release 下载再推。
+ *      `scripts/dev-release.mjs` / `src/main/app-updater.ts` 都依赖这个约定），走
+ *      `scripts/relay-upload.mjs`：大文件 12 路并发分片 + ECS 侧合并 + sha256 校验。
+ *      **必须走公网 443**（实测 60MB/8.5s ≈ 7.0MB/s）；tailnet 是单条 DERP 隧道，
+ *      多少路并发都只有 ~0.8MB/s（143MB 要 3.5 分钟）。快路失败自动回退 tailnet。
+ *      本地 release/ 没有产物时就从刚发布的 Release 下载再推。
  *      **这一步失败默认中止发版**：ECS 上的 latest.yml 落后会让客户端永远看不到新版本。
  *      --no-relay 显式跳过（客户端会直接回退 GitHub）。
  */
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import fs, { createReadStream } from 'node:fs';
 import https from 'node:https';
 import os from 'node:os';
@@ -79,6 +84,8 @@ let noRelay = false;
 let waitCiMinutes = 0;
 /** --local: 只拿本地产物分发（中继镜像 + Seafile），不传 GitHub、不等 CI（发版默认）。 */
 let localOnly = false;
+/** --no-github: 不推 GitHub、不建 Release（小版本默认；大版本才推 GitHub）。 */
+let noGithub = false;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--seafile') seafileDir = argv[++i];
@@ -86,14 +93,19 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--force-upload') forceUpload = true;
   else if (a === '--no-relay') noRelay = true;
   else if (a === '--local') localOnly = true;
+  else if (a === '--no-github') noGithub = true;
   else if (a === '--wait-ci') {
     const next = argv[i + 1] || '';
     waitCiMinutes = /^\d+$/.test(next) ? Number(argv[++i]) : 20;
   }
   else if (!version) version = a;
 }
+if (waitCiMinutes > 0 && noGithub) {
+  console.error('✗ --no-github 与 --wait-ci 互斥：前者不碰 GitHub，后者要等 CI 附件');
+  process.exit(1);
+}
 if (!/^\d+\.\d+\.\d+$/.test(version || '')) {
-  console.error('用法: node scripts/publish-release.mjs <x.y.z> [--local] [--seafile <dir>] [--no-push] [--force-upload] [--no-relay]');
+  console.error('用法: node scripts/publish-release.mjs <x.y.z> [--local] [--no-github] [--seafile <dir>] [--no-push] [--force-upload] [--no-relay]');
   process.exit(1);
 }
 const tag = `v${version}`;
@@ -103,6 +115,10 @@ const tag = `v${version}`;
 // 桌面安装包镜像放 download/app/（electron-updater generic provider 读该目录下的 latest.yml）。
 const RELAY_HOST = process.env.MPI_RELAY_HOST || 'root@100.67.5.31';
 const RELAY_APP_DIR = process.env.MPI_RELAY_APP_DIR || '/var/www/mpi-mobile/download/app';
+// 上传走**公网 443 + 多路并发**：实测 60MB / 8.5s ≈ 7.0MB/s；而 tailnet（100.x）走的是单条
+// DERP 隧道，不管并发多少路都是 ~0.8MB/s（143MB 要 3.5 分钟）。失败则回退 tailnet 慢路。
+const RELAY_UPLOAD_HOST = process.env.MPI_RELAY_UPLOAD_HOST || 'root@47.97.28.110';
+const RELAY_UPLOAD_PORT = process.env.MPI_RELAY_UPLOAD_PORT || '443';
 
 // ---------- token / 仓库信息 ----------
 function getToken() {
@@ -351,21 +367,30 @@ async function mirrorToRelay(rel) {
     for (const name of [`MPI-Setup-${version}.exe`, 'latest.yml', `MPI-Setup-${version}.exe.blockmap`]) {
       const local = path.join(REPO_ROOT, 'release', name);
       if (fs.existsSync(local)) { files.push(local); continue; }
+      if (!rel) throw new Error(`本地没有 ${name}，且本次未建 Release（--no-github）无从下载`);
       staging = staging || fs.mkdtempSync(path.join(os.tmpdir(), 'mpi-relay-mirror-'));
       const dest = path.join(staging, name);
       console.log(`   · 本地没有 ${name}，从 Release 下载…`);
       await downloadReleaseAsset(rel, name, dest);
       files.push(dest);
     }
-    const quoted = files.map((f) => `"${f}"`).join(' ');
-    execSync(`ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new ${RELAY_HOST} "mkdir -p ${RELAY_APP_DIR}"`, { stdio: 'inherit' });
-    console.log(`⬆ ${files.length} 个文件 → ${RELAY_HOST}（大文件可能需要几分钟）`);
-    execSync(`scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new ${quoted} ${RELAY_HOST}:${RELAY_APP_DIR}/`, { stdio: 'inherit' });
+    // 大文件 12 路并发分片（单连接 scp 实测 ~0.8MB/s → 143MB 要 3 分钟；12 路走公网 443 ≈ 7MB/s）；
+    // 工具内部保证 latest.yml 最后落盘、且每个文件校验 sha256 后才原子替换。
+    // 远端目录走 env（argv 里的 POSIX 路径会被 Git Bash 改写成 Windows 路径）。
+    const uploader = path.join(REPO_ROOT, 'scripts', 'relay-upload.mjs');
+    const env = { ...process.env, MPI_RELAY_APP_DIR: RELAY_APP_DIR };
+    const attempt = (host, port) => spawnSync(process.execPath, [uploader, '--host', host, '--port', port, ...files], { stdio: 'inherit', env }).status;
+    let code = attempt(RELAY_UPLOAD_HOST, RELAY_UPLOAD_PORT);
+    if (code !== 0 && RELAY_UPLOAD_HOST !== RELAY_HOST) {
+      console.warn('⚠ 快路（公网 443）上传失败，回退 tailnet 慢路（≈0.8MB/s，143MB 约 3 分钟）…');
+      code = attempt(RELAY_HOST, '');
+    }
+    if (code !== 0) throw new Error(`relay-upload.mjs 退出码 ${code}`);
     console.log('✓ 中继镜像完成（客户端将优先从它检查/下载更新）');
   } catch (e) {
     console.error(`✗ 中继镜像失败：${e.message}`);
-    console.error('  GitHub Release 已发布，但 ECS 上的 latest.yml 落后会让客户端检查不到新版本。');
-    console.error('  修好 SSH/目录后重跑本脚本（幂等），或加 --no-relay 显式跳过（客户端将回退 GitHub）。');
+    console.error('  ECS 上的 latest.yml 落后会让客户端检查不到新版本。');
+    console.error('  修好 SSH/目录后重跑本脚本（幂等），或加 --no-relay 显式跳过。');
     process.exit(1);
   } finally {
     if (staging) fs.rmSync(staging, { recursive: true, force: true });
@@ -411,8 +436,10 @@ function changelogBody(v) {
     console.log(`✓ 创建 tag ${tag} → ${git('rev-parse --short HEAD')}`);
   }
 
-  // 2) push
-  if (!noPush) {
+  // 2) push（--no-github：小版本不推 GitHub，只保留 origin/GitLab）
+  if (noGithub) {
+    console.log('（--no-github：不推 GitHub——小版本只走中继镜像 + Seafile，大版本才推 GitHub）');
+  } else if (!noPush) {
     git(`push github refs/heads/${branch}:refs/heads/${branch}`);
     git(`push github refs/tags/${tag}`);
     console.log(`✓ 已推送 ${branch} + ${tag}`);
@@ -420,25 +447,28 @@ function changelogBody(v) {
     console.log('（--no-push：跳过 push）');
   }
 
-  // 3) Release 正文
-  let body = changelogBody(version);
-  if (!body) console.warn('⚠ changelog.md 里没找到 ## v' + version + ' 小节，Release 描述将为空');
-  const shaFile = path.join(REPO_ROOT, 'release', `MPI-Setup-${version}.exe.sha256`);
-  if (fs.existsSync(shaFile)) {
-    body += `\n\nSHA256: \`${fs.readFileSync(shaFile, 'utf8').trim().split(/\s+/)[0]}\``;
-  }
-
-  // 4) 创建 / 更新 Release
+  // 3) Release 正文 + 4) 创建/更新 Release（--no-github 全部跳过）
   let rel = null;
-  try { rel = await api('GET', `/repos/${OWNER}/${REPO}/releases/tags/${tag}`); } catch { /* 404 */ }
-  if (rel) {
-    await api('PATCH', `/repos/${OWNER}/${REPO}/releases/${rel.id}`, { name: `MPI v${version}`, body });
-    console.log(`✓ 更新已有 Release #${rel.id}（标题/描述）`);
+  const shaFile = path.join(REPO_ROOT, 'release', `MPI-Setup-${version}.exe.sha256`);
+  if (noGithub) {
+    console.log('（--no-github：不创建/更新 GitHub Release）');
   } else {
-    rel = await api('POST', `/repos/${OWNER}/${REPO}/releases`, {
-      tag_name: tag, target_commitish: branch, name: `MPI v${version}`, body,
-    });
-    console.log(`✓ 创建 Release #${rel.id}`);
+    let body = changelogBody(version);
+    if (!body) console.warn('⚠ changelog.md 里没找到 ## v' + version + ' 小节，Release 描述将为空');
+    if (fs.existsSync(shaFile)) {
+      body += `\n\nSHA256: \`${fs.readFileSync(shaFile, 'utf8').trim().split(/\s+/)[0]}\``;
+    }
+
+    try { rel = await api('GET', `/repos/${OWNER}/${REPO}/releases/tags/${tag}`); } catch { /* 404 */ }
+    if (rel) {
+      await api('PATCH', `/repos/${OWNER}/${REPO}/releases/${rel.id}`, { name: `MPI v${version}`, body });
+      console.log(`✓ 更新已有 Release #${rel.id}（标题/描述）`);
+    } else {
+      rel = await api('POST', `/repos/${OWNER}/${REPO}/releases`, {
+        tag_name: tag, target_commitish: branch, name: `MPI v${version}`, body,
+      });
+      console.log(`✓ 创建 Release #${rel.id}`);
+    }
   }
 
   // Release 上期望的附件名（CI 与本地产物同名）
@@ -449,14 +479,16 @@ function changelogBody(v) {
   ];
 
   let final;
-  if (localOnly) {
-    // --local：本机不碰 GitHub 附件——安装包以 release/ 下的本地产物分发（中继镜像 + Seafile），
-    // 附件由 CI 在构建完成后自己发布。校验步骤也知道这个前提（附件缺失属预期）。
-    console.log('\n--local：跳过 GitHub 附件上传与 CI 等待（安装包走本地产物 → 中继镜像 + Seafile）');
+  if (localOnly || noGithub) {
+    // 不走 GitHub 附件（--local：不本地上传也不等 CI；--no-github：连 Release 都不建）：
+    // 安装包以 release/ 下的本地产物分发 → 中继镜像 + Seafile。
+    console.log(noGithub
+      ? '\n--no-github：不推 GitHub、不建 Release（安装包走本地产物 → 中继镜像 + Seafile）'
+      : '\n--local：跳过 GitHub 附件上传与 CI 等待（安装包走本地产物 → 中继镜像 + Seafile）');
     const missing = expectedNames.filter((f) => !fs.existsSync(path.join(REPO_ROOT, 'release', f)));
     if (missing.length) {
-      console.error(`✗ --local 要拿本地产物分发，但 release/ 下缺：${missing.join(', ')}`);
-      console.error('  先跑 npm run dist（或改用 --wait-ci 等 CI 产物）');
+      console.error(`✗ 需要 release/ 下的本地产物，但缺：${missing.join(', ')}`);
+      console.error('  先跑 npm run dist（或去掉 --local / --no-github 走 GitHub 附件路径）');
       process.exit(1);
     }
   } else if (waitCiMinutes > 0) {
@@ -487,10 +519,10 @@ function changelogBody(v) {
   }
 
   // 6) 校验（只查期望附件都在 Release 上；大小差异属正常——CI 与本地构建的 runtime 版本可能不同）
-  //    --local 不校验：附件由 CI 异步发布，此刻缺失是预期状态。
-  if (!final) final = await api('GET', `/repos/${OWNER}/${REPO}/releases/${rel.id}`);
-  if (localOnly) {
-    console.log('\n（--local：跳过 Release 附件校验——附件由 CI 异步发布）');
+  //    --local / --no-github 不校验：一个等 CI 异步发、一个根本没建 Release。
+  if (!noGithub && !final) final = await api('GET', `/repos/${OWNER}/${REPO}/releases/${rel.id}`);
+  if (localOnly || noGithub) {
+    console.log(noGithub ? '\n（--no-github：跳过 Release 附件校验——未建 Release）' : '\n（--local：跳过 Release 附件校验——附件由 CI 异步发布）');
   } else {
     console.log('\nRelease 附件校验:');
     let okAll = true;
@@ -528,7 +560,8 @@ function changelogBody(v) {
     }
   }
 
-  console.log(`\n🎉 https://github.com/${OWNER}/${REPO}/releases/tag/${tag}`);
+  console.log(`\n🎉 v${version} 分发完成（中继镜像 + Seafile）`);
+  if (!noGithub) console.log(`   https://github.com/${OWNER}/${REPO}/releases/tag/${tag}`);
 })().catch((e) => {
   console.error(`✗ 发版失败: ${e.message}`);
   process.exit(1);

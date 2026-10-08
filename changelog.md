@@ -4,6 +4,18 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **发版提速：中继上传改成 12 路并发分片（实测 137MB / 15.6s，原来单连接要 3 分 29 秒）**——新增 `scripts/relay-upload.mjs`：≥4MB 的文件切成 12 段、每条一个独立 ssh 并发上传，ECS 侧 `cat` 合并 → `sha256sum` 与本地比对 → 通过才 `mv` 原子替换（中途失败线上仍是旧文件，不会出现半个包）；`latest.yml` **最后落盘**（客户端读它决定下载哪个版本）；单片失败自动重试 3 次；小文件仍走 scp。
+   - **关键发现：并发只对公网 443 有效**。实测 60MB：公网 443 走 12 条独立 TCP ≈ **7.0MB/s**（线性叠加）；tailnet（`100.x`）无论并发多少路都是 **~0.8MB/s**——整个 tailnet 只有一条 DERP 隧道，并发无意义。所以默认上传路改为 `MPI_RELAY_UPLOAD_HOST=root@47.97.28.110` + `MPI_RELAY_UPLOAD_PORT=443`，快路失败自动回退 tailnet 慢路（并明确打日志）。
+   - 顺带修掉一个真坑：Git Bash 会把 argv / 内联 env 里的 POSIX 路径改写成 Windows 路径（`/var/www/...` → `C:/Program Files/Git/var/www/...`，远端会变成一个叫 `C:` 的怪目录）。现在远端目录只走 spawn 的 env 传，工具还会主动拦下 Windows 化的目录并给出处理办法。
+
+   验证方式：`node scripts/test-relay-upload-parts.mjs`（分片区间、阈值、命名、接线、路径拦截）+ `node scripts/relay-upload.mjs --dry-run …`。实测：`MSYS_NO_PATHCONV=1 node scripts/relay-upload.mjs --host root@47.97.28.110 --port 443 --dir /var/www/mpi-mobile/download/app release/MPI-Setup-0.9.7.exe release/latest.yml …` → 「分片上传完成 8.8 MB/s（15.6s）」「sha256 7dab57196b38… 校验通过并已就位」；ECS 上 `sha256sum` 与本地一致。
+
+2. **GitHub 只在大版本推**——`publish-release.mjs` 新增 `--no-github`（不推 GitHub 分支/tag、不建 Release，只发中继镜像 + Seafile），`dev-release.mjs` 在小版本（patch）自动带上；大版本（`--minor` / `--major`）才推 GitHub 让 CI 出 Release 附件。小版本的 tag 只留在自建 GitLab（`origin`）。
+
+   验证方式：`node scripts/dev-release.mjs --help`；看下次 `npm run release` 日志：小版本应出现「--no-github：不推 GitHub、不建 Release」，大版本则出现「已推送 main + vX」与 GitHub Release 链接。
+
 ## v0.9.7（2026-10-08）
 
 1. **设置页两处更新入口再精简：只留一个下载码 + 短链接文本**——① 手机远程控制 →「手机 App（安卓）」：卡片只剩**一个下载二维码**（中继源）与一个「**GitHub 下载**」超链接文本；删掉「中继（推荐）」标签、版本/大小行、SHA256 行与 Seafile 说明行（中继不可达时只留一行状态提示）。② 「关于 MPI → MPI 应用更新」：原来把整条 GitHub URL 当文本显示，现在改成「**打开发布页**」超链接（桌面默认 `releases/latest`，查到新版时指向该版本 tag 页）。两张卡都不再露出长地址。

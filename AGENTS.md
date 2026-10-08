@@ -6,8 +6,8 @@
 ## ⚠️ 发版铁律（只记这一句）
 
 **发版不等 GitHub 构建。** 本机 `npm run dist` 出包后直接分发到**中继镜像（ECS）+ Seafile**，
-GitHub 只让 CI 异步出 Release 附件（不轮询、不等待）。发版走 `node scripts/dev-release.mjs`，
-默认就是 `publish-release.mjs --local`——**不要改成 `--wait-ci`**。
+GitHub 只让 CI 异步出 Release 附件（不轮询、不等待），**且只在大版本才推 GitHub**（小版本默认 `--no-github`）。
+发版走 `node scripts/dev-release.mjs`，默认就是 `publish-release.mjs --local`——**不要改成 `--wait-ci`**。
 完整规则、分发路径与工具清单：**`docs/RELEASE.md`**（发版前先读它）。
 
 ## 常用命令
@@ -47,7 +47,8 @@ npm run test:zhiya   # 等价的单套件入口，名字见 package.json 的 scr
 
 - **Seafile 是局域网分发放置点**：本地打包好的安装包直接同步过去（路径见 `WorkspaceLayout.md` 速查的 Seafile 条目）。文件名 `MPI-Setup-<版本>.exe` + `.sha256`；复制后校验哈希一致才算完成。
 - **不要等 GitHub 构建**：网络与上行不稳，等 CI 出包只会拖慢分发。本地包先发出去，CI 异步跑。
-- **GitHub 侧交给 CI**：版本提交与 tag（`v<版本>`）推送到 `main` 后，由 GitHub Actions 自动构建生成 Release 安装包；本机不做手工上传产物（`npm run dist` 只为本地 / Seafile 分发服务）。
+- **GitHub 侧交给 CI，且只在大版本推**：小版本（patch）默认 `--no-github`——不推 GitHub、不建 Release，只发中继镜像 + Seafile；大版本（`--minor` / `--major`）才把 tag 推上去让 GitHub Actions 出 Release 安装包；本机不做手工上传产物。
+- **中继上传走公网 443、并发分片**：`scripts/relay-upload.mjs`（12 路，实测 137MB / 15.6s ≈ 8.8MB/s）；tailnet（`100.x`）是单条 DERP 隧道，并发无效（~0.8MB/s）。
 - **发版顺序**：① 改 `package.json` 版本 ② `changelog.md` 的 `Unreleased` 小节改名为 `## v<版本>（日期）` ③ `npm run dist` ④ 复制 exe + sha256 到 Seafile 并校验 ⑤ 提交、等确认后推送分支与 tag（触发 CI）。
 - **桌面端自更新走中继镜像优先**：`npm run release`（`scripts/publish-release.mjs`）在 GitHub Release
   之外，还会把 `latest.yml` + `MPI-Setup-<v>.exe` + `.blockmap` scp 到中继静态目录
