@@ -213,7 +213,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     setBusy(true);
     try {
       const next = (await window.pi.remote.createPairing(autoApprove)) as Pairing;
-      const url = pairingScanUrl(next, relayOrigin(relayUrl));
+      // 二维码的**网址**优先用手机通道地址（公网）：用系统相机/浏览器扫时也不该去打开打不开的
+      // tailnet 页（典型症状：浏览器 timeout，而中继日志里一条 pair.request 都没有）。
+      // App 内「扫码配对」只读 payload，用哪个网址都一样。
+      const url = pairingScanUrl(next, relayOrigin(mobileRelayUrl) ?? relayOrigin(relayUrl));
       setPairing(next);
       setScanUrl(url);
       setQr(await QRCode.toDataURL(url, { width: 260, margin: 1, errorCorrectionLevel: "M" }));
