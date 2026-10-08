@@ -232,6 +232,18 @@ async function main() {
 
     const client = new RelayClient({ url });
     clients.push(client);
+    // 实时投递计数器（重连断言用）：直接数入站的 message_update/text_delta 帧。
+    // 为什么不看视图：主机每次 thread.subscribe 都会推一轮实时事件，而**重连后的
+    // auto-reauth resync 快照可能晚于这一轮落地**——这个 fake 的快照是静态的 2 条
+    // 历史（与真实主机不同，它不会包含刚发生的回合），晚到就把视图换回去。那样
+    // 「Hello! 还在不在 messages 里」就变成了运气（实测 5/6 概率失败），而事件
+    // 到底有没有投递到客户端本来是确定性的。
+    let liveTextDeltas = 0;
+    client.onFrame((frame) => {
+      if (frame.type !== "thread.event") return;
+      const payload = frame.payload || {};
+      if (payload.kind === "message_update" && payload.data?.event?.assistantMessageEvent?.type === "text_delta") liveTextDeltas += 1;
+    });
     const resultPromise = runPairing(client, payload, identity, "test-pwa-thread");
     await waitFor(() => rendererEvents.some(([ch]) => ch === "remote:pairing-request"), "desktop pairing request");
     const pairingRequest = rendererEvents.find(([ch]) => ch === "remote:pairing-request")[1];
@@ -325,6 +337,7 @@ async function main() {
     // 事件都被主机静默丢弃（diag 指纹 `remote-pub … subs=0`，真机表现为「气泡卡发送中 /
     // 整条消息包括回复一起晚到）。所以重连后必须重新 `thread.subscribe`。
     const beforeDropSub = subscribeCount;
+    const beforeDropDeltas = liveTextDeltas;
     client.simulateDrop();
     await waitFor(
       () => subscribeCount > beforeDropSub,
@@ -332,10 +345,14 @@ async function main() {
       15_000,
     );
     await waitFor(() => ts.getSnapshot().ready, "重连后视图恢复");
-    // 实时投递的硬证据：预设的实时回合（快照之后发的，即订阅已生效之后）必须到达。
-    // 旧实现只 resync 的话这一步会超时——因为主机根本不会把事件发给它。
+    // 实时投递的硬证据：主机在每次 subscribe 后都会推一轮实时回合（下面 fake 脚本里的
+    // text_delta 串），而快照之后的这些帧只会在**订阅真的注册上了**时才被主机下发。
+    // 旧实现只 resync 的话这一步会超时。
+    // 注意不要用「视图里还有没有 Hello!」当证据：重连期的 resync 可能晚于这轮事件
+    // 落地，把视图换回静态快照（该快照本来就只有 2 条历史）——那是 fake 的性质，
+    // 不代表事件没到（本文件已因此 flaky，2026-10 改）。
     await waitFor(
-      () => ts.getSnapshot().messages.some((m) => m.role === "assistant" && m.blocks.some((b) => b.text === "Hello!")),
+      () => liveTextDeltas > beforeDropDeltas,
       "重连后实时事件恢复投递（证明订阅真的注册上了）",
       15_000,
     );
