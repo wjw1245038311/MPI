@@ -393,9 +393,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
               <div className="set-hint">{zh ? "中继暂不可达，用下面的备用地址" : "Relay unreachable — use the fallback below"}</div>
             )}
             {phoneApp.github && (
-              <div className="set-hint" style={{ wordBreak: "break-all" }}>
-                GitHub：
-                <a href={phoneApp.github} target="_blank" rel="noreferrer">{phoneApp.github}</a>
+              <div className="set-hint">
+                <a href={phoneApp.github} target="_blank" rel="noreferrer">{zh ? "GitHub 下载" : "Download from GitHub"}</a>
               </div>
             )}
           </div>

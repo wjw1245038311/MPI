@@ -170,9 +170,9 @@ export function AppUpdatePanel() {
           )}
         </div>
         <div className="set-diag-k">GitHub</div>
-        <div className="set-diag-v" style={{ wordBreak: "break-all" }}>
+        <div className="set-diag-v">
           <a href={appUpdateStatus?.releaseUrl || RELEASES_URL} target="_blank" rel="noreferrer">
-            {appUpdateStatus?.releaseUrl || RELEASES_URL}
+            {language === "zh" ? "打开发布页" : "Open releases"}
           </a>
         </div>
       </div>
