@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.9.4（2026-10-08）
 
 1. **修复「发带图片的话，同一条消息上屏两次」（三端都出现过）**——pi 处理图片附件时会把机器注解追加到用户正文末尾（`utils/image-resize.ts`，共 5 种）：
    - ① `[Image: original WxH, displayed at wxh. Multiply coordinates by S …]`（图片被缩放，**大图必中**）
