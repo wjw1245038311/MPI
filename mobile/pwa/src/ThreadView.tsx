@@ -15,6 +15,7 @@ import { requestDirectPlaybackUrl, uploadVideoDirect } from "./lib/attachment-di
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
 import { withChoiceSegments } from "./lib/choice-block";
+import type { ChoiceFailure } from "./lib/choice-block";
 import { ChoicePanel } from "./components/ChoicePanel";
 import { COLUMN_PRESETS, COLUMN_PRESET_ORDER, type ColumnPreset } from "./lib/column-preset";
 import { groupToolBlocks, type ToolGroup } from "./lib/tool-groups";
@@ -261,6 +262,23 @@ interface ChoiceContext {
   onSend: (text: string) => Promise<void>;
 }
 
+/** choices 解析失败的具体原因（与桌面端同一套文案，手机端不区分语言）。 */
+function pwaChoiceWarnText(reason: ChoiceFailure | undefined): string {
+  return reason === "shape"
+    ? "这个 choices 块格式不合法，已按普通代码块显示（原因：JSON 能解析但结构不符——每题需要 2–6 个选项的 options）。"
+    : reason === "syntax"
+      ? "这个 choices 块格式不合法，已按普通代码块显示（原因：JSON 语法错误或不完整——常见于字符串里有未转义的英文双引号，或结尾少括号）。"
+      : "这个 choices 块没有渲染成面板，已按普通代码块显示（原因：JSON 不合法或围栏写坏）。";
+}
+
+/** 面板下方提示：题目/选项超限被截断了多少。 */
+function pwaClampedNote(clamped: { questions: number; options: number }): string {
+  const parts: string[] = [];
+  if (clamped.questions > 0) parts.push(`${clamped.questions} 题`);
+  if (clamped.options > 0) parts.push(`${clamped.options} 个选项`);
+  return `此面板已截断显示：${parts.join(" 与 ")}超出上限（最多 6 题、每题最多 6 个选项）。`;
+}
+
 /** 正文：按代码围栏切段；已定稿 assistant 消息里的合法 choices 围栏升级为交互面板，其余纯文本。 */
 function MessageText({ text, choiceCtx }: { text: string; choiceCtx?: ChoiceContext | null }) {
   const segments = useMemo(() => parseSegments(text), [text]);
@@ -275,22 +293,24 @@ function MessageText({ text, choiceCtx }: { text: string; choiceCtx?: ChoiceCont
           return (
             <div key={`c${i}`}>
               <CodeBlock code={item.text} lang={item.lang} />
-              {item.choiceWarn && <p className="choice-warn">这个 choices 块格式不合法，已按普通代码块显示。</p>}
+              {item.choiceWarn && <p className="choice-warn">{pwaChoiceWarnText(item.failReason)}</p>}
             </div>
           );
         }
         if (item.kind === "choice") {
           return choiceCtx ? (
-            <ChoicePanel
-              key={`c${i}`}
-              data={item.data}
-              threadId={choiceCtx.threadId}
-              messageId={choiceCtx.messageId}
-              blockIndex={choiceCtx.blockIndex}
-              panelIndex={i}
-              messages={choiceCtx.messages}
-              onSend={choiceCtx.onSend}
-            />
+            <div key={`c${i}`}>
+              <ChoicePanel
+                data={item.data}
+                threadId={choiceCtx.threadId}
+                messageId={choiceCtx.messageId}
+                blockIndex={choiceCtx.blockIndex}
+                panelIndex={i}
+                messages={choiceCtx.messages}
+                onSend={choiceCtx.onSend}
+              />
+              {item.data.clamped && <p className="choice-warn">{pwaClampedNote(item.data.clamped)}</p>}
+            </div>
           ) : null;
         }
         return (

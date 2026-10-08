@@ -17,6 +17,8 @@ import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
 import { splitChoiceSegments } from "../lib/choice-block";
+import type { ChoiceClampInfo, ChoiceFailure } from "../lib/choice-block";
+import { logChoiceFenceFailure, logChoiceFenceRepaired } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
 import { chatAttachmentUrl } from "../lib/chat-attachments";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
@@ -1813,6 +1815,32 @@ function renderAssistantBlocks(
   });
 }
 
+/** 降级提示文案：按解析失败的具体原因说清是模型哪里写坏了（不是 MPI 没渲染）。 */
+function choiceFenceWarnText(reason: ChoiceFailure | undefined, language: "en" | "zh"): string {
+  if (language === "zh") {
+    return reason === "shape"
+      ? "这个 choices 块格式不合法，已按普通代码块显示（原因：JSON 能解析但结构不符——每题需要 2–6 个选项的 options）。原文已写入诊断日志。"
+      : reason === "syntax"
+        ? "这个 choices 块格式不合法，已按普通代码块显示（原因：JSON 语法错误或不完整——常见于字符串里有未转义的英文双引号，或结尾少括号）。原文已写入诊断日志。"
+        : "这个 choices 块没有渲染成面板，已按普通代码块显示（原因：JSON 不合法或围栏写坏，例如闭合 ``` 没有独占一行）。原文已写入诊断日志。";
+  }
+  return reason === "shape"
+    ? "This choices block is malformed and is shown as a plain code block (cause: the JSON parses but the shape is wrong — each question needs an options array with 2–6 entries). The raw text was written to the diagnostic log."
+    : reason === "syntax"
+      ? "This choices block is malformed and is shown as a plain code block (cause: invalid or incomplete JSON — usually an unescaped double quote inside a string, or missing closing brackets). The raw text was written to the diagnostic log."
+      : "This choices block was not rendered as a panel and is shown as a plain code block (cause: invalid JSON or a broken fence, e.g. a closing ``` that is not on its own line). The raw text was written to the diagnostic log.";
+}
+
+/** 面板下方提示：题目/选项超限被截断了多少。 */
+function clampedChoiceNote(clamped: ChoiceClampInfo, language: "en" | "zh"): string {
+  const parts: string[] = [];
+  if (clamped.questions > 0) parts.push(language === "zh" ? `${clamped.questions} 题` : `${clamped.questions} question(s)`);
+  if (clamped.options > 0) parts.push(language === "zh" ? `${clamped.options} 个选项` : `${clamped.options} option(s)`);
+  return language === "zh"
+    ? `此面板已截断显示：${parts.join(" 与 ")}超出上限（最多 6 题、每题最多 6 个选项）。`
+    : `This panel is truncated: ${parts.join(" and ")} over the limit (max 6 questions, 6 options each).`;
+}
+
 function BlockView({
   block,
   toolRuns,
@@ -1850,6 +1878,18 @@ function BlockView({
     () => (block.type === "text" && !streaming ? splitChoiceSegments(blockText) : null),
     [block.type, blockText, streaming],
   );
+  // 解析结果入诊断日志（去重；只记失败与「修复救回」两种，正常解析不记）。
+  // 必须在下面的条件 return 之前——hooks 顺序不能变。
+  useEffect(() => {
+    if (!choiceSegments) return;
+    choiceSegments.forEach((seg, index) => {
+      if (seg.kind === "code") {
+        logChoiceFenceFailure({ threadId, messageKey, index, reason: seg.reason, raw: seg.raw ?? seg.text });
+      } else if (seg.kind === "choice" && seg.repaired) {
+        logChoiceFenceRepaired({ threadId, messageKey, index, raw: seg.raw ?? "" });
+      }
+    });
+  }, [choiceSegments, threadId, messageKey]);
   if (block.type === "text") {
     const segments = choiceSegments;
     if (!segments || (segments.length === 1 && segments[0].kind === "md")) {
@@ -1862,17 +1902,16 @@ function BlockView({
       <div ref={markRef}>
         {segments.map((seg, index) =>
           seg.kind === "choice" ? (
-            <ChoicePanel key={`c${index}`} data={seg.data} threadId={threadId} messageKey={messageKey} panelIndex={index} />
+            <div key={`c${index}`}>
+              <ChoicePanel data={seg.data} threadId={threadId} messageKey={messageKey} panelIndex={index} />
+              {seg.data.clamped ? <div className="choice-fence-warn">{clampedChoiceNote(seg.data.clamped, language)}</div> : null}
+            </div>
           ) : seg.kind === "code" ? (
-            // choices 围栏解析失败（JSON 非法 / 围栏写坏）→ 按普通代码块显示，
-            // 并提示一行，便于一眼分清是模型格式问题而不是 MPI 没渲染。
+            // choices 围栏解析失败（JSON 非法 / 围栏写坏 / 结构不符）→ 按普通代码块
+            // 显示，并按具体原因给一行提示（原文已入诊断日志）。
             <div key={`m${index}`}>
               <Markdown text={seg.text} />
-              <div className="choice-fence-warn">
-                {language === "zh"
-                  ? "这个 choices 块格式不合法，已按普通代码块显示（常见原因：闭合 ``` 没有独占一行，或 JSON 有语法错误）。"
-                  : "This choices block is malformed and is shown as a plain code block (usually a closing ``` that is not on its own line, or invalid JSON)."}
-              </div>
+              <div className="choice-fence-warn">{choiceFenceWarnText(seg.reason, language)}</div>
             </div>
           ) : (
             <Markdown key={`m${index}`} text={seg.text} />

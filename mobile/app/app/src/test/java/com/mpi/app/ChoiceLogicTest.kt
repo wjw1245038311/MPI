@@ -64,6 +64,68 @@ class ChoiceLogicTest {
         assertEquals(2, data?.questions?.size)
     }
 
+    // ---- 超限截断（对齐桌面端/PWA：不再整块判非法） ----
+
+    @Test
+    fun `too many options are truncated with a note instead of rejected`() {
+        val seven = """[{"title":"Q","options":["A","B","C","D","E","F","G"]}]"""
+        val data = parseChoiceBlockData(seven)!!
+        assertEquals(6, data.questions.first().options.size)
+        assertEquals(1, data.clamped?.options)
+        assertEquals(0, data.clamped?.questions)
+    }
+
+    @Test
+    fun `too many questions are truncated with a note`() {
+        val many = (0 until 7).joinToString(",") { """{"title":"Q$it","options":["A","B"]}""" }
+        val data = parseChoiceBlockData("[$many]")!!
+        assertEquals(6, data.questions.size)
+        assertEquals(1, data.clamped?.questions)
+    }
+
+    @Test
+    fun `a valid body carries no clamp info`() {
+        assertNull(parseChoiceBlockData(body)?.clamped)
+    }
+
+    // ---- JSON 修复链（与桌面端/PWA 同一套） ----
+
+    @Test
+    fun `unescaped quotes inside strings are repaired`() {
+        val raw = """[{"title":"选哪个？","options":[{"label":"把"类型 vs 路由"的分工写死"},{"label":"先不定"}]}]"""
+        val aware = withChoiceSegments(parseSegments("```choices\n$raw\n```"), finalized = true)
+        val choice = aware.single() as Segment.Choice
+        assertTrue("应标为修复救回", choice.repaired)
+        assertEquals(listOf("把\"类型 vs 路由\"的分工写死", "先不定"), choice.data.questions.first().options.map { it.label })
+    }
+
+    @Test
+    fun `missing closing brackets are repaired`() {
+        val raw = """[{"title":"用哪个改法","options":[{"label":"A"},{"label":"B"}]"""
+        val aware = withChoiceSegments(parseSegments("前\n```choices\n$raw\n```\n后"), finalized = true)
+        val choice = aware.filterIsInstance<Segment.Choice>().single()
+        assertEquals(listOf("A", "B"), choice.data.questions.first().options.map { it.label })
+    }
+
+    @Test
+    fun `bare label pairs inside options are repaired`() {
+        val raw = """[{"title":"午饭","options":[{"label":"楼外楼","detail":"需订位"},"label":"沿途简餐","label":"自带干粮"]}]"""
+        val aware = withChoiceSegments(parseSegments("```choices\n$raw\n```"), finalized = true)
+        val choice = aware.single() as Segment.Choice
+        assertEquals(listOf("楼外楼", "沿途简餐", "自带干粮"), choice.data.questions.first().options.map { it.label })
+    }
+
+    @Test
+    fun `unrecoverable bodies degrade with a specific reason`() {
+        val syntax = withChoiceSegments(parseSegments("```choices\n[{oops}]\n```"), finalized = true).single() as Segment.Code
+        assertTrue(syntax.choiceWarn)
+        assertEquals(com.mpi.app.ui.ChoiceFailure.SYNTAX, syntax.failReason)
+        val shape = withChoiceSegments(parseSegments("""```choices
+[{"title":"Q","options":["只有一个"]}]
+```"""), finalized = true).single() as Segment.Code
+        assertEquals(com.mpi.app.ui.ChoiceFailure.SHAPE, shape.failReason)
+    }
+
     // ---- 围栏容错 ----
 
     @Test

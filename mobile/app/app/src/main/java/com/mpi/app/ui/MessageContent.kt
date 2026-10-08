@@ -80,7 +80,7 @@ internal fun RenderSegments(
                         )
                         if (segment.choiceWarn) {
                             Text(
-                                text = "choices 面板解析失败，按代码显示",
+                                text = choiceWarnText(segment.failReason),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MpiTheme.colors.textFaint,
                             )
@@ -109,19 +109,36 @@ internal sealed interface Segment {
      * @param lang 围栏语言（如 `choices` / `ts`），无则 null。
      * @param closed 是否闭合；false = 流式中或模型漏写闭合围栏。
      * @param choiceWarn choices 围栏解析失败（降级为代码块，由调用方提示）。
+     * @param failReason 失败原因（SYNTAX = JSON 没解析出来；SHAPE = 解析出来了但结构不符）。
      */
     data class Code(
         val text: String,
         val lang: String? = null,
         val closed: Boolean = true,
         val choiceWarn: Boolean = false,
+        val failReason: ChoiceFailure? = null,
     ) : Segment
 
     /** 普通正文（可能含行内代码）。 */
     data class Body(val text: String) : Segment
 
-    /** 合法的 choices 围栏 → 交互面板（批 3）。 */
-    data class Choice(val data: ChoiceBlockData) : Segment
+    /** 合法的 choices 围栏 → 交互面板（批 3）。repaired = 数据是修复链救回来的。 */
+    data class Choice(val data: ChoiceBlockData, val repaired: Boolean = false) : Segment
+}
+
+/** choices 降级提示：按具体原因说清是模型哪里写坏了（对齐桌面端/PWA）。 */
+private fun choiceWarnText(reason: ChoiceFailure?): String = when (reason) {
+    ChoiceFailure.SHAPE -> "这个 choices 块格式不合法，已按普通代码块显示（原因：JSON 能解析但结构不符——每题需要 2–6 个选项的 options）。"
+    ChoiceFailure.SYNTAX -> "这个 choices 块格式不合法，已按普通代码块显示（原因：JSON 语法错误或不完整——常见于字符串里有未转义的英文双引号，或结尾少括号）。"
+    null -> "choices 面板解析失败，按代码显示"
+}
+
+/** 面板下方提示：题目/选项超限被截断了多少。 */
+internal fun clampedChoiceNote(clamped: ChoiceClampInfo): String {
+    val parts = mutableListOf<String>()
+    if (clamped.questions > 0) parts += "${clamped.questions} 题"
+    if (clamped.options > 0) parts += "${clamped.options} 个选项"
+    return "此面板已截断显示：${parts.joinToString(" 与 ")}超出上限（最多 6 题、每题最多 6 个选项）。"
 }
 
 /** 按 ``` 围栏切分；未闭合的围栏按正文处理（流式过程中很常见）。 */
@@ -248,6 +265,13 @@ fun ChoiceAwareText(
                     onDraftChange = { questionIndex, answer -> onDraftChange("$prefix|$questionIndex", answer) },
                     onClearDrafts = { onClearDrafts(prefix) },
                 )
+                segment.data.clamped?.let { clamped ->
+                    Text(
+                        text = clampedChoiceNote(clamped),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MpiTheme.colors.textFaint,
+                    )
+                }
             } else {
                 RenderSegments(listOf(segment), bodyColor)
             }

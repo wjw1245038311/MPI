@@ -35,7 +35,18 @@ export interface ChoiceBlockQuestion {
 
 export interface ChoiceBlockData {
   questions: ChoiceBlockQuestion[];
+  /** 题目/选项超出上限被截断的数量（>0 时面板下方给一行说明）。 */
+  clamped?: ChoiceClampInfo;
 }
+
+/** 超出上限被截断的计数（>0 时面板下方给一行说明，对齐桌面端）。 */
+export interface ChoiceClampInfo {
+  questions: number;
+  options: number;
+}
+
+/** choices 围栏正文解析失败的原因（精确降级提示用，对齐桌面端）。 */
+export type ChoiceFailure = "syntax" | "shape";
 
 /** 一题的一个答案：预设选项或「其它」自由文本。 */
 export type ChoiceAnswer = { kind: "option"; label: string } | { kind: "other"; text: string };
@@ -74,7 +85,7 @@ function choiceOptions(raw: unknown): ChoiceOptionView[] {
 
 // ---- 围栏正文解析（严格 + 容错） --------------------------------------------
 
-/** Parse + validate the JSON body of a choices fence. Null when invalid. */
+/** Parse the JSON body of a choices fence and validate/shape it. Null when invalid. */
 export function parseChoiceBlockData(body: string): ChoiceBlockData | null {
   let raw: unknown;
   try {
@@ -82,24 +93,50 @@ export function parseChoiceBlockData(body: string): ChoiceBlockData | null {
   } catch {
     return null;
   }
+  return choiceDataFromJson(raw);
+}
+
+/**
+ * 结构校验 + 超限截断（不做 JSON 解析——修复链会对同一份数据反复调用它）。
+ * 超限不再整块判非法（对齐桌面端）：截断渲染 + clamped 计数。
+ */
+function choiceDataFromJson(raw: unknown): ChoiceBlockData | null {
   const list = Array.isArray(raw)
     ? raw
     : raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>).questions)
       ? ((raw as Record<string, unknown>).questions as unknown[])
       : null;
-  if (!list || list.length < 1 || list.length > MAX_QUESTIONS) return null;
+  if (!list || list.length < 1) return null;
 
+  let droppedQuestions = Math.max(0, list.length - MAX_QUESTIONS);
+  let droppedOptions = 0;
   const questions: ChoiceBlockQuestion[] = [];
-  for (const item of list) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  for (const item of list.slice(0, MAX_QUESTIONS)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      droppedQuestions++;
+      continue;
+    }
     const o = item as Record<string, unknown>;
     const title = String(o.title ?? "").replace(/\s+/g, " ").trim().slice(0, TITLE_MAX);
-    if (!title) return null;
-    const options = choiceOptions(o.options);
-    if (options.length < MIN_OPTIONS || options.length > MAX_OPTIONS) return null;
+    if (!title) {
+      droppedQuestions++;
+      continue;
+    }
+    let options = choiceOptions(o.options);
+    if (options.length > MAX_OPTIONS) {
+      droppedOptions += options.length - MAX_OPTIONS;
+      options = options.slice(0, MAX_OPTIONS);
+    }
+    if (options.length < MIN_OPTIONS) {
+      droppedQuestions++;
+      continue;
+    }
     questions.push({ title, options });
   }
-  return { questions };
+  if (!questions.length) return null;
+  return droppedQuestions || droppedOptions
+    ? { questions, clamped: { questions: droppedQuestions, options: droppedOptions } }
+    : { questions };
 }
 
 /** 截出正文里第一个括号配对的 JSON 值（跳过字符串内的括号与转义）。 */
@@ -128,8 +165,213 @@ function sliceFirstJson(text: string): string | null {
   return null;
 }
 
-/** 解析围栏正文（容错版）：先整体 parse；失败则截出第一个完整 JSON 再试。 */
-function parseChoiceBodyLoose(body: string): ChoiceBlockData | null {
+/**
+ * JSON 修复链（与桌面端逐字对齐）：① 字符串里未转义的英文双引号；② 结尾少括号；
+ * ③ options 里丢了 `{}` 包裹的裸 `"label":…` 对。仅在严格解析失败后启用，
+ * 结果必须能过 choiceDataFromJson 的结构校验才采纳。
+ * 依据 2026-10 对全部历史会话的盘点（498 个 choices 围栏 / 5 个失败）。
+ */
+function escapeStrayQuotes(src: string): string {
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) {
+        out += ch;
+        esc = false;
+        continue;
+      }
+      if (ch === "\\") {
+        out += ch;
+        esc = true;
+        continue;
+      }
+      if (ch === '"') {
+        let j = i + 1;
+        while (j < src.length && /\s/.test(src[j])) j++;
+        const nxt = src[j];
+        if (nxt === undefined || nxt === "," || nxt === ":" || nxt === "}" || nxt === "]") {
+          out += ch;
+          inStr = false;
+          continue;
+        }
+        out += '\\"';
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    out += ch;
+  }
+  return out;
+}
+
+function closeOpenBrackets(src: string): string {
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  let out = src;
+  if (inStr) out += '"';
+  while (stack.length) out += stack.pop();
+  return out;
+}
+
+function dropTrailingCommas(src: string): string {
+  return src.replace(/,(\s*[}\]])/g, "$1");
+}
+
+/** 读一个 JSON 字符串键：返回 key 或 null（key 后须跟 `:`）。 */
+function peekKey(src: string, i: number): string | null {
+  if (src[i] !== '"') return null;
+  let j = i + 1;
+  let esc = false;
+  let key = "";
+  for (; j < src.length; j++) {
+    const c = src[j];
+    if (esc) {
+      key += c;
+      esc = false;
+      continue;
+    }
+    if (c === "\\") {
+      esc = true;
+      continue;
+    }
+    if (c === '"') break;
+    key += c;
+  }
+  if (j >= src.length) return null;
+  let k = j + 1;
+  while (k < src.length && /\s/.test(src[k])) k++;
+  return src[k] === ":" ? key : null;
+}
+
+/** ③ 裸 `"label":…` 对（options 里丢了 `{}` 包裹）→ 自动补 `{}`。 */
+function wrapBareLabelPairs(src: string): string {
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  const stack: string[] = [];
+  let wrapDepth = -1;
+  let prevSig = "";
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      out += ch;
+      if (esc) {
+        esc = false;
+        continue;
+      }
+      if (ch === "\\") {
+        esc = true;
+        continue;
+      }
+      if (ch === '"') {
+        inStr = false;
+        prevSig = '"';
+      }
+      continue;
+    }
+    if (ch === '"') {
+      const elementPos = stack.length > 0 && stack[stack.length - 1] === "]" && (prevSig === "[" || prevSig === ",");
+      if (elementPos && wrapDepth < 0 && peekKey(src, i) === "label") {
+        out += "{";
+        wrapDepth = stack.length;
+      }
+      inStr = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "[") {
+      stack.push("]");
+      out += ch;
+      prevSig = "[";
+      continue;
+    }
+    if (ch === "{") {
+      stack.push("}");
+      out += ch;
+      prevSig = "{";
+      continue;
+    }
+    if (ch === "]" || ch === "}") {
+      if (wrapDepth === stack.length) {
+        out += "}";
+        wrapDepth = -1;
+      }
+      stack.pop();
+      out += ch;
+      prevSig = ch;
+      continue;
+    }
+    if (ch === ",") {
+      if (wrapDepth >= 0 && wrapDepth === stack.length && peekKey(src, i + 1) === "label") {
+        out += "},{";
+        prevSig = "{";
+        continue;
+      }
+      out += ch;
+      prevSig = ",";
+      continue;
+    }
+    if (!/\s/.test(ch)) prevSig = ch;
+    out += ch;
+  }
+  if (wrapDepth >= 0) out += "}";
+  return out;
+}
+
+function repairChain(src: string): string {
+  return dropTrailingCommas(closeOpenBrackets(wrapBareLabelPairs(escapeStrayQuotes(src))));
+}
+
+function repairCandidates(body: string): string[] {
+  const trimmed = body.trim();
+  const sliced = sliceFirstJson(trimmed);
+  const out = [sliced ?? "", repairChain(trimmed)];
+  if (sliced) out.push(repairChain(sliced));
+  return out.filter((c) => c.length > 0);
+}
+
+/** 解析围栏正文（容错版）：严格 parse → 截出第一个完整 JSON → 修复链。 */
+function parseChoiceBodyEx(body: string): { data: ChoiceBlockData | null; failure?: ChoiceFailure; repaired?: boolean } {
+  const direct = parseChoiceBlockData(body.trim());
+  if (direct) return { data: direct };
+
+  let sawJson = false;
+  for (const candidate of repairCandidates(body)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    sawJson = true;
+    const data = choiceDataFromJson(parsed);
+    if (data) return { data, repaired: true };
+  }
+  return { data: null, failure: sawJson ? "shape" : "syntax" };
+}
+
+/** 仅用于「忘了写闭合围栏」时的边界判定：必须严格能解析才认，不开修复链……
+ * 否则自动补括号会让一段普通正文被误当成面板。 */
+function parseChoiceBodyBoundary(body: string): ChoiceBlockData | null {
   const direct = parseChoiceBlockData(body.trim());
   if (direct) return direct;
   const sliced = sliceFirstJson(body);
@@ -143,9 +385,11 @@ const GLUED_CLOSE_RE = /^(.*?)`{3,}\s*$/;
 
 export type ChoiceAwareSegment =
   | { kind: "text"; text: string }
-  /** choiceWarn：choices 围栏解析失败，按代码块显示并附一行提示（对齐桌面端）。 */
-  | { kind: "code"; text: string; lang?: string; closed?: boolean; choiceWarn?: boolean }
-  | { kind: "choice"; data: ChoiceBlockData };
+  /** choiceWarn：choices 围栏解析失败，按代码块显示并附一行提示（对齐桌面端）。
+   * failReason/raw 供具体原因文案与上层诊断（可选，与桌面端同形）。 */
+  | { kind: "code"; text: string; lang?: string; closed?: boolean; choiceWarn?: boolean; failReason?: ChoiceFailure }
+  /** repaired：这份数据是靠修复链救回来的（对齐桌面端，便于以后统计）。 */
+  | { kind: "choice"; data: ChoiceBlockData; repaired?: boolean };
 
 /**
  * 把 parseSegments 的输出转成可渲染段：合法的 choices 围栏升级为面板。
@@ -168,11 +412,13 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
       continue;
     }
 
-    // 1) 已闭合：整体容错解析。
+    // 1) 已闭合：整体容错解析（严格 → 截第一个 JSON → 修复链）。
     if (seg.closed !== false) {
-      const data = parseChoiceBodyLoose(seg.text);
+      const r = parseChoiceBodyEx(seg.text);
       out.push(
-        data ? { kind: "choice", data } : { kind: "code", text: seg.text, lang: seg.lang, closed: seg.closed, choiceWarn: true },
+        r.data
+          ? { kind: "choice", data: r.data, ...(r.repaired ? { repaired: true } : {}) }
+          : { kind: "code", text: seg.text, lang: seg.lang, closed: seg.closed, choiceWarn: true, ...(r.failure ? { failReason: r.failure } : {}) },
       );
       continue;
     }
@@ -183,9 +429,9 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
     for (let k = 0; k < lines.length && !glued; k++) {
       const m = GLUED_CLOSE_RE.exec(lines[k]);
       if (!m) continue;
-      const data = parseChoiceBodyLoose([...lines.slice(0, k), m[1]].join("\n"));
-      if (!data) continue;
-      out.push({ kind: "choice", data });
+      const r = parseChoiceBodyEx([...lines.slice(0, k), m[1]].join("\n"));
+      if (!r.data) continue;
+      out.push({ kind: "choice", data: r.data, ...(r.repaired ? { repaired: true } : {}) });
       const rest = lines.slice(k + 1).join("\n");
       if (rest.trim()) out.push({ kind: "text", text: rest });
       glued = true;
@@ -193,7 +439,8 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
     if (glued) continue;
 
     // 3) 漏写闭合围栏：整体当正文（剥掉可能的行尾反引号）。
-    const data = parseChoiceBodyLoose(lines.join("\n").replace(/`{3,}\s*$/, ""));
+    //    这里必须用严格边界判定（不开修复链）——否则自动补括号会把一段普通正文误当成面板。
+    const data = parseChoiceBodyBoundary(lines.join("\n").replace(/`{3,}\s*$/, ""));
     out.push(
       data ? { kind: "choice", data } : { kind: "code", text: seg.text, lang: seg.lang, closed: false, choiceWarn: true },
     );

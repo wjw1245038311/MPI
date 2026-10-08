@@ -35,14 +35,54 @@ const { parseSegments } = await import("../mobile/pwa/src/lib/markdown-lite.ts")
   assert.equal(parseChoiceBlockData('[{"title":"Q","options":["A","A"]}]'), null, "去重后 <2 选项非法");
   assert.equal(parseChoiceBlockData('[{"title":"","options":["A","B"]}]'), null, "空 title 非法");
   assert.equal(parseChoiceBlockData('[{"title":"Q","options":["A"]}]'), null, "1 个选项非法");
+  // 超限不再整块判非法（对齐桌面端）：截断渲染 + clamped 计数
   const seven = ["A", "B", "C", "D", "E", "F", "G"];
-  assert.equal(parseChoiceBlockData(JSON.stringify([{ title: "Q", options: seven }])), null, "7 个选项非法");
+  const clampedOpts = parseChoiceBlockData(JSON.stringify([{ title: "Q", options: seven }]));
+  assert.equal(clampedOpts.questions[0].options.length, 6, "7 个选项截断为 6");
+  assert.deepEqual(clampedOpts.clamped, { questions: 0, options: 1 }, "记下截掉 1 个选项");
   assert.equal(parseChoiceBlockData("[]"), null, "空数组非法");
   const many = Array.from({ length: 7 }, (_, i) => ({ title: `Q${i}`, options: ["A", "B"] }));
-  assert.equal(parseChoiceBlockData(JSON.stringify(many)), null, "7 题非法");
+  const clampedQs = parseChoiceBlockData(JSON.stringify(many));
+  assert.equal(clampedQs.questions.length, 6, "7 题截断为 6");
+  assert.deepEqual(clampedQs.clamped, { questions: 1, options: 0 }, "记下截掉 1 题");
   assert.equal(parseChoiceBlockData("not json"), null, "非 JSON 非法");
 
   console.log("ok 1 - parseChoiceBlockData: 合法/非法形状");
+}
+
+// ---- 1b. 修复链（与桌面端同一套，2026-10 真实失败形态） -----------------------
+{
+  const repaired = withChoiceSegments(
+    parseSegments('```choices\n[{"title":"选哪个？","options":[{"label":"把"类型 vs 路由"的分工写死"},{"label":"先不定"}]}]\n```'),
+    true,
+  );
+  assert.equal(repaired[0].kind, "choice", "裸引号修复成面板");
+  assert.equal(repaired[0].repaired, true);
+  assert.deepEqual(repaired[0].data.questions[0].options.map((o) => o.label), ['把"类型 vs 路由"的分工写死', "先不定"]);
+
+  const shortBracket = withChoiceSegments(
+    parseSegments('前\n```choices\n[{"title":"用哪个改法","options":[{"label":"A"},{"label":"B"}]\n```\n后'),
+    true,
+  );
+  assert.equal(shortBracket[1].kind, "choice", "结尾少括号修复成面板");
+  assert.equal(shortBracket[1].repaired, true);
+
+  const bareLabels = withChoiceSegments(
+    parseSegments('```choices\n[{"title":"午饭","options":[{"label":"楼外楼","detail":"需订位"},"label":"沿途简餐","label":"自带干粮"]}]\n```'),
+    true,
+  );
+  assert.equal(bareLabels[0].kind, "choice", "裸 label 对修复成面板");
+  assert.deepEqual(bareLabels[0].data.questions[0].options.map((o) => o.label), ["楼外楼", "沿途简餐", "自带干粮"]);
+
+  // 修不出来 → 降级代码块 + 具体原因
+  const dead = withChoiceSegments(parseSegments('```choices\n[{oops}]\n```'), true);
+  assert.equal(dead[0].kind, "code");
+  assert.equal(dead[0].failReason, "syntax", "语法类失败带 reason=syntax");
+  const shape = withChoiceSegments(parseSegments('```choices\n[{"title":"Q","options":["只有一个"]}]\n```'), true);
+  assert.equal(shape[0].kind, "code");
+  assert.equal(shape[0].failReason, "shape", "结构类失败带 reason=shape");
+
+  console.log("ok 1b - 修复链：裸引号 / 少括号 / 裸 label 对 / 失败原因");
 }
 
 // ---- 2. withChoiceSegments ----------------------------------------------------

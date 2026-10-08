@@ -30,6 +30,12 @@
  * 「围栏未闭合」而整块降级成普通代码块。因此这里对 choices 围栏额外做容错：
  * 粘行闭合 / 反引号数不匹配 / 干脆忘了闭合 都接受，但**仅当正文能解析成合法
  * choices JSON** 时才采纳，否则退回原行为（普通文本 / 降级代码块）。
+ *
+ * 再往里一层是「JSON 修复链」（见 repairCandidates）：模型偶尔把正文写成
+ * 语法非法的 JSON（中文串里夹未转义的英文双引号、结尾少括号、options 里丢
+ * `{}` 包裹），严格 parse 必挂。修复链只在严格解析失败后启用，且修复结果必须
+ * 再通过结构校验才采纳——修不出来就维持降级（并给出精确原因 + 原始正文入
+ * 诊断日志），绝不把普通正文吞成面板。
  */
 
 import { choiceOptions, type ChoiceOptionView } from "./choice";
@@ -40,8 +46,19 @@ export interface ChoiceBlockQuestion {
   options: ChoiceOptionView[];
 }
 
+/** 超出上限被截断的计数（>0 时面板下方给一行说明）。 */
+export interface ChoiceClampInfo {
+  questions: number;
+  options: number;
+}
+
+/** choices 围栏正文解析失败的原因（精确降级提示 + 诊断日志用）。 */
+export type ChoiceFailure = "syntax" | "shape";
+
 export interface ChoiceBlockData {
   questions: ChoiceBlockQuestion[];
+  /** 题目/选项超出上限被截断的数量（>0 时面板下方给一行说明）。 */
+  clamped?: ChoiceClampInfo;
 }
 
 /** One user answer for one question. */
@@ -55,10 +72,11 @@ const TITLE_MAX = 200;
 /** Segments of one assistant text block after splitting out choice fences. */
 export type ChoiceSegment =
   | { kind: "md"; text: string }
-  | { kind: "choice"; data: ChoiceBlockData }
+  /** repaired=true：这份数据是靠修复链救回来的（诊断日志用，便于以后收紧规则）。 */
+  | { kind: "choice"; data: ChoiceBlockData; repaired?: boolean; raw?: string }
   /** A ```choices fence whose body is not valid JSON — rendered as a plain code block
-   * (Chat.tsx 会在其下方给一行「未渲染成面板」提示). */
-  | { kind: "code"; text: string };
+   * (Chat.tsx 会在其下方给一行「未渲染成面板」提示；reason/raw 供文案与诊断日志). */
+  | { kind: "code"; text: string; reason?: ChoiceFailure; raw?: string };
 
 /** Opening backtick fence: capture the run length + info string. */
 const FENCE_OPEN_RE = /^\s*(`{3,})(.*)$/;
@@ -68,7 +86,7 @@ const closeReFor = (len: number) => new RegExp("^\\s*`{" + len + ",}\\s*$");
 /** 行尾挂着 ≥3 个反引号的行（模型把闭合围栏粘在正文末尾时）；捕获反引号之前的正文。 */
 const GLUED_CLOSE_RE = /^(.*?)`{3,}\s*$/;
 
-/** Parse + validate the JSON body of a choices fence. Null when invalid. */
+/** Parse the JSON body of a choices fence and validate/shape it. Null when invalid. */
 export function parseChoiceBlockData(body: string): ChoiceBlockData | null {
   let raw: unknown;
   try {
@@ -76,24 +94,54 @@ export function parseChoiceBlockData(body: string): ChoiceBlockData | null {
   } catch {
     return null;
   }
+  return choiceDataFromJson(raw);
+}
+
+/**
+ * 结构校验 + 超限截断（不做 JSON 解析——修复链会对同一份数据反复调用它）。
+ *
+ * 超限（>MAX_QUESTIONS 题 / >MAX_OPTIONS 个选项）**不再整块判非法**：模型偶尔
+ * 会多写一题或一个选项，此前整块降级成代码块、面板直接不出现，而用户看到的
+ * 提示是「格式不合法」——误导。现在改成截断渲染 + `clamped` 计数（面板下方
+ * 说明被截掉了多少），只有「一题都留不下来」才返回 null。
+ */
+function choiceDataFromJson(raw: unknown): ChoiceBlockData | null {
   const list = Array.isArray(raw)
     ? raw
     : raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>).questions)
       ? ((raw as Record<string, unknown>).questions as unknown[])
       : null;
-  if (!list || list.length < 1 || list.length > MAX_QUESTIONS) return null;
+  if (!list || list.length < 1) return null;
 
+  let droppedQuestions = Math.max(0, list.length - MAX_QUESTIONS);
+  let droppedOptions = 0;
   const questions: ChoiceBlockQuestion[] = [];
-  for (const item of list) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  for (const item of list.slice(0, MAX_QUESTIONS)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      droppedQuestions++;
+      continue;
+    }
     const o = item as Record<string, unknown>;
     const title = String(o.title ?? "").replace(/\s+/g, " ").trim().slice(0, TITLE_MAX);
-    if (!title) return null;
-    const options = choiceOptions(o.options);
-    if (options.length < MIN_OPTIONS || options.length > MAX_OPTIONS) return null;
+    if (!title) {
+      droppedQuestions++;
+      continue;
+    }
+    let options = choiceOptions(o.options);
+    if (options.length > MAX_OPTIONS) {
+      droppedOptions += options.length - MAX_OPTIONS;
+      options = options.slice(0, MAX_OPTIONS);
+    }
+    if (options.length < MIN_OPTIONS) {
+      droppedQuestions++;
+      continue;
+    }
     questions.push({ title, options });
   }
-  return { questions };
+  if (!questions.length) return null;
+  return droppedQuestions || droppedOptions
+    ? { questions, clamped: { questions: droppedQuestions, options: droppedOptions } }
+    : { questions };
 }
 
 /**
@@ -131,13 +179,232 @@ function sliceFirstJson(text: string): string | null {
 }
 
 /**
- * 解析围栏正文（容错版）：先整体 parse；失败则截出第一个完整 JSON 再试。
+ * ---- JSON 修复链（模型把 JSON 写坏时的最后一道网）----
  *
- * 为什么要这一步：模型偶尔会把闭合围栏吐成特殊 token（类似 `<` + 标签名 + `>`
- * 的一串控制标记），于是正文尾部挂上了非 JSON 行，严格 parse 必失败——
- * 结果是整块降级、面板不出现。截到第一个完整 JSON 为止就能救回来。
+ * 全部只在严格解析失败后才启用，结果必须能通过 chooseDataFromJson 的结构校验才采纳。
+ * 依据 2026-10 对全部历史会话的盘点（498 个 choices 围栏 / 5 个失败）实践出来的三类：
+ *   ① 字符串里夹未转义的英文双引号（中文串里常发生）→ escapeStrayQuotes
+ *   ② JSON 结尾被写短（少了 `}`/`]`）→ closeOpenBrackets
+ *   ③ options 里丢了 `{}` 包裹的裸 `"label":…` 对 → wrapBareLabelPairs
+ * 三类之外（真正乱七八糟的）修不出来，维持原行为。
  */
-function parseChoiceBodyLoose(body: string): ChoiceBlockData | null {
+
+/** 字符串内裸露的英文双引号（未转义）→ 补转义。
+ * 判据：字符串内遇到 `"` 时看它后面第一个非空白字符——是 `,` `:` `}` `]`
+ * 或没有字符，才算字符串正常结束；否则按字面量转义。 */
+function escapeStrayQuotes(src: string): string {
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) {
+        out += ch;
+        esc = false;
+        continue;
+      }
+      if (ch === "\\") {
+        out += ch;
+        esc = true;
+        continue;
+      }
+      if (ch === '"') {
+        let j = i + 1;
+        while (j < src.length && /\s/.test(src[j])) j++;
+        const nxt = src[j];
+        if (nxt === undefined || nxt === "," || nxt === ":" || nxt === "}" || nxt === "]") {
+          out += ch;
+          inStr = false;
+          continue;
+        }
+        out += '\\"';
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    out += ch;
+  }
+  return out;
+}
+
+/** 结尾括号补齐（模型把 JSON 写短了：`…"}]` 其实少了 `}`），顺便收尾未闭合的字符串。 */
+function closeOpenBrackets(src: string): string {
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  let out = src;
+  if (inStr) out += '"';
+  while (stack.length) out += stack.pop();
+  return out;
+}
+
+/** 结尾多余逗号（尾逗号，严格 JSON 不允许）。 */
+function dropTrailingCommas(src: string): string {
+  return src.replace(/,(\s*[}\]])/g, "$1");
+}
+
+/** 读一个 JSON 字符串键：返回 {key} 或 null（key 后须跟 `:`）。 */
+function peekKey(src: string, i: number): string | null {
+  if (src[i] !== '"') return null;
+  let j = i + 1;
+  let esc = false;
+  let key = "";
+  for (; j < src.length; j++) {
+    const c = src[j];
+    if (esc) {
+      key += c;
+      esc = false;
+      continue;
+    }
+    if (c === "\\") {
+      esc = true;
+      continue;
+    }
+    if (c === '"') break;
+    key += c;
+  }
+  if (j >= src.length) return null;
+  let k = j + 1;
+  while (k < src.length && /\s/.test(src[k])) k++;
+  return src[k] === ":" ? key : null;
+}
+
+/** ③ 裸 `"label":…` 对（options 数组里丢了 `{}` 包裹）→ 自动补 `{}`。
+ * 规则：数组元素位置上出现 `"label":` 视为对象开头；同一对象内再遇 `"label":`
+ * 视为新对象（`"detail":` 归当前对象）。 */
+function wrapBareLabelPairs(src: string): string {
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  const stack: string[] = [];
+  let wrapDepth = -1;
+  let prevSig = "";
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      out += ch;
+      if (esc) {
+        esc = false;
+        continue;
+      }
+      if (ch === "\\") {
+        esc = true;
+        continue;
+      }
+      if (ch === '"') {
+        inStr = false;
+        prevSig = '"';
+      }
+      continue;
+    }
+    if (ch === '"') {
+      const elementPos = stack.length > 0 && stack[stack.length - 1] === "]" && (prevSig === "[" || prevSig === ",");
+      if (elementPos && wrapDepth < 0 && peekKey(src, i) === "label") {
+        out += "{";
+        wrapDepth = stack.length;
+      }
+      inStr = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "[") {
+      stack.push("]");
+      out += ch;
+      prevSig = "[";
+      continue;
+    }
+    if (ch === "{") {
+      stack.push("}");
+      out += ch;
+      prevSig = "{";
+      continue;
+    }
+    if (ch === "]" || ch === "}") {
+      if (wrapDepth === stack.length) {
+        out += "}";
+        wrapDepth = -1;
+      }
+      stack.pop();
+      out += ch;
+      prevSig = ch;
+      continue;
+    }
+    if (ch === ",") {
+      if (wrapDepth >= 0 && wrapDepth === stack.length && peekKey(src, i + 1) === "label") {
+        out += "},{";
+        prevSig = "{";
+        continue;
+      }
+      out += ch;
+      prevSig = ",";
+      continue;
+    }
+    if (!/\s/.test(ch)) prevSig = ch;
+    out += ch;
+  }
+  if (wrapDepth >= 0) out += "}";
+  return out;
+}
+
+/** 三段修复的组合（顺序：先转义引号，再补包裹，最后补括号/去尾逗号）。 */
+function repairChain(src: string): string {
+  return dropTrailingCommas(closeOpenBrackets(wrapBareLabelPairs(escapeStrayQuotes(src))));
+}
+
+/** 修复候选（改动越小越先试；全部由调用方做 JSON.parse + 结构校验）。 */
+function repairCandidates(body: string): string[] {
+  const trimmed = body.trim();
+  const sliced = sliceFirstJson(trimmed);
+  const out = [sliced ?? "", repairChain(trimmed)];
+  if (sliced) out.push(repairChain(sliced));
+  return out.filter((c) => c.length > 0);
+}
+
+/**
+ * 解析围栏正文（容错版）：严格 parse → 截出第一个完整 JSON → 修复链。
+ * `failure` 仅在真的没救时给出（syntax = JSON 没解析出来；shape = 解析出来了但结构不符）。
+ *
+ * 为什么先「截第一个 JSON」：模型偶尔把闭合围栏吐成特殊 token（类似 `<` + 标签名
+ * + `>` 的控制标记），正文尾部挂上非 JSON 行，严格 parse 必失败。
+ */
+function parseChoiceBodyEx(body: string): { data: ChoiceBlockData | null; failure?: ChoiceFailure; repaired?: boolean } {
+  const direct = parseChoiceBlockData(body.trim());
+  if (direct) return { data: direct };
+
+  let sawJson = false;
+  for (const candidate of repairCandidates(body)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    sawJson = true;
+    const data = choiceDataFromJson(parsed);
+    if (data) return { data, repaired: true };
+  }
+  return { data: null, failure: sawJson ? "shape" : "syntax" };
+}
+
+/** 仅用于「忘了写闭合围栏」时的边界判定：必须严格能解析（含截第一个 JSON）才认，
+ * 不开修复链——否则自动补括号会让一段普通正文被误当成面板。 */
+function parseChoiceBodyBoundary(body: string): ChoiceBlockData | null {
   const direct = parseChoiceBlockData(body.trim());
   if (direct) return direct;
   const sliced = sliceFirstJson(body);
@@ -148,12 +415,13 @@ function readChoiceFence(
   lines: string[],
   openIndex: number,
   openLen: number,
-): { data: ChoiceBlockData | null; end: number } | null {
+): { data: ChoiceBlockData | null; end: number; failure?: ChoiceFailure; repaired?: boolean; body: string } | null {
   // 第一遍：CommonMark 严格闭合行优先，且无论正文是否合法都以它为界。
   let loose: { index: number; prefix: string } | null = null;
   for (let k = openIndex + 1; k < lines.length; k++) {
     if (closeReFor(openLen).test(lines[k])) {
-      return { data: parseChoiceBodyLoose(lines.slice(openIndex + 1, k).join("\n")), end: k };
+      const body = lines.slice(openIndex + 1, k).join("\n");
+      return { ...parseChoiceBodyEx(body), end: k, body };
     }
     // 顺手记下首个「行尾反引号」候选（粘行闭合 / 反引号数不足），等严格扫描落空后再验证。
     if (!loose) {
@@ -165,12 +433,12 @@ function readChoiceFence(
   // （确实是模型写坏的围栏）仍以它为界返回，让调用方降级成代码块而不是当普通文本。
   if (loose) {
     const body = [...lines.slice(openIndex + 1, loose.index), loose.prefix].join("\n");
-    return { data: parseChoiceBodyLoose(body), end: loose.index };
+    return { ...parseChoiceBodyEx(body), end: loose.index, body };
   }
   // 第三遍：一个闭合都没有（模型忘了写）——把剩余文本整体当正文，剥掉可能的行尾反引号。
   const tail = lines.slice(openIndex + 1).join("\n").replace(/`{3,}\s*$/, "");
-  const tailData = parseChoiceBodyLoose(tail);
-  return tailData ? { data: tailData, end: lines.length - 1 } : null;
+  const tailData = parseChoiceBodyBoundary(tail);
+  return tailData ? { data: tailData, end: lines.length - 1, body: tail } : null;
 }
 
 /**
@@ -223,7 +491,9 @@ export function splitChoiceSegments(text: string): ChoiceSegment[] {
     }
     flushMd();
     segments.push(
-      read.data ? { kind: "choice", data: read.data } : { kind: "code", text: lines.slice(i, read.end + 1).join("\n") },
+      read.data
+        ? { kind: "choice", data: read.data, ...(read.repaired ? { repaired: true } : {}), raw: read.body }
+        : { kind: "code", text: lines.slice(i, read.end + 1).join("\n"), ...(read.failure ? { reason: read.failure } : {}), raw: read.body },
     );
     i = read.end + 1;
   }

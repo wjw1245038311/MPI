@@ -169,17 +169,82 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   assert.deepEqual(segs.map((s) => s.kind), ["choice", "md", "choice"]);
 }
 
-// Validation limits.
+// Validation limits —— 超限不再整块判非法，改成「截断渲染 + clamped 计数」。
 {
   const q = (title, options) => JSON.stringify([{ title, options }]);
-  assert.equal(cb.parseChoiceBlockData(q("t", ["a"])), null); // <2 options
-  assert.equal(cb.parseChoiceBlockData(q("t", ["a", "b", "c", "d", "e", "f", "g"])), null); // >6 options
+  assert.equal(cb.parseChoiceBlockData(q("t", ["a"])), null); // <2 options → 这题留不下来
   assert.equal(cb.parseChoiceBlockData(q("", ["a", "b"])), null); // empty title
-  const many = JSON.stringify(Array.from({ length: 7 }, (_, i) => ({ title: `t${i}`, options: ["a", "b"] })));
-  assert.equal(cb.parseChoiceBlockData(many), null); // >6 questions
-  assert.ok(cb.parseChoiceBlockData(q("t", ["a", "b"]))); // minimal valid
+  const tooManyOptions = cb.parseChoiceBlockData(q("t", ["a", "b", "c", "d", "e", "f", "g"]));
+  assert.equal(tooManyOptions.questions[0].options.length, 6);
+  assert.deepEqual(tooManyOptions.clamped, { questions: 0, options: 1 });
+  const many = cb.parseChoiceBlockData(JSON.stringify(Array.from({ length: 7 }, (_, i) => ({ title: `t${i}`, options: ["a", "b"] }))));
+  assert.equal(many.questions.length, 6);
+  assert.deepEqual(many.clamped, { questions: 1, options: 0 });
+  const minimal = cb.parseChoiceBlockData(q("t", ["a", "b"]));
+  assert.ok(minimal);
+  assert.equal(minimal.clamped, undefined); // 未截断 → 不带 clamped（面板下方不加提示）
   // {questions:[...]} wrapper form is accepted too.
   assert.ok(cb.parseChoiceBlockData(JSON.stringify({ questions: [{ title: "t", options: ["a", "b"] }] })));
+}
+
+// --- JSON 修复链（2026-10 对全部历史会话盘点出的 5 类失败形态，文本已合成化） ---
+// 三类可修：① 字符串里夹未转义的英文双引号；② 结尾括号被写短；③ options 里丢了 {}
+// 包裹的裸 "label" 对。修回来的结果必须与手写 JSON 等价（不能修出乱内容）。
+{
+  const withFence = (body) => `前\n${FENCE_OPEN}\n${body}\n\`\`\`\n后`;
+
+  // ① 中文串里的英文双引号（严格 parse 必挂）
+  {
+    const body = `[{"title":"选哪个？","options":[{"label":"把"类型 vs 路由"的分工写死"},{"label":"先不定"}]}]`;
+    const segs = cb.splitChoiceSegments(withFence(body));
+    assert.deepEqual(segs.map((s) => s.kind), ["md", "choice", "md"]);
+    assert.equal(segs[1].repaired, true);
+    assert.deepEqual(
+      segs[1].data.questions[0].options.map((o) => o.label),
+      ['把"类型 vs 路由"的分工写死', "先不定"],
+    );
+  }
+
+  // ② 结尾少一个 }（模型把 JSON 写短了）
+  {
+    const body = `[{"title":"用哪个改法","options":[{"label":"A"},{"label":"B"},{"label":"C"}]`;
+    const segs = cb.splitChoiceSegments(withFence(body));
+    assert.deepEqual(segs.map((s) => s.kind), ["md", "choice", "md"]);
+    assert.equal(segs[1].repaired, true);
+    assert.deepEqual(segs[1].data.questions[0].options.map((o) => o.label), ["A", "B", "C"]);
+  }
+
+  // ③ options 里丢了 {} 包裹的裸 label 对（且不跟 detail）
+  {
+    const body = `[{"title":"午饭怎么安排？","options":[{"label":"楼外楼","detail":"需订位"},"label":"沿途简餐","label":"自带干粮"]}]`;
+    const segs = cb.splitChoiceSegments(withFence(body));
+    assert.deepEqual(segs.map((s) => s.kind), ["md", "choice", "md"]);
+    assert.equal(segs[1].repaired, true);
+    assert.deepEqual(segs[1].data.questions[0].options.map((o) => o.label), ["楼外楼", "沿途简餐", "自带干粮"]);
+  }
+
+  // 修复链不得误伤：合法 JSON 不走修复（repaired 不置位）
+  {
+    const body = JSON.stringify([{ title: "q", options: [{ label: "a", detail: '含 "引号" 的说明' }, "b"] }]);
+    const segs = cb.splitChoiceSegments(withFence(body));
+    assert.equal(segs[1].kind, "choice");
+    assert.equal(segs[1].repaired, undefined);
+    assert.equal(segs[1].data.questions[0].options[0].detail, '含 "引号" 的说明');
+  }
+
+  // 修不出来 → 降级代码块，并带上具体原因与原文（供 UI 提示 + 诊断日志）
+  {
+    const segs = cb.splitChoiceSegments(withFence(`[{oops}]`));
+    assert.deepEqual(segs.map((s) => s.kind), ["md", "code", "md"]);
+    assert.equal(segs[1].reason, "syntax");
+    assert.equal(segs[1].raw, "[{oops}]");
+  }
+  {
+    // JSON 能解析但结构不符（每题 options 至少 2 个）→ reason = shape
+    const segs = cb.splitChoiceSegments(withFence(`[{"title":"q","options":["只有一个"]}]`));
+    assert.deepEqual(segs.map((s) => s.kind), ["md", "code", "md"]);
+    assert.equal(segs[1].reason, "shape");
+  }
 }
 
 // --- reply build/parse round-trip --------------------------------------------
