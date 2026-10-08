@@ -38,9 +38,11 @@ npm run test:zhiya   # 等价的单套件入口，名字见 package.json 的 scr
 - 按**爆炸半径**定范围，不按文件名：ipc.ts 里改一个局部函数（如某条远程广播）= 小改动 → typecheck + 相关套件（`npm test -- pwa`、`test:remote`），不跑全量；动它的共享状态/分发逻辑才算大。
 - 拿不准算大还是小：宁多跑，但单文件局部改动不要反射性全量。
 - 示例：改 `src/main/zhiya/*` → `npm test -- memory` + `npm run test:zhiya`；改 renderer markdown → `npm run test:markdown` + `test:slugs`；改 Chat.tsx/store.ts → 算大，全量。
-- 测试分层与约定见 `docs/E2E-TESTING.md`。
+- 测试分层与约定见 `docs/E2E-TESTING.md`；**测试策略全文、代码地图、调试取证手段见 `docs/DEV.md`**。
 
 ## 发版与分发
+
+**发版先读 `docs/RELEASE.md`**（铁律 / 流程 / 4 个分发点 / 工具清单 / 常见坑）。下面是最短的几条：
 
 - **Seafile 是局域网分发放置点**：本地打包好的安装包直接同步过去（路径见 `WorkspaceLayout.md` 速查的 Seafile 条目）。文件名 `MPI-Setup-<版本>.exe` + `.sha256`；复制后校验哈希一致才算完成。
 - **不要等 GitHub 构建**：网络与上行不稳，等 CI 出包只会拖慢分发。本地包先发出去，CI 异步跑。

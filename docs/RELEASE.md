@@ -13,8 +13,8 @@
    对不上就是传坏了，重传。
 4. **推送要确认。** 可以 commit；`git push`（分支 / tag）必须先说明变更、等用户确认。
    例外：`journal/` 各设备自管目录可直接推。
-5. **发布前来一遍验证。**`npm run typecheck` + 按爆炸半径选测试（见 `AGENTS.md`;
-   全量只在跨模块 / 发版前跑），外加 `node scripts/test-manual-sync.mjs`（changelog 约定）。
+5. **发布前来一遍验证。**`npm run typecheck` + **全量** `npm test` + `node scripts/test-manual-sync.mjs`
+   （发版前是全量的四个正当理由之一；日常改动按爆炸半径选范围，见 `docs/DEV.md` §1）。
 
 ## 2. 发一版（默认路径）
 
