@@ -3,6 +3,13 @@
 > 本仓特有的规则（pi / 其它 agent 在本目录工作时自动加载）。
 > 个人偏好见知芽「人物画像」（`Persona.md`），协作规则见「协作约定」（`Agreement.md`），工作空间事实见「工作空间」（`WorkspaceLayout.md`）。
 
+## ⚠️ 发版铁律（只记这一句）
+
+**发版不等 GitHub 构建。** 本机 `npm run dist` 出包后直接分发到**中继镜像（ECS）+ Seafile**，
+GitHub 只让 CI 异步出 Release 附件（不轮询、不等待）。发版走 `node scripts/dev-release.mjs`，
+默认就是 `publish-release.mjs --local`——**不要改成 `--wait-ci`**。
+完整规则、分发路径与工具清单：**`docs/RELEASE.md`**（发版前先读它）。
+
 ## 常用命令
 
 ```bash
