@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { useStore } from "../store";
+import { shortDeviceId } from "../../../shared/remote-device-match";
 import { Bell, Check, Cloud, Download, Plug, QrCode, Smartphone } from "./icons";
 
 type Pairing = {
@@ -119,6 +120,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const pushToast = useStore((s) => s.pushToast);
   /** 扫码后是否免去桌面端再点一次「允许」（票=凭据，默认开）。 */
   const [autoApprove, setAutoApprove] = useState(true);
+  /** 同名且离线的旧绑定是否在配对时被替换（= config.remoteReplaceSameNameOffline）。 */
+  const [replaceSameName, setReplaceSameName] = useState(true);
   const [phoneApp, setPhoneApp] = useState<PhoneAppInfo | null>(null);
   /** 下载码只留一个：中继（主）；GitHub 降级为一行文本备用地址。地址只放进 <img title>，不占版面。 */
   const [appQr, setAppQr] = useState<string | null>(null);
@@ -145,6 +148,13 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   useEffect(() => {
     void refresh();
     void refreshLanMode();
+    void (async () => {
+      // 「同名离线自动替换」开关的当前值存在 config 里（不在 remote 状态里）
+      try {
+        const cfg = (await window.pi.app.getConfig()) as { remoteReplaceSameNameOffline?: boolean };
+        if (typeof cfg?.remoteReplaceSameNameOffline === "boolean") setReplaceSameName(cfg.remoteReplaceSameNameOffline);
+      } catch { /* IPC 未就绪 */ }
+    })();
     const timer = window.setInterval(() => void refresh(false), 1500);
     const off = window.pi.remote.onPairingRequest(() => void refresh(false));
     return () => {
@@ -421,6 +431,24 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
           <input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} />
           <span>{zh ? "扫码后自动批准（无需在桌面点允许）" : "Auto-approve after scan"}</span>
         </label>
+        <label
+          className="set-check"
+          style={{ marginTop: 6 }}
+          title={zh
+            ? "手机端每换一个网址打开就是一套新的浏览器存储 → 新设备身份；打开它就用同名且离线的旧记录替换（只换最久没露面的那条）"
+            : "Each different web address means a new browser storage and thus a new device identity; replacing the same-named offline record keeps the list from filling up"}
+        >
+          <input
+            type="checkbox"
+            checked={replaceSameName}
+            onChange={async (e) => {
+              const next = e.target.checked;
+              setReplaceSameName(next);
+              await window.pi.app.setConfig({ remoteReplaceSameNameOffline: next });
+            }}
+          />
+          <span>{zh ? "同名离线设备自动替换（避免重复绑定）" : "Replace same-named offline device"}</span>
+        </label>
         <button className="set-btn primary" style={{ marginTop: 12 }} onClick={createPairing} disabled={busy}>
           {zh ? "生成配对二维码" : "Generate pairing QR"}
         </button>
@@ -473,7 +501,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
           </div>
           {status.devices.map((device) => (
             <div className="set-diag-btns" key={device.deviceId}>
-              <span>{device.name} · {device.authenticated ? (zh ? "已连接" : "connected") : (zh ? "离线" : "offline")}</span>
+              <span>
+                {device.name}
+                <span className="set-diag-k"> · #{shortDeviceId(device.deviceId)} · </span>
+                {device.authenticated ? (zh ? "已连接" : "connected") : (zh ? "离线" : "offline")}
+              </span>
               <button className="set-btn ghost" onClick={async () => { await window.pi.remote.revokeDevice(device.deviceId); await refresh(); }}>
                 {zh ? "撤销" : "Revoke"}
               </button>

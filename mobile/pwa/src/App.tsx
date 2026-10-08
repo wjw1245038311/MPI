@@ -14,6 +14,7 @@ import DbgOverlay from "./DbgOverlay";
 import { IdbKeyStore } from "./lib/keystore-idb";
 import type { KeyStore, PairingRecord } from "./lib/keystore";
 import { createDeviceIdentity, randomSeedB64url } from "./lib/device-identity";
+import { LEGACY_DEVICE_NAME, defaultDeviceName } from "./lib/device-name";
 import { attachAutoReauth, parsePairingLink, runPairing, type PairingStage } from "./lib/pairing";
 import { RelayClient } from "./lib/relay-client";
 import { HostSession, type SessionSnapshot } from "./lib/session";
@@ -512,10 +513,16 @@ export default function App() {
     }
     let device = await storeRef.current.getDevice();
     if (!device) {
-      device = { seedB64url: randomSeedB64url(), name: "MPI PWA" };
+      device = { seedB64url: randomSeedB64url(), name: "" };
       await storeRef.current.saveDevice(device);
     }
     const identity = createDeviceIdentity(device.seedB64url);
+    // 设备名带「系统/浏览器 + 短号」：主机侧「已信任设备」里同名条目太多会分不清；
+    // 老安装存的是写死的 "MPI PWA"，启动时迁移一次（见 lib/device-name.ts）。
+    if (!device.name || device.name === LEGACY_DEVICE_NAME) {
+      device = { ...device, name: defaultDeviceName(navigator.userAgent, identity.deviceId) };
+      await storeRef.current.saveDevice(device);
+    }
 
     clientRef.current?.close();
     sessionRef.current?.detach();

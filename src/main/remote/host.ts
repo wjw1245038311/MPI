@@ -14,6 +14,11 @@ import { hostProofText, verifyDeviceProof } from "./pairing-proof";
 import { E2E_BINARY_CAP } from "./e2e-binary";
 import { RemoteService } from "./service";
 import { appendDiagLog } from "../diag-log";
+import {
+  findTrustedDevice,
+  pickSameNameOfflineReplacement,
+  type TrustedDeviceLike,
+} from "../../shared/remote-device-match";
 
 /**
  * Transport sink for the mobile cloud relay uplink (docs/MOBILE-DESIGN.md §5).
@@ -55,6 +60,8 @@ export interface RemoteHostOptions {
    * 按 TLS 握手指纹掐掉安卓的 wss）可以不同；两者指向**同一个中继进程**即可互通。
    */
   mobileRelayUrl?: () => string;
+  /** 同名且离线的旧记录是否在配对时被新设备替换（默认 true；可在设置里关掉）。 */
+  replaceSameNameOfflineDevice?: () => boolean;
 }
 
 interface PairingTicket {
@@ -389,7 +396,28 @@ export class RemoteHost {
   approvePairing(connectionId: string): boolean {
     const connection = this.connections.get(connectionId);
     if (!connection?.deviceId || !connection.publicKeyPem) return false;
-    const existing = this.identity.trustedDevices.find((device) => device.deviceId === connection.deviceId);
+    // 同一设备识别（见 src/shared/remote-device-match.ts）：① deviceId ② 公钥 ③ 同名+离线
+    let existing = findTrustedDevice(this.identity.trustedDevices, connection.deviceId, connection.publicKeyPem);
+    let replaced: TrustedDeviceLike | null = null;
+    if (!existing) {
+      if (this.options.replaceSameNameOfflineDevice?.() !== false) {
+        replaced = pickSameNameOfflineReplacement(
+          this.identity.trustedDevices,
+          connection.deviceName || "",
+          (deviceId) => this.connectionsForDevice(deviceId).length > 0,
+        );
+        if (replaced) {
+          // 网页端换 origin / 清数据会换出全新身份，名字一样就当成同一台手机来收敛——
+          // 否则「已信任设备」会堆一排一模一样的 MPI PWA。只收敛最久没露面的那一条。
+          this.identity.trustedDevices = this.identity.trustedDevices.filter((device) => device !== replaced);
+          // 同时撤掉它在中继上的 token，否则那条旧绑定会变成僵尸记录
+          this.options.relay?.notifyRevoked?.(replaced.deviceId);
+          appendDiagLog(`remote-pair replace-same-name old=${replaced.deviceId} new=${connection.deviceId} name=${replaced.name}`);
+        }
+      } else {
+        appendDiagLog(`remote-pair keep-duplicate new=${connection.deviceId} name=${connection.deviceName || "-"}（同名替换已关闭）`);
+      }
+    }
     const device: TrustedRemoteDevice = existing || {
       deviceId: connection.deviceId,
       name: connection.deviceName || connection.deviceId,

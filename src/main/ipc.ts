@@ -3350,6 +3350,9 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     // 配对票里给手机的地址（empty = 沿用 uplink 自己那条）。
     // LAN 模式开着时优先给**内网地址**：手机就在同一网段，直连更快且不占公网。
     mobileRelayUrl: () => lanModeStatus().url || getConfig().mobileRelayUrl || "",
+    // 同名且离线的旧绑定在配对时被替换（设置里可关）——网页端换网址就是新身份，
+    // 不收敛会在「已信任设备」里堆一排一模一样的 MPI PWA。
+    replaceSameNameOfflineDevice: () => getConfig().remoteReplaceSameNameOffline,
   });
   activeRemoteHost = remoteHost;
   remoteHost.start();

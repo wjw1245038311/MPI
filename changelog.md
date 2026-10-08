@@ -6,13 +6,23 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 ## Unreleased
 
-1. **发版提速：中继上传改成 12 路并发分片（实测 137MB / 15.6s，原来单连接要 3 分 29 秒）**——新增 `scripts/relay-upload.mjs`：≥4MB 的文件切成 12 段、每条一个独立 ssh 并发上传，ECS 侧 `cat` 合并 → `sha256sum` 与本地比对 → 通过才 `mv` 原子替换（中途失败线上仍是旧文件，不会出现半个包）；`latest.yml` **最后落盘**（客户端读它决定下载哪个版本）；单片失败自动重试 3 次；小文件仍走 scp。
+1. **同一台手机不再重复绑定：名称可辨识 + 公钥 upsert + 同名离线替换**——网页端的设备身份（Ed25519 种子）存在**该网址 origin 的 IndexedDB** 里，换个地址打开（中继 `https://<域名>/` ↔ LAN `http://192.168.x.x:9001` ↔ 公网明文 `http://<ip>:10445`）就是另一套存储 → 生成全新身份；而名字又写死叫「MPI PWA」，于是「已信任设备」堆出一排一模一样的条目（实测本机 6 条记录 = 6 把不同公钥，其中 5 条同名）。现在三层处理：
+   - **名称带可辨识信息**：PWA 自报 `MPI PWA · Android/Chrome · 85pU`（系统/浏览器 + 设备短号）。老安装里写死的 `MPI PWA` 在启动时自动迁移一次
+   - **主机侧同一设备识别改为「deviceId → 公钥」**（原来是只认 deviceId）：同一把公钥不会因为派生规则变化而出现两行（`src/shared/remote-device-match.ts`，纯逻辑有 L1 测试）
+   - **同名且离线的旧绑定，在配对时被新设备替换**（默认开，可在「配对手机」卡里关掉）：只换**最久没露面**的那一条，正在连接的不动；被替换的那条同时撤掉中继 token，不留僵尸绑定。日志里会记 `remote-pair replace-same-name old=… new=…`
+   - 已信任设备列表每条补上**设备短号**（如 `#85pU`），同名设备可以分辨
+
+   > 顺带记下没做的方案：**没按 IP 判定**。主机现在看不到手机 IP（中继只转发帧），要按 IP 得改协议 + 重部署中继；而且 IP 会随 5G/WiFi 切换、同 NAT 下多设备共用一个出口 IP，按 IP 合并会把两台不同手机错并。可靠的唯一标识符是设备公钥（已在用）。
+
+   验证方式：`npm run typecheck` + `npm run test:device-dedup`（匹配优先级、同名离线选择、短号、设备名解析、四处接线）+ `npm test -- remote pwa`（21 项）。应用内：设置 → 手机远程控制 →「已信任设备」每行显示 `名字 · #短号 · 已连接/离线`；配对一下手机，日志 `mpi-diag.log` 出现 `remote-pair replace-same-name`，旧同名条目消失且总数不涨；把「同名离线设备自动替换」取消后再配对 → 不替换、旧条目保留。
+
+2. **发版提速：中继上传改成 12 路并发分片（实测 137MB / 15.6s，原来单连接要 3 分 29 秒）**——新增 `scripts/relay-upload.mjs`：≥4MB 的文件切成 12 段、每条一个独立 ssh 并发上传，ECS 侧 `cat` 合并 → `sha256sum` 与本地比对 → 通过才 `mv` 原子替换（中途失败线上仍是旧文件，不会出现半个包）；`latest.yml` **最后落盘**（客户端读它决定下载哪个版本）；单片失败自动重试 3 次；小文件仍走 scp。
    - **关键发现：并发只对公网 443 有效**。实测 60MB：公网 443 走 12 条独立 TCP ≈ **7.0MB/s**（线性叠加）；tailnet（`100.x`）无论并发多少路都是 **~0.8MB/s**——整个 tailnet 只有一条 DERP 隧道，并发无意义。所以默认上传路改为 `MPI_RELAY_UPLOAD_HOST=root@47.97.28.110` + `MPI_RELAY_UPLOAD_PORT=443`，快路失败自动回退 tailnet 慢路（并明确打日志）。
    - 顺带修掉一个真坑：Git Bash 会把 argv / 内联 env 里的 POSIX 路径改写成 Windows 路径（`/var/www/...` → `C:/Program Files/Git/var/www/...`，远端会变成一个叫 `C:` 的怪目录）。现在远端目录只走 spawn 的 env 传，工具还会主动拦下 Windows 化的目录并给出处理办法。
 
    验证方式：`node scripts/test-relay-upload-parts.mjs`（分片区间、阈值、命名、接线、路径拦截）+ `node scripts/relay-upload.mjs --dry-run …`。实测：`MSYS_NO_PATHCONV=1 node scripts/relay-upload.mjs --host root@47.97.28.110 --port 443 --dir /var/www/mpi-mobile/download/app release/MPI-Setup-0.9.7.exe release/latest.yml …` → 「分片上传完成 8.8 MB/s（15.6s）」「sha256 7dab57196b38… 校验通过并已就位」；ECS 上 `sha256sum` 与本地一致。
 
-2. **GitHub 只在大版本推**——`publish-release.mjs` 新增 `--no-github`（不推 GitHub 分支/tag、不建 Release，只发中继镜像 + Seafile），`dev-release.mjs` 在小版本（patch）自动带上；大版本（`--minor` / `--major`）才推 GitHub 让 CI 出 Release 附件。小版本的 tag 只留在自建 GitLab（`origin`）。
+3. **GitHub 只在大版本推**——`publish-release.mjs` 新增 `--no-github`（不推 GitHub 分支/tag、不建 Release，只发中继镜像 + Seafile），`dev-release.mjs` 在小版本（patch）自动带上；大版本（`--minor` / `--major`）才推 GitHub 让 CI 出 Release 附件。小版本的 tag 只留在自建 GitLab（`origin`）。
 
    验证方式：`node scripts/dev-release.mjs --help`；看下次 `npm run release` 日志：小版本应出现「--no-github：不推 GitHub、不建 Release」，大版本则出现「已推送 main + vX」与 GitHub Release 链接。
 

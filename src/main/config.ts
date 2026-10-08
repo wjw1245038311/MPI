@@ -246,6 +246,13 @@ export interface AppConfig {
    */
   remoteRelayToken: string;
   /**
+   * 配对时是否用「同名且离线」的旧记录替换新设备（默认 true）。
+   *
+   * 网页端每换一个域名/地址就是另一套 IndexedDB → 全新的设备身份，主机侧会多一条绑定；
+   * 打开它就能把同名旧记录收敛掉（只换最久没露面的那条）。关掉则一律新增，保留所有绑定。
+   */
+  remoteReplaceSameNameOffline: boolean;
+  /**
    * 局域网直连模式（P2，见 docs/RELAY-SHARING.md §3.2）：桌面端自己起一个只绑局域网的中继，
    * 手机连内网地址 → 不依赖 Tailscale/公网，附件也走内网。**代价是没有推送通道**。
    */
@@ -434,6 +441,7 @@ const DEFAULTS: AppConfig = {
   remoteRelayUrl: "",
   remoteRelayEnabled: false,
   remoteRelayToken: "",
+  remoteReplaceSameNameOffline: true,
   lanModeEnabled: false,
   lanModePort: 9001,
 };
@@ -550,6 +558,10 @@ export function loadConfig(userDataDir: string): AppConfig {
           : DEFAULTS.remoteSignalingEnabled,
         remoteRelayUrl: typeof parsed.remoteRelayUrl === "string" ? parsed.remoteRelayUrl.trim() : DEFAULTS.remoteRelayUrl,
         remoteRelayToken: typeof parsed.remoteRelayToken === "string" ? parsed.remoteRelayToken.trim() : DEFAULTS.remoteRelayToken,
+        remoteReplaceSameNameOffline:
+          typeof parsed.remoteReplaceSameNameOffline === "boolean"
+            ? parsed.remoteReplaceSameNameOffline
+            : DEFAULTS.remoteReplaceSameNameOffline,
         lanModeEnabled: typeof parsed.lanModeEnabled === "boolean" ? parsed.lanModeEnabled : DEFAULTS.lanModeEnabled,
         lanModePort:
           typeof parsed.lanModePort === "number" && parsed.lanModePort > 0 && parsed.lanModePort < 65536
@@ -843,6 +855,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (typeof p.remoteSignalingEnabled === "boolean") out.remoteSignalingEnabled = p.remoteSignalingEnabled;
   if (typeof p.remoteRelayUrl === "string") out.remoteRelayUrl = p.remoteRelayUrl.trim();
   if (typeof p.remoteRelayToken === "string") out.remoteRelayToken = p.remoteRelayToken.trim();
+  if (typeof p.remoteReplaceSameNameOffline === "boolean") out.remoteReplaceSameNameOffline = p.remoteReplaceSameNameOffline;
   if (typeof p.lanModeEnabled === "boolean") out.lanModeEnabled = p.lanModeEnabled;
   if (typeof p.lanModePort === "number" && p.lanModePort > 0 && p.lanModePort < 65536) out.lanModePort = Math.floor(p.lanModePort);
   if (typeof p.remoteRelayEnabled === "boolean") out.remoteRelayEnabled = p.remoteRelayEnabled;
