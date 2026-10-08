@@ -4,6 +4,15 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
+## Unreleased
+
+1. **发版不再等 GitHub CI：本地产物直接分发到中继镜像 + Seafile**——v0.9.5 发版时 `publish-release.mjs --wait-ci` 卡在等 CI 附件上（等了十几分钟），而发版约定本就是「本地打包 → Seafile，GitHub 交给 CI 异步」。现在新增 `--local`（**发版默认**）并给 `dev-release.mjs` 换上：
+   - **本机不向 GitHub 传任何产物、也不轮询 CI**：安装包以 `release/` 下的本地产物分发——推中继镜像（`<中继>/download/app/`）+ 复制到 Seafile；GitHub Release 的附件由 CI 在构建完成后自行发布
+   - 跳过「Release 附件校验」（此刻缺失是预期状态，不再因此失败退出）；`--local` 下如果本地三件套不全则**立即报错并把话说清**（“先跑 `npm run dist`，或改用 `--wait-ci`”），不再拖到后面去 Release 下载
+   - 需要老行为时显式加参数：`--wait-ci [分钟]`（等 CI 附件就位并校验）/ 不加 `--local` 时仍是本地上传 GitHub 附件（`--force-upload` 可覆盖同名）
+
+   验证方式：`node --check scripts/publish-release.mjs scripts/dev-release.mjs` + 下一次 `npm run release` 观察日志：出现「--local：跳过 GitHub 附件上传与 CI 等待」「中继镜像 → root@…:download/app」「✓ 中继镜像完成」「✓ 已复制到 Seafile 目录」，全程不出现「等待 GitHub Actions 附件」；再故意把 `release/MPI-Setup-<版本>.exe` 改名后重跑，应看到「✗ --local 要拿本地产物分发，但 release/ 下缺：…」并立即退出。也可以直接验证分发结果：`ssh root@100.67.5.31 'cat /var/www/mpi-mobile/download/app/latest.yml'` 的 `version` 应等于刚发的版本。
+
 ## v0.9.5（2026-10-08）
 
 1. **桌面端自更新改成「中继镜像优先、GitHub 回退」**——此前应用更新只认 GitHub Releases（`electron-updater` + `provider: github`），国内网络下检查/下载经常卡住或超时；而自建中继（ECS）上早已在托管手机 APK（手机测约 1.85MB/s）。现在：

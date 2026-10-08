@@ -9,9 +9,9 @@
  *   [1/5] 预检（token / github remote / 版本号；工作区脏则自动 git stash -u）
  *   [2/5] bump patch + changelog Unreleased → vN（日期）
  *   [3/5] commit「release: vX——摘要」
- *   [4/5] push origin main+tag（触发 GitHub Actions 构建）+ 本地 npm run dist 并行（只为 Seafile 副本）
- *   [5/5] publish-release.mjs --wait-ci 等 CI 附件就位 → 校验 → Seafile 分发副本
- *         （家庭上行慢，大文件由 CI 在 GitHub 自家网络上传；超时可手动重跑不带 --wait-ci 走本地上传兜底）
+ *   [4/5] push origin main+tag（触发 GitHub Actions 构建）+ 本地 npm run dist
+ *   [5/5] publish-release.mjs --local：本地产物直接分发 → 中继镜像（ECS）+ Seafile
+ *         不等 CI、不本机传 GitHub（家庭上行慢且不稳）：GitHub Release 的附件由 CI 异步发布
  *
  * 安全边界：
  *   - 工作区不干净不再阻断：自动 stash -u（含 untracked），构建只基于已提交
@@ -228,7 +228,7 @@ async function main() {
   log(`   ✓ 已提交 ${git("rev-parse --short HEAD")}：${msg}`);
 
   // ---- [4/5] push origin + 构建安装包 --------------------------------------
-  log("[4/5] 推送 origin 并触发 GitHub Actions 构建；并行构建本地安装包（仅供 Seafile 副本，不再从家里上传）");
+  log("[4/5] 推送 origin 并触发 GitHub Actions 构建；并行构建本地安装包（本地产物即分发用的包）");
   const branch = git("rev-parse --abbrev-ref HEAD");
   const tagName = `v${nextVersion}`;
   try {
@@ -257,11 +257,12 @@ async function main() {
   if (distCode !== 0) {
     throw new Error(`构建失败（npm run dist 退出码 ${distCode}）。版本提交已保留：如需撤销可 git reset --hard ${prevHead.slice(0, 7)}；tag 可用 git push origin :refs/tags/${tagName} 删除`);
   }
-  log("   ✓ 本地安装包构建完成（仅供 Seafile 分发副本）");
+  log("   ✓ 本地安装包构建完成（将镜像到中继 + 复制 Seafile）");
 
-  // ---- [5/5] 发布到 GitHub Release -----------------------------------------
-  log("[5/5] 等待 GitHub Actions 上传附件，随后校验并复制 Seafile");
-  const args = [join(ROOT, "scripts", "publish-release.mjs"), nextVersion, "--wait-ci"];
+  // ---- [5/5] 分发：中继镜像 + Seafile ---------------------------------------
+  // --local：本机不传 GitHub、不等 CI（发版约定：本地包先发出去，CI 异步出 GitHub 产物）。
+  log("[5/5] 分发本地产物：中继镜像 + Seafile（不等 GitHub Actions）");
+  const args = [join(ROOT, "scripts", "publish-release.mjs"), nextVersion, "--local"];
   if (existsSync(SEAFILE_DIR)) {
     args.push("--seafile", SEAFILE_DIR);
     log(`   · Seafile 分发副本：${SEAFILE_DIR}`);

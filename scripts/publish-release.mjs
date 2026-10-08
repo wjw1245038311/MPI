@@ -3,13 +3,12 @@
  * publish-release.mjs —— 一键发版：打 tag → push → GitHub Release（含附件上传）
  *
  * 用法:
- *   node scripts/publish-release.mjs <version> [--wait-ci [分钟]] [--seafile <dir>] [--no-push] [--force-upload] [--no-relay]
+ *   node scripts/publish-release.mjs <version> [--local] [--wait-ci [分钟]] [--seafile <dir>] [--no-push] [--force-upload] [--no-relay]
  *   npm run release -- 0.6.2
  *
  * 示例:
- *   node scripts/publish-release.mjs 0.6.2
- *   node scripts/publish-release.mjs 0.6.2 --seafile "E:/Seafile/wei_jw2/我的资料库/Agent"
- *   node scripts/publish-release.mjs 0.6.7 --wait-ci        # 不本地上传，等 GitHub Actions 传完（dev-release 默认）
+ *   node scripts/publish-release.mjs 0.6.2 --local --seafile "E:/Seafile/wei_jw2/我的资料库/Agent"
+ *   node scripts/publish-release.mjs 0.6.7 --wait-ci        # 不本地上传，等 GitHub Actions 传完
  *
  * Token（二选一）:
  *   - 环境变量 GITHUB_TOKEN
@@ -26,15 +25,18 @@
  *        （单请求流式直传 uploads.github.com，对齐 gh CLI；失败整文件重试）。
  *        ⚠ CI（build-installers.yml）在 tag push 后也会向同一 Release 发布 win+mac 产物，
  *          所以默认「已存在即跳过、只补缺失」；--force-upload 才用本地产物覆盖。
+ *      - --local（**发版默认**）：**本机不向 GitHub 传任何产物、也不等 CI**——安装包直接以
+ *        `release/` 下的本地产物分发（中继镜像 + Seafile），GitHub Release 的附件由 CI 异步发布。
+ *        依据：发版约定（Agents.md 发版与分发）——家庭上行慢且不稳，等 CI 出包只会拖慢分发；
+ *        GitHub 侧完全交给 CI。跳过 Release 附件校验（附件还没到位是预期状态）。
  *      - --wait-ci [分钟]（默认 20）：不本地上传——每 15s 轮询直到 CI 的三个附件就位再校验，
- *        超时则报错并提示去掉该参数走本地上传兜底。dev-release.mjs 用此模式：家庭上行慢
- *        （~1Mbps），CI 在 GitHub 自家网络上传，大文件不必从家里出网。等待期间往 JSONL
- *        桥写心跳行，dev 应用的长任务监控会显示「正在等待 GitHub Actions 构建上传…」。
+ *        超时则报错并提示去掉该参数走本地上传兜底。等待期间往 JSONL 桥写心跳行，
+ *        dev 应用的长任务监控会显示「正在等待 GitHub Actions 构建上传…」。
  *   6. 校验期望附件都在 Release 上（大小差异属正常——CI 与本地构建的 runtime 版本可能不同）；
  *      --seafile 时复制 exe + sha256 sidecar
  *   7. 把 latest.yml + exe + .blockmap 镜像到中继静态目录（桌面端自更新的**主源**，
  *      `scripts/dev-release.mjs` / `src/main/app-updater.ts` 都依赖这个约定）。
- *      本地 release/ 没有产物时（--wait-ci）就从刚发布的 Release 下载再推。
+ *      本地 release/ 没有产物时（--wait-ci / --local 且未本地构建）就从刚发布的 Release 下载再推。
  *      **这一步失败默认中止发版**：ECS 上的 latest.yml 落后会让客户端永远看不到新版本。
  *      --no-relay 显式跳过（客户端会直接回退 GitHub）。
  */
@@ -75,12 +77,15 @@ let forceUpload = false;
 let noRelay = false;
 /** >0 → --wait-ci mode (minutes); don't upload locally, wait for GitHub Actions assets. */
 let waitCiMinutes = 0;
+/** --local: 只拿本地产物分发（中继镜像 + Seafile），不传 GitHub、不等 CI（发版默认）。 */
+let localOnly = false;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--seafile') seafileDir = argv[++i];
   else if (a === '--no-push') noPush = true;
   else if (a === '--force-upload') forceUpload = true;
   else if (a === '--no-relay') noRelay = true;
+  else if (a === '--local') localOnly = true;
   else if (a === '--wait-ci') {
     const next = argv[i + 1] || '';
     waitCiMinutes = /^\d+$/.test(next) ? Number(argv[++i]) : 20;
@@ -88,7 +93,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (!version) version = a;
 }
 if (!/^\d+\.\d+\.\d+$/.test(version || '')) {
-  console.error('用法: node scripts/publish-release.mjs <x.y.z> [--seafile <dir>] [--no-push] [--force-upload] [--no-relay]');
+  console.error('用法: node scripts/publish-release.mjs <x.y.z> [--local] [--seafile <dir>] [--no-push] [--force-upload] [--no-relay]');
   process.exit(1);
 }
 const tag = `v${version}`;
@@ -444,7 +449,17 @@ function changelogBody(v) {
   ];
 
   let final;
-  if (waitCiMinutes > 0) {
+  if (localOnly) {
+    // --local：本机不碰 GitHub 附件——安装包以 release/ 下的本地产物分发（中继镜像 + Seafile），
+    // 附件由 CI 在构建完成后自己发布。校验步骤也知道这个前提（附件缺失属预期）。
+    console.log('\n--local：跳过 GitHub 附件上传与 CI 等待（安装包走本地产物 → 中继镜像 + Seafile）');
+    const missing = expectedNames.filter((f) => !fs.existsSync(path.join(REPO_ROOT, 'release', f)));
+    if (missing.length) {
+      console.error(`✗ --local 要拿本地产物分发，但 release/ 下缺：${missing.join(', ')}`);
+      console.error('  先跑 npm run dist（或改用 --wait-ci 等 CI 产物）');
+      process.exit(1);
+    }
+  } else if (waitCiMinutes > 0) {
     // --wait-ci：不本地上传——GitHub Actions 在 tag push 后从自家网络传，家庭上行慢
     // （~1Mbps），大文件不必出网。轮询直到全部就位。
     final = await waitForCiAssets(rel.id, expectedNames, waitCiMinutes);
@@ -472,21 +487,26 @@ function changelogBody(v) {
   }
 
   // 6) 校验（只查期望附件都在 Release 上；大小差异属正常——CI 与本地构建的 runtime 版本可能不同）
+  //    --local 不校验：附件由 CI 异步发布，此刻缺失是预期状态。
   if (!final) final = await api('GET', `/repos/${OWNER}/${REPO}/releases/${rel.id}`);
-  console.log('\nRelease 附件校验:');
-  let okAll = true;
-  for (const name of expectedNames) {
-    const remote = final.assets.find((a) => a.name === name);
-    if (!remote) { okAll = false; console.log(`  ✗ ${name} 缺失`); continue; }
-    const localFile = path.join(REPO_ROOT, 'release', name);
-    let note = '';
-    if (fs.existsSync(localFile)) {
-      const localSize = fs.statSync(localFile).size;
-      if (remote.size !== localSize) note = `（与本地 ${(localSize / 1048576).toFixed(1)} MB 不同，CI 产物）`;
+  if (localOnly) {
+    console.log('\n（--local：跳过 Release 附件校验——附件由 CI 异步发布）');
+  } else {
+    console.log('\nRelease 附件校验:');
+    let okAll = true;
+    for (const name of expectedNames) {
+      const remote = final.assets.find((a) => a.name === name);
+      if (!remote) { okAll = false; console.log(`  ✗ ${name} 缺失`); continue; }
+      const localFile = path.join(REPO_ROOT, 'release', name);
+      let note = '';
+      if (fs.existsSync(localFile)) {
+        const localSize = fs.statSync(localFile).size;
+        if (remote.size !== localSize) note = `（与本地 ${(localSize / 1048576).toFixed(1)} MB 不同，CI 产物）`;
+      }
+      console.log(`  ✓ ${name} (${(remote.size / 1048576).toFixed(1)} MB)${note}`);
     }
-    console.log(`  ✓ ${name} (${(remote.size / 1048576).toFixed(1)} MB)${note}`);
+    if (!okAll) { console.error('✗ Release 缺少期望附件，请重新运行本脚本或检查 CI'); process.exit(1); }
   }
-  if (!okAll) { console.error('✗ Release 缺少期望附件，请重新运行本脚本或检查 CI'); process.exit(1); }
 
   // 7) 中继镜像（桌面端自更新的主源）。默认必须成功（见 mirrorToRelay 注释）。
   if (noRelay) {
@@ -495,11 +515,11 @@ function changelogBody(v) {
     await mirrorToRelay(final);
   }
 
-  // seafile 分发副本（用本地产物；--wait-ci 且未本地构建时跳过并提示）
+  // seafile 分发副本（用本地产物；未本地构建时跳过并提示）
   if (seafileDir) {
     const exe = path.join(REPO_ROOT, 'release', `MPI-Setup-${version}.exe`);
     if (!fs.existsSync(exe)) {
-      console.log(`⚠ 本地 ${path.basename(exe)} 不存在（--wait-ci 模式且未本地构建），跳过 Seafile 复制；可从 Release 手动下载放置`);
+      console.log(`⚠ 本地 ${path.basename(exe)} 不存在（未本地构建），跳过 Seafile 复制；可从 Release 手动下载放置`);
     } else {
       fs.mkdirSync(seafileDir, { recursive: true });
       fs.copyFileSync(exe, path.join(seafileDir, path.basename(exe)));

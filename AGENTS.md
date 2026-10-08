@@ -46,3 +46,6 @@ npm run test:zhiya   # 等价的单套件入口，名字见 package.json 的 scr
   版本比当前旧时才回退 GitHub。**该步骤失败默认中止发版**（镜像落后 = 客户端永远看不到新版本）；
   确实不推就加 `--no-relay`。
 - **可先行**：第 ④ 步不等 git（也不等 CI），本地包就绪即可分发——分发与代码提交解耦。
+- **发版本机不传 GitHub、不等 CI**：`npm run release` / `scripts/dev-release.mjs` 默认走 `publish-release.mjs --local`——
+  安装包以 `release/` 下的**本地产物**分发（中继镜像 + Seafile），GitHub Release 的附件由 CI 异步发布。
+  只有需要本地上传 GitHub（`--force-upload`）或确实要等 CI 产物（`--wait-ci [分钟]`）时才显式加参数。
