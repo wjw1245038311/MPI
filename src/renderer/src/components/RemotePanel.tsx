@@ -240,6 +240,12 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         remoteRelayToken: relayToken.trim(),
         mobileRelayUrl: mobileRelayUrl.trim(),
       });
+      // 二维码里存的是**生成那一刻**的地址——改了地址后旧码必须作废，
+      // 否则用户接着扫屏上那张旧码，手机上仍然用老地址（典型症状：连接超时、
+      // 中继日志里连一条 pair.request 都没有）。
+      setPairing(null);
+      setQr(null);
+      setScanUrl(null);
       await refresh(false);
     } finally {
       setBusy(false);
@@ -365,6 +371,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         <button className="set-btn primary" style={{ marginTop: 10 }} onClick={saveRelayUrl} disabled={busy || !relayUrl.trim()}>
           {zh ? "保存地址与 token" : "Save URL & token"}
         </button>
+        <div className="set-hint">
+          {zh
+            ? "改完地址要重新生成配对二维码——二维码里记的是生成那一刻的地址。"
+            : "After changing these addresses, generate a fresh pairing QR — the code embeds the addresses as of when it was made."}
+        </div>
         <div className="set-remote-toggle-row">
           <div className="set-remote-toggle-copy">
             <span className="set-remote-toggle-label">{zh ? "启用中继 uplink" : "Enable relay uplink"}</span>
