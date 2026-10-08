@@ -1,6 +1,6 @@
 {
   "name": "mpi",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "piRuntimeVersion": "0.87.0",
   "private": true,
   "license": "MIT",
@@ -239,19 +239,19 @@
       "zh-CN"
     ],
     "extraResources": [
-    {
-      "from": "mobile/relay",
-      "to": "relay",
-      "filter": [
-        "index.mjs",
-        "vapid.mjs",
-        "README.md"
-      ]
-    },
-    {
-      "from": "node_modules/ws",
-      "to": "relay/node_modules/ws"
-    },
+      {
+        "from": "mobile/relay",
+        "to": "relay",
+        "filter": [
+          "index.mjs",
+          "vapid.mjs",
+          "README.md"
+        ]
+      },
+      {
+        "from": "node_modules/ws",
+        "to": "relay/node_modules/ws"
+      },
       {
         "from": "resources/runtime-manifest.json",
         "to": "runtime-manifest.json"

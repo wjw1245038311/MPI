@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。
 
-## Unreleased
+## v0.9.5（2026-10-08）
 
 1. **桌面端自更新改成「中继镜像优先、GitHub 回退」**——此前应用更新只认 GitHub Releases（`electron-updater` + `provider: github`），国内网络下检查/下载经常卡住或超时；而自建中继（ECS）上早已在托管手机 APK（手机测约 1.85MB/s）。现在：
    - **中继镜像**：`npm run release`（`scripts/publish-release.mjs`）在 GitHub Release 之外，把 `latest.yml` + `MPI-Setup-<v>.exe` + `.blockmap` 镜像到 `<中继>/download/app/`（env `MPI_RELAY_HOST` / `MPI_RELAY_APP_DIR`）。本地 `release/` 没有产物时（`--wait-ci` 模式）就从刚发布的 Release 下载再推。**这一步失败默认中止发版**——镜像里的 `latest.yml` 落后等于客户端永远查不到新版本；确实不需要时用 `--no-relay` 显式跳过
