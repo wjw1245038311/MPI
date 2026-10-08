@@ -3446,6 +3446,9 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     // 手机该连的地址（与主机→中继的 remoteRelayUrl 可以不同：手机没有 Tailscale，
     // 必须给公网可达地址）。面板需要回显它。
     mobileRelayUrl: getConfig().mobileRelayUrl || "",
+    // **本次配对票里实际会告诉手机的地址**——优先级与 RemoteHost 里完全一致：
+    // 局域网模式 > mobileRelayUrl > 主机自己那条 uplink 地址。面板用它做“手机会连哪”的显示与告警。
+    phoneRelayUrl: lanModeStatus().url || getConfig().mobileRelayUrl || getConfig().remoteRelayUrl,
   }));
   ipcMain.handle("remote:createPairing", (_e, args?: { autoApprove?: boolean }) => remoteHost.createPairingTicket({ autoApprove: args?.autoApprove === true }));
 

@@ -31,8 +31,10 @@ type RelayStatus = {
   state: "disabled" | "connecting" | "connected" | "error";
   relayUrl: string;
   lastError: string | null;
-  /** 配对票里给**手机**的中继地址（公网可达）；空 = 退回 relayUrl（手机可能连不上）。 */
+  /** 配对票里给**手机**的中继地址（= 面板里「手机通道地址」字段；空 = 退回 relayUrl）。 */
   mobileRelayUrl?: string;
+  /** **本次配对票里实际会告诉手机的地址**（局域网模式 > 手机通道地址 > relayUrl，与主机一致）。 */
+  phoneRelayUrl?: string;
 };
 
 /** 中继托管的手机 App 安装包清单（/download/mpi-android.json）；中继不可达时
@@ -141,6 +143,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [relayUrl, setRelayUrl] = useState("");
   /** 配对票里给手机的地址（公网可达）。与 relayUrl 分开：主机走 tailnet，手机走公网。 */
   const [mobileRelayUrl, setMobileRelayUrl] = useState("");
+  /** 本次配对票里实际会告诉手机的地址（主进程算好，优先级与主机一致）。 */
+  const [phoneRelayUrl, setPhoneRelayUrl] = useState("");
   /** 中继准入 token（P1）：与地址一起保存，不回显已有值的提示（避免在界面上留明文）。 */
   const [relayToken, setRelayToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -157,6 +161,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       setRelayStatus(relay);
       if (syncRelayUrl) setRelayUrl(relay.relayUrl || "");
       if (syncRelayUrl) setMobileRelayUrl(relay.mobileRelayUrl || "");
+      if (syncRelayUrl) setPhoneRelayUrl(relay.phoneRelayUrl || "");
     } catch { /* same reload race */ }
   };
 
@@ -509,6 +514,17 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         <button className="set-btn primary" style={{ marginTop: 12 }} onClick={createPairing} disabled={busy}>
           {zh ? "生成配对二维码" : "Generate pairing QR"}
         </button>
+        <div className="set-hint" style={{ wordBreak: "break-all" }}>
+          {zh ? "手机将连接的地址：" : "The phone will connect to: "}
+          <code>{phoneRelayUrl || "—"}</code>
+        </div>
+        {unreachableForPhone(phoneRelayUrl) && (
+          <div className="set-hint" style={{ color: "#c0392b" }}>
+            {zh
+              ? "⚠ 这是 tailnet / 内网地址——手机（没有 Tailscale、不在同一网段）连不上，扫描后会卡在连接超时。要到外网用就关掉「局域网模式」并把「手机通道地址」填成公网地址；要局域网直连就把手机连到同一 WiFi。"
+              : "⚠ This is a tailnet/private address — a phone without Tailscale or outside that network cannot reach it and will time out. Turn off LAN mode and set a public phone-side URL, or join the phone to the same Wi-Fi."}
+          </div>
+        )}
         {pairing && (
           <div className="set-remote-pairing">
             {qr && <img src={qr} alt={zh ? "手机配对二维码" : "Phone pairing QR code"} width={260} height={260} />}
