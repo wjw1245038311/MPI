@@ -97,6 +97,7 @@ assert.match(host, /findTrustedDevice\(/, "approvePairing 必须按 deviceId→�
 assert.match(host, /pickSameNameOfflineReplacement\(/, "approvePairing 必须做「同名离线替换」");
 assert.match(host, /replaceSameNameOfflineDevice\?\.\(\) !== false/, "必须支持在设置里关掉同名替换");
 assert.match(host, /notifyRevoked\?\.\(replaced\.deviceId\)/, "被替换的旧绑定要顺手撤掉中继 token");
+assert.match(host, /remote-rename device=/, "重连时要刷新设备名（改过名的设备不必重新配对才能看到）");
 assert.match(host, /remote-device-match/, "逻辑必须来自共享模块（而不是 host.ts 里另写一份）");
 
 const pwa = read("mobile", "pwa", "src", "App.tsx");

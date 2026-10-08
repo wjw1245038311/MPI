@@ -759,6 +759,12 @@ export class RemoteHost {
     const trusted = this.identity.trustedDevices.find((device) => device.deviceId === deviceId);
     if (trusted && trusted.publicKeyPem === publicKeyPem) {
       trusted.lastSeenAt = Date.now();
+      // 设备改过名字（例如 PWA 从写死的 "MPI PWA" 升级成带短号的名字）→ 重连就跟着刷新，
+      // 不必重新配一次才能看到。
+      if (connection.deviceName && connection.deviceName !== trusted.name) {
+        appendDiagLog(`remote-rename device=${deviceId} "${trusted.name}" -> "${connection.deviceName}"`);
+        trusted.name = connection.deviceName;
+      }
       saveIdentity(this.options.userDataDir, this.identity);
       connection.authenticated = true;
       this.sendFrame(connection, makeEnvelope("pair.accepted", connection.sessionId, this.acceptedPayload(connection)));
