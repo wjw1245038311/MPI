@@ -633,7 +633,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
             aria-checked={relayStatus?.state !== "disabled"}
              aria-label={zh ? "切换中继 uplink" : "Toggle relay uplink"}
             onClick={() => void toggleRelay()}
-            disabled={busy || !relayUrl.trim()}
+            // 禁用条件原来还在看 S5 之前的旧字段 `relayUrl` —— 界面上早就没有它的输入框了，
+            // 于是新装机器（`remoteRelayUrl` 默认空）上这个总开关**永远点不动**：不只是“默认关”，
+            // 而是用户根本没办法打开它，只能手改 config.json（2026-10-09 在 minibox 上踩到）。
+            // 改为按「有没有启用中的通道」判断——有通道可挂才允许开。
+            disabled={busy || !channelRows.some((row) => row.enabled)}
           >
             <span className="set-toggle-knob" />
           </button>
