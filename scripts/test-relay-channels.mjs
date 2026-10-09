@@ -151,6 +151,13 @@ test("ipc/config 接线：通道列表驱动，旧的「主+备两条」写法�
   assert.match(ipc, /instanceKey: channel\.id/, "持久化实例键必须来自通道 id（多通道各自独立 deviceToken）");
   assert.match(cfg, /relayChannels\?: RelayChannel\[\]/, "配置项：通道列表");
   assert.match(cfg, /relayMode: RelayMode/, "配置项：选路模式");
+
+  // S5：面板要有通道列表 UI，且旧的全局地址字段要拔掉（否则两个真相源）
+  const panel = readFileSync(new URL("../src/renderer/src/components/RemotePanel.tsx", import.meta.url), "utf8");
+  for (const pat of [/relayChannels/, /\u81ea\u52a8\u9009\u62e9\u6700\u4f18\u901a\u9053|Auto-pick best channel/, /\u6dfb\u52a0\u65b0\u670d\u52a1\u5668\u5730\u5740|Add server address/, /saveChannels/]) {
+    assert.match(panel, pat, `面板必须能管理通道列表：${pat}`);
+  }
+  assert.ok(!/\u4e2d\u7ee7\u5730\u5740\uff08WSS\uff09/.test(panel), "旧的「中继地址（WSS）」字段应已移除");
 });
 
 console.log("relay-channels tests passed");

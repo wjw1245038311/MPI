@@ -3583,6 +3583,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());
   ipcMain.handle("remote:getRelayStatus", () => {
     const cfg = getConfig();
+    const ctx = relayChannelContext();
     const addresses = phoneTicketAddresses();
     return {
       ...(relayFanout?.getStatus() ?? { state: "disabled" as const, relayUrl: cfg.remoteRelayUrl, lastError: null }),
@@ -3596,6 +3597,20 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       relayMode: cfg.relayMode,
       activeChannelId: cfg.activeChannelId || "",
       channels: relayFanout?.statuses() ?? [],
+      /** S5：面板编辑用的生效通道列表（`hostUrl` 为**推导后**的实际值）。
+       *  不回传 token，只给 `hasToken`（留存语义：条目不带 token = 保持现有，见 updateConfig）。 */
+      relayChannels: effectiveRelayChannels().map((channel) => ({
+        id: channel.id,
+        label: channel.label,
+        phoneUrl: channel.phoneUrl,
+        hostUrl: hostUrlFor(channel, ctx),
+        hostUrlConfigured: !!channel.hostUrl,
+        hasToken: !!channel.token,
+        enabled: channel.enabled,
+        kind: channel.kind,
+      })),
+      /** 是否已存过通道列表（false = 当前列表是从旧字段合成的，首次保存后才落盘）。 */
+      relayChannelsStored: !!cfg.relayChannels?.length,
     };
   });
   ipcMain.handle("remote:createPairing", (_e, args?: { autoApprove?: boolean }) => remoteHost.createPairingTicket({ autoApprove: args?.autoApprove === true }));

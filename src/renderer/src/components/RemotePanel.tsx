@@ -39,8 +39,29 @@ type RelayStatus = {
   phoneRelayFallbackUrl?: string;
   /** 备用上行是否启用（主机额外挂在**本机中继**上，供 ECS 挂掉时顶替）。 */
   fallbackEnabled?: boolean;
-  /** 两条上行的实时状态（key = primary / fallback）。 */
+  /** 各通道上行的实时状态（key = 通道 id：lan / primary / …）。 */
   channels?: Array<{ key: string } & Omit<RelayStatus, "mobileRelayUrl" | "phoneRelayUrl">>;
+  /** S5：面板编辑用的生效通道列表（`hostUrl` 为**推导后**的实际值；不回传 token，只给 `hasToken`）。 */
+  relayChannels?: RelayChannelRow[];
+  /** S5：选路模式（manual = 只用选中那条；auto = 全部启用）。 */
+  relayMode?: "manual" | "auto";
+  /** S5：手动模式下选中的通道 id。 */
+  activeChannelId?: string;
+  /** 是否已存过通道列表（false = 当前列表由旧字段合成，首次保存后才落盘）。 */
+  relayChannelsStored?: boolean;
+};
+
+/** S5：渲染层通道行（`tokenDraft` 仅渲染层用：留空 = 保持现有 token，见 config.updateConfig）。 */
+type RelayChannelRow = {
+  id: string;
+  label: string;
+  phoneUrl: string;
+  hostUrl: string;
+  hostUrlConfigured: boolean;
+  hasToken: boolean;
+  enabled: boolean;
+  kind: "local" | "lan" | "remote";
+  tokenDraft: string;
 };
 
 /** 中继托管的手机 App 安装包清单（/download/mpi-android.json）；中继不可达时
@@ -151,11 +172,12 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [mobileRelayUrl, setMobileRelayUrl] = useState("");
   /** 本次配对票里实际会告诉手机的地址（主进程算好，优先级与主机一致）。 */
   const [phoneRelayUrl, setPhoneRelayUrl] = useState("");
-  /** 中继准入 token（P1）：与地址一起保存，不回显已有值的提示（避免在界面上留明文）。 */
-  const [relayToken, setRelayToken] = useState("");
-  /** 备用通道（阶段 ②）：手机侧备用公网地址 + 开关。 */
-  const [mobileRelayFallbackUrl, setMobileRelayFallbackUrl] = useState("");
-  const [fallbackEnabled, setFallbackEnabled] = useState(true);
+  /** 中继准入 token 已在 S5 改为**每通道**（见 channelRows 的 tokenDraft）——不再有全局字段。 */
+  /** S5：中继通道列表（编辑副本）+ 选路模式 + 当前通道。 */
+  const [channelRows, setChannelRows] = useState<RelayChannelRow[]>([]);
+  const [relayMode, setRelayMode] = useState<"manual" | "auto">("manual");
+  const [activeChannelId, setActiveChannelId] = useState("");
+  const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
   /** 本机中继静态目录（托管 PWA / 下载页；空 = 不托管）。 */
   const [localRelayStaticDir, setLocalRelayStaticDir] = useState("");
   const [busy, setBusy] = useState(false);
@@ -173,8 +195,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       if (syncRelayUrl) setRelayUrl(relay.relayUrl || "");
       if (syncRelayUrl) setMobileRelayUrl(relay.mobileRelayUrl || "");
       if (syncRelayUrl) setPhoneRelayUrl(relay.phoneRelayUrl || "");
-      if (syncRelayUrl) setMobileRelayFallbackUrl(relay.phoneRelayFallbackUrl || "");
-      if (syncRelayUrl) setFallbackEnabled(relay.fallbackEnabled !== false);
+      if (syncRelayUrl) setChannelRows((relay.relayChannels ?? []).map((row) => ({ ...row, tokenDraft: "" })));
+      if (syncRelayUrl) setRelayMode(relay.relayMode === "auto" ? "auto" : "manual");
+      if (syncRelayUrl)
+        setActiveChannelId(relay.activeChannelId || relay.relayChannels?.find((row) => row.enabled && row.id !== "lan")?.id || "");
     } catch { /* same reload race */ }
   };
 
@@ -254,24 +278,48 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     }
   };
 
-  const saveRelayUrl = async () => {
+  /** S5：通道列表编辑（本地副本，保存时整表写回；token 留空 = 保持现有）。 */
+  const updateChannel = (id: string, patch: Partial<RelayChannelRow>) => {
+    setChannelRows((rows) => rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  };
+  const addChannel = () => {
+    const id = `ch${Date.now().toString(36)}`;
+    setChannelRows((rows) => [
+      ...rows,
+      { id, label: zh ? "新通道" : "New channel", phoneUrl: "", hostUrl: "", hostUrlConfigured: false, hasToken: false, enabled: true, kind: "remote", tokenDraft: "" },
+    ]);
+    setEditingChannelId(id);
+  };
+  const removeChannel = (id: string) => {
+    setChannelRows((rows) => rows.filter((row) => row.id !== id));
+    if (activeChannelId === id) setActiveChannelId("");
+  };
+  const saveChannels = async () => {
     setBusy(true);
     try {
       await window.pi.app.setConfig({
-        remoteRelayUrl: relayUrl.trim(),
-        remoteRelayToken: relayToken.trim(),
-        mobileRelayUrl: mobileRelayUrl.trim(),
-        mobileRelayFallbackUrl: mobileRelayFallbackUrl.trim(),
-        remoteRelayFallbackEnabled: fallbackEnabled,
+        // 运行时合成的局域网通道不入配置（它由状态推导）
+        relayChannels: channelRows
+          .filter((row) => row.id !== "lan")
+          .map((row) => ({
+            id: row.id,
+            label: row.label.trim() || row.id,
+            phoneUrl: row.phoneUrl.trim(),
+            ...(row.hostUrlConfigured && row.hostUrl.trim() ? { hostUrl: row.hostUrl.trim() } : {}),
+            ...(row.tokenDraft.trim() ? { token: row.tokenDraft.trim() } : {}),
+            enabled: row.enabled,
+            kind: row.kind,
+          })),
+        relayMode,
+        activeChannelId,
         localRelayStaticDir: localRelayStaticDir.trim(),
       });
-      // 二维码里存的是**生成那一刻**的地址——改了地址后旧码必须作废，
-      // 否则用户接着扫屏上那张旧码，手机上仍然用老地址（典型症状：连接超时、
-      // 中继日志里连一条 pair.request 都没有）。
+      // 二维码里存的是**生成那一刻**的地址 —— 改完必须作废旧码（否则扫到的还是老地址）。
       setPairing(null);
       setQr(null);
       setScanUrl(null);
       await refresh(false);
+      await refreshLanMode();
     } finally {
       setBusy(false);
     }
@@ -349,30 +397,132 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
             ? "手机 PWA 经自建中继连接本机的 WSS uplink；中继只转发不解析，应用内容 E2E 加密（S3）。托盘驻留 + 常开即守护模式。"
             : "The phone PWA reaches this machine through the self-hosted relay over a persistent WSS uplink; the relay only forwards, content is E2E-encrypted (S3). Tray-resident + always-on = daemon mode."}
         </div>
-        <label className="set-addprov-field wide">
-           <span>{zh ? "中继地址（WSS）" : "Relay URL (WSS)"}</span>
-          <input
-            className="set-input"
-            value={relayUrl}
-            onChange={(event) => setRelayUrl(event.target.value)}
-            placeholder="wss://your-relay-host/ws"
-            spellCheck={false}
-          />
-        </label>
-        <label className="set-addprov-field wide">
-          <span>{zh ? "手机通道地址（手机连的公网 WSS）" : "Phone-side relay URL (public WSS)"}</span>
-          <input
-            className="set-input"
-            value={mobileRelayUrl}
-            onChange={(event) => setMobileRelayUrl(event.target.value)}
-            placeholder="ws://<公网 IP 或域名>:10445/ws"
-            spellCheck={false}
-          />
-        </label>
+        {/* ---- S5：中继通道列表（替代原来「中继地址 / 手机通道地址」两个固定字段）---- */}
+        <div className="set-hint" style={{ fontWeight: 600, marginTop: 4 }}>
+          {zh ? "中继通道" : "Relay channels"}
+          <span style={{ fontWeight: 400, marginLeft: 6 }}>
+            {zh ? "（主机挂在哪几条上；手机连的公网地址写在每条里）" : "(where this host registers; each row carries the phone-facing URL)"}
+          </span>
+        </div>
+        {channelRows.map((row) => {
+          const state = relayStatus?.channels?.find((c) => c.key === row.id)?.state;
+          const dotColor =
+            row.id === "lan" || state === "connected" ? "#3fb950" : state === "connecting" ? "#d29922" : state === "error" ? "#f85149" : row.enabled ? "#8b95a5" : "#4b5563";
+          const dotTitle = row.id === "lan" ? (zh ? "局域网通道（运行时自动探测）" : "LAN channel (auto)") : state || (zh ? "未启用" : "disabled");
+          const editing = editingChannelId === row.id;
+          return (
+            <div key={row.id} style={{ borderTop: "1px solid var(--border, #2a3140)", padding: "8px 0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flex: "0 0 auto" }} title={dotTitle} />
+                <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <strong style={{ fontWeight: 600 }}>{row.label}</strong>
+                    {row.id === "lan" && <em style={{ opacity: 0.7, fontSize: 12 }}>{zh ? "运行时" : "runtime"}</em>}
+                    {row.id !== "lan" && !row.enabled && <em style={{ opacity: 0.7, fontSize: 12 }}>{zh ? "已关闭" : "off"}</em>}
+                  </div>
+                  <div style={{ fontSize: 12, wordBreak: "break-all" }}>{row.phoneUrl || (zh ? "（未填手机地址）" : "(no phone URL)")}</div>
+                  <div style={{ fontSize: 12, opacity: 0.65, wordBreak: "break-all" }}>
+                    {zh ? "主机上行" : "uplink"}: {row.hostUrl || "—"}
+                    {row.hostUrl && !row.hostUrlConfigured ? (zh ? "（推导）" : " (derived)") : ""}
+                    {row.hasToken ? (zh ? " · 带准入 token" : " · token") : ""}
+                  </div>
+                </div>
+                {row.id !== "lan" && (
+                  <div style={{ display: "flex", gap: 6, flex: "0 0 auto" }}>
+                    <button type="button" className="set-btn" onClick={() => setEditingChannelId(editing ? null : row.id)} title={zh ? "编辑" : "Edit"}>
+                      {editing ? "收起" : zh ? "编辑" : "Edit"}
+                    </button>
+                    <button type="button" className="set-btn" onClick={() => removeChannel(row.id)} title={zh ? "删除" : "Delete"}>
+                      {zh ? "删除" : "Delete"}
+                    </button>
+                  </div>
+                )}
+              </div>
+              {editing && (
+                <div style={{ marginTop: 8, paddingLeft: 16 }}>
+                  <label className="set-addprov-field wide">
+                    <span>{zh ? "名称" : "Label"}</span>
+                    <input className="set-input" value={row.label} onChange={(e) => updateChannel(row.id, { label: e.target.value })} spellCheck={false} />
+                  </label>
+                  <label className="set-addprov-field wide">
+                    <span>{zh ? "手机地址（公网可达，写进配对票）" : "Phone URL (public, goes into the ticket)"}</span>
+                    <input
+                      className="set-input"
+                      value={row.phoneUrl}
+                      onChange={(e) => updateChannel(row.id, { phoneUrl: e.target.value })}
+                      placeholder={row.kind === "local" ? "wss://relay.example.com/ws" : "ws://<公网 IP 或域名>:10445/ws"}
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label className="set-addprov-field wide">
+                    <span>{zh ? "主机上行（留空 = 推导：本机→127.0.0.1，局域网→内网 IP）" : "Host uplink (empty = derived)"}</span>
+                    <input className="set-input" value={row.hostUrlConfigured ? row.hostUrl : ""} onChange={(e) => updateChannel(row.id, { hostUrl: e.target.value })} placeholder={row.hostUrl || "ws://127.0.0.1:9001/ws"} spellCheck={false} />
+                  </label>
+                  <label className="set-addprov-field wide">
+                    <span>{zh ? "准入 token（留空 = 保持现有 / 不启用）" : "Access token (empty = keep existing)"}</span>
+                    <input
+                      className="set-input"
+                      value={row.tokenDraft}
+                      onChange={(e) => updateChannel(row.id, { tokenDraft: e.target.value })}
+                      placeholder={row.hasToken ? (zh ? "已设置，留空则保持不变" : "set; leave empty to keep") : zh ? "留空 = 中继未启用准入" : "empty = no allowlist"}
+                      spellCheck={false}
+                    />
+                  </label>
+                  <div className="set-hint">
+                    {zh ? "更改手机地址后需重新生成配对二维码（二维码里记的是生成那一刻的地址）。" : "After changing the phone URL, regenerate the pairing QR."}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <button type="button" className="set-btn" style={{ marginTop: 8 }} onClick={addChannel}>
+          {zh ? "＋ 添加新服务器地址" : "＋ Add server address"}
+        </button>
+
+        <div className="set-remote-toggle-row" style={{ marginTop: 12 }}>
+          <div className="set-remote-toggle-copy">
+            <span className="set-remote-toggle-label">{zh ? "自动选择最优通道" : "Auto-pick best channel"}</span>
+            <span className="set-remote-toggle-state">
+              {relayMode === "auto"
+                ? zh
+                  ? "自动：每条通道都挂上，手机按连通性选"
+                  : "Auto: register all, phone picks by reachability"
+                : zh
+                  ? "手动：只用选中的那条"
+                  : "Manual: only the selected one"}
+            </span>
+          </div>
+          <button
+            type="button"
+            className={`set-toggle ${relayMode === "auto" ? "on" : ""}`}
+            role="switch"
+            aria-checked={relayMode === "auto"}
+            aria-label={zh ? "切换自动选路" : "Toggle auto routing"}
+            onClick={() => setRelayMode(relayMode === "auto" ? "manual" : "auto")}
+            disabled={busy}
+          >
+            <span className="set-toggle-knob" />
+          </button>
+        </div>
+        {relayMode === "manual" && channelRows.some((row) => row.id !== "lan") && (
+          <label className="set-addprov-field wide">
+            <span>{zh ? "当前使用" : "Active channel"}</span>
+            <select className="set-input" value={activeChannelId} onChange={(e) => setActiveChannelId(e.target.value)}>
+              {channelRows
+                .filter((row) => row.enabled)
+                .map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
         <div className="set-hint">
           {zh
-            ? "手机端没有 Tailscale，配对票里给它的必须是公网可达地址；留空则用上面的中继地址（只有当手机也能访问那个地址时才有效）。"
-            : "Phones have no Tailscale, so the pairing ticket must carry a publicly reachable address. Empty = reuse the relay URL above (only works when the phone can reach it too)."}
+            ? "手机端没有 Tailscale，配对票里给它的必须是公网可达地址；留空则该条通道不会被写进票。"
+            : "Phones have no Tailscale, so the ticket must carry a publicly reachable address. Empty = that channel is not advertised."}
         </div>
         {phoneNeedsAttention && (
           <div className="set-hint" style={{ color: "#c0392b" }}>
@@ -381,35 +531,27 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
               : `⚠ No phone-side relay URL — the ticket will carry “${relayUrl.trim()}”, which a phone without Tailscale cannot reach. Set a public address above.`}
           </div>
         )}
-        <label className="set-addprov-field wide">
-          <span>{zh ? "中继准入 token（服务方要求时填）" : "Relay access token (if required)"}</span>
+        <div className="set-hint">
+          {zh
+            ? "准入 token 现在写在每条通道里（只用于主机向中继注册，不进配对票）；改完点下面的「保存通道」。"
+            : "Access tokens now live per channel (host→relay registration only; never in the ticket). Save below."}
+        </div>
+        {/* ---- 本机中继静态目录（S5 起：地址/开关已并入上面的通道列表）---- */}
+        <label className="set-addprov-field wide" style={{ marginTop: 14 }}>
+          <span>{zh ? "本机中继静态目录（托管 PWA / 下载页；可留空）" : "Local relay static dir (hosts the PWA; optional)"}</span>
           <input
             className="set-input"
-            value={relayToken}
-            onChange={(event) => setRelayToken(event.target.value)}
-            placeholder={zh ? "留空 = 中继未启用准入" : "Empty = relay has no allowlist"}
+            value={localRelayStaticDir}
+            onChange={(event) => setLocalRelayStaticDir(event.target.value)}
+            placeholder={zh ? "如 E:\\MyWorkspace\\Software\\cloudflared\\static" : "e.g. E:\\path\\to\\static"}
             spellCheck={false}
           />
         </label>
         <div className="set-hint">
           {zh
-            ? "token 只用于主机向中继注册（服务方在 RELAY_HOST_TOKENS 里配）；它不会进配对票，设备拿不到它。"
-            : "The token only authenticates this host to the relay (RELAY_HOST_TOKENS on the relay); it never goes into the pairing ticket."}
+            ? "填了目录后，通道里那个公网域名打开就是 PWA 界面（同域名 /ws 是数据通道）——ECS 退场后网页版的界面由这里接管。留空 = 不托管。"
+            : "With a directory set, the channel domain serves the PWA UI (same origin /ws is the data channel)."}
         </div>
-        {/* ---- 备用通道（阶段 ②）：主机额外挂在「本机中继」上，主中继挂了也能被手机找到 ---- */}
-        <div className="set-hint" style={{ marginTop: 14, fontWeight: 600 }}>
-          {zh ? "备用通道（保底）" : "Fallback channel"}
-        </div>
-        <label className="set-addprov-field wide">
-          <span>{zh ? "备用公网地址（手机用；经隧道指向本机中继）" : "Fallback phone URL (tunnel to the local relay)"}</span>
-          <input
-            className="set-input"
-            value={mobileRelayFallbackUrl}
-            onChange={(event) => setMobileRelayFallbackUrl(event.target.value)}
-            placeholder="wss://relay.your-domain/ws"
-            spellCheck={false}
-          />
-        </label>
         <div className="set-hint">
           {zh
             ? "主机同时挂在主中继与本机中继上（本机中继默认 ws://127.0.0.1:9001/ws，应用启动即运行）。主中继挂了时，手机改用这条地址即可——不必再碰这台电脑。留空 = 主机仍在备用通道在线，只是不把地址写进配对票。"
@@ -427,44 +569,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         </label>
         <div className="set-hint">
           {zh
-            ? "填了目录后，「备用公网地址」那个域名打开就是 PWA 界面（同域名 /ws 是数据通道）——ECS 退场后网页版的界面由这里接管。留空 = 不托管。"
-            : "With a directory set, the fallback domain serves the PWA UI (same origin /ws is the data channel) — this replaces the ECS-hosted PWA once it retires."}
+            ? "填了目录后，通道里那个公网域名打开就是 PWA 界面（同域名 /ws 是数据通道）——ECS 退场后网页版的界面由这里接管。留空 = 不托管。"
+            : "With a directory set, the channel domain serves the PWA UI (same origin /ws is the data channel) — this replaces the ECS-hosted PWA once it retires."}
         </div>
-        {relayStatus?.channels?.length ? (
-          <div className="set-hint">
-            {relayStatus.channels.map((c) => (
-              <div key={c.key} style={{ fontFamily: "ui-monospace, monospace" }}>
-                {c.key === "fallback" ? (zh ? "备用" : "fallback") : zh ? "主用" : "primary"}: {c.state}
-                {c.relayUrl ? ` \u00b7 ${c.relayUrl}` : ""}
-                {c.lastError ? ` \u00b7 ${c.lastError}` : ""}
-              </div>
-            ))}
-          </div>
-        ) : null}
-        <div className="set-remote-toggle-row">
-          <div className="set-remote-toggle-copy">
-            <span className="set-remote-toggle-label">{zh ? "启用备用通道" : "Enable fallback channel"}</span>
-            <span className="set-remote-toggle-state">{fallbackEnabled ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}</span>
-          </div>
-          <button
-            type="button"
-            className={`set-toggle ${fallbackEnabled ? "on" : ""}`}
-            role="switch"
-            aria-checked={fallbackEnabled}
-            aria-label={zh ? "切换备用通道" : "Toggle fallback channel"}
-            onClick={() => setFallbackEnabled((v) => !v)}
-            disabled={busy}
-          >
-            <span className="set-toggle-knob" />
-          </button>
-        </div>
-        <div className="set-hint">
-          {zh
-            ? "改完记得点下面的「保存中继设置」——备用地址同样会在改动后作废旧配对二维码。"
-            : "Save below — changing the fallback address also invalidates the current pairing QR."}
-        </div>
-        <button className="set-btn primary" style={{ marginTop: 10 }} onClick={saveRelayUrl} disabled={busy || !relayUrl.trim()}>
-          {zh ? "保存地址与 token" : "Save URL & token"}
+        <button className="set-btn primary" style={{ marginTop: 10 }} onClick={saveChannels} disabled={busy}>
+          {zh ? "保存通道" : "Save channels"}
         </button>
         <div className="set-hint">
           {zh

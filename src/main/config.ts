@@ -956,9 +956,20 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
 
 export function updateConfig(patch: Partial<AppConfig>): AppConfig {
   if (!cached) throw new Error("config not loaded");
+  const next: Partial<AppConfig> = { ...patch };
+  // 通道列表保存：token **不回显**给渲染层，所以条目里没带 token 就沿用旧值（留空 = 保持现有）。
+  if (Array.isArray(next.relayChannels)) {
+    const previous = new Map((cached.relayChannels ?? []).map((channel) => [channel.id, channel]));
+    next.relayChannels = next.relayChannels.map((channel) => {
+      if (channel.token) return channel;
+      const old = previous.get(channel.id);
+      return old?.token ? { ...channel, token: old.token } : channel;
+    });
+    next.relayChannelsVersion = 1;
+  }
   cached = {
     ...cached,
-    ...patch,
+    ...next,
     remoteStunUrls: [...BUILT_IN_REMOTE_STUN_URLS],
   };
   if (!existsSync(cachedDir)) mkdirSync(cachedDir, { recursive: true });
