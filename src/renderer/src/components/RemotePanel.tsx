@@ -429,6 +429,23 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
                 </div>
                 {row.id !== "lan" && (
                   <div style={{ display: "flex", gap: 6, flex: "0 0 auto" }}>
+                    {/* S5 补口：通道原来只能编辑/删除，没有「停用」——用户只能靠改坏地址来停一条，很难回滚 */}
+                    <button
+                      type="button"
+                      className="set-btn"
+                      onClick={() => updateChannel(row.id, { enabled: !row.enabled })}
+                      title={
+                        row.enabled
+                          ? zh
+                            ? "停用：不挂这条上行，也不写进手机拿到的通道列表（保存后生效）"
+                            : "Disable: stop this uplink and drop it from the phone's channel list (save to apply)"
+                          : zh
+                            ? "启用（保存后生效）"
+                            : "Enable (save to apply)"
+                      }
+                    >
+                      {row.enabled ? (zh ? "停用" : "Disable") : zh ? "启用" : "Enable"}
+                    </button>
                     <button type="button" className="set-btn" onClick={() => setEditingChannelId(editing ? null : row.id)} title={zh ? "编辑" : "Edit"}>
                       {editing ? "收起" : zh ? "编辑" : "Edit"}
                     </button>
