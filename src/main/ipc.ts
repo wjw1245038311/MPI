@@ -183,6 +183,7 @@ import { buildApprovalDiff } from "./remote/approval-diff";
 import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
 import { RelayUplink } from "./remote/relay-uplink";
+import { RelayFanout } from "./remote/relay-fanout";
 import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } from "./remote/services";
 import { RemoteService, type RemoteBackend } from "./remote/service";
 import {
@@ -210,6 +211,7 @@ import {
   LAN_RELAY_BIND_HOST,
   LAN_RELAY_PORT,
   LOCAL_RELAY_HOST,
+  localRelayUrl,
   resolveLanRelayEntry,
   startLocalRelay,
   type LanRelayStatus,
@@ -283,6 +285,13 @@ const bridges = new Map<string, BridgeHandle>();
 let systemNotifications: SystemNotificationCenter | null = null;
 let activeRemoteHost: RemoteHost | null = null;
 let activeRelayUplink: RelayUplink | null = null;
+/**
+ * 备用中继上行（阶段 ②「主机双中继上行」）：指向**本机中继**（`ws://127.0.0.1:<lanModePort>/ws`）。
+ * 目的是 ECS 挂掉时，手机扫备用票仍能找到主机（否则主机不在那条路上，手机看到「离线」）。
+ */
+let fallbackRelayUplink: RelayUplink | null = null;
+/** 聚合器：`RemoteHost` 只认一个 `RelayOutbound`，由它统一路由到多条上行。 */
+let relayFanout: RelayFanout | null = null;
 
 /** 记忆池 inbox 监听的停止函数（退出/重生时释放）。 */
 let stopMemoryInbox: (() => void) | null = null;
@@ -1181,8 +1190,10 @@ export function stopAllBridges(): Promise<void> {
 export function stopRemoteHost(): void {
   activeRemoteHost?.stop();
   activeRemoteHost = null;
-  activeRelayUplink?.stop();
+  relayFanout?.stop();
+  relayFanout = null;
   activeRelayUplink = null;
+  fallbackRelayUplink = null;
   stopLanMode();
 }
 
@@ -1252,33 +1263,80 @@ function stopLanMode(): void {
   lanRelay = null;
 }
 
-/** Start/stop/re-point the mobile relay uplink from config (S1, docs/MOBILE-DESIGN.md §5). */
+/** 建一条中继上行（主/备共用；只有地址、准入 token 与持久化键不同）。 */
+function makeRelayUplink(
+  args: { relayUrl: string; relayToken?: string; instanceKey?: string },
+  remoteHost: RemoteHost,
+): RelayUplink {
+  const cryptoMaterial = remoteHost.getRelayCryptoMaterial();
+  const instance = args.instanceKey || "primary";
+  return new RelayUplink({
+    relayUrl: args.relayUrl,
+    // P1 准入（见 docs/RELAY-SHARING.md §3.1）：中继配了允许列表时必须带。
+    ...(args.relayToken ? { relayToken: args.relayToken } : {}),
+    // 多上行共存时持久化文件按实例区分（见 relay-uplink.ts 的 instanceKey 注释）。
+    ...(args.instanceKey ? { instanceKey: args.instanceKey } : {}),
+    hostId: remoteHost.getStatus().hostId,
+    userDataDir: getConfigDir(),
+    x25519PrivB64u: cryptoMaterial.x25519PrivB64u,
+    x25519PubB64u: cryptoMaterial.x25519PubB64u,
+    getHost: () => (activeRemoteHost === remoteHost ? remoteHost : null),
+    onStateChange: (status) => {
+      if (sendToRenderer) sendToRenderer("remote:relay-state", { ...status, instance });
+    },
+  });
+}
+
+/**
+ * 按配置启/停/重指中继上行（S1，docs/MOBILE-DESIGN.md §5）——
+ * 现在是**两条**：主（`remoteRelayUrl`，如 ECS）+ 备用（本机中继 `ws://127.0.0.1:<lanModePort>/ws`）。
+ *
+ * 两条都通过 `RelayFanout` 交给 `RemoteHost`（它只认一个 `RelayOutbound`）：
+ * 这样配对票在两条中继上都注册，手机扫哪张票都能找到主机。
+ */
 function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
   const cfg = getConfig();
-  const wantOn = !!cfg.remoteRelayEnabled && !!cfg.remoteRelayUrl.trim();
-  if (!wantOn) {
+  const port = cfg.lanModePort && cfg.lanModePort > 0 ? cfg.lanModePort : LAN_RELAY_PORT;
+
+  // ① 主上行（ECS / 用户自己的中继）
+  const wantPrimary = !!cfg.remoteRelayEnabled && !!cfg.remoteRelayUrl.trim();
+  if (!wantPrimary) {
     activeRelayUplink?.stop();
-    remoteHost.setRelay(null);
-    return;
-  }
-  if (!activeRelayUplink) {
-    const cryptoMaterial = remoteHost.getRelayCryptoMaterial();
-    activeRelayUplink = new RelayUplink({
-      relayUrl: cfg.remoteRelayUrl,
-      // P1 准入（见 docs/RELAY-SHARING.md §3.1）：中继配了允许列表时必须带。
-      ...(cfg.remoteRelayToken ? { relayToken: cfg.remoteRelayToken } : {}),
-      hostId: remoteHost.getStatus().hostId,
-      userDataDir: getConfigDir(),
-      x25519PrivB64u: cryptoMaterial.x25519PrivB64u,
-      x25519PubB64u: cryptoMaterial.x25519PubB64u,
-      getHost: () => (activeRemoteHost === remoteHost ? remoteHost : null),
-      onStateChange: (status) => { if (sendToRenderer) sendToRenderer("remote:relay-state", status); },
-    });
-    remoteHost.setRelay(activeRelayUplink);
+    activeRelayUplink = null;
+  } else if (!activeRelayUplink) {
+    activeRelayUplink = makeRelayUplink({ relayUrl: cfg.remoteRelayUrl, relayToken: cfg.remoteRelayToken }, remoteHost);
   } else {
     activeRelayUplink.configure(cfg.remoteRelayUrl);
   }
-  if (activeRelayUplink.getStatus().state === "disabled") activeRelayUplink.start();
+
+  // ② 备用上行：指向**本机中继**（S0 起常驻）；本机中继无准入，不带 token。
+  const wantFallback = !!cfg.remoteRelayFallbackEnabled;
+  if (!wantFallback) {
+    fallbackRelayUplink?.stop();
+    fallbackRelayUplink = null;
+  } else if (!fallbackRelayUplink) {
+    fallbackRelayUplink = makeRelayUplink({ relayUrl: localRelayUrl(port), instanceKey: "fallback" }, remoteHost);
+  } else {
+    fallbackRelayUplink.configure(localRelayUrl(port));
+  }
+
+  const uplinks = [activeRelayUplink, fallbackRelayUplink].filter((uplink): uplink is RelayUplink => !!uplink);
+  if (!uplinks.length) {
+    relayFanout?.stop();
+    relayFanout = null;
+    remoteHost.setRelay(null);
+    return;
+  }
+  // ③ 聚合器保持**同一实例**：RemoteHost 只在 setRelay 时拿一次引用，换实例会让配对回链断掉。
+  if (!relayFanout) {
+    relayFanout = new RelayFanout({ uplinks, log: appendDiagLog });
+    remoteHost.setRelay(relayFanout);
+  } else {
+    relayFanout.setUplinks(uplinks);
+  }
+  for (const uplink of uplinks) {
+    if (uplink.getStatus().state === "disabled") uplink.start();
+  }
 }
 
 export function registerIpc(getWin: () => BrowserWindow | null): void {
@@ -2580,7 +2638,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         port: ATTACHMENT_HTTP_PORT,
         // 附件载荷的应用层加密（见 attachment-crypto.ts）：ikm 用该设备的 E2E 会话密钥
         // （配对时协商、永不经过网络）；没建好会话的设备拿不到密钥 → 加密请求被拒。
-        keyFor: (deviceId) => activeRelayUplink?.e2eSessionKeyFor(deviceId) ?? null,
+        keyFor: (deviceId) => relayFanout?.e2eSessionKeyFor(deviceId) ?? null,
       });
       attachmentServer = server;
       attachmentServerReady = new Promise<boolean>((resolve) => {
@@ -2619,7 +2677,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
    * 而不是自己猜（猜错的结果是载荷被拒，或者更糟——客户端以为加密了、实际走了明文）。
    */
   function attachmentEncField(deviceId: string): { enc?: string } {
-    return activeRelayUplink?.e2eSessionKeyFor(deviceId) ? { enc: "v1" } : {};
+    return relayFanout?.e2eSessionKeyFor(deviceId) ? { enc: "v1" } : {};
   }
 
   /**
@@ -3285,7 +3343,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     },
     storePushSubscription: async (deviceId, subscription) => {
       // S7 WebPush：持久化 + 同步给 relay（uplink 未配置时静默 no-op）。
-      activeRelayUplink?.storePushSubscription(deviceId, subscription);
+      relayFanout?.storePushSubscription(deviceId, subscription);
       return { ok: true };
     },
     sttTranscribe: async (audioB64: string) => {
@@ -3431,10 +3489,10 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         // S7 WebPush：审批通知发给所有已配对设备（relay 无订阅则 no-op）。在线
         // 设备会同时看到实时审批卡 + 系统通知——v1 接受这点冗余，换取后台/锁屏
         // 场景的可靠触达。文案按 §12.2 保持通用，不含会话内容。
-        const uplink = activeRelayUplink;
-        if (uplink) {
-          for (const deviceId of uplink.getKnownDeviceIds()) {
-            uplink.sendPush(deviceId, { kind: "approval", title: "MPI 需要批准", body: "有会话等待你的确认。", deepLink: `/thread/${threadId}` });
+        const fanout = relayFanout;
+        if (fanout) {
+          for (const deviceId of fanout.getKnownDeviceIds()) {
+            fanout.sendPush(deviceId, { kind: "approval", title: "MPI 需要批准", body: "有会话等待你的确认。", deepLink: `/thread/${threadId}` });
           }
         }
       })();
@@ -3464,13 +3522,17 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
 
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());
   ipcMain.handle("remote:getRelayStatus", () => ({
-    ...(activeRelayUplink?.getStatus() ?? { state: "disabled" as const, relayUrl: getConfig().remoteRelayUrl, lastError: null }),
+    ...(relayFanout?.getStatus() ?? { state: "disabled" as const, relayUrl: getConfig().remoteRelayUrl, lastError: null }),
     // 手机该连的地址（与主机→中继的 remoteRelayUrl 可以不同：手机没有 Tailscale，
     // 必须给公网可达地址）。面板需要回显它。
     mobileRelayUrl: getConfig().mobileRelayUrl || "",
     // **本次配对票里实际会告诉手机的地址**——优先级与 RemoteHost 里完全一致：
     // 局域网模式 > mobileRelayUrl > 主机自己那条 uplink 地址。面板用它做“手机会连哪”的显示与告警。
     phoneRelayUrl: lanModeStatus().url || getConfig().mobileRelayUrl || getConfig().remoteRelayUrl,
+    // 备用通道（阶段 ②）：手机侧的备用公网地址 + 主机两条上行的实时状态。
+    phoneRelayFallbackUrl: getConfig().mobileRelayFallbackUrl || "",
+    fallbackEnabled: !!getConfig().remoteRelayFallbackEnabled,
+    channels: relayFanout?.statuses() ?? [],
   }));
   ipcMain.handle("remote:createPairing", (_e, args?: { autoApprove?: boolean }) => remoteHost.createPairingTicket({ autoApprove: args?.autoApprove === true }));
 
@@ -3612,7 +3674,16 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     if (patch && ("remoteSignalingUrl" in patch || "remoteStunUrls" in patch)) {
       remoteHost.configure(next.remoteSignalingUrl || DEFAULT_REMOTE_SIGNALING_URL, [...BUILT_IN_REMOTE_STUN_URLS]);
     }
-    if (patch && ("remoteRelayUrl" in patch || "remoteRelayEnabled" in patch)) applyRelayUplinkConfig(remoteHost);
+    if (
+      patch &&
+      ("remoteRelayUrl" in patch ||
+        "remoteRelayEnabled" in patch ||
+        "remoteRelayToken" in patch ||
+        "remoteRelayFallbackEnabled" in patch ||
+        "lanModePort" in patch)
+    ) {
+      applyRelayUplinkConfig(remoteHost);
+    }
     if ((next.piCliPath || "") !== (prevCli || "")) {
       resetPiRuntime();
       dropWarmBridge(); // standby was booted from the old runtime

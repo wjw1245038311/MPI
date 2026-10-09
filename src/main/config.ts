@@ -253,8 +253,21 @@ export interface AppConfig {
    */
   remoteReplaceSameNameOffline: boolean;
   /**
+   * 备用中继通道（阶段 ②「主机双中继上行」，见实施计划-C档多通道.md）：
+   * 启用后主机**额外**挂在「本机中继」上（地址推导为 `ws://127.0.0.1:<lanModePort>/ws`），
+   * 使得 ECS 挂掉时手机扫备用票仍能找到主机。默认开（本地一条 WS，代价极小）。
+   */
+  remoteRelayFallbackEnabled: boolean;
+  /**
+   * **给手机**的备用公网地址（如 `wss://relay.whomidas.cn/ws`，经 Cloudflare 隧道转到本机中继）。
+   * 空 = 配对票里不带备用地址（主机仍在备用通道上在线，只是没告诉手机）。
+   */
+  mobileRelayFallbackUrl: string;
+  /**
    * 局域网直连模式（P2，见 docs/RELAY-SHARING.md §3.2）：桌面端自己起一个只绑局域网的中继，
    * 手机连内网地址 → 不依赖 Tailscale/公网，附件也走内网。**代价是没有推送通道**。
+   *
+   * 注（S0 起）：中继进程现已**常驻**，本开关只决定「绑定地址」与「是否把内网地址广告进配对票」。
    */
   lanModeEnabled: boolean;
   /** 局域网中继端口（默认 9001）。 */
@@ -442,6 +455,8 @@ const DEFAULTS: AppConfig = {
   remoteRelayEnabled: false,
   remoteRelayToken: "",
   remoteReplaceSameNameOffline: true,
+  remoteRelayFallbackEnabled: true,
+  mobileRelayFallbackUrl: "",
   lanModeEnabled: false,
   lanModePort: 9001,
 };
@@ -562,6 +577,12 @@ export function loadConfig(userDataDir: string): AppConfig {
           typeof parsed.remoteReplaceSameNameOffline === "boolean"
             ? parsed.remoteReplaceSameNameOffline
             : DEFAULTS.remoteReplaceSameNameOffline,
+        remoteRelayFallbackEnabled:
+          typeof parsed.remoteRelayFallbackEnabled === "boolean"
+            ? parsed.remoteRelayFallbackEnabled
+            : DEFAULTS.remoteRelayFallbackEnabled,
+        mobileRelayFallbackUrl:
+          typeof parsed.mobileRelayFallbackUrl === "string" ? parsed.mobileRelayFallbackUrl.trim() : DEFAULTS.mobileRelayFallbackUrl,
         lanModeEnabled: typeof parsed.lanModeEnabled === "boolean" ? parsed.lanModeEnabled : DEFAULTS.lanModeEnabled,
         lanModePort:
           typeof parsed.lanModePort === "number" && parsed.lanModePort > 0 && parsed.lanModePort < 65536
@@ -856,6 +877,8 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (typeof p.remoteRelayUrl === "string") out.remoteRelayUrl = p.remoteRelayUrl.trim();
   if (typeof p.remoteRelayToken === "string") out.remoteRelayToken = p.remoteRelayToken.trim();
   if (typeof p.remoteReplaceSameNameOffline === "boolean") out.remoteReplaceSameNameOffline = p.remoteReplaceSameNameOffline;
+  if (typeof p.remoteRelayFallbackEnabled === "boolean") out.remoteRelayFallbackEnabled = p.remoteRelayFallbackEnabled;
+  if (typeof p.mobileRelayFallbackUrl === "string") out.mobileRelayFallbackUrl = p.mobileRelayFallbackUrl.trim();
   if (typeof p.lanModeEnabled === "boolean") out.lanModeEnabled = p.lanModeEnabled;
   if (typeof p.lanModePort === "number" && p.lanModePort > 0 && p.lanModePort < 65536) out.lanModePort = Math.floor(p.lanModePort);
   if (typeof p.remoteRelayEnabled === "boolean") out.remoteRelayEnabled = p.remoteRelayEnabled;

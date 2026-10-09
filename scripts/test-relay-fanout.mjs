@@ -184,4 +184,29 @@ test("storePushSubscription 存到设备当前所在通道（订阅与中继 VAP
   assert.equal(opsOf(b, "storePushSubscription").length, 1);
 });
 
+// ---- ⑤ 接线守卫（源码级）：两条上行都交给 fanout，路由不再绕过它 ----
+test("ipc 接线：主+备都进 fanout，推送/附件密钥走聚合器", async () => {
+  const { readFileSync } = await import("node:fs");
+  const ipc = readFileSync(new URL("../src/main/ipc.ts", import.meta.url), "utf8");
+  const cfg = readFileSync(new URL("../src/main/config.ts", import.meta.url), "utf8");
+
+  assert.match(ipc, /relayFanout = new RelayFanout\(/, "要有聚合器实例");
+  assert.match(ipc, /remoteHost\.setRelay\(relayFanout\)/, "RemoteHost 拿到的必须是聚合器");
+  assert.match(ipc, /instanceKey: "fallback"/, "备用上行要用独立的持久化键（否则与主上行互相覆盖 deviceToken）");
+  assert.match(ipc, /localRelayUrl\(port\)/, "备用上行地址应由 lanModePort 推导到本机中继");
+  assert.match(ipc, /remoteRelayFallbackEnabled/, "备用通道要受配置开关控制");
+
+  for (const pat of [
+    /activeRelayUplink\?\.e2eSessionKeyFor/,
+    /activeRelayUplink\?\.storePushSubscription/,
+    /activeRelayUplink\?\.sendPush/,
+    /activeRelayUplink\?\.getKnownDeviceIds/,
+  ]) {
+    assert.ok(!pat.test(ipc), `路由不得再绕过 fanout：${pat}`);
+  }
+
+  assert.match(cfg, /remoteRelayFallbackEnabled: boolean/, "配置项：备用通道开关");
+  assert.match(cfg, /mobileRelayFallbackUrl: string/, "配置项：手机侧备用地址");
+});
+
 console.log("relay-fanout tests passed");

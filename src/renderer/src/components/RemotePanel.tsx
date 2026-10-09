@@ -35,6 +35,12 @@ type RelayStatus = {
   mobileRelayUrl?: string;
   /** **本次配对票里实际会告诉手机的地址**（局域网模式 > 手机通道地址 > relayUrl，与主机一致）。 */
   phoneRelayUrl?: string;
+  /** 备用通道（阶段 ②）：手机侧备用公网地址（如 `wss://relay.whomidas.cn/ws`；空 = 不进配对票）。 */
+  phoneRelayFallbackUrl?: string;
+  /** 备用上行是否启用（主机额外挂在**本机中继**上，供 ECS 挂掉时顶替）。 */
+  fallbackEnabled?: boolean;
+  /** 两条上行的实时状态（key = primary / fallback）。 */
+  channels?: Array<{ key: string } & Omit<RelayStatus, "mobileRelayUrl" | "phoneRelayUrl">>;
 };
 
 /** 中继托管的手机 App 安装包清单（/download/mpi-android.json）；中继不可达时
@@ -147,6 +153,9 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [phoneRelayUrl, setPhoneRelayUrl] = useState("");
   /** 中继准入 token（P1）：与地址一起保存，不回显已有值的提示（避免在界面上留明文）。 */
   const [relayToken, setRelayToken] = useState("");
+  /** 备用通道（阶段 ②）：手机侧备用公网地址 + 开关。 */
+  const [mobileRelayFallbackUrl, setMobileRelayFallbackUrl] = useState("");
+  const [fallbackEnabled, setFallbackEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
 
   const refresh = async (syncRelayUrl = true) => {
@@ -162,6 +171,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       if (syncRelayUrl) setRelayUrl(relay.relayUrl || "");
       if (syncRelayUrl) setMobileRelayUrl(relay.mobileRelayUrl || "");
       if (syncRelayUrl) setPhoneRelayUrl(relay.phoneRelayUrl || "");
+      if (syncRelayUrl) setMobileRelayFallbackUrl(relay.phoneRelayFallbackUrl || "");
+      if (syncRelayUrl) setFallbackEnabled(relay.fallbackEnabled !== false);
     } catch { /* same reload race */ }
   };
 
@@ -247,6 +258,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         remoteRelayUrl: relayUrl.trim(),
         remoteRelayToken: relayToken.trim(),
         mobileRelayUrl: mobileRelayUrl.trim(),
+        mobileRelayFallbackUrl: mobileRelayFallbackUrl.trim(),
+        remoteRelayFallbackEnabled: fallbackEnabled,
       });
       // 二维码里存的是**生成那一刻**的地址——改了地址后旧码必须作废，
       // 否则用户接着扫屏上那张旧码，手机上仍然用老地址（典型症状：连接超时、
@@ -378,6 +391,58 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
           {zh
             ? "token 只用于主机向中继注册（服务方在 RELAY_HOST_TOKENS 里配）；它不会进配对票，设备拿不到它。"
             : "The token only authenticates this host to the relay (RELAY_HOST_TOKENS on the relay); it never goes into the pairing ticket."}
+        </div>
+        {/* ---- 备用通道（阶段 ②）：主机额外挂在「本机中继」上，主中继挂了也能被手机找到 ---- */}
+        <div className="set-hint" style={{ marginTop: 14, fontWeight: 600 }}>
+          {zh ? "备用通道（保底）" : "Fallback channel"}
+        </div>
+        <label className="set-addprov-field wide">
+          <span>{zh ? "备用公网地址（手机用；经隧道指向本机中继）" : "Fallback phone URL (tunnel to the local relay)"}</span>
+          <input
+            className="set-input"
+            value={mobileRelayFallbackUrl}
+            onChange={(event) => setMobileRelayFallbackUrl(event.target.value)}
+            placeholder="wss://relay.your-domain/ws"
+            spellCheck={false}
+          />
+        </label>
+        <div className="set-hint">
+          {zh
+            ? "主机同时挂在主中继与本机中继上（本机中继默认 ws://127.0.0.1:9001/ws，应用启动即运行）。主中继挂了时，手机改用这条地址即可——不必再碰这台电脑。留空 = 主机仍在备用通道在线，只是不把地址写进配对票。"
+            : "The host stays registered on both the primary and the local relay (ws://127.0.0.1:9001/ws, always running). If the primary dies, the phone switches to this address — no need to touch this machine."}
+        </div>
+        {relayStatus?.channels?.length ? (
+          <div className="set-hint">
+            {relayStatus.channels.map((c) => (
+              <div key={c.key} style={{ fontFamily: "ui-monospace, monospace" }}>
+                {c.key === "fallback" ? (zh ? "备用" : "fallback") : zh ? "主用" : "primary"}: {c.state}
+                {c.relayUrl ? ` \u00b7 ${c.relayUrl}` : ""}
+                {c.lastError ? ` \u00b7 ${c.lastError}` : ""}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="set-remote-toggle-row">
+          <div className="set-remote-toggle-copy">
+            <span className="set-remote-toggle-label">{zh ? "启用备用通道" : "Enable fallback channel"}</span>
+            <span className="set-remote-toggle-state">{fallbackEnabled ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}</span>
+          </div>
+          <button
+            type="button"
+            className={`set-toggle ${fallbackEnabled ? "on" : ""}`}
+            role="switch"
+            aria-checked={fallbackEnabled}
+            aria-label={zh ? "切换备用通道" : "Toggle fallback channel"}
+            onClick={() => setFallbackEnabled((v) => !v)}
+            disabled={busy}
+          >
+            <span className="set-toggle-knob" />
+          </button>
+        </div>
+        <div className="set-hint">
+          {zh
+            ? "改完记得点下面的「保存中继设置」——备用地址同样会在改动后作废旧配对二维码。"
+            : "Save below — changing the fallback address also invalidates the current pairing QR."}
         </div>
         <button className="set-btn primary" style={{ marginTop: 10 }} onClick={saveRelayUrl} disabled={busy || !relayUrl.trim()}>
           {zh ? "保存地址与 token" : "Save URL & token"}

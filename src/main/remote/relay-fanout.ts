@@ -50,12 +50,26 @@ export interface RelayFanoutOptions {
 }
 
 export class RelayFanout {
-  private readonly uplinks: RelayUplinkLike[];
+  private uplinks: RelayUplinkLike[];
   private readonly log: (line: string) => void;
 
   constructor(options: RelayFanoutOptions) {
     this.uplinks = options.uplinks.filter(Boolean);
     this.log = options.log ?? (() => {});
+  }
+
+  /**
+   * 替换通道集合（配置变更时调用）。
+   * 不重建 fanout 实例：`RemoteHost` 只认一个 `RelayOutbound`，换实例会让配对的
+   * 回调链断了（它只在 setRelay 时拿一次引用）。
+   */
+  setUplinks(uplinks: RelayUplinkLike[]): void {
+    this.uplinks = uplinks.filter(Boolean);
+  }
+
+  /** 当前通道数（面板/诊断）。 */
+  size(): number {
+    return this.uplinks.length;
   }
 
   // --- lifecycle ---------------------------------------------------------------
