@@ -89,6 +89,26 @@ export interface RemoteBackend {
    * 手机连上/刷新时拉一次 → 按它选路 ⇒ 桌面改通道后手机只要重连就跟过去（不用重新扫码）。
    */
   getRelayInfo(): { relayUrls: string[]; relayMode: string; activeChannelId: string };
+  /**
+   * 附件**中继分片上传**（2026-10-09）：把直连 HTTP 的 `PUT` 分片搬到加密通道上。
+   *
+   * 为什么需要：直连要求主机有公网 HTTP 入口（Tailscale serve / 反向隧道 / 域名），新装机没有，
+   * 而企业网又限死了主机**上行**（~0.8MB/s）。走中继时数据方向对主机是**下行**（实测 11MB/s），
+   * 且零配置可用。授权（能力令牌）与落盘校验与直连**完全共用**。
+   */
+  uploadAttachment(input: {
+    token: string;
+    offset: number;
+    dataBase64: string;
+    last: boolean;
+  }): Promise<{
+    received: number;
+    done: boolean;
+    name?: string;
+    size?: number;
+    workspacePath?: string;
+    workspaceName?: string;
+  }>;
   /** S7 WebPush：store the device's PushSubscription and sync it to the relay. */
   storePushSubscription(deviceId: string, subscription: RemotePushSubscription): Promise<unknown>;
   /** Transcribe a phone voice memo (base64 WAV) via the local STT endpoint. */
@@ -227,6 +247,23 @@ export class RemoteService {
     switch (request.type) {
       case "host.info":
         return responseFor(request, this.backend.getRelayInfo());
+      case "attachment.upload": {
+        const token = this.requiredShortString(payload, "token");
+        const rawOffset = payload.offset;
+        const offset =
+          typeof rawOffset === "number" && Number.isFinite(rawOffset) && rawOffset >= 0 ? Math.floor(rawOffset) : null;
+        if (offset === null) throw new RemoteProtocolError("INVALID_REQUEST", "offset must be a non-negative number");
+        // 单帧上限 8MB；base64 膨胀 4/3，所以明文片最大约 6MB。这里给字符数的硬边界，
+        // 超了直接拒——不校验的话一个恶意客户端能把主进程内存打满。
+        const dataBase64 = typeof payload.data === "string" ? payload.data : "";
+        if (!dataBase64 || dataBase64.length > 6_000_000) {
+          throw new RemoteProtocolError("INVALID_REQUEST", "data is empty or too large");
+        }
+        return responseFor(
+          request,
+          await this.backend.uploadAttachment({ token, offset, dataBase64, last: payload.last === true }),
+        );
+      }
       case "projects.list":
         return responseFor(request, { projects: await this.backend.listProjects() });
       case "threads.list":

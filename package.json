@@ -152,7 +152,8 @@
     "test:memorygate": "node --experimental-strip-types scripts/test-memory-gate.mjs",
     "test:memoryendpoint": "node --experimental-strip-types scripts/test-memory-endpoint.mjs",
     "test:memoryrecall": "node --experimental-strip-types scripts/test-memory-recall.mjs",
-    "test:memoryregress": "node --experimental-strip-types scripts/test-memory-regress.mjs"
+    "test:memoryregress": "node --experimental-strip-types scripts/test-memory-regress.mjs",
+    "test:attachment-relay-upload": "node --experimental-transform-types scripts/test-attachment-relay-upload.mjs"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.73.3",

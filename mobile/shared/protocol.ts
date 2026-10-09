@@ -19,6 +19,8 @@ export const MAX_ENVELOPE_BYTES = 8_000_000;
 export const REMOTE_REQUEST_TYPES = [
   /** S6：下拉主机当前的**中继通道列表**（手机刷新后按它选路，免重新扫码）。 */
   "host.info",
+  /** 附件中继分片上传（2026-10-09）：主机的附件字节不再只能走 HTTP 直连。 */
+  "attachment.upload",
   "projects.list",
   "threads.list",
   "thread.get",

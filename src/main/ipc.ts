@@ -214,6 +214,7 @@ import {
 } from "./remote/video-refs";
 import { snapshotImagePayload } from "./remote/image-thumbs";
 import { fillVideoPosters } from "./remote/video-poster";
+import { uploadAttachmentChunk } from "./remote/attachment-relay-upload";
 import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, agentImageFor, findVideoPoster, hasObject, isContentKey, isVideoFile, materializeIntoWorkspace, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeThumbnail, storeVideoPoster } from "./chat-attachment-store";
 import {
   LAN_RELAY_BIND_HOST,
@@ -3082,6 +3083,27 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
   );
 
   const remoteBackend: RemoteBackend = {
+    // 附件中继分片上传（2026-10-09）：与 HTTP 直连**共用**令牌表与落盘/校验逻辑，
+    // 只是把 PUT 分片搬到了加密通道上——任何主机、零配置可用（新装机没有公网入口也能发大附件）。
+    uploadAttachment: (input) =>
+      uploadAttachmentChunk(
+        {
+          tokens: attachmentTokens,
+          workspaceDirFor: async (threadId) => {
+            try {
+              return (await remoteThread(threadId)).cwd || null;
+            } catch {
+              return null;
+            }
+          },
+          onUploadComplete: ({ name, threadId, deviceId }) => {
+            uploadedAttachments.set(name, { threadId, deviceId, at: Date.now() });
+            rememberAttachmentNames(threadId, [name]);
+          },
+          log: appendDiagLog,
+        },
+        input,
+      ),
     // S6：手机拉一次就知道主机现在走哪几条中继、首选哪条（顺序 = 列表顺序）
     getRelayInfo: () => ({
       relayUrls: phoneTicketAddresses(),
