@@ -49,6 +49,7 @@ import com.mpi.app.data.VoiceRecorder
 import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.PairingLink
 import com.mpi.app.protocol.PairingLinkException
+import com.mpi.app.protocol.RelaySelect
 import com.mpi.app.protocol.RemotePermission
 import com.mpi.app.protocol.BlockType
 import com.mpi.app.protocol.MessageBlock
@@ -320,30 +321,52 @@ class AppViewModel(
             var pairingClient: RelayClient? = null
             try {
                 val payload = PairingLink.parse(link)
-                val relayUrl = payload.relayUrl?.takeIf { it.isNotBlank() }
-                    ?: throw PairingLinkException("配对码里没有中继地址，请用桌面端生成的二维码/链接")
+                // S4：候选顺序 = 上次可用 → 票序（局域网已置顶）→ 单值
+                val candidates = RelaySelect.candidates(payload.relayUrl, payload.relayUrls, null)
+                if (candidates.isEmpty()) {
+                    throw PairingLinkException("配对码里没有中继地址，请用桌面端生成的二维码/链接")
+                }
                 if (payload.isExpired()) {
                     throw PairingLinkException("配对码已过期，请在桌面端重新生成")
                 }
                 val deviceIdentity = identity ?: throw PairingLinkException("设备身份尚未就绪，请稍后重试")
 
-                val client = RelayClient(relayUrl)
+                // S4：**逐条尝试**票里的每个通道；任一条跑完配对即止，失败的降级到下一条
+                // （票在各条中继上都注册过，换条重试语义成立）。
+                var chosenUrl = ""
+                var lastError: Exception? = null
+                val paired = candidates.firstNotNullOfOrNull { url ->
+                    val attempt = RelayClient(url)
+                    try {
+                        val r = Pairing.run(
+                            client = attempt,
+                            hostId = payload.hostId,
+                            ticket = payload.ticket,
+                            identity = deviceIdentity,
+                            deviceName = deviceName,
+                            onStage = { stage ->
+                                _ui.update { state -> state.copy(pairing = PairingUi(stage)) }
+                            },
+                        )
+                        chosenUrl = url
+                        attempt to r
+                    } catch (e: Exception) {
+                        lastError = e
+                        runCatching { attempt.close() }
+                        null
+                    }
+                } ?: throw (lastError ?: PairingLinkException("所有通道都连不上"))
+                val client = paired.first
+                val result = paired.second
                 pairingClient = client
-                val result = Pairing.run(
-                    client = client,
-                    hostId = payload.hostId,
-                    ticket = payload.ticket,
-                    identity = deviceIdentity,
-                    deviceName = deviceName,
-                    onStage = { stage ->
-                        _ui.update { state -> state.copy(pairing = PairingUi(stage)) }
-                    },
-                )
 
                 val now = System.currentTimeMillis()
                 val record = PairingRecord(
                     hostId = payload.hostId,
-                    relayUrl = relayUrl,
+                    relayUrl = chosenUrl,
+                    // S4：下次重连优先这条真正配对成功的通道
+                    lastGoodRelayUrl = chosenUrl,
+                    relayUrls = payload.relayUrls,
                     deviceId = deviceIdentity.deviceId,
                     deviceToken = result.deviceToken,
                     hostX25519PubB64u = result.hostX25519PubB64u,
@@ -1812,7 +1835,9 @@ class AppViewModel(
         autoOpenedThread = false
         val deviceIdentity = identity ?: return
 
-        val client = RelayClient(record.relayUrl)
+        // S4：重连优先上次真正连上的通道（旧记录回落 relayUrl）
+        val chosenUrl = RelaySelect.pick(record.relayUrl, record.relayUrls, record.lastGoodRelayUrl)
+        val client = RelayClient(chosenUrl)
         val newSession = HostSession(client, record, deviceIdentity, deviceName, scope)
         val newRequester = Requester(
             transport = newSession,

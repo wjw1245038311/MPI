@@ -19,6 +19,10 @@ data class DeviceRecord(
 data class PairingRecord(
     val hostId: String,
     val relayUrl: String,
+    /** S3/S4：主机给的有序地址列表（局域网 → 主 → 备）；旧记录没有→空表。 */
+    val relayUrls: List<String> = emptyList(),
+    /** S4：最近一次真正连上的通道地址——重连优先它。 */
+    val lastGoodRelayUrl: String? = null,
     val deviceId: String,
     /** 来自 pair.accepted 的稳定令牌；重连时用它走 hello 重认证。 */
     val deviceToken: String? = null,

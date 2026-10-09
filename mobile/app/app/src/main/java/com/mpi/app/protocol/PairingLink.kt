@@ -12,6 +12,8 @@ data class PairingPayload(
     val ticket: String,
     /** 中继 WSS 端点；没有它就无法配对。 */
     val relayUrl: String? = null,
+    /** S3/S4：主机给的有序地址列表（局域网 → 主 → 备）；旧客户端只读 relayUrl。 */
+    val relayUrls: List<String> = emptyList(),
     /** 桌面机器名，多设备列表用来区分主机。 */
     val hostName: String? = null,
     /** 过期时间戳（ms）；0 = 载荷里没带。 */
@@ -51,6 +53,14 @@ object PairingLink {
             obj[key]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull() }
                 ?.takeIf { it.isNotEmpty() }
 
+        // S4：有序地址列表（旧节点不带这个字段 → 空表，退回单值 relayUrl）
+        fun stringList(key: String): List<String> =
+            (obj[key] as? kotlinx.serialization.json.JsonArray)
+                ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull() }
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?: emptyList()
+
         val hostId = text("hostId") ?: throw PairingLinkException("配对载荷缺少 hostId")
         val ticket = text("ticket") ?: throw PairingLinkException("配对载荷缺少 ticket")
         val expiresAt = text("expiresAt")?.toLongOrNull() ?: 0L
@@ -59,6 +69,7 @@ object PairingLink {
             hostId = hostId,
             ticket = ticket,
             relayUrl = text("relayUrl"),
+            relayUrls = stringList("relayUrls"),
             hostName = text("hostName"),
             expiresAt = expiresAt,
         )
