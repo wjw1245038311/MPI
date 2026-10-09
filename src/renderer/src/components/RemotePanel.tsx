@@ -290,6 +290,21 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     ]);
     setEditingChannelId(id);
   };
+  /**
+   * 上下移动一条通道（顺序 = 手机尝试的顺序，首个优先）。
+   * 局域网通道由运行时合成，不让越过它。
+   */
+  const moveChannel = (id: string, delta: number) => {
+    setChannelRows((rows) => {
+      const index = rows.findIndex((row) => row.id === id);
+      const target = index + delta;
+      if (index < 0 || target < 0 || target >= rows.length) return rows;
+      if (rows[target].id === "lan" || rows[index].id === "lan") return rows;
+      const next = [...rows];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
   const removeChannel = (id: string) => {
     setChannelRows((rows) => rows.filter((row) => row.id !== id));
     if (activeChannelId === id) setActiveChannelId("");
@@ -401,7 +416,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         <div className="set-hint" style={{ fontWeight: 600, marginTop: 4 }}>
           {zh ? "中继通道" : "Relay channels"}
           <span style={{ fontWeight: 400, marginLeft: 6 }}>
-            {zh ? "（主机挂在哪几条上；手机连的公网地址写在每条里）" : "(where this host registers; each row carries the phone-facing URL)"}
+            {zh ? "（主机挂在哪几条上；手机连的公网地址写在每条里。从上到下 = 手机尝试的顺序，首个优先）" : "(where this host registers; each row carries the phone-facing URL. Top-to-bottom = the order the phone tries them)"}
           </span>
         </div>
         {channelRows.map((row) => {
@@ -445,6 +460,13 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
                       }
                     >
                       {row.enabled ? (zh ? "停用" : "Disable") : zh ? "启用" : "Enable"}
+                    </button>
+                    {/* 顺序即手机尝试顺序：没有这两个按钮时，只能靠「删掉再按序加回」来凑 */}
+                    <button type="button" className="set-btn" onClick={() => moveChannel(row.id, -1)} title={zh ? "上移（更优先）" : "Move up (higher priority)"}>
+                      ↑
+                    </button>
+                    <button type="button" className="set-btn" onClick={() => moveChannel(row.id, 1)} title={zh ? "下移" : "Move down"}>
+                      ↓
                     </button>
                     <button type="button" className="set-btn" onClick={() => setEditingChannelId(editing ? null : row.id)} title={zh ? "编辑" : "Edit"}>
                       {editing ? "收起" : zh ? "编辑" : "Edit"}
