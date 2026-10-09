@@ -114,6 +114,11 @@ import com.mpi.app.protocol.MessageBlock
 import com.mpi.app.protocol.RemotePermission
 import com.mpi.app.protocol.ThreadMessage
 import com.mpi.app.ui.theme.MpiTheme
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -2431,11 +2436,20 @@ private const val PREVIEW_MAX_EDGE = 2400
 private fun ImagePreviewDialog(localUri: String?, thumbB64: String, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    /** 画面来自本地原图吗？（false = 回落到了缩略图，放大后会糊，得让用户知道） */
+    var fromOriginal by remember { mutableStateOf(false) }
     LaunchedEffect(localUri) {
-        bitmap = withContext(Dispatchers.IO) {
-            decodeOriginalImage(context, localUri) ?: decodeThumb(thumbB64)
-        }?.asImageBitmap()
+        val original = withContext(Dispatchers.IO) { decodeOriginalImage(context, localUri) }
+        val shown = original ?: withContext(Dispatchers.IO) { decodeThumb(thumbB64) }
+        fromOriginal = original != null
+        bitmap = shown?.asImageBitmap()
     }
+
+    // 手势：捏合缩放、放大后拖动；双击在「适应屏幕 ↔ 2.5×」之间切换；未放大时单击关闭。
+    // 为什么要缩放：缩略图从 640px 提到 960px 后，光看「放满屏」很难判断是不是原图（用户反馈）。
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -2443,17 +2457,54 @@ private fun ImagePreviewDialog(localUri: String?, thumbB64: String, onDismiss: (
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.94f))
-                .clickable { onDismiss() },
+                .background(Color.Black.copy(alpha = 0.96f))
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 6f)
+                        offset = if (scale <= 1.01f) Offset.Zero else offset + pan
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { if (scale <= 1.01f) onDismiss() },
+                        onDoubleTap = {
+                            if (scale > 1.01f) {
+                                scale = 1f
+                                offset = Offset.Zero
+                            } else {
+                                scale = 2.5f
+                            }
+                        },
+                    )
+                },
             contentAlignment = Alignment.Center,
         ) {
             val shown = bitmap
             if (shown != null) {
                 Image(
                     bitmap = shown,
-                    contentDescription = "原图",
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    contentDescription = "图片原图",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y,
+                        ),
                     contentScale = ContentScale.Fit,
+                )
+                // 左上角如实标注：这到底是原图还是缩略图、多大、放到多少倍。
+                // （以前只能胉猜「糊了没糊」——尤其是缩略图提高到 960px 之后。）
+                Text(
+                    text = buildString {
+                        append(if (fromOriginal) "原图" else "缩略图（本机原图不可用）")
+                        append(" · ").append(shown.width).append('×').append(shown.height)
+                        if (scale > 1.01f) append(" · ").append(String.format("%.1f", scale)).append('×')
+                    },
+                    color = Color.White.copy(alpha = 0.88f),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
                 )
             } else {
                 CircularProgressIndicator(color = Color.White)
