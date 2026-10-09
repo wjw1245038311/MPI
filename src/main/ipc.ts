@@ -3082,6 +3082,12 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
   );
 
   const remoteBackend: RemoteBackend = {
+    // S6：手机拉一次就知道主机现在走哪几条中继、首选哪条（顺序 = 列表顺序）
+    getRelayInfo: () => ({
+      relayUrls: phoneTicketAddresses(),
+      relayMode: getConfig().relayMode,
+      activeChannelId: getConfig().activeChannelId || "",
+    }),
     listProjects: () => projectService.list(),
     listThreads: (projectId) => projectService.listThreads(projectId),
     // 唯一给手机的入口：带锚点就只回新增（增量快照），否则全量。

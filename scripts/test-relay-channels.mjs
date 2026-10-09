@@ -153,6 +153,10 @@ test("ipc/config 接线：通道列表驱动，旧的「主+备两条」写法�
   assert.match(cfg, /relayMode: RelayMode/, "配置项：选路模式");
   assert.match(ipc, /mobileRelayUrls: \(\) => phoneTicketAddresses\(\)/, "S3：票里要带整份有序地址列表");
   assert.match(readFileSync(new URL("../src/main/remote/host.ts", import.meta.url), "utf8"), /relayUrls/, "S3：RemoteHost 要把 relayUrls 写进票");
+  // S6：主机侧「通道列表下发」——类型系统已保证 backend 实现（RemoteBackend 必实现 getRelayInfo）
+  assert.match(readFileSync(new URL("../src/main/remote/protocol.ts", import.meta.url), "utf8"), /"host\.info"/, "S6：协议要有 host.info 请求");
+  assert.match(readFileSync(new URL("../src/main/remote/service.ts", import.meta.url), "utf8"), /case "host\.info"/, "S6：service 要分发 host.info");
+  assert.match(ipc, /getRelayInfo: \(\) => \(\{/, "S6：主进程要用通道列表回答 host.info");
 
   // S5：面板要有通道列表 UI，且旧的全局地址字段要拔掉（否则两个真相源）
   const panel = readFileSync(new URL("../src/renderer/src/components/RemotePanel.tsx", import.meta.url), "utf8");

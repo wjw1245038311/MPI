@@ -84,6 +84,11 @@ export interface RemoteBackend {
     workspaceName?: string;
   }>;
   respondUi(threadId: string, requestId: string, payload: Record<string, unknown>): Promise<unknown>;
+  /**
+   * S6：主机当前的**中继通道列表**（有序，首个 = 首选）。
+   * 手机连上/刷新时拉一次 → 按它选路 ⇒ 桌面改通道后手机只要重连就跟过去（不用重新扫码）。
+   */
+  getRelayInfo(): { relayUrls: string[]; relayMode: string; activeChannelId: string };
   /** S7 WebPush：store the device's PushSubscription and sync it to the relay. */
   storePushSubscription(deviceId: string, subscription: RemotePushSubscription): Promise<unknown>;
   /** Transcribe a phone voice memo (base64 WAV) via the local STT endpoint. */
@@ -220,6 +225,8 @@ export class RemoteService {
   private async dispatch(request: RemoteEnvelope, context: RemoteClientContext): Promise<RemoteEnvelope | null> {
     const payload = (request.payload || {}) as Record<string, unknown>;
     switch (request.type) {
+      case "host.info":
+        return responseFor(request, this.backend.getRelayInfo());
       case "projects.list":
         return responseFor(request, { projects: await this.backend.listProjects() });
       case "threads.list":

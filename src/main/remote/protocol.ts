@@ -14,6 +14,8 @@ export const REMOTE_PROTOCOL_VERSION = 1 as const;
 export const MAX_ENVELOPE_BYTES = 8_000_000;
 
 export const REMOTE_REQUEST_TYPES = [
+  /** S6：下拉主机当前的**中继通道列表**（手机刷新后按它选路，免重新扫码）。 */
+  "host.info",
   "projects.list",
   "threads.list",
   "thread.get",
