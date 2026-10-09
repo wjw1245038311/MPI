@@ -184,6 +184,14 @@ import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
 import { RelayUplink } from "./remote/relay-uplink";
 import { RelayFanout } from "./remote/relay-fanout";
+import {
+  effectiveChannels,
+  hostUrlFor,
+  ticketAddresses,
+  uplinkChannels,
+  type ChannelContext,
+  type RelayChannel,
+} from "./remote/relay-channels";
 import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } from "./remote/services";
 import { RemoteService, type RemoteBackend } from "./remote/service";
 import {
@@ -211,7 +219,6 @@ import {
   LAN_RELAY_BIND_HOST,
   LAN_RELAY_PORT,
   LOCAL_RELAY_HOST,
-  localRelayUrl,
   resolveLanRelayEntry,
   startLocalRelay,
   type LanRelayStatus,
@@ -284,12 +291,11 @@ interface BridgeHandle {
 const bridges = new Map<string, BridgeHandle>();
 let systemNotifications: SystemNotificationCenter | null = null;
 let activeRemoteHost: RemoteHost | null = null;
-let activeRelayUplink: RelayUplink | null = null;
 /**
- * 备用中继上行（阶段 ②「主机双中继上行」）：指向**本机中继**（`ws://127.0.0.1:<lanModePort>/ws`）。
- * 目的是 ECS 挂掉时，手机扫备用票仍能找到主机（否则主机不在那条路上，手机看到「离线」）。
+ * 通道 id → 上行实例（S2：由通道列表驱动）。
+ * 手动模式只启一条（选中那条）；自动模式每条启用的通道各一条。
  */
-let fallbackRelayUplink: RelayUplink | null = null;
+const channelUplinks = new Map<string, RelayUplink>();
 /** 聚合器：`RemoteHost` 只认一个 `RelayOutbound`，由它统一路由到多条上行。 */
 let relayFanout: RelayFanout | null = null;
 
@@ -1192,8 +1198,8 @@ export function stopRemoteHost(): void {
   activeRemoteHost = null;
   relayFanout?.stop();
   relayFanout = null;
-  activeRelayUplink = null;
-  fallbackRelayUplink = null;
+  for (const uplink of channelUplinks.values()) uplink.stop();
+  channelUplinks.clear();
   stopLanMode();
 }
 
@@ -1297,40 +1303,85 @@ function makeRelayUplink(
   });
 }
 
+/** S2：通道推导上下文（本机中继端口 + 局域网广告地址/内网 IP）。 */
+function relayChannelContext(): ChannelContext {
+  const cfg = getConfig();
+  const port = cfg.lanModePort && cfg.lanModePort > 0 ? cfg.lanModePort : LAN_RELAY_PORT;
+  const lan = lanModeStatus();
+  return { localRelayPort: port, lanPhoneUrl: lan.url, lanAddress: lan.address };
+}
+
 /**
- * 按配置启/停/重指中继上行（S1，docs/MOBILE-DESIGN.md §5）——
- * 现在是**两条**：主（`remoteRelayUrl`，如 ECS）+ 备用（本机中继 `ws://127.0.0.1:<lanModePort>/ws`）。
+ * S2：生效的通道列表 —— 配置里的通道列表，**或**从旧字段只读合成（从没保存过列表时）；
+ * 局域网通道由运行时合成并置顶（同网段最快，设备端按序选路时优先）。
+ */
+function effectiveRelayChannels(): RelayChannel[] {
+  const cfg = getConfig();
+  return effectiveChannels(
+    cfg.relayChannels,
+    {
+      remoteRelayUrl: cfg.remoteRelayUrl,
+      mobileRelayUrl: cfg.mobileRelayUrl,
+      remoteRelayToken: cfg.remoteRelayToken,
+      remoteRelayFallbackEnabled: cfg.remoteRelayFallbackEnabled,
+      mobileRelayFallbackUrl: cfg.mobileRelayFallbackUrl,
+    },
+    relayChannelContext(),
+  );
+}
+
+/** S2：本次配对票里给手机的地址（有序；手动=选中那条，自动=全部启用）。 */
+function phoneTicketAddresses(): string[] {
+  const cfg = getConfig();
+  return ticketAddresses(effectiveRelayChannels(), cfg.relayMode, cfg.activeChannelId);
+}
+
+/**
+ * 按配置启/停/重指中继上行（S1/S2）。
  *
- * 两条都通过 `RelayFanout` 交给 `RemoteHost`（它只认一个 `RelayOutbound`）：
- * 这样配对票在两条中继上都注册，手机扫哪张票都能找到主机。
+ * **手动模式**只挂「选中那条」（行为可预期、开销最小，与改造前等价）；
+ * **自动模式**每条启用的通道都挂上，配对票在每条中继上都注册 —— 设备端才有得选（S4）。
+ * 所有上行经 `RelayFanout` 交给 `RemoteHost`（它只认一个 `RelayOutbound`）。
  */
 function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
   const cfg = getConfig();
-  const port = cfg.lanModePort && cfg.lanModePort > 0 ? cfg.lanModePort : LAN_RELAY_PORT;
+  const ctx = relayChannelContext();
+  const channels = effectiveRelayChannels();
 
-  // ① 主上行（ECS / 用户自己的中继）
-  const wantPrimary = !!cfg.remoteRelayEnabled && !!cfg.remoteRelayUrl.trim();
-  if (!wantPrimary) {
-    activeRelayUplink?.stop();
-    activeRelayUplink = null;
-  } else if (!activeRelayUplink) {
-    activeRelayUplink = makeRelayUplink({ relayUrl: cfg.remoteRelayUrl, relayToken: cfg.remoteRelayToken }, remoteHost);
-  } else {
-    activeRelayUplink.configure(cfg.remoteRelayUrl);
+  // 全局开关仍生效：关闭 relay uplink 时一条也不挂
+  const wanted = cfg.remoteRelayEnabled ? uplinkChannels(channels, cfg.relayMode, cfg.activeChannelId) : [];
+
+  // ① 摘掉不再需要的上行
+  for (const [id, uplink] of [...channelUplinks]) {
+    if (wanted.some((channel) => channel.id === id)) continue;
+    uplink.stop();
+    channelUplinks.delete(id);
   }
 
-  // ② 备用上行：指向**本机中继**（S0 起常驻）；本机中继无准入，不带 token。
-  const wantFallback = !!cfg.remoteRelayFallbackEnabled;
-  if (!wantFallback) {
-    fallbackRelayUplink?.stop();
-    fallbackRelayUplink = null;
-  } else if (!fallbackRelayUplink) {
-    fallbackRelayUplink = makeRelayUplink({ relayUrl: localRelayUrl(port), instanceKey: "fallback" }, remoteHost);
-  } else {
-    fallbackRelayUplink.configure(localRelayUrl(port));
+  // ② 新建 / 重指（channel.id 作持久化实例键：多通道共存时各自独立的 deviceToken 与推送订阅）
+  //    同址去重：同一主机上行地址只允许挂一次——同 hostId 在同一中继注册两次会互相顶掉。
+  //    （保存时由 validateChannels 报错；这里是运行期兵底，防旧配置直接踩坑）
+  const hostUrlSeen = new Map<string, string>();
+  for (const channel of wanted) {
+    const hostUrl = hostUrlFor(channel, ctx);
+    if (!hostUrl) continue;
+    const takenBy = hostUrlSeen.get(hostUrl);
+    if (takenBy) {
+      appendDiagLog(`relay-channel skip id=${channel.id}（主机上行与 ${takenBy} 重复：${hostUrl}）`);
+      continue;
+    }
+    hostUrlSeen.set(hostUrl, channel.id);
+    let uplink = channelUplinks.get(channel.id);
+    if (!uplink) {
+      uplink = makeRelayUplink({ relayUrl: hostUrl, relayToken: channel.token, instanceKey: channel.id }, remoteHost);
+      channelUplinks.set(channel.id, uplink);
+    } else {
+      uplink.configure(hostUrl);
+    }
+    if (uplink.getStatus().state === "disabled") uplink.start();
   }
 
-  const uplinks = [activeRelayUplink, fallbackRelayUplink].filter((uplink): uplink is RelayUplink => !!uplink);
+  const uplinks = [...channelUplinks.values()];
   if (!uplinks.length) {
     relayFanout?.stop();
     relayFanout = null;
@@ -1344,9 +1395,9 @@ function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
   } else {
     relayFanout.setUplinks(uplinks);
   }
-  for (const uplink of uplinks) {
-    if (uplink.getStatus().state === "disabled") uplink.start();
-  }
+  appendDiagLog(
+    `relay-channels mode=${cfg.relayMode} uplinks=${uplinks.map((uplink) => uplink.instanceKey()).join(",") || "-"} ticketAddr=${phoneTicketAddresses().length}`,
+  );
 }
 
 export function registerIpc(getWin: () => BrowserWindow | null): void {
@@ -3437,9 +3488,8 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     stunUrls: [...BUILT_IN_REMOTE_STUN_URLS],
     sendToRenderer: send,
     service: remoteService,
-    // 配对票里给手机的地址（empty = 沿用 uplink 自己那条）。
-    // LAN 模式开着时优先给**内网地址**：手机就在同一网段，直连更快且不占公网。
-    mobileRelayUrl: () => lanModeStatus().url || getConfig().mobileRelayUrl || "",
+    // 配对票里给手机的地址（S2：由通道列表算出；局域网通道已置顶——同网段直连更快、不占公网）。
+    mobileRelayUrl: () => phoneTicketAddresses()[0] || "",
     // 同名且离线的旧绑定在配对时被替换（设置里可关）——网页端换网址就是新身份，
     // 不收敛会在「已信任设备」里堆一排一模一样的 MPI PWA。
     replaceSameNameOfflineDevice: () => getConfig().remoteReplaceSameNameOffline,
@@ -3531,19 +3581,23 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
   }
 
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());
-  ipcMain.handle("remote:getRelayStatus", () => ({
-    ...(relayFanout?.getStatus() ?? { state: "disabled" as const, relayUrl: getConfig().remoteRelayUrl, lastError: null }),
-    // 手机该连的地址（与主机→中继的 remoteRelayUrl 可以不同：手机没有 Tailscale，
-    // 必须给公网可达地址）。面板需要回显它。
-    mobileRelayUrl: getConfig().mobileRelayUrl || "",
-    // **本次配对票里实际会告诉手机的地址**——优先级与 RemoteHost 里完全一致：
-    // 局域网模式 > mobileRelayUrl > 主机自己那条 uplink 地址。面板用它做“手机会连哪”的显示与告警。
-    phoneRelayUrl: lanModeStatus().url || getConfig().mobileRelayUrl || getConfig().remoteRelayUrl,
-    // 备用通道（阶段 ②）：手机侧的备用公网地址 + 主机两条上行的实时状态。
-    phoneRelayFallbackUrl: getConfig().mobileRelayFallbackUrl || "",
-    fallbackEnabled: !!getConfig().remoteRelayFallbackEnabled,
-    channels: relayFanout?.statuses() ?? [],
-  }));
+  ipcMain.handle("remote:getRelayStatus", () => {
+    const cfg = getConfig();
+    const addresses = phoneTicketAddresses();
+    return {
+      ...(relayFanout?.getStatus() ?? { state: "disabled" as const, relayUrl: cfg.remoteRelayUrl, lastError: null }),
+      // 手机该连的地址（与主机→中继的上行可以不同：手机没有 Tailscale，必须给公网可达地址）。
+      mobileRelayUrl: cfg.mobileRelayUrl || "",
+      // **本次配对票里实际会告诉手机的地址**（S2：由通道列表算出，局域网优先）。
+      phoneRelayUrl: addresses[0] || "",
+      // S3 起票里会带整列表，这里先把后续地址暴露给面板。
+      phoneTicketAddresses: addresses,
+      phoneRelayFallbackUrl: addresses[1] || "",
+      relayMode: cfg.relayMode,
+      activeChannelId: cfg.activeChannelId || "",
+      channels: relayFanout?.statuses() ?? [],
+    };
+  });
   ipcMain.handle("remote:createPairing", (_e, args?: { autoApprove?: boolean }) => remoteHost.createPairingTicket({ autoApprove: args?.autoApprove === true }));
 
   /** 手机 App 安装包信息（relay 静态托管 /download/mpi-android.json）。在主进程取：
@@ -3690,6 +3744,10 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         "remoteRelayEnabled" in patch ||
         "remoteRelayToken" in patch ||
         "remoteRelayFallbackEnabled" in patch ||
+        "mobileRelayFallbackUrl" in patch ||
+        "relayChannels" in patch ||
+        "relayMode" in patch ||
+        "activeChannelId" in patch ||
         "lanModePort" in patch)
     ) {
       applyRelayUplinkConfig(remoteHost);

@@ -134,8 +134,8 @@ const ifaces = (...entries) => Object.fromEntries(entries);
   const ipc = readFileSync(new URL("../src/main/ipc.ts", import.meta.url), "utf8");
   assert.match(
     ipc,
-    /mobileRelayUrl: \(\) => lanModeStatus\(\)\.url \|\| getConfig\(\)\.mobileRelayUrl/,
-    "LAN 模式开着时配对票给内网地址；关着时回到配置里的公网中继",
+    /mobileRelayUrl: \(\) => phoneTicketAddresses\(\)\[0\]/,
+    "配对票地址改由通道列表算出（局域网通道已置顶；优先级语义见 test-relay-channels）",
   );
   const lan = readFileSync(new URL("../src/main/lan-mode.ts", import.meta.url), "utf8");
   assert.ok(!/remoteRelayToken/.test(lan), "LAN 模块不该碰中继准入 token");

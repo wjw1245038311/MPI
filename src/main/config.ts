@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 // Type-only imports (erased at compile time) — no runtime cycles.
 import type { FeishuChannelConfig, WeChatChannelConfig } from "./messaging/types";
 import type { AutoPolicy, PoolEntry } from "./model-autopilot";
+import type { RelayChannel, RelayMode } from "./remote/relay-channels";
 import { sanitizeWeChatConfig } from "./messaging/wechat-text";
 
 /**
@@ -264,6 +265,18 @@ export interface AppConfig {
    */
   mobileRelayFallbackUrl: string;
   /**
+   * 中继通道列表（实施计划-C档多通道.md §三）。
+   * **缺省 = 从旧字段合成**（`remoteRelayUrl` / `mobileRelayUrl` / `remoteRelayFallback*`，只读不写）；
+   * 用户在界面首次保存通道列表时才落盘，并写 `relayChannelsVersion`。
+   */
+  relayChannels?: RelayChannel[];
+  /** 选路模式：manual = 手动选通道（默认，与改造前行为一致）；auto = 每条启用通道都挂上，设备端选路。 */
+  relayMode: RelayMode;
+  /** 手动模式下选中的通道 id（空 = 取首条启用通道）。 */
+  activeChannelId?: string;
+  /** 通道配置结构版本（首次保存通道列表时写入；用于迁移与回滚）。 */
+  relayChannelsVersion?: number;
+  /**
    * 局域网直连模式（P2，见 docs/RELAY-SHARING.md §3.2）：桌面端自己起一个只绑局域网的中继，
    * 手机连内网地址 → 不依赖 Tailscale/公网，附件也走内网。**代价是没有推送通道**。
    *
@@ -462,6 +475,7 @@ const DEFAULTS: AppConfig = {
   remoteReplaceSameNameOffline: true,
   remoteRelayFallbackEnabled: true,
   mobileRelayFallbackUrl: "",
+  relayMode: "manual",
   lanModeEnabled: false,
   lanModePort: 9001,
   localRelayStaticDir: "",
@@ -471,6 +485,34 @@ let cached: AppConfig | null = null;
 let cachedDir = "";
 
 /** Coerces a persisted (or parsed) channel object into a safe shape. */
+/**
+ * 中继通道列表清洗（S2）。结构不对的条目一律丢弃，不猜内容。
+ * `kind` 决定主机上行怎么推导（见 remote/relay-channels.ts）。
+ */
+function sanitizeRelayChannels(value: unknown): RelayChannel[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: RelayChannel[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const id = typeof r.id === "string" ? r.id.trim().replace(/[^a-zA-Z0-9_-]/g, "") : "";
+    if (!id) continue;
+    const kind = r.kind === "local" || r.kind === "lan" ? r.kind : "remote";
+    out.push({
+      id,
+      label: typeof r.label === "string" && r.label.trim() ? r.label.trim().slice(0, 40) : id,
+      phoneUrl: typeof r.phoneUrl === "string" ? r.phoneUrl.trim() : "",
+      ...(typeof r.hostUrl === "string" && r.hostUrl.trim() ? { hostUrl: r.hostUrl.trim() } : {}),
+      ...(typeof r.token === "string" && r.token.trim() ? { token: r.token.trim() } : {}),
+      enabled: r.enabled !== false,
+      kind,
+    });
+  }
+  // 同 id 去重（保留首个）——id 是持久化键与实例键，重复会导致上行互相顶掉
+  const seen = new Set<string>();
+  return out.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
+}
+
 function sanitizeFeishuChannel(value: unknown): FeishuChannelConfig | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const c = value as Record<string, unknown>;
@@ -596,6 +638,12 @@ export function loadConfig(userDataDir: string): AppConfig {
             : DEFAULTS.lanModePort,
         localRelayStaticDir:
           typeof parsed.localRelayStaticDir === "string" ? parsed.localRelayStaticDir.trim() : DEFAULTS.localRelayStaticDir,
+        relayChannels: sanitizeRelayChannels(parsed.relayChannels),
+        relayMode: parsed.relayMode === "auto" ? "auto" : "manual",
+        ...(typeof parsed.activeChannelId === "string" && parsed.activeChannelId.trim()
+          ? { activeChannelId: parsed.activeChannelId.trim() }
+          : {}),
+        ...(typeof parsed.relayChannelsVersion === "number" ? { relayChannelsVersion: Math.floor(parsed.relayChannelsVersion) } : {}),
         remoteRelayEnabled: typeof parsed.remoteRelayEnabled === "boolean"
           ? parsed.remoteRelayEnabled
           : DEFAULTS.remoteRelayEnabled,
@@ -889,6 +937,12 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (typeof p.mobileRelayFallbackUrl === "string") out.mobileRelayFallbackUrl = p.mobileRelayFallbackUrl.trim();
   if (typeof p.lanModeEnabled === "boolean") out.lanModeEnabled = p.lanModeEnabled;
   if (typeof p.localRelayStaticDir === "string") out.localRelayStaticDir = p.localRelayStaticDir.trim();
+  if (Array.isArray(p.relayChannels)) {
+    out.relayChannels = sanitizeRelayChannels(p.relayChannels) ?? [];
+    out.relayChannelsVersion = 1;
+  }
+  if (p.relayMode === "manual" || p.relayMode === "auto") out.relayMode = p.relayMode;
+  if (typeof p.activeChannelId === "string") out.activeChannelId = p.activeChannelId.trim();
   if (typeof p.lanModePort === "number" && p.lanModePort > 0 && p.lanModePort < 65536) out.lanModePort = Math.floor(p.lanModePort);
   if (typeof p.remoteRelayEnabled === "boolean") out.remoteRelayEnabled = p.remoteRelayEnabled;
 

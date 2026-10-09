@@ -114,7 +114,7 @@ assert.match(remotePanel, /unreachableForPhone/, "必须能识别手机大概率
 assert.match(remotePanel, /phoneNeedsAttention/, "必须把“会给手机 tailnet 地址”的情况报出来");
 assert.match(
   readFileSync(resolve(root, "src", "main", "ipc.ts"), "utf8"),
-  /mobileRelayUrl: getConfig\(\)\.mobileRelayUrl/,
+  /mobileRelayUrl: cfg\.mobileRelayUrl \|\| ""/,
   "getRelayStatus 必须回传 mobileRelayUrl",
 );
 

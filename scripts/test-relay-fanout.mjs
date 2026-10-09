@@ -192,8 +192,8 @@ test("ipc 接线：主+备都进 fanout，推送/附件密钥走聚合器", asyn
 
   assert.match(ipc, /relayFanout = new RelayFanout\(/, "要有聚合器实例");
   assert.match(ipc, /remoteHost\.setRelay\(relayFanout\)/, "RemoteHost 拿到的必须是聚合器");
-  assert.match(ipc, /instanceKey: "fallback"/, "备用上行要用独立的持久化键（否则与主上行互相覆盖 deviceToken）");
-  assert.match(ipc, /localRelayUrl\(port\)/, "备用上行地址应由 lanModePort 推导到本机中继");
+  assert.match(ipc, /instanceKey: channel\.id/, "持久化实例键要来自通道 id（与主上行隔离，否则互相覆盖 deviceToken）");
+  assert.match(ipc, /hostUrlFor\(channel, ctx\)/, "主机上行地址由通道模型推导（本机通道 → 127.0.0.1:<port>）");
   assert.match(ipc, /remoteRelayFallbackEnabled/, "备用通道要受配置开关控制");
 
   for (const pat of [
