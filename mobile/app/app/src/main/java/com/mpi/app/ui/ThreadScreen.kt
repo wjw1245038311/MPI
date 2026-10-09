@@ -2279,7 +2279,11 @@ private fun ImageBlock(block: MessageBlock) {
         val origins = LocalImageOrigins.current
         val key = block.mediaName
         // 发送时那张图的本地 URI：有就打开它（原图），没有才退回放大缩略图。
-        val localUri = remember(key, origins) { key?.let { origins?.invoke(it) } }
+        //
+        // ⚠️ 这里**故意不用 `remember`**：图片是「乐观上屏」的，首次渲染时 `sentImageUris`
+        // 里还没有这个 key（要等上传完成），缓存住那个 null 就永远看不到原图了 ——
+        // 2026-10-10 真机就是这样（代码链看着全对，点开却总是缩略图）。map 查一次很便宜。
+        val localUri = key?.let { origins?.invoke(it) }
         var showingOriginal by remember { mutableStateOf(false) }
         Image(
             bitmap = bitmap,
