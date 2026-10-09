@@ -271,10 +271,13 @@ internal fun nextQuality(rawBytes: Int, quality: Double, maxBytes: Int = MAX_RAW
 }
 
 /** 缩略图顶点（P3）：快照里只发它，原图客户端按 key 拉。 */
-const val THUMB_EDGE = 640
+// 2026-10-10：640 → 960。附件通道打通后，图片气泡**只剩缩略图**可看（原图在主机对象库），
+// 640px 在手机上明显发糊。不能再大：主机侧每个快照的图片预算是 400KB（ipc.ts 的 imageBudget），
+// 这里一起调到了 900KB —— 再往上会让每次刷新的快照明显变胖（移动网络下刷得慢）。
+const val THUMB_EDGE = 960
 
 /** 缩略图的**原始字节**上限：base64 后约 200k 字符，远小于主机单张上限。 */
-const val THUMB_MAX_BYTES = 150 * 1024
+const val THUMB_MAX_BYTES = 220 * 1024
 
 /** 把位图最长边缩到 [maxEdge] 以内（已够小就原样返回）。 */
 internal fun scaleToMaxEdge(bitmap: Bitmap, maxEdge: Int): Bitmap {

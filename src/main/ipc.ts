@@ -1903,7 +1903,11 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     // message budget. `text` remains available for previews and compatibility,
     // while text blocks preserve the actual thinking/tool/reply order in the
     // mobile renderer.
-    let imageBudget = 400_000;
+    // 每个快照里图片（缩略图 / 内联小原图）的总预算。
+    // 2026-10-10：400KB → 900KB —— 手机端缩略图从 640px/150KB 提到 960px/220KB 后，
+    // 旧预算一张图就吃光了，同屏后面的图会直接没有画面。再往上要慎重：
+    // 快照是每次刷新都要传的，预算是「刷新速度 ↔ 图片清晰度」的直接互换。
+    let imageBudget = 900_000;
     /**
      * 读缩略图并转 base64（P3）；读不到 → null（调用方回落到「内联小原图」那条老路）。
      *
@@ -3317,11 +3321,11 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     fileTree: (projectId, relativePath) => filePreviewService.tree(projectId, relativePath),
     filePreview: (projectId, relativePath) => filePreviewService.preview(projectId, relativePath),
     issueAttachmentUrl: async (threadId, deviceId, input) => {
+      // 直连不可用时**仍然签发令牌**，只是不给 URL（客户端据此改走中继分片
+      // `attachment.upload`）。两条路共用同一套令牌与落盘/校验逻辑，所以没有理由
+      // 因为「这台机器没有公网入口」就把整个附件上传拒掉——新装的机器（如 MiniBox）
+      // 正是这种情况，旧那套公网隧道又已废弃（2026-10-09）。
       const base = await ensureAttachmentServer();
-      if (!base) {
-        // 直连不可用（不在 tailnet / CLI 读不到主机名）：客户端据此走内联或中继分片。
-        throw new RemoteProtocolError("DIRECT_UNAVAILABLE", "Direct attachment transfer is unavailable on this host");
-      }
       if (input.mode === "read") {
         const name = input.name || "";
         // 作用域沿用按需拉取那一套（只能取本会话引用过的附件）。
@@ -3330,7 +3334,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         }
         const token = attachmentTokens.mint({ mode: "read", threadId, deviceId, name, ...(input.mimeType ? { mimeType: input.mimeType } : {}) });
         appendDiagLog(`attachment-direct mint read name=${name.slice(0, 36)} dev=${deviceId.slice(0, 12)}`);
-        return { url: `${base}/att/${token.token}`, token: token.token, name, expiresAt: token.expiresAt, ...attachmentEncField(deviceId) };
+        return { url: base ? `${base}/att/${token.token}` : "", token: token.token, name, expiresAt: token.expiresAt, ...attachmentEncField(deviceId) };
       }
       // 写入令牌。
       // 内容寻址（P1，见 docs/attachment-content-addressing.md）：客户端**先算好**整文件 SHA-256 再 mint →
@@ -3385,7 +3389,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         `attachment-direct mint write ${contentKey ? `key=${contentKey.slice(0, 16)}` : `name=${name.slice(0, 36)}`} dev=${deviceId.slice(0, 12)} size=${input.size ?? "?"}`,
       );
       return {
-        url: `${base}/att/${token.token}`,
+        url: base ? `${base}/att/${token.token}` : "",
         token: token.token,
         name,
         ...(contentKey ? { key: `sha256:${contentKey}`, deduped: false } : {}),
