@@ -60,6 +60,11 @@ export interface RemoteHostOptions {
    * 按 TLS 握手指纹掐掉安卓的 wss）可以不同；两者指向**同一个中继进程**即可互通。
    */
   mobileRelayUrl?: () => string;
+  /**
+   * S3：配对票里给手机的**有序地址列表**（局域网 → 主 → 备；见 remote/relay-channels.ts）。
+   * 存在时：`relayUrls` 整列表给出，`relayUrl` 仍保留 = 首项（旧客户端只认单值）。
+   */
+  mobileRelayUrls?: () => string[];
   /** 同名且离线的旧记录是否在配对时被新设备替换（默认 true；可在设置里关掉）。 */
   replaceSameNameOfflineDevice?: () => boolean;
 }
@@ -257,6 +262,9 @@ export class RemoteHost {
     this.options.relay?.sendControl({ type: "ticket.register", ticket, expiresAt });
     const relay = this.options.relay;
     const phoneRelayUrl = this.options.mobileRelayUrl?.() || (relay?.relayUrl && relay.relayUrl() ? relay.relayUrl() : "");
+    // S3：有序地址列表（旧客户端读 relayUrl 单值，新客户端可读 relayUrls 并按序选路）。
+    const listed = (this.options.mobileRelayUrls?.() ?? []).map((url) => (url || "").trim()).filter(Boolean);
+    const phoneRelayUrls = listed.length ? listed : phoneRelayUrl ? [phoneRelayUrl] : [];
     return {
       hostId: this.identity.hostId,
       hostName: hostname(),
@@ -264,7 +272,8 @@ export class RemoteHost {
       hostPublicKeyPem: this.identity.publicKeyPem,
       signalingUrl: this.options.signalingUrl,
       stunUrls: [...this.options.stunUrls],
-      ...(phoneRelayUrl ? { relayUrl: phoneRelayUrl } : {}),
+      ...(phoneRelayUrls[0] ? { relayUrl: phoneRelayUrls[0] } : {}),
+      ...(phoneRelayUrls.length ? { relayUrls: phoneRelayUrls } : {}),
       ticket,
       expiresAt,
       protocol: 1,

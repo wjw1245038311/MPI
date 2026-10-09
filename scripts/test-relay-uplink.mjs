@@ -227,6 +227,10 @@ async function main() {
     const device = makeDeviceIdentity();
     const ticketInfo = remoteHost.createPairingTicket();
     assert.ok(ticketInfo.ticket);
+    // S3：票里带**有序地址列表**；旧字段 relayUrl 仍保留 = 列表首项（旧客户端只认单值）
+    assert.ok(Array.isArray(ticketInfo.relayUrls) && ticketInfo.relayUrls.length >= 1, "票里应带 relayUrls 列表");
+    assert.equal(ticketInfo.relayUrl, ticketInfo.relayUrls[0], "relayUrl 必须 = relayUrls 首项");
+    assert.ok(ticketInfo.relayUrls.every((u) => typeof u === "string" && u.startsWith("ws")), "列表里应全是 ws(s) 地址");
 
     step("starting pairing chain");
     const phone = new Phone("phone", url);

@@ -3490,6 +3490,8 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     service: remoteService,
     // 配对票里给手机的地址（S2：由通道列表算出；局域网通道已置顶——同网段直连更快、不占公网）。
     mobileRelayUrl: () => phoneTicketAddresses()[0] || "",
+    // S3：同一份列表整份给票（旧客户端读 relayUrl 单值，新客户端按序选路）。
+    mobileRelayUrls: () => phoneTicketAddresses(),
     // 同名且离线的旧绑定在配对时被替换（设置里可关）——网页端换网址就是新身份，
     // 不收敛会在「已信任设备」里堆一排一模一样的 MPI PWA。
     replaceSameNameOfflineDevice: () => getConfig().remoteReplaceSameNameOffline,

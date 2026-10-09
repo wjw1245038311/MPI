@@ -151,6 +151,8 @@ test("ipc/config 接线：通道列表驱动，旧的「主+备两条」写法�
   assert.match(ipc, /instanceKey: channel\.id/, "持久化实例键必须来自通道 id（多通道各自独立 deviceToken）");
   assert.match(cfg, /relayChannels\?: RelayChannel\[\]/, "配置项：通道列表");
   assert.match(cfg, /relayMode: RelayMode/, "配置项：选路模式");
+  assert.match(ipc, /mobileRelayUrls: \(\) => phoneTicketAddresses\(\)/, "S3：票里要带整份有序地址列表");
+  assert.match(readFileSync(new URL("../src/main/remote/host.ts", import.meta.url), "utf8"), /relayUrls/, "S3：RemoteHost 要把 relayUrls 写进票");
 
   // S5：面板要有通道列表 UI，且旧的全局地址字段要拔掉（否则两个真相源）
   const panel = readFileSync(new URL("../src/renderer/src/components/RemotePanel.tsx", import.meta.url), "utf8");
