@@ -57,6 +57,15 @@ const val DIRECT_REQUEST_TIMEOUT_MS = 20_000L
 private const val DIRECT_CHUNK_TIMEOUT_MS = 60_000L
 
 /**
+ * 中继分片上传的片大小：3MB 明文 → base64 后 4MB。
+ * 中继单帧上限 8MB、主机侧对 base64 字符数的硬限是 6M，这个值两边都留了余量。
+ */
+private const val RELAY_UPLOAD_CHUNK_BYTES = 3 * 1024 * 1024
+
+/** 中继分片单片超时：每片 3MB 走上行，给足时间（比直连宽松）。 */
+private const val RELAY_CHUNK_TIMEOUT_MS = 120_000L
+
+/**
  * 同时在途的分片数。
  *
  * 为什么要并发：单片 4MB、串行发，吞吐被「单连接 / RTT」卡死——手机走 Tailscale 中继时
@@ -172,10 +181,13 @@ internal fun parseDirectTarget(payload: JsonElement?): DirectTarget? {
     // name 为空时只有在「去重命中」时才是合法的（那时主机不回 url，只回 key/name）。
     val deduped = runCatching { direct["deduped"]?.jsonPrimitive?.booleanOrNull }.getOrNull()
     if (name.isNullOrEmpty()) return null
-    if (url.isNullOrEmpty() && deduped != true) return null
+    val token = runCatching { direct["token"]?.jsonPrimitive?.contentOrNull }.getOrNull().orEmpty()
+    // `url` 为空有两种合法情况：① 内容去重命中（字节已在主机）；② 主机没有公网直连入口
+    // （新装的机器），此时只给令牌，客户端改走中继分片 `attachment.upload`。
+    if (url.isNullOrEmpty() && deduped != true && token.isEmpty()) return null
     return DirectTarget(
         url = url.orEmpty(),
-        token = runCatching { direct["token"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: "",
+        token = token,
         name = name,
         expiresAt = runCatching { direct["expiresAt"]?.jsonPrimitive?.longOrNull }.getOrNull() ?: 0L,
         enc = runCatching { direct["enc"]?.jsonPrimitive?.contentOrNull }.getOrNull(),
@@ -292,6 +304,10 @@ class DirectAttachments(
         // 封面也不用重传：主机上的那个对象本来就有封面（首次上传时落的）。
         if (target.deduped == true) return target.name
 
+        // 主机没有公网直连入口（新装机很常见，如 MiniBox）→ 改走中继分片。
+        // 视频封面是观感优化，中继路径不送（消息里还会再带一份缩略图）。
+        if (target.url.isEmpty()) return relayUploadChunks(target, size, open, onProgress)
+
         // 分片上传 + 末片屏障（与图/音/文件共用同一套实现）。
         val outcome = putAllChunks(target, size, open, sessionKey, onProgress)
         if (outcome.problem != null) throw DirectUploadException(outcome.problem)
@@ -340,6 +356,12 @@ class DirectAttachments(
         if (target.deduped == true) {
             return MediaUpload(target.name, deduped = true, target.workspacePath, target.workspaceName)
         }
+        // 主机没有公网直连入口 → 改走中继分片（授权/校验与直连完全相同）。
+        if (target.url.isEmpty()) {
+            val uploaded = relayUploadChunks(target, size, open, onProgress)
+            return MediaUpload(uploaded, deduped = false, target.workspacePath, target.workspaceName)
+        }
+
         val outcome = putAllChunks(target, size, open, sessionKey, onProgress)
         if (outcome.problem != null) throw DirectUploadException(outcome.problem)
         return MediaUpload(
@@ -356,6 +378,43 @@ class DirectAttachments(
      * 抽出来是因为媒体（P3）与视频走的是同一套并发/屏障/加密语义——复制一份就等于以后
      * 修一处忘一处（那次「a+ 追加导致落盘错位」的教训还包括「两处实现很容易漂移」）。
      */
+    /**
+     * 中继分片上传（2026-10-09）：字节走**加密通道**送给主机，而不是 HTTP 直连。
+     *
+     * 为什么需要：直连要求主机有公网可达的 HTTP 入口（Tailscale serve / 反向隧道 / 已备案域名）。
+     * 新装的机器（如 MiniBox）什么都没有；而企业网限速卡的是主机**单条 TCP 上行**，走中继时
+     * 数据方向对主机是**下行**（实测 11MB/s），所以这条不但能用，还更快。
+     *
+     * 授权与落盘校验与直连完全相同 —— 用的就是刚 mint 到的那把写令牌，两条路甚至可以混着续传。
+     * 片大小 3MB（base64 后 4MB），稳稳落在中继单帧 8MB 与主机的 6M 字符校验里。
+     */
+    private suspend fun relayUploadChunks(
+        target: DirectTarget,
+        size: Long,
+        open: () -> InputStream,
+        onProgress: (Long, Long) -> Unit,
+    ): String {
+        if (target.token.isEmpty()) throw DirectUploadException("主机没有签发上传令牌，无法走中继上传")
+        val buffer = ByteArray(RELAY_UPLOAD_CHUNK_BYTES)
+        open().use { input ->
+            var offset = 0L
+            while (offset < size) {
+                val read = input.read(buffer)
+                if (read <= 0) throw DirectUploadException("读取文件中断（已传 $offset / $size 字节）")
+                val payload = buildJsonObject {
+                    put("token", target.token)
+                    put("offset", offset)
+                    put("data", android.util.Base64.encodeToString(buffer, 0, read, android.util.Base64.NO_WRAP))
+                    put("last", offset + read >= size)
+                }
+                request("attachment.upload", payload, null, RELAY_CHUNK_TIMEOUT_MS)
+                offset += read
+                onProgress(offset, size)
+            }
+        }
+        return target.name
+    }
+
     private suspend fun putAllChunks(
         target: DirectTarget,
         size: Long,
