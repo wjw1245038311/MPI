@@ -272,6 +272,11 @@ export interface AppConfig {
   lanModeEnabled: boolean;
   /** 局域网中继端口（默认 9001）。 */
   lanModePort: number;
+  /**
+   * 本机中继的静态目录（托管网页 PWA / 下载页）。空 = 不托管。
+   * 设为目录后，经 CF 隧道的 `https://relay.<域名>/` 就是 PWA 界面，同域名 `/ws` 是数据通道。
+   */
+  localRelayStaticDir: string;
   /** Feishu message channel (导航栏 → 消息接入). Absent = off. The app secret
    * stays local to this machine and is never part of backup imports. */
   feishuChannel?: FeishuChannelConfig;
@@ -459,6 +464,7 @@ const DEFAULTS: AppConfig = {
   mobileRelayFallbackUrl: "",
   lanModeEnabled: false,
   lanModePort: 9001,
+  localRelayStaticDir: "",
 };
 
 let cached: AppConfig | null = null;
@@ -588,6 +594,8 @@ export function loadConfig(userDataDir: string): AppConfig {
           typeof parsed.lanModePort === "number" && parsed.lanModePort > 0 && parsed.lanModePort < 65536
             ? Math.floor(parsed.lanModePort)
             : DEFAULTS.lanModePort,
+        localRelayStaticDir:
+          typeof parsed.localRelayStaticDir === "string" ? parsed.localRelayStaticDir.trim() : DEFAULTS.localRelayStaticDir,
         remoteRelayEnabled: typeof parsed.remoteRelayEnabled === "boolean"
           ? parsed.remoteRelayEnabled
           : DEFAULTS.remoteRelayEnabled,
@@ -880,6 +888,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (typeof p.remoteRelayFallbackEnabled === "boolean") out.remoteRelayFallbackEnabled = p.remoteRelayFallbackEnabled;
   if (typeof p.mobileRelayFallbackUrl === "string") out.mobileRelayFallbackUrl = p.mobileRelayFallbackUrl.trim();
   if (typeof p.lanModeEnabled === "boolean") out.lanModeEnabled = p.lanModeEnabled;
+  if (typeof p.localRelayStaticDir === "string") out.localRelayStaticDir = p.localRelayStaticDir.trim();
   if (typeof p.lanModePort === "number" && p.lanModePort > 0 && p.lanModePort < 65536) out.lanModePort = Math.floor(p.lanModePort);
   if (typeof p.remoteRelayEnabled === "boolean") out.remoteRelayEnabled = p.remoteRelayEnabled;
 

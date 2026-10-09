@@ -1248,7 +1248,17 @@ function applyLanMode(): LanRelayStatus {
     resourcesPath: process.resourcesPath || "",
     appPath: app.getAppPath(),
   });
-  lanRelay = startLocalRelay({ entryPath, port, bindHost, advertiseLan, log: appendDiagLog });
+  lanRelay = startLocalRelay({
+    entryPath,
+    port,
+    bindHost,
+    advertiseLan,
+    // VAPID 密钥固定落 userData：写在安装目录的话，应用一更新就换密钥 → 推送订阅全失效。
+    vapidKeyFile: join(getConfigDir(), "relay-vapid.json"),
+    // 静态目录（托管 PWA / 下载页）：空 = 不托管。
+    staticDir: cfg.localRelayStaticDir || "",
+    log: appendDiagLog,
+  });
   appendDiagLog(
     `local-relay ${lanRelay.status.enabled ? "on" : "failed"} bind=${bindHost}:${port}` +
       `${lanRelay.status.url ? ` lan=${lanRelay.status.url}` : ""}` +
@@ -3683,6 +3693,10 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
         "lanModePort" in patch)
     ) {
       applyRelayUplinkConfig(remoteHost);
+    }
+    // 本机中继的静态目录/端口变了要重启子进程（VAPID 路径固定指向 userData，不需重启）。
+    if (patch && ("localRelayStaticDir" in patch || "lanModePort" in patch)) {
+      applyLanMode();
     }
     if ((next.piCliPath || "") !== (prevCli || "")) {
       resetPiRuntime();

@@ -156,6 +156,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   /** 备用通道（阶段 ②）：手机侧备用公网地址 + 开关。 */
   const [mobileRelayFallbackUrl, setMobileRelayFallbackUrl] = useState("");
   const [fallbackEnabled, setFallbackEnabled] = useState(true);
+  /** 本机中继静态目录（托管 PWA / 下载页；空 = 不托管）。 */
+  const [localRelayStaticDir, setLocalRelayStaticDir] = useState("");
   const [busy, setBusy] = useState(false);
 
   const refresh = async (syncRelayUrl = true) => {
@@ -182,8 +184,9 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     void (async () => {
       // 「同名离线自动替换」开关的当前值存在 config 里（不在 remote 状态里）
       try {
-        const cfg = (await window.pi.app.getConfig()) as { remoteReplaceSameNameOffline?: boolean };
+        const cfg = (await window.pi.app.getConfig()) as { remoteReplaceSameNameOffline?: boolean; localRelayStaticDir?: string };
         if (typeof cfg?.remoteReplaceSameNameOffline === "boolean") setReplaceSameName(cfg.remoteReplaceSameNameOffline);
+        if (typeof cfg?.localRelayStaticDir === "string") setLocalRelayStaticDir(cfg.localRelayStaticDir);
       } catch { /* IPC 未就绪 */ }
     })();
     const timer = window.setInterval(() => void refresh(false), 1500);
@@ -260,6 +263,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         mobileRelayUrl: mobileRelayUrl.trim(),
         mobileRelayFallbackUrl: mobileRelayFallbackUrl.trim(),
         remoteRelayFallbackEnabled: fallbackEnabled,
+        localRelayStaticDir: localRelayStaticDir.trim(),
       });
       // 二维码里存的是**生成那一刻**的地址——改了地址后旧码必须作废，
       // 否则用户接着扫屏上那张旧码，手机上仍然用老地址（典型症状：连接超时、
@@ -410,6 +414,21 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
           {zh
             ? "主机同时挂在主中继与本机中继上（本机中继默认 ws://127.0.0.1:9001/ws，应用启动即运行）。主中继挂了时，手机改用这条地址即可——不必再碰这台电脑。留空 = 主机仍在备用通道在线，只是不把地址写进配对票。"
             : "The host stays registered on both the primary and the local relay (ws://127.0.0.1:9001/ws, always running). If the primary dies, the phone switches to this address — no need to touch this machine."}
+        </div>
+        <label className="set-addprov-field wide">
+          <span>{zh ? "本机中继静态目录（托管 PWA / 下载页；可留空）" : "Local relay static dir (hosts the PWA; optional)"}</span>
+          <input
+            className="set-input"
+            value={localRelayStaticDir}
+            onChange={(event) => setLocalRelayStaticDir(event.target.value)}
+            placeholder={zh ? "如 E:\\MyWorkspace\\Software\\cloudflared\\static" : "e.g. E:\\path\\to\\static"}
+            spellCheck={false}
+          />
+        </label>
+        <div className="set-hint">
+          {zh
+            ? "填了目录后，「备用公网地址」那个域名打开就是 PWA 界面（同域名 /ws 是数据通道）——ECS 退场后网页版的界面由这里接管。留空 = 不托管。"
+            : "With a directory set, the fallback domain serves the PWA UI (same origin /ws is the data channel) — this replaces the ECS-hosted PWA once it retires."}
         </div>
         {relayStatus?.channels?.length ? (
           <div className="set-hint">

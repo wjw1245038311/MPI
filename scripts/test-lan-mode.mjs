@@ -199,4 +199,44 @@ const ifaces = (...entries) => Object.fromEntries(entries);
   console.log("ok 6 - 常驻本机中继：绑回环/全网卡，广告与否只影响手机地址");
 }
 
+// ---- 7. VAPID 密钥与静态目录要显式注入子进程（否则应用更新即失效推送）----
+{
+  const calls = [];
+  const fakeSpawn = (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    return { stdout: { on() {} }, stderr: { on() {} }, on() {}, kill() {} };
+  };
+  const entry = join(tmpdir(), "fake-vapid-relay-entry.mjs");
+  writeFileSync(entry, "// fake\n");
+  try {
+    startLocalRelay({
+      entryPath: entry,
+      bindHost: "127.0.0.1",
+      advertiseLan: false,
+      spawnImpl: fakeSpawn,
+      interfaces: {},
+      vapidKeyFile: "C:/u/relay-vapid.json",
+      staticDir: "C:/static",
+    });
+    const env = calls.at(-1).opts.env;
+    assert.equal(env.RELAY_VAPID_KEY_FILE, "C:/u/relay-vapid.json", "VAPID 密钥路径要传给子进程");
+    assert.equal(env.RELAY_STATIC_DIR, "C:/static", "静态目录（托管 PWA）要传给子进程");
+
+    startLocalRelay({ entryPath: entry, spawnImpl: fakeSpawn, interfaces: {} });
+    assert.equal(calls.at(-1).opts.env.RELAY_STATIC_DIR, "", "不传静态目录 = 不托管");
+  } finally {
+    rmSync(entry, { force: true });
+  }
+
+  // 源码级守卫：主进程必须把 VAPID 指到 userData，而不是安装目录（更新即换密钥 → 推送全失效）
+  const { readFileSync } = await import("node:fs");
+  const ipc = readFileSync(new URL("../src/main/ipc.ts", import.meta.url), "utf8");
+  assert.match(
+    ipc,
+    /vapidKeyFile: join\(getConfigDir\(\), "relay-vapid\.json"\)/,
+    "本机中继的 VAPID 密钥必须落在 userData 下",
+  );
+  console.log("ok 7 - VAPID 密钥与静态目录：显式注入子进程，密钥落 userData");
+}
+
 console.log("lan-mode tests passed");

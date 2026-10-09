@@ -128,6 +128,14 @@ export interface StartLocalRelayOptions {
    * 局域网模式的旧入口 `startLanRelay` 传 true 以保持原语义。
    */
   requireLanAddress?: boolean;
+  /**
+   * Web Push 的 VAPID 密钥文件路径。**必须指到 userData 下**：
+   * 中继默认把它写在脚本旁边（打包后在安装目录 `resources/relay/data/`），
+   * 而应用一更新就换密钥 → 手机上已有推送订阅全部失效（订阅与密钥绑定）。
+   */
+  vapidKeyFile?: string;
+  /** 静态目录（托管 PWA / 下载页）。空 = 不托管。 */
+  staticDir?: string;
   /** 注入用（测试里换成假实现，不真的拉子进程）。 */
   spawnImpl?: typeof spawn;
   interfaces?: NodeJS.Dict<NetworkInterfaceInfo[]>;
@@ -180,8 +188,10 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
         // 本机中继不需要公网明文监听，也不需要准入列表。
         RELAY_PLAIN_PORT: "",
         RELAY_HOST_TOKENS: "",
-        // 静态目录留空：网页 PWA 的静态托管由调用方（CF 路）单独配置后再打开。
-        RELAY_STATIC_DIR: "",
+        // VAPID 密钥必须落在 userData（见选项注释）：否则应用更新即换密钥、推送订阅全失效。
+        ...(options.vapidKeyFile ? { RELAY_VAPID_KEY_FILE: options.vapidKeyFile } : {}),
+        // 静态目录：托管 PWA / 下载页（CF 路下同一域名既是界面又是通道）。
+        RELAY_STATIC_DIR: options.staticDir || "",
       },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
