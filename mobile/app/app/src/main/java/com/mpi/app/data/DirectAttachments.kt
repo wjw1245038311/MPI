@@ -310,7 +310,9 @@ class DirectAttachments(
 
         // 分片上传 + 末片屏障（与图/音/文件共用同一套实现）。
         val outcome = putAllChunks(target, size, open, sessionKey, onProgress)
-        if (outcome.problem != null) throw DirectUploadException(outcome.problem)
+        // 直连失败（入口不可达 / 被防火墙拦 / 隧道已废弃……）→ **回落中继分片**再试一次。
+        // 不回落的话，只要主机那个公网入口是死的，大附件就彻底发不出去（2026-10-09 的实测现场）。
+        if (outcome.problem != null) return relayUploadChunks(target, size, open, onProgress)
 
         // 封面是观感优化：送失败不算上传失败（消息里还会再带一份，主机侧幂等）。
         if (posterB64 != null) {
@@ -363,7 +365,11 @@ class DirectAttachments(
         }
 
         val outcome = putAllChunks(target, size, open, sessionKey, onProgress)
-        if (outcome.problem != null) throw DirectUploadException(outcome.problem)
+        // 直连失败 → 回落中继分片（同上：主机入口挂着时这是唯一能走通的路）。
+        if (outcome.problem != null) {
+            val uploaded = relayUploadChunks(target, size, open, onProgress)
+            return MediaUpload(uploaded, deduped = false, target.workspacePath, target.workspaceName)
+        }
         return MediaUpload(
             name = target.name,
             deduped = false,
