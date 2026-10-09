@@ -57,6 +57,15 @@ export interface RelayUplinkOptions {
    */
   relayToken?: string;
   hostId: string;
+  /**
+   * 实例标识：多中继（主 + 备用）共存时，用它区分持久化文件
+   * （`remote-relay-tokens[.<key>].json` / `remote-push-subscriptions[.<key>].json`）。
+   *
+   * 为什么不用 URL 派生键：`configure()` 会改 URL（用户改中继地址），一旦按 URL 分文件，
+   * 改地址就等于丢了 deviceToken（设备要重新配对）。显式键与地址解耦。
+   * **不传 = 沿用旧文件名**（单中继安装零迁移）。
+   */
+  instanceKey?: string;
   /** userData dir — device tokens persist in remote-relay-tokens.json. */
   userDataDir: string;
   /** Host X25519 key pair (identity schema v2) for E2E session derivation. */
@@ -135,6 +144,21 @@ export class RelayUplink implements RelayOutbound {
 
   getStatus(): RelayUplinkStatus {
     return { state: this.state, relayUrl: this.options.relayUrl, lastError: this.lastError };
+  }
+
+  /** 实例标识（多中继共存时用于日志/路由诊断）。 */
+  instanceKey(): string {
+    return this.options.instanceKey || "primary";
+  }
+
+  /** 该设备当前是否**正连接在本条中继上**（fanout 据此路由。见下面 deviceToConnection）。 */
+  isDeviceConnected(deviceId: string): boolean {
+    return !!deviceId && this.deviceToConnection.has(deviceId);
+  }
+
+  /** 本实例是否握有该设备的推送订阅（订阅是 VAPID 绑定的，只有持有它的中继能投递）。 */
+  hasPushSubscription(deviceId: string): boolean {
+    return !!deviceId && !!this.loadPushSubscriptions()[deviceId];
   }
 
   // --- RelayOutbound -----------------------------------------------------------
@@ -531,8 +555,14 @@ export class RelayUplink implements RelayOutbound {
 
   // --- token store --------------------------------------------------------------------
 
+  /** 持久化文件后缀：不传 instanceKey 时为空串（沿用旧文件名，零迁移）。 */
+  private fileSuffix(): string {
+    const key = (this.options.instanceKey || "").trim();
+    return key ? `.${key.replace(/[^a-zA-Z0-9_-]/g, "")}` : "";
+  }
+
   private tokenFile(): string {
-    return join(this.options.userDataDir, "remote-relay-tokens.json");
+    return join(this.options.userDataDir, `remote-relay-tokens${this.fileSuffix()}.json`);
   }
 
   private loadTokens(): Record<string, string> {
@@ -561,7 +591,7 @@ export class RelayUplink implements RelayOutbound {
   private pushSubs: Record<string, RemotePushSubscription> | null = null;
 
   private pushSubFile(): string {
-    return join(this.options.userDataDir, "remote-push-subscriptions.json");
+    return join(this.options.userDataDir, `remote-push-subscriptions${this.fileSuffix()}.json`);
   }
 
   private loadPushSubscriptions(): Record<string, RemotePushSubscription> {
