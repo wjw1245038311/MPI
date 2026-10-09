@@ -207,9 +207,11 @@ import { snapshotImagePayload } from "./remote/image-thumbs";
 import { fillVideoPosters } from "./remote/video-poster";
 import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, agentImageFor, findVideoPoster, hasObject, isContentKey, isVideoFile, materializeIntoWorkspace, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeThumbnail, storeVideoPoster } from "./chat-attachment-store";
 import {
+  LAN_RELAY_BIND_HOST,
   LAN_RELAY_PORT,
+  LOCAL_RELAY_HOST,
   resolveLanRelayEntry,
-  startLanRelay,
+  startLocalRelay,
   type LanRelayStatus,
 } from "./lan-mode";
 import { createAttachmentServer } from "./remote/attachment-server";
@@ -1184,11 +1186,14 @@ export function stopRemoteHost(): void {
   stopLanMode();
 }
 
-// ---- 局域网直连模式（P2，见 docs/RELAY-SHARING.md §3.2）------------------------------
-// 桌面端自己起一个中继子进程，手机连它的内网地址：不依赖 Tailscale 与公网，附件走内网。
-let lanRelay: ReturnType<typeof startLanRelay> | null = null;
+// ---- 本机中继（常驻）与局域网直连模式（见 docs/RELAY-SHARING.md §3.2）------------------
+// 桌面端自己起一个中继子进程，它是**两种入口共用的同一个进程**：
+//   · 内网入口 ws://<内网IP>:<port>/ws   —— 手机同网段时走它（最快），仅在 LAN 模式开启时广告
+//   · 本机入口 ws://127.0.0.1:<port>/ws  —— CF 隧道 / 主机上行 #2 走它（公网保底路），总是可用
+// 因此进程**常驻**（应用启动即起）；`lanModeEnabled` 只决定「绑定地址」与「要不要广告内网地址」。
+let lanRelay: ReturnType<typeof startLocalRelay> | null = null;
 
-/** 当前 LAN 模式状态（给设置页与诊断用）。 */
+/** 当前本机中继状态（给设置页与诊断用）。 */
 function lanModeStatus(): LanRelayStatus {
   const cfg = getConfig();
   const port = cfg.lanModePort && cfg.lanModePort > 0 ? cfg.lanModePort : LAN_RELAY_PORT;
@@ -1197,30 +1202,47 @@ function lanModeStatus(): LanRelayStatus {
     enabled: false,
     url: null,
     attachmentBase: null,
+    localUrl: null,
     port,
     address: null,
-    lastError: cfg.lanModeEnabled ? "未启动（检查日志）" : null,
+    bindHost: cfg.lanModeEnabled ? LAN_RELAY_BIND_HOST : LOCAL_RELAY_HOST,
+    advertiseLan: !!cfg.lanModeEnabled,
+    lastError: null,
   };
 }
 
-/** 按配置启/停局域网中继（幂等）；配置变化与启动时各调一次。 */
+/**
+ * 确保本机中继在跑（幂等）；绑定地址/端口/是否广告 变化时重启。
+ *
+ * 为什么常驻：CF 保底路需要 `ws://127.0.0.1:<port>/ws` 一直存在（主机上行 #2 与隧道都指向它）；
+ * 而局域网那条只是**同一个进程的另一个入口**，所以不再单独拉起第二个进程。
+ */
 function applyLanMode(): LanRelayStatus {
   const cfg = getConfig();
   const port = cfg.lanModePort && cfg.lanModePort > 0 ? cfg.lanModePort : LAN_RELAY_PORT;
-  if (!cfg.lanModeEnabled) {
-    stopLanMode();
-    return lanModeStatus();
+  const advertiseLan = !!cfg.lanModeEnabled;
+  const bindHost = advertiseLan ? LAN_RELAY_BIND_HOST : LOCAL_RELAY_HOST;
+  if (
+    lanRelay &&
+    lanRelay.status.enabled &&
+    lanRelay.status.port === port &&
+    lanRelay.status.bindHost === bindHost &&
+    lanRelay.status.advertiseLan === advertiseLan
+  ) {
+    return lanRelay.status;
   }
-  if (lanRelay && lanRelay.status.port === port) return lanRelay.status;
   stopLanMode();
   const entryPath = resolveLanRelayEntry({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath || "",
     appPath: app.getAppPath(),
   });
-  lanRelay = startLanRelay({ entryPath, port, log: appendDiagLog });
+  lanRelay = startLocalRelay({ entryPath, port, bindHost, advertiseLan, log: appendDiagLog });
   appendDiagLog(
-    `lan-mode ${lanRelay.status.enabled ? "on" : "failed"}${lanRelay.status.url ? ` url=${lanRelay.status.url}` : ""}${lanRelay.status.lastError ? ` err=${lanRelay.status.lastError}` : ""}`,
+    `local-relay ${lanRelay.status.enabled ? "on" : "failed"} bind=${bindHost}:${port}` +
+      `${lanRelay.status.url ? ` lan=${lanRelay.status.url}` : ""}` +
+      `${lanRelay.status.localUrl ? ` local=${lanRelay.status.localUrl}` : ""}` +
+      `${lanRelay.status.lastError ? ` err=${lanRelay.status.lastError}` : ""}`,
   );
   return lanRelay.status;
 }
@@ -3356,7 +3378,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
   });
   activeRemoteHost = remoteHost;
   remoteHost.start();
-  // 局域网模式（P2）：配了就在启动时把内嵌中继拉起来（幂等）。
+  // 本机中继（常驻）：契约是「应用启动即起」——CF 保底路依赖它的 127.0.0.1 入口。
   applyLanMode();
   // 附件服务：配了公网入口/证书就**预热**起来。
   // 为什么不靠懒启动：公网入口（反向隧道绑在 ECS 上的端口）在 App 起来后就该可用——

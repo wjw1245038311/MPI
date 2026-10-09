@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-const { LAN_ATTACHMENT_PORT, LAN_RELAY_PORT, lanAttachmentBase, lanRelayUrl, pickLanAddress, resolveLanRelayEntry, startLanRelay } =
+const { LAN_ATTACHMENT_PORT, LAN_RELAY_PORT, lanAttachmentBase, lanRelayUrl, localRelayUrl, pickLanAddress, resolveLanRelayEntry, startLanRelay, startLocalRelay } =
   await import("../src/main/lan-mode.ts");
 
 const iface = (name, address, internal = false) => [name, [{ address, family: "IPv4", internal, netmask: "255.255.255.0", mac: "00:00:00:00:00:00", cidr: `${address}/24` }]];
@@ -140,6 +140,63 @@ const ifaces = (...entries) => Object.fromEntries(entries);
   const lan = readFileSync(new URL("../src/main/lan-mode.ts", import.meta.url), "utf8");
   assert.ok(!/remoteRelayToken/.test(lan), "LAN 模块不该碰中继准入 token");
   console.log("ok 5 - 配对票：LAN 模式给内网地址；LAN 模块不碰准入 token");
+}
+
+// ---- 6. 常驻本机中继（S0）：绑回环 / 绑全网卡，广告与否只影响「手机地址」----
+{
+  const calls = [];
+  const fakeSpawn = (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    return { stdout: { on() {} }, stderr: { on() {} }, on() {}, kill() {} };
+  };
+  const entry = join(tmpdir(), "fake-local-relay-entry.mjs");
+  writeFileSync(entry, "// fake\n");
+  try {
+    // ① 局域网模式关（只服务 CF 隧道/主机上行）：绑回环，**不广告**内网地址，但没有网卡也要起。
+    const off = startLocalRelay({
+      entryPath: entry,
+      port: 9201,
+      bindHost: "127.0.0.1",
+      advertiseLan: false,
+      spawnImpl: fakeSpawn,
+      interfaces: ifaces(iface("WLAN", "192.168.5.6")),
+    });
+    assert.equal(off.status.enabled, true, "局域网模式关着也要常驻（CF 保底路依赖它）");
+    assert.equal(off.status.url, null, "关着时不广告内网地址（配对票要回落到公网中继）");
+    assert.equal(off.status.attachmentBase, null, "不广告附件内网基地址");
+    assert.equal(off.status.localUrl, `ws://127.0.0.1:9201/ws`, "回环入口总是可用（隧道/上行 #2 指向它）");
+    assert.equal(off.status.bindHost, "127.0.0.1");
+    assert.equal(off.status.advertiseLan, false);
+    assert.equal(calls.at(-1).opts.env.RELAY_HOST, "127.0.0.1", "只服务本机时不要绑 0.0.0.0");
+    assert.equal(localRelayUrl(9201), "ws://127.0.0.1:9201/ws", "回环地址形状");
+
+    // ② 没有任何可用网卡 + 不要求网卡 → 仍要起来（只是没内网地址可广告）
+    const noIface = startLocalRelay({ entryPath: entry, bindHost: "127.0.0.1", advertiseLan: false, spawnImpl: fakeSpawn, interfaces: {} });
+    assert.equal(noIface.status.enabled, true, "挑不到网卡不该阻止中继常驻");
+    assert.equal(noIface.status.localUrl, `ws://127.0.0.1:${LAN_RELAY_PORT}/ws`, "默认端口");
+
+    // ③ 局域网模式开：绑 0.0.0.0 + 广告内网地址（新入口仍保有旧语义）
+    const on = startLocalRelay({
+      entryPath: entry,
+      port: 9202,
+      bindHost: "0.0.0.0",
+      advertiseLan: true,
+      spawnImpl: fakeSpawn,
+      interfaces: ifaces(iface("WLAN", "192.168.7.8")),
+    });
+    assert.equal(on.status.url, "ws://192.168.7.8:9202/ws");
+    assert.equal(on.status.attachmentBase, `http://192.168.7.8:${LAN_ATTACHMENT_PORT}`);
+    assert.equal(calls.at(-1).opts.env.RELAY_HOST, "0.0.0.0");
+
+    // ④ 广告但没网卡 → 起来 + 给出可读原因
+    const warn = startLocalRelay({ entryPath: entry, bindHost: "0.0.0.0", advertiseLan: true, spawnImpl: fakeSpawn, interfaces: {} });
+    assert.equal(warn.status.enabled, true);
+    assert.equal(warn.status.url, null);
+    assert.match(warn.status.lastError || "", /网卡/, "要说清为什么手机连不上");
+  } finally {
+    rmSync(entry, { force: true });
+  }
+  console.log("ok 6 - 常驻本机中继：绑回环/全网卡，广告与否只影响手机地址");
 }
 
 console.log("lan-mode tests passed");

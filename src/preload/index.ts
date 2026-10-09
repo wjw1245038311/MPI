@@ -339,21 +339,29 @@ const api = {
     getTransportConfig: () => ipcRenderer.invoke("remote:getTransportConfig"),
     setConfig: (patch: { signalingUrl?: string }) => ipcRenderer.invoke("remote:setConfig", patch),
     getRelayStatus: () => ipcRenderer.invoke("remote:getRelayStatus"),
-    /** 局域网直连模式（P2）：开关 + 当前地址。 */
+    /** 本机中继（常驻）+ 局域网直连模式（P2）：进程状态 + 是否广告内网地址。
+     *  注意：`enabled` = **中继进程在跑**（常驻，所以基本恒为 true）；
+     *  「局域网模式开关」看的是 `advertiseLan`。 */
     getLanMode: (): Promise<{
       enabled: boolean;
       url: string | null;
       attachmentBase: string | null;
+      localUrl: string | null;
       port: number;
       address: string | null;
+      bindHost: string;
+      advertiseLan: boolean;
       lastError: string | null;
     }> => ipcRenderer.invoke("lanmode:status"),
     setLanMode: (args: { enabled?: boolean; port?: number }): Promise<{
       enabled: boolean;
       url: string | null;
       attachmentBase: string | null;
+      localUrl: string | null;
       port: number;
       address: string | null;
+      bindHost: string;
+      advertiseLan: boolean;
       lastError: string | null;
     }> => ipcRenderer.invoke("lanmode:set", args),
     onRelayState: (cb: (p: { state: string; relayUrl: string; lastError: string | null }) => void) => on("remote:relay-state", cb),

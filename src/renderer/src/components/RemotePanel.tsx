@@ -265,8 +265,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     enabled: boolean;
     url: string | null;
     attachmentBase: string | null;
+    localUrl: string | null;
     port: number;
     address: string | null;
+    bindHost: string;
+    advertiseLan: boolean;
     lastError: string | null;
   } | null>(null);
   const refreshLanMode = async () => {
@@ -279,7 +282,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const toggleLanMode = async () => {
     setBusy(true);
     try {
-      setLanMode(await window.pi.remote.setLanMode({ enabled: !lanMode?.enabled }));
+      setLanMode(await window.pi.remote.setLanMode({ enabled: !lanMode?.advertiseLan }));
     } finally {
       setBusy(false);
     }
@@ -426,19 +429,26 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
             ) : null}
           </div>
         )}
+        {lanMode?.enabled && lanMode.localUrl && (
+          <div className="set-hint">
+            {zh ? "本机中继进程：" : "Local relay: "}
+            <code>{lanMode.bindHost}:{lanMode.port}</code>
+            {" "}[<code>{lanMode.localUrl}</code>]
+          </div>
+        )}
         {lanMode?.lastError && <div className="set-hint" style={{ color: "#c0392b" }}>{lanMode.lastError}</div>}
         <div className="set-remote-toggle-row">
           <div className="set-remote-toggle-copy">
             <span className="set-remote-toggle-label">{zh ? "局域网模式" : "LAN mode"}</span>
             <span className="set-remote-toggle-state">
-              {lanMode?.enabled ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}
+              {lanMode?.advertiseLan ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}
             </span>
           </div>
           <button
             type="button"
-            className={`set-toggle ${lanMode?.enabled ? "on" : ""}`}
+            className={`set-toggle ${lanMode?.advertiseLan ? "on" : ""}`}
             role="switch"
-            aria-checked={!!lanMode?.enabled}
+            aria-checked={!!lanMode?.advertiseLan}
             aria-label={zh ? "切换局域网模式" : "Toggle LAN mode"}
             onClick={() => void toggleLanMode()}
             disabled={busy}
