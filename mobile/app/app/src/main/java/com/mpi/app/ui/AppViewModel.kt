@@ -263,6 +263,8 @@ class AppViewModel(
     private var reconnectSyncJob: Job? = null
     /** S6：拉主机通道列表（host.info）的 single-flight Job。 */
     private var relayInfoJob: Job? = null
+    /** S4 缺口补齐：通道降级看门狗（首选连不上就换下一条）。 */
+    private var degradeJob: Job? = null
     /** 按会话保存的草稿（内存；跨重启持久化留待需要时再说）。 */
     private val drafts = mutableMapOf<String, String>()
     /**
@@ -1858,13 +1860,44 @@ class AppViewModel(
         }
     }
 
-    private fun attach(record: PairingRecord) {
+    /**
+     * S4 缺口补齐：首选通道超过 [RELAY_DEGRADE_MS] 仍未认证成功 → 按主机给的顺序换下一条。
+     *
+     * 为什么必须：桌面停用/切换通道会让手机当前那条**立刻失效**，而手机只会重连候选首位；
+     * 只有降级才能自愈，也才能拿到主机新下发的列表（S6）。
+     * 终止性失败（令牌失效/被撤销/被顶替）不降级：换哪条通道都一样失败。
+     */
+    private fun scheduleRelayDegrade(
+        record: PairingRecord,
+        session: HostSession,
+        candidates: List<String>,
+        chosenUrl: String,
+        tried: List<String>,
+    ) {
+        degradeJob?.cancel()
+        if (candidates.size <= 1) return
+        degradeJob = scope.launch {
+            delay(RELAY_DEGRADE_MS)
+            if (this@AppViewModel.session !== session) return@launch // 已被别的 attach 取代
+            if (session.state.value is SessionState.Connected) return@launch
+            if ((session.state.value as? SessionState.Failed)?.reason?.isTerminal == true) return@launch
+            attach(record, tried + chosenUrl)
+        }
+    }
+
+    private fun attach(record: PairingRecord, tried: List<String> = emptyList()) {
         detachSession()
         autoOpenedThread = false
         val deviceIdentity = identity ?: return
 
-        // S4：重连优先上次真正连上的通道（旧记录回落 relayUrl）
-        val chosenUrl = RelaySelect.pick(record.relayUrl, record.relayUrls, record.lastGoodRelayUrl)
+        // S6：主机给的顺序取候选（跳过已试过的），首位 = 主机首选；旧记录回落上次可用
+        val candidates = RelaySelect.remainingCandidates(
+            record.relayUrl,
+            record.relayUrls,
+            record.lastGoodRelayUrl,
+            tried,
+        )
+        val chosenUrl = candidates.firstOrNull() ?: record.relayUrl
         val client = RelayClient(chosenUrl)
         val newSession = HostSession(client, record, deviceIdentity, deviceName, scope)
         val newRequester = Requester(
@@ -1936,6 +1969,7 @@ class AppViewModel(
         _ui.update { it.copy(activeHostId = record.hostId, problems = emptyList()) }
         newRepository.start()
         newSession.connect()
+        scheduleRelayDegrade(record, newSession, candidates, chosenUrl, tried)
         // M5：起前台服务保活——进程活着，连接与审批提醒才收得到
         notifier.startLinkService()
 
@@ -1970,6 +2004,11 @@ class AppViewModel(
 
     companion object {
         private const val MAX_PROBLEMS = 5
+        /**
+         * 通道降级看门狗的超时（毫秒）：比 PWA 侧单条探测宽——ECS/CF 走公网首连本来就慢，
+         * 误判成“连不上”而去降级，比多等几秒更糟。
+         */
+        private const val RELAY_DEGRADE_MS = 8_000L
         private const val MAX_ATTACHMENTS = 3
 
         // ---- 语音对话模式（阶段 1）----

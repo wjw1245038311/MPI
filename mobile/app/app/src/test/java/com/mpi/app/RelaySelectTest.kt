@@ -71,6 +71,22 @@ class RelaySelectTest {
     }
 
     @Test
+    fun remainingCandidatesSkipsTriedAndKeepsOrder() {
+        val urls = listOf("ws://a/ws", "ws://b/ws", "ws://c/ws")
+        assertEquals(urls, RelaySelect.remainingCandidates("ws://c/ws", urls, null, emptyList()))
+        assertEquals(
+            listOf("ws://b/ws", "ws://c/ws"),
+            RelaySelect.remainingCandidates("ws://c/ws", urls, null, listOf("ws://a/ws")),
+        )
+        assertEquals(emptyList<String>(), RelaySelect.remainingCandidates("ws://c/ws", urls, null, urls))
+        assertEquals(
+            "比较前要 trim",
+            listOf("ws://b/ws", "ws://c/ws"),
+            RelaySelect.remainingCandidates("ws://c/ws", urls, null, listOf(" ws://a/ws ")),
+        )
+    }
+
+    @Test
     fun labelShowsHostOnly() {
         assertEquals("192.168.1.9:9001", RelaySelect.label("ws://192.168.1.9:9001/ws"))
         assertEquals("relay.whomidas.cn", RelaySelect.label("wss://relay.whomidas.cn/ws"))

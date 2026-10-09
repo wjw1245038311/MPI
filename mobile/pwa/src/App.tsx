@@ -17,7 +17,7 @@ import { createDeviceIdentity, randomSeedB64url } from "./lib/device-identity";
 import { LEGACY_DEVICE_NAME, defaultDeviceName } from "./lib/device-name";
 import { attachAutoReauth, parsePairingLink, runPairing, type PairingStage } from "./lib/pairing";
 import { RelayClient } from "./lib/relay-client";
-import { mergeHostRelayInfo, pickRelayUrl, relayCandidates } from "./lib/relay-select";
+import { mergeHostRelayInfo, pickRelayUrl, relayCandidates, remainingCandidates } from "./lib/relay-select";
 import { HostSession, type SessionSnapshot } from "./lib/session";
 import { Requester } from "./lib/requester";
 import { ThreadActions } from "./lib/thread-actions";
@@ -31,6 +31,12 @@ import { currentBundleName, isUpdateAvailable } from "./lib/update-watch";
 
 /** ?dbg=1 in the URL turns on the on-screen diagnostics overlay (real-device debugging). */
 const DBG_ENABLED = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("dbg");
+
+/**
+ * 降级看门狗：某条通道连上超时（毫秒）就换下一条（S4 缺口补齐）。
+ * 8s 比单条去探测宽松——ECS/CF 走公网首连本来就慢，误判会比不降级更糟。
+ */
+const RELAY_DEGRADE_MS = 8_000;
 
 // 壳（0.2.7+）回前台时靠这个值判断页面是否已过期 → 与中继的 index.html 对比，
 // 不同就自动 reload。契约见 docs/ANDROID-SHELL.md #11。
@@ -185,6 +191,8 @@ export default function App() {
   }, []);
   const [session, setSession] = useState<HostSession | null>(null);
   const sessionRef = useRef<HostSession | null>(null);
+  /** 降级看门狗定时器（连不上就换下一条通道）。 */
+  const degradeWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   sessionRef.current = session;
 
   const [link, setLink] = useState("");
@@ -437,6 +445,7 @@ export default function App() {
     })();
     return () => {
       cancelled = true;
+      if (degradeWatchdogRef.current) clearTimeout(degradeWatchdogRef.current);
       sessionRef.current?.detach();
       clientRef.current?.close();
     };
@@ -477,13 +486,15 @@ export default function App() {
 
   /** (Re)connect to a stored pairing. The first socket open triggers re-auth via
    * attachAutoReauth, which also reinstalls E2E crypto; home shows immediately. */
-  const startSession = (record: PairingRecord, seedB64url: string, name: string) => {
+  const startSession = (record: PairingRecord, seedB64url: string, name: string, tried: string[] = []) => {
     clientRef.current?.close();
+    if (degradeWatchdogRef.current) { clearTimeout(degradeWatchdogRef.current); degradeWatchdogRef.current = null; }
     sessionRef.current?.detach();
     setSession(null);
     const identity = createDeviceIdentity(seedB64url);
-    // S4：重连优先上次真正连上的通道（旧记录回落 relayUrl）
-    const chosenUrl = pickRelayUrl(record);
+    // S6：主机给的顺序取候选（跳过已试过的），首位 = 主机首选；旧记录回落上次可用
+    const candidates = remainingCandidates(record, tried);
+    const chosenUrl = candidates[0] ?? pickRelayUrl(record);
     setActiveRelayUrl(chosenUrl);
     const client = new RelayClient({ url: chosenUrl, onStateChange: onClientState });
     clientRef.current = client;
@@ -494,6 +505,22 @@ export default function App() {
     void storeRef.current.savePairing(touched);
     setPairings((prev) => (prev.some((item) => item.hostId === touched.hostId) ? prev.map((item) => (item.hostId === touched.hostId ? touched : item)) : [...prev, touched]));
     if (!record.deviceToken) return;
+    // S4 缺口补齐：首选连不上就按顺序换下一条（逐条看门狗），
+    // 否则手机会粘在一条已失效的通道上，也就永远拉不到主机新下发的列表。
+    if (candidates.length > 1) {
+      const off = client.onState((state) => {
+        if (state !== "open") return;
+        off();
+        if (degradeWatchdogRef.current) { clearTimeout(degradeWatchdogRef.current); degradeWatchdogRef.current = null; }
+      });
+      degradeWatchdogRef.current = setTimeout(() => {
+        degradeWatchdogRef.current = null;
+        off();
+        if (clientRef.current !== client) return; // 已被别的会话取代
+        if (client.getState() === "open") return;
+        startSession(record, seedB64url, name, [...tried, chosenUrl]);
+      }, RELAY_DEGRADE_MS);
+    }
     client.setHelloCreds(identity.deviceId, record.deviceToken, record.hostId);
     attachAutoReauth(client, record.hostId, identity, name, (result) => {
       if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken, record.hostId);

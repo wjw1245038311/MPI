@@ -64,6 +64,18 @@ export function mergeHostRelayInfo<T extends { relayUrl?: string; relayUrls?: st
   return next;
 }
 
+/**
+ * S4 缺口补齐（降级重试用）：候选顺序不变，但去掉**已经试过**的地址。
+ * 看门狗每超时一次就换下一条（逐条短超时），直到候选耗尽。
+ */
+export function remainingCandidates(
+  input: { relayUrl?: string; relayUrls?: string[]; lastGoodRelayUrl?: string },
+  tried: readonly string[],
+): string[] {
+  const done = new Set(tried.map((url) => (url || "").trim()));
+  return relayCandidates(input).filter((url) => !done.has(url));
+}
+
 /** 本次连接该用哪个地址（重连热路径）：候选首位 = 主机首选；旧记录则回落上次可用。 */
 export function pickRelayUrl(input: { relayUrl: string; relayUrls?: string[]; lastGoodRelayUrl?: string }): string {
   const candidates = relayCandidates(input);

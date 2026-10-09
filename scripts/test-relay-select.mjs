@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { relayCandidates, pickRelayUrl, mergeHostRelayInfo, connectFirstReachable } = await import("../mobile/pwa/src/lib/relay-select.ts");
+const { relayCandidates, pickRelayUrl, mergeHostRelayInfo, remainingCandidates, connectFirstReachable } = await import("../mobile/pwa/src/lib/relay-select.ts");
 
 test("S6 候选顺序：主机下发的顺序优先，上次可用退为回落，单值最后；去重去空", () => {
   assert.deepEqual(
@@ -60,6 +60,14 @@ test("S6 host.info 合并：顺序以主机为准；lastGood 只在降级时保�
   assert.equal(mergeHostRelayInfo(base, ["", "  "]), base);
   // 去重去空，顺序保持
   assert.deepEqual(mergeHostRelayInfo(base, [" ws://a/ws ", "ws://a/ws", ""], {}).relayUrls, ["ws://a/ws"]);
+});
+
+test("S4 降级重试：remainingCandidates 去掉已试过的，顺序不变", () => {
+  const input = { relayUrl: "ws://c/ws", relayUrls: ["ws://a/ws", "ws://b/ws"] };
+  assert.deepEqual(remainingCandidates(input, []), ["ws://a/ws", "ws://b/ws", "ws://c/ws"]);
+  assert.deepEqual(remainingCandidates(input, ["ws://a/ws"]), ["ws://b/ws", "ws://c/ws"]);
+  assert.deepEqual(remainingCandidates(input, ["ws://a/ws", "ws://b/ws", "ws://c/ws"]), [], "候选耗尽 → 空（调用方回落）");
+  assert.deepEqual(remainingCandidates(input, [" ws://a/ws "]), ["ws://b/ws", "ws://c/ws"], "比较前要 trim");
 });
 
 test("逐条尝试：第一条成功即用；失败降级到下一条", async () => {

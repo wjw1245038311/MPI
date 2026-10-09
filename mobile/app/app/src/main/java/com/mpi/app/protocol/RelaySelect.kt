@@ -26,6 +26,20 @@ object RelaySelect {
         return ordered.toList()
     }
 
+    /**
+     * S4 缺口补齐（降级重试用）：候选顺序不变，但去掉**已经试过**的地址。
+     * 看门狗每超时一次就换下一条（逐条短超时），直到候选耗尽。
+     */
+    fun remainingCandidates(
+        relayUrl: String?,
+        relayUrls: List<String>,
+        lastGoodRelayUrl: String?,
+        tried: List<String>,
+    ): List<String> {
+        val done = tried.map { it.trim() }.toSet()
+        return candidates(relayUrl, relayUrls, lastGoodRelayUrl).filterNot { it in done }
+    }
+
     /** 本次连接该用哪个地址：候选首位（= 主机首选；旧记录则回落上次可用）。 */
     fun pick(relayUrl: String, relayUrls: List<String>, lastGoodRelayUrl: String?): String =
         candidates(relayUrl, relayUrls, lastGoodRelayUrl).firstOrNull() ?: relayUrl
