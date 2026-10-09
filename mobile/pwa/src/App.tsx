@@ -17,7 +17,7 @@ import { createDeviceIdentity, randomSeedB64url } from "./lib/device-identity";
 import { LEGACY_DEVICE_NAME, defaultDeviceName } from "./lib/device-name";
 import { attachAutoReauth, parsePairingLink, runPairing, type PairingStage } from "./lib/pairing";
 import { RelayClient } from "./lib/relay-client";
-import { pickRelayUrl, relayCandidates } from "./lib/relay-select";
+import { mergeHostRelayInfo, pickRelayUrl, relayCandidates } from "./lib/relay-select";
 import { HostSession, type SessionSnapshot } from "./lib/session";
 import { Requester } from "./lib/requester";
 import { ThreadActions } from "./lib/thread-actions";
@@ -454,6 +454,27 @@ export default function App() {
     }
   };
 
+  /**
+   * S6：连上后向主机拉一次**通道列表**并落本地（顺序以主机为准）——
+   * 桌面改通道后，手机只要重连/刷新就跟过去，不必重新扫码。
+   * best-effort：旧版主机没有 `host.info`，失败不影响主流程。
+   */
+  const syncHostRelayInfo = async (client: RelayClient, hostId: string, connectedUrl: string) => {
+    const requester = new Requester(client);
+    try {
+      const info = await requester.request<{ relayUrls?: string[] }>("host.info", undefined, "host.info", 8_000);
+      const urls = Array.isArray(info?.relayUrls) ? info.relayUrls : [];
+      if (urls.length === 0) return;
+      const record = await storeRef.current.getPairing(hostId);
+      if (!record) return;
+      const merged = mergeHostRelayInfo(record, urls, { connectedUrl });
+      await storeRef.current.savePairing(merged);
+      setPairings(await storeRef.current.listPairings());
+    } catch { /* 旧版主机 / 网络抖动：保持本地列表不动 */ } finally {
+      requester.detach();
+    }
+  };
+
   /** (Re)connect to a stored pairing. The first socket open triggers re-auth via
    * attachAutoReauth, which also reinstalls E2E crypto; home shows immediately. */
   const startSession = (record: PairingRecord, seedB64url: string, name: string) => {
@@ -476,13 +497,16 @@ export default function App() {
     client.setHelloCreds(identity.deviceId, record.deviceToken, record.hostId);
     attachAutoReauth(client, record.hostId, identity, name, (result) => {
       if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken, record.hostId);
-      void storeRef.current.savePairing({
-        ...record,
-        deviceToken: result.deviceToken || null,
-        hostX25519PubB64u: result.hostX25519PubB64u || record.hostX25519PubB64u,
-        // S4：这次连上了 → 记住这条通道，下次从它开始
-        lastGoodRelayUrl: chosenUrl,
-      });
+      // S6：先落盘本次重认证结果，再拉 host.info——两者都是 read-modify-write，串行化避免互相覆盖。
+      void (async () => {
+        await storeRef.current.savePairing({
+          ...record,
+          deviceToken: result.deviceToken || null,
+          hostX25519PubB64u: result.hostX25519PubB64u || record.hostX25519PubB64u,
+        });
+        // `lastGoodRelayUrl` 只在「不是主机首选」时才有意义，交给 host.info 合并决定
+        await syncHostRelayInfo(client, record.hostId, chosenUrl);
+      })();
       void sessionRef.current?.refresh(); // the open-triggered refresh may have raced AUTH_REQUIRED
       void threadSessionRef.current?.resync().catch(() => {}); // same race for an open conversation
     });
@@ -587,6 +611,8 @@ export default function App() {
       if (pairResult.deviceToken) liveClient.setHelloCreds(identity.deviceId, pairResult.deviceToken, payload.hostId);
       attachAutoReauth(liveClient, payload.hostId, identity, device.name, (r) => {
         if (r.deviceToken) liveClient.setHelloCreds(identity.deviceId, r.deviceToken, payload.hostId);
+        // S6：配对成功后同样拉一次主机通道列表（票里的列表可能已过期）
+        void syncHostRelayInfo(liveClient, payload.hostId, chosenUrl);
         void sessionRef.current?.refresh();
         void threadSessionRef.current?.resync().catch(() => {});
       });

@@ -71,7 +71,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.coroutineContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
@@ -259,6 +261,8 @@ class AppViewModel(
     private var voiceSettle: CompletableDeferred<Unit>? = null
     /** 重连后的会话重同步 Job（合并多次 Connected 回调，避免重复拉全量快照）。 */
     private var reconnectSyncJob: Job? = null
+    /** S6：拉主机通道列表（host.info）的 single-flight Job。 */
+    private var relayInfoJob: Job? = null
     /** 按会话保存的草稿（内存；跨重启持久化留待需要时再说）。 */
     private val drafts = mutableMapOf<String, String>()
     /**
@@ -1830,6 +1834,30 @@ class AppViewModel(
         }
     }
 
+    /**
+     * S6：连上后向主机拉一次**通道列表**并落本地（顺序以主机为准）——
+     * 桌面改通道后，手机只要重连/刷新就跟过去，不必重新扫码。
+     * best-effort：旧版主机没有 `host.info`，失败时保持本地列表不动。
+     */
+    private fun syncHostRelayInfo(record: PairingRecord, connectedUrl: String) {
+        if (relayInfoJob?.isActive == true) return
+        relayInfoJob = scope.launch {
+            val request = requester ?: return@launch
+            val response = runCatching { request.request("host.info", timeoutMs = 8_000) }.getOrNull() ?: return@launch
+            val hostUrls = (response as? JsonObject)
+                ?.get("relayUrls")
+                ?.jsonArray
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty) }
+                .orEmpty()
+            if (hostUrls.isEmpty()) return@launch
+            val current = keyStore.getPairing(record.hostId) ?: record
+            val merged = RelaySelect.mergeHostRelayInfo(current.lastGoodRelayUrl, hostUrls, connectedUrl) ?: return@launch
+            keyStore.savePairing(current.copy(relayUrls = merged.relayUrls, lastGoodRelayUrl = merged.lastGoodRelayUrl))
+            val list = keyStore.listPairings().sortedByDescending { it.sortKey }
+            _ui.update { it.copy(pairings = list) }
+        }
+    }
+
     private fun attach(record: PairingRecord) {
         detachSession()
         autoOpenedThread = false
@@ -1881,6 +1909,8 @@ class AppViewModel(
                 // 只 resync（拉快照）会让之后所有实时事件被主机静默丢弃——真机表现为
                 // 「气泡卡发送中 / 整条消息包括回复一起晚到」（diag 里 `remote-pub … subs=0`）。
                 if (state is SessionState.Connected) {
+                    // S6：每次连上（含重连）都拉一次主机通道列表——桌面改通道后手机即跟随
+                    syncHostRelayInfo(record, chosenUrl)
                     // 已恢复连接——离线期间的提示已经过时，清掉免得号人
                     if (_ui.value.problems.isNotEmpty()) _ui.update { it.copy(problems = emptyList()) }
                     // 认证前被跳过的「自动开一次会话」在这里补上（那时 session 还没就绪）
