@@ -17,7 +17,7 @@ import { createDeviceIdentity, randomSeedB64url } from "./lib/device-identity";
 import { LEGACY_DEVICE_NAME, defaultDeviceName } from "./lib/device-name";
 import { attachAutoReauth, parsePairingLink, runPairing, type PairingStage } from "./lib/pairing";
 import { RelayClient } from "./lib/relay-client";
-import { pickRelayUrl } from "./lib/relay-select";
+import { pickRelayUrl, relayCandidates } from "./lib/relay-select";
 import { HostSession, type SessionSnapshot } from "./lib/session";
 import { Requester } from "./lib/requester";
 import { ThreadActions } from "./lib/thread-actions";
@@ -443,6 +443,17 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** S4：当前实际使用的通道地址（显示用）。 */
+  const [activeRelayUrl, setActiveRelayUrl] = useState("");
+  /** 通道地址 → 可读标签（就显示 host，不猜语义）。 */
+  const relayLabel = (url: string) => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return url;
+    }
+  };
+
   /** (Re)connect to a stored pairing. The first socket open triggers re-auth via
    * attachAutoReauth, which also reinstalls E2E crypto; home shows immediately. */
   const startSession = (record: PairingRecord, seedB64url: string, name: string) => {
@@ -452,6 +463,7 @@ export default function App() {
     const identity = createDeviceIdentity(seedB64url);
     // S4：重连优先上次真正连上的通道（旧记录回落 relayUrl）
     const chosenUrl = pickRelayUrl(record);
+    setActiveRelayUrl(chosenUrl);
     const client = new RelayClient({ url: chosenUrl, onStateChange: onClientState });
     clientRef.current = client;
     setHostId(record.hostId);
@@ -532,35 +544,55 @@ export default function App() {
     clientRef.current?.close();
     sessionRef.current?.detach();
     setSession(null);
-    const client = new RelayClient({ url: payload.relayUrl, onStateChange: onClientState });
-    clientRef.current = client;
     setError(null);
+    let client: RelayClient | null = null;
+    let result: Awaited<ReturnType<typeof runPairing>> | null = null;
+    let chosenUrl = "";
+    let lastError: unknown = null;
     try {
-      const result = await runPairing(client, payload, identity, device.name, (s: PairingStage) => setStage(s));
+      // S4：按序尝试票里的每个通道（局域网 → 主 → 备）；任一条完成配对即止。
+      for (const url of relayCandidates({ relayUrl: payload.relayUrl, relayUrls: payload.relayUrls })) {
+        const attempt = new RelayClient({ url, onStateChange: onClientState });
+        try {
+          result = await runPairing(attempt, payload, identity, device.name, (s: PairingStage) => setStage(s));
+          client = attempt;
+          chosenUrl = url;
+          break;
+        } catch (error) {
+          lastError = error;
+          attempt.close();
+        }
+      }
+      if (!client || !result) throw lastError instanceof Error ? lastError : new Error("所有通道都连不上");
+      // 固定下来：下面的回调里 TS 不再能窄化 let 变量
+      const liveClient: RelayClient = client;
+      const pairResult = result;
+      clientRef.current = liveClient;
+      setActiveRelayUrl(chosenUrl);
       const record: PairingRecord = {
         hostId: payload.hostId,
-        relayUrl: payload.relayUrl!,
+        relayUrl: chosenUrl,
         // S4：把票里的有序地址列表一起存下，供后续按序选路
         relayUrls: payload.relayUrls,
-        lastGoodRelayUrl: payload.relayUrl,
+        lastGoodRelayUrl: chosenUrl,
         deviceId: identity.deviceId,
-        deviceToken: result.deviceToken || null,
-        hostX25519PubB64u: result.hostX25519PubB64u || undefined,
+        deviceToken: pairResult.deviceToken || null,
+        hostX25519PubB64u: pairResult.hostX25519PubB64u || undefined,
         pairedAt: Date.now(),
         hostName: payload.hostName,
         lastSeenAt: Date.now(),
       };
       await storeRef.current.savePairing(record);
       setPairings(await storeRef.current.listPairings());
-      if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken, payload.hostId);
-      attachAutoReauth(client, payload.hostId, identity, device.name, (r) => {
-        if (r.deviceToken) client.setHelloCreds(identity.deviceId, r.deviceToken, payload.hostId);
+      if (pairResult.deviceToken) liveClient.setHelloCreds(identity.deviceId, pairResult.deviceToken, payload.hostId);
+      attachAutoReauth(liveClient, payload.hostId, identity, device.name, (r) => {
+        if (r.deviceToken) liveClient.setHelloCreds(identity.deviceId, r.deviceToken, payload.hostId);
         void sessionRef.current?.refresh();
         void threadSessionRef.current?.resync().catch(() => {});
       });
       setHostId(payload.hostId);
-      enterHome(client, record);
-      setupWebPush(client, payload.relayUrl!);
+      enterHome(liveClient, record);
+      setupWebPush(liveClient, chosenUrl);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStage("error");
@@ -894,7 +926,7 @@ export default function App() {
       (snap?.projects.find((p) => p.id === threadView.summary?.projectId)?.name ?? "")
     : hostId
       ? connState === "open"
-        ? "在线"
+        ? `在线${activeRelayUrl ? ` · ${relayLabel(activeRelayUrl)}` : ""}`
         : "连接中…"
       : "";
 
