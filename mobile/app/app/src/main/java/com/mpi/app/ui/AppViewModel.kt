@@ -895,6 +895,8 @@ class AppViewModel(
                             thumbB64 = source.thumbB64,
                             mimeType = source.mimeType,
                             size = source.size,
+                            // 记住本地那张原图：「点开看原图」直接读它，不走网络（微信/飞书的做法）。
+                            localUri = source.localUri,
                         ),
                     )
                 }

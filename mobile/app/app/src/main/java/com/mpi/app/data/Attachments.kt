@@ -1,6 +1,7 @@
 package com.mpi.app.data
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -92,6 +93,12 @@ sealed interface Attachment {
         val thumbB64: String,
         val mimeType: String,
         val size: Long,
+        /**
+         * 发送时那张原图在本机的 URI —— 「点开看原图」直接读它（不走网络）。
+         *
+         * 旧消息/别的设备发来的消息没有这个值（null）：那种情况只能显示缩略图。
+         */
+        val localUri: String? = null,
     ) : Attachment
 
     /**
@@ -172,6 +179,13 @@ data class ImageSource(
     val open: () -> java.io.InputStream,
     /** 缩略图（base64 JPEG，≤[THUMB_MAX_BYTES]）：prompt 里只带它。 */
     val thumbB64: String,
+    /**
+     * 本地原图 URI（`content://` / `file://`）。
+     *
+     * 「点开看原图」直接读它 —— 零延迟零流量，跟微信/飞书一个路子；只有它失效时
+     * （用户删了图 / 授权被收回）才回落缩略图。
+     */
+    val localUri: String,
 )
 
 /** 直连上传需要的视频元信息（**不读字节**，字节由 [VideoSource.open] 流式读）。 */
@@ -365,12 +379,18 @@ class AttachmentLoader(private val context: Context) {
     fun loadImageSource(uri: Uri): Result<ImageSource> = runCatching {
         val meta = fileMeta(uri) ?: error("无法读取这张图片")
         val thumb = thumbnailB64(uri) ?: error("这不是可识别的图片")
+        // 图片选择器给的读权限默认是**临时**的（进程内有效）。尽量升级成持久授权，
+        // 这样「点开看原图」在 App 重启后依然读得到；不支持持久化的 provider 会失败，忽略即可。
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
         ImageSource(
             name = meta.name,
             mimeType = meta.mimeType?.takeIf { it.startsWith("image/") } ?: "image/jpeg",
             size = meta.size,
             open = { openStream(uri) },
             thumbB64 = thumb,
+            localUri = uri.toString(),
         )
     }
 

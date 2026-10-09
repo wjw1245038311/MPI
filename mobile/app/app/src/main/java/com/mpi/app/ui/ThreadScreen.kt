@@ -114,7 +114,9 @@ import com.mpi.app.protocol.MessageBlock
 import com.mpi.app.protocol.RemotePermission
 import com.mpi.app.protocol.ThreadMessage
 import com.mpi.app.ui.theme.MpiTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -981,15 +983,26 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
             }
 
             is Attachment.ImageKeyed -> {
-                // P3：原图已在主机上，本地只剩缩略图（同样是压过的 JPEG，解码很安全）。
+                // 气泡里画的仍是缩略图（小、快、省内存）；点一下开全屏看**本地原图**（见 ImagePreviewDialog）。
                 val bitmap = remember(attachment.thumbB64) { decodeThumb(attachment.thumbB64)?.asImageBitmap() }
+                var previewing by remember { mutableStateOf(false) }
                 if (bitmap != null) {
                     Image(
                         bitmap = bitmap,
                         contentDescription = "图片附件",
-                        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { previewing = true },
                         contentScale = ContentScale.Crop,
                     )
+                    if (previewing) {
+                        ImagePreviewDialog(
+                            localUri = attachment.localUri,
+                            thumbB64 = attachment.thumbB64,
+                            onDismiss = { previewing = false },
+                        )
+                    }
                 } else {
                     Box(Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(MpiTheme.colors.control))
                 }
@@ -2377,3 +2390,69 @@ private fun ThinkingPlaceholderRow() {
 
 /** 长按进入语音模式的时长（用户指定 3 秒）。 */
 private const val LONG_HOLD_MS = 3_000L
+
+/** 全屏看原图的目标最长边：够看清细节，又不至于解码出几十 MB 的位图（12MP 原图直解会 OOM）。 */
+private const val PREVIEW_MAX_EDGE = 2400
+
+/**
+ * 全屏看原图（2026-10-10）：**本地原图优先** —— 零延迟零流量，跟微信/飞书一个路子。
+ *
+ * 本地 URI 失效时（用户删了图 / 授权被收回 / 旧消息根本没有本地引用）回落缩略图：
+ * 宁可小一点，也不要白屏。
+ */
+@Composable
+private fun ImagePreviewDialog(localUri: String?, thumbB64: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(localUri) {
+        bitmap = withContext(Dispatchers.IO) {
+            decodeOriginalImage(context, localUri) ?: decodeThumb(thumbB64)
+        }?.asImageBitmap()
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.94f))
+                .clickable { onDismiss() },
+            contentAlignment = Alignment.Center,
+        ) {
+            val shown = bitmap
+            if (shown != null) {
+                Image(
+                    bitmap = shown,
+                    contentDescription = "原图",
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                CircularProgressIndicator(color = Color.White)
+            }
+        }
+    }
+}
+
+/** 解码本地原图：先量尺寸再按 2 的幂采样，避免高分辨率图把内存顶爆。 */
+private fun decodeOriginalImage(context: Context, localUri: String?): android.graphics.Bitmap? {
+    if (localUri.isNullOrEmpty()) return null
+    return runCatching {
+        val uri = Uri.parse(localUri)
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use {
+            android.graphics.BitmapFactory.decodeStream(it, null, bounds)
+        }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= PREVIEW_MAX_EDGE) sample *= 2
+        context.contentResolver.openInputStream(uri)?.use {
+            android.graphics.BitmapFactory.decodeStream(
+                it,
+                null,
+                android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+            )
+        }
+    }.getOrNull()
+}
