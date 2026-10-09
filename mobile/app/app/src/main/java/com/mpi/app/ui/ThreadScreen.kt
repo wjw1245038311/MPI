@@ -377,6 +377,7 @@ fun ThreadScreen(
         ) {
             // 图片块拿不到 ThreadScreen 的 state（隔了好几层），用 CompositionLocal 把
             // 「打开预览」这件事传下去，免得为一张图把回调穿过整条渲染链。
+            // LocalImageOrigins 由 MpiApp 层提供（与 LocalVideoFetcher / LocalDirectPlaybackUrl 同处）。
             CompositionLocalProvider(LocalImagePreviewer provides { previewImage = it }) {
             when {
                 !view.ready -> CenteredHint(text = "正在载入会话…", loading = true)
@@ -1653,6 +1654,14 @@ private fun ThinkingBlockRow(block: MessageBlock, key: String) {
  */
 internal val LocalImagePreviewer = staticCompositionLocalOf<((ImageBitmap) -> Unit)?> { null }
 
+/**
+ * 「内容 key → 本地原图 URI」查询（2026-10-10）。
+ *
+ * 图片块点开时优先读**本机那张原图**（零延迟零流量，微信/飞书的路子）；查不到才回到
+ * 把缩略图放大——后者放大后必然是糊的，只当兼底。
+ */
+internal val LocalImageOrigins = staticCompositionLocalOf<((String) -> String?)?> { null }
+
 /** 全屏图片预览覆盖层：双指缩放（1x–6x）、拖移，点空白或返回关闭。 */
 @Composable
 private fun ImagePreviewOverlay(bitmap: ImageBitmap, onClose: () -> Unit) {
@@ -2265,18 +2274,32 @@ private fun ImageBlock(block: MessageBlock) {
     }
 
     if (bitmap != null) {
-        // LocalImagePreviewer.current 只能在 @Composable 上下文里读（clickable 的 lambda 不是）
+        // 这两个只能在 @Composable 上下文里读（clickable 的 lambda 不是）
         val previewer = LocalImagePreviewer.current
+        val origins = LocalImageOrigins.current
+        val key = block.mediaName
+        // 发送时那张图的本地 URI：有就打开它（原图），没有才退回放大缩略图。
+        val localUri = remember(key, origins) { key?.let { origins?.invoke(it) } }
+        var showingOriginal by remember { mutableStateOf(false) }
         Image(
             bitmap = bitmap,
-            contentDescription = "图片（点击放大）",
+            contentDescription = "图片（点击看原图）",
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
-                // 点击放大：手机上小图看不清（截图 / 报错图常常如此）。
-                .clickable { previewer?.invoke(bitmap) },
+                // 点击查看：本地原图优先（缩略图放大只会更糊——2026-10-10 用户实测的那个问题）。
+                .clickable {
+                    if (localUri != null) showingOriginal = true else previewer?.invoke(bitmap)
+                },
             contentScale = ContentScale.Fit,
         )
+        if (showingOriginal && localUri != null) {
+            ImagePreviewDialog(
+                localUri = localUri,
+                thumbB64 = block.data.orEmpty(),
+                onDismiss = { showingOriginal = false },
+            )
+        }
     } else {
         Text(
             text = "［图片无法显示${block.mimeType?.let { " · $it" } ?: ""}］",

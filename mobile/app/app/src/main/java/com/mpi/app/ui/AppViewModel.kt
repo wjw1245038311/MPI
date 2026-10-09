@@ -268,6 +268,14 @@ class AppViewModel(
     /** 按会话保存的草稿（内存；跨重启持久化留待需要时再说）。 */
     private val drafts = mutableMapOf<String, String>()
     /**
+     * 「内容 key → 本机原图 URI」：发送图片时记下，「点开看原图」用它读本地那份。
+     *
+     * 为什么不能只存在消息里：消息是**快照重建**的（主机不知道你手机上的 URI），
+     * 所以映射必须活在 ViewModel 里。目前仅进程内存 —— 重启 App 后回落缩略图，
+     * 要跨重启得落盘，另行安排。
+     */
+    private val sentImageUris = mutableMapOf<String, String>()
+    /**
      * 「对话即主页」：每次 attach 只自动开一次会话；
      * 用户自己开过（或通知深链开过）就不再掠。
      */
@@ -887,6 +895,8 @@ class AppViewModel(
                     loadAttachment { attachmentLoader.loadImage(uri) }
                     return@launch
                 }
+                // 记住「key → 本机原图」：消息快照重建后依然能按 key 找回本地那份。
+                sentImageUris[upload.name] = source.localUri
                 _ui.update { state ->
                     state.copy(
                         videoUpload = null,
@@ -1996,6 +2006,9 @@ class AppViewModel(
         session = null
         requester = null
     }
+
+    /** 「点开看原图」用：按内容 key 查本机原图 URI（没有 → null，调用方回落缩略图）。 */
+    fun localImageUri(key: String): String? = sentImageUris[key]
 
     override fun onCleared() {
         detachSession()

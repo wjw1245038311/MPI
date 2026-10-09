@@ -82,6 +82,13 @@ data class MessageBlock(
      * （一个永远「执行中」的占位块 + 一个真正拿到结果的块）。
      */
     val contentIndex: Int? = null,
+    /**
+     * 图片块的内容 key（SHA-256）——「点开看原图」靠它查发送时记下的本地 URI。
+     *
+     * 主机侧一直在快照里带 `key`（`...(ref?.name ? { key: ref.name } : {})`），只是客户端
+     * 从来没解出来过，于是点开只能把缩略图放大（越放越糊）。老消息没有这个字段。
+     */
+    val mediaName: String? = null,
 )
 
 data class MessageArtifact(
@@ -188,6 +195,8 @@ internal data class BlockDto(
     val omitted: Boolean? = null,
     val isError: Boolean? = null,
     val id: String? = null,
+    /** 内容寻址的 key（主机一直在发，客户端以前没接）。用它找本地原图。 */
+    val key: String? = null,
 )
 
 @Serializable
@@ -376,6 +385,7 @@ object ThreadModels {
             omitted = omitted == true,
             id = id,
             isError = isError == true,
+            mediaName = key,
         )
     }
 }

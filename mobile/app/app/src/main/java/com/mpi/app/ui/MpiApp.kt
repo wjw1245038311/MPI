@@ -196,6 +196,8 @@ fun MpiApp(container: AppContainer) {
                         CompositionLocalProvider(
                             LocalVideoFetcher provides viewModel::fetchVideoAttachment,
                             LocalDirectPlaybackUrl provides viewModel::directPlaybackUrl,
+                            // 「点开看原图」：按内容 key 查发送时记下的本地 URI（查不到回落缩略图）。
+                            LocalImageOrigins provides viewModel::localImageUri,
                         ) {
                             ThreadScreen(
                                 view = openThread,
