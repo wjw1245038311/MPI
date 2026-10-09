@@ -175,18 +175,12 @@ export interface ChannelProblem {
  */
 export function validateChannels(channels: RelayChannel[], ctx: ChannelContext, mode: RelayMode): ChannelProblem[] {
   const problems: ChannelProblem[] = [];
-  const seen = new Map<string, string>();
   for (const channel of channels) {
     if (channel.id === "lan") continue; // 运行时合成，不参与校验
-    const host = hostUrlFor(channel, ctx);
-    if (channel.enabled && host) {
-      const previous = seen.get(host);
-      if (previous) {
-        problems.push({ channelId: channel.id, reason: `主机上行地址与「${previous}」重复（${host}）：同一中继上同 hostId 注册两次会互相顶掉` });
-      } else {
-        seen.set(host, channel.label || channel.id);
-      }
-    }
+    // 注：**不再**报「主机上行地址重复」。同一台中继可以配多条通道，只暴露不同的手机地址
+    // （典型场景：同一台上再提供 TLS 与明文两个入口 —— PWA 只能连 wss，原生 App 走明文）。
+    // 运行期 `applyRelayUplinkConfig` 已按 hostUrl 去重、只挂**先出现**的那条 uplink，
+    // 所以同址不会真的注册两次（2026-10-09：ECS 中继同时监听 9443/TLS + 10445/明文）。
     if (channel.enabled && mode === "auto" && !(channel.phoneUrl || "").trim()) {
       problems.push({ channelId: channel.id, reason: "自动模式下每条启用的通道都要有手机地址（否则票里带不上它）" });
     }

@@ -117,15 +117,14 @@ test("票内地址：手动一条；自动多条且局域网优先、空地址�
 });
 
 // ---- ⑥ 校验 ----
-test("同主机上行地址只允许一条启用（防同 hostId 在同一中继互相顶掉）", () => {
+test("同主机上行地址：允许重复配置（运行期按 hostUrl 去重，只挂先出现的那条）", () => {
+  // 2026-10-09：同一台中继可以暴露多个手机地址（TLS 的 wss + 明文 ws），
+  // 主机只需要一条 uplink —— applyRelayUplinkConfig 会跳过重复的 hostUrl。
   const dup = [
     { id: "a", label: "本机（CF）", phoneUrl: "wss://cf/ws", enabled: true, kind: "local" },
     { id: "b", label: "本机（第二份）", phoneUrl: "wss://cf2/ws", enabled: true, kind: "local" },
   ];
-  const problems = validateChannels(dup, ctx(), "manual");
-  assert.equal(problems.length, 1, "两条都推导到 ws://127.0.0.1:9001/ws → 必须报错");
-  assert.match(problems[0].reason, /重复/);
-  assert.equal(validateChannels([{ ...dup[0], enabled: false }, dup[1]], ctx(), "manual").length, 0, "关掉一条就不冲突");
+  assert.equal(validateChannels(dup, ctx(), "manual").length, 0, "两条推导到同一 hostUrl 也不再报错（运行期去重）");
   assert.equal(
     validateChannels([{ id: "e", label: "空地址", phoneUrl: "", enabled: true, kind: "local" }], ctx(), "auto").length,
     1,

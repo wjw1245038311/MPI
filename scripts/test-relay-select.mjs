@@ -62,6 +62,18 @@ test("S6 host.info 合并：顺序以主机为准；lastGood 只在降级时保�
   assert.deepEqual(mergeHostRelayInfo(base, [" ws://a/ws ", "ws://a/ws", ""], {}).relayUrls, ["ws://a/ws"]);
 });
 
+test("HTTPS 页面下剔除 ws:// 候选（混合内容会被浏览器拦掉）", () => {
+  const input = { relayUrl: "ws://plain/ws", relayUrls: ["ws://plain/ws", "wss://tls/ws"] };
+  assert.deepEqual(relayCandidates(input, { secureContext: true }), ["wss://tls/ws"], "https 页面只留 wss");
+  assert.deepEqual(
+    relayCandidates(input, { secureContext: false }),
+    ["ws://plain/ws", "wss://tls/ws"],
+    "http 页面两条都在（原生 App / node 测试同理）",
+  );
+  assert.deepEqual(remainingCandidates(input, [], { secureContext: true }), ["wss://tls/ws"], "降级重试同样遵守该过滤");
+  assert.equal(pickRelayUrl({ ...input, relayUrl: "ws://plain/ws" }, { secureContext: true }), "wss://tls/ws", "重连取址同理");
+});
+
 test("S4 降级重试：remainingCandidates 去掉已试过的，顺序不变", () => {
   const input = { relayUrl: "ws://c/ws", relayUrls: ["ws://a/ws", "ws://b/ws"] };
   assert.deepEqual(remainingCandidates(input, []), ["ws://a/ws", "ws://b/ws", "ws://c/ws"]);

@@ -11,13 +11,30 @@
  * （注入连接函数，便于单测）。
  */
 
-/** 从记录/载荷里算出候选地址顺序（去空、去重、上次可用优先）。 */
-export function relayCandidates(input: { relayUrl?: string; relayUrls?: string[]; lastGoodRelayUrl?: string }): string[] {
+/**
+ * 页面是不是安全上下文（HTTPS / localhost）。
+ *
+ * 为什么需要：**HTTPS 页面里浏览器会直接拦掉 `ws://`（混合内容）**，它永远不会成功。
+ * 不跳过的代价不只是报错 —— 它会白占一个候选位，让降级看门狗干等一整个超时
+ * （2026-10-09 实测：minibox 上每刷新一次就要白等 8 秒才轮到 wss）。
+ * node 测试环境没有 `location`，当作非安全上下文（不过滤）。
+ */
+function isSecureContext(): boolean {
+  return typeof location !== "undefined" && location.protocol === "https:";
+}
+
+/** 从记录/载荷里算出候选地址顺序（去空、去重、上次可用优先；HTTPS 页面剔掉 `ws://`）。 */
+export function relayCandidates(
+  input: { relayUrl?: string; relayUrls?: string[]; lastGoodRelayUrl?: string },
+  options: { secureContext?: boolean } = {},
+): string[] {
+  const secure = options.secureContext ?? isSecureContext();
   const seen = new Set<string>();
   const ordered: string[] = [];
   const push = (raw?: string) => {
     const url = (raw || "").trim();
     if (!url || seen.has(url)) return;
+    if (secure && url.startsWith("ws://")) return; // 浏览器会拦，跳过
     seen.add(url);
     ordered.push(url);
   };
@@ -71,14 +88,18 @@ export function mergeHostRelayInfo<T extends { relayUrl?: string; relayUrls?: st
 export function remainingCandidates(
   input: { relayUrl?: string; relayUrls?: string[]; lastGoodRelayUrl?: string },
   tried: readonly string[],
+  options: { secureContext?: boolean } = {},
 ): string[] {
   const done = new Set(tried.map((url) => (url || "").trim()));
-  return relayCandidates(input).filter((url) => !done.has(url));
+  return relayCandidates(input, options).filter((url) => !done.has(url));
 }
 
 /** 本次连接该用哪个地址（重连热路径）：候选首位 = 主机首选；旧记录则回落上次可用。 */
-export function pickRelayUrl(input: { relayUrl: string; relayUrls?: string[]; lastGoodRelayUrl?: string }): string {
-  const candidates = relayCandidates(input);
+export function pickRelayUrl(
+  input: { relayUrl: string; relayUrls?: string[]; lastGoodRelayUrl?: string },
+  options: { secureContext?: boolean } = {},
+): string {
+  const candidates = relayCandidates(input, options);
   return candidates[0] || input.relayUrl;
 }
 
