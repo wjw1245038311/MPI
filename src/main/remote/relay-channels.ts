@@ -158,6 +158,25 @@ export function uplinkChannels(channels: RelayChannel[], mode: RelayMode, active
  * 自动模式带**全部**（局域网优先）；手动模式只带选中那条。
  * 空地址一律剔除（例如本机通道还没填公网域名时）。
  */
+/**
+ * 桌面自更新用的中继来源：取**第一条启用的公网（remote）通道**的主机上行地址。
+ *
+ * 为什么不能用旧的 `remoteRelayUrl`：S5 之后中继由通道列表管理，那个字段在新装机上是空字符串
+ * —— 结果是自更新直接跳过中继镜像去查 GitHub，而小版本不推 GitHub，于是「检查更新」
+ * 永远停在旧版本号（2026-10-09 minibox 实测：当前 0.9.11，却显示“最新版本 v0.9.7”）。
+ *
+ * 只取 remote：local 是 `ws://127.0.0.1:<port>`（回环地址做不了镜像源），
+ * lan 是内网地址（换个网络就打不开）。
+ */
+export function pickRelayFeedUrl(channels: RelayChannel[], ctx: ChannelContext): string {
+  for (const channel of channels) {
+    if (!channel.enabled || channel.kind !== "remote") continue;
+    const url = hostUrlFor(channel, ctx);
+    if (url) return url;
+  }
+  return "";
+}
+
 export function ticketAddresses(channels: RelayChannel[], mode: RelayMode, activeChannelId?: string): string[] {
   const picked = mode === "manual" ? uplinkChannels(channels, mode, activeChannelId) : channels.filter((c) => c.enabled);
   return picked.map((c) => (c.phoneUrl || "").trim()).filter(Boolean);

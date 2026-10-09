@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { fromLegacy, lanChannel, effectiveChannels, hostUrlFor, uplinkChannels, ticketAddresses, validateChannels, flipScheme } =
+const { fromLegacy, lanChannel, effectiveChannels, hostUrlFor, uplinkChannels, ticketAddresses, validateChannels, pickRelayFeedUrl, flipScheme } =
   await import("../src/main/remote/relay-channels.ts");
 
 const ctx = (over = {}) => ({ localRelayPort: 9001, lanPhoneUrl: null, lanAddress: null, ...over });
@@ -116,7 +116,24 @@ test("票内地址：手动一条；自动多条且局域网优先、空地址�
   );
 });
 
-// ---- ⑥ 校验 ----
+// ---- ⑥ 自更新来源 ----
+test("自更新来源：取第一条启用的公网通道（跳过 lan / local / 停用的）", () => {
+  const channels = [
+    { id: "lan", label: "局域网", phoneUrl: "ws://192.168.1.9:9001/ws", enabled: true, kind: "lan" },
+    { id: "local", label: "本机（CF）", phoneUrl: "", enabled: true, kind: "local" },
+    { id: "off", label: "停用的公网", phoneUrl: "ws://off.example/ws", enabled: false, kind: "remote" },
+    { id: "ecs", label: "ECS（主）", phoneUrl: "ws://47.97.28.110:10445/ws", enabled: true, kind: "remote" },
+    { id: "ecs-tls", label: "ECS（TLS）", phoneUrl: "wss://47.97.28.110:9443/ws", enabled: true, kind: "remote" },
+  ];
+  assert.equal(
+    pickRelayFeedUrl(channels, ctx()),
+    "ws://47.97.28.110:10445/ws",
+    "lan/local/停用都不算；取第一条启用的 remote 通道的主机上行",
+  );
+  assert.equal(pickRelayFeedUrl([], ctx()), "", "一条都没有 → 空串（调用方回退 GitHub）");
+});
+
+// ---- ⑦ 校验 ----
 test("同主机上行地址：允许重复配置（运行期按 hostUrl 去重，只挂先出现的那条）", () => {
   // 2026-10-09：同一台中继可以暴露多个手机地址（TLS 的 wss + 明文 ws），
   // 主机只需要一条 uplink —— applyRelayUplinkConfig 会跳过重复的 hostUrl。

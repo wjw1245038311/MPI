@@ -2,6 +2,7 @@ import { app } from "electron";
 import { autoUpdater, type ProgressInfo, type UpdateCheckResult, type UpdateInfo } from "electron-updater";
 import { getConfig } from "./config";
 import { relayAppUpdateFeedUrl } from "../shared/app-update-feed";
+import { effectiveChannels, pickRelayFeedUrl, type ChannelContext } from "./remote/relay-channels";
 import { beginTransfer, endTransfer, updateTransfer } from "./transfer-monitor";
 
 const OWNER = "wjw1245038311";
@@ -10,7 +11,8 @@ const REPOSITORY = OWNER + "/" + REPO;
 const RELEASES_LATEST_URL = "https://github.com/" + REPOSITORY + "/releases/latest";
 // 应用自更新：**中继镜像优先、GitHub 回退**。中继（用户的 ECS）在国内比 GitHub 快得多，
 // 但可能没部署/挂了，所以逐源探测，第一源成功就用它（下载也走同一源）。
-// 未配置中继（`remoteRelayUrl` 为空，例如别人装这台机器）时直接走 GitHub。
+// 中继地址取自**通道列表**（S5 起中继由它管理），而不是旧的 `remoteRelayUrl`：
+// 新装的机器上那个字段是空的，会让自更新跳过中继镜像、只能去查 GitHub（而小版本不推 GitHub）。
 // 发布流程：CI 把 dist/ 的 MPI-Setup-x.y.z.exe + latest.yml（+ .blockmap）挂到 GitHub Release，
 // 同时把同样三份文件推上中继的静态目录（路径见 shared/app-update-feed.ts，脚本见 scripts/publish-release.mjs）。
 // Pi 核心更新（core-updater.ts，走 npm registry）不受影响。
@@ -67,16 +69,31 @@ let probing = false;
 /** 上次成功的源（statusFromInfo 用它回填 source）。 */
 let activeSource: AppUpdateSource = "github";
 
+/** 自更新用不到局域网：这里只需要一个占位上下文（`pickRelayFeedUrl` 只取 remote 通道）。 */
+const FEED_CTX: ChannelContext = { localRelayPort: 0, lanPhoneUrl: null, lanAddress: null };
+
 /**
  * 中继镜像的 feed 地址（`<中继 http(s) 源>/download/app/`）；没有可用中继时返回 null。
  *
- * 从 `remoteRelayUrl`（wss://host/ws）推出来：把 ws(s) 换成 http(s)、丢掉路径。
- * `MPI_APP_UPDATE_URL` 可覆盖（测试/临时换源用）。
+ * 地址优先级：`MPI_APP_UPDATE_URL` 覆盖 > **通道列表里第一条启用的公网通道** > 旧的 `remoteRelayUrl`。
+ * 拿到 `ws(s)://host/ws` 后换成 http(s) 并丢掉路径（见 shared/app-update-feed.ts）。
  */
 function relayUpdateFeedUrl(): string | null {
   const override = (process.env.MPI_APP_UPDATE_URL || "").trim();
   if (override) return override.endsWith("/") ? override : override + "/";
-  return relayAppUpdateFeedUrl(getConfig().remoteRelayUrl);
+  const cfg = getConfig();
+  const channels = effectiveChannels(
+    cfg.relayChannels,
+    {
+      remoteRelayUrl: cfg.remoteRelayUrl,
+      mobileRelayUrl: cfg.mobileRelayUrl,
+      remoteRelayToken: cfg.remoteRelayToken,
+      remoteRelayFallbackEnabled: cfg.remoteRelayFallbackEnabled,
+      mobileRelayFallbackUrl: cfg.mobileRelayFallbackUrl,
+    },
+    FEED_CTX,
+  );
+  return relayAppUpdateFeedUrl(pickRelayFeedUrl(channels, FEED_CTX) || cfg.remoteRelayUrl);
 }
 
 function normalizeVersion(raw: string): string {
