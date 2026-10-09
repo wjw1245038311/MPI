@@ -43,6 +43,19 @@ const CONTROL_TYPES = new Set([
 
 export type RelayUplinkState = "disabled" | "connecting" | "connected" | "error";
 
+/**
+ * 持久化文件名后缀（deviceToken / 推送订阅）。
+ *
+ * **`primary` 与未设置都返回空** —— 沿用旧文件名 `remote-relay-tokens.json`：
+ * 升级到多通道前，主机上行没有实例键（逻辑名就是 "primary"），文件是不带后缀的；
+ * 若给 primary 也加后缀，升级后就读不到旧 token → 已配对设备全部失效（挨过这个坑）。
+ */
+export function relayInstanceFileSuffix(instanceKey?: string): string {
+  const key = (instanceKey || "").trim();
+  if (!key || key === "primary") return "";
+  return `.${key.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+}
+
 export interface RelayUplinkStatus {
   state: RelayUplinkState;
   relayUrl: string;
@@ -555,10 +568,9 @@ export class RelayUplink implements RelayOutbound {
 
   // --- token store --------------------------------------------------------------------
 
-  /** 持久化文件后缀：不传 instanceKey 时为空串（沿用旧文件名，零迁移）。 */
+  /** 持久化文件后缀：primary/未设置时为空串（沿用旧文件名，升级零迁移）。 */
   private fileSuffix(): string {
-    const key = (this.options.instanceKey || "").trim();
-    return key ? `.${key.replace(/[^a-zA-Z0-9_-]/g, "")}` : "";
+    return relayInstanceFileSuffix(this.options.instanceKey);
   }
 
   private tokenFile(): string {

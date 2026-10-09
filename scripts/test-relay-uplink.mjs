@@ -335,6 +335,16 @@ async function main() {
   }
 }
 
+// ---- 升级兼容（S2）：primary 必须沿用旧文件名，否则升级后读不到 deviceToken ----
+{
+  const { relayInstanceFileSuffix } = await import("../src/main/remote/relay-uplink.ts");
+  assert.equal(relayInstanceFileSuffix(undefined), "", "未设置 → 沿用旧文件名");
+  assert.equal(relayInstanceFileSuffix("primary"), "", "primary → 沿用旧文件名（升级零迁移）");
+  assert.equal(relayInstanceFileSuffix("local"), ".local", "其它通道按实例区分");
+  assert.equal(relayInstanceFileSuffix("ch-1_x"), ".ch-1_x", "安全字符保留");
+  console.log("ok - 持久化文件名：primary 沿用旧名，多通道按实例后缀区分");
+}
+
 main().catch((err) => {
   console.error(err);
   process.exit(1);
