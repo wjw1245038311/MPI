@@ -309,9 +309,17 @@ class DirectAttachments(
         if (target.url.isEmpty()) return relayUploadChunks(target, size, open, onProgress)
 
         // 分片上传 + 末片屏障（与图/音/文件共用同一套实现）。
-        val outcome = putAllChunks(target, size, open, sessionKey, onProgress)
+        //
         // 直连失败（入口不可达 / 被防火墙拦 / 隧道已废弃……）→ **回落中继分片**再试一次。
-        // 不回落的话，只要主机那个公网入口是死的，大附件就彻底发不出去（2026-10-09 的实测现场）。
+        // 两种失败形态都要兜：返回 problem（服务端拒）和**抛异常**（连接被拒/超时/中断）——
+        // 2026-10-10 首次真机测试就踩在这：只兜了 problem，而连接失败是抛异常，附件被静默丢掉。
+        val outcome = try {
+            putAllChunks(target, size, open, sessionKey, onProgress)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return relayUploadChunks(target, size, open, onProgress)
+        }
         if (outcome.problem != null) return relayUploadChunks(target, size, open, onProgress)
 
         // 封面是观感优化：送失败不算上传失败（消息里还会再带一份，主机侧幂等）。
@@ -364,8 +372,15 @@ class DirectAttachments(
             return MediaUpload(uploaded, deduped = false, target.workspacePath, target.workspaceName)
         }
 
-        val outcome = putAllChunks(target, size, open, sessionKey, onProgress)
-        // 直连失败 → 回落中继分片（同上：主机入口挂着时这是唯一能走通的路）。
+        // 直连失败 → 回落中继分片（同上：连接失败是抛异常，服务端拒是 problem，两种都要兜）。
+        val outcome = try {
+            putAllChunks(target, size, open, sessionKey, onProgress)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            val uploaded = relayUploadChunks(target, size, open, onProgress)
+            return MediaUpload(uploaded, deduped = false, target.workspacePath, target.workspaceName)
+        }
         if (outcome.problem != null) {
             val uploaded = relayUploadChunks(target, size, open, onProgress)
             return MediaUpload(uploaded, deduped = false, target.workspacePath, target.workspaceName)
