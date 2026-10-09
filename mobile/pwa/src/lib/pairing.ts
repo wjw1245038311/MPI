@@ -28,6 +28,8 @@ export interface PairingPayload {
   hostPublicKeyPem?: string;
   /** Relay WSS endpoint embedded by the desktop (S3); S2 links may carry it too. */
   relayUrl?: string;
+  /** S3：**有序地址列表**（局域网 → 主 → 备）——客户端按序选路（S4）；旧客户端只读 relayUrl。 */
+  relayUrls?: string[];
   ticket: string;
   expiresAt: number;
   protocol?: number;
@@ -62,6 +64,9 @@ export function parsePairingLink(input: string): PairingPayload {
     hostId: value.hostId,
     fingerprint: typeof value.fingerprint === "string" ? value.fingerprint : undefined,    hostPublicKeyPem: typeof value.hostPublicKeyPem === "string" ? value.hostPublicKeyPem : undefined,
     relayUrl: typeof value.relayUrl === "string" && value.relayUrl ? value.relayUrl : undefined,
+    relayUrls: Array.isArray(value.relayUrls)
+      ? value.relayUrls.filter((url): url is string => typeof url === "string" && !!url.trim())
+      : undefined,
     ticket: value.ticket,
     expiresAt: Number.isSafeInteger(value.expiresAt) ? (value.expiresAt as number) : 0,
     protocol: Number.isSafeInteger(value.protocol) ? (value.protocol as number) : undefined,

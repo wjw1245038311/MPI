@@ -17,6 +17,7 @@ import { createDeviceIdentity, randomSeedB64url } from "./lib/device-identity";
 import { LEGACY_DEVICE_NAME, defaultDeviceName } from "./lib/device-name";
 import { attachAutoReauth, parsePairingLink, runPairing, type PairingStage } from "./lib/pairing";
 import { RelayClient } from "./lib/relay-client";
+import { pickRelayUrl } from "./lib/relay-select";
 import { HostSession, type SessionSnapshot } from "./lib/session";
 import { Requester } from "./lib/requester";
 import { ThreadActions } from "./lib/thread-actions";
@@ -449,7 +450,9 @@ export default function App() {
     sessionRef.current?.detach();
     setSession(null);
     const identity = createDeviceIdentity(seedB64url);
-    const client = new RelayClient({ url: record.relayUrl, onStateChange: onClientState });
+    // S4：重连优先上次真正连上的通道（旧记录回落 relayUrl）
+    const chosenUrl = pickRelayUrl(record);
+    const client = new RelayClient({ url: chosenUrl, onStateChange: onClientState });
     clientRef.current = client;
     setHostId(record.hostId);
     setError(null);
@@ -465,6 +468,8 @@ export default function App() {
         ...record,
         deviceToken: result.deviceToken || null,
         hostX25519PubB64u: result.hostX25519PubB64u || record.hostX25519PubB64u,
+        // S4：这次连上了 → 记住这条通道，下次从它开始
+        lastGoodRelayUrl: chosenUrl,
       });
       void sessionRef.current?.refresh(); // the open-triggered refresh may have raced AUTH_REQUIRED
       void threadSessionRef.current?.resync().catch(() => {}); // same race for an open conversation
@@ -535,6 +540,9 @@ export default function App() {
       const record: PairingRecord = {
         hostId: payload.hostId,
         relayUrl: payload.relayUrl!,
+        // S4：把票里的有序地址列表一起存下，供后续按序选路
+        relayUrls: payload.relayUrls,
+        lastGoodRelayUrl: payload.relayUrl,
         deviceId: identity.deviceId,
         deviceToken: result.deviceToken || null,
         hostX25519PubB64u: result.hostX25519PubB64u || undefined,

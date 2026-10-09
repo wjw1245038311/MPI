@@ -12,6 +12,10 @@ export interface DeviceRecord {
 export interface PairingRecord {
   hostId: string;
   relayUrl: string;
+  /** S3/S4：配对票里的**有序地址列表**（局域网 → 主 → 备）；旧记录无此项。 */
+  relayUrls?: string[];
+  /** S4：最近一次真正连上的通道地址——重连时优先它。 */
+  lastGoodRelayUrl?: string;
   deviceId: string;
   /** Stable token from pair.accepted — enables hello re-auth after reconnects. */
   deviceToken: string | null;
