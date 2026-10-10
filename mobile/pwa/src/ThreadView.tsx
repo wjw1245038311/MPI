@@ -10,6 +10,7 @@ import type { RemotePermission, RemoteThreadState, RemoteUiRequest } from "../..
 import type { ThreadActions, SendMode } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
 import { compressImageFile, type CompressedImage } from "./lib/image-attach";
+import { routeDroppedFiles } from "./lib/attach-route";
 import { extractVideoPoster, looksLikeVideo } from "./lib/video-attach";
 import { requestDirectPlaybackUrl, uploadVideoDirect } from "./lib/attachment-direct";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
@@ -987,6 +988,10 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   // 视频**直连上传**进度（P1）：几十 MB 上传必须给反馈，否则像卡死。
   const [videoUpload, setVideoUpload] = useState<{ name: string; loaded: number; total: number } | null>(null);
 
+  // 拖拽 / 粘贴附件（对齐桌面 Composer）：高亮态 + enter/leave 深度计数。
+  const [fileDragOver, setFileDragOver] = useState(false);
+  const dragDepthRef = useRef(0);
+
   // 切会话：载入该会话的草稿 + 把顶层配置回收到当前快照值。
   const threadIdRef = useRef(view.threadId);
   useEffect(() => {
@@ -1350,16 +1355,14 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     }
   };
 
-  const onVideoPicked = async (list: FileList | null) => {
-    const file = list?.[0];
-    if (!file) return;
+  /** 单个视频文件 → 专用通道（picker / 拖拽 / 粘贴共用）。 */
+  const handleVideoFile = async (file: File) => {
     const browserType = file.type || "";
     if (browserType && !/^video\//.test(browserType)) {
       setSendError(`只支持视频文件（实际：${browserType}）`);
       return;
     }
     try {
-      setSendError(null);
       // 包成 video/mp4 而不是空 mime：主机会拒掉非 video/* 的请求（INVALID_REQUEST）。
       await prepareVideo(file, browserType || "video/mp4");
     } catch (error) {
@@ -1367,9 +1370,16 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     }
   };
 
-  const onFilesPicked = async (list: FileList | null) => {
-    if (!list || !list.length) return;
-    for (const file of Array.from(list)) {
+  const onVideoPicked = async (list: FileList | null) => {
+    const file = list?.[0];
+    if (!file) return;
+    setSendError(null);
+    await handleVideoFile(file);
+  };
+
+  const onFilesPicked = async (picked: File[]) => {
+    if (!picked.length) return;
+    for (const file of picked) {
       // 图片走压缩通道（模型直接看图）；其余原样上传。
       if (file.type.startsWith("image/")) {
         if (attachments.length >= 3) continue;
@@ -1410,6 +1420,70 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
         setSendError(`文件读取失败：${message}`);
       }
     }
+  };
+
+  /** 拖拽 / 粘贴的统一入口：按类型分通道——图片走压缩、视频优先直连上传、其余 base64。 */
+  const addDroppedFiles = async (dropped: File[]) => {
+    if (!dropped.length) return;
+    setSendError(null);
+    const routed = routeDroppedFiles(dropped);
+    // 视频走专用通道（直连上传优先，可到 128MB）：只取第一个。
+    if (routed.videos.length > 1) setSendError("只支持 1 个视频附件，其余视频已忽略");
+    // 超出通道上限的部分会被静默丢弃——给一句能归因的提示（而不是文件凭空消失）。
+    const overflow = [
+      routed.images.length + attachments.length > 3 ? "图片最多 3 张" : null,
+      routed.files.length + files.length > MAX_FILES ? `文件最多 ${MAX_FILES} 个` : null,
+    ].filter(Boolean);
+    if (overflow.length) setSendError(`${overflow.join("，")}，超出部分已忽略`);
+    await onFilesPicked([...routed.images, ...routed.files]);
+    const video = routed.videos[0];
+    if (video) await handleVideoFile(video);
+  };
+
+  // ---- 拖拽 / 粘贴附件（落区=整个聊天窗口；深度计数 + Files 类型守卫，对齐桌面 Composer）----
+
+  /** 只拦截真正携带文件的拖拽——不干扰选中文本等页内其它拖拽。 */
+  const isFileDragEvent = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+
+  const onDragEnter = (e: React.DragEvent) => {
+    if (!isFileDragEvent(e)) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setFileDragOver(true);
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    if (!isFileDragEvent(e)) return;
+    e.preventDefault(); // 必须 preventDefault 才允许 drop
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const onDragLeave = (e: React.DragEvent) => {
+    if (!isFileDragEvent(e)) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (!dragDepthRef.current) setFileDragOver(false);
+  };
+
+  const onDropFiles = async (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setFileDragOver(false);
+    await addDroppedFiles(Array.from(e.dataTransfer?.files ?? []));
+  };
+
+  /** Ctrl+V：剪贴板含文件/图片（截图、资源管理器复制的文件）→ 走附件通道；纯文本照旧。 */
+  const onPasteFiles = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    const itemFiles = items
+      ? Array.from(items)
+          .filter((item) => item.kind === "file" || item.type.toLowerCase().startsWith("image/"))
+          .map((item) => item.getAsFile())
+          .filter((file): file is File => !!file)
+      : [];
+    const pasted = itemFiles.length ? itemFiles : Array.from(e.clipboardData?.files ?? []);
+    if (!pasted.length) return;
+    e.preventDefault();
+    await addDroppedFiles(pasted);
   };
 
   const removeAttachment = (index: number) => {
@@ -1576,7 +1650,13 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const ctxLabel = ctx.hasValue ? `${Math.round(ctx.percent)}%` : "—";
 
   return (
-    <div className="thread-view">
+    <div
+      className={`thread-view ${fileDragOver ? "drop-target" : ""}`}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={(e) => void onDropFiles(e)}
+    >
       {/* 工具栏：会话级配置（权限/模式/模型）。返回改用顶部头像按钮，状态/权限文字已去重。 */}
       <div className="thread-toolbar">
         {view.summary && (
@@ -1734,6 +1814,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
               }
               rows={1}
               onChange={(e) => setDraft(e.target.value)}
+              onPaste={(e) => void onPasteFiles(e)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -1795,9 +1876,9 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
             </div>
 
             {/* Hidden pickers: album (multi) + camera (single, rear) + 任意文件。 */}
-            <input ref={albumInputRef} type="file" accept="image/*" multiple hidden onChange={(e) => void onFilesPicked(e.target.files)} />
-            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => void onFilesPicked(e.target.files)} />
-            <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => void onFilesPicked(e.target.files)} />
+            <input ref={albumInputRef} type="file" accept="image/*" multiple hidden onChange={(e) => void onFilesPicked(Array.from(e.target.files ?? []))} />
+            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => void onFilesPicked(Array.from(e.target.files ?? []))} />
+            <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => void onFilesPicked(Array.from(e.target.files ?? []))} />
             <input ref={videoInputRef} type="file" accept="video/*" hidden onChange={(e) => void onVideoPicked(e.target.files)} />
           </div>
         </>
