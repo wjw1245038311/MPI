@@ -78,6 +78,13 @@ async function main() {
     const parsedBare = parsePairingLink(Buffer.from(JSON.stringify({ hostId: "h", ticket: "t" })).toString("base64url"));
     assert.equal(parsedBare.hostId, "h");
 
+    // 完整 https 配对链接（桌面端「复制链接」的形态）：#pair= 与 ?pair= 都能提取 payload。
+    const b64 = Buffer.from(JSON.stringify({ hostId: "h2", ticket: "t2" })).toString("base64url");
+    assert.equal(parsePairingLink(`https://relay.example:9443/#pair=${b64}`).hostId, "h2");
+    assert.equal(parsePairingLink(`https://relay.example:9443/?pair=${b64}`).hostId, "h2");
+    // 裸 payload 里不含 #/?（base64url 字母表），不会被误判成 URL。
+    assert.equal(parsePairingLink(b64).ticket, "t2");
+
     // --- boot host + uplink -----------------------------------------------------------
     const rendererEvents = [];
     const handledEnvelopes = []; // what the (fake) host service receives — must be plaintext

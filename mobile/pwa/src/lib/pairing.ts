@@ -40,12 +40,31 @@ export interface PairingPayload {
 export type PairingStage = "connecting" | "waiting-challenge" | "waiting-approval" | "approved" | "error";
 
 /** Accepts "mpi://pair?payload=<b64url>" or a bare b64url payload. */
+/** 从完整 https 配对链接（https://<relay>/#pair=<b64> 或 ?pair=）里提取 payload；没有则 null。 */
+function pairParamFromUrl(text: string): string | null {
+  const hashIndex = text.indexOf("#");
+  if (hashIndex >= 0) {
+    const fromHash = new URLSearchParams(text.slice(hashIndex + 1)).get("pair");
+    if (fromHash) return fromHash;
+  }
+  const queryIndex = text.indexOf("?");
+  if (queryIndex >= 0) {
+    const fromQuery = new URLSearchParams(text.slice(queryIndex + 1).split("#")[0]).get("pair");
+    if (fromQuery) return fromQuery;
+  }
+  return null;
+}
+
 export function parsePairingLink(input: string): PairingPayload {
   let raw = input.trim();
   if (raw.startsWith("mpi://")) {
     const queryIndex = raw.indexOf("?");
     const params = new URLSearchParams(queryIndex >= 0 ? raw.slice(queryIndex + 1) : "");
     raw = params.get("payload") || "";
+  } else {
+    // 桌面端「复制链接」给的是完整 https 链接（扫码用）——粘贴框里也直接接受，提取 payload。
+    const extracted = pairParamFromUrl(raw);
+    if (extracted) raw = extracted;
   }
   if (!raw) throw new Error("missing pairing payload");
   let json: unknown;
