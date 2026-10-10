@@ -46,6 +46,7 @@
     "test:pwa-actions": "node --experimental-transform-types scripts/test-pwa-actions.mjs",
     "test:pwa-composer": "node --experimental-transform-types scripts/test-pwa-composer.mjs",
     "test:pwa-drop-attach": "node --experimental-strip-types scripts/test-pwa-drop-attach.mjs",
+    "test:remote-path-redact": "node --experimental-strip-types scripts/test-remote-path-redact.mjs",
     "test:pwa-layout": "node scripts/test-pwa-layout.mjs",
     "test:pwa-snapshot-cache": "node --experimental-transform-types scripts/test-pwa-snapshot-cache.mjs",
     "test:pwa-thread-cache": "node --experimental-transform-types scripts/test-pwa-thread-cache.mjs",

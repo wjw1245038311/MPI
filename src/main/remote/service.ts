@@ -15,6 +15,7 @@ import {
   type RemoteThreadSnapshot,
 } from "./protocol";
 import { appendDiagLog } from "../diag-log";
+import { redactRemotePaths } from "./path-redact";
 
 export interface RemoteBackend {
   listProjects(): Promise<unknown>;
@@ -135,9 +136,7 @@ export function isPushSubscriptionShape(value: unknown): value is RemotePushSubs
 }
 
 function safeErrorMessage(message: string): string {
-  return message
-    .replace(/(?:[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|private|var|tmp|workspace)\/)[^\s"'<>`]*/gi, "[path]")
-    .slice(0, 2_000);
+  return redactRemotePaths(message).slice(0, 2_000);
 }
 
 interface Claim {

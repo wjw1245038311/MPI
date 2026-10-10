@@ -213,6 +213,7 @@ import {
   videoRefEnvelope,
 } from "./remote/video-refs";
 import { snapshotImagePayload } from "./remote/image-thumbs";
+import { redactRemotePaths } from "./remote/path-redact";
 import { fillVideoPosters } from "./remote/video-poster";
 import { uploadAttachmentChunk } from "./remote/attachment-relay-upload";
 import { storeObject } from "./chat-attachment-store";
@@ -1734,11 +1735,10 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return result;
   }
 
-  function remoteSafeString(value: string): string {
-    return value
-      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
-      .replace(/(?:[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|private|var|tmp|workspace)\/)[^\s"'<>`]*/gi, "[path]")
-      .slice(0, 100_000);
+  function remoteSafeString(value: string, maskPaths = true): string {
+    let out = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
+    if (maskPaths) out = redactRemotePaths(out);
+    return out.slice(0, 100_000);
   }
 
   function modelArray(value: unknown): unknown[] {
@@ -1859,10 +1859,10 @@ function withVideoMarkers<T extends Record<string, any>>(event: T): T {
   } as T;
 }
 
-function remoteSafeEventValue(value: unknown, depth = 0): unknown {
+function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unknown {
     if (depth > 4 || value === null || typeof value === "number" || typeof value === "boolean") return value;
-    if (typeof value === "string") return remoteSafeString(splitVideoRefs(value).text);
-    if (Array.isArray(value)) return value.slice(0, 50).map((item) => remoteSafeEventValue(item, depth + 1));
+    if (typeof value === "string") return remoteSafeString(splitVideoRefs(value).text, maskPaths);
+    if (Array.isArray(value)) return value.slice(0, 50).map((item) => remoteSafeEventValue(item, depth + 1, maskPaths));
     if (!value || typeof value !== "object") return undefined;
     // 图片块：事件通道不做大图搬运。base64 会被 remoteSafeString 截成 100k 坏数据，
     // 手机端解析失败会渲染成「图片无法显示」（真机反馈）。事件里只留 mimeType，
@@ -1876,7 +1876,7 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
     const output: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 40)) {
       if (blocked.test(key)) continue;
-      const safe = remoteSafeEventValue(item, depth + 1);
+      const safe = remoteSafeEventValue(item, depth + 1, maskPaths);
       if (safe !== undefined) output[key] = safe;
     }
     return output;
@@ -3586,7 +3586,10 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
       const piEvent = (payload as any).event || {};
       // 带视频引用的用户消息 → 额外补一个 video 占位块（客户端据此触发快照补拉）。
       const eventForRemote = withVideoMarkers(piEvent);
-      event = { kind: String(piEvent.type || "agent.event"), data: { event: remoteSafeEventValue(eventForRemote) as Record<string, unknown> } };
+      // 用户消息内容不做路径脱敏：快照通道是原样下发的，两通道不一致会让 PWA
+      // 乐观回显的文本相等对账失败 → 同一条消息上屏两次（2026-10-10 真机事故）。
+      const maskPaths = piEvent.message?.role !== "user";
+      event = { kind: String(piEvent.type || "agent.event"), data: { event: remoteSafeEventValue(eventForRemote, 0, maskPaths) as Record<string, unknown> } };
       // 取证：回合关键事件的发布时刻 + 当时的订阅者数。
       // 真机反馈「气泡卡发送中 / 整条消息包括回复一起晚到」——subs=0 即说明
       // 手机此刻不在订阅状态，事件被静默丢弃（只能靠重连后的 resync 快照补齐）。
