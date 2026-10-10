@@ -172,7 +172,13 @@ internal fun Modifier.blockAncestorGestures(): Modifier = pointerInput(Unit) {
  */
 internal fun Modifier.edgeSwipeNodePanel(
     state: NodePanelState,
+    /**
+     * false = 不吃手势。全屏覆盖层（图片查看器）打开时必须关掉：
+     * 否则在里面向右拖图片（平移）会被当成「从边缘拉出面板」，把抽屉一起拉出来（2026-10-10 真机）。
+     */
+    enabled: Boolean = true,
 ): Modifier {
+    if (!enabled) return this
     return pointerInput(Unit) {
         val touchSlop = viewConfiguration.touchSlop
         val horizontalTrigger = touchSlop * 0.6f

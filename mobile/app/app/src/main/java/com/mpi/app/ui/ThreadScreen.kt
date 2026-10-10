@@ -244,6 +244,8 @@ fun ThreadScreen(
     // 工具/思考块隐藏时的可见列表（纯函数，可单测）：只影响展示，不影响 allMessages 的状态推导
     // 点击消息里的图片 → 全屏预览（见 ImagePreviewDialog）。
     var previewImage by remember { mutableStateOf<ImageBitmap?>(null) }
+    /** 图片查看器（原图那一路）开着没 —— 开着就禁用抽屉手势，见 LocalImageViewerOpen。 */
+    var imageViewerOpen by remember { mutableStateOf(false) }
     val showThinkingPlaceholder = shouldShowThinkingPlaceholder(view)
     val display = visibleMessages(renderable, showToolCalls, showThinking)
         // 占位行出现时，把「已 start 但一个块都没有」的流式消息从列表里摘掉：
@@ -378,12 +380,16 @@ fun ThreadScreen(
             Modifier
                 .weight(1f)
                 // 判定区域 = 这个消息区 Box：输入框/顶栏不在里面，所以它们的手势不受影响
-                .edgeSwipeNodePanel(nodePanel),
+                // 图片查看器开着时不吃抽屉手势（里面的平移不能被当成“拉出面板”）。
+                .edgeSwipeNodePanel(nodePanel, enabled = !imageViewerOpen && previewImage == null),
         ) {
             // 图片块拿不到 ThreadScreen 的 state（隔了好几层），用 CompositionLocal 把
             // 「打开预览」这件事传下去，免得为一张图把回调穿过整条渲染链。
             // LocalImageOrigins 由 MpiApp 层提供（与 LocalVideoFetcher / LocalDirectPlaybackUrl 同处）。
-            CompositionLocalProvider(LocalImagePreviewer provides { previewImage = it }) {
+            CompositionLocalProvider(
+                LocalImagePreviewer provides { previewImage = it },
+                LocalImageViewerOpen provides { imageViewerOpen = it },
+            ) {
             when {
                 !view.ready -> CenteredHint(text = "正在载入会话…", loading = true)
 
@@ -1667,6 +1673,14 @@ internal val LocalImagePreviewer = staticCompositionLocalOf<((ImageBitmap) -> Un
  */
 internal val LocalImageOrigins = staticCompositionLocalOf<((String) -> String?)?> { null }
 
+/**
+ * 「图片查看器打开了没」上报通道。
+ *
+ * 查看器是全屏覆盖层，但它不是**这个 Box** 的子节点——抽屉手势挂在 Box 上，
+ * 不关掉的话在里面平移图片会连带把抽屉拉出来（2026-10-10 真机反馈）。
+ */
+internal val LocalImageViewerOpen = staticCompositionLocalOf<((Boolean) -> Unit)?> { null }
+
 /** 全屏图片预览覆盖层：双指缩放（1x–6x）、拖移，点空白或返回关闭。 */
 @Composable
 private fun ImagePreviewOverlay(bitmap: ImageBitmap, onClose: () -> Unit) {
@@ -2282,6 +2296,7 @@ private fun ImageBlock(block: MessageBlock) {
         // 这两个只能在 @Composable 上下文里读（clickable 的 lambda 不是）
         val previewer = LocalImagePreviewer.current
         val origins = LocalImageOrigins.current
+        val setViewerOpen = LocalImageViewerOpen.current
         val key = block.mediaName
         // 发送时那张图的本地 URI：有就打开它（原图），没有才退回放大缩略图。
         //
@@ -2297,16 +2312,23 @@ private fun ImageBlock(block: MessageBlock) {
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 // 点击查看：本地原图优先（缩略图放大只会更糊——2026-10-10 用户实测的那个问题）。
+                // 不管有没有本地原图都进同一个查看器：它自己决定用原图还是缩略图，
+                // 并在左上角写出原因。以前分两条路，出问题时看不到任何提示（2026-10-10）。
                 .clickable {
-                    if (localUri != null) showingOriginal = true else previewer?.invoke(bitmap)
+                    showingOriginal = true
+                    setViewerOpen?.invoke(true)
                 },
             contentScale = ContentScale.Fit,
         )
-        if (showingOriginal && localUri != null) {
+        if (showingOriginal) {
             ImagePreviewDialog(
                 localUri = localUri,
                 thumbB64 = block.data.orEmpty(),
-                onDismiss = { showingOriginal = false },
+                mediaKey = key,
+                onDismiss = {
+                    showingOriginal = false
+                    setViewerOpen?.invoke(false)
+                },
             )
         }
     } else {
@@ -2433,7 +2455,13 @@ private const val PREVIEW_MAX_EDGE = 2400
  * 宁可小一点，也不要白屏。
  */
 @Composable
-private fun ImagePreviewDialog(localUri: String?, thumbB64: String, onDismiss: () -> Unit) {
+private fun ImagePreviewDialog(
+    localUri: String?,
+    thumbB64: String,
+    /** 内容 key（仅用于左上角的诊断文案，方便一眼看出卡在哪一环）。 */
+    mediaKey: String? = null,
+    onDismiss: () -> Unit,
+) {
     val context = LocalContext.current
     var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }
     /** 画面来自本地原图吗？（false = 回落到了缩略图，放大后会糊，得让用户知道） */
@@ -2498,9 +2526,14 @@ private fun ImagePreviewDialog(localUri: String?, thumbB64: String, onDismiss: (
                 // （以前只能胉猜「糊了没糊」——尤其是缩略图提高到 960px 之后。）
                 Text(
                     text = buildString {
-                        append(if (fromOriginal) "原图" else "缩略图（本机原图不可用）")
+                        append(if (fromOriginal) "原图" else "缩略图")
                         append(" · ").append(shown.width).append('×').append(shown.height)
                         if (scale > 1.01f) append(" · ").append(String.format("%.1f", scale)).append('×')
+                        // 回落时把原因一并写出来：没 key / 没本地 URI / 有 URI 但读不出来。
+                        if (!fromOriginal) {
+                            append(" · key=").append(mediaKey?.take(8) ?: "无")
+                            append(" uri=").append(if (localUri == null) "无" else "有(读取失败)")
+                        }
                     },
                     color = Color.White.copy(alpha = 0.88f),
                     style = MaterialTheme.typography.labelSmall,
