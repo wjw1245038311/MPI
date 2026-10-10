@@ -215,6 +215,7 @@ import {
 import { snapshotImagePayload } from "./remote/image-thumbs";
 import { fillVideoPosters } from "./remote/video-poster";
 import { uploadAttachmentChunk } from "./remote/attachment-relay-upload";
+import { storeObject } from "./chat-attachment-store";
 import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, agentImageFor, findVideoPoster, hasObject, isContentKey, isVideoFile, materializeIntoWorkspace, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeThumbnail, storeVideoPoster } from "./chat-attachment-store";
 import {
   LAN_RELAY_BIND_HOST,
@@ -1914,6 +1915,25 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
      * 缩略图是主机自己在收到图片时落盘的（`<key>.thumb.jpg`，见 resolveKeyedImages），
      * 所以这里只是一次本地读盘，不涉及网络。
      */
+    /**
+     * pi 消息里的图片 base64（可能是裸串，也可能带 `data:image/png;base64,` 前缀）→ 字节。
+     * 用于把 agent 产出的图片落进对象库（它没有附件引用，拿不到现成的 key）。
+     */
+    const decodeInlineImage = (data: string): { bytes: Buffer; mime: string | null } | null => {
+      const raw = data.trim();
+      if (!raw) return null;
+      const comma = raw.startsWith("data:") ? raw.indexOf(",") : -1;
+      const meta = comma > 0 ? raw.slice(5, comma) : "";
+      const base64 = comma > 0 ? raw.slice(comma + 1) : raw;
+      const mime = meta.split(";")[0] || null;
+      try {
+        const bytes = Buffer.from(base64, "base64");
+        return bytes.length > 0 ? { bytes, mime } : null;
+      } catch {
+        return null;
+      }
+    };
+
     const readThumbnailBase64 = (name: string): string | null => {
       try {
         const abs = resolveChatAttachment(name);
@@ -1984,11 +2004,25 @@ function remoteSafeEventValue(value: unknown, depth = 0): unknown {
             : typeof block.mimeType === "string" && /^image\/(jpeg|png|webp|gif)$/.test(block.mimeType)
               ? block.mimeType
               : "image/jpeg";
+          // 没有 media 引用的图片块（**agent 产出的截图 / 报错图**）以前只能看到缩略图：
+          // 它没有 ref、自然没有 key，客户端无从按需拉原图。现在把本体也落进对象库并带上
+          // key —— 与用户发的图走同一条路（内容寻址 + 按需拉取），客户端不用分两种情况。
+          let key = ref?.name;
+          if (!key) {
+            const inline = decodeInlineImage(block.data);
+            const stored = inline
+              ? storeObject({ bytes: inline.bytes, mime: inline.mime ?? mimeType, label: "图片" })
+              : null;
+            key = stored?.name;
+          }
+          appendDiagLog(
+            `snapshot-image refsLeft=${refs.length} hasThumb=${Boolean(ref?.thumb)} key=${key ? key.slice(0, 8) : "无"}${ref ? "" : "(inline)"}`,
+          );
           return {
             type: "image",
             data: decision.data,
             mimeType,
-            ...(ref?.name ? { key: ref.name } : {}),
+            ...(key ? { key } : {}),
             ...(ref?.label ? { label: ref.label } : {}),
           };
         }

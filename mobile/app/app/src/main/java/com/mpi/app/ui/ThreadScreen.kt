@@ -2463,14 +2463,37 @@ private fun ImagePreviewDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    val fetcher = LocalVideoFetcher.current
     var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }
-    /** 画面来自本地原图吗？（false = 回落到了缩略图，放大后会糊，得让用户知道） */
+    /** 画面来自原图吗？（false = 回落到了缩略图，放大后会糊，得让用户知道） */
     var fromOriginal by remember { mutableStateOf(false) }
-    LaunchedEffect(localUri) {
-        val original = withContext(Dispatchers.IO) { decodeOriginalImage(context, localUri) }
-        val shown = original ?: withContext(Dispatchers.IO) { decodeThumb(thumbB64) }
-        fromOriginal = original != null
-        bitmap = shown?.asImageBitmap()
+    /** 取原图过程中的状态文案（拉取中 / 拉失败了），显示在左上角。 */
+    var note by remember { mutableStateOf("") }
+    LaunchedEffect(localUri, mediaKey) {
+        // ① 本机原图（自己刚发出去的图，最快）
+        val local = withContext(Dispatchers.IO) { decodeOriginalImage(context, localUri) }
+        if (local != null) {
+            fromOriginal = true
+            bitmap = local.asImageBitmap()
+            return@LaunchedEffect
+        }
+        // ② 按 key 从主机拉原图 —— agent 产出的截图/报错图、别的设备发的图、本地文件已删的旧图
+        //    都走这条（与视频附件同一套中继分片，拉下来缓存在 cacheDir，重进不再拉）。
+        if (!mediaKey.isNullOrEmpty() && fetcher != null) {
+            note = "正在取原图…"
+            val file = withContext(Dispatchers.IO) { imageCacheFile(context, mediaKey) }
+            val ok = runCatching { fetcher.invoke(mediaKey, file) { _, _ -> } }.getOrNull() == true
+            val fetched = if (ok) withContext(Dispatchers.IO) { decodeFileSampled(file) } else null
+            if (fetched != null) {
+                fromOriginal = true
+                bitmap = fetched.asImageBitmap()
+                note = ""
+                return@LaunchedEffect
+            }
+            note = if (ok) "原图无法解码" else "取原图失败"
+        }
+        // ③ 回落缩略图
+        bitmap = withContext(Dispatchers.IO) { decodeThumb(thumbB64) }?.asImageBitmap()
     }
 
     // 手势：捏合缩放、放大后拖动；双击在「适应屏幕 ↔ 2.5×」之间切换；未放大时单击关闭。
@@ -2529,8 +2552,9 @@ private fun ImagePreviewDialog(
                         append(if (fromOriginal) "原图" else "缩略图")
                         append(" · ").append(shown.width).append('×').append(shown.height)
                         if (scale > 1.01f) append(" · ").append(String.format("%.1f", scale)).append('×')
+                        if (note.isNotEmpty()) append(" · ").append(note)
                         // 回落时把原因一并写出来：没 key / 没本地 URI / 有 URI 但读不出来。
-                        if (!fromOriginal) {
+                        if (!fromOriginal && note.isEmpty()) {
                             append(" · key=").append(mediaKey?.take(8) ?: "无")
                             append(" uri=").append(if (localUri == null) "无" else "有(读取失败)")
                         }
@@ -2545,6 +2569,26 @@ private fun ImagePreviewDialog(
         }
     }
 }
+
+/** 从主机拉下来的原图缓存在这里（按内容 key 命名，同一张图只拉一次）。 */
+private fun imageCacheFile(context: Context, key: String): File {
+    val dir = File(context.cacheDir, "image-originals").apply { mkdirs() }
+    return File(dir, key)
+}
+
+/** 解码文件并按 2 的幂采样（与本地原图同一口径，避免大图 OOM）。 */
+private fun decodeFileSampled(file: File): android.graphics.Bitmap? = runCatching {
+    if (!file.exists() || file.length() <= 0L) return@runCatching null
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+    var sample = 1
+    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= PREVIEW_MAX_EDGE) sample *= 2
+    android.graphics.BitmapFactory.decodeFile(
+        file.absolutePath,
+        android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+    )
+}.getOrNull()
 
 /** 解码本地原图：先量尺寸再按 2 的幂采样，避免高分辨率图把内存顶爆。 */
 private fun decodeOriginalImage(context: Context, localUri: String?): android.graphics.Bitmap? {
