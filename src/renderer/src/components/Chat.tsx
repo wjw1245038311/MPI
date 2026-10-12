@@ -18,7 +18,7 @@ import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
 import { splitChoiceSegments } from "../lib/choice-block";
 import type { ChoiceClampInfo, ChoiceFailure } from "../lib/choice-block";
-import { logChoiceFenceFailure, logChoiceFenceRepaired } from "../lib/diag-watch";
+import { logChoiceFenceFailure, logChoiceFenceInfoString, logChoiceFenceRepaired } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
 import { chatAttachmentUrl } from "../lib/chat-attachments";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
@@ -1885,8 +1885,10 @@ function BlockView({
     choiceSegments.forEach((seg, index) => {
       if (seg.kind === "code") {
         logChoiceFenceFailure({ threadId, messageKey, index, reason: seg.reason, raw: seg.raw ?? seg.text });
-      } else if (seg.kind === "choice" && seg.repaired) {
-        logChoiceFenceRepaired({ threadId, messageKey, index, raw: seg.raw ?? "" });
+      } else if (seg.kind === "choice") {
+        // 修复链救回 / info string 写歪但已升级：两者可能同时发生，各自记一行。
+        if (seg.repaired) logChoiceFenceRepaired({ threadId, messageKey, index, raw: seg.raw ?? "" });
+        if (seg.info) logChoiceFenceInfoString({ threadId, messageKey, index, info: seg.info, raw: seg.raw ?? "" });
       }
     });
   }, [choiceSegments, threadId, messageKey]);

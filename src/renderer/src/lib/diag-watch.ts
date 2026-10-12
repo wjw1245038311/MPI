@@ -121,3 +121,24 @@ export function logChoiceFenceRepaired(detail: {
     tail: flat.slice(-120),
   });
 }
+
+/** 开围栏的 info string 不是标准 `choices`（`choices>` / `Choices` / `choicesjson`）但已按
+ *  面板渲染。以前这种形态会静默降级成代码块（既无面板也无提示），现在记一行笔误形态，
+ *  便于以后判断容错规则该放宽还是该收紧。 */
+export function logChoiceFenceInfoString(detail: {
+  threadId: string;
+  messageKey: string;
+  index: number;
+  info: string;
+  raw: string;
+}): void {
+  const key = `info:${choiceFenceKey(detail.threadId, detail.messageKey, detail.index, detail.raw)}`;
+  if (!rememberChoiceFence(key)) return;
+  send("choice-fence-info", {
+    thread: detail.threadId,
+    message: detail.messageKey,
+    index: detail.index,
+    info: detail.info,
+    len: detail.raw.length,
+  });
+}

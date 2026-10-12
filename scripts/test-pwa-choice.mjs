@@ -156,6 +156,31 @@ const FENCE_BODY = '[{"title":"用什么方案？","options":["方案甲（推�
   console.log("ok 4 - withChoiceSegments: 漏闭合 / 尾部垃圾 / 非法降级 / 非 choices 不受影响");
 }
 
+{
+  // info string 写歪（2026-10-12：```choices> 曾被静默降级成代码块）：与桌面端同步的两档判定。
+  const noisy = withChoiceSegments(parseSegments("```choices>\n" + FENCE_BODY + "\n```"), true);
+  assert.deepEqual(noisy.map((i) => i.kind), ["choice"], "choices> 应升级成面板");
+
+  const colon = withChoiceSegments(parseSegments("```choices:\n" + FENCE_BODY + "\n```"), true);
+  assert.deepEqual(colon.map((i) => i.kind), ["choice"], "choices: 同样算精确档");
+
+  const upper = withChoiceSegments(parseSegments("```Choices\n" + FENCE_BODY + "\n```"), true);
+  assert.deepEqual(upper.map((i) => i.kind), ["choice"], "大小写变体等价（markdown-lite 已小写化 lang）");
+
+  const like = withChoiceSegments(parseSegments("```choicesjson\n" + FENCE_BODY + "\n```"), true);
+  assert.deepEqual(like.map((i) => i.kind), ["choice"], "疑似档（choicesjson）+ 合法正文 → 升级");
+
+  const likeBad = withChoiceSegments(parseSegments("```choicesjson\n{oops}\n```"), true);
+  assert.deepEqual(likeBad.map((i) => i.kind), ["code"], "疑似档 + 非法正文 → 维持代码块");
+  assert.equal(likeBad[0].choiceWarn, undefined, "疑似档失败不给提示（它不是标准 choices 围栏）");
+
+  const other = withChoiceSegments(parseSegments("```json\n" + FENCE_BODY + "\n```"), true);
+  assert.deepEqual(other.map((i) => i.kind), ["code"], "普通 json 代码块不受影响");
+  assert.equal(other[0].choiceWarn, undefined);
+
+  console.log("ok 4b - withChoiceSegments: info string 笔误容错（choices> / Choices / choicesjson）");
+}
+
 // ---- 3. buildChoiceReplyText + parseChoiceReply --------------------------------
 const QUESTIONS = [
   { title: "用什么方案？", options: [{ label: "方案甲（推荐）" }, { label: "方案乙" }] },

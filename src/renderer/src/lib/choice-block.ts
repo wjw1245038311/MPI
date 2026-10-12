@@ -31,6 +31,16 @@
  * 粘行闭合 / 反引号数不匹配 / 干脆忘了闭合 都接受，但**仅当正文能解析成合法
  * choices JSON** 时才采纳，否则退回原行为（普通文本 / 降级代码块）。
  *
+ * info string 的判定分两档（2026-10-12：模型把开围栏写成 ```choices> 时整块静默
+ * 降级成代码块，既没有面板也没有提示，只能靠用户截图反馈）：
+ *   ① 精确档 `isChoicesInfoString`：`choices` 加尾随空白或非字母数字噪声
+ *      （`choices>` / `choices:` / `Choices`）——按标准 choices 围栏处理；
+ *      但 `choicesjson` / `choices_block` 这类「另一个标签」不算。
+ *   ② 疑似档（以 choices 开头但带字母，如 `choicesjson`）：只有正文**严格**
+ *      解析通过才升级为面板（不开修复链），否则维持原行为当普通围栏。
+ * 两档里 info string 不等于标准 `choices` 的，段上带 `info` 字段，由 Chat.tsx
+ * 写一行诊断日志（choice-fence-info），便于以后看哪些笔误形态真的出现过。
+ *
  * 再往里一层是「JSON 修复链」（见 repairCandidates）：模型偶尔把正文写成
  * 语法非法的 JSON（中文串里夹未转义的英文双引号、结尾少括号、options 里丢
  * `{}` 包裹），严格 parse 必挂。修复链只在严格解析失败后启用，且修复结果必须
@@ -73,7 +83,10 @@ const TITLE_MAX = 200;
 export type ChoiceSegment =
   | { kind: "md"; text: string }
   /** repaired=true：这份数据是靠修复链救回来的（诊断日志用，便于以后收紧规则）。 */
-  | { kind: "choice"; data: ChoiceBlockData; repaired?: boolean; raw?: string }
+  | { kind: "choice"; data: ChoiceBlockData; repaired?: boolean; raw?: string;
+      /** 开围栏的 info string 不是标准 `choices`（`choices>` / `Choices` / `choicesjson`），
+       *  靠容错判定才升级成面板——诊断日志据此统计模型的真实笔误形态。 */
+      info?: string }
   /** A ```choices fence whose body is not valid JSON — rendered as a plain code block
    * (Chat.tsx 会在其下方给一行「未渲染成面板」提示；reason/raw 供文案与诊断日志). */
   | { kind: "code"; text: string; reason?: ChoiceFailure; raw?: string };
@@ -85,6 +98,16 @@ const FENCE_OPEN_RE = /^\s*(`{3,})(.*)$/;
 const closeReFor = (len: number) => new RegExp("^\\s*`{" + len + ",}\\s*$");
 /** 行尾挂着 ≥3 个反引号的行（模型把闭合围栏粘在正文末尾时）；捕获反引号之前的正文。 */
 const GLUED_CLOSE_RE = /^(.*?)`{3,}\s*$/;
+/** 精确档 info string：`choices` + 尾随空白或非字母数字噪声（`choices>` 等笔误）。
+ *  故意不接受 `choicesjson` / `choices-2` 这类「另一个标签」——它们走疑似档。 */
+const CHOICES_INFO_RE = /^choices[^a-z0-9_-]*$/i;
+/** 疑似档：以 choices 开头的其它标签（模型把语言标签写歪）。 */
+const CHOICES_LIKE_RE = /^choices/i;
+
+/** info string 是否应视为 choices 围栏（`choices` / `choices>` / `Choices` 都算）。 */
+export function isChoicesInfoString(info: string | undefined): boolean {
+  return CHOICES_INFO_RE.test((info ?? "").trim());
+}
 
 /** Parse the JSON body of a choices fence and validate/shape it. Null when invalid. */
 export function parseChoiceBlockData(body: string): ChoiceBlockData | null {
@@ -476,7 +499,11 @@ export function splitChoiceSegments(text: string): ChoiceSegment[] {
       continue;
     }
     const open = FENCE_OPEN_RE.exec(line);
-    if (!open || !/^choices[ \t]*$/i.test(open[2].trim())) {
+    const info = open ? open[2].trim() : "";
+    const exact = !!open && isChoicesInfoString(info);
+    // 疑似档（choicesjson / choices_v2 这类写歪的标签）：升级门槛是正文严格解析通过。
+    const like = !exact && !!open && CHOICES_LIKE_RE.test(info);
+    if (!exact && !like) {
       if (open) fenceLen = open[1].length; // generic fence — skip until its close
       buf.push(line);
       i++;
@@ -489,10 +516,27 @@ export function splitChoiceSegments(text: string): ChoiceSegment[] {
       i++;
       continue;
     }
+    // 疑似档不开修复链：正文严格解析不过就维持原行为（当普通围栏，不给提示、不吞正文）。
+    const likeData = like ? parseChoiceBodyBoundary(read.body) : null;
+    if (like && !likeData) {
+      fenceLen = open[1].length;
+      buf.push(line);
+      i++;
+      continue;
+    }
     flushMd();
+    const data = like ? likeData : read.data;
+    // info string 不是标准 choices → 带出去入诊断日志（面板本身照常渲染）。
+    const rescued = info.toLowerCase() === "choices" ? undefined : info;
     segments.push(
-      read.data
-        ? { kind: "choice", data: read.data, ...(read.repaired ? { repaired: true } : {}), raw: read.body }
+      data
+        ? {
+            kind: "choice",
+            data,
+            ...(read.repaired && !like ? { repaired: true } : {}),
+            ...(rescued ? { info: rescued } : {}),
+            raw: read.body,
+          }
         : { kind: "code", text: lines.slice(i, read.end + 1).join("\n"), ...(read.failure ? { reason: read.failure } : {}), raw: read.body },
     );
     i = read.end + 1;

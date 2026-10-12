@@ -17,6 +17,11 @@
  *
  * 已知差异：parseSegments 不跟踪嵌套围栏，所以「另一个代码块里引用的 choices
  * 示例」在手机上会被当成真面板（桌面端有 fence state 保护）。属罕见场景，接受。
+ *
+ * lang 判定与桌面端同步分两档（2026-10-12）：精确档 `choices` 允许尾随噪声
+ * （模型把开围栏写成 ```choices> 时，markdown-lite 给出的 lang 是 `choices>`，
+ * 旧判定会静默降级成代码块）；疑似档（choicesjson 等）仅当正文严格解析通过
+ * 才升级。手机端无诊断日志通道，所以不上报笔误形态（桌面端有 choice-fence-info）。
  */
 
 import type { TextSegment } from "./markdown-lite";
@@ -383,6 +388,18 @@ function parseChoiceBodyBoundary(body: string): ChoiceBlockData | null {
 /** 行尾挂着 ≥3 个反引号的行（模型把闭合围栏粘在正文末尾时）；捕获反引号之前的正文。 */
 const GLUED_CLOSE_RE = /^(.*?)`{3,}\s*$/;
 
+/** 精确档 lang（markdown-lite 已 trim + 小写）：`choices` 或带尾随噪声的笔误
+ *  （`choices>` / `choices:`）——与桌面端 isChoicesInfoString 同一规则。 */
+const CHOICES_LANG_RE = /^choices[^a-z0-9_-]*$/;
+/** 疑似档：以 choices 开头的其它标签（choicesjson / choices_v2 等），
+ *  只有正文严格解析通过才升级成面板（不开修复链）。 */
+const CHOICES_LIKE_RE = /^choices/;
+
+/** 代码段的 lang 是否应视为 choices 围栏。 */
+export function isChoicesLang(lang: string | undefined): boolean {
+  return CHOICES_LANG_RE.test((lang ?? "").trim().toLowerCase());
+}
+
 export type ChoiceAwareSegment =
   | { kind: "text"; text: string }
   /** choiceWarn：choices 围栏解析失败，按代码块显示并附一行提示（对齐桌面端）。
@@ -407,7 +424,19 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
 
   const out: ChoiceAwareSegment[] = [];
   for (const seg of segments) {
-    if (seg.type !== "code" || (seg.lang ?? "") !== "choices") {
+    if (seg.type !== "code") {
+      out.push(toPlainSegment(seg));
+      continue;
+    }
+    const lang = (seg.lang ?? "").trim().toLowerCase();
+    const exact = CHOICES_LANG_RE.test(lang);
+    const like = !exact && CHOICES_LIKE_RE.test(lang);
+    if (!exact && !like) {
+      out.push(toPlainSegment(seg));
+      continue;
+    }
+    // 疑似档（标签写歪）：正文严格解析不过就维持普通代码块，不抢普通 json 块。
+    if (like && !parseChoiceBodyBoundary(seg.text)) {
       out.push(toPlainSegment(seg));
       continue;
     }

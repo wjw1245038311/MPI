@@ -48,6 +48,44 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   assert.deepEqual(segs[2], { kind: "md", text: "后" });
 }
 
+// info string 写歪（2026-10-12：```choices> 曾整块静默降级成代码块，既无面板也无提示）。
+{
+  const body = JSON.stringify([{ title: "怎么落地？", options: ["做 A", "做 B"] }]);
+  const fenceWith = (info) => "```" + info + "\n" + body + "\n```";
+
+  // ① 精确档 + 尾随噪声：升级成面板，并把笔误形态带在 info 上（诊断日志据此统计）。
+  for (const info of ["choices>", "choices:", "choices\""]) {
+    const panel = cb.splitChoiceSegments(`问：\n${fenceWith(info)}\n`).find((s) => s.kind === "choice");
+    assert.ok(panel, `info="${info}" 应渲染成面板`);
+    assert.equal(panel.info, info, "笔误形态要能被诊断日志看到");
+  }
+  // 大小写与尾随空白等价于标准写法：升级但不带 info（不制造诊断噪声）。
+  for (const info of ["Choices", "choices "]) {
+    const panel = cb.splitChoiceSegments(fenceWith(info)).find((s) => s.kind === "choice");
+    assert.ok(panel, `info="${info}" 应等价于标准 choices`);
+    assert.equal(panel.info, undefined);
+  }
+  // 标准写法也不带 info。
+  assert.equal(cb.splitChoiceSegments(fence(body)).find((s) => s.kind === "choice").info, undefined);
+
+  // ② 疑似档（标签被写歪成另一个词）：正文严格合法才升级。
+  for (const info of ["choicesjson", "choices_v2"]) {
+    const segs = cb.splitChoiceSegments(fenceWith(info));
+    const panel = segs.find((s) => s.kind === "choice");
+    assert.ok(panel, `info="${info}" + 合法正文应升级`);
+    assert.equal(panel.info, info);
+  }
+  // 疑似档 + 正文非法 → 维持原行为：整段普通文本，不弹提示、不吞正文。
+  const badSegs = cb.splitChoiceSegments("```choicesjson\n{oops\n```");
+  assert.ok(!badSegs.some((s) => s.kind === "choice" || s.kind === "code"), "疑似档 + 非法正文不该产生面板或告警块");
+  assert.ok(badSegs[0].text.includes("choicesjson"), "原文必须原样保留");
+
+  // ③ 其它语言标签即使正文合法也不升级（别把普通 json 代码块吞成面板）。
+  const other = cb.splitChoiceSegments("```json\n" + body + "\n```");
+  assert.equal(other.length, 1);
+  assert.equal(other[0].kind, "md");
+}
+
 // A choices example QUOTED inside another code fence must not activate.
 {
   const inner = fence(JSON.stringify([{ title: "q", options: ["a", "b"] }]));
