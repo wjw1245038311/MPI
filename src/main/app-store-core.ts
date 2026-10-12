@@ -13,6 +13,7 @@ import type {
   AppManifest,
   AppLocalizedText,
   AppCapability,
+  AppHelperSpec,
   AppServiceSpec,
   AppPiSpec,
   VoiceSttTemplate,
@@ -255,6 +256,28 @@ export function validateAppManifest(raw: unknown): ManifestValidation {
     }
   }
 
+  // v3: @ 小帮手声明（composer @ 菜单 + main 进程路由；仅启用中的应用生效）
+  let helpers: AppHelperSpec[] | undefined;
+  if (m.helpers !== undefined) {
+    const list = Array.isArray(m.helpers) ? m.helpers : null;
+    if (!list || list.length === 0) errors.push("helpers must be a non-empty array");
+    else {
+      const hs: AppHelperSpec[] = [];
+      for (const [i, raw] of list.entries()) {
+        const h = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+        const name = typeof h.name === "string" ? h.name.trim().toLowerCase() : "";
+        if (!name || !/^[a-z][a-z0-9_-]{0,31}$/.test(name))
+          errors.push(`helpers[${i}].name must be 1–32 chars of a-z/0-9/_/- starting with a letter`);
+        else {
+          const label = isLocText(h.label) ? h.label : undefined;
+          const description = isLocText(h.description) ? h.description : undefined;
+          hs.push({ name, ...(label ? { label } : {}), ...(description ? { description } : {}) });
+        }
+      }
+      if (hs.length > 0) helpers = hs;
+    }
+  }
+
   if (errors.length > 0) return { ok: false, errors };
   const manifest: AppManifest = {
     id,
@@ -268,6 +291,7 @@ export function validateAppManifest(raw: unknown): ManifestValidation {
     ...(service ? { service } : {}),
     ...(pi ? { pi } : {}),
     ...(capabilities ? { capabilities } : {}),
+    ...(helpers ? { helpers } : {}),
   };
   return { ok: true, manifest };
 }

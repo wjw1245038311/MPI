@@ -486,6 +486,23 @@ const attr = (s: string) => s.replace(/"/g, "&quot;");
 
 // 视频附件的引用格式、上限与预算都在 remote/video-refs.ts（写入与解析必须同源）。
 
+/** @ 小帮手前缀："@<name> 问题"（name = 1–32 位 a-z/0-9/_/-，字母开头；仅消息开头生效）。 */
+const HELPER_PROMPT_RE = /^@([a-z][a-z0-9_-]{0,31})[ \t]+\n?([\s\S]+)$/i;
+
+/** 匹配 @ 前缀且该 helper 被某个已启用应用声明 → 返回 {name, question}；否则 null（落回 pi）。 */
+function matchHelperPrompt(text: string): { name: string; question: string } | null {
+  const m = HELPER_PROMPT_RE.exec(String(text || "").trim());
+  if (!m) return null;
+  const name = m[1].toLowerCase();
+  const question = m[2].trim();
+  if (!question) return null;
+  for (const app of listApps()) {
+    if (!app.enabled || !app.helpers) continue;
+    if (app.helpers.some((h) => h.name === name)) return { name, question };
+  }
+  return null;
+}
+
 function processAttachments(attachments: Attachment[] | undefined, text: string): { text: string; images: unknown[] } {
   const images: unknown[] = [];
   let extra = "";
@@ -5345,11 +5362,97 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
     return true;
   });
 
+  // @ 小帮手直调（v3）："@<name> 问题" → 路由到声明该 helper 的已启用应用的桥服务，
+  // 不走 pi / 不烧主模型 token；回复以合成 pi:event 序列显示在会话中（易失，产品决策见记忆池）。
+  const runHelperPrompt = async (threadId: string, rawText: string, name: string, question: string, images: unknown[]): Promise<void> => {
+    const app = listApps().find((a) => a.enabled && a.helpers?.some((x) => x.name === name));
+    if (!app) return; // 防御：matchHelperPrompt 已校验过
+    const cfg = getAppConfig(app.id) || {};
+    const port = parseInt(String(cfg.bridgePort ?? "19527"), 10);
+
+    send("pi:event", { threadId, event: { type: "agent_start" } });
+    // user 气泡用原始文本（含 @ 前缀）——与用户实际输入一致；若渲染层已有乐观气泡会被就地提升。
+    send("pi:event", {
+      threadId,
+      event: { type: "message_start", message: { role: "user", content: [{ type: "text", text: rawText }], timestamp: Date.now() } },
+    });
+
+    // 附件 → 桥的图片载荷（processAttachments 产出 {type:"image",data,mimeType}；兼容 dataUrl）。
+    const helperImages = (images || [])
+      .map((im) => {
+        if (!im || typeof im !== "object") return null;
+        const o = im as Record<string, unknown>;
+        let b64 = "";
+        if (typeof o.data === "string" && o.data) b64 = o.data;
+        else if (typeof o.dataUrl === "string" && o.dataUrl.startsWith("data:")) b64 = o.dataUrl.slice(o.dataUrl.indexOf(",") + 1);
+        return b64 ? { name: typeof o.name === "string" ? o.name : undefined, dataBase64: b64 } : null;
+      })
+      .filter((x): x is { name: string | undefined; dataBase64: string } => !!x)
+      .slice(0, 5);
+
+    const emitAssistant = (answerText: string, failed: boolean) => {
+      send("pi:event", {
+        threadId,
+        event: { type: "message_start", message: { role: "assistant", provider: app.id, model: name, timestamp: Date.now() } },
+      });
+      if (answerText) {
+        send("pi:event", { threadId, event: { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: answerText } } });
+      }
+      send("pi:event", {
+        threadId,
+        event: {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: answerText }],
+            stopReason: failed ? "error" : "stop",
+            ...(failed && answerText ? { errorMessage: answerText } : {}),
+            timestamp: Date.now(),
+            provider: app.id,
+            model: name,
+          },
+        },
+      });
+    };
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/ask`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: question, ...(helperImages.length ? { images: helperImages } : {}) }),
+        // 服务默认 300s（长生成实测会超 2 分钟）+ 余量
+        signal: AbortSignal.timeout(360_000),
+      });
+      const out = (await res.json()) as { ok?: boolean; answer?: string; error?: string };
+      if (!res.ok || !out.ok || !out.answer) throw new Error(out.error || `bridge HTTP ${res.status}`);
+      emitAssistant(out.answer, false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const zh = getConfig().language !== "en";
+      emitAssistant(
+        zh
+          ? `【@${name} 不可用】${msg}\n（本条未发给主模型；请检查应用商店里该应用的运行状态，或去掉 @ 前缀重发。）`
+          : `[@${name} unavailable] ${msg}`,
+        true,
+      );
+    } finally {
+      send("pi:event", { threadId, event: { type: "agent_settled" } });
+    }
+  };
+
   ipcMain.handle("thread:prompt", async (_e, args: { threadId: string; text: string; images?: unknown[]; attachments?: Attachment[] }) => {
     const h = bridges.get(args.threadId);
     if (!h) throw new Error("Thread not open: " + args.threadId);
     const { text, images } = processAttachments(args.attachments, args.text || "");
     const merged = [...(args.images || []), ...images];
+
+    // @ 小帮手直调（v3）：仅当已启用应用声明了该 helper 才拦截，否则落回 pi。
+    const helperHit = matchHelperPrompt(text);
+    if (helperHit) {
+      await runHelperPrompt(args.threadId, text.trim(), helperHit.name, helperHit.question, merged);
+      return { ok: true };
+    }
+
     await h.bridge.prompt(text, merged.length ? merged : undefined);
     return { ok: true };
   });

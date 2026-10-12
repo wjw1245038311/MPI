@@ -4,7 +4,7 @@ import { formatTokens, modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
 import { BUILTIN_BALANCED_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
 import { useOutsideClose } from "../lib/useOutsideClose";
-import type { ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage, PendingQuote, PromptAttachment, TaskModeDef } from "../lib/types";
+import type { AppHelperSpec, ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage, PendingQuote, PromptAttachment, TaskModeDef } from "../lib/types";
 import { MPI_FILE_MIME, MPI_SESSION_MIME, parseSessionDragPayload } from "../lib/file-drag";
 import { extractVideoPoster, looksLikeVideo } from "../lib/video-poster";
 import { SttError, startRecording, sttRecordErrorText, sttTranscribeErrorText, type RecordingHandle } from "../lib/stt";
@@ -212,6 +212,10 @@ export function Composer({ threadId }: { threadId: string }) {
   const dragDepthRef = useRef(0);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  // @ 小帮手菜单（v3）：条目来自应用商店中已启用应用的 helpers 声明。
+  const [atIndex, setAtIndex] = useState(0);
+  const [atDismissed, setAtDismissed] = useState(false);
+  const [helpers, setHelpers] = useState<Array<AppHelperSpec & { appId: string }>>([]);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const tmRef = useRef<HTMLDivElement>(null);
   const permRef = useRef<HTMLDivElement>(null);
@@ -703,6 +707,28 @@ export function Composer({ threadId }: { threadId: string }) {
     // submit / slash-menu navigation — otherwise Chinese/Japanese typing would
     // send the draft or accept a command mid-word.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (atMenuOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAtIndex((index) => (index + 1) % atItems.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAtIndex((index) => (index - 1 + atItems.length) % atItems.length);
+        return;
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && atItems.length > 0) {
+        e.preventDefault();
+        chooseHelper(atItems[atIndex] || atItems[0]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setAtDismissed(true);
+        return;
+      }
+    }
     if (slashMenuOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -814,6 +840,45 @@ export function Composer({ threadId }: { threadId: string }) {
   }, [commands, commandQuery, builtinCommands]);
   const slashMenuOpen = !!slashMatch && !slashDismissed && slashItems.length > 0;
 
+  // @ 小帮手：仅消息开头生效（路由语义 = 整条文本直调该应用，见 ipc.ts matchHelperPrompt）。
+  const atMatch = text.match(/^@([^\s@]*)$/);
+  const atQuery = (atMatch?.[1] || "").toLowerCase();
+  // 菜单打开时刷新一次（应用可能刚在商店面板里启用/停用）；依赖用稳定布尔，避免每次击键都发 IPC。
+  const atMenuActive = !!atMatch;
+  useEffect(() => {
+    if (!atMenuActive) return;
+    let on = true;
+    window.pi.apps
+      .list()
+      .then((apps) => {
+        if (!on) return;
+        const hs: Array<AppHelperSpec & { appId: string }> = [];
+        for (const app of apps) {
+          if (!app.enabled || !app.helpers?.length) continue;
+          for (const h of app.helpers) hs.push({ ...h, appId: app.id });
+        }
+        setHelpers(hs);
+      })
+      .catch(() => {});
+    return () => {
+      on = false;
+    };
+  }, [atMenuActive]);
+  const atItems = useMemo(
+    () =>
+      helpers
+        .filter(
+          (h) =>
+            !atQuery ||
+            h.name.includes(atQuery) ||
+            String(h.label?.zh || "").toLowerCase().includes(atQuery) ||
+            String(h.label?.en || "").toLowerCase().includes(atQuery),
+        )
+        .slice(0, 20),
+    [helpers, atQuery],
+  );
+  const atMenuOpen = !!atMatch && !atDismissed && atItems.length > 0;
+
   useEffect(() => {
     setSlashIndex(0);
   }, [slashQuery]);
@@ -822,6 +887,13 @@ export function Composer({ threadId }: { threadId: string }) {
     // Replace only the current slash token and keep any prompt text before it.
     patchDraft({ text: text.replace(/\/[^\s]*$/, `/${command.name} `) });
     setSlashDismissed(true);
+    requestAnimationFrame(() => taRef.current?.focus());
+  };
+
+  const chooseHelper = (helper: AppHelperSpec & { appId: string }) => {
+    // @ 小帮手只在消息开头出现 → 直接替换为 "@name "（路由前缀，见 ipc.ts）。
+    patchDraft({ text: `@${helper.name} ` });
+    setAtDismissed(true);
     requestAnimationFrame(() => taRef.current?.focus());
   };
 
@@ -965,6 +1037,31 @@ export function Composer({ threadId }: { threadId: string }) {
             </div>
           </div>
         )}
+        {atMenuOpen && (
+          <div className="slash-menu" role="listbox" aria-label={language === "zh" ? "小帮手" : "Helpers"}>
+            <div className="slash-menu-head">{language === "zh" ? "@ 小帮手直调（不进主模型）" : "@ Helper direct call (bypasses main model)"}</div>
+            <div className="slash-menu-list">
+              {atItems.map((helper, index) => {
+                const label = helper.label?.[language as "zh" | "en"] || helper.label?.[language === "zh" ? "en" : "zh"] || "";
+                return (
+                  <button
+                    key={`${helper.appId}:${helper.name}`}
+                    className={`slash-menu-item ${index === atIndex ? "active" : ""}`}
+                    role="option"
+                    aria-selected={index === atIndex}
+                    onMouseEnter={() => setAtIndex(index)}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => chooseHelper(helper)}
+                  >
+                    <span className="slash-command-name">@{helper.name}</span>
+                    <span className="slash-command-kind command">{language === "zh" ? "小帮手" : "Helper"}</span>
+                    {label && <span className="slash-command-description">{label}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {(images.length > 0 || files.length > 0 || quotes.length > 0) && (
           <div className="composer-attachments">
             {images.map((im) => (
@@ -1082,6 +1179,7 @@ export function Composer({ threadId }: { threadId: string }) {
             onChange={(e) => {
               patchDraft({ text: e.target.value });
               setSlashDismissed(false);
+              setAtDismissed(false);
             }}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
@@ -1430,6 +1528,9 @@ export function Composer({ threadId }: { threadId: string }) {
                           : "Switches between pool models by tier & latency"}
                     </span>
                   </button>
+                  {/* Only the provider list scrolls; the thinking row and session tools
+                      below stay pinned so 思考等级 can never be scrolled out of view. */}
+                  <div className="model-pop-list">
                   {modelList.length === 0 && <div className="ft-empty">{language === "zh" ? "无可用模型（请检查认证）" : "No models available (check auth)"}</div>}
                   {modelGroups.map((group) => {
                     const expanded = expandedProviders[group.provider] === true;
@@ -1469,19 +1570,35 @@ export function Composer({ threadId }: { threadId: string }) {
                       </div>
                     );
                   })}
-                  {levelList.length > 0 && (
-                    <>
+                  </div>
+                  <div className="model-pop-foot">
                       <div className="pop-divider" />
                       <div className="think-row">
-                        <span className="think-row-label">思考等级</span>
-                        <button
-                          type="button"
-                          className={`think-pill ${thinkOpen ? "open" : ""}`}
-                          onClick={() => setThinkOpen(!thinkOpen)}
-                        >
-                          {reasoningLevelLabel(thinking, language)}
-                          <ChevronRight size={12} className={`chev ${thinkOpen ? "up" : ""}`} />
-                        </button>
+                        <span className="think-row-label">{language === "zh" ? "思考等级" : "Thinking"}</span>
+                        {levelList.length === 0 ? (
+                          /* 模型不支持思考时也要把这行留在面板里，否则用户会以为控件丢了。 */
+                          <button
+                            type="button"
+                            className="think-pill na"
+                            disabled
+                            title={
+                              language === "zh"
+                                ? "当前模型不支持思考（pi 只返回 off）。若该模型实际支持思考，请在 models.json 里把该模型的 reasoning 设为 true，然后重启应用。"
+                                : "This model has no thinking levels (pi reports only “off”). If it does support reasoning, set reasoning: true for it in models.json and restart the app."
+                            }
+                          >
+                            {language === "zh" ? "不支持" : "n/a"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className={`think-pill ${thinkOpen ? "open" : ""}`}
+                            onClick={() => setThinkOpen(!thinkOpen)}
+                          >
+                            {reasoningLevelLabel(thinking, language)}
+                            <ChevronRight size={12} className={`chev ${thinkOpen ? "up" : ""}`} />
+                          </button>
+                        )}
                       </div>
                       {thinkOpen && (
                         <div className="think-options">
@@ -1506,8 +1623,6 @@ export function Composer({ threadId }: { threadId: string }) {
                           })}
                         </div>
                       )}
-                    </>
-                  )}
                   <div className="pop-divider" />
                   <div className="pop-head">{language === "zh" ? "会话工具" : "Session tools"}</div>
                   <button
@@ -1522,6 +1637,7 @@ export function Composer({ threadId }: { threadId: string }) {
                     </span>
                     <span className="o2">{language === "zh" ? "智能体完成任务时播放提示音" : "Play a short chime when the agent finishes a task"}</span>
                   </button>
+                  </div>
                 </div>
               )}
             </div>

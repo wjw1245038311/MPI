@@ -973,6 +973,14 @@ export interface AppRuntimeStatus {
 }
 
 /** 解析并校验后的 mpi-app.json 清单。 */
+/** v3：@ 小帮手声明——输入框 @ 菜单条目 + main 进程路由目标。 */
+export interface AppHelperSpec {
+  /** @ 名称，如 "qoder"（1–32 位 a-z/0-9/_/-，字母开头；输入时大小写不敏感）。 */
+  name: string;
+  label?: AppLocalizedText;
+  description?: AppLocalizedText;
+}
+
 export interface AppManifest {
   id: string;
   name: AppLocalizedText;
@@ -989,6 +997,8 @@ export interface AppManifest {
   pi?: AppPiSpec;
   /** v2：能力声明（安装确认用）。 */
   capabilities?: AppCapability[];
+  /** v3：@ 小帮手（composer @ 菜单；仅启用中的应用生效，同名先到先得）。 */
+  helpers?: AppHelperSpec[];
 }
 
 /** apps:list 返回的一条：清单 + 安装/启用状态。 */

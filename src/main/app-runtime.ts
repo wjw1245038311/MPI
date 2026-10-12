@@ -50,7 +50,14 @@ export interface AppHost {
 
 /** Injectable side-effect boundary so orchestration can be unit-tested. */
 export interface RuntimeDeps {
-  loadModule(absPath: string): Promise<ServiceModule>;
+  /**
+   * Load an app service module.
+   * fresh=true（默认，activate 用）：强制从磁盘重新求值——重装/更新会原地替换服务文件。
+   * fresh=false（deactivate 用）：复用本进程已加载的实例——有状态模块（闭包里持有
+   * server/socket 等）必须在同一个实例上 deactivate 才能释放资源；若每次都重载，
+   * deactivate 拿到的是全新实例（状态全空），旧资源永远泄漏、端口一直被占。
+   */
+  loadModule(absPath: string, fresh?: boolean): Promise<ServiceModule>;
   spawnProcess(
     command: string,
     args: string[],
@@ -93,21 +100,22 @@ function isEsmContext(from: string): boolean {
 }
 
 export const defaultRuntimeDeps: RuntimeDeps = {
-  loadModule: async (absPath) => {
+  loadModule: async (absPath, fresh = true) => {
     // An app reinstall/update replaces the service files IN PLACE, so a plain
     // import() would keep serving the module cached from the previous version
-    // until MPI restarts. Load fresh every time:
+    // until MPI restarts. activate therefore always loads fresh; deactivate must
+    // reuse the cached instance (stateful modules release resources in closures).
     const ext = extname(absPath).toLowerCase();
     if (ext !== ".cjs" && isEsmContext(absPath)) {
       // True ESM: the cache is keyed by URL, so a changing query re-evaluates.
       const url = pathToFileURL(absPath);
-      url.searchParams.set("mpiReload", String(Date.now()));
+      if (fresh) url.searchParams.set("mpiReload", String(Date.now()));
       return import(url.href) as Promise<ServiceModule>;
     }
     // CJS (.cjs / .js without type:module): require() with cache invalidation
     // (import()-ing a replaced .cjs still returns the cached evaluation).
     const req = createRequire(absPath);
-    delete req.cache[req.resolve(absPath)];
+    if (fresh) delete req.cache[req.resolve(absPath)];
     return Promise.resolve(req(absPath) as ServiceModule);
   },
   spawnProcess: (command, args, cwd, env, shell, onOutput) => {
@@ -298,7 +306,8 @@ export async function activateService(opts: ActivateOptions): Promise<ActivateRe
   });
 
   try {
-    const mod = normalizeServiceModule(await deps.loadModule(entryAbs));
+    // fresh=true：重启/重装后拿到磁盘上的最新代码。
+    const mod = normalizeServiceModule(await deps.loadModule(entryAbs, true));
     const result = await mod.activate?.(host);
     const voice = result && typeof result === "object" ? result.voice : undefined;
     const reported = (lastStatus as AppRuntimeStatus | null)?.state;
@@ -331,7 +340,8 @@ export async function deactivateService(opts: {
     const entryAbs = resolveServiceEntry(opts.dir, spec.entry);
     if (entryAbs && existsSync(entryAbs)) {
       try {
-        const mod = normalizeServiceModule(await deps.loadModule(entryAbs));
+        // fresh=false：复用 activate 时的同一实例，让有状态模块能释放自己持有的资源。
+        const mod = normalizeServiceModule(await deps.loadModule(entryAbs, false));
         const host = createAppHost(opts);
         await mod.deactivate?.(host);
       } catch (e) {

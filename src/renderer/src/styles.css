@@ -3806,6 +3806,27 @@ body.sidebar-resizing * {
 .model-pop {
   min-width: 264px;
 }
+/* 模型面板改成「列表滚动 + 底部固定」两段：
+   思考等级与会话工具不再随 provider 列表被挤出可视区（之前 .pill-pop 的
+   320px 高度把整块内容一起滚动，列表一长思考控件就看不到）。 */
+.model-pop {
+  display: flex;
+  flex-direction: column;
+  max-height: min(72vh, 520px);
+  overflow: hidden;
+}
+.model-pop-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.model-pop-foot {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 /* P1-12 auto mode: health dot (pill button + dropdown Auto row). */
 .model-auto-dot {
   display: inline-block;
@@ -3928,6 +3949,21 @@ body.sidebar-resizing * {
 .think-pill:hover {
   background: #f3f3ee;
   color: var(--text);
+}
+/* 模型不支持思考时：这一行仍然显示，但标成禁用（虚线 + 半透），
+   与「被面板遮住」区分开；悬停不再给反馈。 */
+.think-pill.na,
+.think-pill:disabled {
+  opacity: 0.55;
+  border-style: dashed;
+  cursor: default;
+}
+.think-pill:disabled:hover {
+  background: transparent;
+  color: var(--text-dim);
+}
+:root[data-theme="dark"] .think-pill:disabled:hover {
+  background: transparent;
 }
 .think-pill.open {
   border-color: var(--accent);

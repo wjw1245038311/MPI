@@ -167,6 +167,8 @@ MPI 启动 → 对 installed && enabled && autostart 的应用自动 activate（
 MPI 退出 → 统一 deactivate + kill 托管子进程
 ```
 
+**服务模块实例契约**：activate 总是从磁盘重新加载（重装/更新会原地替换文件）；deactivate 复用 activate 时的同一实例——有状态模块（闭包里持有 server/socket 等资源）只有在同一实例上 deactivate 才释放得了。改代码后点「重启」即生效（旧实例 deactivate → 新代码 activate）。
+
 **状态机**：`stopped → starting → ready | error`；`ready|error → stopped`（停用）。
 启用是幂等的：重复 enable 不会重复写 config（已有 `applied` 则先按停用回滚再重放）。
 

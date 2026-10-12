@@ -6,7 +6,7 @@
  * app-runtime.ts pulls in app-store-core.ts (dependency-free) and node builtins
  * only, so it loads in plain node with no electron stub. */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { register } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -176,6 +176,37 @@ assert.deepEqual(off.killed.sort((a, b) => a - b), [111, 222]);
 assert.equal(off.processes.size, 0);
 assert.equal(off.statuses.at(-1).state, "stopped");
 ok("deactivateService: reaps managed processes and reports stopped");
+
+// 有状态模块契约：deactivate 必须跑在 activate 的同一实例上（fresh=false），
+// 否则闭包里的 server/socket 等资源永远释放不掉、端口一直被占。
+{
+  const dir = mkdtempSync(join(tmpdir(), "mpi-app-stateful-"));
+  try {
+    writeFileSync(
+      join(dir, "service.cjs"),
+      [
+        "let started = false;",
+        "module.exports = {",
+        "  activate: async () => { started = true; },",
+        "  deactivate: async (host) => { host.log('stateful:' + started); },",
+        "};",
+      ].join("\n"),
+    );
+    const h = makeHarness({ id: "x", version: "1", service: { entry: "service.cjs" } }, {
+      dir,
+      loadModule: rt.defaultRuntimeDeps.loadModule,
+    });
+    await rt.activateService(h.opts);
+    await rt.deactivateService(h.opts);
+    assert.ok(
+      h.logs.some((l) => l.includes("stateful:true")),
+      "deactivate must observe the closure state set by activate",
+    );
+    ok("loadModule fresh flag: deactivate reuses the activated instance (stateful resources releasable)");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 /* ------------------------- rolling log ------------------------- */
 
