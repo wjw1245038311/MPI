@@ -44,6 +44,7 @@ const exact: Record<string, string> = {
   "项目文件夹被移动后，把会话与配置指向新位置": "Re-point sessions and settings after the project folder moved",
   "把当前会话完整复制成一个新会话": "Duplicate the whole session into a new one",
   "克隆会话": "Clone session",
+  "交接到新会话": "Hand off to new session",
   "删除？": "Delete?",
   "消息接入": "Messaging",
   "会话": "Sessions",

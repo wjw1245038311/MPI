@@ -1240,6 +1240,21 @@ interface PiStore {
   newSessionInThread: (id: string) => Promise<void>;
   forkThread: (id: string, entryId: string) => Promise<void>;
   cloneThread: (id: string) => Promise<void>;
+  /**
+   * 「交接到新会话」：同目录新建一个**空**会话，并继承来源会话的
+   * provider/model/thinkingLevel/permission（能拿到时还有 taskMode）。
+   *
+   * 为什么需要（2026-10-13 用户需求）：新建会话原本只读全局默认
+   * （settings.json 的 defaultProvider / defaultModel / defaultThinkingLevel），
+   * 于是在某个会话里临时切换的模型不会跟到新会话；而长会话继续往下堆代价很高
+   * （实测 38 万 token 的会话，缓存未命中时冷读一轮要 75 s）。
+   * 交接 = 配置不变、上下文清零。
+   *
+   * 来源可以是**未打开的**会话：那时从磁盘会话文件读 model / thinkingLevel
+   * （与 readThreadHistory 同源），但**权限与任务模式只在会话已打开时继承**
+   * （它们不落在会话文件里）。
+   */
+  handoffToNewSession: (cwd: string, sessionFile: string | null) => Promise<void>;
   renameThread: (id: string, name: string) => Promise<void>;
 
   setSidebarTab: (t: "threads" | "files") => void;
@@ -2936,6 +2951,51 @@ export const useStore = create<PiStore>()((set, get) => {
   },
 
   // Native pi clone semantics: duplicate the whole current active branch into a new session.
+  handoffToNewSession: async (cwd, sessionFile) => {
+    const zh = get().config?.language === "zh";
+    const live = sessionFile ? get().threads[sessionFile] : null;
+    // 继承源：优先活会话状态（字段最全），否则从磁盘会话文件读（只有 model / thinking）。
+    let inherit: { model?: { provider: string; id: string } | null; thinking?: string; permission?: PermissionLevel; taskMode?: string | null } = {};
+    if (live) {
+      inherit = { model: live.model, thinking: live.thinking, permission: live.permission, taskMode: live.taskMode };
+    } else if (sessionFile) {
+      try {
+        const hist: any = await window.pi.thread.loadHistory({ cwd, sessionFile });
+        inherit = { model: hist?.model || null, thinking: typeof hist?.thinkingLevel === "string" ? hist.thinkingLevel : undefined };
+      } catch {
+        // 读不到就只建空会话：交接不该因为读历史失败而失败
+      }
+    }
+    const newId = await get().openThread(cwd, undefined);
+    if (!newId) return;
+    const liveId = await get().ensureConnected(newId);
+    if (!liveId) return;
+    // 顺序有讲究：任务模式会连带写 thinking + 权限，所以先应用它，再逐项覆盖。
+    const inherited: string[] = [];
+    if (inherit.taskMode) {
+      await get().applyTaskMode(liveId, inherit.taskMode).catch(() => {});
+      inherited.push(zh ? "任务模式" : "task mode");
+    }
+    if (inherit.model?.provider && inherit.model?.id) {
+      await get().setModel(liveId, inherit.model.provider, inherit.model.id);
+      inherited.push(zh ? "模型" : "model");
+    }
+    if (inherit.thinking) {
+      await get().setThinking(liveId, inherit.thinking);
+      inherited.push(zh ? "思考等级" : "thinking level");
+    }
+    if (inherit.permission) {
+      await get().setPermission(liveId, inherit.permission);
+      inherited.push(zh ? "权限" : "permission");
+    }
+    get().pushToast(
+      "info",
+      zh
+        ? `已交接到新会话（继承 ${inherited.join("、") || "默认配置"}）`
+        : `Handed off to a new session (inherited ${inherited.join(", ") || "defaults"})`,
+    );
+  },
+
   cloneThread: async (id) => {
     const liveId = await get().ensureConnected(id);
     if (!liveId) return;

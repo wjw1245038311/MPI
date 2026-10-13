@@ -1,6 +1,6 @@
 {
   "name": "mpi",
-  "version": "0.9.16",
+  "version": "0.10.0",
   "piRuntimeVersion": "0.87.0",
   "private": true,
   "license": "MIT",
@@ -156,7 +156,8 @@
     "test:memoryrecall": "node --experimental-strip-types scripts/test-memory-recall.mjs",
     "test:memoryregress": "node --experimental-strip-types scripts/test-memory-regress.mjs",
     "test:attachment-relay-upload": "node --experimental-transform-types scripts/test-attachment-relay-upload.mjs",
-    "test:agent-rules": "node --experimental-strip-types scripts/test-agent-rules.mjs"
+    "test:agent-rules": "node --experimental-strip-types scripts/test-agent-rules.mjs",
+    "test:handoff": "node scripts/test-handoff-session.mjs"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.73.3",
