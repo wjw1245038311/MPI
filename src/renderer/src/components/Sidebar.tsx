@@ -224,7 +224,6 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const archiveProject = useStore((s) => s.archiveProject);
   const archiveThread = useStore((s) => s.archiveThread);
   const cloneThread = useStore((s) => s.cloneThread);
-  const handoffToNewSession = useStore((s) => s.handoffToNewSession);
   const deleteThread = useStore((s) => s.deleteThread);
   const setSidebarTab = useStore((s) => s.setSidebarTab);
   const toggleSidebar = useStore((s) => s.toggleSidebar);
@@ -846,21 +845,6 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             }}
           >
             {language === "zh" ? "克隆会话" : "Clone session"}
-          </button>
-          <button
-            role="menuitem"
-            title={
-              language === "zh"
-                ? "新建一个空会话，并继承这个会话的模型 / 思考等级 / 权限"
-                : "Start an empty session that inherits this session's model, thinking level and permission"
-            }
-            onClick={() => {
-              const item = threadMenu;
-              setThreadMenu(null);
-              void handoffToNewSession(item.cwd, item.file);
-            }}
-          >
-            {language === "zh" ? "交接到新会话" : "Hand off to new session"}
           </button>
           <button
             className="danger"
