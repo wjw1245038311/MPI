@@ -819,8 +819,8 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
   switch (event.type) {
     case "agent_start":
       // turnStartedAt 只在「本轮还没在等」时才取当前时刻：正常发送路径已在用户按下
-      // 发送时就写过它（把排队/建桥/冷启动都算进去），这里覆盖会让秒数从 agent_start
-      // 重新起算。自动续跑等未经发送路径的回合靠这个分支补上起点。
+      // 发送时就写过它，这里覆盖会让秒数从 agent_start 重新起算。自动续跑等未经
+      // 发送路径的回合靠这个分支补上起点。
       return { ...t, isStreaming: true, lastAgentStart: Date.now(), turnStartedAt: t.isStreaming ? t.turnStartedAt : Date.now(), error: undefined };
     case "agent_settled": {
       // If a streaming assistant message never got message_end, finalize it.
@@ -922,7 +922,10 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
         };
         // Flag permanently bricked sessions so the composer offers one-click repair.
         const brick = detectBricked(m.errorMessage);
-        return { ...t, streaming: null, messages: [...t.messages, final], toolRuns: reconciled.toolRuns, bricked: brick ?? t.bricked };
+        // 本段等待（本次 LLM 响应）到此结束。多步会话里模型马上会再请求一次，
+        // 所以把计时起点刷到此刻：否则占位行会把整轮的时间累加（用户 2026-10-13 实测：
+        // 多段思考 + 工具调用的会话里显示了 1m53s，而实际每段只等了十几秒）。
+        return { ...t, streaming: null, messages: [...t.messages, final], toolRuns: reconciled.toolRuns, bricked: brick ?? t.bricked, turnStartedAt: Date.now() };
       }
       return t;
     }
@@ -1101,6 +1104,8 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
             endedAt,
           },
         },
+        // 工具跑完 ≠ 回答完：模型马上要拿工具结果再请求一次，下一段等待从此刻算起。
+        turnStartedAt: endedAt,
       };
     }
     default:

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { register } from "node:module";
 
 // Source files use bundler-style extensionless imports; resolve them for node.
@@ -67,5 +68,19 @@ assert.equal(ti.thinkingElapsedSeconds(NOW - 145_000, NOW, NOW), 145); // 冷读
 assert.equal(ti.thinkingElapsedSeconds(undefined, NOW, NOW - 3_000), 3); // 无回合时间戳 → 退化成挂载时刻
 assert.equal(ti.thinkingElapsedSeconds(NaN, NOW, NOW - 2_000), 2); // 脏值同样退化成兜底
 assert.equal(ti.thinkingElapsedSeconds(NOW + 5_000, NOW, NOW), 0); // 时钟回拨/负值不出负数
+
+// --- 计时起点必须在「每段等待开始」刷新（源级护栏） -------------------------------
+// 为什么是读源码而不是跑行为：reduceThread 不导出，也没有 store 的测试夹具（它依赖
+// React/pi SDK）。而这两个刷新点很容易在重构中被抹掉：丢了就回到「整轮累加」这个
+// 用户 2026-10-13 实测到的 bug（多段思考 + 工具调用的会话显示 1m53s）。
+const storeSrc = readFileSync(new URL("../src/renderer/src/store.ts", import.meta.url), "utf8");
+const branchOf = (name) => {
+  const i = storeSrc.indexOf(`case "${name}":`);
+  assert.ok(i >= 0, `store.ts 里找不到 case "${name}"`);
+  return storeSrc.slice(i, i + 2500);
+};
+assert.match(branchOf("tool_execution_end"), /turnStartedAt/, "工具结束必须刷新 turnStartedAt（否则多步会话会把整轮时间累加）");
+assert.match(branchOf("message_end"), /turnStartedAt/, "上一条回复结束必须刷新 turnStartedAt（多步会话同理）");
+assert.match(storeSrc, /turnStartedAt:\s*sentAt/, "发送那一刻仍必须写入起点（排队/建桥/冷启动那段不能漏计）");
 
 console.log("thinking-indicator tests passed");

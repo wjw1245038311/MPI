@@ -422,12 +422,15 @@ export interface ThreadState {
   isStreaming: boolean;
   /** Wall-clock time of the most recent agent_start; used to tell real LLM turns apart from extension commands that never start one. */
   lastAgentStart?: number;
-  /** Wall-clock time the current waiting period began — the moment the user's
-   *  prompt was issued (falls back to agent_start for turns nobody sent, e.g.
-   *  auto-continue). The 「思考中 · Ns」 placeholder counts from here, so
-   *  switching threads / remounting the view no longer resets the counter to 0
-   *  (maxbox 2026-10-13: the counter restarted on every thread switch because
-   *  the component took its start from its own mount effect). */
+  /** Wall-clock time the **current waiting period** began — refreshed at every boundary
+   *  where the UI starts waiting for a fresh LLM response: the moment the user's prompt
+   *  is issued, and again when each tool finishes or each assistant reply ends (a
+   *  multi-step turn therefore never accumulates its whole duration here). The
+   *  「思考中 · Ns」 placeholder counts from this, so switching threads / remounting the
+   *  view no longer resets the counter to 0 (maxbox 2026-10-13: the counter restarted on
+   *  every thread switch because the component took its start from its own mount effect;
+   *  the opposite bug — counting the whole turn — was reported by the user the same day
+   *  from a session showing 1m53s while each segment waited only seconds). */
   turnStartedAt?: number;
   /** True while a manual compaction run (pi /compact) is in flight. */
   compacting?: boolean;
