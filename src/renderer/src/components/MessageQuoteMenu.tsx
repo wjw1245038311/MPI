@@ -6,19 +6,17 @@ import { Branch, CheckSquare, MessageSquare } from "./icons";
 /**
  * Chat-area right-click menu.
  *
- * 两种触发形态：
- *   ① 选中了聊天文字（原有行为）→ 「引用到输入框」/「添加为待办」；
- *   ② **没有选中文字、但右键落在对话区域（`.chat-scroll`）** → 「交接到新会话」。
- * 为什么要 ②：交接是“对这个对话”的操作，不应该要求先把鼠标划出一段文字才能用
- *   （用户 2026-10-13 指出：入口应该在对话区，而不是侧栏会话列表）。
- * 右键在对话区以外（输入框、侧栏…）时不接管，保留各处原有行为。
+ * 只在**选中了聊天文字**时接管右键（对话区之外、没选文字时不接管，保留各处原有行为）。
+ * 三个动作都以这段选中文字为输入：
+ *   「引用到输入框」→ 作为引用块进输入框；「添加为待办」→ 记成待办；
+ *   「交接到新会话」→ **把这段文字当成新会话的提示词直接发出去**（用户 2026-10-13 定稿语义）。
  *
  * The quote carries its location inside this conversation (session entry id +
  * transcript path), not just the pasted text — see buildQuoteEnvelope().
  */
 export function MessageQuoteMenu() {
-  // quote === null 表示“没选中文字、只对该对话操作”的那一形态
-  const [state, setState] = useState<{ x: number; y: number; quote: PendingQuote | null } | null>(null);
+  // 菜单永远由「一段选中的文字」触发：没有选中文字就没有菜单（交接需要提示词，空手交接没有意义）。
+  const [state, setState] = useState<{ x: number; y: number; quote: PendingQuote } | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const pushToast = useStore((s) => s.pushToast);
   const language = useStore((s) => s.config?.language || "en");
@@ -31,10 +29,11 @@ export function MessageQuoteMenu() {
       const t = threadId ? st.threads[threadId] : undefined;
       const sel = window.getSelection();
       const text = sel && !sel.isCollapsed ? sel.toString().trim() : "";
-      let quote: PendingQuote | null = null;
-      if (text && sel) {
-        // The selection may span several messages; attribute the quote to the
-        // message where it STARTS (anchor), falling back to its other end.
+      if (!text || !sel) return; // 没选中文字：不接管右键（输入框/侧栏保持各自原有菜单）
+      // The selection may span several messages; attribute the quote to the
+      // message where it STARTS (anchor), falling back to its other end.
+      let quote: PendingQuote;
+      {
         const anchorNode = sel.anchorNode;
         const anchorEl = anchorNode instanceof Element ? anchorNode : anchorNode?.parentElement ?? null;
         const focusNode = sel.focusNode;
@@ -51,10 +50,6 @@ export function MessageQuoteMenu() {
           role: m && (m.role === "user" || m.role === "assistant") ? m.role : undefined,
           sessionFile: t.sessionFile ?? undefined,
         };
-      } else {
-        // 没选中文字：只在对话区域内响应（右键别处保持原有行为）。
-        const inChat = e.target instanceof Element && e.target.closest(".chat-scroll");
-        if (!inChat || !t) return;
       }
       e.preventDefault();
       setState({ x: e.clientX, y: e.clientY, quote });
@@ -83,7 +78,7 @@ export function MessageQuoteMenu() {
   }, [state]);
 
   const doQuote = () => {
-    if (!state || !state.quote) return;
+    if (!state) return;
     const quote = state.quote;
     setState(null);
     // The active thread's composer listens and adds the chip to its draft.
@@ -91,19 +86,22 @@ export function MessageQuoteMenu() {
   };
 
   /**
-   * 交接到新会话：同目录开一个空会话，继承本会话的模型 / 思考等级 / 权限 / 任务模式。
+   * 交接到新会话：同目录开一个空会话、继承本会话的模型 / 思考等级 / 权限 / 任务模式，
+   * 并**把选中的这段文字当作新会话的提示词直接发出**（新会话立刻开始跑）。
    * 实现细节与继承范围见 store.handoffToNewSession。
    */
   const doHandoff = () => {
+    if (!state) return;
+    const { quote } = state;
     setState(null);
     const st = useStore.getState();
     const t = st.activeThreadId ? st.threads[st.activeThreadId] : undefined;
     if (!t) return;
-    void st.handoffToNewSession(t.cwd, t.sessionFile);
+    void st.handoffToNewSession(t.cwd, t.sessionFile, quote.text);
   };
 
   const doTodo = async () => {
-    if (!state || !state.quote) return;
+    if (!state) return;
     const { quote } = state;
     setState(null);
     const st = useStore.getState();
@@ -128,7 +126,7 @@ export function MessageQuoteMenu() {
   if (!state) return null;
   // Clamp so the menu never opens off-screen at a window edge.
   const W = 210;
-  const H = state.quote ? 130 : 46;
+  const H = 160; // 三个菜单项
   const x = Math.max(8, Math.min(state.x, window.innerWidth - W - 8));
   const y = Math.max(8, Math.min(state.y, window.innerHeight - H - 8));
   return (
@@ -138,20 +136,16 @@ export function MessageQuoteMenu() {
       style={{ left: x, top: y }}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {state.quote && (
-        <button type="button" onClick={() => doQuote()}>
-          <span>
-            <MessageSquare size={13} /> {zh ? "引用到输入框" : "Quote to composer"}
-          </span>
-        </button>
-      )}
-      {state.quote && (
-        <button type="button" onClick={() => void doTodo()}>
-          <span>
-            <CheckSquare size={13} /> {zh ? "添加为待办" : "Add as todo"}
-          </span>
-        </button>
-      )}
+      <button type="button" onClick={() => doQuote()}>
+        <span>
+          <MessageSquare size={13} /> {zh ? "引用到输入框" : "Quote to composer"}
+        </span>
+      </button>
+      <button type="button" onClick={() => void doTodo()}>
+        <span>
+          <CheckSquare size={13} /> {zh ? "添加为待办" : "Add as todo"}
+        </span>
+      </button>
       <button type="button" onClick={doHandoff}>
         <span>
           <Branch size={13} /> {zh ? "交接到新会话" : "Hand off to new session"}

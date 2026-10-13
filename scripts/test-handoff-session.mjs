@@ -2,16 +2,19 @@
  * 「交接到新会话」的回归测试。
  *
  * 为什么是源级断言：`store.ts` 依赖 React / pi SDK，拉不进 node 测试，也没有 store 夹具。
- * 而这个功能的语义**恰好全是"装配顺序"问题**（先建空会话、继承哪几项、任务模式必须先应用），
- * 一旦被重构改乱，功能会静默退化（模型没继承过去 / 权限被任务模式覆盖），所以在这里钉住。
+ * 而这个功能的语义**恰好全是"装配顺序"问题**（先建空会话、继承哪几项、任务模式必须先应用、
+ * 提示词必须在继承之后才发），一旦被重构改乱，功能会静默退化（模型没继承过去 / 第一轮
+ * 用了旧模型跑），所以在这里钉住。
  *
  * 需求背景（2026-10-13 用户）：新建会话原本只读全局默认
  * （settings.json 的 defaultProvider / defaultModel / defaultThinkingLevel），
  * 于是在某个会话里临时切换的模型不会跟到新会话；而长会话继续堆下去代价很高
  * （实测 38 万 token 的会话，缓存未命中时冷读一轮 75 s）。交接 = 配置不变、上下文清零。
  *
- * 入口位置由用户在同一天两次指正后定稿：**对话区域右键菜单**（MessageQuoteMenu），
- * 不是侧栏会话列表——并且"没选中文字、直接右键对话区"也要能用。
+ * 语义由用户在同一天三次指正后定稿：
+ *   ① 入口在**对话区域右键菜单**（不是侧栏会话列表）；
+ *   ② 触发条件是**选中一段文字**；
+ *   ③ 那段文字**就是新会话的提示词，并直接开跑**（不是开个空会话让用户再输一遍）。
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -19,9 +22,9 @@ import { readFileSync } from "node:fs";
 const store = readFileSync(new URL("../src/renderer/src/store.ts", import.meta.url), "utf8");
 const menu = readFileSync(new URL("../src/renderer/src/components/MessageQuoteMenu.tsx", import.meta.url), "utf8");
 
-const anchor = store.indexOf("handoffToNewSession: async (cwd, sessionFile) =>");
-assert.ok(anchor > 0, "store 里找不到 handoffToNewSession 实现");
-const body = store.slice(anchor, anchor + 4000);
+const anchor = store.indexOf("handoffToNewSession: async (cwd, sessionFile, prompt) =>");
+assert.ok(anchor > 0, "store 里找不到 handoffToNewSession 实现（签名应带 prompt 参数）");
+const body = store.slice(anchor, anchor + 5000);
 
 // ① 必须新建**空**会话（openThread 的第二参为 undefined），不能把来源会话本身拿来用
 assert.match(body, /openThread\(cwd, undefined\)/, "交接必须新建空会话：openThread(cwd, undefined)");
@@ -36,15 +39,21 @@ const [iTask, iModel, iThink, iPerm] = [at("applyTaskMode"), at("setModel"), at(
 assert.ok([iTask, iModel, iThink, iPerm].every((i) => i > 0), "四项继承缺项（任务模式/模型/思考等级/权限）");
 assert.ok(iTask < iModel && iModel < iThink && iThink < iPerm, `继承顺序错了：任务模式(${iTask}) → 模型(${iModel}) → 思考等级(${iThink}) → 权限(${iPerm})`);
 
-// ④ 入口在**对话区域右键菜单**里
-assert.match(menu, /handoffToNewSession/, "对话区菜单未接入 handoffToNewSession");
+// ④ 选中文字 = 新会话的第一条提示词，且**在继承之后**发出（否则第一轮会跑在旧模型/旧权限上）
+const iSend = at("sendPrompt(liveId");
+assert.ok(iSend > iPerm, `提示词必须在继承全部就位之后再发：权限(${iPerm}) → sendPrompt(${iSend})`);
+assert.match(store, /handoffToNewSession: \(cwd: string, sessionFile: string \| null, prompt\?: string\)/, "store 类型声明未带上 prompt 参数");
+
+// ⑤ 入口在**对话区域右键菜单**里，并且把选中的文字传给交接
+assert.match(menu, /handoffToNewSession\(t\.cwd, t\.sessionFile, quote\.text\)/, "菜单未把选中文字作为提示词传给 handoffToNewSession");
 assert.match(menu, /交接到新会话/, "对话区菜单缺少「交接到新会话」文案");
 
-// ⑤ 没选中文字、只右键对话区时也要能用
-assert.match(menu, /closest\("\.chat-scroll"\)/, "未选中文字时未接住对话区右键（closest(\".chat-scroll\")）");
-assert.match(menu, /quote\?: PendingQuote \| null|quote: PendingQuote \| null/, "菜单 state 未支持“无选中”形态（quote 可空）");
+// ⑥ 菜单只由「一段选中的文字」触发：没选中文字就不该接管右键
+assert.ok(!/closest\("\.chat-scroll"\)/.test(menu), "菜单不该再按「右键落在对话区」无条件弹出——交接需要选中文字");
+assert.ok(!/quote: PendingQuote \| null/.test(menu), "菜单 state 不该再有“无选中”形态（quote 必须非空）");
+assert.match(menu, /if \(!text \|\| !sel\) return;/, "未选中文字时应直接放行（保留各处原有右键菜单）");
 
-// ⑥ 侧栏会话列表**不再**承载这个入口（用户指正过：入口在对话区）
+// ⑦ 侧栏会话列表**不再**承载这个入口（用户指正过：入口在对话区）
 const sidebar = readFileSync(new URL("../src/renderer/src/components/Sidebar.tsx", import.meta.url), "utf8");
 assert.ok(!/handoffToNewSession/.test(sidebar), "Sidebar 不该再挂交接入门（入口在对话区右键菜单）");
 

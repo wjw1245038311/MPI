@@ -1248,13 +1248,13 @@ interface PiStore {
    * （settings.json 的 defaultProvider / defaultModel / defaultThinkingLevel），
    * 于是在某个会话里临时切换的模型不会跟到新会话；而长会话继续往下堆代价很高
    * （实测 38 万 token 的会话，缓存未命中时冷读一轮要 75 s）。
-   * 交接 = 配置不变、上下文清零。
+   * 交接 = 配置不变、上下文清零，并把选中的那段文字**作为新会话的第一条提示词直接发出**。
    *
    * 来源可以是**未打开的**会话：那时从磁盘会话文件读 model / thinkingLevel
    * （与 readThreadHistory 同源），但**权限与任务模式只在会话已打开时继承**
    * （它们不落在会话文件里）。
    */
-  handoffToNewSession: (cwd: string, sessionFile: string | null) => Promise<void>;
+  handoffToNewSession: (cwd: string, sessionFile: string | null, prompt?: string) => Promise<void>;
   renameThread: (id: string, name: string) => Promise<void>;
 
   setSidebarTab: (t: "threads" | "files") => void;
@@ -2951,7 +2951,9 @@ export const useStore = create<PiStore>()((set, get) => {
   },
 
   // Native pi clone semantics: duplicate the whole current active branch into a new session.
-  handoffToNewSession: async (cwd, sessionFile) => {
+  // 交接语义（用户 2026-10-13 定稿）：选中的文字就是新会话的提示词，且**直接开跑**，
+  // 不需要用户在新会话里再按一次发送。
+  handoffToNewSession: async (cwd, sessionFile, prompt) => {
     const zh = get().config?.language === "zh";
     const live = sessionFile ? get().threads[sessionFile] : null;
     // 继承源：优先活会话状态（字段最全），否则从磁盘会话文件读（只有 model / thinking）。
@@ -2988,11 +2990,14 @@ export const useStore = create<PiStore>()((set, get) => {
       await get().setPermission(liveId, inherit.permission);
       inherited.push(zh ? "权限" : "permission");
     }
+    // 配置就位后（必须在继承之后：换模型/权限要发生在第一轮之前）把选中文字作为
+    // 新会话的首条提示词发出去——「交接」到这里才算真的开始。
+    const firstPrompt = (prompt || "").trim();
+    if (firstPrompt) await get().sendPrompt(liveId, firstPrompt);
+    const scope = inherited.join(zh ? "、" : ", ") || (zh ? "默认配置" : "defaults");
     get().pushToast(
       "info",
-      zh
-        ? `已交接到新会话（继承 ${inherited.join("、") || "默认配置"}）`
-        : `Handed off to a new session (inherited ${inherited.join(", ") || "defaults"})`,
+      zh ? `已交接到新会话（继承 ${scope}）${firstPrompt ? "，提示词已发出" : ""}` : `Handed off to a new session (inherited ${scope})${firstPrompt ? "; prompt sent" : ""}`,
     );
   },
 
