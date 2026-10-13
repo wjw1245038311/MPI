@@ -11,7 +11,7 @@ import { extractEditPairs, normalizeTranscriptText } from "../lib/tool-args";
 import { findMessageOccurrences } from "../lib/chat-search";
 import { MarkedDiv, useSearchMark } from "../lib/search-mark";
 import { getExpandState, setExpandState } from "../lib/expand-state";
-import { formatElapsed, shouldShowThinkingIndicator } from "../lib/thinking-indicator";
+import { formatElapsed, shouldShowThinkingIndicator, thinkingElapsedSeconds } from "../lib/thinking-indicator";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
@@ -833,8 +833,8 @@ export function Chat() {
                 {...groupSearchProps}
               />
             )}
-            {/* key = 线程：切会话时重新挂载，等待秒数从 0 起算 */}
-            {thinkingActive && <ThinkingPlaceholder key={activeThreadId} language={language} />}
+            {/* 秒数从 thread.turnStartedAt（用户按下发送那一刻）算起：切会话重挂载不再归零 */}
+            {thinkingActive && <ThinkingPlaceholder key={activeThreadId} language={language} startedAt={thread.turnStartedAt} />}
             {thread.error && (
               <div className="msg system">
                 <div className="msg-body">⚠ {thread.error}</div>
@@ -1579,14 +1579,20 @@ function MessageGroupInner({
 
 /** Prefill 等待占位行：agent 在跑但 assistant 消息还没开始（本地模型 prefill
  * 可达数十秒）。**计时器自包含**：只重渲染这一行，不让 Chat 根节点每秒
- * 带着整个消息列表重建（长会话下这是实打实的秒级开销）。 */
-const ThinkingPlaceholder = memo(function ThinkingPlaceholder({ language }: { language: "en" | "zh" }) {
-  const [elapsedSec, setElapsedSec] = useState(0);
+ * 带着整个消息列表重建（长会话下这是实打实的秒级开销）。
+ *
+ * 计时起点来自线程的回合时间戳（props.startedAt），**不是本组件的挂载时刻**：
+ * 切会话 / 列表虚拟化 / key 变化都会重挂载，用挂载时刻会把秒数清零。
+ */
+const ThinkingPlaceholder = memo(function ThinkingPlaceholder({ language, startedAt }: { language: "en" | "zh"; startedAt?: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  // 兜底起点：没有回合时间戳时（旧会话/异常路径）退化成挂载时刻。
+  const mountedAtRef = useRef(Date.now());
   useEffect(() => {
-    const startedAt = Date.now();
-    const id = window.setInterval(() => setElapsedSec(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
+  const elapsedSec = thinkingElapsedSeconds(startedAt, now, mountedAtRef.current);
   return (
     <div className="msg thinking-placeholder">
       <div className="msg-avatar" aria-label={language === "zh" ? "MPI 智能体" : "MPI Agent"}>

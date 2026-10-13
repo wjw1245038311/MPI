@@ -422,6 +422,13 @@ export interface ThreadState {
   isStreaming: boolean;
   /** Wall-clock time of the most recent agent_start; used to tell real LLM turns apart from extension commands that never start one. */
   lastAgentStart?: number;
+  /** Wall-clock time the current waiting period began — the moment the user's
+   *  prompt was issued (falls back to agent_start for turns nobody sent, e.g.
+   *  auto-continue). The 「思考中 · Ns」 placeholder counts from here, so
+   *  switching threads / remounting the view no longer resets the counter to 0
+   *  (maxbox 2026-10-13: the counter restarted on every thread switch because
+   *  the component took its start from its own mount effect). */
+  turnStartedAt?: number;
   /** True while a manual compaction run (pi /compact) is in flight. */
   compacting?: boolean;
   /** Post-compaction token estimate from the last successful compaction_end; pi reports context tokens as null until the next LLM response, so this keeps the usage popover meaningful in between. */

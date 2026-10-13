@@ -58,4 +58,14 @@ assert.equal(ti.formatElapsed(83), "1m23s");
 assert.equal(ti.formatElapsed(-5), "0s"); // 时钟回拨/负值不吐怪字符串
 assert.equal(ti.formatElapsed(3599), "59m59s");
 
+// --- 等待秒数的起点：回合开始，而不是组件挂载（切会话不再归零） -----------
+// maxbox 2026-10-13 录屏：切走再切回，秒数从 0 重新起算，用户误以为 prefill 白跑了。
+// 根因是组件在 mount effect 里取 Date.now() 当起点；现在起点由 thread.turnStartedAt 传入。
+const NOW = 1_000_000;
+assert.equal(ti.thinkingElapsedSeconds(NOW - 28_000, NOW, NOW), 28); // 重挂载后仍是 28s，不是 0
+assert.equal(ti.thinkingElapsedSeconds(NOW - 145_000, NOW, NOW), 145); // 冷读 37 万 token 的 145s 不被漏计
+assert.equal(ti.thinkingElapsedSeconds(undefined, NOW, NOW - 3_000), 3); // 无回合时间戳 → 退化成挂载时刻
+assert.equal(ti.thinkingElapsedSeconds(NaN, NOW, NOW - 2_000), 2); // 脏值同样退化成兜底
+assert.equal(ti.thinkingElapsedSeconds(NOW + 5_000, NOW, NOW), 0); // 时钟回拨/负值不出负数
+
 console.log("thinking-indicator tests passed");

@@ -41,6 +41,23 @@ export function shouldShowThinkingIndicator(
   return !hasVisibleContent(streaming);
 }
 
+/**
+ * 「思考中 · Ns」已等待的秒数。
+ *
+ * 起点必须是**回合开始**（`thread.turnStartedAt`，用户按下发送那一刻），不能是
+ * 组件挂载时刻：切换会话 / 列表虚拟化回收 / key 变化都会重挂载，用挂载时刻会把
+ * 秒数清零，让用户误以为 prefill 白跑了（等价于「请求被重置」）。
+ *
+ * 另一个偏差也一并修掉：挂载晚于回合开始时，排队/建桥/冷启动那段等待不再被漏计——
+ * 本地大模型冷读一轮 37 万 token 要 145 秒，少算这段很显眼。
+ *
+ * `startedAt` 缺失（旧会话、异常路径）时退化成挂载时刻，至少不会跳到负数或 NaN。
+ */
+export function thinkingElapsedSeconds(startedAt: number | undefined, now: number, fallbackStartedAt: number): number {
+  const base = typeof startedAt === "number" && Number.isFinite(startedAt) ? startedAt : fallbackStartedAt;
+  return Math.max(0, Math.floor((now - base) / 1000));
+}
+
 /** 流式消息里是否已有用户看得见的东西（正文 / 思考 / 工具调用）。 */
 function hasVisibleContent(message: ViewMessage | null | undefined): boolean {
   const blocks = message?.blocks;

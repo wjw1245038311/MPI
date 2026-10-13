@@ -818,7 +818,10 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
   if (!event || typeof event !== "object") return t;
   switch (event.type) {
     case "agent_start":
-      return { ...t, isStreaming: true, lastAgentStart: Date.now(), error: undefined };
+      // turnStartedAt 只在「本轮还没在等」时才取当前时刻：正常发送路径已在用户按下
+      // 发送时就写过它（把排队/建桥/冷启动都算进去），这里覆盖会让秒数从 agent_start
+      // 重新起算。自动续跑等未经发送路径的回合靠这个分支补上起点。
+      return { ...t, isStreaming: true, lastAgentStart: Date.now(), turnStartedAt: t.isStreaming ? t.turnStartedAt : Date.now(), error: undefined };
     case "agent_settled": {
       // If a streaming assistant message never got message_end, finalize it.
       const streaming = t.streaming;
@@ -2517,6 +2520,8 @@ export const useStore = create<PiStore>()((set, get) => {
             creatingSession: false,
             messages: [...t.messages, optimistic],
             isStreaming: true,
+            // 「思考中 · Ns」的计时起点：按下发送这一刻（sentAt），不是占位行挂载时刻。
+            turnStartedAt: sentAt,
             error: undefined,
           },
         },
