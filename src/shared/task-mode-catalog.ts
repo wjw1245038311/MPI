@@ -9,6 +9,8 @@
  * 纯数据 + 纯函数，不依赖 electron / DOM。
  */
 
+import { THINKING_LEVEL_ORDER, thinkingLevelLabel } from "./thinking-levels";
+
 /** 权限级别（与 src/main/config.ts、renderer/lib/types.ts 结构一致）。 */
 export type PermissionLevel = "readonly" | "strict" | "sandbox" | "full";
 
@@ -65,7 +67,9 @@ const BUILTIN_ORDER: readonly string[] = [
 ];
 
 const PERMISSION_VALUES: ReadonlySet<string> = new Set(["readonly", "strict", "sandbox", "full"]);
-const THINKING_VALUES: ReadonlySet<string> = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+// 档位白名单从单一来源派生：以前这里又拄了一份七档列表，漂移的结果是模式里选的档位
+// 被 sanitize 静默丢掉（界面上选了、实际没生效）。
+const THINKING_VALUES: ReadonlySet<string> = new Set<string>(THINKING_LEVEL_ORDER);
 /** Safety cap so a corrupt config can't flood the dropdown. */
 export const MAX_MODES = 20;
 /** Cap for inline instructions (spec documents live in external files). */
@@ -166,17 +170,11 @@ export function taskModeSummary(mode: TaskModeDef, language: "zh" | "en"): strin
     parts.push(names[mode.permission][language]);
   }
   if (mode.thinking) {
-    const names: Record<string, { zh: string; en: string }> = {
-      off: { zh: "思考关闭", en: "Thinking off" },
-      minimal: { zh: "最低思考", en: "Minimal thinking" },
-      low: { zh: "低思考", en: "Low thinking" },
-      medium: { zh: "中思考", en: "Medium thinking" },
-      high: { zh: "高思考", en: "High thinking" },
-      xhigh: { zh: "极高思考", en: "X-high thinking" },
-      max: { zh: "最高思考", en: "Max thinking" },
-    };
-    const t = names[mode.thinking];
-    if (t) parts.push(t[language]);
+    // 档位词取自单一来源（thinkingLevelLabel），只拼接「X思考」这层摘要文案；
+    // 再手写一份内联表就会与界面叫法漂移（手册里已经漂过一次：写成「关/超高」）。
+    const zhLabel = `${thinkingLevelLabel(mode.thinking, "zh")}思考`;
+    const enLabel = mode.thinking === "off" ? "thinking off" : `${thinkingLevelLabel(mode.thinking, "en")} thinking`;
+    parts.push(language === "zh" ? (mode.thinking === "off" ? "思考关闭" : zhLabel) : enLabel);
   }
   // A spec document is worth surfacing in the dropdown; inline instructions alone are not.
   if (mode.specFile?.trim()) parts.push(language === "zh" ? "含说明书" : "with spec");

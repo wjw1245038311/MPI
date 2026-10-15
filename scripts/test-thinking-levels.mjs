@@ -13,7 +13,7 @@
  * 夹紧但不清空 intent）；③ 安卓侧的标准档位常量不许与 shared 漂移（等价于 Kotlin 单测）。
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { register } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,7 @@ const {
   thinkingLevelsFromMap,
   isThinkingLevelAllowed,
   planThinkingAfterModelSwitch,
+  thinkingLevelLabel,
 } = await import("../src/shared/thinking-levels.ts");
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -124,6 +125,47 @@ try {
     .filter(Boolean);
   assert.deepEqual(kotlinLevels, [...THINKING_LEVEL_ORDER], "安卓标准档位列表与 shared 不一致");
   ok(`安卓 STANDARD_THINKING_LEVELS 与 shared 一致（${kotlinLevels.join("/")}）`);
+
+  // ---------------------------------------------------------------- 标签也只有一份
+  assert.equal(thinkingLevelLabel("off", "zh"), "关闭");
+  assert.equal(thinkingLevelLabel("xhigh", "zh"), "极高");
+  assert.equal(thinkingLevelLabel("max", "en"), "max");
+  assert.equal(thinkingLevelLabel(undefined, "zh"), "关闭");
+  assert.equal(thinkingLevelLabel("mid", "zh"), "mid");
+  ok("档位标签单一来源（未知取值原样显示，不隐藏用户自定义映射）");
+
+  // 任务模式摘要里的档位词也走同一函数（以前那里内联了第四份表）。
+  const catalog = await import("../src/shared/task-mode-catalog.ts");
+  const summaryZh = catalog.taskModeSummary({ id: "m", thinking: "xhigh" }, "zh");
+  const summaryEn = catalog.taskModeSummary({ id: "m", thinking: "xhigh" }, "en");
+  assert.ok(summaryZh.includes("极高思考"), `zh 摘要应含「极高思考」，实际：${summaryZh}`);
+  assert.ok(summaryEn.includes("xhigh thinking"), `en 摘要应含「xhigh thinking」，实际：${summaryEn}`);
+  assert.ok(catalog.taskModeSummary({ id: "m", thinking: "off" }, "zh").includes("思考关闭"));
+  ok("任务模式摘要的档位词与界面一致（不再内联一份标签表）");
+
+  // -------------------------------------------------- 反漂移：别处不许再抄梯子
+  const scanned = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(entry.name)) scanned.push(full);
+    }
+  };
+  for (const rel of [join(ROOT, "src", "main"), join(ROOT, "src", "renderer", "src"), join(ROOT, "src", "shared"), join(ROOT, "src", "preload")]) {
+    walk(rel);
+  }
+  const offenders = [];
+  for (const file of scanned) {
+    const text = readFileSync(file, "utf8");
+    const isCanonical = file.replace(/\\/g, "/").endsWith("src/shared/thinking-levels.ts");
+    if (isCanonical) continue;
+    const rel = file.slice(ROOT.length + 1).replace(/\\/g, "/");
+    if (/"off"\s*,\s*"minimal"/.test(text)) offenders.push(`${rel} 又抄了一份档位梯子`);
+    if (/xhigh["']?\s*:\s*["']极高/.test(text)) offenders.push(`${rel} 又抄了一份档位标签`);
+  }
+  assert.deepEqual(offenders, [], offenders.join("；"));
+  ok(`档位列表与标签在 src/ 下只有一份（扫了 ${scanned.length} 个文件）`);
 
   console.log(`\nthinking-levels: ${passed} passed`);
 } catch (e) {

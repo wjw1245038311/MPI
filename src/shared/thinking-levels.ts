@@ -28,6 +28,28 @@ export type ThinkingLevel = (typeof THINKING_LEVEL_ORDER)[number];
 /** 「关」——所有模型都能选，包括 pi 只返回空列表的。 */
 export const THINKING_OFF: ThinkingLevel = "off";
 
+/** 档位标签的语言（与渲染端 `Language` 兼容；这里不依赖 i18n 模块）。 */
+export type ThinkingLabelLanguage = "zh" | "en";
+
+/**
+ * 档位显示名——**全应用唯一一份**。
+ *
+ * 以前有四份副本：Composer 用的 `lib/reasoning.ts`、任务模式编辑器里硬编码的
+ * `THINKING_OPTIONS`、`taskModeSummary()` 里的「高思考」内联表，以及手册里的叫法
+ * （写的是「关/超高」，与界面不符）。现在都从这里取，新增档位只改一处。
+ * 英文保持 pi 自己的词表（小写），中文用界面惯用说法。
+ */
+const THINKING_LEVEL_LABELS: Record<ThinkingLabelLanguage, Record<string, string>> = {
+  zh: { off: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高" },
+  en: { off: "off", minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+};
+
+/** 档位的显示名（未知取值原样返回，不隐藏用户自定义的映射值）。 */
+export function thinkingLevelLabel(level: string | undefined, language: ThinkingLabelLanguage = "zh"): string {
+  const value = level || THINKING_OFF;
+  return THINKING_LEVEL_LABELS[language]?.[value] || value;
+}
+
 function orderIndex(level: string): number {
   const i = (THINKING_LEVEL_ORDER as readonly string[]).indexOf(level);
   return i === -1 ? THINKING_LEVEL_ORDER.length : i;

@@ -8,7 +8,7 @@ import { reasoningLevelLabel } from "../lib/reasoning";
 import { translateUiText } from "../lib/i18n";
 import { COMMON_EXTENSION_TOOLS, isTrustableToolName, toggleTrustedTool } from "../lib/trusted-tools";
 import { classifyToolName } from "@repo-root/src/shared/tool-trust-meta";
-import { thinkingLevelsFromMap } from "@repo-root/src/shared/thinking-levels";
+import { thinkingLevelsFromMap, THINKING_LEVEL_ORDER as THINK_LEVELS } from "@repo-root/src/shared/thinking-levels";
 import { EDGE_VOICES, defaultEdgeVoice } from "../lib/edge-voices";
 import { Archive, Check, ChevronRight, Close, Edit, Plus, Refresh, Folder, Search, Trash } from "./icons";
 import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
@@ -21,7 +21,6 @@ import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
  * ------------------------------------------------------------------ */
 
 const API_TYPES: ApiType[] = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"];
-const THINK_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const TOKENS_PER_K = 1000;
 
 function formatTokenLimitK(tokens?: number): string {

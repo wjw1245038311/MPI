@@ -4,6 +4,7 @@ import type { PermissionLevel, TaskModeDef } from "../lib/types";
 import { BUILTIN_BALANCED_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
 import { Close, Edit, Info, Plus, Trash } from "./icons";
 import { TaskModeDetailModal } from "./TaskModeDetailModal";
+import { THINKING_LEVEL_ORDER, thinkingLevelLabel } from "../../../shared/thinking-levels";
 
 /** One-line parameter labels shared by the form selects. */
 const PERMISSION_OPTIONS: { value: PermissionLevel; zh: string; en: string }[] = [
@@ -13,15 +14,10 @@ const PERMISSION_OPTIONS: { value: PermissionLevel; zh: string; en: string }[] =
   { value: "full", zh: "完全权限", en: "Full access" },
 ];
 
-const THINKING_OPTIONS: { value: string; zh: string; en: string }[] = [
-  { value: "off", zh: "关闭", en: "Off" },
-  { value: "minimal", zh: "最低", en: "Minimal" },
-  { value: "low", zh: "低", en: "Low" },
-  { value: "medium", zh: "中", en: "Medium" },
-  { value: "high", zh: "高", en: "High" },
-  { value: "xhigh", zh: "极高", en: "X-high" },
-  { value: "max", zh: "最高", en: "Max" },
-];
+// 思考档位选项不再在本文件里硬编码一份（以前这里是第四份副本）：
+// 列表与标签都取自 src/shared/thinking-levels.ts，新增档位只改那一处。
+// 任务模式定义不绑定具体模型，所以给标准全量档位；应用时若当前模型不支持，
+// 不会报错也不会静默降档——保持会话原值并提示一句（见 store.applyTaskMode）。
 
 type FormState = {
   id: string | null;
@@ -200,9 +196,9 @@ export function TaskModesModal({ open, onClose }: { open: boolean; onClose: () =
               <label>{zh ? "思考等级" : "Thinking level"}</label>
               <select value={form.thinking} onChange={(e) => setForm({ ...form, thinking: e.target.value })}>
                 <option value="">{zh ? "不改变（保持当前）" : "Leave unchanged"}</option>
-                {THINKING_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {zh ? o.zh : o.en}
+                {THINKING_LEVEL_ORDER.map((value) => (
+                  <option key={value} value={value}>
+                    {thinkingLevelLabel(value, language)}
                   </option>
                 ))}
               </select>
