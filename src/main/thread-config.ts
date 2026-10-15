@@ -101,3 +101,49 @@ export function planModeApplication(mode: TaskModeDef): ModeApplication {
 export function planModeClear(): Pick<ModeApplication, "modeId" | "state"> {
   return { modeId: "", state: null };
 }
+
+/**
+ * 会话级映射的硬上限（兜底用）。正常靠「会话文件还在不在」清理，
+ * 这个上限只在极端情况下（比如会话目录被整体换掉）防止 config 无限膨胀。
+ */
+export const THREAD_KEYED_MAP_LIMIT = 400;
+
+/**
+ * 清掉 `threadTaskModes` / `threadThinking` 里的孤儿键 —— 两者都按会话 UUID 索引，
+ * 但只有「删除会话」这一条路径会回收它们：实测本机已攒到 143 个模式键，而其中绝大多数
+ * 对应的会话早已不存在（从没发过消息的草稿、或已删会话的其他设备残留）。
+ *
+ * 规则（保守优先）：
+ *   1. UUID 在现存会话文件集合里 → 保留；
+ *   2. 不在 → 删（没会话文件就没地方恢复这些配置，重启后本来也用不上）；
+ *   3. 删完仍超上限 → 只留最后写入的 {@link THREAD_KEYED_MAP_LIMIT} 条。
+ *
+ * UUID 的取法沿用 `threadUuidFromSessionFile()`（调用方负责），别再引一份正则。
+ *
+ * 纯函数：不读盘、不写配置，便于单测；调用方负责 updateConfig + 日志。
+ */
+export function pruneThreadKeyedMaps<T>(
+  maps: { threadTaskModes?: Record<string, T> | null; threadThinking?: Record<string, T> | null },
+  existingUuids: ReadonlySet<string>,
+  limit = THREAD_KEYED_MAP_LIMIT,
+): { threadTaskModes: Record<string, T>; threadThinking: Record<string, T>; dropped: string[] } {
+  const dropped = new Set<string>();
+  const cleanOne = (raw: Record<string, T> | null | undefined): Record<string, T> => {
+    let next: Record<string, T> = {};
+    for (const [uuid, value] of Object.entries(raw || {})) {
+      if (existingUuids.has(uuid)) next[uuid] = value;
+      else dropped.add(uuid);
+    }
+    const entries = Object.entries(next);
+    if (entries.length > limit) {
+      for (const [uuid] of entries.slice(0, entries.length - limit)) dropped.add(uuid);
+      next = Object.fromEntries(entries.slice(entries.length - limit));
+    }
+    return next;
+  };
+  return {
+    threadTaskModes: cleanOne(maps.threadTaskModes),
+    threadThinking: cleanOne(maps.threadThinking),
+    dropped: [...dropped],
+  };
+}

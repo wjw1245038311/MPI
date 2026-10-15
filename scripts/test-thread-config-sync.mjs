@@ -11,7 +11,7 @@ import { register } from "node:module";
 
 register(new URL("./electron-stub-loader.mjs", import.meta.url));
 
-const { buildConfigPatch, resolveModeById, planModeApplication, planModeClear } = await import(
+const { buildConfigPatch, resolveModeById, planModeApplication, planModeClear, pruneThreadKeyedMaps, THREAD_KEYED_MAP_LIMIT } = await import(
   "../src/main/thread-config.ts"
 );
 
@@ -159,4 +159,48 @@ console.log("thread-config sync tests passed");
   assert.equal(trimRemoteHistory([{ id: "only", role: "assistant", text: "x".repeat(REMOTE_HISTORY_BYTE_BUDGET * 2) }]).length, 1, "单条超预算也要保留");
 
   console.log("ok 5 - context usage: compact 请求/写租约/百分比回退/阈值带");
+}
+
+// ---- 6. 会话级映射的孤儿键清理 --------------------------------------------
+{
+  const UUID_A = "01a13f49-9d5a-72e7-803b-4c24fb01e73c";
+  const UUID_B = "01a13fd7-7b58-7380-bdd1-3803d7497f47";
+
+  // 键的取法不在这里（用 threadUuidFromSessionFile，与写入端同一把尺子），这里只测清理规则。
+  const existing = new Set([UUID_A]);
+
+  // 键的取法必须与写入端完全一致（否则会把活会话的配置当孤儿删掉）：
+  // 这里直接用真实的 threadUuidFromSessionFile() 造键再跑一遍清理。
+  const { threadUuidFromSessionFile } = await import("../src/main/messaging/channel-threads.ts");
+  const parsed = threadUuidFromSessionFile(`C:\\x\\2026-10-15T11-19-11-453Z_${UUID_A}.jsonl`);
+  assert.equal(parsed, UUID_A, "从会话文件名解析 UUID");
+  assert.deepEqual(
+    pruneThreadKeyedMaps({ threadTaskModes: { [parsed]: "review" }, threadThinking: null }, new Set([parsed])).threadTaskModes,
+    { [parsed]: "review" },
+    "同一把尺子算出的键不会被误删",
+  );
+  const pruned = pruneThreadKeyedMaps(
+    { threadTaskModes: { [UUID_A]: "review", [UUID_B]: "balanced" }, threadThinking: { [UUID_A]: "high" } },
+    existing,
+  );
+  assert.deepEqual(pruned.threadTaskModes, { [UUID_A]: "review" }, "只保留会话文件还在的键");
+  assert.deepEqual(pruned.threadThinking, { [UUID_A]: "high" }, "存在的键不动");
+  assert.deepEqual(pruned.dropped, [UUID_B], "孤儿键被报告出来（供日志）");
+
+  // 从没发过消息的草稿：两边都是孤儿 → 一起清掉。
+  const allGone = pruneThreadKeyedMaps({ threadTaskModes: { [UUID_B]: "balanced" }, threadThinking: { [UUID_B]: "max" } }, new Set());
+  assert.deepEqual(allGone.threadTaskModes, {}, "模式孤儿键清空");
+  assert.deepEqual(allGone.threadThinking, {}, "思考本意孤儿键清空");
+  assert.deepEqual(allGone.dropped, [UUID_B], "两个映射命中同一个 UUID 只计一次");
+
+  // 上限兜底：全部存在但数量超限时只留最后写入的 N 条。
+  const many = Object.fromEntries(Array.from({ length: THREAD_KEYED_MAP_LIMIT + 5 }, (_, i) => [`k${String(i).padStart(4, "0")}`, "balanced"]));
+  const allExist = new Set(Object.keys(many));
+  const capped = pruneThreadKeyedMaps({ threadTaskModes: many, threadThinking: null }, allExist);
+  assert.equal(Object.keys(capped.threadTaskModes).length, THREAD_KEYED_MAP_LIMIT, "超上限时截到上限");
+  assert.ok(!("k0000" in capped.threadTaskModes), "丢的是最早写入的");
+  assert.ok(`k${String(THREAD_KEYED_MAP_LIMIT + 4).padStart(4, "0")}` in capped.threadTaskModes, "保留最新的");
+  assert.deepEqual(capped.threadThinking, {}, "缺失的映射退化成空对象");
+
+  console.log("ok 6 - 会话级映射清理：孤儿键回收 + 上限兜底");
 }

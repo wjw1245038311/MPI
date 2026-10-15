@@ -14,6 +14,9 @@ import { registerPdfViewerProtocol, registerPdfViewerScheme } from "./pdf-viewer
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
 import { registerChatAttachmentProtocol, registerChatAttachmentScheme } from "./chat-attachment-protocol";
 import { collectReferencedAttachmentNames } from "./attachment-gc";
+import { getSessionsDir, listAllSessionFiles } from "./session-store";
+import { threadUuidFromSessionFile } from "./messaging/channel-threads";
+import { pruneThreadKeyedMaps } from "./thread-config";
 import { pruneChatAttachments } from "./chat-attachment-store";
 import { appendDiagLog } from "./diag-log";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
@@ -300,6 +303,29 @@ if (!gotLock) {
       if (n > 0) console.log(`[mcp] 归一化 ${n} 个条目的 disabled → enabled:false`);
     } catch (e: any) {
       console.error("[mcp] builtin-mcp migration failed:", e?.message || String(e));
+    }
+    // 会话级映射（config.threadTaskModes / config.threadThinking）只按会话 UUID 累积，
+    // 而以前只有「删除会话」这一条路径会回收：实测本机已攒到 143 个对应会话早已不存在的
+    // 模式键（从没发过消息的草稿、删掉的会话残留）。启动时按「会话文件还在不在」清一次。
+    try {
+      const uuids = new Set<string>();
+      for (const file of listAllSessionFiles(getSessionsDir())) {
+        // 与写入端同一把尺子：config 里的键就是 threadUuidFromSessionFile() 算出来的 UUID。
+        const uuid = threadUuidFromSessionFile(file);
+        if (uuid) uuids.add(uuid);
+      }
+      const cfg = getConfig();
+      const pruned = pruneThreadKeyedMaps(
+        { threadTaskModes: cfg.threadTaskModes, threadThinking: cfg.threadThinking },
+        uuids,
+      );
+      if (pruned.dropped.length > 0) {
+        updateConfig({ threadTaskModes: pruned.threadTaskModes, threadThinking: pruned.threadThinking });
+        appendDiagLog(`[thread-config] pruned ${pruned.dropped.length} orphan keys (sessions=${uuids.size})`);
+      }
+    } catch (e: any) {
+      // 清理失败不影响启动：最坏情况就是 config 继续胖一点。
+      console.error("[thread-config] prune failed:", e?.message || String(e));
     }
     registerHtmlPreviewProtocol();
     registerPdfViewerProtocol();
