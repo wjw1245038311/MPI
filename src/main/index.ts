@@ -8,7 +8,7 @@ import { runPendingDataMigrations } from "./data-migration";
 import { ensureKnowledgeDirConfigured } from "./knowledge-dir";
 import { ensureZhiyaFiles, migrateUserProfileToZhiya, zhiyaMasterDir } from "./zhiya";
 import { flushTodos, ingestInbox } from "./todo-store";
-import { cleanupOldRuntimes } from "./core-updater";
+import { cleanupOldRuntimes, readManagedPiStatus } from "./core-updater";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
 import { registerPdfViewerProtocol, registerPdfViewerScheme } from "./pdf-viewer-protocol";
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
@@ -284,10 +284,13 @@ if (!gotLock) {
     // MCP 交给 pi 内建实现（pi ≥ 0.99）：摘掉第三方 adapter、清掉它写的 `-builtin:mcp`，
     // 并把旧版 MPI 的 `disabled: true` 归一化成内建认的 `enabled: false`。幂等；失败不拦启动。
     try {
-      const m = migrateToBuiltinMcp();
+      // 只有 pi ≥ 0.99 才有内建 MCP；旧运行时上摘 adapter 等于 MCP 直接消失，所以先按版本分流。
+      const piVersion = readManagedPiStatus().version;
+      const m = migrateToBuiltinMcp(piVersion);
+      if (m.skipped) console.log(`[mcp] 暂不切内建：${m.skipped}`);
       if (m.removedAdapter || m.removedFlag) {
-        console.log(`[mcp] 切到内建 MCP：removedAdapter=${m.removedAdapter} removedFlag=${m.removedFlag}`);
-        appendDiagLog(`[mcp] migrate-to-builtin adapter=${m.removedAdapter} flag=${m.removedFlag}`);
+        console.log(`[mcp] 切到内建 MCP（pi ${piVersion}）：removedAdapter=${m.removedAdapter} removedFlag=${m.removedFlag}`);
+        appendDiagLog(`[mcp] migrate-to-builtin pi=${piVersion} adapter=${m.removedAdapter} flag=${m.removedFlag}`);
       }
       const n = normalizeMcpDisabledFlags();
       if (n > 0) console.log(`[mcp] 归一化 ${n} 个条目的 disabled → enabled:false`);

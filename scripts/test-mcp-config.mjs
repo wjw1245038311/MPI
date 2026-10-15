@@ -20,7 +20,7 @@ process.env.PI_AGENT_DIR = agentDir.replace(/^\//, ""); // Windows 路径给 pi/
 // plugins.ts 会拉到 runtime-package（依赖 electron），这个 loader 同时把 electron
 // 换成桩、并给无扩展名导入补 .ts 后缀。
 register(new URL("./electron-stub-loader.mjs", import.meta.url));
-const { listMcpServers, normalizeMcpDisabledFlags, setMcpServerEnabled, migrateToBuiltinMcp } = await import(
+const { listMcpServers, normalizeMcpDisabledFlags, setMcpServerEnabled, migrateToBuiltinMcp, piHasBuiltinMcp } = await import(
   "../src/main/plugins.ts"
 );
 
@@ -91,7 +91,7 @@ try {
     ),
     "utf8",
   );
-  const mig = migrateToBuiltinMcp();
+  const mig = migrateToBuiltinMcp("1.2.0");
   assert.deepEqual(mig, { removedAdapter: true, removedFlag: true });
   const st = JSON.parse(readFileSync(SETTINGS, "utf8"));
   assert.deepEqual(st.packages, ["npm:other-ext"], "只摘掉 adapter，其它包保留");
@@ -102,22 +102,35 @@ try {
 
   // 没东西可改时不碰磁盘
   const before = statSync(SETTINGS).mtimeMs;
-  const noop = migrateToBuiltinMcp();
+  const noop = migrateToBuiltinMcp("1.2.0");
   assert.deepEqual(noop, { removedAdapter: false, removedFlag: false });
   assert.equal(statSync(SETTINGS).mtimeMs, before, "幂等：无事可做就不写文件");
   ok("迁移：重复调用无副作用（不写盘）");
 
   // packages 清空后不落空数组
   writeFileSync(SETTINGS, JSON.stringify({ packages: ["npm:pi-mcp-adapter"] }, null, 2), "utf8");
-  assert.equal(migrateToBuiltinMcp().removedAdapter, true);
+  assert.equal(migrateToBuiltinMcp("1.2.0").removedAdapter, true);
   assert.deepEqual(JSON.parse(readFileSync(SETTINGS, "utf8")), {}, "最后一项被摘掉时删除整个键");
   ok("迁移：packages 空了就删键，不给 pi 留噪声");
 
+  // 版本门控：pi < 0.99 没有内建 MCP，这时摘掉 adapter 等于 MCP 直接消失 ⇒ 必须跳过
+  writeFileSync(SETTINGS, JSON.stringify({ packages: ["npm:pi-mcp-adapter"], extensions: ["-builtin:mcp"] }, null, 2), "utf8");
+  assert.deepEqual(piHasBuiltinMcp("0.87.0"), false, "0.87 无内建 MCP");
+  assert.deepEqual(piHasBuiltinMcp("0.99.0"), true, "0.99 起有内建");
+  assert.deepEqual(piHasBuiltinMcp("1.2.0"), true, "1.x 有内建");
+  assert.deepEqual(piHasBuiltinMcp(null), false, "版本未知当作不支持");
+  const skipped = migrateToBuiltinMcp("0.87.0");
+  assert.equal(skipped.removedAdapter, false, "旧运行时不动 packages");
+  assert.ok(skipped.skipped, "跳过原因可见");
+  assert.deepEqual(JSON.parse(readFileSync(SETTINGS, "utf8")), { packages: ["npm:pi-mcp-adapter"], extensions: ["-builtin:mcp"] },
+    "跳过时文件保持原样（当前 0.87 环境里 adapter 仍是唯一 MCP 来源）");
+  ok("版本门控：pi < 0.99 时不摘 adapter，避免 MCP 直接消失");
+
   // settings.json 缺失/损坏都不该抛
   rmSync(SETTINGS);
-  assert.deepEqual(migrateToBuiltinMcp(), { removedAdapter: false, removedFlag: false });
+  assert.deepEqual(migrateToBuiltinMcp("1.2.0"), { removedAdapter: false, removedFlag: false });
   writeFileSync(SETTINGS, "{oops", "utf8");
-  assert.deepEqual(migrateToBuiltinMcp(), { removedAdapter: false, removedFlag: false }, "坏 settings.json 直接跳过，不覆写");
+  assert.deepEqual(migrateToBuiltinMcp("1.2.0"), { removedAdapter: false, removedFlag: false }, "坏 settings.json 直接跳过，不覆写");
   ok("迁移：settings.json 缺失或损坏时安全跳过（坏文件留给用户排查）");
 } finally {
   delete process.env.PI_AGENT_DIR;

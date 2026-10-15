@@ -32,12 +32,12 @@
 | 位置 | 改动 |
 |---|---|
 | `src/main/plugins.ts` | `McpServerInfo.disabled` → `enabled` + `exposure`；读取兼容旧字段（`mcpEntryEnabled`）；新增 `normalizeMcpDisabledFlags()`（把历史写下的 `disabled: true` 幂等改写成 `enabled: false`）与 `migrateToBuiltinMcp()`（从 pi 的 `settings.json` 摘掉 `npm:pi-mcp-adapter` 并清 `-builtin:mcp`——**两件必须成对做**，否则 adapter 每次启动都会把内建再关掉）；`setMcpServerDisabled` → `setMcpServerEnabled`（启用时删键，与 pi `/mcp` 写法一致）；`writeMcpFile` 改原子写 |
-| `src/main/index.ts` | 启动时调用上述两个迁移（幂等、失败不拦启动，结果进 console + `mpi-diag.log`） |
+| `src/main/index.ts` | 启动时调用上述两个迁移（幂等、失败不拦启动，结果进 console + `mpi-diag.log`）。**带版本门控**：`piHasBuiltinMcp()` 只在 pi ≥ 0.99 时才摘 adapter——在当前钉住的 0.87 上，adapter 是唯一 MCP 来源，贸然摘掉等于 MCP 直接消失；版本读不到也当作不支持 |
 | `src/main/ipc.ts` | 通道改名 `plugins:setMcpServerEnabled`；`plugins:getMcpServers` 先归一化再列出 |
 | `src/preload/index.ts`、`store.ts`、`lib/types.ts` | 同步 `enabled` 语义与方法名 |
 | `PluginsPanel.tsx` | 删除「MCP 模块不可用」gate 卡片与 `pi-mcp-market` / `pi-mcp-adapter` 依赖条（内建后不再是运行前提），详情栏加 `exposure` 徽章，提示文案改为内建 `/mcp` + `/reload`；`MessagingPanel.tsx` 的飞书 MCP 状态判断跟着改 |
 | `styles.css` | 清掉随之孤立的 `.mcp-gate*`、`.mcp-dep*` 共 10 条规则 |
-| `scripts/test-mcp-config.mjs` | 新增 8 项断言：读取兼容、归一化幂等且保留未知键、启用删键、迁移成对且无事可做时不写盘、坏 settings.json 安全跳过 |
+| `scripts/test-mcp-config.mjs` | 新增 9 项断言（含版本门控：0.87 下必须跳过、文件保持原样）：读取兼容、归一化幂等且保留未知键、启用删键、迁移成对且无事可做时不写盘、坏 settings.json 安全跳过 |
 
 ## 四、升级执行步骤（**尚未做**，需要确认后再动）
 
@@ -78,5 +78,6 @@ PI_PACKAGE_DIR=/e/MyWorkspace/Work/tempfile/pi12-smoke/pkg/node_modules/@earendi
 
 - **体感变化**：内建 MCP 默认 `exposure: codemode`，模型不再直接看到一堆 `mcp__*` 工具。这与之前 adapter 的「一个代理工具」思路接近，但不是同一个机制；老用户若习惯 `/mcp` 里看到全部工具，需要给 `exposure: "direct"`。
 - **未做**：面板显示项目级 `.pi/mcp.json` 覆盖（pi 1.0.0 起支持，同名条目会整体替换用户级）；`toolExposure` 编辑；`oauth.clientRegistration` / `authServerMetadataUrl` / `auth.provider` 表单。
+- **本轮改动在 0.87 运行时上是惰性的**：版本门控会跳过 adapter 迁移，所以合并代码不会让现在的 MCP 失效；`normalizeMcpDisabledFlags()` 仍然执行（`enabled:false` 在 adapter 上也生效，实测 F7），属于安全方向。
 - **未验证**：F8 只证明扩展能加载，不等于其运行期行为在 1.2 完全等价（尤其 `before_agent_start` 与 compact 路径）。
 - **回滚**：`piRuntimeVersion` 改回 `0.87.0` + 重跑 bundle；配置侧把 `.bak-*` 覆盖回去即可（注意 MPI 启动迁移会把 `enabled:false` 保留、不会写回 `disabled`）。

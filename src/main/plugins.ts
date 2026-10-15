@@ -804,6 +804,20 @@ export function normalizeMcpDisabledFlags(): number {
 }
 
 /**
+ * 当前运行时是否带内建 MCP。**pi ≥ 0.99.0 才有**（CHANGELOG 0.99.0 引入）。
+ *
+ * 版本拿不到就当作不支持：在 0.87.x 上摘掉 adapter 等于 **MCP 直接消失**（那个版本
+ * 没有内建实现），宁可不迁移也不能把用户弄到没 MCP 可用。
+ */
+export function piHasBuiltinMcp(version: string | null): boolean {
+  const m = /^(\d+)\.(\d+)/.exec((version || "").trim());
+  if (!m) return false;
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  return major > 0 || (major === 0 && minor >= 99);
+}
+
+/**
  * 一次性迁移到 pi 内建 MCP（刻意不做开关）。
  *
  * 两件事，缺一内建 MCP 都跑不起来：
@@ -812,11 +826,18 @@ export function normalizeMcpDisabledFlags(): number {
  *   2. 清掉 `extensions` 里遗留的 `-builtin:mcp` token。
  *
  * 其余条目（其它 packages、其它 extensions、无关设置）原样保留；两项都没得改时不碰磁盘。
+ *
+ * @param piVersion 当前运行时版本；不支持内建 MCP 时直接跳过（见 {@link piHasBuiltinMcp}）。
  */
-export function migrateToBuiltinMcp(): { removedAdapter: boolean; removedFlag: boolean } {
+export function migrateToBuiltinMcp(piVersion: string | null): {
+  removedAdapter: boolean;
+  removedFlag: boolean;
+  skipped?: string;
+} {
+  const none = { removedAdapter: false, removedFlag: false };
+  if (!piHasBuiltinMcp(piVersion)) return { ...none, skipped: `pi ${piVersion || "unknown"} 无内建 MCP` };
   const path = join(getAgentDir(), "settings.json");
   const parsed = readJsonRaw(path);
-  const none = { removedAdapter: false, removedFlag: false };
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return none;
   const obj = parsed as Record<string, unknown>;
 
