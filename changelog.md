@@ -26,9 +26,13 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run test:mcp-config`（9 项（含版本门控）：旧 `disabled:true` 与新 `enabled:false` 都读成禁用、归一化幂等且保留 oauth/exposure 等未知键、启用时删键、迁移成对执行且无事可做时不写盘、坏 settings.json 安全跳过）+ 全量 `npm test`。应用内：扩展功能 → MCP → 关一个服务器的开关，重启后仍为禁用，终端 `pi mcp list --json` 里该服务器 `state: "disabled"`；打开面板应看不到任何要求安装 adapter 的提示；飞书 MCP 那行状态与实际启用态一致。
 
-6. **升级：内置 Pi 运行时 0.87.0 → 1.2.0**——`package.json` 的 `piRuntimeVersion` 改钉 1.2.0 并重打 runtime 归档（`MPI-Runtime-1.2.0-win-x64.tar.gz`，剪枝后 45.1 MiB）。跨版本影响与实测记录见 `docs/PI-1.2-UPGRADE.md`；MCP 部分已按上一条切到内建实现。**已知问题**：1.x 的 npm 包不再带 `npm-shrinkwrap.json`，而「设置 → 更新 Pi」的自更新流程硬性依赖它（`core-updater.ts:559`），这条路径在修好前会报错——安装包自带的 runtime 不受影响。
+6. **升级：内置 Pi 运行时 0.87.0 → 1.2.0**——`package.json` 的 `piRuntimeVersion` 改钉 1.2.0 并重打 runtime 归档（`MPI-Runtime-1.2.0-win-x64.tar.gz`，剪枝后 45.1 MiB）。跨版本影响与实测记录见 `docs/PI-1.2-UPGRADE.md`；MCP 部分已按上一条切到内建实现。跨版本的行为差异（MCP 内建化、事件语义、`--tools` 交互）与逐项实测记录都写在文档里。
 
    验证方式：解包归档后用归档内的 node 跑 `pi/dist/cli.js --version` → `1.2.0`；`--mode rpc -e permission-gate-ext.ts` + `get_state` 返回 `success:true`；`pi mcp list --json` 能读配置；`quickjs.wasm` 等 codemode 依赖未被剪掉；`npm run typecheck` + 全量 `npm test`。应用内：帮助→关于 MPI 应显示 Pi 版本 1.2.0，会话能正常对话、工具卡片与权限审批照旧。
+
+7. **改：「设置 → 更新 Pi」优先安装 MPI 自带的运行时，不再依赖 npm 装依赖**——原实现只有一条路：下载 registry tarball，然后按包内的 `npm-shrinkwrap.json` 逐个装依赖，且硬性要求该文件存在。实测：0.87.0 的包里有，**1.2.0 的包里没有**（也没有 `bundleDependencies`），所以这条路径对 pi 1.x 根本走不通，点更新只会报「安装包缺少 npm-shrinkwrap.json」。现在按「设备上的 pi 低于本安装包内置的版本就直接装内置归档」决策：内置归档本来就是完整树（node + pi + 依赖，打包时生成，带 size/sha512 校验），离线可用、不需要装依赖；只有上游确实比内置更新时才走 registry，而那条路失败时给出可行动的提示（升级 MPI 本体）而不是半截状态。判定抽成 `shouldInstallEmbeddedRuntime()` 并钉了真值表：设备 0.87 + 内置 1.2 + 上游 1.3 ⇒ 装内置并说明上游还有 1.3；设备已等于内置 ⇒ 走 registry；设备比内置还新 ⇒ 不降级。
+
+   验证方式：`npm run test:core-update-route`（4 项真值表，含 1.10 > 1.9 的数字段比较）+ `npm run test:app-runtime` + typecheck。应用内：帮助→关于 MPI 看当前 Pi 版本；点「更新 Pi」应显示安装内置运行时（进度条走「正在解压内置 Pi 运行时」而不是「正在安装依赖（x/y）」），完成后版本号变成安装包内置的 1.2.0。
 
 ## v0.10.1（2026-10-13）
 

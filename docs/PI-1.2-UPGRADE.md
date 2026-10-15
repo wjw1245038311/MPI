@@ -66,14 +66,44 @@ PI_PACKAGE_DIR=<...>/pkgroot/package npm run bundle
 
 > 注意：本机 `npm` 配置了 allow-scripts，安装时跳过了依赖的 postinstall（protobufjs/@google/genai）。上面那组校验证明运行不受影响，但**换机器重打时若发现异常先怀疑这里**。
 
-### ⚠️ 应用内「更新 Pi」在 1.x 上会失败（待修，发版前必须处理）
+### 「设置 → 更新 Pi」改为优先安装内置运行时（已修）
 
-`core-updater.ts:559` 硬性要求安装包带 `npm-shrinkwrap.json`，否则抛「安装包缺少 npm-shrinkwrap.json，无法安装依赖」。实测对比：
+原实现只有一条路：下载 registry tarball → **按 `npm-shrinkwrap.json` 逐个装依赖**，并且硬性要求该文件存在（旧代码直接抛「安装包缺少 npm-shrinkwrap.json」）。实测对比：0.87.0 的包**有**该文件，1.2.0 的包**没有**（也没有 `bundleDependencies`）⇒ 这条路径对 pi 1.x 根本走不通。
 
-- 0.87.0 的 registry tarball **有**该文件（本机全局安装副本里 61 KB 的 `npm-shrinkwrap.json` 就是它）；
-- 1.2.0 的 registry tarball **没有**（解包后根目录只有 `package.json`），也没有 `bundleDependencies`。
+现在的规则（`shouldInstallEmbeddedRuntime()`，`scripts/test-core-update-route.mjs` 钉了真值表）：
 
-也就是说：**MPI 自带的 runtime 归档没问题（走安装包分发），但「设置 → 更新 Pi」这条自更新路径从 1.x 起装不上**。修法建议：把 shrinkwrap 从硬前提改成可选——有就按锁装依赖（现状），没有就在解压目录里用打包进 runtime 的 npm CLI 跑一次 `npm install --omit=dev --no-package-lock`（与上面第 1 步同一条命令），并把 integrity 校验保留在主包上。
+| 设备当前版本 | MPI 内置版本 | 上游最新 | 走哪条 |
+|---|---|---|---|
+| 0.87.0 | 1.2.0 | 1.2.0 | **内置归档**（离线、size+sha512 校验、不装依赖） |
+| 0.87.0 | 1.2.0 | 1.3.0 | **内置归档**，并在结果里说明「上游是 1.3.0，要拿到它请升级 MPI 本体」 |
+| （无） | 1.2.0 | 1.3.0 | **内置归档** |
+| 1.2.0 | 1.2.0 | 1.3.0 | registry（此时若上游包仍缺锁文件 → 明确报错并指向「升级 MPI 本体」，不再给半截状态） |
+| 1.3.0 | 1.2.0 | 1.4.0 | registry（不会把用户降回内置版本） |
+
+理由：安装包自带的 runtime 归档已经是**完整可用的树**（node + pi + 依赖，打包时生成），拿它做升级既不需要联网也不需要装依赖；只有确实需要比内置更新的版本才有必要走 npm。
+
+### 本机 dev 已切到 1.2.0（手工激活，可一键回退）
+
+```bash
+RT="$APPDATA/MPI Dev/runtime"          # dev 实例的 userData（正式实例是 %APPDATA%\MPI）
+mkdir -p "$RT/versions/1.2.0"
+tar -xzf runtime-release/MPI-Runtime-1.2.0-win-x64.tar.gz -C "$RT/versions/1.2.0"
+printf '{
+  "schema": 1,
+  "version": "1.2.0"
+}' > "$RT/current.json"
+```
+
+用 MPI 自己的代码验证过解析结果（不是猜的）：
+
+```
+getActiveRuntimeRoot() = …\MPI Dev\runtime\versions\1.2.0
+resolvePiRuntime("")   = node = …\runtime\versions\1.2.0\node\node.exe
+                         cli  = …\runtime\versions\1.2.0\pi\dist\cli.js
+readManagedPiStatus()  = { version: '1.2.0', source: 'userData' }
+```
+
+**回退**：删掉 `$RT/current.json`（或整个 `runtime/` 目录）→ 解析回落到全局 npm 的 pi。重启 dev 实例生效。
 
 ### 冒烟清单（升级后逐项确认）
 

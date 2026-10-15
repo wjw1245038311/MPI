@@ -470,9 +470,21 @@ export async function checkForCoreUpdate(cliOverride?: string): Promise<CoreUpda
 }
 
 /**
- * Download and activate the latest pi core. Safe to call when already latest
- * (resolves with updated=false). Progress is reported via onProgress.
+ * 「更新 Pi」该不该直接装 MPI 自带的运行时归档（而不是去 npm 下载）。
+ *
+ * 规则（按用户的决定）：**设备上的 pi 低于本安装包内置的版本，就直接装内置那份**。
+ * 内置归档是打包时生成、带 size/sha512 校验的完整树（node + pi + 依赖），不需要再装
+ * 依赖——而 pi 1.x 的 npm 包已不再随包发布 `npm-shrinkwrap.json`，原来的“按锁装依赖”
+ * 路径对 1.x 根本跑不通。只有上游确实比内置更新时才有必要走 registry。
  */
+export function shouldInstallEmbeddedRuntime(current: string | null, embedded: string | null, targetVersion: string): boolean {
+  if (!embedded) return false; // 没有内置归档（dev / 旧发行版）⇒ 只能走 registry
+  if (embedded === targetVersion) return true; // 要的就是这一版：一个归档解决
+  return !current || compareVersions(current, embedded) < 0; // 设备比内置旧 ⇒ 先吃内置（离线、快）
+}
+
+/** Download and activate the latest pi core. Safe to call when already latest
+ * (resolves with updated=false). Progress is reported via onProgress. */
 export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUpdateResult> {
   const progress: ProgressFn = onProgress || (() => undefined);
   /** Long-task-monitor entry for the network phase (set once downloading starts). */
@@ -495,18 +507,26 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
     progress({ stage: "checking", message: `发现新版本 v${targetVersion}（当前 v${status.current || "?"}）` });
 
     // A release built with the standalone runtime already contains a verified
-    // one-archive path. Use it when its Pi version is the requested version;
-    // this avoids the old 139-request npm dependency installation.
+    // one-archive path. Prefer it whenever the packaged Pi is newer than what
+    // this machine has — not only when it happens to equal the registry's
+    // latest. That keeps "更新 Pi" working offline and avoids the npm dependency
+    // install entirely (pi 1.x tarballs no longer ship npm-shrinkwrap.json, so
+    // the registry path can't build a tree for them).
     const standalone = getRuntimePackageManifest();
-    if (standalone?.runtimeVersion === targetVersion) {
+    const embedded = standalone?.runtimeVersion || null;
+    if (standalone && embedded && shouldInstallEmbeddedRuntime(status.current, embedded, targetVersion)) {
       const root = await installRuntimePackage(standalone, (p) => progress({ stage: p.stage, message: p.message, pct: p.pct }));
       resetPiRuntime();
+      const upstreamAhead = embedded !== targetVersion;
       return {
         ok: true,
         updated: true,
         from: status.current,
-        to: targetVersion,
-        message: `Pi 运行时 v${targetVersion} 已作为独立包安装到应用数据目录：${root}`,
+        to: embedded,
+        message: upstreamAhead
+          ? `已安装 MPI 自带的 Pi 运行时 v${embedded}（当前 v${status.current || "?"} 更旧）到：${root}。`
+            + `上游最新版是 v${targetVersion}，要拿到它请升级 MPI 本体（内置运行时会跟着发版）。`
+          : `Pi 运行时 v${embedded} 已作为独立包安装到应用数据目录：${root}`,
       };
     }
 
@@ -556,7 +576,12 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
 
     // ---- engine check ----------------------------------------------------
     const lockPath = join(root, "npm-shrinkwrap.json");
-    if (!existsSync(lockPath)) throw new Error("安装包缺少 npm-shrinkwrap.json，无法安装依赖");
+    if (!existsSync(lockPath)) {
+      throw new Error(
+        `无法从 npm 安装包构建运行时：v${targetVersion} 的包里没有 npm-shrinkwrap.json（pi 1.x 起不再随包发布）。` +
+          "请升级 MPI 本体到内置该版本运行时的发行版。",
+      );
+    }
     const lock = JSON.parse(readFileSync(lockPath, "utf8")) as { packages?: Record<string, LockEntry> };
     const packages = lock.packages || {};
     const requiredNode = packages[""]?.engines?.node;
