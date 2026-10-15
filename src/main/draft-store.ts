@@ -1,6 +1,6 @@
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { getConfigDir } from "./config";
+import { readJsonRaw, writeJsonAtomic } from "./json-store";
 import type { ComposerDraft, PendingQuote } from "../renderer/src/lib/types";
 
 /**
@@ -33,7 +33,7 @@ function ensureLoaded(): Map<string, ComposerDraft> {
   if (drafts) return drafts;
   const map = new Map<string, ComposerDraft>();
   try {
-    const parsed: unknown = JSON.parse(readFileSync(file(), "utf8"));
+    const parsed = readJsonRaw(file());
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
         if (!value || typeof value !== "object") continue;
@@ -86,10 +86,7 @@ function sanitize(draft: ComposerDraft): ComposerDraft | null {
 function writeNow(): void {
   const map = ensureLoaded();
   try {
-    const target = file();
-    const tmp = target + ".tmp";
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(map)));
-    renameSync(tmp, target);
+    writeJsonAtomic(file(), Object.fromEntries(map));
   } catch (e) {
     console.error("[drafts] persist failed:", e);
   }

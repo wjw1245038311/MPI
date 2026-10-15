@@ -1751,10 +1751,17 @@ export function Settings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persistedVoiceSig]);
   function attemptClose() {
-    if (
-      (modelDirty || thinkDirty || permDirty || dataDirty || sysDirty || voiceDirty || qaDirty) &&
-      !window.confirm(language === "zh" ? "有未保存的更改，确定放弃并关闭？" : "Discard unsaved changes and close?")
-    ) return;
+    if (modelDirty || thinkDirty || permDirty || dataDirty || sysDirty || voiceDirty || qaDirty) {
+      // 有未保存改动先问一句（应用内确认框，不用原生 confirm）
+      useStore.getState().askConfirm({
+        title: language === "zh" ? "放弃未保存的更改？" : "Discard unsaved changes?",
+        body: language === "zh" ? "关闭后本次编辑不会保存。" : "Closing now loses these edits.",
+        danger: true,
+        confirmLabel: language === "zh" ? "放弃并关闭" : "Discard & close",
+        onConfirm: () => close(),
+      });
+      return;
+    }
     close();
   }
 
@@ -1804,13 +1811,22 @@ export function Settings() {
       return { ...d, providers: { ...d.providers, [k]: { ...prov, models } } };
     });
   const deleteProvider = (k: string) => {
-    const question = language === "zh" ? `删除提供商 “${k}” 及其全部模型？` : `Delete provider “${k}” and all of its models?`;
-    if (!window.confirm(question)) return;
-    setExpandedProvider((cur) => (cur === k ? null : cur));
-    setDraft((d) => {
-      const p = { ...d.providers };
-      delete p[k];
-      return { ...d, providers: p };
+    useStore.getState().askConfirm({
+      title: language === "zh" ? "删除提供商" : "Delete provider",
+      body:
+        language === "zh"
+          ? `删除提供商 “${k}” 及其全部模型？`
+          : `Delete provider “${k}” and all of its models?`,
+      danger: true,
+      confirmLabel: language === "zh" ? "删除" : "Delete",
+      onConfirm: () => {
+        setExpandedProvider((cur) => (cur === k ? null : cur));
+        setDraft((d) => {
+          const p = { ...d.providers };
+          delete p[k];
+          return { ...d, providers: p };
+        });
+      },
     });
   };
   const confirmAddProvider = () => {
@@ -1858,18 +1874,26 @@ export function Settings() {
     else openAddForm(preset);
   };
   const reloadModels = async () => {
-    if (
-      modelDirty &&
-      !window.confirm(
-        language === "zh"
-          ? "将丢弃未保存的模型编辑并重新读取 models.json，继续？"
-          : "Discard unsaved model changes and reload models.json?",
-      )
-    ) return;
-    const models = await window.pi.settings.getModels();
-    setDraft(clone(models));
-    setInitialProviders(JSON.stringify(models.providers || {}));
-    setInvalidJson({});
+    const apply = async () => {
+      const models = await window.pi.settings.getModels();
+      setDraft(clone(models));
+      setInitialProviders(JSON.stringify(models.providers || {}));
+      setInvalidJson({});
+    };
+    if (modelDirty) {
+      useStore.getState().askConfirm({
+        title: language === "zh" ? "重新读取模型列表" : "Reload models",
+        body:
+          language === "zh"
+            ? "将丢弃未保存的模型编辑并重新读取 models.json，继续？"
+            : "Discard unsaved model changes and reload models.json?",
+        danger: true,
+        confirmLabel: language === "zh" ? "丢弃并重读" : "Discard & reload",
+        onConfirm: apply,
+      });
+      return;
+    }
+    await apply();
   };
 
   /* ---- save ---- */

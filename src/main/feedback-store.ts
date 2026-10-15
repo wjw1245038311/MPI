@@ -1,6 +1,6 @@
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "./config";
+import { readJsonRaw, writeJsonAtomic } from "./json-store";
 
 /**
  * Per-message user feedback (👍/👎 + optional note) for assistant replies.
@@ -35,7 +35,7 @@ function ensureLoaded(): Map<string, FeedbackEntry> {
   if (cache) return cache;
   const map = new Map<string, FeedbackEntry>();
   try {
-    const parsed: unknown = JSON.parse(readFileSync(file(), "utf8"));
+    const parsed = readJsonRaw(file());
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
         if (!value || typeof value !== "object") continue;
@@ -59,9 +59,7 @@ function writeThrough(): void {
   try {
     const obj: FeedbackMap = {};
     for (const [k, v] of ensureLoaded()) obj[k] = v;
-    const tmp = file() + ".tmp";
-    writeFileSync(tmp, JSON.stringify(obj), "utf8");
-    renameSync(tmp, file());
+    writeJsonAtomic(file(), obj);
   } catch {
     // Feedback is a convenience sidecar — never crash the app over it.
   }

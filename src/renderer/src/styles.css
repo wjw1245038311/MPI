@@ -11331,25 +11331,26 @@ mark.hl {
 .mempool-dates { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .mempool-date { width: 132px; font-size: 11.5px; }
 /* 记忆池：应用内确认层（不用原生 window.confirm） */
-.mempool-confirm-layer {
+/* 全局确认框（components/ConfirmDialog.tsx）——以前叫 .mempool-confirm-*，只服务记忆池 */
+.confirm-layer {
   position: fixed; inset: 0; z-index: 220;
   background: rgba(20, 22, 18, 0.42);
   display: grid; place-items: center;
   -webkit-app-region: no-drag;
 }
-.mempool-confirm {
+.confirm-box {
   width: min(420px, 90vw);
   background: var(--bg);
   border-radius: 12px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   padding: 16px 18px;
 }
-.mempool-confirm-title { font-size: 13.5px; font-weight: 650; color: var(--text); }
-.mempool-confirm-body {
+.confirm-title { font-size: 13.5px; font-weight: 650; color: var(--text); }
+.confirm-body {
   margin-top: 8px; font-size: 12px; line-height: 1.6; color: var(--text-dim);
   white-space: pre-wrap; max-height: 40vh; overflow: auto;
 }
-.mempool-confirm-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.confirm-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 /* 记忆池：批量选择 */
 .mempool-batchbar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;

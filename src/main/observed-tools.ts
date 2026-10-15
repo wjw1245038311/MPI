@@ -1,6 +1,7 @@
-import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "./config";
+import { readJsonRaw, writeJsonAtomic } from "./json-store";
 import { forEachLine, getSessionsDir, listAllSessionFiles } from "./session-store";
 
 /**
@@ -56,7 +57,7 @@ function ensureLoaded(): Map<string, Entry> {
   if (cache) return cache;
   const map = new Map<string, Entry>();
   try {
-    const parsed: unknown = JSON.parse(readFileSync(file(), "utf8"));
+    const parsed = readJsonRaw(file());
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
         if (!value || typeof value !== "object") continue;
@@ -79,9 +80,7 @@ function writeThrough(): void {
   try {
     const obj: Record<string, Entry> = {};
     for (const [k, v] of ensureLoaded()) obj[k] = v;
-    const tmp = file() + ".tmp";
-    writeFileSync(tmp, JSON.stringify(obj), "utf8");
-    renameSync(tmp, file());
+    writeJsonAtomic(file(), obj);
   } catch {
     // Convenience sidecar — never crash the app over it.
   }

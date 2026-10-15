@@ -14,8 +14,13 @@
  *     （一条记忆坏了不该让整个池子不可用）。
  *   - 事实与推断分开：正文是"事实"，frontmatter 的评分字段是"写入时的判断"。
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { atomicReplace, writeFileAtomic } from "../fs-atomic";
+
+// 原子写底座已提到 src/main/fs-atomic.ts（与 JSON 状态文件共用一份实现）；
+// 这里保留 re-export，已有的 `from "./pool"` 导入方与 scripts/test-pool-write.mjs 不受影响。
+export { atomicReplace };
 
 // ---------------------------------------------------------------------------
 // 类型
@@ -417,68 +422,9 @@ export function listEntries(poolDir: string): ListResult {
 export function writeEntry(poolDir: string, e: PoolEntry): string {
   ensurePool(poolDir);
   const dest = entryPath(poolDir, e.createdAt, e.id);
-  const dir = join(dest, "..");
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const tmp = `${dest}.tmp-${process.pid}`;
-  const content = serializeEntry(e);
-  writeFileSync(tmp, content, "utf8");
-  atomicReplace(tmp, dest, content);
+  writeFileAtomic(dest, serializeEntry(e));
   e.path = dest;
   return dest;
-}
-
-/** 重命名函数（可注入，便于测试错误分支）。 */
-type Renamer = (tmp: string, dest: string) => void;
-
-/** 同步小睡（本模块是同步 API，不能用 await）。 */
-function sleepSync(ms: number): void {
-  // Atomics.wait 在非 worker 线程上等待共享内存是允许的
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/** 目标文件是否已经就是我们要写的内容（用于识别 Windows 的「假失败」）。 */
-function destAlreadyWritten(dest: string, content: string): boolean {
-  try {
-    if (!existsSync(dest)) return false;
-    const st = statSync(dest);
-    if (!st.isFile() || st.size !== Buffer.byteLength(content, "utf8")) return false;
-    return readFileSync(dest, "utf8") === content;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * 原子替换（临时文件 → 目标），并容错 **Windows 的「假失败」**。
- *
- * 实测（2026-09-20 真机，800 次原子写）：约 **1.9%（15/800）** 的 `renameSync` 抛
- * `EPERM: operation not permitted`，**但重命名其实已经生效**——目标文件存在且内容
- * 完整（同一 id、字节数一致）。成因是杀软/搜索索引器短暂持有句柄的竞态：
- * 操作生效，错误照报。
- *
- * 为什么不能盲目重试：第二次 rename 会因目标已存在而继续报错，最终把**已经写好**的
- * 条目当失败——迁移会报「N 条失败」而实际全部成功，上层还可能触发多余的清理/回滚。
- *
- * 正确做法：出错后**先校验目标文件内容是否与待写内容一致**（内容含 id，一致即同一条），
- * 一致 → 判定成功（并清掉临时文件）；不一致 → 有限重试（退避），仍失败才抛。
- */
-export function atomicReplace(tmp: string, dest: string, content: string, rename: Renamer = renameSync, attempts = 3): void {
-  let lastErr: unknown = null;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      rename(tmp, dest);
-      return;
-    } catch (e) {
-      lastErr = e;
-      if (destAlreadyWritten(dest, content)) {
-        rmSync(tmp, { force: true });
-        return;
-      }
-      if (i < attempts - 1) sleepSync(20 * (i + 1));
-    }
-  }
-  rmSync(tmp, { force: true });
-  throw new Error(`原子写失败（已尝试 ${attempts} 次）：${(lastErr as Error)?.message || lastErr}`);
 }
 
 // ---------------------------------------------------------------------------

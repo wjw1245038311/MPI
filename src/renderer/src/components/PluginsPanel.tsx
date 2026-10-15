@@ -937,10 +937,15 @@ function McpMineView({ language }: { language: "en" | "zh" }) {
   };
 
   const removeServer = (name: string) => {
-    const question = zh
-      ? `删除 MCP 服务器 “${name}”？将从 ~/.pi/agent/mcp.json 移除该条目。`
-      : `Remove MCP server “${name}”? This deletes its entry from ~/.pi/agent/mcp.json.`;
-    if (window.confirm(question)) removeMcpServer(name);
+    useStore.getState().askConfirm({
+      title: zh ? "移除 MCP 服务器" : "Remove MCP server",
+      body: zh
+        ? `删除 MCP 服务器 “${name}”？将从 ~/.pi/agent/mcp.json 移除该条目。`
+        : `Remove MCP server “${name}”? This deletes its entry from ~/.pi/agent/mcp.json.`,
+      danger: true,
+      confirmLabel: zh ? "移除" : "Remove",
+      onConfirm: () => removeMcpServer(name),
+    });
   };
 
   return (
@@ -1601,8 +1606,15 @@ function PackagesView({ language, onOpenMarket }: { language: "en" | "zh"; onOpe
 
   const removeSelected = () => {
     if (!selected) return;
-    const question = zh ? `移除包 “${selected.name}”？将执行 pi remove 卸载。` : `Remove package “${selected.name}”? This runs pi remove.`;
-    if (window.confirm(question)) removePackage(selected.source);
+    useStore.getState().askConfirm({
+      title: zh ? "移除扩展包" : "Remove package",
+      body: zh
+        ? `移除包 “${selected.name}”？将执行 pi remove 卸载。`
+        : `Remove package “${selected.name}”? This runs pi remove.`,
+      danger: true,
+      confirmLabel: zh ? "移除" : "Remove",
+      onConfirm: () => removePackage(selected.source),
+    });
   };
 
   return (

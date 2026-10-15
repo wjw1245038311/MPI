@@ -7,6 +7,10 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { register } from "node:module";
+
+// pool.ts 依赖 src/main/fs-atomic.ts（无扩展名导入），补上 .ts 后缀让 node 直接跑。
+register(new URL("./ts-ext-loader.mjs", import.meta.url));
 
 const {
   newId, idTimestamp, nowIso, monthKey,

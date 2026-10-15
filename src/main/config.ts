@@ -1,5 +1,6 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { writeJsonAtomic } from "./json-store";
 // Type-only imports (erased at compile time) — no runtime cycles.
 import type { FeishuChannelConfig, WeChatChannelConfig } from "./messaging/types";
 import type { AutoPolicy, PoolEntry } from "./model-autopilot";
@@ -972,7 +973,7 @@ export function updateConfig(patch: Partial<AppConfig>): AppConfig {
     ...next,
     remoteStunUrls: [...BUILT_IN_REMOTE_STUN_URLS],
   };
-  if (!existsSync(cachedDir)) mkdirSync(cachedDir, { recursive: true });
-  writeFileSync(configPath(cachedDir), JSON.stringify(cached, null, 2), "utf8");
+  // 原子写：写一半崩了也不会把 config.json 留成半截 JSON（那会被下次启动当成空配置）。
+  writeJsonAtomic(configPath(cachedDir), cached, { pretty: true });
   return cached;
 }

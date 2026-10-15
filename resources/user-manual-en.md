@@ -816,9 +816,11 @@ That just means no app has been imported yet. Click **Install from zip** or **Lo
 | `Enter` | Send message; while the agent is running = save as pending follow-up |
 | `Shift+Enter` | Newline in the composer (Enter during IME composition only confirms the candidate) |
 | `Alt+Enter` | Insert into context immediately while running (steer) |
+| `Ctrl+N` | New session in the current project (prompts for a folder first if none is open) |
 | `Ctrl+K` | Global session search |
 | `Ctrl+F` | In-conversation message search (Enter/Shift+Enter for next/previous match, Esc to close) |
-| `Esc` | Close popovers / dismiss menus |
+| `Ctrl+,` | Open settings |
+| `Esc` | Close popovers / dismiss menus; **while the agent is running and focus is outside the composer = stop this turn** |
 | `Ctrl+=` / `Ctrl+-` | Window zoom ±25% |
 | `Ctrl+0` | Reset window zoom to 100% |
 

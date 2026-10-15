@@ -36,11 +36,22 @@ function capLabel(cap: string, zh: boolean): string {
   return l ? (zh ? l.zh : l.en) : cap;
 }
 
-function confirmTrust(zh: boolean): boolean {
-  const msg = zh
-    ? "应用代码以 MPI 主进程权限运行（与 pi 插件同一信任模型），可访问网络、读写文件并启动子进程。\n\n请仅安装你信任来源的应用。是否继续？"
-    : "App code runs with MPI main-process privileges (same trust model as pi plugins) and may access the network, read/write files and start child processes.\n\nOnly install apps from sources you trust. Continue?";
-  return window.confirm(msg);
+/**
+ * 安装前的信任告知（应用代码以主进程权限运行）。
+ *
+ * 用应用内确认框而不是 `window.confirm`：原生模态在 Windows/Electron 上关掉后
+ * 会把输入框的鼠标焦点弄丢（用户反馈「批准后无法输入」）。
+ */
+function askTrust(zh: boolean, onYes: () => void): void {
+  useStore.getState().askConfirm({
+    title: zh ? "确认安装这个应用？" : "Install this app?",
+    body: zh
+      ? "应用代码以 MPI 主进程权限运行（与 pi 插件同一信任模型），可访问网络、读写文件并启动子进程。\n\n请仅安装你信任来源的应用。"
+      : "App code runs with MPI main-process privileges (same trust model as pi plugins) and may access the network, read/write files and start child processes.\n\nOnly install apps from sources you trust.",
+    confirmLabel: zh ? "继续安装" : "Install",
+    danger: true,
+    onConfirm: onYes,
+  });
 }
 
 /** Service state → display label. */
@@ -203,10 +214,15 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
   };
 
   const uninstall = () => {
-    const question = zh
-      ? `确定卸载「${pickLoc(entry.name, lang)}」吗？已写入的设置会被还原。`
-      : `Uninstall “${pickLoc(entry.name, lang)}”? Settings it wrote will be restored.`;
-    if (window.confirm(question)) void uninstallApp(entry.id);
+    useStore.getState().askConfirm({
+      title: zh ? "卸载应用" : "Uninstall app",
+      body: zh
+        ? `确定卸载「${pickLoc(entry.name, lang)}」吗？已写入的设置会被还原。`
+        : `Uninstall “${pickLoc(entry.name, lang)}”? Settings it wrote will be restored.`,
+      danger: true,
+      confirmLabel: zh ? "卸载" : "Uninstall",
+      onConfirm: () => void uninstallApp(entry.id),
+    });
   };
 
   const renderField = (field: AppConfigField) => {
@@ -420,10 +436,10 @@ export function AppStorePanel() {
   if (!open) return null;
 
   const installZip = () => {
-    if (confirmTrust(zh)) void useStore.getState().installAppFromZip();
+    askTrust(zh, () => void useStore.getState().installAppFromZip());
   };
   const installDir = () => {
-    if (confirmTrust(zh)) void useStore.getState().installAppFromDir();
+    askTrust(zh, () => void useStore.getState().installAppFromDir());
   };
 
   const selected = entries.find((e) => e.id === selectedId) || null;

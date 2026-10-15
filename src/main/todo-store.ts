@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { extname, join } from "node:path";
 import { getConfig, getConfigDir } from "./config";
+import { readJsonRaw, writeJsonAtomic } from "./json-store";
 import type { TodoAttachment, TodoItem } from "../renderer/src/lib/types";
 
 /**
@@ -128,7 +129,7 @@ function ensureLoaded(): TodoItem[] {
   if (todos) return todos;
   const list: TodoItem[] = [];
   try {
-    const parsed: unknown = JSON.parse(readFileSync(todosFilePath(), "utf8"));
+    const parsed = readJsonRaw(todosFilePath());
     if (Array.isArray(parsed)) {
       for (const raw of parsed) {
         const item = sanitizeItem(raw);
@@ -146,10 +147,7 @@ function ensureLoaded(): TodoItem[] {
 function writeNow(): void {
   const list = ensureLoaded();
   try {
-    const target = todosFilePath();
-    const tmp = target + ".tmp";
-    writeFileSync(tmp, JSON.stringify(list));
-    renameSync(tmp, target);
+    writeJsonAtomic(todosFilePath(), list);
   } catch (e) {
     console.error("[todos] persist failed:", e);
   }

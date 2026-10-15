@@ -53,6 +53,26 @@ export interface ParsedUserMessage {
 }
 
 /**
+ * 应用内确认框的一问（由 {@link ConfirmDialog} 统一渲染）。
+ *
+ * 为什么不用原生 `window.confirm`：在 Electron/Windows 上弹原生模态后，
+ * 关掉对话框会出现输入框夺不回鼠标焦点的问题（用户反馈「批准后无法输入」，
+ * 见 MemoryPoolTab 的原注释）。删除 / 卸载 / 放弃未保存改动等破坏性操作以
+ * 前散落地用了 8 处原生 confirm，现在统一走这里。
+ */
+export interface ConfirmAsk {
+  title: string;
+  /** 正文，支持 `\n` 换行。 */
+  body?: string;
+  /** 确认按钮文案；不给则按 danger 取默认值。 */
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** true = 不可逆操作（删除 / 卸载），确认按钮用危险色。 */
+  danger?: boolean;
+  onConfirm: () => void | Promise<void>;
+}
+
+/**
  * File attachments and conversation quotes are supplied to Pi as internal
  * text envelopes because the runtime accepts images but not local file paths.
  * Keep those envelopes out of the user bubble and turn them into the
@@ -1167,6 +1187,8 @@ interface PiStore {
 
   // overlay
   toasts: Toast[];
+  /** 全局确认框（应用内，代替原生 window.confirm）。null = 未弹出。 */
+  confirmAsk: ConfirmAsk | null;
   extuiQueue: { threadId: string; request: ExtUiRequest }[];
   /** Inline choice-panel drafts (对话内多题选择): panelKey → qIndex → answer.
    * Session-only; the frozen/answered state is derived from the transcript. */
@@ -1280,6 +1302,9 @@ interface PiStore {
 
   pushToast: (kind: Toast["kind"], text: string) => void;
   dismissToast: (id: string) => void;
+  /** 弹一个应用内确认框；用户点确认才执行 `ask.onConfirm`。 */
+  askConfirm: (ask: ConfirmAsk) => void;
+  closeConfirm: () => void;
 
   handleEvent: (threadId: string, event: any) => void;
   handleExtUi: (threadId: string, req: ExtUiRequest) => void;
@@ -1745,6 +1770,7 @@ export const useStore = create<PiStore>()((set, get) => {
   previewTabs: [],
   activePreviewId: null,
   toasts: [],
+  confirmAsk: null,
   extuiQueue: [],
   choiceDrafts: {},
   settingsOpen: false,
@@ -3222,6 +3248,9 @@ export const useStore = create<PiStore>()((set, get) => {
     setTimeout(() => get().dismissToast(id), 5200);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+
+  askConfirm: (ask) => set({ confirmAsk: ask }),
+  closeConfirm: () => set({ confirmAsk: null }),
 
   handleEvent: (threadId, event) => {
     // Queued and folded into one store update per frame (see scheduleEventFlush).

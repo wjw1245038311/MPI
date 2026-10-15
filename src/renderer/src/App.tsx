@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { useStore } from "./store";
 import { usePiEvents } from "./lib/usePiEvents";
 import { startDiagWatch } from "./lib/diag-watch";
+import { installShortcuts } from "./lib/shortcuts";
 import { unlockAudio } from "./lib/sound";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
 import { Chat } from "./components/Chat";
 import { Preview } from "./components/Preview";
 import { Toasts } from "./components/Toasts";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ExtUiModal } from "./components/ExtUiModal";
 import { Settings } from "./components/Settings";
 import { SearchModal } from "./components/SearchModal";
@@ -70,33 +72,7 @@ export default function App() {
     document.documentElement.dataset.accent = accentTheme;
   }, [accentTheme]);
 
-  // Ctrl/Cmd+K opens the thread search palette; Ctrl+= / Ctrl+- / Ctrl+0
-  // adjust the window zoom (Feishu-style, persisted via main).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const key = e.key.toLowerCase();
-      if (key === "k") {
-        e.preventDefault();
-        useStore.getState().openSearch();
-        return;
-      }
-      if (key === "=" || key === "+" || key === "-" || key === "_" || key === "0") {
-        const cur = useStore.getState().config?.zoomPercent ?? 100;
-        const next =
-          key === "0" ? 100 : key === "=" || key === "+" ? Math.min(150, cur + 25) : Math.max(50, cur - 25);
-        if (next !== cur) {
-          e.preventDefault();
-          window.pi.window
-            .setZoom(next)
-            .then((cfg: any) => useStore.setState({ config: cfg }))
-            .catch((err) => console.error("[zoom] setZoom failed:", err));
-        }
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  // 全局快捷键见下方 installShortcuts（注册表在 lib/shortcuts.ts）。
 
   // Prime the WebAudio context on the first user gesture so the completion
   // chime can play later without a fresh gesture requirement.
@@ -132,6 +108,47 @@ export default function App() {
     }
     if (cwd) await useStore.getState().openThread(cwd);
   };
+
+  /** 缩放（沿用原有 Feishu 风格：Ctrl+= / Ctrl+- / Ctrl+0，由主进程持久化）。 */
+  const zoomTo = (next: number) => {
+    const cur = useStore.getState().config?.zoomPercent ?? 100;
+    if (next === cur) return;
+    window.pi.window
+      .setZoom(next)
+      .then((cfg: any) => useStore.setState({ config: cfg }))
+      .catch((err) => console.error("[zoom] setZoom failed:", err));
+  };
+
+  // 全局快捷键。搜索与缩放是原有行为（含在输入框里也生效），新增三个高频入口：
+  // 新建会话、打开设置、Esc 停止生成。
+  useEffect(() => {
+    const st = () => useStore.getState();
+    const zoomPct = () => st().config?.zoomPercent ?? 100;
+    // Esc 只在「当前会话正在生成、且没有别的弹层需要这个键」时用来中止。
+    const canAbort = () => {
+      const s = st();
+      const t = s.activeThreadId ? s.threads[s.activeThreadId] : undefined;
+      return !!t?.isStreaming && !s.settingsOpen && !s.searchOpen && !s.confirmAsk && s.extuiQueue.length === 0;
+    };
+    return installShortcuts([
+      { id: "search", combo: "Ctrl+K", allowInInput: true, run: () => st().openSearch() },
+      { id: "new-task", combo: "Ctrl+N", run: () => newTask() },
+      { id: "settings", combo: "Ctrl+,", when: () => !st().settingsOpen, run: () => st().openSettings() },
+      { id: "zoom-in", combo: "Ctrl+=", allowInInput: true, when: () => zoomPct() < 150, run: () => zoomTo(Math.min(150, zoomPct() + 25)) },
+      { id: "zoom-out", combo: "Ctrl+-", allowInInput: true, when: () => zoomPct() > 50, run: () => zoomTo(Math.max(50, zoomPct() - 25)) },
+      { id: "zoom-reset", combo: "Ctrl+0", allowInInput: true, when: () => zoomPct() !== 100, run: () => zoomTo(100) },
+      {
+        id: "abort",
+        combo: "Escape",
+        when: canAbort,
+        run: () => {
+          const id = st().activeThreadId;
+          if (id) void st().abortThread(id);
+        },
+      },
+    ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="app">
@@ -198,6 +215,8 @@ export default function App() {
           </div>
         </div>
       )}
+      {/* 确认框放最后：与 .settings-backdrop 这类无 z-index 的弹层同层时，靠 DOM 顺序保证在最上 */}
+      <ConfirmDialog />
     </div>
   );
 }

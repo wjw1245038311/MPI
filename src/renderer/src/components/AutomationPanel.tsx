@@ -148,8 +148,14 @@ export function AutomationPanel() {
                       className="set-iconbtn danger"
                       title="删除"
                       onClick={() => {
-                        const question = language === "zh" ? `删除任务 “${t.name}”？` : `Delete task “${t.name}”?`;
-                        if (window.confirm(question)) deleteTask(t.id);
+                        const zh = language === "zh";
+                        useStore.getState().askConfirm({
+                          title: zh ? "删除定时任务" : "Delete automation",
+                          body: zh ? `删除任务 “${t.name}”？以调度配置一并丢失。` : `Delete task “${t.name}”? Its schedule goes with it.`,
+                          danger: true,
+                          confirmLabel: zh ? "删除" : "Delete",
+                          onConfirm: () => deleteTask(t.id),
+                        });
                       }}
                     >
                       ×

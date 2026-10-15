@@ -107,9 +107,9 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
   const [selEntries, setSelEntries] = useState<Set<string>>(new Set());
   const [selProps, setSelProps] = useState<Set<string>>(new Set());
 
-  /** 应用内确认框（**不用原生 window.confirm**：原生模态在 Electron/Windows 上
-   *  出现过点关闭后输入框夺不回鼠标焦点的问题，用户反馈"批准后无法输入"）。 */
-  const [confirmAsk, setConfirmAsk] = useState<{ title: string; body: string; confirmLabel: string; run: () => Promise<void> } | null>(null);
+  // 确认统一走全局应用内确认框（components/ConfirmDialog.tsx）——以前这里自己实现了一份。
+  // 不用原生 window.confirm：原生模态在 Electron/Windows 上关掉后输入框会夺不回鼠标焦点。
+  const askConfirm = useStore((s) => s.askConfirm);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -140,11 +140,11 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
   }, [load]);
 
   const doArchive = (entry: EntryView) => {
-    setConfirmAsk({
+    askConfirm({
       title: zh ? "归档这条记忆？" : "Archive this memory?",
       body: `${entry.summary}\n\n${zh ? "归档≠删除，可在归档目录找回。" : "Archive ≠ delete — restorable from the archive folder."}`,
       confirmLabel: zh ? "归档" : "Archive",
-      run: async () => {
+      onConfirm: async () => {
         const r = await window.pi.memory.archive(entry.id);
         pushToast(r.ok ? "success" : "error", r.detail);
         await load();
@@ -154,11 +154,11 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
 
   const doDecide = (p: ProposalView, decision: "approve" | "reject") => {
     if (decision === "reject") {
-      setConfirmAsk({
+      askConfirm({
         title: `${zh ? "拒绝" : "Reject"}「${p.title}」？`,
         body: zh ? "只改提案状态（留痕），不动池子里的条目。" : "Only the proposal status changes; pool entries stay put.",
         confirmLabel: zh ? "拒绝" : "Reject",
-        run: async () => {
+        onConfirm: async () => {
           const r = await window.pi.memory.decide(p.id, "reject");
           pushToast(r.ok ? "success" : "error", r.detail);
           await load();
@@ -178,11 +178,11 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
           : zh
             ? "标记为已批准，由你人工合并进长期内容"
             : "mark as approved; you merge it into long-term content yourself";
-    setConfirmAsk({
+    askConfirm({
       title: `${zh ? "批准" : "Approve"}「${p.title}」？`,
       body: what,
       confirmLabel: zh ? "批准" : "Approve",
-      run: async () => {
+      onConfirm: async () => {
         const r = await window.pi.memory.decide(p.id, "approve");
         pushToast(r.ok ? "success" : "error", r.detail);
         await load();
@@ -204,11 +204,11 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
 
   const batchArchive = () => {
     const ids = [...selEntries];
-    setConfirmAsk({
+    askConfirm({
       title: `${zh ? "归档选中的" : "Archive"} ${ids.length} ${zh ? "条记忆？" : "entries?"}`,
       body: zh ? "归档≠删除，可在归档目录找回。逐条独立处理，失败会逐条列出。" : "Archive ≠ delete. Processed one by one; failures are listed.",
       confirmLabel: zh ? "全部归档" : "Archive all",
-      run: async () => {
+      onConfirm: async () => {
         const r = await window.pi.memory.archiveMany(ids);
         reportBatch("已归档", "Archived", r);
         setSelEntries(new Set());
@@ -219,7 +219,7 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
 
   const batchDecide = (decision: "approve" | "reject") => {
     const ids = [...selProps];
-    setConfirmAsk({
+    askConfirm({
       title:
         decision === "approve"
           ? `${zh ? "批准选中的" : "Approve"} ${ids.length} ${zh ? "份提案？" : "proposals?"}`
@@ -233,7 +233,7 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
             ? "只改提案状态（留痕），不动池子里的条目。"
             : "Only proposal statuses change; pool entries stay put.",
       confirmLabel: decision === "approve" ? (zh ? "全部批准" : "Approve all") : zh ? "全部拒绝" : "Reject all",
-      run: async () => {
+      onConfirm: async () => {
         const r = await window.pi.memory.decideMany(ids, decision);
         reportBatch(decision === "approve" ? "已批准" : "已拒绝", decision === "approve" ? "Approved" : "Rejected", r);
         setSelProps(new Set());
@@ -647,30 +647,6 @@ export function MemoryPoolTab({ zh }: { zh: boolean }) {
         </div>
       )}
 
-      {/* 应用内确认层：不用原生 window.confirm（原生模态在 Windows 上会留下焦点问题） */}
-      {confirmAsk && (
-        <div className="mempool-confirm-layer" onMouseDown={() => setConfirmAsk(null)}>
-          <div className="mempool-confirm" onMouseDown={(e) => e.stopPropagation()} role="alertdialog" aria-modal="true">
-            <div className="mempool-confirm-title">{confirmAsk.title}</div>
-            <div className="mempool-confirm-body">{confirmAsk.body}</div>
-            <div className="mempool-confirm-btns">
-              <button className="set-btn ghost" onClick={() => setConfirmAsk(null)} autoFocus>
-                {zh ? "取消" : "Cancel"}
-              </button>
-              <button
-                className="set-btn"
-                onClick={() => {
-                  const run = confirmAsk.run;
-                  setConfirmAsk(null);
-                  void run();
-                }}
-              >
-                {confirmAsk.confirmLabel}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="zhiya-sec-foot">
         {zh
