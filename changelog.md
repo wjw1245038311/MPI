@@ -53,6 +53,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（新增 `FileAttachmentTest`：`fromWire("file")` 必须落到 `BlockType.File`、未知类型仍按文本兜底、落盘名去非法字符并截断到 160）→ BUILD SUCCESSFUL，3 tests / 0 failures。⚠️ **真机未验**：装 debug 包 → 对 agent 说「把 xxx.pdf 作为附件发我」→ 会话里出现 📄 卡片（名字 + 大小·类型）→ 点一下出进度、完成后弹「打开方式」；重进会话再点应该秒开（走缓存）；点「分享」能存到文件或发给别的应用。
 
+12. **新增（PWA）：浏览器里也能下载 agent 递交的文件**——安卓上一版接上了，PWA 遇到 `file` 块仍会被当文本吞掉（不报错、也不显示）。现在 PWA 认这个块：卡片显示可读名与「大小 · 类型」，点一下按需拉字节并触发浏览器下载，底部给进度与取消（复用懒加载视频那条 `.video-fetch` 反馈条，切会话时中止在途拉取）。**故意不走直连 URL**：跳域链接上的 `download` 属性会被浏览器忽略（变成直接导航），文件名也就由不了我们——而这条链路存在的意义之一就是把 64 位哈希名换成看得懂的名字；拉成 Blob 后同源，两件事都成立，代价是必须先下完整段（文件本来就是要整份拿走的）。顺带把 `mobile/shared/protocol.ts` 的块类型补上 `file`（主机那份上一版已加），并在 `test:attach-file` 里加了一条跳端哨兵——`test:pwa-shared` 只比函数行为，类型 union 漂移它测不到。**音频播放器仍未做**（PWA 里 audio 仍是占位卡片，维持 S5 当时的决定）。
+
+   验证方式：`cd mobile/pwa && npx tsc --noEmit`（0 error）+ `npm run test:attach-file`（新增三端块类型一致性哨兵）+ `npm test -- pwa`（14 passed）+ `npm test -- remote`（9 passed）+ `npm run typecheck`。⚠️ **浏览器未实测**：手机浏览器打开 PWA → 对 agent 说「把 xxx.pdf 作为附件发我」→ 会话里出现 📄 卡片 → 点一下底部出「正在下载文件 42%（…）」→ 完成后浏览器保存为 `xxx.pdf`（不是哈希名）。
+
 ## v0.10.1（2026-10-13）
 
 1. **修：交接到新会话的入口挪到「对话区域右键」**——v0.10.0 把它放在了**侧栏会话列表**的右键菜单里，但这是“对这个对话”的操作，位置应该在对话区（用户指正）。现在：**在对话区域右键即可，而且不必先选中文字**——右键落在本对话的消息区（`.chat-scroll`）就会给出「交接到新会话」；若选中了文字，则和以前一样同时给出「引用到输入框」「添加为待办」。侧栏里那条已撤掉。

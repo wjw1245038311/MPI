@@ -565,6 +565,34 @@ button:disabled { opacity: 0.5; cursor: default; }
 .msg-video-placeholder .mvp-text strong { color: var(--text); font-weight: 600; }
 .msg-video-placeholder .mvp-text em { font-style: normal; opacity: 0.8; }
 
+/* agent 递交的文件卡片（mpi_attach_file）：可读名 + 大小 + ⬇，点一下按需拉字节并下载。
+   与懒加载视频同一套路：卡片本身不挂回调，点击由滚动容器上的事件委托接。 */
+.msg-file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(320px, 100%);
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--control);
+  cursor: pointer;
+  user-select: none;
+}
+.msg-file-card:active { transform: scale(0.99); }
+.msg-file-card .mfc-icon { font-size: 18px; line-height: 1; }
+.msg-file-card .mfc-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.msg-file-card .mfc-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-file-card .mfc-copy em { font-style: normal; font-size: 11px; color: var(--text-dim); }
+.msg-file-card .mfc-action { flex: 0 0 auto; font-size: 14px; color: var(--text-dim); }
+
 /* 大视频的**懒加载**卡片：快照里只给封面 + 名字，点开才按需拉字节（lib/attachment-fetch.ts）。
    没封面（旧消息 / 发送端抽帧失败）时叠一层深色渐变，避免死黑的空洞感。 */
 .msg-video-card--lazy .msg-video-play {

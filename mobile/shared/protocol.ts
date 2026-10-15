@@ -193,7 +193,9 @@ export interface RemoteMessage {
   role: "user" | "assistant" | "system" | "tool";
   text?: string;
   blocks?: Array<{
-    type: "text" | "thinking" | "tool" | "image" | "video" | "audio";
+    /** `file` = agent 主动递交的任意文件（`mpi_attach_file`）：快照只给名字与大小，
+     * 本体由客户端拿读令牌按需拉（与 video / audio 同一语义）。 */
+    type: "text" | "thinking" | "tool" | "image" | "video" | "audio" | "file";
     text?: string;
     name?: string;
     running?: boolean;

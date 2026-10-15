@@ -154,6 +154,18 @@ const partial = renderer.parseAgentMediaRefs(`好的，文件：<file name="abc"
 assert.equal(partial.attachments.length, 0, "半个标签还不算附件");
 assert.ok(!partial.text.includes("<file"), "流式中途不应把半截 XML 显示给用户");
 
+// 三端协议同源：主机 protocol.ts 与 PWA 那份 vendored 副本的**块类型联合**必须一致。
+// （test:pwa-shared 只比函数行为，类型 union 是编译期的东西它测不到——而只改一边时
+// PWA 会把 file 块当文本吞掉，不报错也不显示。）
+const desktopProto = readFileSync(new URL("../src/main/remote/protocol.ts", import.meta.url), "utf8");
+const sharedProto = readFileSync(new URL("../mobile/shared/protocol.ts", import.meta.url), "utf8");
+const blockTypesOf = (src) => {
+  const m = /type: "text" \| "thinking" \| "tool"((?: \| "[a-z]+")+);/.exec(src);
+  return m ? m[1].split("|").map((s) => s.trim().replace(/"/g, "")).sort().join(",") : "";
+};
+assert.ok(blockTypesOf(desktopProto).includes("file"), "主机协议得认 file 块");
+assert.equal(blockTypesOf(sharedProto), blockTypesOf(desktopProto), "PWA 的块类型联合与主机不一致");
+
 // ---- 5. 扩展副本与 core 的同步哨兵 ---------------------------------------
 // pi 子进程 import 不到主进程模块，判定逻辑只能复制一份（同 permission-gate-ext 的
 // SAFE_TOOLS 约定）。这是文本级哨兵，不是等价性证明——真正跑通看上面的用例 + 手动验证。

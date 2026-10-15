@@ -482,6 +482,43 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
       </div>
     );
   }
+  if (block.type === "file") {
+    // agent 主动递交的普通文件（mpi_attach_file）：浏览器里就一个动作——下载。
+    // 卡片本身不带回调，点击由滚动容器上的事件委托接（与懒加载视频同一套路，
+    // 不把回调穿过整棵消息树）。
+    const label = block.label || block.name || "附件";
+    const meta = [block.size ? formatSize(block.size) : "", (block.mimeType || "").split("/").pop() || ""]
+      .filter(Boolean)
+      .join(" · ");
+    // 没名字 = 主机只给了占位（附件已被清理那一类），点了也没得拉 → 退化成说明。
+    if (!block.name) {
+      return (
+        <div className="msg-video-placeholder">
+          <span className="mvp-icon" aria-hidden="true">📄</span>
+          <span className="mvp-text">
+            <strong>{label}</strong>
+            <em>{block.text || "文件未随本次同步下发"}</em>
+          </span>
+        </div>
+      );
+    }
+    return (
+      <div
+        className="msg-file-card"
+        data-download-file={block.name}
+        data-download-name={label}
+        data-download-mime={block.mimeType || "application/octet-stream"}
+        title={label}
+      >
+        <span className="mfc-icon" aria-hidden="true">📄</span>
+        <span className="mfc-copy">
+          <strong>{label}</strong>
+          <em>{meta || "点按下载"}</em>
+        </span>
+        <span className="mfc-action" aria-hidden="true">⬇</span>
+      </div>
+    );
+  }
   return <MessageText text={block.text ?? ""} choiceCtx={choiceCtx} />;
 }
 
@@ -985,6 +1022,9 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   // 大视频按需拉取（点开才拉）：进度 + 取消。null = 当前没有进行中的拉取。
   const [lazyVideo, setLazyVideo] = useState<{ name: string; loaded: number; total: number; error?: string } | null>(null);
   const lazyAbortRef = useRef<AbortController | null>(null);
+  // agent 递交的文件（mpi_attach_file）：点卡片才按需拉字节 → 交给浏览器下载。
+  const [fileFetch, setFileFetch] = useState<{ name: string; loaded: number; total: number; error?: string } | null>(null);
+  const fileAbortRef = useRef<AbortController | null>(null);
   // 视频**直连上传**进度（P1）：几十 MB 上传必须给反馈，否则像卡死。
   const [videoUpload, setVideoUpload] = useState<{ name: string; loaded: number; total: number } | null>(null);
 
@@ -1076,6 +1116,16 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       setPreviewSrc(target.currentSrc || target.src);
       return;
     }
+    // agent 递交的文件卡片 → 按需拉字节并下载（不缓存 URL，见 downloadLazyFile 的注释）。
+    const fileCard = target instanceof HTMLElement ? target.closest<HTMLElement>(".msg-file-card") : null;
+    if (fileCard?.dataset.downloadFile) {
+      void downloadLazyFile(
+        fileCard.dataset.downloadFile,
+        fileCard.dataset.downloadName || "附件",
+        fileCard.dataset.downloadMime || "application/octet-stream",
+      );
+      return;
+    }
     // 视频框点击 → 直接全屏播（飞书式）。从框里的 <video> 取 src（不把 data URL 再塞一份进
     // DOM 属性——一段 3MB 视频的 base64 复制到属性里是实打实的内存与解析开销）。
     if (target instanceof HTMLElement && target.closest(".msg-video-card")) {
@@ -1132,8 +1182,55 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     }
   };
 
+  /**
+   * 点文件卡片：把字节拉回来，再交给浏览器下载。
+   *
+   * 与懒加载视频共用取字节那一套（中继分片 + 进度 + 取消），但**故意不走直连 URL**：
+   * 跨域链接上的 `download` 属性会被浏览器忽略（变成直接导航），文件名也就由不了我们——
+   * 而这条链路存在的意义之一就是把 64 位哈希名换成用户看得懂的名字。拉成 Blob 后同源，
+   * 两件事都成立，代价是必须先下完整段（文件本来就是要整份拿走的）。
+   */
+  const downloadLazyFile = async (name: string, filename: string, mimeType: string): Promise<void> => {
+    if (!actions || fileFetch) return;
+    fileAbortRef.current?.abort();
+    const controller = new AbortController();
+    fileAbortRef.current = controller;
+    setFileFetch({ name, loaded: 0, total: 0 });
+    try {
+      const url = await actions.fetchAttachmentUrl(name, mimeType, {
+        signal: controller.signal,
+        onProgress: (loaded, total) => setFileFetch({ name, loaded, total }),
+      });
+      // objectURL 已在 lib/attachment-fetch.ts 的 LRU 里（上限 2），这里不能 revoke。
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename || "附件";
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setFileFetch(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setFileFetch({
+        name,
+        loaded: 0,
+        total: 0,
+        error: message.includes("NOT_FOUND") ? "附件已不可用（可能已被清理）" : `下载失败：${message}`,
+      });
+    } finally {
+      fileAbortRef.current = null;
+    }
+  };
+
   // 卸载（切会话 / 关页面）时放弃在途的拉取：objectURL 与分片循环都不该在后台悬着。
-  useEffect(() => () => lazyAbortRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      lazyAbortRef.current?.abort();
+      fileAbortRef.current?.abort();
+    },
+    [],
+  );
 
   const scrollToBottom = () => {
     const el = scrollRef.current;
@@ -2052,6 +2149,38 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
             {videoUpload.total > 0 ? ` ${Math.min(99, Math.floor((videoUpload.loaded / videoUpload.total) * 100))}%` : "…"}
             {videoUpload.total > 0 ? `（${formatSize(videoUpload.loaded)} / ${formatSize(videoUpload.total)}）` : ""}
           </span>
+        </div>
+      )}
+
+      {/* agent 递交的文件：拉字节的进度与取消（几十 MB 也得有反馈，照视频那一套）。 */}
+      {fileFetch && (
+        <div className="video-fetch" role="status" aria-live="polite">
+          {fileFetch.error ? (
+            <>
+              <span className="vf-text">{fileFetch.error}</span>
+              <button type="button" className="vf-cancel" onClick={() => setFileFetch(null)}>
+                知道了
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="vf-text">
+                正在下载文件
+                {fileFetch.total > 0 ? ` ${Math.min(99, Math.floor((fileFetch.loaded / fileFetch.total) * 100))}%` : "…"}
+                {fileFetch.total > 0 ? `（${formatSize(fileFetch.loaded)} / ${formatSize(fileFetch.total)}）` : ""}
+              </span>
+              <button
+                type="button"
+                className="vf-cancel"
+                onClick={() => {
+                  fileAbortRef.current?.abort();
+                  setFileFetch(null);
+                }}
+              >
+                取消
+              </button>
+            </>
+          )}
         </div>
       )}
 
