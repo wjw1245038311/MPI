@@ -136,9 +136,9 @@ fun normalizeThinkingLevels(levels: List<String>): List<String> {
     return listOf("off") + (known + unknown).filter { it != "off" }
 }
 
-/** 档位中文标签（未知取值原样显示，不隐藏）。 */
+/** 档位中文标签（与桌面 `shared/thinking-levels.ts` 的 `THINKING_LEVEL_LABELS.zh` 逐字一致；未知取值原样显示）。 */
 fun thinkingLevelLabel(level: String): String = when (level) {
-    "off" -> "关"
+    "off" -> "关闭"
     "minimal" -> "最低"
     "low" -> "低"
     "medium" -> "中"

@@ -126,6 +126,17 @@ try {
   assert.deepEqual(kotlinLevels, [...THINKING_LEVEL_ORDER], "安卓标准档位列表与 shared 不一致");
   ok(`安卓 STANDARD_THINKING_LEVELS 与 shared 一致（${kotlinLevels.join("/")}）`);
 
+  // 安卓的中文档位标签也钉住（语言不同没法共享代码，但至少不能漂）。
+  const fnStart = kt.indexOf("fun thinkingLevelLabel(");
+  const fnBody = fnStart < 0 ? "" : kt.slice(fnStart, kt.indexOf("\n}\n", fnStart));
+  const kotlinLabels = {};
+  for (const m of fnBody.matchAll(/"([a-z]+)" -> "([^"]+)"/g)) kotlinLabels[m[1]] = m[2];
+  const labelDiff = THINKING_LEVEL_ORDER.filter((level) => kotlinLabels[level] !== thinkingLevelLabel(level, "zh")).map(
+    (level) => `${level}: 安卓「${kotlinLabels[level]}」 vs 桌面「${thinkingLevelLabel(level, "zh")}」`,
+  );
+  assert.deepEqual(labelDiff, [], `安卓档位标签与桌面不一致：${labelDiff.join("；")}`);
+  ok("安卓档位中文标签与桌面逐字一致（off = 关闭）");
+
   // ---------------------------------------------------------------- 标签也只有一份
   assert.equal(thinkingLevelLabel("off", "zh"), "关闭");
   assert.equal(thinkingLevelLabel("xhigh", "zh"), "极高");

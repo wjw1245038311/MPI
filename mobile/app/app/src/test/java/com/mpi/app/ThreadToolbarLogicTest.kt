@@ -114,7 +114,7 @@ class ThinkingLevelLogicTest {
 
     @Test
     fun `labels are localized and unknown values pass through`() {
-        assertEquals("关", com.mpi.app.ui.thinkingLevelLabel("off"))
+        assertEquals("关闭", com.mpi.app.ui.thinkingLevelLabel("off"))
         assertEquals("中", com.mpi.app.ui.thinkingLevelLabel("medium"))
         assertEquals("极高", com.mpi.app.ui.thinkingLevelLabel("xhigh"))
         assertEquals("奇怪档", com.mpi.app.ui.thinkingLevelLabel("奇怪档"))
