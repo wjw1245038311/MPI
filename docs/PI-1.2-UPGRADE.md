@@ -24,6 +24,7 @@
 | F8 | MPI 的 7 个扩展在 1.2 下能加载 | 逐个 `-e <ext>.ts --mode rpc` + `get_state` 全部 `success:true`，无 error/failed 行（permission-gate / todo / taskmode / smart-compact / choice / shelenv） |
 | F9 | MPI 用到的 RPC 命令都还在 | `docs/rpc-commands.md`：prompt、steer、abort、compact、fork、clone 均在（另有 follow_up、clear_queue 等） |
 | F10 | 1.2.0 有 Breaking Changes 的版本只有 1.2.0 与 1.0.3 | 包内 CHANGELOG 分节统计 |
+| F11 | **`models.json` 的 `compat.thinkingTokenBudgetField` 收紧成三选一字面量，且校验失败是文件级的** | bundle 里 typebox：`Union[Literal("thinking_token_budget") /*vLLM*/, Literal("thinking_budget") /*Qwen·DashScope·SGLang*/, Literal("thinking_budget_tokens") /*llama.cpp*/]`。本机真实 `~/.pi/agent/models.json` 写了自定义值 `reasoning_budget_tokens` ⇒ `ModelRuntime.getError()` 报 `Invalid models.json schema`、`getAvailableSnapshot()` 返回 **0**（5 个自定义 provider 全没），MPI 只显示「无可用模型（请检查认证）」。删键或改成合法字面量后 `available=17`。旧运行时接受任意字符串，所以这是升级才出现的坑 |
 
 ## 三、代码侧改动（本轮已完成）
 
@@ -105,10 +106,25 @@ readManagedPiStatus()  = { version: '1.2.0', source: 'userData' }
 
 **回退**：删掉 `$RT/current.json`（或整个 `runtime/` 目录）→ 解析回落到全局 npm 的 pi。重启 dev 实例生效。
 
+### 本机踩到的 F11：模型列表全空（已修）
+
+重启后下拉框只给「无可用模型（请检查认证）」、右下角 `unknown`——不是认证问题，是 `models.json` 被整份拒收：
+
+```bash
+# 不经 MPI，直接问内置 runtime
+RT="$APPDATA/MPI Dev/runtime/versions/1.2.0"
+printf '%s\n' '{"type":"get_available_models","id":"r"}' \
+  | "$RT/node/node.exe" "$RT/pi/dist/cli.js" --mode rpc --no-session --no-mcp   # → models: []
+# 定因：ModelRuntime.create({}).getError() → Invalid models.json schema …（脚本见 Work/tempfile/2026-10-15-pi12-smoke/probe-models*.mjs）
+```
+
+修法（一行）：`providers.strata.models[1].compat.thinkingTokenBudgetField` 由 `reasoning_budget_tokens` 改成 **`thinking_budget_tokens`**（llama.cpp 约定）。8090 端口的 Strata 0.1.43 对未知请求字段静默忽略（实测塞 `zzz_bogus_field` 也返 200），所以旧值是否曾生效无法证明；改完 `available=17`。原文件备份：`~/.pi/agent/models.json.bak-20261015-f11fix`。
+
 ### 冒烟清单（升级后逐项确认）
 
 | 项 | 期望 |
 |---|---|
+| **模型下拉列表非空**（F11，最先查） | 自定义 provider（LM Studio / strata / deepseek / freellmapi / ollama-cloud）都在；若显示「无可用模型（请检查认证）」且右下角是 `unknown`，先跑 `ModelRuntime.create({}).getError()`（脚本见 tempfile 的 `probe-models*.mjs`），别怀疑认证 |
 | 「扩展功能 → MCP」列表 | 服务器来自 mcp.json；旧 `disabled:true` 条目被自动改写成 `enabled:false` 并显示为已禁用 |
 | 面板开关 | 关掉后面板显示已禁用、终端 `pi mcp list --json` 里 `state: "disabled"` |
 | 飞书 MCP 状态行（渠道面板） | 与 mcp.json 实际启用态一致 |
@@ -119,6 +135,8 @@ readManagedPiStatus()  = { version: '1.2.0', source: 'userData' }
 | 工具白名单类任务模式 | `--tools/--exclude-tools` 语义在 1.x 改过（现在除非条目以 `mcp__` 开头否则不连带排除 MCP 工具），需确认模式行为符合预期 |
 
 ## 五、已知取舍与后续项
+
+- **待修（MPI 侧体验，F11）**：模型列表为空时只说「请检查认证」，而 runtime 本就有 `ModelRuntime.getError()`（本次就是靠它定位的）。应在列表为空 / `get_state.model.id === "unknown"` 时把 `getError()` 原文显示出来并写进 `mpi-diag.log`；更进一步是在保存 provider 配置时用当前运行时跑一次 schema 校验——一个非法键就能废掉整份 `models.json`，代价太隐式。
 
 - **体感变化**：内建 MCP 默认 `exposure: codemode`，模型不再直接看到一堆 `mcp__*` 工具。这与之前 adapter 的「一个代理工具」思路接近，但不是同一个机制；老用户若习惯 `/mcp` 里看到全部工具，需要给 `exposure: "direct"`。
 - **未做**：面板显示项目级 `.pi/mcp.json` 覆盖（pi 1.0.0 起支持，同名条目会整体替换用户级）；`toolExposure` 编辑；`oauth.clientRegistration` / `authServerMetadataUrl` / `auth.provider` 表单。
