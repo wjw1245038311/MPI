@@ -25,6 +25,12 @@ enum class BlockType {
      * 与视频同一套取字节入口（直连读 URL 优先、中继分片回落）。
      */
     Audio,
+    /**
+     * agent 主动递交的**普通文件**（`mpi_attach_file`，2026-10-15）：快照同样只给元数据
+     * （name/label/size/mime），点开才按需拉全文件，到手后交给系统「打开方式 / 分享」——
+     * 人在外面要的是把文件**拿走**，而不是就地预览。
+     */
+    File,
     ;
 
     companion object {
@@ -36,6 +42,7 @@ enum class BlockType {
             "image" -> Image
             "video" -> Video
             "audio" -> Audio
+            "file" -> File
             else -> Text
         }
     }

@@ -1,5 +1,7 @@
 package com.mpi.app.ui
 
+import android.content.Context
+import android.content.Intent
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
@@ -91,12 +93,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
 import androidx.media3.common.MediaItem
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
-import android.content.Context
 import java.io.File
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -1439,6 +1441,7 @@ private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit, on
                             BlockType.Image -> ImageBlock(block)
                             BlockType.Video -> VideoBlock(block)
                             BlockType.Audio -> AudioBlock(block)
+                            BlockType.File -> FileBlock(block)
                             else -> Unit
                         }
                     }
@@ -1508,6 +1511,7 @@ private fun AssistantMessageRow(
                     BlockType.Image -> ImageBlock(block)
                     BlockType.Video -> VideoBlock(block)
                     BlockType.Audio -> AudioBlock(block)
+                    BlockType.File -> FileBlock(block)
                     BlockType.Text -> if (!block.text.isNullOrBlank()) {
                         // 定稿的 assistant 文本才认 choices 面板（流式中间态仍按代码块）
                         if (finalized) {
@@ -2189,6 +2193,146 @@ private fun AudioBlock(block: MessageBlock) {
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+/**
+ * agent 递交的普通文件卡片（`mpi_attach_file`，主机侧见 `src/main/attach-file-inbox.ts`）。
+ *
+ * 取字节与视频/音频走同一个入口（[LocalVideoFetcher]：加密直连优先、中继分片回落），
+ * 区别在两处：① **落盘名用 label 而不是 64 位哈希**——交给系统「打开方式 / 分享」时接收方
+ * 看到的就是这个文件名，叫 `8c4dd03…` 等于让人猜；② 到手后不就地预览，而是交给系统。
+ */
+@Composable
+private fun FileBlock(block: MessageBlock) {
+    val context = LocalContext.current
+    val fetchAttachment = LocalVideoFetcher.current
+    val scope = rememberCoroutineScope()
+    val dir = remember(context) { File(context.cacheDir, "file-attachments").apply { mkdirs() } }
+    val attachment = block.name
+    val label = block.label?.takeIf { it.isNotBlank() } ?: attachment ?: "附件"
+    // 缓存键用展示名（同一对象库名字永远对应同一内容，不会串台）。
+    val target = remember(label) { File(dir, safeFileName(label)) }
+    var saved by remember(block.name) { mutableStateOf<File?>(null) }
+    var fetching by remember(block.name) { mutableStateOf(false) }
+    var loaded by remember(block.name) { mutableStateOf(0L) }
+    var total by remember(block.name) { mutableStateOf(block.size ?: 0L) }
+    var error by remember(block.name) { mutableStateOf<String?>(null) }
+
+    // 盘上已有（上次拉过 / 应用重启回来）→ 直接就能打开，一个包都不发。
+    LaunchedEffect(target) {
+        if (attachment != null && target.length() > 0) saved = target
+    }
+
+    /** 确保字节到手，再交给系统（view=true 走「打开方式」，false 走「分享」）。 */
+    fun handOff(view: Boolean) {
+        val name = attachment ?: return
+        if (fetching) return
+        val ready = saved?.takeIf { it.length() > 0 }
+        if (ready != null) {
+            error = handFileToSystem(context, ready, block.mimeType, view)
+            return
+        }
+        fetching = true
+        error = null
+        loaded = 0L
+        scope.launch {
+            val ok = runCatching {
+                fetchAttachment(name, target) { got, sum ->
+                    loaded = got
+                    if (sum > 0) total = sum
+                }
+            }.getOrElse { false }
+            fetching = false
+            if (ok && target.length() > 0) {
+                saved = target
+                error = handFileToSystem(context, target, block.mimeType, view)
+            } else {
+                // 拉一半失败要清掉残file：否则下次 length()>0 会把它当完整文件打开。
+                runCatching { if (target.length() > 0 && !ok) target.delete() }
+                error = "附件已不可用（可能已被清理）"
+            }
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .widthIn(max = 320.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MpiTheme.colors.control)
+            .clickable(enabled = attachment != null && !fetching) { handOff(view = true) }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(if (saved != null) "📄" else "⬇️", style = MaterialTheme.typography.titleMedium)
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                text = error ?: when {
+                    fetching && total > 0 -> "正在下载 ${(loaded * 100 / total).toInt()}%"
+                    fetching -> "正在下载…"
+                    saved != null -> "已下载 · 点按用其它应用打开"
+                    // formatVideoMeta 是通用的「大小 · mime」拼接，视频/音频/文件共用。
+                    else -> formatVideoMeta(block).ifBlank { "点按下载" }
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = if (error != null) MaterialTheme.colorScheme.error else MpiTheme.colors.textFaint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        // 只有字节到手才给「分享」（没文件可分享时点了只会报错）。
+        if (saved != null) {
+            Text(
+                text = "分享",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { handOff(view = false) }
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * 落盘名安全化：Windows/Android 都认的字符集，并避开结尾的点与空白。
+ *
+ * internal 是为了能被单测钉住（它决定用户「另存为」时看到的文件名，不能出乱码）。
+ */
+internal fun safeFileName(value: String): String {
+    val illegal = charArrayOf('\\', '/', ':', '*', '?', '"', '<', '>', '|')
+    val cleaned = buildString {
+        value.forEach { c -> append(if (c in illegal || c.code < 32) '-' else c) }
+    }.trim().trimEnd('.', ' ').take(160)
+    return cleaned.ifBlank { "附件" }
+}
+
+/**
+ * 把已落盘的文件交给系统：view=true 用「打开方式」，false 用「分享」面板。
+ *
+ * 走 FileProvider 而不是 file:// —— Android 7+ 递 file:// URI 会直接抛
+ * FileUriExposedException（自更新那套已经这么做了，authority 与它共用一个）。
+ * 返回 null = 成功；非 null = 一句能直接给人看的失败原因。
+ */
+private fun handFileToSystem(context: Context, file: File, mimeType: String?, view: Boolean): String? {
+    val uri = runCatching { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file) }
+        .getOrNull() ?: return "无法共享这个文件"
+    val type = mimeType?.takeIf { it.contains('/') } ?: "application/octet-stream"
+    val intent = if (view) {
+        Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, type) }
+    } else {
+        Intent(Intent.ACTION_SEND).apply {
+            this.type = type
+            putExtra(Intent.EXTRA_STREAM, uri)
+        }
+    }
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    return runCatching { context.startActivity(Intent.createChooser(intent, file.name)) }.exceptionOrNull()?.let {
+        // ActivityNotFoundException 最常见于「没装能开这类型的 App」——这时候分享是出路。
+        if (view) "没有能打开这个文件的应用，可改用「分享」保存" else "打不开系统分享面板"
     }
 }
 
