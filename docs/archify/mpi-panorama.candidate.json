@@ -1,0 +1,576 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "MPI 系统全景",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "docs/archify/mpi-panorama.html",
+    "repository": {
+      "url": "ssh://git@workstation.tail38d5a.ts.net:2222/ai/MPI.git",
+      "revision": "9c715a848b77a344349900f2c356af0e00e60ffc",
+      "link_mode": "local-only"
+    }
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "使用者",
+      "sublabel": "桌面 · 手机",
+      "pos": [
+        40,
+        280
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "README.md",
+          "line": 5,
+          "label": "客户端定位"
+        }
+      ]
+    },
+    {
+      "id": "renderer",
+      "type": "frontend",
+      "label": "渲染层",
+      "sublabel": "React · zustand",
+      "pos": [
+        240,
+        280
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "tag": "294 字段单 store",
+      "sources": [
+        {
+          "path": "src/renderer/src/App.tsx",
+          "line": 145,
+          "end_line": 185,
+          "label": "面板装配"
+        },
+        {
+          "path": "src/renderer/src/store.ts",
+          "line": 1708,
+          "label": "create<PiStore>"
+        }
+      ]
+    },
+    {
+      "id": "preload",
+      "type": "frontend",
+      "label": "preload 桥",
+      "sublabel": "219 个 invoke",
+      "pos": [
+        440,
+        280
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/preload/index.ts",
+          "line": 36,
+          "label": "const api"
+        },
+        {
+          "path": "src/preload/index.ts",
+          "line": 616,
+          "label": "exposeInMainWorld"
+        }
+      ]
+    },
+    {
+      "id": "ipc",
+      "type": "backend",
+      "label": "主进程路由",
+      "sublabel": "ipc.ts · 215 通道",
+      "pos": [
+        640,
+        280
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "tag": "4.6k 行单函数",
+      "sources": [
+        {
+          "path": "src/main/ipc.ts",
+          "line": 1423,
+          "end_line": 1437,
+          "label": "registerIpc()"
+        },
+        {
+          "path": "src/main/ipc.ts",
+          "line": 3709,
+          "end_line": 3756,
+          "label": "handler 内嵌网络逻辑"
+        }
+      ]
+    },
+    {
+      "id": "bridge",
+      "type": "backend",
+      "label": "pi RPC 桥",
+      "sublabel": "spawn --mode rpc",
+      "pos": [
+        840,
+        280
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/pi-bridge.ts",
+          "line": 388,
+          "label": "--mode rpc"
+        },
+        {
+          "path": "src/main/pi-bridge.ts",
+          "line": 427,
+          "label": "spawn(rt.node, args)"
+        }
+      ]
+    },
+    {
+      "id": "runtime",
+      "type": "external",
+      "label": "pi 运行时",
+      "sublabel": "Node 子进程",
+      "pos": [
+        1040,
+        280
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "tag": "扩展在此加载",
+      "sources": [
+        {
+          "path": "package.json",
+          "line": 4,
+          "label": "piRuntimeVersion"
+        }
+      ]
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "权限门扩展",
+      "sublabel": "allow / deny",
+      "pos": [
+        1040,
+        100
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "tag": "只读模式强制",
+      "sources": [
+        {
+          "path": "src/main/permission-gate-ext.ts",
+          "line": 730,
+          "label": "extension entry"
+        },
+        {
+          "path": "src/main/permission-gate-ext.ts",
+          "line": 810,
+          "label": "read-only enforcement"
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "本地状态",
+      "sublabel": "config · todos",
+      "pos": [
+        440,
+        460
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "tag": "原子写不统一",
+      "sources": [
+        {
+          "path": "src/main/config.ts",
+          "line": 976,
+          "label": "直接 writeFileSync"
+        },
+        {
+          "path": "src/main/draft-store.ts",
+          "line": 90,
+          "end_line": 92,
+          "label": "tmp + rename"
+        },
+        {
+          "path": "src/main/todo-store.ts",
+          "line": 151,
+          "end_line": 152,
+          "label": "另一份 tmp + rename"
+        }
+      ]
+    },
+    {
+      "id": "remote",
+      "type": "backend",
+      "label": "远程主机服务",
+      "sublabel": "protocol v1",
+      "pos": [
+        640,
+        460
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/remote/host.ts",
+          "line": 96,
+          "label": "class RemoteHost"
+        },
+        {
+          "path": "src/main/remote/protocol.ts",
+          "line": 15,
+          "end_line": 16,
+          "label": "envelope 上限 8MB"
+        }
+      ]
+    },
+    {
+      "id": "memory",
+      "type": "database",
+      "label": "知芽记忆池",
+      "sublabel": "Markdown · zvec",
+      "pos": [
+        840,
+        460
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/zhiya/pool.ts",
+          "line": 417,
+          "end_line": 426,
+          "label": "writeEntry 原子落盘"
+        },
+        {
+          "path": "src/main/memory-inbox.ts",
+          "line": 402,
+          "label": "ingestMemoryInbox"
+        }
+      ]
+    },
+    {
+      "id": "sessions",
+      "type": "database",
+      "label": "会话 .jsonl",
+      "sublabel": "pi 写 · MPI 读",
+      "pos": [
+        1040,
+        460
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/session-store.ts",
+          "line": 51,
+          "end_line": 53,
+          "label": "<agentDir>/sessions"
+        }
+      ]
+    },
+    {
+      "id": "signal",
+      "type": "cloud",
+      "label": "信令服务器",
+      "sublabel": "WebRTC :8787",
+      "pos": [
+        440,
+        640
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "signaling/server.mjs",
+          "line": 32,
+          "label": "WebSocketServer"
+        },
+        {
+          "path": "signaling/server.mjs",
+          "line": 143,
+          "label": "listen(:8787)"
+        }
+      ]
+    },
+    {
+      "id": "relay",
+      "type": "cloud",
+      "label": "ECS 中继",
+      "sublabel": "ws 转发 · 密文",
+      "pos": [
+        640,
+        640
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "tag": "看不到明文",
+      "sources": [
+        {
+          "path": "mobile/relay/index.mjs",
+          "line": 739,
+          "label": "wss upgrade"
+        },
+        {
+          "path": "src/main/remote/relay-uplink.ts",
+          "line": 94,
+          "end_line": 94,
+          "label": "RelayUplink"
+        },
+        {
+          "path": "src/main/remote/relay-uplink.ts",
+          "line": 278,
+          "label": "new WebSocket(relayUrl)"
+        }
+      ]
+    },
+    {
+      "id": "pwa",
+      "type": "frontend",
+      "label": "手机 PWA",
+      "sublabel": "React · 浏览器",
+      "pos": [
+        540,
+        820
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "mobile/pwa/src/lib/relay-client.ts",
+          "line": 43,
+          "label": "class RelayClient"
+        },
+        {
+          "path": "mobile/pwa/src/lib/relay-client.ts",
+          "line": 281,
+          "label": "new WebSocket(url)"
+        }
+      ]
+    },
+    {
+      "id": "native",
+      "type": "frontend",
+      "label": "原生 App",
+      "sublabel": "Compose · Kotlin",
+      "pos": [
+        740,
+        820
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "mobile/app/app/src/main/java/com/mpi/app/data/RelayClient.kt",
+          "line": 40,
+          "end_line": 46,
+          "label": "中继 ws 客户端"
+        },
+        {
+          "path": "mobile/app/app/src/main/java/com/mpi/app/protocol/Envelope.kt",
+          "line": 29,
+          "label": "MAX_ENVELOPE_BYTES"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "本机 Electron 应用（dev / prod userData 隔离）",
+      "wraps": [
+        "renderer",
+        "preload",
+        "ipc",
+        "bridge"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "自托管服务器",
+      "wraps": [
+        "signal",
+        "relay"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "移动设备",
+      "wraps": [
+        "pwa",
+        "native"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-ui",
+      "from": "user",
+      "to": "renderer",
+      "label": "操作",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ui-preload",
+      "from": "renderer",
+      "to": "preload",
+      "label": "调用",
+      "variant": "emphasis"
+    },
+    {
+      "id": "preload-ipc",
+      "from": "preload",
+      "to": "ipc",
+      "label": "IPC",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ipc-bridge",
+      "from": "ipc",
+      "to": "bridge",
+      "label": "pi:*",
+      "variant": "emphasis"
+    },
+    {
+      "id": "bridge-runtime",
+      "from": "bridge",
+      "to": "runtime",
+      "label": "JSONL",
+      "variant": "emphasis"
+    },
+    {
+      "id": "runtime-gate",
+      "from": "runtime",
+      "to": "gate",
+      "label": "tool 审批",
+      "variant": "security"
+    },
+    {
+      "id": "runtime-sessions",
+      "from": "runtime",
+      "to": "sessions",
+      "label": "写会话记录"
+    },
+    {
+      "id": "ipc-state",
+      "from": "ipc",
+      "to": "state",
+      "label": "读写配置/待办"
+    },
+    {
+      "id": "ipc-memory",
+      "from": "ipc",
+      "to": "memory",
+      "label": "zhiya:*"
+    },
+    {
+      "id": "runtime-inbox",
+      "from": "runtime",
+      "to": "memory",
+      "label": "写收件箱",
+      "variant": "dashed"
+    },
+    {
+      "id": "ipc-remote",
+      "from": "ipc",
+      "to": "remote",
+      "label": "remote:*"
+    },
+    {
+      "id": "remote-signal",
+      "from": "remote",
+      "to": "signal",
+      "label": "配对信令",
+      "variant": "dashed"
+    },
+    {
+      "id": "remote-relay",
+      "from": "remote",
+      "to": "relay",
+      "label": "wss 上行 · 密文帧"
+    },
+    {
+      "id": "relay-pwa",
+      "from": "relay",
+      "to": "pwa",
+      "label": "同协议转发"
+    },
+    {
+      "id": "relay-native",
+      "from": "relay",
+      "to": "native",
+      "label": "同协议转发"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "重构关注点（详见 docs/CODE-REVIEW-2026-10.md）",
+      "items": [
+        "ipc.ts 单个 registerIpc() 约 4.6k 行、215 个通道，handler 内嵌网络与缓存逻辑",
+        "主进程 19 处 import type 反向依赖渲染层 lib/types.ts（src/main/ipc.ts:60）",
+        "JSON 落盘不统一：config.ts:976 直接覆写，draft/todo-store 各写一份 tmp+rename",
+        "渲染层无 React.lazy / Suspense：Chat.tsx:25 静态引入 xterm，主 chunk 3.3 MB"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "手机端与多端",
+      "items": [
+        "协议三处同步：src/main/remote/protocol.ts、mobile/shared/protocol.ts、Envelope.kt:29（8MB 上限由测试守一致）",
+        "android/ 是 WebView 壳，加载中继 PWA（android/app/src/main/java/com/mpi/remote/MainActivity.kt:38）",
+        "飞书 / 微信通道属可选能力：src/main/messaging/service.ts:47，未画入主链路"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "数据落点",
+      "items": [
+        "会话 .jsonl 由 pi 运行时写，MPI 侧只读并做历史裁剪（session-store.ts:51）",
+        "配置 / 待办 / 草稿在 Electron userData；记忆池为 Markdown 文件 + zvec 索引",
+        "扩展工具先写收件箱目录，再由主进程校验入池（memory-inbox.ts:402）"
+      ]
+    }
+  ]
+}

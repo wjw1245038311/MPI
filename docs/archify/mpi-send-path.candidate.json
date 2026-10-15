@@ -1,0 +1,406 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "MPI 发送链路：输入框 → 主进程 → pi 运行时 → 事件回流",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "docs/archify/mpi-send-path.html",
+    "repository": {
+      "url": "ssh://git@workstation.tail38d5a.ts.net:2222/ai/MPI.git",
+      "revision": "9c715a848b77a344349900f2c356af0e00e60ffc",
+      "link_mode": "local-only"
+    }
+  },
+  "participants": [
+    {
+      "id": "composer",
+      "type": "frontend",
+      "label": "输入框",
+      "sublabel": "Composer.tsx",
+      "sources": [
+        {
+          "path": "src/renderer/src/components/Composer.tsx",
+          "line": 655,
+          "label": "调用 sendPrompt"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "type": "frontend",
+      "label": "状态",
+      "sublabel": "zustand store",
+      "sources": [
+        {
+          "path": "src/renderer/src/store.ts",
+          "line": 2480,
+          "label": "sendPrompt 实现"
+        },
+        {
+          "path": "src/renderer/src/store.ts",
+          "line": 3255,
+          "label": "handleEvent"
+        }
+      ]
+    },
+    {
+      "id": "preload",
+      "type": "frontend",
+      "label": "preload",
+      "sublabel": "contextBridge",
+      "sources": [
+        {
+          "path": "src/preload/index.ts",
+          "line": 383,
+          "end_line": 384,
+          "label": "prompt → invoke"
+        },
+        {
+          "path": "src/preload/index.ts",
+          "line": 408,
+          "end_line": 409,
+          "label": "extuiResponse → invoke"
+        }
+      ]
+    },
+    {
+      "id": "ipc",
+      "type": "backend",
+      "label": "主进程路由",
+      "sublabel": "ipc.ts",
+      "sources": [
+        {
+          "path": "src/main/ipc.ts",
+          "line": 5443,
+          "label": "thread:prompt handler"
+        },
+        {
+          "path": "src/main/ipc.ts",
+          "line": 708,
+          "end_line": 759,
+          "label": "pi:event / pi:extui 转发"
+        },
+        {
+          "path": "src/main/ipc.ts",
+          "line": 5668,
+          "label": "thread:extuiResponse"
+        }
+      ]
+    },
+    {
+      "id": "bridge",
+      "type": "backend",
+      "label": "RPC 桥",
+      "sublabel": "pi-bridge.ts",
+      "sources": [
+        {
+          "path": "src/main/pi-bridge.ts",
+          "line": 539,
+          "label": "prompt()"
+        },
+        {
+          "path": "src/main/pi-bridge.ts",
+          "line": 522,
+          "label": "stdin.write(line)"
+        },
+        {
+          "path": "src/main/pi-bridge.ts",
+          "line": 502,
+          "label": "opts.onEvent(msg)"
+        }
+      ]
+    },
+    {
+      "id": "runtime",
+      "type": "external",
+      "label": "pi 运行时",
+      "sublabel": "每会话一子进程",
+      "sources": [
+        {
+          "path": "src/main/pi-bridge.ts",
+          "line": 388,
+          "end_line": 427,
+          "label": "spawn pi --mode rpc"
+        },
+        {
+          "path": "package.json",
+          "line": 4,
+          "label": "piRuntimeVersion"
+        }
+      ]
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "权限门",
+      "sublabel": "pi 扩展内判定",
+      "sources": [
+        {
+          "path": "src/main/permission-gate-ext.ts",
+          "line": 730,
+          "label": "扩展入口"
+        }
+      ]
+    },
+    {
+      "id": "sessions",
+      "type": "database",
+      "label": "会话 .jsonl",
+      "sublabel": "<agentDir>/sessions",
+      "sources": [
+        {
+          "path": "src/main/session-store.ts",
+          "line": 51,
+          "end_line": 53,
+          "label": "pi 的会话目录"
+        }
+      ]
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 312,
+      "label": "发送（渲染层 → 主进程）"
+    },
+    {
+      "from": 312,
+      "to": 684,
+      "label": "运行时执行 + 审批门"
+    },
+    {
+      "from": 684,
+      "to": 852,
+      "label": "事件回流与重渲染"
+    }
+  ],
+  "messages": [
+    {
+      "id": "submit",
+      "from": "composer",
+      "to": "store",
+      "y": 172,
+      "label": "Enter 发送",
+      "variant": "emphasis",
+      "note": "steer / followUp 两种模式"
+    },
+    {
+      "id": "call-preload",
+      "from": "store",
+      "to": "preload",
+      "y": 240,
+      "label": "thread.prompt()",
+      "variant": "emphasis"
+    },
+    {
+      "id": "invoke",
+      "from": "preload",
+      "to": "ipc",
+      "y": 268,
+      "label": "invoke thread:prompt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "to-bridge",
+      "from": "ipc",
+      "to": "bridge",
+      "y": 296,
+      "label": "按线程取桥 → prompt()"
+    },
+    {
+      "id": "stdin",
+      "from": "bridge",
+      "to": "runtime",
+      "y": 336,
+      "label": "JSONL 写 stdin",
+      "variant": "emphasis",
+      "note": "一会话一子进程"
+    },
+    {
+      "id": "append-jsonl",
+      "from": "runtime",
+      "to": "sessions",
+      "y": 384,
+      "label": "追加会话记录",
+      "variant": "dashed"
+    },
+    {
+      "id": "ask-gate",
+      "from": "runtime",
+      "to": "gate",
+      "y": 412,
+      "label": "tool 调用前征询",
+      "variant": "security"
+    },
+    {
+      "id": "wait-gate",
+      "from": "gate",
+      "to": "runtime",
+      "y": 440,
+      "label": "挂起等应答",
+      "variant": "return"
+    },
+    {
+      "id": "ui-request",
+      "from": "runtime",
+      "to": "bridge",
+      "y": 470,
+      "label": "扩展 UI 请求",
+      "variant": "security",
+      "note": "转成 pi:extui（ipc.ts:754）"
+    },
+    {
+      "id": "ui-to-ipc",
+      "from": "bridge",
+      "to": "ipc",
+      "y": 518,
+      "label": "onEvent(请求)",
+      "variant": "return"
+    },
+    {
+      "id": "ui-push",
+      "from": "ipc",
+      "to": "store",
+      "y": 546,
+      "label": "pi:extui 审批卡片",
+      "variant": "security"
+    },
+    {
+      "id": "user-answer",
+      "from": "store",
+      "to": "ipc",
+      "y": 586,
+      "label": "点选 → extuiResponse",
+      "variant": "emphasis",
+      "note": "手机可代答（remote/host.ts:96）"
+    },
+    {
+      "id": "respond",
+      "from": "ipc",
+      "to": "bridge",
+      "y": 634,
+      "label": "respondExtUi(id)"
+    },
+    {
+      "id": "respond-stdin",
+      "from": "bridge",
+      "to": "runtime",
+      "y": 662,
+      "label": "extension_ui_response"
+    },
+    {
+      "id": "events",
+      "from": "runtime",
+      "to": "bridge",
+      "y": 702,
+      "label": "事件流：增量 / tool_end",
+      "variant": "return",
+      "note": "逐行 JSONL（pi-bridge.ts:471）"
+    },
+    {
+      "id": "events-ipc",
+      "from": "bridge",
+      "to": "ipc",
+      "y": 750,
+      "label": "onEvent(msg)",
+      "variant": "return"
+    },
+    {
+      "id": "events-push",
+      "from": "ipc",
+      "to": "store",
+      "y": 780,
+      "label": "pi:event（带 threadId）",
+      "variant": "emphasis",
+      "note": "按线程转发（ipc.ts:708）"
+    },
+    {
+      "id": "rerender",
+      "from": "store",
+      "to": "composer",
+      "y": 828,
+      "label": "状态更新 → 重渲染",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "composer",
+      "from": 168,
+      "to": 832,
+      "type": "frontend"
+    },
+    {
+      "participant": "store",
+      "from": 172,
+      "to": 828,
+      "type": "frontend"
+    },
+    {
+      "participant": "preload",
+      "from": 238,
+      "to": 270,
+      "type": "frontend"
+    },
+    {
+      "participant": "ipc",
+      "from": 266,
+      "to": 782,
+      "type": "backend"
+    },
+    {
+      "participant": "bridge",
+      "from": 294,
+      "to": 752,
+      "type": "backend"
+    },
+    {
+      "participant": "runtime",
+      "from": 334,
+      "to": 704,
+      "type": "external"
+    },
+    {
+      "participant": "gate",
+      "from": 410,
+      "to": 442,
+      "type": "security"
+    },
+    {
+      "participant": "sessions",
+      "from": 382,
+      "to": 390,
+      "type": "database"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "信任边界",
+      "items": [
+        "渲染层只能经 preload 暴露的 invoke 面进主进程（src/preload/index.ts:36、:616）",
+        "权限判定发生在 pi 进程内的扩展里，MPI 只负责把请求显示出来并回填答案",
+        "命令是带 id 的请求-应答（pending 表回收），审批回填则直写 extension_ui_response（src/main/pi-bridge.ts:512-534）"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "链路上的重构点",
+      "items": [
+        "thread:* 等 215 个通道集中在单个 registerIpc()（src/main/ipc.ts:1423），handler 内还嵌业务逻辑",
+        "preload 手写 219 个 invoke，与主进程 handler 无契约校验（docs/CODE-REVIEW-2026-10.md A3）",
+        "事件回流按线程逐个转发，压缩估算等副作用也写在同一路径上（src/main/ipc.ts:708-759）"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "手机端复用同一链路",
+      "items": [
+        "手机走 protocol v1 envelope，请求名与桌面 thread:* 同一份清单（src/main/remote/protocol.ts:16）",
+        "中继只见密文帧：上行由 RelayUplink 转发（src/main/remote/relay-uplink.ts:94）",
+        "审批可被手机代答，桌面侧随后收到 pi:extuiResolved 收起卡片（src/preload/index.ts:534）"
+      ]
+    }
+  ]
+}
