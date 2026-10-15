@@ -1259,7 +1259,7 @@ interface PiStore {
   setModel: (id: string, provider: string, modelId: string) => Promise<void>;
   /** P1-12: toggle auto mode for a thread. Exiting stops monitoring entirely. */
   setAutoModel: (id: string, enabled: boolean) => Promise<void>;
-  setThinking: (id: string, level: string) => Promise<boolean>;
+  setThinking: (id: string, level: string, options?: { silent?: boolean }) => Promise<boolean>;
   newSessionInThread: (id: string) => Promise<void>;
   forkThread: (id: string, entryId: string) => Promise<void>;
   cloneThread: (id: string) => Promise<void>;
@@ -2892,7 +2892,7 @@ export const useStore = create<PiStore>()((set, get) => {
     }
   },
 
-  setThinking: async (id, level) => {
+  setThinking: async (id, level, options) => {
     // ensureConnected may remap a draft's temp id to the live bridge id — use
     // the returned id for the RPC or main answers "Thread not open".
     const live = await get().ensureConnected(id);
@@ -2903,7 +2903,10 @@ export const useStore = create<PiStore>()((set, get) => {
       set((s) => (s.threads[live] ? { threads: { ...s.threads, [live]: { ...s.threads[live], thinking: effectiveLevel } } } : s));
       return true;
     } catch (e: any) {
-      get().pushToast("error", e?.message || "set thinking failed");
+      // silent：调用方自己解释失败原因。任务模式预设遇到模型不支持的档位是**预期内**
+      // 分支（2026-10-15 实测：切「审查」时把英文原始报错弹成红色 error toast，与下面
+      // 那句中文提示重复），不能再走通用错误通道。
+      if (!options?.silent) get().pushToast("error", e?.message || "set thinking failed");
       return false;
     }
   },
@@ -3023,8 +3026,19 @@ export const useStore = create<PiStore>()((set, get) => {
       inherited.push(zh ? "模型" : "model");
     }
     if (inherit.thinking) {
-      await get().setThinking(liveId, inherit.thinking);
-      inherited.push(zh ? "思考等级" : "thinking level");
+      // 源会话的档位不一定被新会话的模型支持（实测：切「审查」时弹过英文原始报错）。
+      // 失败只说明一句，并别把它当成「已继承」。
+      const applied = await get().setThinking(liveId, inherit.thinking, { silent: true });
+      if (applied) {
+        inherited.push(zh ? "思考等级" : "thinking level");
+      } else {
+        get().pushToast(
+          "info",
+          zh
+            ? `源会话的思考等级「${reasoningLevelLabel(inherit.thinking, "zh")}」当前模型不支持，未继承。`
+            : `The source session's thinking level “${inherit.thinking}” isn't supported by this model — not inherited.`,
+        );
+      }
     }
     if (inherit.permission) {
       await get().setPermission(liveId, inherit.permission);
@@ -3994,7 +4008,7 @@ export const useStore = create<PiStore>()((set, get) => {
     // 模式预设的思考等级：当前模型不支持时不要报错（以前会被 pi 静默夹紧），
     // 改成一句提示并保留原档位；用户手动选仍然走严格校验的 setThinking。
     if (mode.thinking) {
-      const applied = await get().setThinking(live, mode.thinking);
+      const applied = await get().setThinking(live, mode.thinking, { silent: true });
       if (!applied) {
         const zh = get().config?.language === "zh";
         const current = get().threads[live]?.thinking;
