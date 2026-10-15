@@ -8618,53 +8618,14 @@ mark.hl {
   }
 }
 
-/* mcp module (gated on pi-mcp-market) */
+/* MCP 模块：pi ≥ 0.99 内建实现，MPI 直接管 mcp.json */
 .mcp-view {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
-.mcp-gate {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 56px 24px;
-  text-align: center;
-}
-.mcp-gate-icon {
-  width: 58px;
-  height: 58px;
-  border-radius: 17px;
-  display: grid;
-  place-items: center;
-  background: var(--accent-soft);
-  color: var(--accent);
-  margin-bottom: 4px;
-}
-.mcp-gate-title {
-  font-size: 16px;
-  font-weight: 700;
-}
-.mcp-gate-copy {
-  max-width: 500px;
-  margin: 0;
-  font-size: 12.5px;
-  line-height: 1.65;
-  color: var(--text-dim);
-}
-.mcp-gate-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
-  margin-top: 10px;
-}
-/* my mcp — column wrapper so the dependency strip stays compact and the
-   master-detail row below fills the remaining height. (A single wrap-enabled
-   flex container would stretch both rows to share the space, inflating the
-   dep cards to half the panel height.) */
+/* my mcp — 列向容器：让下面的主从两栏占满剩余高度（单个允许换行的 flex
+   容器会把两行拉伸成各占一半） */
 .mcp-mine-wrap {
   flex: 1;
   min-height: 0;
@@ -8677,38 +8638,6 @@ mark.hl {
   flex: 1;
   min-height: 0;
   padding: 0;
-}
-.mcp-deps {
-  display: flex;
-  gap: 8px;
-}
-.mcp-dep-card {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 7px 12px;
-}
-.mcp-dep-card.warn {
-  border-color: color-mix(in srgb, var(--ctx-warn) 45%, var(--border));
-  background: color-mix(in srgb, var(--ctx-warn) 6%, #fff);
-}
-.mcp-dep-name {
-  font-weight: 600;
-  font-size: 12.5px;
-  flex: 0 0 auto;
-}
-.mcp-dep-note {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11.5px;
 }
 /* transport badge inside a skill-row (right side, before the toggle) */
 .skill-row-kind {

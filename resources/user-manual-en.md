@@ -529,10 +529,10 @@ A pi extension is a code package installed from npm/git/local path that can add 
 
 MCP (Model Context Protocol) servers provide pi with external tools and data sources. Two sub-tabs:
 
-- My MCP: a dependency strip at the top shows whether the `pi-mcp-market` / `pi-mcp-adapter` extensions are enabled (missing ones can be installed with one click). The left column lists servers configured in `~/.pi/agent/mcp.json` (stdio/remote badges); right detail pane has copy command, enable/disable switch (only writes a disabled flag, reversible anytime), delete (with confirmation).
+- My MCP: the left column lists servers configured in `~/.pi/agent/mcp.json` (stdio / remote badges, plus an exposure badge); the right detail pane has copy command, an enable/disable switch (writes the `enabled: false` flag pi understands, reversible anytime) and delete (with confirmation).
 - MCP marketplace: browse the mcpmarket.cn public catalog (logo/author/stars/description) with keyword search and "Load more"; click a card for the overview sections and GitHub link.
 
-> The MCP module depends on the `pi-mcp-market` extension; when it's missing you see an unavailable card + one-click install button. Actually connecting to and running servers also requires `pi-mcp-adapter`.
+> **MCP is built into pi** (pi ≥ 0.99): the `pi-mcp-adapter` extension is no longer needed and the panel no longer asks for it. Run `/reload` in a session to pick up config edits; `/mcp` shows connections and OAuth sign-in. Two notes: ① a legacy `disabled: true` written by older MPI builds is rewritten automatically to `enabled: false`; ② the built-in default `exposure` is `codemode`, so the model does not see a pile of `mcp__*` tools upfront — add `"exposure": "direct"` to a server entry when you want its tools declared directly.
 
 ### 13.4 Extension model pick (no popups)
 

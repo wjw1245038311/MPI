@@ -177,7 +177,7 @@ export function MessagingPanel() {
       .then((servers) => {
         if (!alive) return;
         const s = servers.find((x) => x.name === "lark-mcp");
-        setMcpEnabled(!!s && !s.disabled);
+        setMcpEnabled(!!s && s.enabled);
       })
       .catch(() => {
         if (alive) setMcpEnabled(null);

@@ -1343,7 +1343,7 @@ interface PiStore {
   installPackage: (source: string) => Promise<boolean>;
   removePackage: (source: string) => Promise<void>;
   updatePackages: (source?: string) => Promise<void>;
-  toggleMcpServer: (name: string, disabled: boolean) => Promise<void>;
+  toggleMcpServer: (name: string, enabled: boolean) => Promise<void>;
   removeMcpServer: (name: string) => Promise<void>;
   toggleSkill: (path: string, enabled: boolean) => Promise<void>;
   installSkill: (skill: SkillHubSkill) => Promise<boolean>;
@@ -3482,10 +3482,10 @@ export const useStore = create<PiStore>()((set, get) => {
       get().pushToast("error", "移除失败：" + (e?.message || e));
     }
   },
-  toggleMcpServer: async (name, disabled) => {
-    set((s) => ({ mcpServers: s.mcpServers.map((m) => (m.name === name ? { ...m, disabled } : m)) }));
+  toggleMcpServer: async (name, enabled) => {
+    set((s) => ({ mcpServers: s.mcpServers.map((m) => (m.name === name ? { ...m, enabled } : m)) }));
     try {
-      await window.pi.plugins.setMcpServerDisabled(name, disabled);
+      await window.pi.plugins.setMcpServerEnabled(name, enabled);
     } catch (e: any) {
       get().pushToast("error", e?.message || "切换失败");
       get().loadPlugins();

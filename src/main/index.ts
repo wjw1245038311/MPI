@@ -21,6 +21,7 @@ import { stopMemoryEndpoint } from "./memory-endpoint";
 import { disposeMemoryIndex } from "./memory-service";
 import { ensureBackfilled as backfillObservedTools } from "./observed-tools";
 import { activateAutostartApps, killAllManagedProcesses } from "./app-store";
+import { migrateToBuiltinMcp, normalizeMcpDisabledFlags } from "./plugins";
 import { startDevReleaseProgressTail } from "./dev-release-progress";
 import { stopAutomations, stopScheduler } from "./automation";
 import { stopMessaging } from "./messaging/service";
@@ -279,6 +280,19 @@ if (!gotLock) {
       console.log("[zhiya] knowledge dir:", ensureKnowledgeDirConfigured());
     } catch (e: any) {
       console.error("[zhiya] init failed:", e?.message || String(e));
+    }
+    // MCP 交给 pi 内建实现（pi ≥ 0.99）：摘掉第三方 adapter、清掉它写的 `-builtin:mcp`，
+    // 并把旧版 MPI 的 `disabled: true` 归一化成内建认的 `enabled: false`。幂等；失败不拦启动。
+    try {
+      const m = migrateToBuiltinMcp();
+      if (m.removedAdapter || m.removedFlag) {
+        console.log(`[mcp] 切到内建 MCP：removedAdapter=${m.removedAdapter} removedFlag=${m.removedFlag}`);
+        appendDiagLog(`[mcp] migrate-to-builtin adapter=${m.removedAdapter} flag=${m.removedFlag}`);
+      }
+      const n = normalizeMcpDisabledFlags();
+      if (n > 0) console.log(`[mcp] 归一化 ${n} 个条目的 disabled → enabled:false`);
+    } catch (e: any) {
+      console.error("[mcp] builtin-mcp migration failed:", e?.message || String(e));
     }
     registerHtmlPreviewProtocol();
     registerPdfViewerProtocol();

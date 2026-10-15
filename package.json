@@ -21,6 +21,7 @@
     "test": "node scripts/run-all-tests.mjs",
     "test:drafts": "node --experimental-strip-types scripts/test-draft-store.mjs",
     "test:json-store": "node --experimental-strip-types scripts/test-json-store.mjs",
+    "test:mcp-config": "node --experimental-strip-types scripts/test-mcp-config.mjs",
     "test:shortcuts": "node --experimental-strip-types scripts/test-shortcuts.mjs",
     "test:project-remap": "node --experimental-strip-types scripts/test-project-remap.mjs",
     "test:docx": "node --experimental-strip-types scripts/test-docx.mjs",

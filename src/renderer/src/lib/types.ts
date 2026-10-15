@@ -93,7 +93,7 @@ export interface SkillContent {
   markdown: string;
 }
 
-/** An MCP server entry from <agentDir>/mcp.json (managed by pi-mcp-adapter). */
+/** An MCP server entry from <agentDir>/mcp.json (read/written by pi's built-in MCP since pi ≥ 0.99). */
 export interface McpServerInfo {
   name: string;
   /** "stdio" when launched via command, "remote" when using a url. */
@@ -101,8 +101,13 @@ export interface McpServerInfo {
   /** Full stdio command line for display (command + args). */
   command?: string;
   url?: string;
-  /** Per-server disable flag (`disabled: true` in mcp.json). */
-  disabled: boolean;
+  /**
+   * 启用状态。pi ≥ 0.99 的内建 MCP 只认 `enabled`（主进程读取时兼容旧版 MPI 写的
+   * `disabled: true`，并在首次列出时归一化掉）。
+   */
+  enabled: boolean;
+  /** pi 1.x 的工具暴露方式：direct / deferred / codemode / hidden；不给 = 用 pi 默认值。 */
+  exposure?: string;
 }
 
 /** One entry from the mcpmarket.cn directory (list view). */

@@ -8,6 +8,8 @@ import { decideNpmCommand, pathStartsWith } from "./npm-command";
 import { resolvePiRuntime } from "./pi-bridge";
 import { bundledNpmCliPath, migrateBundledNpm, runtimeBaseDir } from "./runtime-package";
 import { getAgentDir } from "./session-store";
+import { writeFileAtomic } from "./fs-atomic";
+import { readJsonRaw, writeJsonAtomic } from "./json-store";
 
 /**
  * Manage pi packages (extensions bundles) and standalone skills.
@@ -666,9 +668,12 @@ export function setSkillEnabled(path: string, enabled: boolean): void {
 /* ----------------------------- mcp servers ----------------------------- */
 
 /**
- * MCP server configuration lives in `<agentDir>/mcp.json` (the Pi-owned file
- * that pi-mcp-adapter reads and pi-mcp-market writes). Shape:
- * `{ "mcpServers": { name: { command, args?, env? } | { url, headers?, auth? ... }, ... }, ...other adapter keys }
+ * MCP server configuration lives in `<agentDir>/mcp.json`.
+ *
+ * pi ≥ 0.99 ships **built-in MCP support**（`pi mcp add|list|login`、`--no-mcp`），MPI 直接管
+ * 这个文件：`{ "mcpServers": { name: { command, args?, env? } | { url, headers?, oauth?, auth? }, ... } }`。
+ * 启用标记是 `enabled: false`（实测：旧字段 `disabled` 会被内建实现忽略）；另有项目级覆盖
+ * `.pi/mcp.json` 与 `exposure`/`toolExposure`，那些键 MPI 不主动写也不抹掉。
  *
  * We only ever touch `mcpServers.<name>` — every other top-level key (imports,
  * overrides) is preserved verbatim. A malformed file is reported, never
@@ -682,8 +687,14 @@ export interface McpServerInfo {
   /** Full stdio command line for display (command + args). */
   command?: string;
   url?: string;
-  /** Per-server disable flag (`disabled: true` in mcp.json). */
-  disabled: boolean;
+  /**
+   * 启用状态。pi ≥ 0.99 的内建 MCP **只认 `enabled`**（实测：写 `disabled: true` 会被
+   * 忽略并照常连接），所以这里统一算成一个布尔：缺省 = 启用，`enabled: false` 或旧版
+   * MPI 写的 `disabled: true` 都算禁用。
+   */
+  enabled: boolean;
+  /** pi 1.x 的工具暴露方式（direct / deferred / codemode / hidden）；不给表示用 pi 默认值。 */
+  exposure?: string;
 }
 
 interface McpFileShape {
@@ -720,7 +731,8 @@ function readMcpFile(): McpFileShape {
 function writeMcpFile(obj: McpFileShape): void {
   const dir = getAgentDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(mcpConfigPath(), JSON.stringify(obj, null, 2) + "\n", "utf8");
+  // 原子写：mcp.json 被写坏 = 所有 MCP 服务器直接消失，不能留半截文件。
+  writeFileAtomic(mcpConfigPath(), JSON.stringify(obj, null, 2) + "\n");
 }
 
 function requireServer(file: McpFileShape, name: string): Record<string, unknown> {
@@ -749,19 +761,100 @@ export function listMcpServers(): McpServerInfo[] {
         transport: command ? "stdio" : url ? "remote" : "stdio",
         ...(command ? { command: [...(command.split(/\s+/).filter(Boolean)), ...args].join(" ") } : {}),
         ...(url ? { url } : {}),
-        disabled: entry.disabled === true,
+        enabled: mcpEntryEnabled(entry),
+        ...(typeof entry.exposure === "string" ? { exposure: entry.exposure } : {}),
       };
     });
 }
 
-export function setMcpServerDisabled(name: string, disabled: boolean): void {
+/** MCP 条目的启用状态：`enabled: false` 与旧版 `disabled: true` 都算禁用。 */
+function mcpEntryEnabled(entry: Record<string, unknown>): boolean {
+  if (entry.enabled === false) return false;
+  if (entry.disabled === true) return false; // ≤ v0.10.x 的 MPI 写法（pi 不认，仅做读取兼容）
+  return true;
+}
+
+/**
+ * 把旧版 MPI 写的 `disabled: true` 归一化成 pi 1.x 认的 `enabled: false`。
+ *
+ * 背景：≤ v0.10.x 的 MPI 写的是 `disabled: true`，而 pi ≥ 0.99 的内建 MCP 只读
+ * `enabled`——实测那个旧字段会被忽略、服务器照常连接（等于「禁用」静默失效）。
+ * 幂等：没有遗留字段就不碰磁盘。返回改写的条目数。
+ */
+export function normalizeMcpDisabledFlags(): number {
+  const file = readMcpFile();
+  const servers = file.mcpServers;
+  if (typeof servers !== "object" || servers === null) return 0;
+  let changed = 0;
+  for (const [name, raw] of Object.entries(servers)) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as Record<string, unknown>;
+    if (!("disabled" in entry)) continue;
+    const next: Record<string, unknown> = { ...entry };
+    const wasDisabled = next.disabled === true;
+    delete next.disabled;
+    // 启用态在 pi 的写法里就是「不落 enabled 键」（config.js 的 patch 也是这么删的）。
+    if (wasDisabled) next.enabled = false;
+    else if (next.enabled === undefined) delete next.enabled;
+    servers[name] = next;
+    changed++;
+  }
+  if (changed > 0) writeMcpFile(file);
+  return changed;
+}
+
+/**
+ * 一次性迁移到 pi 内建 MCP（刻意不做开关）。
+ *
+ * 两件事，缺一内建 MCP 都跑不起来：
+ *   1. 从 `<agentDir>/settings.json` 的 `packages` 里摘掉 `npm:pi-mcp-adapter`——它一加载就会
+ *      往 `extensions` 写 `-builtin:mcp` 给自己让位（实测），不摘干净会反复顶掉内建；
+ *   2. 清掉 `extensions` 里遗留的 `-builtin:mcp` token。
+ *
+ * 其余条目（其它 packages、其它 extensions、无关设置）原样保留；两项都没得改时不碰磁盘。
+ */
+export function migrateToBuiltinMcp(): { removedAdapter: boolean; removedFlag: boolean } {
+  const path = join(getAgentDir(), "settings.json");
+  const parsed = readJsonRaw(path);
+  const none = { removedAdapter: false, removedFlag: false };
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return none;
+  const obj = parsed as Record<string, unknown>;
+
+  const packages = Array.isArray(obj.packages) ? (obj.packages as unknown[]) : null;
+  const keptPackages = packages ? packages.filter((p) => !(typeof p === "string" && p.includes("pi-mcp-adapter"))) : null;
+  const removedAdapter = !!keptPackages && keptPackages.length !== packages!.length;
+  if (removedAdapter) {
+    // 空数组就不落键，给 pi 的设置文件少添噪声。
+    if (keptPackages!.length > 0) obj.packages = keptPackages;
+    else delete obj.packages;
+  }
+
+  const extensions = Array.isArray(obj.extensions) ? (obj.extensions as unknown[]) : null;
+  const keptExtensions = extensions ? extensions.filter((x) => x !== "-builtin:mcp") : null;
+  const removedFlag = !!keptExtensions && keptExtensions.length !== extensions!.length;
+  if (removedFlag) {
+    if (keptExtensions!.length > 0) obj.extensions = keptExtensions;
+    else delete obj.extensions;
+  }
+
+  if (removedAdapter || removedFlag) writeJsonAtomic(path, obj, { pretty: true });
+  return { removedAdapter, removedFlag };
+}
+
+/**
+ * 启用 / 禁用一个 MCP 服务器（写 pi 认的 `enabled` 字段）。
+ *
+ * 启用时不落 `enabled: true` 而是删键——与 pi 自己的 `/mcp` 写法一致，避免给用户的
+ * mcp.json 堆噪声；同时清掉旧版遗留的 `disabled`。
+ */
+export function setMcpServerEnabled(name: string, enabled: boolean): void {
   const file = readMcpFile();
   const entry = requireServer(file, name);
-  if (disabled) file.mcpServers![name] = { ...entry, disabled: true };
-  else {
-    const { disabled: _drop, ...rest } = entry;
-    file.mcpServers![name] = rest;
-  }
+  const next: Record<string, unknown> = { ...entry };
+  delete next.disabled;
+  if (enabled) delete next.enabled;
+  else next.enabled = false;
+  file.mcpServers![name] = next;
   writeMcpFile(file);
 }
 

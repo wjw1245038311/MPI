@@ -22,6 +22,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run test:json-store`（9 项：紧凑/缩进格式、不留 `.tmp` 残渣、自动建目录、损坏文件返回 null 且原地保留、EPERM 假失败判定为成功、config/drafts 迁移后行为不变）+ 全量 `npm test`。应用内：改一项设置并重启确认仍生效；在输入框留一段草稿、强杀进程后重开，草稿仍在。
 
+5. **改：MCP 交给 pi 内建实现（不再依赖 pi-mcp-adapter）**——pi 从 0.99.0 起自带 MCP 支持（实测 1.2.0：`pi mcp add|list|login`、`--no-mcp` 写的是 “Disable built-in MCP support”），而第三方 `pi-mcp-adapter` 一加载就会往 `~/.pi/agent/settings.json` 写 `-builtin:mcp` 顶掉内建（启动告警原文：`registers command /mcp, so built-in extension mcp was not loaded`）。更坑的是启用标记换了语义：**内建只认 `enabled`**，旧版 MPI 写的 `disabled: true` 会被直接忽略并照常连接（实测：该条目 `state` 是 `failed` 而不是 `disabled`），等于面板的「停用」静默失效。现在按「直接用内建、不做二选一切换」处理：启动时幂等地从 packages 里摘掉 adapter 并清掉遗留 token（两件必须成对做）；面板开关改写 `enabled: false`（启用则删键，与 pi `/mcp` 写法一致），并把历史遗留的 `disabled` 字段自动归一化；同时删掉「MCP 模块不可用」门控卡片与 `pi-mcp-market` / `pi-mcp-adapter` 依赖条（已不是运行前提），详情栏新增 `exposure` 徐章（内建默认 `codemode`，即工具按需取用而非全部声明给模型）。升级步骤与实测记录见 `docs/PI-1.2-UPGRADE.md`。
+
+   验证方式：`npm run test:mcp-config`（8 项：旧 `disabled:true` 与新 `enabled:false` 都读成禁用、归一化幂等且保留 oauth/exposure 等未知键、启用时删键、迁移成对执行且无事可做时不写盘、坏 settings.json 安全跳过）+ 全量 `npm test`。应用内：扩展功能 → MCP → 关一个服务器的开关，重启后仍为禁用，终端 `pi mcp list --json` 里该服务器 `state: "disabled"`；打开面板应看不到任何要求安装 adapter 的提示；飞书 MCP 那行状态与实际启用态一致。
+
 ## v0.10.1（2026-10-13）
 
 1. **修：交接到新会话的入口挪到「对话区域右键」**——v0.10.0 把它放在了**侧栏会话列表**的右键菜单里，但这是“对这个对话”的操作，位置应该在对话区（用户指正）。现在：**在对话区域右键即可，而且不必先选中文字**——右键落在本对话的消息区（`.chat-scroll`）就会给出「交接到新会话」；若选中了文字，则和以前一样同时给出「引用到输入框」「添加为待办」。侧栏里那条已撤掉。

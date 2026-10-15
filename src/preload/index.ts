@@ -288,7 +288,7 @@ const api = {
       ipcRenderer.invoke("plugins:mcpMarketSearch", { query, page }),
     getMcpMarketDetail: (id: string): Promise<McpMarketDetail> => ipcRenderer.invoke("plugins:mcpMarketDetail", id),
     getMcpServers: (): Promise<McpServerInfo[]> => ipcRenderer.invoke("plugins:getMcpServers"),
-    setMcpServerDisabled: (name: string, disabled: boolean) => ipcRenderer.invoke("plugins:setMcpServerDisabled", { name, disabled }),
+    setMcpServerEnabled: (name: string, enabled: boolean) => ipcRenderer.invoke("plugins:setMcpServerEnabled", { name, enabled }),
     removeMcpServer: (name: string) => ipcRenderer.invoke("plugins:removeMcpServer", name),
     getSkillsHubLeaderboard: () => ipcRenderer.invoke("skillsHub:leaderboard"),
     searchSkillsHub: (query: string) => ipcRenderer.invoke("skillsHub:search", query),

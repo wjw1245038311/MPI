@@ -158,7 +158,8 @@ import {
   removePackageEntry,
   runPiCli,
   TransferCancelledError,
-  setMcpServerDisabled,
+  normalizeMcpDisabledFlags,
+  setMcpServerEnabled,
   setPackageEnabled,
   setSkillEnabled,
   upsertFeishuMcp,
@@ -5765,10 +5766,14 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
   );
   ipcMain.handle("plugins:mcpMarketDetail", (_e, id: string) => getMcpMarketDetail(typeof id === "string" ? id : ""));
 
-  // MCP servers live in <agentDir>/mcp.json (pi-mcp-adapter / pi-mcp-market).
-  ipcMain.handle("plugins:getMcpServers", () => listMcpServers());
-  ipcMain.handle("plugins:setMcpServerDisabled", (_e, args: { name: string; disabled: boolean }) => {
-    setMcpServerDisabled(typeof args?.name === "string" ? args.name : "", !!args?.disabled);
+  // MCP servers live in <agentDir>/mcp.json — pi ≥ 0.99 的内建 MCP（启用标记是 `enabled`）。
+  ipcMain.handle("plugins:getMcpServers", () => {
+    // 旧版 MPI 写的 disabled:true 内建实现不认，首次列出时顺手归一化（幂等）。
+    normalizeMcpDisabledFlags();
+    return listMcpServers();
+  });
+  ipcMain.handle("plugins:setMcpServerEnabled", (_e, args: { name: string; enabled: boolean }) => {
+    setMcpServerEnabled(typeof args?.name === "string" ? args.name : "", args?.enabled !== false);
     return { ok: true };
   });
   ipcMain.handle("plugins:removeMcpServer", (_e, name: string) => {

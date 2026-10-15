@@ -13,7 +13,7 @@ import type {
   SkillInfo,
 } from "../lib/types";
 import { Markdown } from "../lib/markdown";
-import { AppStore, At, Check, Close, Copy, Files, Gauge, Plug, Plus, Refresh, Search } from "./icons";
+import { AppStore, At, Check, Close, Copy, Files, Gauge, Plus, Refresh, Search } from "./icons";
 import { SidePanel } from "./SidePanel";
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -816,62 +816,10 @@ npm ↗
   );
 }
 
-/** Gate card shown while pi-mcp-market is not installed — MCP module unavailable. */
-function McpGateCard({ language }: { language: "en" | "zh" }) {
-  const installPackage = useStore((s) => s.installPackage);
-  const zh = language === "zh";
-  const [installing, setInstalling] = useState(false);
-
-  // A dev instance started before this feature has an old preload without these APIs.
-  const mcpApiReady = typeof window.pi.plugins.getMcpServers === "function" && typeof window.pi.plugins.removeMcpServer === "function";
-
-  const installMarket = async () => {
-    if (installing) return;
-    setInstalling(true);
-    try {
-      await installPackage("npm:pi-mcp-market");
-    } finally {
-      setInstalling(false);
-    }
-  };
-
-  return (
-    <div className="plugins-body mcp-view">
-      {!mcpApiReady && (
-        <div className="skills-hub-error">
-          {zh
-            ? "当前实例的 preload 缺少 MCP 接口——请完全退出 MPI 后重新启动（dev：重新运行 npm run dev）。"
-            : "This instance's preload is missing the MCP APIs — fully quit MPI and restart (dev: re-run npm run dev)."}
-        </div>
-      )}
-      <div className="mcp-gate">
-        <div className="mcp-gate-icon">
-          <Plug size={26} />
-        </div>
-        <div className="mcp-gate-title">{zh ? "MCP 模块不可用" : "MCP module unavailable"}</div>
-        <p className="mcp-gate-copy">
-          {zh
-            ? "使用 MCP 需要先安装 pi-mcp-market 扩展：它提供 /mcp-market 市场面板，可搜索、预览并安装/卸载 MCP 服务器。实际连接与运行这些服务器还需要 pi-mcp-adapter。"
-            : "MCP requires the pi-mcp-market extension: it provides the /mcp-market panel to search, preview and install/uninstall MCP servers. Actually connecting to those servers also needs pi-mcp-adapter."}
-        </p>
-        <div className="mcp-gate-actions">
-          <button type="button" className="set-btn primary" onClick={installMarket} disabled={installing}>
-            {installing ? <span className="spinner" /> : <Plus size={14} />}
-            {zh ? "安装 pi-mcp-market" : "Install pi-mcp-market"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /** My MCP — master-detail over the servers configured in mcp.json (skill-style layout). */
 function McpMineView({ language }: { language: "en" | "zh" }) {
-  const packages = useStore((s) => s.packages);
   const mcpServers = useStore((s) => s.mcpServers);
   const loading = useStore((s) => s.pluginsLoading);
-  const installPackage = useStore((s) => s.installPackage);
-  const togglePackage = useStore((s) => s.togglePackage);
   const toggleMcpServer = useStore((s) => s.toggleMcpServer);
   const removeMcpServer = useStore((s) => s.removeMcpServer);
   const pushToast = useStore((s) => s.pushToast);
@@ -880,23 +828,8 @@ function McpMineView({ language }: { language: "en" | "zh" }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "stdio" | "remote">("all");
   const [selectedName, setSelectedName] = useState<string | null>(null);
-  const [installingAdapter, setInstallingAdapter] = useState(false);
-
   // A dev instance started before this feature has an old preload without these APIs.
   const mcpApiReady = typeof window.pi.plugins.getMcpServers === "function" && typeof window.pi.plugins.removeMcpServer === "function";
-
-  const marketPkg = packages.find((p) => p.name.toLowerCase() === "pi-mcp-market");
-  const adapterPkg = packages.find((p) => p.name.toLowerCase() === "pi-mcp-adapter");
-
-  const installAdapter = async () => {
-    if (installingAdapter) return;
-    setInstallingAdapter(true);
-    try {
-      await installPackage("npm:pi-mcp-adapter");
-    } finally {
-      setInstallingAdapter(false);
-    }
-  };
 
   const q = query.trim().toLowerCase();
   const filtered = useMemo(
@@ -958,35 +891,6 @@ function McpMineView({ language }: { language: "en" | "zh" }) {
         </div>
       )}
 
-      {/* Dependency strip: pi-mcp-market provides /mcp-market, pi-mcp-adapter runs servers. */}
-      <div className="mcp-deps">
-        {marketPkg && (
-          <div className="mcp-dep-card">
-            <span className={`skill-dot ${marketPkg.enabled ? "on" : "off"}`} />
-            <span className="mcp-dep-name">pi-mcp-market</span>
-            <span className="muted mcp-dep-note">{zh ? "/mcp-market 市场面板" : "/mcp-market panel"}</span>
-            <Toggle checked={marketPkg.enabled} onChange={(v) => togglePackage(marketPkg.source, v)} />
-          </div>
-        )}
-        {adapterPkg ? (
-          <div className="mcp-dep-card">
-            <span className={`skill-dot ${adapterPkg.enabled ? "on" : "off"}`} />
-            <span className="mcp-dep-name">pi-mcp-adapter</span>
-            <span className="muted mcp-dep-note">{zh ? "连接与运行 MCP 服务器" : "connects to & runs the servers"}</span>
-            <Toggle checked={adapterPkg.enabled} onChange={(v) => togglePackage(adapterPkg.source, v)} />
-          </div>
-        ) : (
-          <div className="mcp-dep-card warn">
-            <span className="skill-dot off" />
-            <span className="mcp-dep-name">pi-mcp-adapter</span>
-            <span className="muted mcp-dep-note">{zh ? "未安装——已配置的服务器无法使用" : "not installed — configured servers won't work"}</span>
-            <button type="button" className="set-btn primary" onClick={installAdapter} disabled={installingAdapter}>
-              {installingAdapter ? <span className="spinner" /> : <Plus size={13} />} {zh ? "安装" : "Install"}
-            </button>
-          </div>
-        )}
-      </div>
-
       <div className="skills-mine mcp-mine-inner">
       <div className="skills-mine-list">
         <div className="plugins-search">
@@ -1042,14 +946,14 @@ function McpMineView({ language }: { language: "en" | "zh" }) {
                 }
               }}
             >
-              <span className={`skill-dot ${server.disabled ? "off" : "on"}`} />
+              <span className={`skill-dot ${server.enabled ? "on" : "off"}`} />
               <div className="skill-row-main">
                 <div className="skill-row-name">{server.name}</div>
                 {(server.command || server.url) && <div className="skill-row-desc">{server.command || server.url}</div>}
               </div>
               <span className="plugins-kind skill-row-kind">{server.transport === "stdio" ? "stdio" : "remote"}</span>
               <span className="skill-row-toggle" onClick={(event) => event.stopPropagation()}>
-                <Toggle checked={!server.disabled} onChange={(v) => toggleMcpServer(server.name, !v)} />
+                <Toggle checked={server.enabled} onChange={(v) => toggleMcpServer(server.name, v)} />
               </span>
             </div>
           ))}
@@ -1065,18 +969,20 @@ function McpMineView({ language }: { language: "en" | "zh" }) {
                 <div className="skill-detail-title">{selected.name}</div>
                 <div className="skill-detail-badges">
                   <span className="plugins-kind">{selected.transport === "stdio" ? "stdio" : "remote"}</span>
-                  <span className={`skill-badge ${selected.disabled ? "off" : "on"}`}>
-                    {selected.disabled ? (zh ? "已禁用" : "Disabled") : zh ? "● 已启用" : "● Enabled"}
+                  {/* pi 1.x 的工具暴露方式（direct/deferred/codemode/hidden）：缺省由 pi 决定，这里只如实显示 */}
+                  {selected.exposure && <span className="plugins-kind">{`exposure: ${selected.exposure}`}</span>}
+                  <span className={`skill-badge ${selected.enabled ? "on" : "off"}`}>
+                    {selected.enabled ? (zh ? "● 已启用" : "● Enabled") : zh ? "已禁用" : "Disabled"}
                   </span>
                 </div>
               </div>
               <div className="skill-detail-actions">
                 <button
                   type="button"
-                  className={`set-btn${selected.disabled ? "" : " primary"}`}
-                  onClick={() => toggleMcpServer(selected.name, !selected.disabled)}
+                  className={`set-btn${selected.enabled ? "" : " primary"}`}
+                  onClick={() => toggleMcpServer(selected.name, !selected.enabled)}
                 >
-                  {selected.disabled ? (zh ? "启用" : "Enable") : zh ? "停用" : "Disable"}
+                  {selected.enabled ? (zh ? "停用" : "Disable") : zh ? "启用" : "Enable"}
                 </button>
                 <button type="button" className="set-iconbtn danger" title={zh ? "删除该服务器" : "Remove this server"} onClick={() => removeServer(selected.name)}>
                   ×
@@ -1100,15 +1006,15 @@ function McpMineView({ language }: { language: "en" | "zh" }) {
               <div className="skills-hub-mini-label">{zh ? "使用" : "USAGE"}</div>
               <p className="skills-hub-description">
                 {zh
-                  ? "在会话中运行 /mcp-market 可搜索并安装新服务器；/reload 重新加载配置，/mcp 查看连接状态。"
-                  : "Run /mcp-market in a session to search and install new servers; /reload re-reads the config, /mcp shows connection status."}
+                  ? "pi ≥ 0.99 自带 MCP：改完配置后在会话里 /reload 生效，/mcp 看连接状态与登录 OAuth；本面板的「MCP 市场」也可以直接写入配置。"
+                  : "pi ≥ 0.99 runs MCP natively: /reload in a session picks up config edits and /mcp shows connections and OAuth sign-in; this panel's MCP Market tab can also write entries directly."}
               </p>
             </div>
 
             <div className="muted plugins-note">
               {zh
-                ? "配置读写 ~/.pi/agent/mcp.json（与 pi-mcp-adapter、pi-mcp-market 共享）；停用只写 disabled 标志，可随时恢复。"
-                : "Config is read from and written to ~/.pi/agent/mcp.json (shared with pi-mcp-adapter and pi-mcp-market); disabling only sets a flag and is reversible."}
+                ? "配置读写 ~/.pi/agent/mcp.json，由 pi 内建 MCP 读取；停用写 enabled:false（旧版本写过的 disabled 字段会自动改写），随时可恢复。"
+                : "Config lives in ~/.pi/agent/mcp.json and is read by pi's built-in MCP; disabling writes enabled:false (a legacy disabled flag is rewritten automatically), reversible anytime."}
             </div>
           </>
         )}
@@ -1820,7 +1726,6 @@ export function PluginsPanel() {
   const close = useStore((s) => s.closePlugins);
   const packagesCount = useStore((s) => s.packages.length);
   // The MCP module is gated on pi-mcp-market being installed.
-  const mcpAvailable = useStore((s) => s.packages.some((p) => p.name.toLowerCase() === "pi-mcp-market"));
   const skills = useStore((s) => s.skills);
   const loading = useStore((s) => s.pluginsLoading);
   const loadPlugins = useStore((s) => s.loadPlugins);
@@ -1876,7 +1781,7 @@ export function PluginsPanel() {
             </div>
           )}
 
-          {module === "mcp" && mcpAvailable && (
+          {module === "mcp" && (
             <div className="skills-subtabs">
               <button type="button" className={`skill-subtab${mcpTab === "mine" ? " active" : ""}`} onClick={() => setMcpTab("mine")}>
                 <Files size={13} /> {zh ? "我的 MCP" : "My MCP"}
@@ -1894,14 +1799,10 @@ export function PluginsPanel() {
 
         <div className="plugins-content">
           {module === "mcp" ? (
-            mcpAvailable ? (
-              mcpTab === "mine" ? (
-                <McpMineView language={language} />
-              ) : (
-                <McpMarketView language={language} />
-              )
+            mcpTab === "mine" ? (
+              <McpMineView language={language} />
             ) : (
-              <McpGateCard language={language} />
+              <McpMarketView language={language} />
             )
           ) : module === "packages" ? (
             packageTab === "mine" ? (

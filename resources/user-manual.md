@@ -529,10 +529,10 @@ pi extension 是 npm/git/本地路径安装的代码扩展，可为 pi 增加工
 
 MCP（Model Context Protocol）服务器为 pi 提供外部工具与数据源。两个子 tab：
 
-- 我的 MCP：顶部依赖条显示 `pi-mcp-market` / `pi-mcp-adapter` 扩展的启用状态（缺失可一键补装）。左列列出 `~/.pi/agent/mcp.json` 中已配置的服务器（stdio/remote 徽章）；右列详情栏有命令复制、启用/停用开关（只写 disabled 标志，可随时恢复）、删除（带确认）。
+- 我的 MCP：左列列出 `~/.pi/agent/mcp.json` 中已配置的服务器（stdio / remote 徽章，另有 exposure 徽章）；右列详情栏有命令复制、启用/停用开关（写 pi 认的 `enabled: false`，可随时恢复）、删除（带确认）。
 - MCP 市场：浏览 mcpmarket.cn 公开目录（logo/作者/stars/简介），支持关键词搜索与「加载更多」；点卡片查看中英文 overview 分节与 GitHub 链接。
 
-> MCP 模块依赖 `pi-mcp-market` 扩展，未安装时显示不可用卡片 + 一键安装按钮；实际连接与运行服务器还需 `pi-mcp-adapter`。
+> **MCP 由 pi 内建实现**（pi ≥ 0.99）：不再需要 `pi-mcp-adapter` 扩展，面板也不再要求安装它。改完配置后在会话里 `/reload` 生效，`/mcp` 看连接状态与登录 OAuth。两个注意项：① 旧版本 MPI 写的 `disabled: true` 会被自动改写成 `enabled: false`；② 内建的默认 `exposure` 是 `codemode`，即模型不直接看到一堆 `mcp__*` 工具而是按需取用——希望某个服务器的工具直接可见，就给它的条目加 `"exposure": "direct"`。
 
 ### 13.4 扩展选模（免弹窗）
 
