@@ -1,7 +1,7 @@
 {
   "name": "mpi",
   "version": "0.10.1",
-  "piRuntimeVersion": "0.87.0",
+  "piRuntimeVersion": "1.2.0",
   "private": true,
   "license": "MIT",
   "author": {

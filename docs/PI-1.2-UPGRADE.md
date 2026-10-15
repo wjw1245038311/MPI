@@ -39,27 +39,41 @@
 | `styles.css` | 清掉随之孤立的 `.mcp-gate*`、`.mcp-dep*` 共 10 条规则 |
 | `scripts/test-mcp-config.mjs` | 新增 9 项断言（含版本门控：0.87 下必须跳过、文件保持原样）：读取兼容、归一化幂等且保留未知键、启用删键、迁移成对且无事可做时不写盘、坏 settings.json 安全跳过 |
 
-## 四、升级执行步骤（**尚未做**，需要确认后再动）
+## 四、升级执行记录（2026-10-15 已做）
 
 ```bash
-# 0) 备份（这两个文件是本次唯一会被改到的 pi 侧配置）
-cp ~/.pi/agent/settings.json ~/.pi/agent/settings.json.bak-$(date +%F)
-cp ~/.pi/agent/mcp.json      ~/.pi/agent/mcp.json.bak-$(date +%F)
+# 1) 准备包树：必须是「包目录自带 node_modules」的形状
+#    （bundle-runtime.mjs 的 bundlePi() 只拷 <pkg>/node_modules 与 <pkg>/package.json，
+#     普通 `npm install --prefix` 会把依赖提到上层 → 报 ENOENT .../pi-coding-agent/node_modules）
+tar -xzf pi-coding-agent-1.2.0.tgz -C pkgroot
+cd pkgroot/package && npm install --omit=dev --no-audit --no-fund --no-package-lock
 
-# 1) 准备 1.2.0 包树（两种做法，推荐 B，不动全局 pi）
-#    A：npm i -g @earendil-works/pi-coding-agent@1.2.0        # 会同时改掉终端 pi
-#    B：npm i --prefix <dir> @earendil-works/pi-coding-agent@1.2.0
-#       已备好：Work/tempfile/pi12-smoke/pkg（PI_PACKAGE_DIR 指它）
-
-# 2) 改钉住版本 + 重打 runtime 归档（bundle-runtime.mjs 校验 dist/cli.js 与版本一致）
-#    package.json: "piRuntimeVersion": "0.87.0" → "1.2.0"
-PI_PACKAGE_DIR=/e/MyWorkspace/Work/tempfile/pi12-smoke/pkg/node_modules/@earendil-works/pi-coding-agent \
-  PI_RUNTIME_VERSION=1.2.0 npm run bundle
-
-# 3) 冒烟（见下表），全绿再走 docs/RELEASE.md 的发版流程
+# 2) 改钉住版本（package.json: piRuntimeVersion 0.87.0 → 1.2.0）+ 重打归档
+PI_PACKAGE_DIR=<...>/pkgroot/package npm run bundle
 ```
 
-`scripts/bundle-runtime.mjs` 的取值顺序：`PI_PACKAGE_DIR` → `npm root -g` → PATH 上的 `pi.cmd` 同级 node_modules；三处都要求 `dist/cli.js` 且版本等于 `piRuntimeVersion`，否则直接报错（这是好事，防止打进错版本）。
+产物与校验（都跑过）：
+
+| 检查 | 结果 |
+|---|---|
+| 归档 | `runtime-release/MPI-Runtime-1.2.0-win-x64.tar.gz`，45.5 MiB；剪枝 14 843 文件/101.9 MiB → 5 456 文件/45.1 MiB |
+| `resources/runtime-manifest.json` | `runtimeVersion: 1.2.0`、schema 2、带 sha512 |
+| 解包后用**打包内的 node** 跑打包内的 pi | `node/node.exe pi/dist/cli.js --version` → `1.2.0` |
+| RPC + MPI 扩展 | `--mode rpc -e permission-gate-ext.ts` + `get_state` → `success:true` |
+| 剪枝后内建 MCP 仍可用 | `pi mcp list --json` 正常读隔离的 mcp.json（enabled/exposure 都在） |
+| codemode 依赖未被剪掉 | `pi/node_modules/quickjs-wasi/quickjs.wasm`、`@silvia-odwyer/photon-node/*.wasm` 均在 |
+| 仓库回归 | `npm run typecheck` ✅；`npm test` = 137 passed / 3 skipped / 0 failed |
+
+> 注意：本机 `npm` 配置了 allow-scripts，安装时跳过了依赖的 postinstall（protobufjs/@google/genai）。上面那组校验证明运行不受影响，但**换机器重打时若发现异常先怀疑这里**。
+
+### ⚠️ 应用内「更新 Pi」在 1.x 上会失败（待修，发版前必须处理）
+
+`core-updater.ts:559` 硬性要求安装包带 `npm-shrinkwrap.json`，否则抛「安装包缺少 npm-shrinkwrap.json，无法安装依赖」。实测对比：
+
+- 0.87.0 的 registry tarball **有**该文件（本机全局安装副本里 61 KB 的 `npm-shrinkwrap.json` 就是它）；
+- 1.2.0 的 registry tarball **没有**（解包后根目录只有 `package.json`），也没有 `bundleDependencies`。
+
+也就是说：**MPI 自带的 runtime 归档没问题（走安装包分发），但「设置 → 更新 Pi」这条自更新路径从 1.x 起装不上**。修法建议：把 shrinkwrap 从硬前提改成可选——有就按锁装依赖（现状），没有就在解压目录里用打包进 runtime 的 npm CLI 跑一次 `npm install --omit=dev --no-package-lock`（与上面第 1 步同一条命令），并把 integrity 校验保留在主包上。
 
 ### 冒烟清单（升级后逐项确认）
 

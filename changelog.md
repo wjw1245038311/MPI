@@ -24,7 +24,11 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 5. **改：MCP 交给 pi 内建实现（不再依赖 pi-mcp-adapter）**——pi 从 0.99.0 起自带 MCP 支持（实测 1.2.0：`pi mcp add|list|login`、`--no-mcp` 写的是 “Disable built-in MCP support”），而第三方 `pi-mcp-adapter` 一加载就会往 `~/.pi/agent/settings.json` 写 `-builtin:mcp` 顶掉内建（启动告警原文：`registers command /mcp, so built-in extension mcp was not loaded`）。更坑的是启用标记换了语义：**内建只认 `enabled`**，旧版 MPI 写的 `disabled: true` 会被直接忽略并照常连接（实测：该条目 `state` 是 `failed` 而不是 `disabled`），等于面板的「停用」静默失效。现在按「直接用内建、不做二选一切换」处理：启动时幂等地从 packages 里摘掉 adapter 并清掉遗留 token（两件必须成对做）；面板开关改写 `enabled: false`（启用则删键，与 pi `/mcp` 写法一致），并把历史遗留的 `disabled` 字段自动归一化；同时删掉「MCP 模块不可用」门控卡片与 `pi-mcp-market` / `pi-mcp-adapter` 依赖条（已不是运行前提），详情栏新增 `exposure` 徐章（内建默认 `codemode`，即工具按需取用而非全部声明给模型）。升级步骤与实测记录见 `docs/PI-1.2-UPGRADE.md`。
 
-   验证方式：`npm run test:mcp-config`（8 项：旧 `disabled:true` 与新 `enabled:false` 都读成禁用、归一化幂等且保留 oauth/exposure 等未知键、启用时删键、迁移成对执行且无事可做时不写盘、坏 settings.json 安全跳过）+ 全量 `npm test`。应用内：扩展功能 → MCP → 关一个服务器的开关，重启后仍为禁用，终端 `pi mcp list --json` 里该服务器 `state: "disabled"`；打开面板应看不到任何要求安装 adapter 的提示；飞书 MCP 那行状态与实际启用态一致。
+   验证方式：`npm run test:mcp-config`（9 项（含版本门控）：旧 `disabled:true` 与新 `enabled:false` 都读成禁用、归一化幂等且保留 oauth/exposure 等未知键、启用时删键、迁移成对执行且无事可做时不写盘、坏 settings.json 安全跳过）+ 全量 `npm test`。应用内：扩展功能 → MCP → 关一个服务器的开关，重启后仍为禁用，终端 `pi mcp list --json` 里该服务器 `state: "disabled"`；打开面板应看不到任何要求安装 adapter 的提示；飞书 MCP 那行状态与实际启用态一致。
+
+6. **升级：内置 Pi 运行时 0.87.0 → 1.2.0**——`package.json` 的 `piRuntimeVersion` 改钉 1.2.0 并重打 runtime 归档（`MPI-Runtime-1.2.0-win-x64.tar.gz`，剪枝后 45.1 MiB）。跨版本影响与实测记录见 `docs/PI-1.2-UPGRADE.md`；MCP 部分已按上一条切到内建实现。**已知问题**：1.x 的 npm 包不再带 `npm-shrinkwrap.json`，而「设置 → 更新 Pi」的自更新流程硬性依赖它（`core-updater.ts:559`），这条路径在修好前会报错——安装包自带的 runtime 不受影响。
+
+   验证方式：解包归档后用归档内的 node 跑 `pi/dist/cli.js --version` → `1.2.0`；`--mode rpc -e permission-gate-ext.ts` + `get_state` 返回 `success:true`；`pi mcp list --json` 能读配置；`quickjs.wasm` 等 codemode 依赖未被剪掉；`npm run typecheck` + 全量 `npm test`。应用内：帮助→关于 MPI 应显示 Pi 版本 1.2.0，会话能正常对话、工具卡片与权限审批照旧。
 
 ## v0.10.1（2026-10-13）
 
