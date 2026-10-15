@@ -288,9 +288,13 @@ if (!gotLock) {
       const piVersion = readManagedPiStatus().version;
       const m = migrateToBuiltinMcp(piVersion);
       if (m.skipped) console.log(`[mcp] 暂不切内建：${m.skipped}`);
-      if (m.removedAdapter || m.removedFlag) {
-        console.log(`[mcp] 切到内建 MCP（pi ${piVersion}）：removedAdapter=${m.removedAdapter} removedFlag=${m.removedFlag}`);
-        appendDiagLog(`[mcp] migrate-to-builtin pi=${piVersion} adapter=${m.removedAdapter} flag=${m.removedFlag}`);
+      if (m.removedAdapter || m.removedMarket || m.removedFlag) {
+        console.log(
+          `[mcp] 切到内建 MCP（pi ${piVersion}）：adapter=${m.removedAdapter} market=${m.removedMarket} flag=${m.removedFlag}`,
+        );
+        appendDiagLog(
+          `[mcp] migrate-to-builtin pi=${piVersion} adapter=${m.removedAdapter} market=${m.removedMarket} flag=${m.removedFlag}`,
+        );
       }
       const n = normalizeMcpDisabledFlags();
       if (n > 0) console.log(`[mcp] 归一化 ${n} 个条目的 disabled → enabled:false`);

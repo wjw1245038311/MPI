@@ -31,7 +31,7 @@
 
 | 位置 | 改动 |
 |---|---|
-| `src/main/plugins.ts` | `McpServerInfo.disabled` → `enabled` + `exposure`；读取兼容旧字段（`mcpEntryEnabled`）；新增 `normalizeMcpDisabledFlags()`（把历史写下的 `disabled: true` 幂等改写成 `enabled: false`）与 `migrateToBuiltinMcp()`（从 pi 的 `settings.json` 摘掉 `npm:pi-mcp-adapter` 并清 `-builtin:mcp`——**两件必须成对做**，否则 adapter 每次启动都会把内建再关掉）；`setMcpServerDisabled` → `setMcpServerEnabled`（启用时删键，与 pi `/mcp` 写法一致）；`writeMcpFile` 改原子写 |
+| `src/main/plugins.ts` | `McpServerInfo.disabled` → `enabled` + `exposure`；读取兼容旧字段（`mcpEntryEnabled`）；新增 `normalizeMcpDisabledFlags()`（把历史写下的 `disabled: true` 幂等改写成 `enabled: false`）与 `migrateToBuiltinMcp(piVersion)`（从 pi 的 `settings.json` 摘掉 `npm:pi-mcp-adapter` 与 `npm:pi-mcp-market`、并清 `-builtin:mcp`——**摘包与清 token 必须成对做**，否则 adapter 每次启动都会把内建再关掉；market 只提供终端 pi 的 `/mcp-market`，MPI 自己的市场页走主进程 `src/main/mcp-market.ts`，不依赖它）；`setMcpServerDisabled` → `setMcpServerEnabled`（启用时删键，与 pi `/mcp` 写法一致）；`writeMcpFile` 改原子写 |
 | `src/main/index.ts` | 启动时调用上述两个迁移（幂等、失败不拦启动，结果进 console + `mpi-diag.log`）。**带版本门控**：`piHasBuiltinMcp()` 只在 pi ≥ 0.99 时才摘 adapter——在当前钉住的 0.87 上，adapter 是唯一 MCP 来源，贸然摘掉等于 MCP 直接消失；版本读不到也当作不支持 |
 | `src/main/ipc.ts` | 通道改名 `plugins:setMcpServerEnabled`；`plugins:getMcpServers` 先归一化再列出 |
 | `src/preload/index.ts`、`store.ts`、`lib/types.ts` | 同步 `enabled` 语义与方法名 |

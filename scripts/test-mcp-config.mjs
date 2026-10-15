@@ -85,16 +85,16 @@ try {
   writeFileSync(
     SETTINGS,
     JSON.stringify(
-      { defaultModel: "m@p", packages: ["npm:pi-mcp-adapter", "npm:other-ext"], extensions: ["-builtin:mcp", "./my.ts"], skills: ["/s"] },
+      { defaultModel: "m@p", packages: ["npm:pi-mcp-adapter", "npm:pi-mcp-market", "npm:other-ext"], extensions: ["-builtin:mcp", "./my.ts"], skills: ["/s"] },
       null,
       2,
     ),
     "utf8",
   );
   const mig = migrateToBuiltinMcp("1.2.0");
-  assert.deepEqual(mig, { removedAdapter: true, removedFlag: true });
+  assert.deepEqual(mig, { removedAdapter: true, removedMarket: true, removedFlag: true });
   const st = JSON.parse(readFileSync(SETTINGS, "utf8"));
-  assert.deepEqual(st.packages, ["npm:other-ext"], "只摘掉 adapter，其它包保留");
+  assert.deepEqual(st.packages, ["npm:other-ext"], "两个第三方 MCP 包都摘掉，其它包保留");
   assert.deepEqual(st.extensions, ["./my.ts"], "只删 -builtin:mcp 这一个 token");
   assert.equal(st.defaultModel, "m@p");
   assert.deepEqual(st.skills, ["/s"]);
@@ -103,9 +103,16 @@ try {
   // 没东西可改时不碰磁盘
   const before = statSync(SETTINGS).mtimeMs;
   const noop = migrateToBuiltinMcp("1.2.0");
-  assert.deepEqual(noop, { removedAdapter: false, removedFlag: false });
+  assert.deepEqual(noop, { removedAdapter: false, removedMarket: false, removedFlag: false });
   assert.equal(statSync(SETTINGS).mtimeMs, before, "幂等：无事可做就不写文件");
   ok("迁移：重复调用无副作用（不写盘）");
+
+  // 只有 market（没装 adapter）时也要摘干净
+  writeFileSync(SETTINGS, JSON.stringify({ packages: ["npm:pi-mcp-market", "npm:web"] }, null, 2), "utf8");
+  const onlyMarket = migrateToBuiltinMcp("1.2.0");
+  assert.deepEqual(onlyMarket, { removedAdapter: false, removedMarket: true, removedFlag: false });
+  assert.deepEqual(JSON.parse(readFileSync(SETTINGS, "utf8")).packages, ["npm:web"], "market 单独存在时也摘掉");
+  ok("迁移：只装了 pi-mcp-market 的情况同样摘除（MPI 自己的市场页不依赖它）");
 
   // packages 清空后不落空数组
   writeFileSync(SETTINGS, JSON.stringify({ packages: ["npm:pi-mcp-adapter"] }, null, 2), "utf8");
@@ -128,9 +135,10 @@ try {
 
   // settings.json 缺失/损坏都不该抛
   rmSync(SETTINGS);
-  assert.deepEqual(migrateToBuiltinMcp("1.2.0"), { removedAdapter: false, removedFlag: false });
+  assert.deepEqual(migrateToBuiltinMcp("1.2.0"), { removedAdapter: false, removedMarket: false, removedFlag: false });
   writeFileSync(SETTINGS, "{oops", "utf8");
-  assert.deepEqual(migrateToBuiltinMcp("1.2.0"), { removedAdapter: false, removedFlag: false }, "坏 settings.json 直接跳过，不覆写");
+  assert.deepEqual(migrateToBuiltinMcp("1.2.0"), { removedAdapter: false, removedMarket: false, removedFlag: false },
+    "坏 settings.json 直接跳过，不覆写");
   ok("迁移：settings.json 缺失或损坏时安全跳过（坏文件留给用户排查）");
 } finally {
   delete process.env.PI_AGENT_DIR;

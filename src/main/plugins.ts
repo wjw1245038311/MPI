@@ -820,33 +820,40 @@ export function piHasBuiltinMcp(version: string | null): boolean {
 /**
  * 一次性迁移到 pi 内建 MCP（刻意不做开关）。
  *
- * 两件事，缺一内建 MCP 都跑不起来：
+ * 三件事，缺前两件内建 MCP 都跑不起来：
  *   1. 从 `<agentDir>/settings.json` 的 `packages` 里摘掉 `npm:pi-mcp-adapter`——它一加载就会
  *      往 `extensions` 写 `-builtin:mcp` 给自己让位（实测），不摘干净会反复顶掉内建；
- *   2. 清掉 `extensions` 里遗留的 `-builtin:mcp` token。
+ *   2. 清掉 `extensions` 里遗留的 `-builtin:mcp` token；
+ *   3. 顺带摘掉 `npm:pi-mcp-market`：它只提供终端 pi 里的 `/mcp-market`，而 MPI 自己的
+ *      「MCP 市场」页是主进程直接访问 mcpmarket.cn（src/main/mcp-market.ts），不依赖该扩展。
  *
- * 其余条目（其它 packages、其它 extensions、无关设置）原样保留；两项都没得改时不碰磁盘。
+ * 其余条目（其它 packages、其它 extensions、无关设置）原样保留；没东西可改时不碰磁盘。
  *
  * @param piVersion 当前运行时版本；不支持内建 MCP 时直接跳过（见 {@link piHasBuiltinMcp}）。
  */
 export function migrateToBuiltinMcp(piVersion: string | null): {
   removedAdapter: boolean;
+  removedMarket: boolean;
   removedFlag: boolean;
   skipped?: string;
 } {
-  const none = { removedAdapter: false, removedFlag: false };
+  const none = { removedAdapter: false, removedMarket: false, removedFlag: false };
   if (!piHasBuiltinMcp(piVersion)) return { ...none, skipped: `pi ${piVersion || "unknown"} 无内建 MCP` };
   const path = join(getAgentDir(), "settings.json");
   const parsed = readJsonRaw(path);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return none;
   const obj = parsed as Record<string, unknown>;
 
-  const packages = Array.isArray(obj.packages) ? (obj.packages as unknown[]) : null;
-  const keptPackages = packages ? packages.filter((p) => !(typeof p === "string" && p.includes("pi-mcp-adapter"))) : null;
-  const removedAdapter = !!keptPackages && keptPackages.length !== packages!.length;
-  if (removedAdapter) {
+  // 第三方 MCP 包：命中名字就摘（npm:xxx / 本地路径等写法都适用）。
+  const hasPackage = (frag: string) =>
+    Array.isArray(obj.packages) && (obj.packages as unknown[]).some((p) => typeof p === "string" && p.includes(frag));
+  const removedAdapter = hasPackage("pi-mcp-adapter");
+  const removedMarket = hasPackage("pi-mcp-market");
+  if (removedAdapter || removedMarket) {
+    const packages = obj.packages as unknown[];
+    const kept = packages.filter((p) => !(typeof p === "string" && (p.includes("pi-mcp-adapter") || p.includes("pi-mcp-market"))));
     // 空数组就不落键，给 pi 的设置文件少添噪声。
-    if (keptPackages!.length > 0) obj.packages = keptPackages;
+    if (kept.length > 0) obj.packages = kept;
     else delete obj.packages;
   }
 
@@ -858,8 +865,8 @@ export function migrateToBuiltinMcp(piVersion: string | null): {
     else delete obj.extensions;
   }
 
-  if (removedAdapter || removedFlag) writeJsonAtomic(path, obj, { pretty: true });
-  return { removedAdapter, removedFlag };
+  if (removedAdapter || removedMarket || removedFlag) writeJsonAtomic(path, obj, { pretty: true });
+  return { removedAdapter, removedMarket, removedFlag };
 }
 
 /**
