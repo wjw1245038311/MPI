@@ -153,6 +153,11 @@ const SAFE_TOOLS = new Set([
   // normal research workflow ("record a follow-up task"), no shell/file risk.
   "mpi_todo_add",
   "mpi_todo_list",
+  // mpi_attach_file 把文件交给会话（主进程入库，客户端按需拉）。名字故意避开
+  // MUTATING_TOOL_NAME 里的 send/upload：那个正则会把「白名单内的直发」也变成每次
+  // 弹卡，而路径级的知情确认已由扩展自己弹（越界才问）。调研/审查的强制只读下同样
+  // 放行——把已生成的报告递给用户不是对项目空间的修改。
+  "mpi_attach_file",
   // memory_note only drops one candidate JSON into <userData>/zhiya-memory-inbox
   // and asks the LOCAL model for a score — same risk class as mpi_todo_add
   // (never touches the pool index or shell; main decides whether to keep it).

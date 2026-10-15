@@ -23,6 +23,9 @@ export const NO_APPROVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "ls",
   "mpi_request_mode_switch",
   "mpi_todo_add",
+  // 附件下行：gate 看不到路径，在这里一律要批会把「把刚生成的报告发我」也变成一次点击；
+  // 审批下沉到扩展——工作区/tempfile/Share 内直发，越界才弹卡（见 mpi-attach-file-ext.ts）。
+  "mpi_attach_file",
   "mpi_todo_list",
   "ask_question",
   "plan_question",

@@ -213,7 +213,12 @@ export interface RemoteMessage {
   role: "user" | "assistant" | "system" | "tool";
   text?: string;
   blocks?: Array<{
-    type: "text" | "thinking" | "tool" | "image" | "video" | "audio";
+    /**
+     * `file` = agent 主动递交的**任意文件**（pdf / zip / 安装包…）。
+     * 快照只给名字与大小，本体由客户端拿 read 令牌按需拉
+     * （docs/attachment-content-addressing.md §6.4 预留的形式，2026-10-15 落地）。
+     */
+    type: "text" | "thinking" | "tool" | "image" | "video" | "audio" | "file";
     text?: string;
     name?: string;
     running?: boolean;
@@ -239,6 +244,8 @@ export interface RemoteMessage {
     /**
      * 内容寻址的 key（P3，image 块用）：快照只下发**缩略图**（几十 KB），原图由客户端
      * 拿这个 key 去申请读令牌按需拉（url 对 key 来说没有可读信息，但它是唯一标识）。
+     *
+     * file 块同样带 key：它就是客户端拉整文件时用的附件名（与视频/音频一条路）。
      */
     key?: string;
     /** 实时事件通道刻意剥掉本体（防大帧）——照图片语义。 */

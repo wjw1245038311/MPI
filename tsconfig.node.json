@@ -20,6 +20,7 @@
   // don't exist in our node_modules.
   "exclude": [
     "src/main/mpi-todo-ext.ts",
+    "src/main/mpi-attach-file-ext.ts",
     "src/main/mpi-choice-ext.ts",
     "src/main/mpi-smart-compact-ext.ts",
     "src/main/mpi-taskmode-ext.ts",

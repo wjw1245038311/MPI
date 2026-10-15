@@ -321,6 +321,12 @@ export interface PiBridgeOptions {
   /** Paths for the 待办任务 bridge extension (mpi-todo-ext): todos.json and the
    * inbox dir where agent-side additions land before main ingests them. */
   todoPaths?: { file: string; inboxDir: string };
+  /**
+   * Dirs for the 附件下行 bridge (mpi-attach-file-ext): where it drops send
+   * requests and where it polls for the receipt. Absent = the tool reports
+   * “not configured” instead of silently doing nothing.
+   */
+  attachFilePaths?: { inboxDir: string; outboxDir: string; configFile: string };
   /** Inbox dir for the 记忆池 capture bridge (mpi-memory-ext): the extension drops
    * one candidate JSON per memory here; the main process ingests them into the
    * pool (it is the single writer). */
@@ -403,6 +409,14 @@ export class PiBridge {
       env.MPI_TODO_FILE = this.opts.todoPaths.file;
       env.MPI_TODO_INBOX_DIR = this.opts.todoPaths.inboxDir;
       if (this.opts.sessionFile) env.MPI_TODO_SESSION_FILE = this.opts.sessionFile;
+    }
+    if (this.opts.attachFilePaths) {
+      env.MPI_ATTACH_INBOX_DIR = this.opts.attachFilePaths.inboxDir;
+      env.MPI_ATTACH_OUTBOX_DIR = this.opts.attachFilePaths.outboxDir;
+      env.MPI_ATTACH_CONFIG_FILE = this.opts.attachFilePaths.configFile;
+      if (this.opts.sessionFile) env.MPI_ATTACH_SESSION_FILE = this.opts.sessionFile;
+      // MPI_WORKSPACE_ROOT (which widens the no-approval area past the session cwd)
+      // is inherited straight from the app environment — no per-bridge plumbing.
     }
     if (this.opts.memoryInboxDir) {
       env.MPI_MEMORY_INBOX_DIR = this.opts.memoryInboxDir;

@@ -20,7 +20,7 @@ import { splitChoiceSegments } from "../lib/choice-block";
 import type { ChoiceClampInfo, ChoiceFailure } from "../lib/choice-block";
 import { logChoiceFenceFailure, logChoiceFenceInfoString, logChoiceFenceRepaired } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
-import { chatAttachmentUrl } from "../lib/chat-attachments";
+import { chatAttachmentUrl, parseAgentMediaRefs } from "../lib/chat-attachments";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
 import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
@@ -1847,6 +1847,43 @@ function clampedChoiceNote(clamped: ChoiceClampInfo, language: "en" | "zh"): str
     : `This panel is truncated: ${parts.join(" and ")} over the limit (max 6 questions, 6 options each).`;
 }
 
+/**
+ * agent 主动递交的附件卡片（mpi_attach_file 写进正文的引用信封）。
+ *
+ * 样式直接复用用户气泡那套 msg-user-file：两端看到的东西长得一样，用户不需要
+ * 区分「我发上去的」与「agent 递过来的」。点开走独立预览窗口（路径是对象库里的
+ * 绝对路径，不依赖会话 cwd）。
+ */
+function AgentFileCards({ attachments, language }: { attachments: NonNullable<ViewMessage["attachments"]>; language: "en" | "zh" }) {
+  return (
+    <div className="msg-user-files msg-agent-files" aria-label={language === "zh" ? "本条回复附带的文件" : "Files attached to this reply"}>
+      {attachments.map((attachment, index) => (
+        <button
+          type="button"
+          key={`${attachment.name}-${index}`}
+          className="msg-user-file"
+          disabled={!attachment.path}
+          title={attachment.path || attachment.name}
+          onClick={() => {
+            if (!attachment.path) return;
+            void window.pi.app.openPreviewWindow(attachment.path).catch(() => {});
+          }}
+        >
+          <span className="msg-user-file-icon" aria-hidden="true">
+            <Files size={15} />
+          </span>
+          <span className="msg-user-file-copy">
+            <span className="msg-user-file-name">{attachment.name}</span>
+            <span className="msg-user-file-meta">
+              {attachment.note || (language === "zh" ? "已发到本会话，可点开" : "Sent to this conversation")}
+            </span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function BlockView({
   block,
   toolRuns,
@@ -1870,16 +1907,16 @@ function BlockView({
   /** Stable "messageKey:index" key for cross-remount expand-state persistence. */
   expandKey?: string;
 }) {
+  // agent 递交的附件以引用信封的形式写在正文里：渲染前先剥成卡片，否则用户会看到
+  // 一整行原始 XML（流式中途只写了一半的标签也会被裁掉）。
+  const agentMedia = useMemo(() => (block.type === "text" ? parseAgentMediaRefs(block.text) : null), [block]);
   // Marks are injected into the rendered .md DOM (see lib/search-mark); the
   // content key re-applies them once a streaming block finalizes.
-  const markRef = useSearchMark(
-    block.type === "text" ? (searchQuery ?? null) : null,
-    block.type === "text" ? block.text : "",
-  );
+  const blockText = block.type === "text" ? (agentMedia?.text ?? block.text) : "";
+  const markRef = useSearchMark(block.type === "text" ? (searchQuery ?? null) : null, blockText);
   // Inline multi-question choice blocks: split out ```choices fences once the
   // message has finalized (while streaming they render as inert code blocks).
   // Unconditional hook — guarded inside so non-text blocks cost one regex test.
-  const blockText = block.type === "text" ? block.text : "";
   const choiceSegments = useMemo(
     () => (block.type === "text" && !streaming ? splitChoiceSegments(blockText) : null),
     [block.type, blockText, streaming],
@@ -1900,9 +1937,16 @@ function BlockView({
   }, [choiceSegments, threadId, messageKey]);
   if (block.type === "text") {
     const segments = choiceSegments;
+    const fileCards =
+      agentMedia && agentMedia.attachments.length > 0 ? <AgentFileCards attachments={agentMedia.attachments} language={language} /> : null;
     if (!segments || (segments.length === 1 && segments[0].kind === "md")) {
       // 流式中的文本每个 tick 都在变：noCache，避免中间态污染 markdown 解析缓存
-      return <Markdown text={block.text} containerRef={markRef} noCache={streaming} />;
+      return (
+        <>
+          <Markdown text={blockText} containerRef={markRef} noCache={streaming} />
+          {fileCards}
+        </>
+      );
     }
     // Multiple rendered units: the mark ref wraps them all so search
     // highlighting still covers every segment.
@@ -1925,6 +1969,7 @@ function BlockView({
             <Markdown key={`m${index}`} text={seg.text} />
           ),
         )}
+        {fileCards}
       </div>
     );
   }

@@ -112,6 +112,10 @@ import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
 import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
+// 附件下行（agent → 客户端）：扩展桥 + 收件箱 + 引用 mime 推断。
+import { ensureAttachFileExtension } from "./attach-file-extension";
+import { ensureAttachFileDirs, ingestAttachFileRequests } from "./attach-file-inbox";
+import { guessMimeType } from "./attach-file-core";
 import { ensureMemoryExtension, ensureMemoryCandidateInbox } from "./memory-extension";
 import { startMemoryInboxWatcher } from "./memory-inbox";
 import { getMemoryIndex, memoryPoolDir, scheduleMemoryMaintenance } from "./memory-service";
@@ -640,6 +644,10 @@ function createHandle(
     extensions: [
       ensureGateExtension(getConfigDir()),
       ensureTodoExtension(getConfigDir()),
+      // 附件下行 bridge: mpi_attach_file hands a real file to the conversation (the
+      // desktop shows a card, paired phones/PWA can download it). Loaded for every
+      // thread — an agent that cannot offer "I'll send it to you" is the whole point.
+      ensureAttachFileExtension(getConfigDir()),
       // Shell-environment bridge: tells the model which shell its commands run
       // in (paired with the --exclude-tools powershell passed to this spawn).
       ensureShellEnvExtension(getConfigDir()),
@@ -667,6 +675,7 @@ function createHandle(
     // Live paths so a customized todo data location (Settings → 数据管理) is
     // honored from the next spawned bridge on.
     todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
+    attachFilePaths: { ...ensureAttachFileDirs(getConfigDir()), configFile: join(getConfigDir(), "config.json") },
     memoryInboxDir: ensureMemoryCandidateInbox(getConfigDir()),
     memoryProject: cwd.split(/[\\/]/).filter(Boolean).pop(),
     memoryPoolDir: memoryPoolDir(),
@@ -2253,6 +2262,20 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       const mediaBlocks = mediaRefs
         .filter((ref) => ref.kind !== "image")
         .map((ref): RemoteBlock => {
+          if (ref.kind === "file") {
+            // agent 主动递交的任意文件（mpi_attach_file）。以前 kind="file" 会一路
+            // 掉进下面的 video 分支，生成一张点开必失败的「视频卡片」（2026-10-15 修）。
+            // 快照只给名字与大小，本体由客户端拿 read 令牌按需拉（同视频语义）。
+            const meta = isContentKey(ref.name) ? objectMeta(ref.name) : null;
+            return {
+              type: "file",
+              name: ref.name,
+              mimeType: meta?.mime || guessMimeType(ref.path, ref.label),
+              ...(ref.label ? { label: ref.label } : {}),
+              ...(ref.size ? { size: ref.size } : {}),
+              omitted: true,
+            };
+          }
           if (ref.kind === "audio") {
             return {
               type: "audio",
@@ -4356,6 +4379,24 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     }
   }, 2000);
   todoInboxPoll.unref?.();
+
+  // 附件下行：agent 的 mpi_attach_file 把请求丢进 inbox，主进程在这里入库（对象库的唯一
+  // 写入者）并回写引用文本。watch + 轮询双保险，与待办收件箱同一套；处理完即删请求文件。
+  const attachFileDirs = ensureAttachFileDirs(getConfigDir());
+  const ingestAttachFiles = () => {
+    try {
+      ingestAttachFileRequests({ ...attachFileDirs, storeObject });
+    } catch {
+      /* never let one bad request kill the channel; the next sweep retries */
+    }
+  };
+  try {
+    watch(attachFileDirs.inboxDir, ingestAttachFiles);
+  } catch {
+    /* the poll below still covers it */
+  }
+  const attachFilePoll = setInterval(ingestAttachFiles, 1000);
+  attachFilePoll.unref?.();
 
   // op 执行器的依赖装配（dream/审批共用）。单飞标志放在闭包外：
   // 本地模型一次分诊要 1-2 分钟，叠加跑两个会把机器拖死。
