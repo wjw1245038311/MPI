@@ -265,7 +265,12 @@ export interface RemoteThreadSnapshot extends RemoteThreadSummary {
   availableModels: RemoteModelOption[];
   skills: RemoteSkill[];
   thinkingLevel: string;
-  /** 当前模型可选的思考档位（如 `["off","low","high"]`）；主机未上报时手机端自行推断。 */
+  /**
+   * 当前模型可选的思考档位（如 `["off","low","high"]`）。
+   *
+   * 主机侧已归一化：标准顺序 + **必含 off** + 去重（规则见 `src/shared/thinking-levels.ts`，
+   * pi 原始返回对某些模型不含 off）。缺字段时才由客户端按 `reasoning` 推断。
+   */
   thinkingLevels?: string[];
   /** Applied task mode id (null = baseline / no behavioural mode). */
   taskMode?: string | null;

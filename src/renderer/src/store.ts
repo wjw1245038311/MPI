@@ -36,6 +36,7 @@ import { cleanOutput, extensionsAlreadyLatest, hasLibuvAssertion, lastLine, stri
 import { playCompletionChime } from "./lib/sound";
 import { speakMessage } from "./lib/tts";
 import { parseSkillBlock } from "./lib/skill-block";
+import { reasoningLevelLabel } from "./lib/reasoning";
 import { stripImageDimensionNotes, stripImageHints } from "../../shared/image-notes";
 import type { ChoiceAnswer } from "./lib/choice-block";
 export type { ParsedSkillBlock } from "./lib/skill-block";
@@ -1258,7 +1259,7 @@ interface PiStore {
   setModel: (id: string, provider: string, modelId: string) => Promise<void>;
   /** P1-12: toggle auto mode for a thread. Exiting stops monitoring entirely. */
   setAutoModel: (id: string, enabled: boolean) => Promise<void>;
-  setThinking: (id: string, level: string) => Promise<void>;
+  setThinking: (id: string, level: string) => Promise<boolean>;
   newSessionInThread: (id: string) => Promise<void>;
   forkThread: (id: string, entryId: string) => Promise<void>;
   cloneThread: (id: string) => Promise<void>;
@@ -2849,6 +2850,17 @@ export const useStore = create<PiStore>()((set, get) => {
         .getThinkingLevels(id)
         .then((r: any) => set((s) => (s.threads[id] ? { threads: { ...s.threads, [id]: { ...s.threads[id], levels: r?.levels || ["off"] } } } : s)))
         .catch(() => {});
+      // 新模型不支持用户本意档位时提示一次（本意已保留，切回支持的模型会自动恢复）。
+      const down = res?.downgraded as { from?: string; to?: string } | undefined;
+      if (down?.from && down?.to) {
+        const zh = get().config?.language === "zh";
+        get().pushToast(
+          "info",
+          zh
+            ? `该模型不支持思考等级「${reasoningLevelLabel(down.from, "zh")}」，已降到「${reasoningLevelLabel(down.to, "zh")}」；切回支持的模型会自动恢复。`
+            : `This model has no thinking level “${down.from}” — using “${down.to}”. It restores automatically when a supporting model is selected again.`,
+        );
+      }
     } catch (e: any) {
       get().pushToast("error", e?.message || "set model failed");
     }
@@ -2884,13 +2896,15 @@ export const useStore = create<PiStore>()((set, get) => {
     // ensureConnected may remap a draft's temp id to the live bridge id — use
     // the returned id for the RPC or main answers "Thread not open".
     const live = await get().ensureConnected(id);
-    if (!live) return;
+    if (!live) return false;
     try {
       const res: any = await window.pi.thread.setThinking({ threadId: live, level });
       const effectiveLevel = typeof res?.thinkingLevel === "string" ? res.thinkingLevel : level;
       set((s) => (s.threads[live] ? { threads: { ...s.threads, [live]: { ...s.threads[live], thinking: effectiveLevel } } } : s));
+      return true;
     } catch (e: any) {
       get().pushToast("error", e?.message || "set thinking failed");
+      return false;
     }
   },
 
@@ -3977,7 +3991,21 @@ export const useStore = create<PiStore>()((set, get) => {
     // Apply each configured parameter through the existing live-switch actions
     // (model stays independent — its own pill on the right).
     if (mode.permission) await get().setPermission(live, mode.permission);
-    if (mode.thinking) await get().setThinking(live, mode.thinking);
+    // 模式预设的思考等级：当前模型不支持时不要报错（以前会被 pi 静默夹紧），
+    // 改成一句提示并保留原档位；用户手动选仍然走严格校验的 setThinking。
+    if (mode.thinking) {
+      const applied = await get().setThinking(live, mode.thinking);
+      if (!applied) {
+        const zh = get().config?.language === "zh";
+        const current = get().threads[live]?.thinking;
+        get().pushToast(
+          "info",
+          zh
+            ? `该模型不支持「${taskModeName(mode, zh ? "zh" : "en")}」预设的思考等级，保持为「${reasoningLevelLabel(current, zh ? "zh" : "en")}」。`
+            : `This model doesn't support the thinking level preset by mode “${taskModeName(mode, zh ? "zh" : "en")}” — keeping “${reasoningLevelLabel(current, zh ? "zh" : "en")}”.`,
+        );
+      }
+    }
     // Behavioural content: main writes the per-thread state file and the
     // mpi-taskmode extension injects it into the system prompt from the next
     // turn on — live switching without a pi process restart. Empty = clear.

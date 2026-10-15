@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { draftKeyFor, quoteToAttachment, useStore } from "../store";
 import { formatTokens, modelShort } from "../lib/format";
 import { reasoningLevelLabel } from "../lib/reasoning";
+import { normalizeThinkingLevels } from "../../../shared/thinking-levels";
 import { BUILTIN_BALANCED_ID, normalizeTaskModes, taskModeName, taskModeSummary } from "../lib/task-modes";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { AppHelperSpec, ComposerDraft, HtmlElementReference, ModelInfo, PermissionLevel, PendingFile, PendingImage, PendingQuote, PromptAttachment, TaskModeDef } from "../lib/types";
@@ -780,7 +781,10 @@ export function Composer({ threadId }: { threadId: string }) {
     }
     return Array.from(grouped, ([provider, providerModels]) => ({ provider, models: providerModels }));
   }, [modelList]);
-  const levelList = (levels || []).filter((l) => l !== "off");
+  // 主机（主进程）已把可选档位归一化：标准顺序 + 必含 off（src/shared/thinking-levels.ts）。
+  // 这里不再自己 `["off", ...levels]` 拼一份——那份重复就是三端不一致的根源。
+  const allLevels = normalizeThinkingLevels(levels);
+  const levelList = allLevels.filter((l) => l !== "off");
   const thinkLabel = thinking === "off" ? "" : reasoningLevelLabel(thinking, language);
   const mappedThinkingLevel = (level: string) => {
     const mapped = model?.thinkingLevelMap?.[level];
@@ -1602,7 +1606,7 @@ export function Composer({ threadId }: { threadId: string }) {
                       </div>
                       {thinkOpen && (
                         <div className="think-options">
-                          {(["off", ...levelList] as string[]).map((l) => {
+                          {allLevels.map((l) => {
                             const mapped = mappedThinkingLevel(l);
                             return (
                               <button

@@ -8,6 +8,7 @@ import { reasoningLevelLabel } from "../lib/reasoning";
 import { translateUiText } from "../lib/i18n";
 import { COMMON_EXTENSION_TOOLS, isTrustableToolName, toggleTrustedTool } from "../lib/trusted-tools";
 import { classifyToolName } from "@repo-root/src/shared/tool-trust-meta";
+import { thinkingLevelsFromMap } from "@repo-root/src/shared/thinking-levels";
 import { EDGE_VOICES, defaultEdgeVoice } from "../lib/edge-voices";
 import { Archive, Check, ChevronRight, Close, Edit, Plus, Refresh, Folder, Search, Trash } from "./icons";
 import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
@@ -82,13 +83,10 @@ function TokenLimitInput({
 }
 
 function supportedThinkingLevels(model?: ModelDef): readonly string[] {
-  // This is a desired global default, not the live model capability list.
-  // Keep unmapped levels visible so models without an explicit map can still
-  // choose max here; the live composer still narrows levels using Pi's
-  // model-specific capability response.
-  if (!model) return THINK_LEVELS;
-  if (!model.reasoning) return ["off"];
-  return THINK_LEVELS.filter((level) => model.thinkingLevelMap?.[level] !== null);
+  // 这是「全局默认」的候选列表，不是活会话的能力列表；但推导规则与主进程/
+  // 手机端共用同一个函数（src/shared/thinking-levels.ts），别再这里再算一套：
+  // 以前三端各自算导致设置页能看到 max、实际面板里没有这类错位。
+  return thinkingLevelsFromMap(model?.thinkingLevelMap, model?.reasoning);
 }
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 

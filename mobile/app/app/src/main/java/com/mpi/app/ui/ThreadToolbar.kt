@@ -115,8 +115,26 @@ fun modelChipLabel(view: ThreadView): String {
 
 // ---- 思考档位（纯函数）----
 
-/** 主机未上报可选档位时的兜底列表（与桌面端 THINK_LEVELS 的前五档一致）。 */
-val DEFAULT_THINKING_LEVELS = listOf("off", "minimal", "low", "medium", "high")
+/** pi 的标准思考档位，顺序即展示顺序（与 `src/shared/thinking-levels.ts` 保持一致，改那边要同步这里）。 */
+val STANDARD_THINKING_LEVELS = listOf("off", "minimal", "low", "medium", "high", "xhigh", "max")
+
+/** 主机未上报可选档位时的兜底列表（以前只给前五档，缺 xhigh/max）。 */
+val DEFAULT_THINKING_LEVELS = STANDARD_THINKING_LEVELS
+
+/**
+ * 归一化可选档位：去重、按标准顺序、**保证含 off**。
+ *
+ * 主机（新版 MPI）已经归一化过了，这里再兜一次是为了兼容旧主机：pi 原始列表对某些
+ * 模型根本不含 off（实测 LM Studio 那台只有 minimal…max），而手机以前把主机列表原样
+ * 用，结果就是那些模型在手机上**关不掉思考**。未知取值保留并排在末尾。
+ */
+fun normalizeThinkingLevels(levels: List<String>): List<String> {
+    val clean = levels.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    if (clean.isEmpty()) return listOf("off")
+    val known = STANDARD_THINKING_LEVELS.filter { clean.contains(it) }
+    val unknown = clean.filter { !STANDARD_THINKING_LEVELS.contains(it) }
+    return listOf("off") + (known + unknown).filter { it != "off" }
+}
 
 /** 档位中文标签（未知取值原样显示，不隐藏）。 */
 fun thinkingLevelLabel(level: String): String = when (level) {
@@ -138,12 +156,12 @@ fun thinkingLevelChipLabel(view: ThreadView): String {
 
 /**
  * 可选思考档位：
- * 1. 主机上报了就用它（按当前模型的 `thinkingLevelMap` 过滤过，最准）；
- * 2. 未上报时看当前模型是否支持 reasoning：支持 → 常用五档；
+ * 1. 主机上报了就用它（经 [normalizeThinkingLevels] 保证含 off）；
+ * 2. 未上报时看当前模型是否支持 reasoning：支持 → 标准七档；
  * 3. 模型元信息也未知 → 给全量，交给主机校验并返回明确错误（不静默失败）。
  */
 fun thinkingLevelOptions(view: ThreadView): List<String> {
-    if (view.availableThinkingLevels.isNotEmpty()) return view.availableThinkingLevels
+    if (view.availableThinkingLevels.isNotEmpty()) return normalizeThinkingLevels(view.availableThinkingLevels)
     val model = view.model ?: return listOf("off")
     val option = view.availableModels.firstOrNull { it.provider == model.provider && it.id == model.id }
         ?: return DEFAULT_THINKING_LEVELS

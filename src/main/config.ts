@@ -180,6 +180,12 @@ export interface AppConfig {
    * driven by that state file; this map only lets the UI restore which mode a
    * thread was on after restart/reopen so the ⚡ pill stays in sync. */
   threadTaskModes?: Record<string, string>;
+  /** Per-thread **intended** thinking level, keyed by the same session UUID as
+   * `threadTaskModes`. The live value always comes from pi (`get_state`); this
+   * only records what the user actually picked, so switching models — where pi
+   * clamps to the new model's `thinkingLevelMap` and never restores — can put it
+   * back when the target model supports it (see src/shared/thinking-levels.ts). */
+  threadThinking?: Record<string, string>;
   /** Extension tools the user has persistently trusted (“始终允许该工具” on an
    * approval card, or added in Settings → Conversation): auto-approved by the
    * permission gate in sandbox/strict; still blocked under readonly / enforced

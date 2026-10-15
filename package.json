@@ -91,6 +91,7 @@
     "test:searchtrash": "node --experimental-strip-types scripts/test-search-trash.mjs",
     "test:chatsearch": "node --experimental-strip-types scripts/test-chat-search.mjs",
     "test:thinking": "node --experimental-strip-types scripts/test-thinking-indicator.mjs",
+    "test:thinklevels": "node --experimental-strip-types scripts/test-thinking-levels.mjs",
     "test:model-context": "node --experimental-strip-types scripts/test-model-context.mjs",
     "test:model-autopilot": "node --experimental-strip-types scripts/test-model-autopilot.mjs",
     "test:voice": "node --experimental-strip-types scripts/test-voice.mjs",

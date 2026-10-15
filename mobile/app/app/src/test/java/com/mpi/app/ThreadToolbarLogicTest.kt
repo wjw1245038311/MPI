@@ -103,7 +103,7 @@ class ThreadToolbarLogicTest {
     }
 }
 
-/** 思考档位（新增）：主机上报优先，否则按模型 reasoning 推断。 */
+/** 思考档位（新增）：主机上报优先（保证含 off），否则按模型 reasoning 推断。 */
 class ThinkingLevelLogicTest {
 
     private fun view(
@@ -147,5 +147,21 @@ class ThinkingLevelLogicTest {
     @Test
     fun `no model means only off`() {
         assertEquals(listOf("off"), com.mpi.app.ui.thinkingLevelOptions(view()))
+    }
+
+    @Test
+    fun `host list without off still offers off first`() {
+        // pi 对某些模型根本不报 off（实测 LM Studio 那台只有 minimal…max），
+        // 旧手机版本会以原样展示 → 用户无法关闭思考。
+        val options = com.mpi.app.ui.thinkingLevelOptions(
+            view(model = ModelRef("p", "m"), hostLevels = listOf("minimal", "low", "high")),
+        )
+        assertEquals(listOf("off", "minimal", "low", "high"), options)
+    }
+
+    @Test
+    fun `unknown levels survive and sort last`() {
+        val options = com.mpi.app.ui.normalizeThinkingLevels(listOf("mid", "off", "high", "high"))
+        assertEquals(listOf("off", "high", "mid"), options)
     }
 }

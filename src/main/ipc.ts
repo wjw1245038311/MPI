@@ -249,6 +249,12 @@ import type { Server } from "node:http";import {
   type RemoteThreadState,
 } from "./remote/protocol";
 import { buildConfigPatch, planModeApplication, resolveModeById, type ConfigChangeOrigin, type ThreadConfigPatch } from "./thread-config";
+import {
+  isThinkingLevelAllowed,
+  normalizeThinkingLevels,
+  planThinkingAfterModelSwitch,
+  thinkingLevelsFromMap,
+} from "../shared/thinking-levels";
 import { normalizeTaskModes, taskModeName, taskModeSummary } from "../shared/task-mode-catalog";
 import { stripImageDimensionNotes } from "../shared/image-notes";
 import {
@@ -1139,17 +1145,60 @@ async function gatherThread(bridge: PiBridge, threadId: string, permission: Perm
 
 /**
  * 当前桥可用的思考档位（pi `get_available_thinking_levels` 返回 `{ levels }`）。
+ *
+ * 出口一律经 {@link normalizeThinkingLevels}：去重、标准顺序、保证含 `off`。
+ * 不能直接把 pi 的原始列表发下去——实测它不一致（LM Studio 那台只有
+ * minimal…max 没有 off，strata 那台有），而桌面曾自己补 off、手机端原样使用，
+ * 结果就是「那些模型在手机上关不掉思考」。规则本体在 `src/shared/thinking-levels.ts`。
+ *
  * 失败或为空时不报字段 —— 手机端会按模型 `reasoning` 自行推断一个保守列表。
  */
 async function bridgeThinkingLevels(bridge: any): Promise<string[] | undefined> {
   try {
     const res: any = await bridge.getAvailableThinkingLevels();
     const raw = Array.isArray(res?.levels) ? res.levels : Array.isArray(res) ? res : [];
-    const clean = raw.filter((level: unknown): level is string => typeof level === "string" && level.length > 0);
-    return clean.length ? clean : undefined;
+    const clean = raw.filter((level: unknown): level is string => typeof level === "string" && level.trim().length > 0);
+    return clean.length ? normalizeThinkingLevels(clean) : undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * 会话 UUID：思考等级的 intent 与任务模式共用同一把钥匙（session UUID）。
+ * 接受会话文件路径或 `boot:<uuid>` 两种写法（与 thread:setTaskMode 一致）。
+ */
+function threadThinkingKey(id: string | null | undefined): string | null {
+  if (!id) return null;
+  if (id.endsWith(".jsonl")) return threadUuidFromSessionFile(id);
+  return /^boot:(.+)$/.exec(id)?.[1] ?? null;
+}
+
+/** 读「用户本意档位」（config.threadThinking）；没有则返回 null（完全跟随 pi）。 */
+function readThinkingIntent(key: string | null): string | null {
+  if (!key) return null;
+  return getConfig().threadThinking?.[key] ?? null;
+}
+
+/** 记一次用户选择（手动选、以及任务模式预设都算）。同值不写盘。 */
+function writeThinkingIntent(key: string | null, level: string | null | undefined): void {
+  if (!key || !level) return;
+  const current = getConfig().threadThinking || {};
+  if (current[key] === level) return;
+  updateConfig({ threadThinking: { ...current, [key]: level } });
+}
+
+/**
+ * 桥没开时的可选档位：从 models.json 的 `thinkingLevelMap` 推（与设置页同一规则）。
+ * 以前这里直接硬编码 `["off"]`，于是未打开的会话在界面上看起来「不支持思考」。
+ * 模型不在 models.json（pi 目录里的模型）时返回 undefined，交给客户端兜底。
+ */
+function configuredThinkingLevels(provider?: string | null, modelId?: string | null): string[] | undefined {
+  if (!provider || !modelId) return undefined;
+  const model = readModelsFile()
+    .providers?.[provider]?.models?.find((m) => m.id === modelId);
+  if (!model) return undefined;
+  return thinkingLevelsFromMap(model.thinkingLevelMap, model.reasoning);
 }
 
 /** Resolve visible user/assistant messages on the active entry branch to their
@@ -1493,6 +1542,56 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       patch: built,
       origin,
     });
+  };
+
+  /**
+   * 切模型 + 思考等级复位的统一入口（桌面与手机都走这里）。
+   *
+   * pi 在 `set_model` 时会按新模型的 `thinkingLevelMap` **夹紧**当前档位，而且
+   * 切回来也不恢复（本机实测 1.2.0：high → 切到另一模型变 low → 切回来仍是 low）。
+   * 这里用 config.threadThinking 记下的「用户本意」把它复位回去；本意不被新模型
+   * 支持时接受夹紧结果、给出 `downgraded` 让界面提示一次，**本意保留**以便下次
+   * 切回支持的模型时自动恢复。规则本体见 `src/shared/thinking-levels.ts`。
+   */
+  const applyModelSwitchWithThinking = async (
+    target: { remoteThreadId?: string | null; sessionFile?: string | null },
+    handle: BridgeHandle,
+    provider: string,
+    modelId: string,
+    origin: ConfigChangeOrigin,
+  ): Promise<{
+    model: unknown;
+    thinkingLevel: string | null;
+    downgraded: { from: string; to: string } | null;
+  }> => {
+    const model = await handle.bridge.setModel(provider, modelId);
+    const state: any = await handle.bridge.getState().catch(() => null);
+    const levels = await bridgeThinkingLevels(handle.bridge);
+    const intent = readThinkingIntent(threadThinkingKey(handle.getId() || target.sessionFile || ""));
+    const plan = planThinkingAfterModelSwitch({ intent, clamped: state?.thinkingLevel ?? null, levels });
+    let effective = plan.effective;
+    if (plan.restore) {
+      try {
+        await handle.bridge.setThinkingLevel(plan.restore);
+        const after: any = await handle.bridge.getState().catch(() => null);
+        effective = after?.thinkingLevel ?? plan.restore;
+      } catch {
+        // 复位失败就接受 pi 的夹紧结果——别把切模型整个拖失败。
+      }
+    }
+    publishThreadConfigChange(
+      target,
+      { model: { provider, id: modelId }, ...(effective ? { thinkingLevel: effective } : {}) },
+      origin,
+    );
+    return {
+      model,
+      thinkingLevel: effective,
+      downgraded:
+        intent && effective && effective !== intent && !isThinkingLevelAllowed(intent, levels)
+          ? { from: intent, to: effective }
+          : null,
+    };
   };
 
   /**
@@ -2461,7 +2560,9 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         availableModels: remoteModelOptions([...lastKnownPiModels, ...configuredModels]),
         skills: [],
         thinkingLevel: "off",
-        thinkingLevels: ["off"],
+        // 草稿会话还没有模型，别再硬报 ["off"]（那等于告诉客户端「不支持思考」）：
+        // 缺字段时手机端会按 reasoning 给标准档位列表。
+        thinkingLevels: undefined,
         taskMode: null,
         availableModes: remoteModeOptions(),
         contextUsage: null,
@@ -2522,6 +2623,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     // running → 在飞工具确实还在途，不收口；非 running → 被中断的工具文件里没有
     // toolResult，收口掉免得远程视图永远转圈（原「磁盘快照一律 idle」的语义保留给桥没开的情况）。
     const state = remoteState(!!openState?.isStreaming, messages.length > 0);
+    const snapshotModel = openState?.model ?? history.model;
     return {
       id: threadId,
       projectId: ref.projectId,
@@ -2532,11 +2634,12 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       state,
       permission,
       cwdName: basename(ref.cwd) || ref.cwd,
-      model: openState?.model ?? history.model,
+      model: snapshotModel,
       availableModels: remoteModelOptions([...lastKnownPiModels, ...configuredModels]),
       skills: [],
       thinkingLevel: openState?.thinkingLevel || history.thinkingLevel || "off",
-      thinkingLevels: open ? await bridgeThinkingLevels(open.bridge) : undefined,
+      // 桥没开时不再缺字段：从 models.json 推一份，手机才能给出正确的档位列表。
+      thinkingLevels: open ? await bridgeThinkingLevels(open.bridge) : configuredThinkingLevels(snapshotModel?.provider, snapshotModel?.id),
       taskMode: ref.sessionFile ? (getConfig().threadTaskModes || {})[threadUuidFromSessionFile(ref.sessionFile) ?? ""] ?? null : null,
       availableModes: remoteModeOptions(),
       contextUsage: open ? await threadContextUsage(open.getId(), compactionEstimates.get(open.getId()) ?? null) : null,
@@ -3211,18 +3314,13 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       }
       const allowed = models.some((model) => model.provider === provider && model.id === modelId);
       if (!allowed) throw new RemoteProtocolError("MODEL_UNAVAILABLE", "That model is not available on the MPI host");
-      await handle.bridge.setModel(provider, modelId);
-      // 同步到其它端（桌面 / 其它手机）：与 setThinking / setMode / 桌面端 thread:setModel 一致。
-      // 只 return 响应快照的话只有发起端知道，别的端 chip 会停在旧值到下次 resync；
-      // 而发起端当年也拿不到（原生端不消费返回值）→ 表现为「切了没反应」。
-      const modelState: any = await handle.bridge.getState().catch(() => null);
-      publishThreadConfigChange(
+      // 切模型走统一入口：顺带把被 pi 夹紧的思考等级按用户本意复位（广播也在里面发）。
+      // 只 return 响应快照的话只有发起端知道，别的端 chip 会停在旧值到下次 resync。
+      await applyModelSwitchWithThinking(
         { remoteThreadId: remoteIdForSession(ref.sessionFile) ?? threadId, sessionFile: ref.sessionFile },
-        {
-          model: { provider, id: modelId },
-          // Pi 会按新模型的 thinkingLevelMap 夹紧档位，带上生效值免得别的端停在旧档
-          ...(modelState?.thinkingLevel ? { thinkingLevel: modelState.thinkingLevel } : {}),
-        },
+        handle,
+        provider,
+        modelId,
         "remote",
       );
       return remoteSnapshot(threadId, { live: true });
@@ -3230,14 +3328,17 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     setThinking: async (threadId, level) => {
       const ref = await remoteThread(threadId);
       const handle = await ensureRemoteBridge(ref);
-      const levels = (await bridgeThinkingLevels(handle.bridge)) ?? ["off"];
-      if (!levels.includes(level)) {
+      const levels = await bridgeThinkingLevels(handle.bridge);
+      // 档位未知（旧 runtime / RPC 失败）时不拦，让 pi 自己定；知道就明确报错而不是静默失败。
+      if (levels && !isThinkingLevelAllowed(level, levels)) {
         throw new RemoteProtocolError(
           "THINKING_UNAVAILABLE",
           `That thinking level is not available for the current model (available: ${levels.join(", ")})`,
         );
       }
       await handle.bridge.setThinkingLevel(level);
+      // 记下用户本意：之后切模型被夹紧时按它复位。
+      writeThinkingIntent(threadThinkingKey(handle.getId() || ref.sessionFile || threadId), level);
       // 与桌面/其它手机同步（publishThreadConfigChange 同时走 remoteEventHub 与 IPC）
       publishThreadConfigChange(
         { remoteThreadId: remoteIdForSession(ref.sessionFile) ?? threadId, sessionFile: ref.sessionFile },
@@ -3323,6 +3424,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         } catch {
           thinkingLevel = plan.thinking; // 旧 runtime 不支持时仍广播预期值
         }
+        // 模式预设也算「用户本意」：不记的话，之后一切模型被夹到低档就再也回不来了。
+        writeThinkingIntent(threadThinkingKey(ref.sessionFile || handle.getId() || threadId), plan.thinking);
       }
 
       publishThreadConfigChange(
@@ -5313,6 +5416,9 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
       threadTaskModes: uuid
         ? Object.fromEntries(Object.entries(current.threadTaskModes ?? {}).filter(([k]) => k !== uuid))
         : current.threadTaskModes,
+      threadThinking: uuid
+        ? Object.fromEntries(Object.entries(current.threadThinking ?? {}).filter(([k]) => k !== uuid))
+        : current.threadThinking,
     });
 
     for (const [localId] of Array.from(remoteLocalToId.entries())) {
@@ -5529,18 +5635,15 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
       delete next[args.threadId];
       updateConfig({ autoModelThreads: next });
     }
-    const model = await h.bridge.setModel(args.provider, args.modelId);
-    // Pi clamps the current thinking level when the selected model exposes a
-    // narrower thinkingLevelMap. Return the effective value so the renderer's
-    // badge stays in sync with the live session instead of showing stale max.
-    const state: any = await h.bridge.getState();
-    // 手机侧同步：模型（以及可能被夹紧的思考等级）。
-    publishThreadConfigChange(
+    // 切模型 + 思考等级复位（与手机端走同一个入口，见 applyModelSwitchWithThinking）。
+    const switched = await applyModelSwitchWithThinking(
       configTargetFor(args.threadId),
-      { model: { provider: args.provider, id: args.modelId }, ...(state?.thinkingLevel ? { thinkingLevel: state.thinkingLevel } : {}) },
+      h,
+      args.provider,
+      args.modelId,
       "desktop",
     );
-    return { model, thinkingLevel: state?.thinkingLevel ?? null };
+    return switched;
   });
 
   ipcMain.handle("thread:refreshModels", async (_e, threadId: string) => {
@@ -5552,20 +5655,29 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
   ipcMain.handle("thread:setThinking", async (_e, args: { threadId: string; level: string }) => {
     const h = bridges.get(args.threadId);
     if (!h) throw new Error("Thread not open");
+    // 与远程路径同一套校验（以前只有手机侧校，桌面直接把不支持的档位下发给 pi）。
+    // 档位未知（旧 runtime / RPC 失败）时不拦，避免把正常操作误拒。
+    const levels = await bridgeThinkingLevels(h.bridge);
+    if (levels && !isThinkingLevelAllowed(args.level, levels)) {
+      throw new Error(`That thinking level is not available for the current model (available: ${levels.join(", ")})`);
+    }
     await h.bridge.setThinkingLevel(args.level);
     const state: any = await h.bridge.getState();
-    publishThreadConfigChange(
-      configTargetFor(args.threadId),
-      { thinkingLevel: state?.thinkingLevel ?? args.level },
-      "desktop",
-    );
-    return { thinkingLevel: state?.thinkingLevel ?? args.level };
+    const effective = state?.thinkingLevel ?? args.level;
+    // 记下用户本意（任务模式预设也是走这个 handler 进来的）。
+    writeThinkingIntent(threadThinkingKey(h.getId() || args.threadId), effective);
+    publishThreadConfigChange(configTargetFor(args.threadId), { thinkingLevel: effective }, "desktop");
+    return { thinkingLevel: effective };
   });
 
   ipcMain.handle("thread:getThinkingLevels", async (_e, threadId: string) => {
     const h = bridges.get(threadId);
-    if (!h) return { levels: ["off"] };
-    return h.bridge.getAvailableThinkingLevels();
+    if (!h) {
+      // 桥没开：从会话文件里的模型 + models.json 推档位，别再一律回 ["off"]。
+      const hist = threadId.endsWith(".jsonl") ? await readThreadHistory(threadId).catch(() => null) : null;
+      return { levels: configuredThinkingLevels(hist?.model?.provider, hist?.model?.id) ?? ["off"] };
+    }
+    return { levels: normalizeThinkingLevels(await bridgeThinkingLevels(h.bridge)) };
   });
 
   ipcMain.handle("thread:newSession", async (_e, threadId: string) => {
