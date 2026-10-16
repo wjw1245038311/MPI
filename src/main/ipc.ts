@@ -1451,8 +1451,14 @@ function effectiveRelayChannels(): RelayChannel[] {
   const ctx = relayChannelContext();
   const channels: RelayChannel[] = [];
   // ① 局域网通道（运行时合成；手机同网段时最快，放在最前）
+  //
+  // 主机上行**显式指向回环**（而不是内网 IP）：局域网通道与本机中继通道（③）指向的是**同一个
+  // 中继进程**，同一个 hostId 在同一台中继上注册两次会互相顶掉（实测：后注册的那条让先来的收到
+  // `replaced` 并被 4006 关闭；两个 uplink 又都会自动重连 → 无限互顶、手机路由跟着抖）。
+  // 上行去重只按地址字符串比对，所以这里把两条归一成同一个地址，自然只留一条上行；
+  // **手机地址（phoneUrl）照旧用内网 IP** —— 那才是"同网段直连"的意义所在。
   const lan = lanChannel(ctx);
-  if (lan) channels.push(lan);
+  if (lan) channels.push({ ...lan, hostUrl: `ws://127.0.0.1:${ctx.localRelayPort}/ws` });
   // ② 云中继：自定义优先，其次内置（有激活码才挂）
   const custom = (cfg.customRelayUrl || "").trim();
   if (custom) {
@@ -1638,7 +1644,7 @@ function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
     if (!hostUrl) continue;
     const takenBy = hostUrlSeen.get(hostUrl);
     if (takenBy) {
-      appendDiagLog(`relay-channel skip id=${channel.id}（主机上行与 ${takenBy} 重复：${hostUrl}）`);
+      appendDiagLog(`relay-channel skip id=${channel.id}（主机上行与 ${takenBy} 是同一台中继：${hostUrl}）`);
       continue;
     }
     hostUrlSeen.set(hostUrl, channel.id);
