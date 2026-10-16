@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { relayCandidates, pickRelayUrl, mergeHostRelayInfo, remainingCandidates, connectFirstReachable } = await import("../mobile/pwa/src/lib/relay-select.ts");
+const { relayCandidates, sameOriginRelayUrl, pickRelayUrl, mergeHostRelayInfo, remainingCandidates, connectFirstReachable } = await import("../mobile/pwa/src/lib/relay-select.ts");
 
 test("S6 候选顺序：主机下发的顺序优先，上次可用退为回落，单值最后；去重去空", () => {
   assert.deepEqual(
@@ -116,3 +116,28 @@ test("逐条尝试：全失败时抛出可读错误", async () => {
 });
 
 console.log("relay-select tests passed");
+
+test("同源候选：https 页面排最前（页面能加载 = 必然可达；明文局域网候选在这类页面里本来就会被剔除）", () => {
+  const input = { relayUrl: "ws://lan:9001/ws", relayUrls: ["ws://lan:9001/ws", "wss://ecs:9443/ws"] };
+  assert.deepEqual(
+    relayCandidates(input, { secureContext: true, location: { origin: "https://workstation.tail38d5a.ts.net:8765" } }),
+    ["wss://workstation.tail38d5a.ts.net:8765/ws", "wss://ecs:9443/ws"],
+    "https 页面：同源 wss 最前，明文局域网被剔除",
+  );
+});
+
+test("同源候选：明文页面排在主机列表之后（局域网通常比同源更快）", () => {
+  const input = { relayUrl: "ws://lan:9001/ws", relayUrls: ["ws://lan:9001/ws", "ws://ecs:10445/ws"] };
+  assert.deepEqual(
+    relayCandidates(input, { secureContext: false, location: { origin: "http://47.97.28.110:10445" } }),
+    ["ws://lan:9001/ws", "ws://ecs:10445/ws", "ws://47.97.28.110:10445/ws"],
+    "明文页面：主机顺序优先，同源（这里是 ECS）殿后且去重",
+  );
+});
+
+test("同源候选：非 http(s) 页面不给（本地文件 / 无 location）", () => {
+  assert.equal(sameOriginRelayUrl({ origin: "file:///x" }), null);
+  assert.equal(sameOriginRelayUrl({ origin: "" }), null);
+  assert.equal(sameOriginRelayUrl(undefined), null);
+  assert.equal(sameOriginRelayUrl({ origin: "https://h:8765" }), "wss://h:8765/ws", "https → wss，同主机同端口，路径 /ws");
+});

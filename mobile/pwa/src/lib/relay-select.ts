@@ -23,10 +23,27 @@ function isSecureContext(): boolean {
   return typeof location !== "undefined" && location.protocol === "https:";
 }
 
+/**
+ * 页面自身的 origin 推导出的**同源数据通道**：`http(s)://host[:port]/` → `ws(s)://host[:port]/ws`。
+ *
+ * 为什么要加这条（2026-10-16）：页面能加载成功，就说明**这台设备一定能连到这个 origin**；
+ * 而本机中继同时提供静态页面与 `/ws`，所以"从哪加载的页面就连哪里的 /ws"是**必然可达**的候选
+ * ——典型场景：`tailscale serve` 把本机中继暴露成 `https://workstation.<tailnet>.ts.net:8765/`
+ * （受信证书），浏览器里就能直接 `wss://…:8765/ws` 连本机中继，**不经 ECS、也不经 Cloudflare**。
+ *
+ * 注意：HTTPS 页面下明文 `ws://` 会被浏览器拦掉，所以这条在安全上下文里尤其重要
+ * （主机下发的局域网候选全是 `ws://`，在 https 页面里一条都用不了）。
+ */
+export function sameOriginRelayUrl(loc: { origin?: string } | undefined = typeof location !== "undefined" ? location : undefined): string | null {
+  const origin = String(loc?.origin || "").trim();
+  if (!/^https?:\/\//i.test(origin)) return null;
+  return `${origin.replace(/^http/i, "ws")}/ws`;
+}
+
 /** 从记录/载荷里算出候选地址顺序（去空、去重、上次可用优先；HTTPS 页面剔掉 `ws://`）。 */
 export function relayCandidates(
   input: { relayUrl?: string; relayUrls?: string[]; lastGoodRelayUrl?: string },
-  options: { secureContext?: boolean } = {},
+  options: { secureContext?: boolean; location?: { origin?: string } } = {},
 ): string[] {
   const secure = options.secureContext ?? isSecureContext();
   const seen = new Set<string>();
@@ -38,8 +55,14 @@ export function relayCandidates(
     seen.add(url);
     ordered.push(url);
   };
+  // 同源候选（页面就是从这儿加载的 → 必然可达）。放在哪一位取决于上下文：
+  //  · HTTPS 页面：主机下发的局域网候选全是 ws:// 会被过滤，同源 wss 是最优 → 排最前；
+  //  · 明文页面：局域网 ws 通常比同源更快（同源可能正是公网中继）→ 排在主机列表之后。
+  const sameOrigin = sameOriginRelayUrl(options.location);
+  if (secure && sameOrigin) push(sameOrigin);
   // S6：主机顺序优先（首个 = 首选）——「桌面选哪条、手机跟哪条」。
   for (const url of input.relayUrls ?? []) push(url);
+  if (!secure && sameOrigin) push(sameOrigin);
   // 上次可用只作回落；主机列表缺失（旧记录）时它自然成为首位，S4 老行为不破。
   push(input.lastGoodRelayUrl);
   push(input.relayUrl);
