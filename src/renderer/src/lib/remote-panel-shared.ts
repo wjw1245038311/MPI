@@ -53,6 +53,11 @@ export type RelayStatus = {
   source?: "builtin" | "custom";
   /** 配对票里给手机的**全部**候选地址（有序）。 */
   phoneTicketAddresses?: string[];
+  /**
+   * 二维码该指向的**网页入口**（主进程算好的 https 原址）：本机中继的局域网 TLS → CF 隧道 →
+   * 自定义中继；都没有时为 null（此时不要给用户一个打不开的地址，而要提示从哪个入口打开）。
+   */
+  pairingPageUrl?: string | null;
 };
 
 /** S5：渲染层通道行（`tokenDraft` 仅渲染层用：留空 = 保持现有 token，见 config.updateConfig）。 */

@@ -65,7 +65,8 @@ node scripts/dev-release.mjs --help          # 只有这三个开关，其余参
 | **中继（ECS）** `/var/www/mpi-mobile/download/` | `mpi-android*.json` 清单 + APK + patch | 手机 App 更新主源 |
 | **Seafile** `E:/Seafile/wei_jw2/我的资料库/Agent` | 桌面 exe + `.sha256`、安卓 APK | 局域网分发 / 手机直接下 |
 | **GitHub Release** | 同上（CI 异步上传） | 公网备份、别人安装；**只在大版本推** |
-| 中继静态服务本体 | `/var/www/mpi-mobile`（PWA + 上面两个 download 目录） | 手机 PWA / 附件 |
+| 中继静态服务本体 | `/var/www/mpi-mobile/download/`（APK + 清单 + 桌面安装包镜像） | 手机 App 更新 / 桌面自更新 |
+| 网页版（PWA）托管 | **桌面端本机中继**（`localRelayStaticDir`）＋ CF 隧道 / tailscale serve / 局域网 TLS 暴露 | 手机与浏览器客户端（2026-10-16 起云中继**不再托管 PWA**：它只转发 + 镜像安装包，这样别人自建中继几乎零改动） |
 
 **中继部署**：`scp mobile/relay/index.mjs root@<ecs>:/opt/mpi-relay/ && ssh root@<ecs> 'systemctl restart mpi-relay'`
 （systemd 单元 `mpi-relay`；改了中继代码要重部署，否则线上还是旧行为）。

@@ -4276,6 +4276,29 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       mobileRelayUrl: cfg.mobileRelayUrl || "",
       // **本次配对票里实际会告诉手机的地址**（S2：由通道列表算出，局域网优先）。
       phoneRelayUrl: addresses[0] || "",
+      /**
+       * **配对二维码/配对链接该指向哪个网页入口**（2026-10-16 新增）。
+       *
+       * 为什么单独算：票里首位是「局域网明文」（给手机那种明文页面直连局域网用），
+       * 而页面本身**必须是 https**（PWA 的 E2E 依赖 `crypto.subtle`，只在安全上下文可用）。
+       * 且云中继（ECS）**不再托管 PWA**（它只转发 + 镜像安装包），所以能当页面入口的只有：
+       *   ① 本机中继的局域网 TLS（`wss://<内网IP>:<tlsPort>/ws` → `https://…`）
+       *   ② 本机中继的 CF 隧道（`mobileRelayFallbackUrl`，同一台机器换个出口）
+       *   ③ 自定义中继（用户自己的，可能也托管页面）
+       * 都没有就返回 null，界面提示用户从局域网/tailnet/CF 入口打开（而不是给一个打不开的地址）。
+       */
+      pairingPageUrl: (() => {
+        const candidates = [
+          ...lanModeStatus().tlsUrls,
+          (cfg.mobileRelayFallbackUrl || "").trim(),
+          (cfg.customRelayUrl || "").trim(),
+        ];
+        for (const url of candidates) {
+          const origin = httpOriginOf(url);
+          if (origin) return origin;
+        }
+        return null;
+      })(),
       // S3 起票里会带整列表，这里先把后续地址暴露给面板。
       phoneTicketAddresses: addresses,
       phoneRelayFallbackUrl: addresses[1] || "",

@@ -50,6 +50,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [phoneRelayUrl, setPhoneRelayUrl] = useState("");
   /** 生效来源：内置服务器（地址不外显，只给标签）/ 自定义中继（显示用户自己的地址）。 */
   const [relaySource, setRelaySource] = useState<"builtin" | "custom">("builtin");
+  /** 二维码会指向的网页入口（主进程算好；null = 没有可用的 https 页面入口）。 */
+  const [pairingPageUrl, setPairingPageUrl] = useState<string | null>(null);
   /** 局域网直连模式（手机同网段时走最快那条路；开关在这里，因为它是"手机怎么连"的事）。 */
   const [lanMode, setLanMode] = useState<LanModeStatus | null>(null);
   const [lanBusy, setLanBusy] = useState(false);
@@ -66,6 +68,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       setRelayStatus(relay);
       setPhoneRelayUrl(relay.phoneRelayUrl || "");
       setRelaySource(relay.source === "custom" ? "custom" : "builtin");
+      setPairingPageUrl(relay.pairingPageUrl ?? null);
     } catch {
       /* same reload race */
     }
@@ -144,10 +147,14 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       // 二维码的**网址**优先用给手机的地址（公网）：用系统相机/浏览器扫时也不该去打开打不开的
       // tailnet 页（典型症状：浏览器 timeout，而中继日志里一条 pair.request 都没有）。
       // App 内「扫码配对」只读 payload，用哪个网址都一样。
-      // 二维码指向**安全**入口（wss → https）：票里首位是局域网明文（给手机那种明文页面用），
-      // 但页面本身必须是 https，否则 crypto.subtle 不可用、端到端加密失效。
-      const secure = securePageOrigin(relayStatus?.phoneTicketAddresses ?? [phoneRelayUrl]);
-      const url = pairingScanUrl(next, secure ?? relayOrigin(phoneRelayUrl) ?? relayOrigin(next.relayUrl || ""));
+      // 二维码指向**能打开页面**的 https 入口（主进程算好的 pairingPageUrl：局域网 TLS → CF → 自定义）；
+      // 云中继不再托管 PWA，所以绝不把它的地址当页面入口。兜底才用票里首个 wss。
+      const pageOrigin =
+        relayStatus?.pairingPageUrl ??
+        securePageOrigin(relayStatus?.phoneTicketAddresses ?? [phoneRelayUrl]) ??
+        relayOrigin(phoneRelayUrl) ??
+        relayOrigin(next.relayUrl || "");
+      const url = pairingScanUrl(next, pageOrigin);
       setPairing(next);
       setScanUrl(url);
       setQr(await QRCode.toDataURL(url, { width: 260, margin: 1, errorCorrectionLevel: "M" }));
@@ -312,6 +319,17 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
           />
           <span>{zh ? "同名离线设备自动替换（避免重复绑定）" : "Replace same-named offline device"}</span>
         </label>
+        <div className="set-hint" style={{ wordBreak: "break-all" }}>
+          {zh ? "扫码将打开：" : "The QR opens: "}
+          {pairingPageUrl ? <code>{pairingPageUrl}</code> : <strong>{zh ? "（当前没有可用的网页入口）" : "(no page entry available)"}</strong>}
+        </div>
+        {!pairingPageUrl && (
+          <div className="set-hint" style={{ color: "#c0392b" }}>
+            {zh
+              ? "云中继只转发、不托管网页版，所以要先有一条能打开页面的入口：① 局域网 TLS（在「转发设置 → 高级」填证书，设备打开 https://<内网IP>:9443/）② 或 CF 隧道（手机侧备用地址）。否则只能把 mpi:// 链接粘进已装的安卓 App。"
+              : "The cloud relay only forwards and no longer hosts the web UI. Provide a page entry first: LAN TLS (configure certs under Relay settings → Advanced) or the CF tunnel address. Otherwise paste the mpi:// link into the installed Android app."}
+          </div>
+        )}
         <button className="set-btn primary" style={{ marginTop: 12 }} onClick={createPairing} disabled={busy}>
           {zh ? "生成配对二维码" : "Generate pairing QR"}
         </button>
