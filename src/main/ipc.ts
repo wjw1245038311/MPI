@@ -4075,11 +4075,14 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     const id = deviceIdentity();
     const code = (cfg.serverAuthCode || "").trim();
     const base = authzBase();
+    // 内置服务器的地址**不外传**（它本就以混淆常量内置，不该出现在渲染层/界面）：
+    // 只有用户自己的中继才把地址给界面，因为它需要展示与编辑。
+    const customRelayUrl = (cfg.customRelayUrl || "").trim();
     const baseState = {
       ...id,
       authorized: Boolean(code),
-      server: base,
-      customRelay: Boolean((cfg.customRelayUrl || "").trim()),
+      server: customRelayUrl ? base : null,
+      customRelay: Boolean(customRelayUrl),
     };
     if (!base) return { ...baseState, ok: false, error: "NO_SERVER" };
     try {
@@ -4248,7 +4251,12 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     const cfg = getConfig();
     const addresses = phoneTicketAddresses();
     return {
-      ...(relayFanout?.getStatus() ?? { state: "disabled" as const, relayUrl: cfg.remoteRelayUrl, lastError: null }),
+      ...(() => {
+        const fanout = relayFanout?.getStatus() ?? { state: "disabled" as const, relayUrl: cfg.remoteRelayUrl, lastError: null };
+        // 内置服务器的地址不在界面上出现：主机上行地址遮成标签（手机侧地址在二维码里，界面不主动展示）。
+        if ((cfg.customRelayUrl || "").trim()) return { ...fanout, source: "custom" as const };
+        return { ...fanout, relayUrl: "", source: "builtin" as const };
+      })(),
       // 中继只回错误码（HOST_UNAUTHORIZED / HOST_DEVICE_LIMIT / …），这里翻成能行动的中文。
       lastErrorText: relayErrorText((relayFanout?.getStatus() ?? { lastError: null }).lastError),
       // 手机该连的地址（与主机→中继的上行可以不同：手机没有 Tailscale，必须给公网可达地址）。

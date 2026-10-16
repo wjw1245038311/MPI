@@ -1132,7 +1132,10 @@ async function onRequest(req, res) {
       sendJson(401, { ok: false, error: "BAD_CODE" });
       return;
     }
-    sendJson(200, authzSummary(matched));
+    // 注意：必须把查询里的 hostId 带进来，否则 activated 恒为 undefined ——
+    // 界面就会在"服务器已登记本机"的同时显示"未激活"（2026-10-16 实测踩到）。
+    const query = new URL(req.url || "/", "http://localhost").searchParams;
+    sendJson(200, authzSummary(matched, (query.get("hostId") || "").trim().slice(0, 64)));
     return;
   }
   if (serveStatic(req, res)) return;

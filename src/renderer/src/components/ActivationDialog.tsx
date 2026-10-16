@@ -135,29 +135,45 @@ export function ActivationDialog({ language, onClose }: { language: "en" | "zh";
             </button>
           </header>
           <div className="set-body">
-            <label className="set-addprov-field wide">
-              <span>{zh ? "设备标识" : "Device ID"}</span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input className="set-input" value={busy === "load" ? "…" : state?.hostId || ""} readOnly spellCheck={false} />
-                <button
-                  type="button"
-                  className="set-btn ghost"
-                  onClick={() => void copy(state?.hostId || "", zh ? "设备标识" : "Device ID")}
-                  disabled={!state?.hostId}
-                >
-                  {zh ? "复制" : "Copy"}
-                </button>
+            {/* 设备标识/名称都是**系统自动获取**的：标识 = 本机 id（随安装目录持久化），
+                名称 = 系统机器名。这里只展示 + 复制，不做输入（用户反馈：看着像要自己填）。 */}
+            <div className="set-row wide">
+              <label className="set-label">{zh ? "设备标识" : "Device ID"}</label>
+              <div className="set-control">
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <code style={{ flex: "1 1 auto", wordBreak: "break-all", fontSize: 13 }}>{busy === "load" ? "…" : state?.hostId || "—"}</code>
+                  <button
+                    type="button"
+                    className="set-btn ghost"
+                    onClick={() => void copy(state?.hostId || "", zh ? "设备标识" : "Device ID")}
+                    disabled={!state?.hostId}
+                  >
+                    {zh ? "复制" : "Copy"}
+                  </button>
+                </div>
+                <div className="set-hint">
+                  {zh
+                    ? "由本机自动生成，无需填写。服务器依据它区分不同设备；每个激活码最多绑定三台。"
+                    : "Generated automatically on this machine. The server uses it to distinguish devices; each access code binds at most three."}
+                </div>
               </div>
-            </label>
-            <label className="set-addprov-field wide">
-              <span>{zh ? "设备名称" : "Device name"}</span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input className="set-input" value={state?.name || ""} readOnly spellCheck={false} />
-                <button type="button" className="set-btn ghost" onClick={() => void copy(state?.name || "", zh ? "设备名称" : "Device name")} disabled={!state?.name}>
-                  {zh ? "复制" : "Copy"}
-                </button>
+            </div>
+            <div className="set-row wide">
+              <label className="set-label">{zh ? "设备名称" : "Device name"}</label>
+              <div className="set-control">
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <code style={{ flex: "1 1 auto", wordBreak: "break-all", fontSize: 13 }}>{state?.name || "—"}</code>
+                  <button type="button" className="set-btn ghost" onClick={() => void copy(state?.name || "", zh ? "设备名称" : "Device name")} disabled={!state?.name}>
+                    {zh ? "复制" : "Copy"}
+                  </button>
+                </div>
+                <div className="set-hint">
+                  {zh
+                    ? "取自系统主机名，仅用于在服务器端辨认本机，不影响功能。"
+                    : "Taken from the OS hostname; used only to identify this machine server-side."}
+                </div>
               </div>
-            </label>
+            </div>
 
             <label className="set-addprov-field wide" style={{ marginTop: 6 }}>
               <span>{zh ? "激活码" : "Access code"}</span>
@@ -166,7 +182,15 @@ export function ActivationDialog({ language, onClose }: { language: "en" | "zh";
                 rows={3}
                 value={codeDraft}
                 onChange={(e) => setCodeDraft(e.target.value)}
-                placeholder={state?.authorized ? (zh ? "已设置，粘贴新码可替换" : "set; paste a new one to replace") : zh ? "按 Ctrl+V 粘贴" : "Paste with Ctrl+V"}
+                placeholder={
+                  state?.authorized
+                    ? zh
+                      ? "已设置；粘贴新码可替换"
+                      : "set; paste a new one to replace"
+                    : zh
+                      ? "粘贴激活码（Ctrl+V）"
+                      : "Paste the access code (Ctrl+V)"
+                }
                 spellCheck={false}
               />
             </label>
@@ -184,21 +208,20 @@ export function ActivationDialog({ language, onClose }: { language: "en" | "zh";
                         : "This server has no access-code check"
                       : activated
                         ? zh
-                          ? "产品已激活"
+                          ? "已激活"
                           : "Activated"
                         : zh
-                          ? "未激活"
-                          : "Not activated"}
+                          ? "未激活（本机尚未登记）"
+                          : "Not activated (this machine is not registered)"}
               </strong>
-              {state?.enforcing ? ` · ${zh ? "设备名额" : "devices"} ${quota}` : ""}
             </div>
-            {state?.server && (
-              <div className="set-hint" style={{ wordBreak: "break-all" }}>
-                {zh ? "服务器：" : "Server: "}
-                <code>{state.server}</code>
-                {state.customRelay ? (zh ? "（自定义中继）" : " (custom relay)") : ""}
+            {state?.enforcing ? (
+              <div className="set-hint">
+                {zh ? "设备名额：" : "Device quota: "}
+                <strong>{quota}</strong>
+                {zh ? "（一个激活码最多三台）" : " (up to three per code)"}
               </div>
-            )}
+            ) : null}
 
             <div className="set-diag-btns" style={{ marginTop: 10 }}>
               <button className="set-btn primary" onClick={() => void activate()} disabled={!!busy}>
@@ -213,8 +236,8 @@ export function ActivationDialog({ language, onClose }: { language: "en" | "zh";
             </div>
             <div className="set-hint">
               {zh
-                ? "解除绑定只是让服务器不再把本机算作一台（腾出名额）；本机不会因此丢设置，重新激活即可再绑。"
-                : "Unbinding only releases the slot on the server; local settings stay and you can bind again anytime."}
+                ? "解除绑定仅解除服务器端的设备登记并释放名额，不影响本机任何设置；需要时重新激活即可再次绑定。"
+                : "Unbinding only clears the device registration on the server and releases the slot; no local setting is affected, and you can bind again by activating anew."}
             </div>
           </div>
         </section>

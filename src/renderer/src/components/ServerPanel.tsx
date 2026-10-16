@@ -73,7 +73,9 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
       }
       // 分两层说：① 转发通道（WS 握手）② 授权/名额（有 /authz/check 才说得清）
       const parts: string[] = [];
-      parts.push(zh ? `转发通道可达（${result.wsUrl || result.server}）` : `Forwarding reachable (${result.wsUrl || result.server})`);
+      // 内置服务器的地址不打印（它本来就以混淆常量内置、不该出现在界面上）；自定义中继显示用户自己的地址。
+      const where = result.source === "builtin" ? (zh ? "内置服务器" : "built-in server") : result.wsUrl || result.server || "";
+      parts.push(zh ? `转发通道可达（${where}）` : `Forwarding reachable (${where})`);
       if (result.authzError === "BAD_CODE") {
         parts.push(zh ? "激活码无效" : "access code rejected");
       } else if (result.enforcing) {

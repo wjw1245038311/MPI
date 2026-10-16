@@ -33,7 +33,7 @@ export type RelayStatus = {
   state: "disabled" | "connecting" | "connected" | "error";
   relayUrl: string;
   lastError: string | null;
-  /** 配对票里给**手机**的中继地址（= 面板里「手机通道地址」字段；空 = 退回 relayUrl）。 */
+  /** 旧字段（S5 前的「手机通道地址」）：保留读取兼容，界面不再编辑。 */
   mobileRelayUrl?: string;
   /** **本次配对票里实际会告诉手机的地址**（局域网模式 > 手机通道地址 > relayUrl，与主机一致）。 */
   phoneRelayUrl?: string;
@@ -49,8 +49,8 @@ export type RelayStatus = {
   relayMode?: "manual" | "auto";
   /** S5：手动模式下选中的通道 id。 */
   activeChannelId?: string;
-  /** 是否已存过通道列表（false = 当前列表由旧字段合成，首次保存后才落盘）。 */
-  relayChannelsStored?: boolean;
+  /** 生效来源：`builtin` = 内置服务器（地址不外显）/ `custom` = 用户自己的中继。 */
+  source?: "builtin" | "custom";
 };
 
 /** S5：渲染层通道行（`tokenDraft` 仅渲染层用：留空 = 保持现有 token，见 config.updateConfig）。 */

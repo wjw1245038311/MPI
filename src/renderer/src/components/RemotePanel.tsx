@@ -46,6 +46,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
   /** 本次配对票里实际会告诉手机的地址（主进程算好；由「服务器」决定）。 */
   const [phoneRelayUrl, setPhoneRelayUrl] = useState("");
+  /** 生效来源：内置服务器（地址不外显，只给标签）/ 自定义中继（显示用户自己的地址）。 */
+  const [relaySource, setRelaySource] = useState<"builtin" | "custom">("builtin");
   const [busy, setBusy] = useState(false);
 
   const refresh = async () => {
@@ -58,6 +60,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       const relay = (await window.pi.remote.getRelayStatus()) as RelayStatus;
       setRelayStatus(relay);
       setPhoneRelayUrl(relay.phoneRelayUrl || "");
+      setRelaySource(relay.source === "custom" ? "custom" : "builtin");
     } catch {
       /* same reload race */
     }
@@ -161,7 +164,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         </div>
         <div className="set-hint" style={{ wordBreak: "break-all" }}>
           {zh ? "手机将连接：" : "Phone connects to: "}
-          <code>{phoneRelayUrl || "—"}</code>
+          {relaySource === "builtin" ? (
+            <span>{zh ? "内置服务器（实际地址含在配对二维码里）" : "Built-in server (actual address is in the pairing QR)"}</span>
+          ) : (
+            <code>{phoneRelayUrl || "—"}</code>
+          )}
         </div>
         {/* 服务器（转发地址 / 授权码 / 局域网 / 多通道）在设置里，这里只给入口 —— 
             面板从 800 行瘦下来就靠这一刀：本面板不再承担转发地址的编辑。 */}
@@ -246,7 +253,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         <button className="set-btn primary" style={{ marginTop: 12 }} onClick={createPairing} disabled={busy}>
           {zh ? "生成配对二维码" : "Generate pairing QR"}
         </button>
-        {unreachableForPhone(phoneRelayUrl) && (
+        {relaySource === "custom" && unreachableForPhone(phoneRelayUrl) && (
           <div className="set-hint" style={{ color: "#c0392b" }}>
             {zh
               ? "⚠ 这是 tailnet / 内网地址——手机（没有 Tailscale、不在同一网段）连不上，扫描后会卡在连接超时。要到外网用就关掉「局域网模式」并在「设置 → 服务器」里换成公网地址；要局域网直连就把手机连到同一 WiFi。"
