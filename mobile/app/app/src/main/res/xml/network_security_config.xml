@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MPI 的网络信任策略（2026-10-16 从 src/debug 提到 main；调试包/正式包同一套策略）。
+
+  两件事必须同时成立，否则手机连不上：
+
+  ① **允许明文**：明文不是"图省事"——国内链路会按 TLS 握手指纹给连接注入 RST，
+     所以手机侧走的就是明文 `ws://`（ECS 的 10445、本机中继的 9001）；附件直连也是 http。
+     Android 9（API 28）起默认禁止明文，不放开的话候选里那几条明文地址全部连不上。
+
+  ② **信任用户安装的 CA**：中继的 TLS 入口（ECS 9443、本机中继 9443、局域网入口）用的是
+     **自签证书**（我们自己的 `MPI Self-signed CA`），而 Android 7 起 App **默认不信任**用户
+     安装的 CA —— 只在设备上装一次根证书是不够的，App 还得显式声明信任 user 源。
+     这样 `wss://<中继或内网IP>:9443/ws` 才能在安卓端真正可用（局域网 TLS 就近直连就靠它）。
+
+  安全说明：内容安全由应用层端到端加密（E2E）保证，TLS 只是外层；信任 user 源意味着
+  设备上若被人装了恶意根证书，理论上可被中间人看到明文帧——但那种设备本身已经失守。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
