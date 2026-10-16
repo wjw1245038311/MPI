@@ -223,8 +223,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         </div>
         <div className="set-hint">
           {zh
-            ? "开启后，手机与这台电脑在同一网段时直接走内网（不经公网中继，更快、更省流量）；不同网段或连不上时自动回落到公网。配对二维码里会带上全部内网候选地址，手机按顺序试。"
-            : "When on, a phone on the same network connects directly over the LAN (faster, no cloud relay traffic); it falls back to the public relay when unreachable. The pairing QR carries every LAN candidate."}
+            ? "开启后，手机与这台电脑在同一网段时直接走内网（不经公网中继，更快、更省流量）；连不上时自动回落到中继服务器。配对二维码里会带上全部内网候选地址，手机按顺序试。"
+            : "When on, a phone on the same network connects directly over the LAN (faster, no relay traffic); it falls back to the relay server when unreachable. The pairing QR carries every LAN candidate."}
         </div>
         <div className="set-remote-toggle-row">
           <div className="set-remote-toggle-copy">
@@ -326,8 +326,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         {!pairingPageUrl && (
           <div className="set-hint" style={{ color: "#c0392b" }}>
             {zh
-              ? "云中继只转发、不托管网页版，所以要先有一条能打开页面的入口：① 局域网 TLS（在「转发设置 → 高级」填证书，设备打开 https://<内网IP>:9443/）② 或 CF 隧道（手机侧备用地址）。否则只能把 mpi:// 链接粘进已装的安卓 App。"
-              : "The cloud relay only forwards and no longer hosts the web UI. Provide a page entry first: LAN TLS (configure certs under Relay settings → Advanced) or the CF tunnel address. Otherwise paste the mpi:// link into the installed Android app."}
+              ? "云中继只转发、不托管网页版，所以要先有一条能打开页面的入口：在「转发设置 → 高级」填好局域网 TLS 证书，设备打开 https://<内网IP>:9443/ 即可（离开局域网时用已装的安卓 App）。"
+              : "The cloud relay only forwards and no longer hosts the web UI. Configure the LAN TLS certs under Relay settings → Advanced, then open https://<LAN-IP>:9443/ on the device (use the installed Android app when away from the LAN)."}
           </div>
         )}
         <button className="set-btn primary" style={{ marginTop: 12 }} onClick={createPairing} disabled={busy}>

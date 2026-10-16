@@ -267,8 +267,9 @@ export interface AppConfig {
    */
   remoteRelayFallbackEnabled: boolean;
   /**
-   * **给手机**的备用公网地址（如 `wss://relay.whomidas.cn/ws`，经 Cloudflare 隧道转到本机中继）。
-   * 空 = 配对票里不带备用地址（主机仍在备用通道上在线，只是没告诉手机）。
+   * **已弃用**（2026-10-16，用户决定去掉 CF：公网绕一圈、延迟太高）：链路只保留
+   * 「中继服务器（内置/自定义）+ 局域网」。字段仍读取（老配置不报错），但**不再进配对票、
+   * 也不再当页面入口**。（CF 隧道本身仍可作网页入口手工使用，只是不再由客户端自动选它。）
    */
   mobileRelayFallbackUrl: string;
   /**

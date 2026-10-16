@@ -1489,7 +1489,9 @@ function effectiveRelayChannels(): RelayChannel[] {
   }
   // ③ 本机中继备用（常驻；主中继挂了手机可切它，也不依赖 Tailscale）
   if (cfg.remoteRelayFallbackEnabled !== false) {
-    channels.push({ id: "local", label: "本机中继", phoneUrl: (cfg.mobileRelayFallbackUrl || "").trim(), enabled: true, kind: "local" });
+    // 本机中继通道：**只作主机上行**（让经 tailscale serve / 局域网入口进来的设备能找到主机），
+    // 不写手机地址（那由 lan 通道给；CF 已按用户决定去掉）。
+    channels.push({ id: "local", label: "本机中继", phoneUrl: "", enabled: true, kind: "local" });
   }
   return channels;
 }
@@ -1615,7 +1617,9 @@ function phoneTicketAddresses(): string[] {
   } else if ((cfg.serverAuthCode || "").trim()) {
     for (const url of builtinServer()?.phoneUrls ?? []) push(url);
   }
-  push(cfg.mobileRelayFallbackUrl || "");
+  // 注（2026-10-16）：这里原来还会带上「手机侧备用地址」（CF 隧道 `mobileRelayFallbackUrl`）。
+  // 用户决定**去掉 CF**（公网绕一圈、延迟太高）：链路只保留「中继服务器（内置/自定义）+ 局域网」。
+  // 配置字段保留（老配置读得回来），但不再进票、不再当页面入口。
   return urls;
 }
 
@@ -4281,16 +4285,14 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
        *
        * 为什么单独算：票里首位是「局域网明文」（给手机那种明文页面直连局域网用），
        * 而页面本身**必须是 https**（PWA 的 E2E 依赖 `crypto.subtle`，只在安全上下文可用）。
-       * 且云中继（ECS）**不再托管 PWA**（它只转发 + 镜像安装包），所以能当页面入口的只有：
+       * 且云中继**不再托管 PWA**（它只转发 + 镜像安装包），所以能当页面入口的只有：
        *   ① 本机中继的局域网 TLS（`wss://<内网IP>:<tlsPort>/ws` → `https://…`）
-       *   ② 本机中继的 CF 隧道（`mobileRelayFallbackUrl`，同一台机器换个出口）
-       *   ③ 自定义中继（用户自己的，可能也托管页面）
-       * 都没有就返回 null，界面提示用户从局域网/tailnet/CF 入口打开（而不是给一个打不开的地址）。
+       *   ② 自定义中继（用户自己的，可能也托管页面）
+       * 都没有就返回 null，界面提示用户配局域网 TLS（而不是给一个打不开的地址）。
        */
       pairingPageUrl: (() => {
         const candidates = [
           ...lanModeStatus().tlsUrls,
-          (cfg.mobileRelayFallbackUrl || "").trim(),
           (cfg.customRelayUrl || "").trim(),
         ];
         for (const url of candidates) {
