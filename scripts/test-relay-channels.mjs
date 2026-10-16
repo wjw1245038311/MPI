@@ -177,7 +177,9 @@ test("ipc/config 接线：通道列表驱动，旧的「主+备两条」写法�
   // S5：面板要有通道列表 UI，且旧的全局地址字段要拔掉（否则两个真相源）
   // 2026-10-16：通道编辑整体搬到「设置 → 服务器」分栏（ServerPanel），所以这里改看那份。
   const panel = readFileSync(new URL("../src/renderer/src/components/ServerPanel.tsx", import.meta.url), "utf8");
-  for (const pat of [/relayChannels/, /\u81ea\u52a8\u9009\u62e9\u6700\u4f18\u901a\u9053|Auto-pick best channel/, /\u6dfb\u52a0\u65b0\u670d\u52a1\u5668\u5730\u5740|Add server address/, /saveChannels/]) {
+  // 2026-10-16：选路开关撤掉（配对票始终带全部候选，手机按序试连）——不许再出现
+  assert.ok(!/Auto-pick best channel|relayMode/.test(panel), "服务器面板不应再有「手动/自动选路」开关");
+  for (const pat of [/relayChannels/, /Add server address/, /saveCustom/]) {
     assert.match(panel, pat, `面板必须能管理通道列表：${pat}`);
   }
   assert.ok(!/\u4e2d\u7ee7\u5730\u5740\uff08WSS\uff09/.test(panel), "旧的「中继地址（WSS）」字段应已移除");

@@ -43,7 +43,7 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
 import https from "node:https";
-import { readFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createReadStream } from "node:fs";
 import { timingSafeEqual } from "node:crypto";
 import { stat } from "node:fs/promises";
@@ -313,19 +313,113 @@ function refreshHostTokens() {
   hostTokens = loadHostTokens();
 }
 
-/** 常量时间比较（避免用时长泄露 token 前缀）。 */
-function tokenMatches(candidate) {
-  if (typeof candidate !== "string" || !candidate) return false;
+/** 常量时间比较（避免用时长泄露 token 前缀）；命中时返回**命中的那个 token**（设备额度要用）。 */
+function matchedHostToken(candidate) {
+  if (typeof candidate !== "string" || !candidate) return null;
   const a = Buffer.from(candidate);
-  let matched = false;
+  let matched = null;
   for (const token of hostTokens) {
     const b = Buffer.from(token);
-    if (a.length === b.length && timingSafeEqual(a, b)) matched = true;
+    if (a.length === b.length && timingSafeEqual(a, b)) matched = token;
   }
   return matched;
 }
 
 const hostAuthRequired = () => hostTokens.size > 0;
+
+/**
+ * **设备额度**（2026-10-16）：一个授权码最多 N 台设备。
+ *
+ * 为什么需要：授权码是共享口令（一台机器填一次就完），如果不管设备数，码一旦流出去
+ * 就能被无限台机器白嫖这台中继。主流做法（ngrok authtoken / Tailscale auth key 那类）
+ * 都是「按设备登记 + 可撤销」，这里用最小的形态实现它：
+ *
+ *   · **设备 = hostId**（主机进程生成并持久化的 id，见 relay-uplink）；
+ *   · 码列表仍由人维护（`RELAY_TOKEN_FILE`，加删一行即生效）；设备表由中继自己写，
+ *     落在 `RELAY_AUTH_FILE`（默认不启用，兼容旧部署）；
+ *   · 同一 hostId 重连只更新 lastSeen，不占新额度；设备数满了 → `HOST_DEVICE_LIMIT` 拒绝；
+ *   · 撤销：删设备表里那条（或整个文件）即可，无需重启（下次注册重新计数）。
+ */
+const AUTH_DEVICES_FILE = process.env.RELAY_AUTH_FILE || "";
+const AUTH_MAX_DEVICES = Math.max(1, Number(process.env.RELAY_AUTH_MAX_DEVICES || 3));
+
+function loadAuthDevices() {
+  if (!AUTH_DEVICES_FILE) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(AUTH_DEVICES_FILE, "utf8"));
+    if (!parsed || typeof parsed !== "object") return {};
+    const out = {};
+    for (const [code, list] of Object.entries(parsed)) {
+      if (!Array.isArray(list)) continue;
+      out[code] = list
+        .filter((item) => item && typeof item.hostId === "string" && item.hostId)
+        .map((item) => ({
+          hostId: item.hostId,
+          name: typeof item.name === "string" ? item.name : "",
+          firstSeen: typeof item.firstSeen === "string" ? item.firstSeen : new Date().toISOString(),
+          lastSeen: typeof item.lastSeen === "string" ? item.lastSeen : new Date().toISOString(),
+        }));
+    }
+    return out;
+  } catch (error) {
+    // 文件不存在是正常情况（第一次跑）；真读坏了也不能把中继带崩。
+    if (error?.code !== "ENOENT") log(`auth device file unreadable (${AUTH_DEVICES_FILE}): ${error?.message || error}`);
+    return {};
+  }
+}
+
+/** 原子写（tmp + rename）：写一半挂掉也不会把设备表留成半截 JSON。 */
+function saveAuthDevices() {
+  if (!AUTH_DEVICES_FILE) return;
+  try {
+    const tmp = `${AUTH_DEVICES_FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify(authDevices, null, 2));
+    renameSync(tmp, AUTH_DEVICES_FILE);
+  } catch (error) {
+    log(`auth device file write failed (${AUTH_DEVICES_FILE}): ${error?.message || error}`);
+  }
+}
+
+let authDevices = loadAuthDevices();
+
+/** 日志里不回显明文码（前 8 位已够区分）。 */
+const codeFp = (code) => String(code || "").slice(0, 8);
+
+/** 登记/续期一次注册；满额返回 `{ok:false}`（调用方回 HOST_DEVICE_LIMIT 并断开）。 */
+function registerAuthDevice(code, hostId) {
+  if (!AUTH_DEVICES_FILE) return { ok: true, devices: 0, counted: false };
+  const list = authDevices[code] || (authDevices[code] = []);
+  const now = new Date().toISOString();
+  const existing = list.find((item) => item.hostId === hostId);
+  if (existing) {
+    existing.lastSeen = now;
+    saveAuthDevices();
+    return { ok: true, devices: list.length, counted: false };
+  }
+  if (list.length >= AUTH_MAX_DEVICES) return { ok: false, devices: list.length, counted: false };
+  list.push({ hostId, name: "", firstSeen: now, lastSeen: now });
+  saveAuthDevices();
+  return { ok: true, devices: list.length, counted: true };
+}
+
+/** `/authz/check` 的返回：只给用量与码指纹，不回显设备 id。 */
+function authzSummary(code) {
+  const list = authDevices[code] || [];
+  return {
+    ok: true,
+    code: codeFp(code),
+    devices: list.length,
+    maxDevices: AUTH_MAX_DEVICES,
+    enforcing: Boolean(AUTH_DEVICES_FILE),
+  };
+}
+
+/** 检查结果：ok / 拒因（调用方负责回错并断开）；`token` = 命中的授权码（空 = 开放模式）。 */
+function checkHostAuth(frame) {
+  if (!hostAuthRequired()) return { ok: true, token: "" };
+  const matched = matchedHostToken(frame.token);
+  return matched ? { ok: true, token: matched } : { ok: false, token: "" };
+}
 
 /**
  * 桌面自更新镜像的准入（2026-10-16）。
@@ -383,16 +477,25 @@ function appMirrorTokenMatches(candidate) {
   return matched;
 }
 
-/** 从 `Authorization: Bearer <t>`（或 `?token=`，方便手动 curl）取令牌。 */
-function appMirrorRequestToken(req) {
+/**
+ * 从请求里取授权码：`Authorization: Bearer <code>` 优先，其次 `?code=`（手动 curl / 健康检查用），
+ * 再退回 `?token=`（镜像门控早期的写法，保持兼容）。
+ */
+function authCodeFromRequest(req) {
   const header = String(req.headers.authorization || "");
   const bearer = /^Bearer\s+(.+)$/i.exec(header.trim());
   if (bearer) return bearer[1].trim();
   try {
-    return new URL(req.url || "/", "http://localhost").searchParams.get("token") || "";
+    const params = new URL(req.url || "/", "http://localhost").searchParams;
+    return params.get("code") || params.get("token") || "";
   } catch {
     return "";
   }
+}
+
+/** 镜像门控用同一个提取器。 */
+function appMirrorRequestToken(req) {
+  return authCodeFromRequest(req);
 }
 
 /** 软/硬门控结果：`open`（没配令牌）/`ok`/`missing`/`bad`。 */
@@ -430,15 +533,11 @@ function gateAppMirror(req, res, pathname) {
   return true;
 }
 
-/** 检查结果：ok / 拒因（调用方负责回错并断开）。 */
-function checkHostAuth(frame) {
-  if (!hostAuthRequired()) return { ok: true };
-  return tokenMatches(frame.token) ? { ok: true } : { ok: false };
-}
-
 const CLOSE_HOST_RESTARTED = 4007;
 /** 主机凭证不对（P1 准入）。 */
 const CLOSE_HOST_UNAUTHORIZED = 4003;
+/** 授权码设备额度已满（2026-10-16：一个码最多 N 台）。 */
+const CLOSE_HOST_DEVICE_LIMIT = 4008;
 
 // --- routing table ---------------------------------------------------------------
 /** hostId -> { ws } */
@@ -836,6 +935,26 @@ function onRequest(req, res) {
     res.end(JSON.stringify(vapidKey ? { publicKey: vapidKey.pubB64u } : { error: "push not configured" }));
     return;
   }
+  // 授权码自检（桌面端「验证连通性」用）：服务器通不通 / 码对不对 / 还剩几个设备名额。
+  // 只回用量与码指纹，不回设备 id（那些留在设备表文件里）。
+  if (req.method === "GET" && req.url?.split("?")[0] === "/authz/check") {
+    const sendJson = (status, body) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (!hostAuthRequired()) {
+      sendJson(200, { ok: true, open: true, code: "", devices: 0, maxDevices: AUTH_MAX_DEVICES, enforcing: false });
+      return;
+    }
+    const code = authCodeFromRequest(req);
+    const matched = matchedHostToken(code);
+    if (!matched) {
+      sendJson(401, { ok: false, error: "BAD_CODE" });
+      return;
+    }
+    sendJson(200, authzSummary(matched));
+    return;
+  }
   if (serveStatic(req, res)) return;
   res.writeHead(404, { "content-type": "text/plain" });
   res.end("not found");
@@ -900,6 +1019,16 @@ wss.on("connection", (ws) => {
           log(`host ${hostId} rejected (unauthorized)`);
           send(ws, { type: "relay.error", code: "HOST_UNAUTHORIZED" });
           return tryClose(ws, CLOSE_HOST_UNAUTHORIZED, "HOST_UNAUTHORIZED");
+        }
+        // 设备额度（一个码最多 N 台；同一 hostId 重连不占新名额）。仅当配了设备表文件时启用。
+        if (auth.token) {
+          const reg = registerAuthDevice(auth.token, hostId);
+          if (!reg.ok) {
+            log(`host ${hostId} rejected (device limit ${reg.devices}/${AUTH_MAX_DEVICES} for code ${codeFp(auth.token)})`);
+            send(ws, { type: "relay.error", code: "HOST_DEVICE_LIMIT", max: AUTH_MAX_DEVICES, devices: reg.devices });
+            return tryClose(ws, CLOSE_HOST_DEVICE_LIMIT, "HOST_DEVICE_LIMIT");
+          }
+          if (reg.counted) log(`auth device registered ${codeFp(auth.token)} host=${hostId} (${reg.devices}/${AUTH_MAX_DEVICES})`);
         }
         const bootId = str(frame.bootId, 64);
         const previous = hosts.get(hostId);

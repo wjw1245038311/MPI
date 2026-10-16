@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, shell } from "electron";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
@@ -193,6 +193,7 @@ import { RelayFanout } from "./remote/relay-fanout";
 import {
   effectiveChannels,
   hostUrlFor,
+  lanChannel,
   ticketAddresses,
   uplinkChannels,
   type ChannelContext,
@@ -922,6 +923,36 @@ let publishThreadContextUsageHook: ((localId: string) => void) | null = null;
  * 2. 服务器授权码同理（2026-10-16）：渲染层只需要知道「有没有」，不需要拿到值
  *    —— 设置页保存时只上传用户新填的那个（留空 = 保持现有）。
  */
+/** `ws(s)://host:port/ws` → `http(s)://host:port`（自检端点用）。 */
+function httpOriginOf(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const scheme = parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
+    if (scheme !== "https:" && scheme !== "http:") return null;
+    return `${scheme}//${parsed.host}`;
+  } catch {
+    return null;
+  }
+}
+
+/** 中继错误码 → 用户能行动的中文（`null` 原样返回）。 */
+function relayErrorText(code: string | null | undefined): string | null {
+  const value = String(code || "").trim();
+  if (!value) return null;
+  const zh = () => getConfig().language === "zh";
+  if (value === "HOST_DEVICE_LIMIT") {
+    return zh()
+      ? `此授权码已达设备上限（${3} 台）。请在服务器侧解绑一台再试。`
+      : `This access code has hit its device limit. Unbind a device on the server and retry.`;
+  }
+  if (value === "HOST_UNAUTHORIZED") {
+    return zh() ? "服务器不接受这个授权码（可能已被撤销）。" : "The server rejected this access code (it may have been revoked).";
+  }
+  if (value === "HOST_RESTARTED") return zh() ? "主机进程重启，正在重连…" : "Host restarted — reconnecting…";
+  if (value === "REPLACED") return zh() ? "同一台机器的另一条连接顶替了它。" : "Another connection from this machine replaced it.";
+  return value;
+}
+
 function configForRenderer(cfg: AppConfig = getConfig()) {
   const { serverAuthCode, ...rest } = cfg;
   return {
@@ -1461,11 +1492,17 @@ function builtinRelayChannel(builtin: BuiltinServer, authCode: string): RelayCha
 /** S2：本次配对票里给手机的地址（有序；手动=选中那条，自动=全部启用）。 */
 function phoneTicketAddresses(): string[] {
   const cfg = getConfig();
+  // 2026-10-16 起**一个二维码带全部候选**（局域网优先 → 云中继 → 备用），手机按序试连：
+  // 选路交给手机，用户不再需要理解「手动/自动」这层概念（那个开关已撤）。
+  // 注意：候选地址必须对应**主机真的挂了上行**的中继，否则手机会朝一个没人接的地址白试。
+  const lan = lanChannel(relayChannelContext());
+  const lanUrls = lan && lan.enabled ? [(lan.phoneUrl || "").trim()].filter(Boolean) : [];
   if (cfg.serverSource === "builtin") {
     const builtin = builtinServer();
-    return builtin ? [...builtin.phoneUrls] : [];
+    return builtin ? [...lanUrls, ...builtin.phoneUrls] : lanUrls;
   }
-  return ticketAddresses(effectiveRelayChannels(), cfg.relayMode, cfg.activeChannelId);
+  const custom = ticketAddresses(effectiveRelayChannels(), "auto", cfg.activeChannelId);
+  return [...lanUrls, ...custom.filter((url) => !lanUrls.includes(url))];
 }
 
 /**
@@ -1481,7 +1518,8 @@ function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
   const channels = effectiveRelayChannels();
 
   // 全局开关仍生效：关闭 relay uplink 时一条也不挂
-  const wanted = cfg.remoteRelayEnabled ? uplinkChannels(channels, cfg.relayMode, cfg.activeChannelId) : [];
+  // 选路开关已撤（2026-10-16）：始终挂全部启用通道；配对票也带全部候选。
+  const wanted = cfg.remoteRelayEnabled ? uplinkChannels(channels, "auto", cfg.activeChannelId) : [];
 
   // ① 摘掉不再需要的上行
   for (const [id, uplink] of [...channelUplinks]) {
@@ -3848,6 +3886,72 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     }
   }
 
+  /**
+   * 「验证连通性」（2026-10-16）：一次请求回答「服务器通不通 + 授权码对不对 + 还剩几个设备名额」。
+   *
+   * 打的是中继的 `GET /authz/check`（带 `Authorization: Bearer <授权码>`）。自定义服务器可能没有
+   * 这个端点 → 退回 `GET /healthz`（只证明服务器活着），并在返回里说明这一点。
+   * 不发任何主机身份信息：这一步只验凭证，不注册设备（注册由真正的 uplink 在保存后做）。
+   */
+  ipcMain.handle("remote:testServer", async () => {
+    const cfg = getConfig();
+    const source = cfg.serverSource === "custom" ? "custom" : "builtin";
+    let code = (cfg.serverAuthCode || "").trim();
+    let wsUrl = "";
+    if (source === "builtin") {
+      wsUrl = builtinServer()?.hostUplinks[0] || "";
+    } else {
+      const channels = effectiveRelayChannels();
+      const picked = channels.find((channel) => channel.enabled && channel.kind === "remote");
+      wsUrl = picked ? hostUrlFor(picked, relayChannelContext()) : "";
+      if (!code && picked?.token) code = picked.token;
+    }
+    if (!wsUrl) return { ok: false, error: "NO_SERVER" };
+    const http = httpOriginOf(wsUrl);
+    if (!http) return { ok: false, error: "BAD_URL" };
+    const headers: Record<string, string> = code ? { authorization: `Bearer ${code}` } : {};
+    // ① 授权自检（首选）
+    try {
+      const res = await net.fetch(`${http}/authz/check`, { headers, signal: AbortSignal.timeout(8000) });
+      if (res.status === 401 || res.status === 403) return { ok: false, error: "BAD_CODE" };
+      if (res.ok) {
+        const body: any = await res.json().catch(() => ({}));
+        return {
+          ok: true,
+          server: http,
+          source,
+          // 中继没配主机准入时是开放模式：能连，但不代表码有效（界面照实说）。
+          open: Boolean(body?.open),
+          devices: Number(body?.devices) || 0,
+          maxDevices: Number(body?.maxDevices) || 0,
+          enforcing: Boolean(body?.enforcing),
+        };
+      }
+      if (res.status !== 404) return { ok: false, error: `HTTP_${res.status}` };
+    } catch (error: any) {
+      // 连不上（超时/DNS/拒绝）与 404（老中继没这个端点）分开处理。
+      if (!/timeout|abort/i.test(String(error?.name || error?.message || ""))) {
+        try {
+          const res = await net.fetch(`${http}/healthz`, { signal: AbortSignal.timeout(5000) });
+          if (res.ok) return { ok: true, server: http, source, open: true, devices: 0, maxDevices: 0, enforcing: false };
+        } catch {
+          /* 兜底也失败 → 当作不可达 */
+        }
+        return { ok: false, error: "UNREACHABLE" };
+      }
+      return { ok: false, error: "TIMEOUT" };
+    }
+    // ② 老中继没有 /authz/check（404）→ 健康检查兜底
+    try {
+      const res = await net.fetch(`${http}/healthz`, { signal: AbortSignal.timeout(5000) });
+      return res.ok
+        ? { ok: true, server: http, source, open: true, devices: 0, maxDevices: 0, enforcing: false }
+        : { ok: false, error: `HTTP_${res.status}` };
+    } catch {
+      return { ok: false, error: "UNREACHABLE" };
+    }
+  });
+
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());
   ipcMain.handle("remote:getRelayStatus", () => {
     const cfg = getConfig();
@@ -3855,6 +3959,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     const addresses = phoneTicketAddresses();
     return {
       ...(relayFanout?.getStatus() ?? { state: "disabled" as const, relayUrl: cfg.remoteRelayUrl, lastError: null }),
+      // 中继只回错误码（HOST_UNAUTHORIZED / HOST_DEVICE_LIMIT / …），这里翻成能行动的中文。
+      lastErrorText: relayErrorText((relayFanout?.getStatus() ?? { lastError: null }).lastError),
       // 手机该连的地址（与主机→中继的上行可以不同：手机没有 Tailscale，必须给公网可达地址）。
       mobileRelayUrl: cfg.mobileRelayUrl || "",
       // **本次配对票里实际会告诉手机的地址**（S2：由通道列表算出，局域网优先）。

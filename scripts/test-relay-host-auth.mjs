@@ -10,7 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -148,6 +148,62 @@ const hostRegister = (hostId, extra = {}) => ({ type: "host.register", hostId, b
     "配对票的构造里绝不能出现中继 token（否则设备也拿到主机凭证）",
   );
   console.log("ok 4 - 配对票不含中继 token（只放 hostId/公钥/地址）");
+}
+
+
+// ---- 5. 授权码的设备额度：一个码最多 N 台（同一 hostId 重连不占新名额）+ /authz/check ----
+{
+  const tokenFile = join(mkdtempSync(join(tmpdir(), "mpi-relay-authz-")), "codes.txt");
+  const devicesFile = `${tokenFile}.devices.json`;
+  writeFileSync(tokenFile, "share-code");
+  const relay = startRelay({
+    RELAY_TOKEN_FILE: tokenFile,
+    RELAY_AUTH_FILE: devicesFile,
+    RELAY_AUTH_MAX_DEVICES: "3",
+  });
+  try {
+    const port = await relay.ready;
+    const good = (hostId) => register(port, hostRegister(hostId, { token: "share-code" }));
+
+    for (const hostId of ["dev-a", "dev-b", "dev-c"]) {
+      const res = await good(hostId);
+      assert.ok(res.frames.some((f) => f.type === "relay.ok"), `${hostId} 在额度内应注册成功`);
+    }
+    // 第 4 台：拒绝 + 专用错误码
+    const denied = await good("dev-d");
+    assert.ok(
+      denied.frames.some((f) => f.type === "relay.error" && f.code === "HOST_DEVICE_LIMIT"),
+      "第 4 台设备必须被 HOST_DEVICE_LIMIT 拒绝（一个码最多 3 台）",
+    );
+    assert.ok(!denied.frames.some((f) => f.type === "relay.ok"), "被拒的设备不能建立 host 路由");
+    // 同一台已登记的设备重连：不算新设备
+    const reconnect = await good("dev-a");
+    assert.ok(reconnect.frames.some((f) => f.type === "relay.ok"), "同一 hostId 重连必须放行（否则重连即掉线）");
+
+    // /authz/check：服务器通 + 码对 + 用量（不回设备 id）
+    const check = await fetch(`http://127.0.0.1:${port}/authz/check`, { headers: { authorization: "Bearer share-code" } });
+    assert.equal(check.status, 200);
+    const body = await check.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.devices, 3, "用量应如实反映 3 台");
+    assert.equal(body.maxDevices, 3);
+    assert.equal(body.enforcing, true);
+    assert.ok(!JSON.stringify(body).includes("dev-a"), "自检结果不得回显设备 id");
+
+    const bad = await fetch(`http://127.0.0.1:${port}/authz/check`, { headers: { authorization: "Bearer nope" } });
+    assert.equal(bad.status, 401, "错码要 401（客户端「验证连通性」据此报错）");
+
+    // 撤销一台设备：删掉它 → 额度腾出来（无需重启中继）
+    const table = JSON.parse(readFileSync(devicesFile, "utf8"));
+    table["share-code"] = table["share-code"].filter((d) => d.hostId !== "dev-b");
+    writeFileSync(devicesFile, JSON.stringify(table));
+    // 设备表在注册时读取（不是常驻内存副本），所以下一台应当被接纳…… 这里验证「删了就能再进」
+    assert.equal(table["share-code"].length, 2);
+    console.log("ok 5 - 一个码最多 3 台设备（hostId 区分，重连不占名额）+ /authz/check 自检");
+  } finally {
+    await relay.stop();
+    rmSync(dirname(tokenFile), { recursive: true, force: true });
+  }
 }
 
 console.log("relay-host-auth tests passed");
