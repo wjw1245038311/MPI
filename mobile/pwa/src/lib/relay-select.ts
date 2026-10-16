@@ -40,6 +40,24 @@ export function sameOriginRelayUrl(loc: { origin?: string } | undefined = typeof
   return `${origin.replace(/^http/i, "ws")}/ws`;
 }
 
+/**
+ * 是不是**局域网候选**（私网地址）。
+ *
+ * 为什么需要它：HTTPS 页面里明文 `ws://` 全被浏览器拦掉，剩下的 wss 里既有**局域网 TLS**
+ * （最快、且不出网）又有**公网中继 TLS**。用户要的是「都通时走最快的」——所以安全上下文里
+ * 要先把局域网 TLS 排前面，再退到同源/公网。设备不在那个网段时它会快速失败并继续往下试。
+ */
+export function isPrivateRelayUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    if (!host) return false;
+    if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return true;
+    return /\.local$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
 /** 从记录/载荷里算出候选地址顺序（去空、去重、上次可用优先；HTTPS 页面剔掉 `ws://`）。 */
 export function relayCandidates(
   input: { relayUrl?: string; relayUrls?: string[]; lastGoodRelayUrl?: string },
@@ -55,14 +73,21 @@ export function relayCandidates(
     seen.add(url);
     ordered.push(url);
   };
-  // 同源候选（页面就是从这儿加载的 → 必然可达）。放在哪一位取决于上下文：
-  //  · HTTPS 页面：主机下发的局域网候选全是 ws:// 会被过滤，同源 wss 是最优 → 排最前；
-  //  · 明文页面：局域网 ws 通常比同源更快（同源可能正是公网中继）→ 排在主机列表之后。
   const sameOrigin = sameOriginRelayUrl(options.location);
-  if (secure && sameOrigin) push(sameOrigin);
-  // S6：主机顺序优先（首个 = 首选）——「桌面选哪条、手机跟哪条」。
-  for (const url of input.relayUrls ?? []) push(url);
-  if (!secure && sameOrigin) push(sameOrigin);
+  const hostList = (input.relayUrls ?? []).map((url) => String(url || "").trim()).filter(Boolean);
+  if (secure) {
+    // HTTPS 页面：明文候选全被浏览器拦掉，所以在 **wss 候选之间**排优先级，
+    // 顺序 = 局域网 TLS（最快、不出网）→ 同源（页面就是它发来的，必然可达）→ 公网中继 TLS。
+    // 这一条正是「都通时走最快」在安全上下文里的落地：页面即使从公网中继打开，
+    // 设备在局域网时也会先命中局域网 TLS，而不是被"同源优先"钉在公网上。
+    for (const url of hostList.filter((url) => isPrivateRelayUrl(url))) push(url);
+    if (sameOrigin) push(sameOrigin);
+    for (const url of hostList.filter((url) => !isPrivateRelayUrl(url))) push(url);
+  } else {
+    // 明文页面：主机顺序优先（首个 = 首选，局域网明文通常最快），同源退为回落。
+    for (const url of hostList) push(url);
+    if (sameOrigin) push(sameOrigin);
+  }
   // 上次可用只作回落；主机列表缺失（旧记录）时它自然成为首位，S4 老行为不破。
   push(input.lastGoodRelayUrl);
   push(input.relayUrl);
