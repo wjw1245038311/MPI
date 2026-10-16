@@ -37,8 +37,6 @@ const DBG_ENABLED = typeof window !== "undefined" && new URLSearchParams(window.
  * 8s 比单条去探测宽松——ECS/CF 走公网首连本来就慢，误判会比不降级更糟。
  */
 const RELAY_DEGRADE_MS = 8_000;
-/** 后台择优的检查间隔：连上后每 45s 看一次「更近的路」是否可用（另在网络恢复时立即检查一次）。 */
-const PATH_OPTIMIZE_MS = 45_000;
 
 // 壳（0.2.7+）回前台时靠这个值判断页面是否已过期 → 与中继的 index.html 对比，
 // 不同就自动 reload。契约见 docs/ANDROID-SHELL.md #11。
@@ -488,12 +486,11 @@ export default function App() {
 
   /** (Re)connect to a stored pairing. The first socket open triggers re-auth via
    * attachAutoReauth, which also reinstalls E2E crypto; home shows immediately. */
-  /** 后台择优的定时器与 online 监听（每次 startSession 重挂，避免叠加）。 */
-  const pathOptimizerRef = useRef<{ timer: number; onOnline: () => void } | null>(null);
+  /** 「网络恢复时择优」的监听（每次 startSession 重挂，避免叠加；没有定时器）。 */
+  const pathOptimizerRef = useRef<{ onOnline: () => void } | null>(null);
   const stopPathOptimizer = () => {
     const current = pathOptimizerRef.current;
     if (!current) return;
-    window.clearInterval(current.timer);
     window.removeEventListener("online", current.onOnline);
     pathOptimizerRef.current = null;
   };
@@ -554,14 +551,15 @@ export default function App() {
     enterHome(client, record);
     setupWebPush(client, record.relayUrl);
 
-    // **后台动态择优**（2026-10-16）：连上之后继续盯着，一旦"更近的路"变得可用就切过去。
+    // **网络恢复时择优一次**（不做定时盯梢，见下）。
     //
-    // 场景：设备先在外网（走中继服务器），回到家/进了同一网段 → 局域网 TLS 变得可达 →
-    // 45 秒内自动切到局域网，用户不用做任何事（也不用第二个二维码）。
-    // 规则是**单向**的：只从"不更近"切到"更近"（见 shouldSwitchToBetterPath 注释）；
-    // 离开网络时由正常的断线重连 + 候选顺序回落，不在这里处理。
-    // 切换方式是复用整条 startSession（重连 → 重认证 → 重新订阅 → resync），
-    // 因此不会丢会话；代价是一次亚秒级的重连。
+    // 为什么不定时轮询（2026-10-16 用户口径）：**"断开 → 重连"这条天然路径本来就会重新择优**
+    // ——每次 startSession 都会重算候选顺序（局域网 TLS 在最前），所以网络抖动、切前后台、
+    // 手动刷新之后，都会自动落到当前最优的那条。定时探测额外覆盖的只是「网络一直没断、但更近的
+    // 路出现了」这种少数情况，而代价是手机上的**无线电唤醒**（每 45s 一次 TCP 尝试；失败通常
+    // 立刻返回，被丢包时最长 3s），电池比 CPU 更值钱，所以不做。
+    // 只保留一个几乎零成本的触发点：`online`（网络刚恢复的那一刻，往往正是"进了同一网段"）。
+    // 规则仍是**单向**的（见 shouldSwitchToBetterPath）：只切向更近的路，从不反向。
     stopPathOptimizer();
     const optimize = async () => {
       if (clientRef.current !== client || client.getState() !== "open") return;
@@ -572,9 +570,8 @@ export default function App() {
       startSession(record, seedB64url, name);
     };
     const onOnline = () => void optimize();
-    const timer = window.setInterval(() => void optimize(), PATH_OPTIMIZE_MS);
     window.addEventListener("online", onOnline);
-    pathOptimizerRef.current = { timer, onOnline };
+    pathOptimizerRef.current = { onOnline };
   };
 
   // 扫码即配对：桌面二维码现在是 https 链接 https://<relay>/#pair=<payload>（mpi://
