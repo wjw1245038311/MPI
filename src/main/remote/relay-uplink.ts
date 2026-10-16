@@ -14,7 +14,7 @@
  * Qoder daemon equivalent).
  */
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { appendDiagLog } from "../diag-log";
@@ -592,15 +592,58 @@ export class RelayUplink implements RelayOutbound {
     return join(this.options.userDataDir, `remote-relay-tokens${this.fileSuffix()}.json`);
   }
 
+  /**
+   * 读设备令牌（`deviceId → token`）。
+   *
+   * **跨实例合并**（2026-10-16 修）：令牌是**主机自己生成**的（见 `pair.approved`），中继只是
+   * 记下来，所以同一台设备用同一个令牌可以连任何一条中继——前提是主机在**每条**上行上都把它
+   * 声明一遍。而中继的令牌表是内存态、重启即清空，全靠主机重连后重新声明。
+   *
+   * 只在「本实例自己的文件」里读，会在换通道 id 时踩坑：内置通道的实例键是 `builtin`，
+   * 而手机当年的令牌写在旧通道文件 `remote-relay-tokens.<旧 id>.json` 里 → 读到空 →
+   * 重启后什么都不声明 → **手机的 hello 永远被拒**（2026-10-16 实测：ECS 日志每 2s 一条
+   * `device … hello rejected`）。所以这里把 `remote-relay-tokens*.json` 全部读进来做并集
+   * （同名以**最近写入的文件**为准），写回仍只写本实例自己的文件。
+   */
   private loadTokens(): Record<string, string> {
     if (this.tokens) return this.tokens;
-    try {
-      const parsed = JSON.parse(readFileSync(this.tokenFile(), "utf8")) as unknown;
-      this.tokens = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, string>) : {};
-    } catch {
-      this.tokens = {};
+    const merged: Record<string, string> = {};
+    for (const file of this.tokenFilesNewestFirst()) {
+      try {
+        const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+        for (const [deviceId, token] of Object.entries(parsed as Record<string, string>)) {
+          if (typeof token !== "string" || !token) continue;
+          if (!(deviceId in merged)) merged[deviceId] = token; // 新文件优先
+        }
+      } catch {
+        // 文件不存在 / 坏了都跳过：令牌存储不该让上行起不来。
+      }
     }
+    this.tokens = merged;
     return this.tokens;
+  }
+
+  /** 本实例文件 + 同目录下所有 `remote-relay-tokens*.json`，按修改时间从新到旧。 */
+  private tokenFilesNewestFirst(): string[] {
+    const mine = this.tokenFile();
+    const files = [mine];
+    try {
+      for (const entry of readdirSync(this.options.userDataDir)) {
+        if (!/^remote-relay-tokens.*\.json$/.test(entry)) continue;
+        const full = join(this.options.userDataDir, entry);
+        if (full !== mine) files.push(full);
+      }
+    } catch {
+      // 目录还不存在（首次启动）→ 只有本实例那一个候选。
+    }
+    return files.sort((a, b) => {
+      try {
+        return statSync(b).mtimeMs - statSync(a).mtimeMs;
+      } catch {
+        return 0;
+      }
+    });
   }
 
   private saveTokens(tokens: Record<string, string>): void {

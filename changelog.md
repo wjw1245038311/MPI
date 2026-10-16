@@ -40,6 +40,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run typecheck`。应用内：开启局域网模式后重启应用，`mpi-diag.log` 应出现 `relay-channels uplinks=lan,builtin`（不再同时出现 local）与 `relay-channel skip id=local（主机上行与 lan 是同一台中继：ws://127.0.0.1:9001/ws）`；中继日志不应再刷 `host … replaced`。
 
+9. **修：换通道/换实例键后手机被拒之门外（设备令牌跨实例合并）+ 局域网与中继共存实测通过**——局域网模式打开后实测发现：主机在两条中继上都注册成功（`uplinks=lan,builtin`，`id=local` 被正确去重跳过），但手机的 `hello` 在 ECS 上每 2 秒被拒一次。根因不是网络：**中继的设备令牌表是内存态、重启即清空**，全靠主机重连后按 `deviceId→token` 重新声明；而令牌文件是按**通道实例键**命名（`remote-relay-tokens.<键>.json`），新模型里内置通道的键是 `builtin`，手机当年的令牌却写在旧通道文件 `remote-relay-tokens.chmv0yg49q.json` 里 → 读到空 → 什么都不声明 → 手机永远认证失败。现在 `loadTokens()` 会把同目录下所有 `remote-relay-tokens*.json` **按修改时间从新到旧做并集**（同名以最新为准），写回仍只写本实例自己的文件。另外顺带记下：局域网通道的上行已按方案 A 归一成回环（`relay-channel skip id=local（主机上行与 lan 是同一台中继）`），票里候选顺序为「局域网 → 内置（明文/TLS）→ 手机侧备用」。
+
+   验证方式：`npm test -- relay-uplink` + `npm run typecheck`。应用内（局域网模式已开）：重启后 `mpi-diag.log` 应出现 `relay-channels uplinks=lan,builtin ticketAddr=4`；ECS 日志不再刷 `device … hello rejected`，`curl -H 'Authorization: Bearer <码>' …/healthz` 的 `devices` 应 ≥1。
+
 ## v0.10.3（2026-10-16）
 
 1. **改：中继/更新合流成「设置 → 服务器」一栏——内置服务器（我的 ECS，凭授权码）+ 自定义服务器**——转发地址原先长在「手机远程控制」弹层里（通道列表：多行、类型、上移下移、token 草稿），而自更新源又从同一个地方推导，两件互不相干的事被绑在一起：**没配手机通道的机器永远只查 GitHub**（小版本不推 GitHub → 永远查不到更新），配了通道的机器还会在 ECS 不通时干等 60s 默认超时；面板本身 800 多行，用户找不到重点。现在：
