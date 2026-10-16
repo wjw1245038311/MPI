@@ -33,7 +33,15 @@ function overallUpdatePct(stage: string, pct?: number): number | null {
  * ancestor containing blocks (.set-card:hover transform) and flicker. */
 export function AppUpdatePanel() {
   const language = useStore((s) => s.config?.language || "en");
+  const appConfig = useStore((s) => s.config);
+  const setAppUpdateSource = useStore((s) => s.setAppUpdateSource);
   const pushToast = useStore((s) => s.pushToast);
+
+  const zh = language === "zh";
+  const [updateSourceDraft, setUpdateSourceDraft] = useState<"github" | "ecs">("github");
+  const [ecsUrlDraft, setEcsUrlDraft] = useState("");
+  const [ecsTokenDraft, setEcsTokenDraft] = useState("");
+  const [savingSource, setSavingSource] = useState(false);
 
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [appUpdating, setAppUpdating] = useState(false);
@@ -75,6 +83,32 @@ export function AppUpdatePanel() {
       if (p.stage === "error") setAppUpdateError(p.message);
     });
   }, []);
+
+  // 更新源草稿从配置回填（令牌不回填：渲染层拿不到它的值）。
+  useEffect(() => {
+    if (!appConfig) return;
+    setUpdateSourceDraft(appConfig.appUpdateSource === "ecs" ? "ecs" : "github");
+    setEcsUrlDraft(appConfig.appUpdateEcsUrl || "");
+  }, [appConfig?.appUpdateSource, appConfig?.appUpdateEcsUrl]);
+
+  /** 保存更新源。令牌只在用户填了/明确清除时才上传（留空 = 保持现有）。 */
+  const saveUpdateSource = async (patch?: { appUpdateEcsToken: string }) => {
+    setSavingSource(true);
+    try {
+      const token = patch ?? (ecsTokenDraft.trim() ? { appUpdateEcsToken: ecsTokenDraft.trim() } : undefined);
+      await setAppUpdateSource({
+        appUpdateSource: updateSourceDraft,
+        appUpdateEcsUrl: ecsUrlDraft.trim(),
+        ...(token ?? {}),
+      });
+      if (!patch) setEcsTokenDraft("");
+      pushToast("success", zh ? "更新源已保存" : "Update source saved");
+    } catch {
+      // store 已经弹过错误提示了。
+    } finally {
+      setSavingSource(false);
+    }
+  };
 
   // dev 实例若在新增该 IPC 前启动，preload 里没有此方法——明确提示重启而不是静默失败。
   const openChangelog = () => {
@@ -153,6 +187,64 @@ export function AppUpdatePanel() {
   return (
     <div className="set-card">
       <div className="set-card-title">{language === "zh" ? "MPI 应用更新" : "MPI app update"}</div>
+      {/* 更新源（2026-10-16）：以前它藏在「手机远程控制」的中继通道里，两件事互相拖着；
+          现在独立成一项：选 ECS = 这台机器已授权，5s 预探测不通就回退 GitHub。 */}
+      <div className="set-row wide" style={{ marginBottom: 12 }}>
+        <label className="set-label">{language === "zh" ? "更新源" : "Update source"}</label>
+        <div className="set-control">
+          <select
+            className="set-input"
+            value={updateSourceDraft}
+            onChange={(e) => setUpdateSourceDraft(e.target.value === "ecs" ? "ecs" : "github")}
+          >
+            <option value="github">{language === "zh" ? "GitHub Releases（默认）" : "GitHub Releases (default)"}</option>
+            <option value="ecs">{language === "zh" ? "我的 ECS 中继镜像（需授权令牌）" : "My ECS relay mirror (token required)"}</option>
+          </select>
+          {updateSourceDraft === "ecs" && (
+            <>
+              <input
+                className="set-input"
+                style={{ marginTop: 6 }}
+                placeholder="http://47.97.28.110:10445/download/app/"
+                value={ecsUrlDraft}
+                onChange={(e) => setEcsUrlDraft(e.target.value)}
+              />
+              <input
+                className="set-input"
+                style={{ marginTop: 6 }}
+                type="password"
+                autoComplete="off"
+                placeholder={
+                  appConfig?.appUpdateEcsTokenSet
+                    ? language === "zh"
+                      ? "令牌已设置，留空则保持不变"
+                      : "token set; leave empty to keep"
+                    : language === "zh"
+                      ? "准入令牌（中继开通校验后必填）"
+                      : "access token (required once the relay enforces it)"
+                }
+                value={ecsTokenDraft}
+                onChange={(e) => setEcsTokenDraft(e.target.value)}
+              />
+            </>
+          )}
+          <div className="set-hint">
+            {language === "zh"
+              ? "选 ECS 后，检查更新先探测中继镜像（5 秒超时），不通才回退 GitHub——小版本只发中继镜像，所以需要小版本更新的机器要选它。地址留空 = 用内置 ECS 地址。"
+              : "With ECS selected the app probes the relay mirror first (5s timeout) and only then falls back to GitHub. Patch releases are mirrored there only, so machines that need them should use this source. Empty address = built-in ECS address."}
+          </div>
+          <div className="set-diag-btns" style={{ marginTop: 8 }}>
+            <button className="set-btn ghost" onClick={() => void saveUpdateSource()} disabled={savingSource}>
+              {savingSource ? (language === "zh" ? "保存中…" : "Saving…") : language === "zh" ? "保存更新源" : "Save update source"}
+            </button>
+            {appConfig?.appUpdateEcsTokenSet && (
+              <button className="set-btn ghost" onClick={() => void saveUpdateSource({ appUpdateEcsToken: "" })} disabled={savingSource}>
+                {language === "zh" ? "清除令牌" : "Clear token"}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
       <div className="set-diag-grid" style={{ marginBottom: 12 }}>
         <div className="set-diag-k">{language === "zh" ? "当前版本" : "Current version"}</div>
         <div className="set-diag-v">{appUpdateStatus?.current ? `v${appUpdateStatus.current}` : appVersion ? `v${appVersion}` : "—"}</div>
@@ -174,6 +266,16 @@ export function AppUpdatePanel() {
           <a href={appUpdateStatus?.releaseUrl || RELEASES_URL} target="_blank" rel="noreferrer">
             {language === "zh" ? "打开发布页" : "Open releases"}
           </a>
+        </div>
+        <div className="set-diag-k">{language === "zh" ? "本次来源" : "Last source"}</div>
+        <div className="set-diag-v">
+          {appUpdateStatus?.source === "relay"
+            ? language === "zh"
+              ? "ECS 中继镜像"
+              : "ECS relay mirror"
+            : appUpdateStatus?.source === "github"
+              ? "GitHub"
+              : "—"}
         </div>
       </div>
       {appUpdateStatus && !appUpdateStatus.packaged && (

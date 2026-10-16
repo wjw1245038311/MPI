@@ -1,18 +1,26 @@
-import { app } from "electron";
+import { app, net } from "electron";
 import { autoUpdater, type ProgressInfo, type UpdateCheckResult, type UpdateInfo } from "electron-updater";
 import { getConfig } from "./config";
-import { relayAppUpdateFeedUrl } from "../shared/app-update-feed";
-import { effectiveChannels, pickRelayFeedUrl, type ChannelContext } from "./remote/relay-channels";
+import {
+  APP_UPDATE_ECS_PROBE_TIMEOUT_MS,
+  resolveAppUpdateFeed,
+  type AppUpdateFeedTarget,
+} from "../shared/app-update-feed";
 import { beginTransfer, endTransfer, updateTransfer } from "./transfer-monitor";
 
 const OWNER = "wjw1245038311";
 const REPO = "MPI";
 const REPOSITORY = OWNER + "/" + REPO;
 const RELEASES_LATEST_URL = "https://github.com/" + REPOSITORY + "/releases/latest";
-// 应用自更新：**中继镜像优先、GitHub 回退**。中继（用户的 ECS）在国内比 GitHub 快得多，
-// 但可能没部署/挂了，所以逐源探测，第一源成功就用它（下载也走同一源）。
-// 中继地址取自**通道列表**（S5 起中继由它管理），而不是旧的 `remoteRelayUrl`：
-// 新装的机器上那个字段是空的，会让自更新跳过中继镜像、只能去查 GitHub（而小版本不推 GitHub）。
+// 应用自更新：**自建中继镜像优先、GitHub 回退**，但只对「已授权」的机器（见下）。
+// 中继（用户的 ECS）在国内比 GitHub 快得多，但可能没部署/挂了，所以一律先做一次短超时
+// 预探测（5s），通了才把它交给 electron-updater（check 与下载都走同一个源）。
+//
+// 2026-10-16 改造：**更新源不再从「手机远程控制」的通道列表推导**（那个耦合的后果是：
+// 没配中继通道的机器永远只查 GitHub，而小版本按发版铁律不推 GitHub → 永远查不到更新）。
+// 现在更新源有自己的配置（`appUpdateSource` / `appUpdateEcsUrl` / `appUpdateEcsToken`，
+// 见 shared/app-update-feed.ts）；默认 GitHub，**在这台机器上显式选过 ECS 的才算授权**，
+// 所以别人的安装仍然不会碰这台 ECS。旧机器由 config.ts 做一次性迁移。
 // 发布流程：CI 把 dist/ 的 MPI-Setup-x.y.z.exe + latest.yml（+ .blockmap）挂到 GitHub Release，
 // 同时把同样三份文件推上中继的静态目录（路径见 shared/app-update-feed.ts，脚本见 scripts/publish-release.mjs）。
 // Pi 核心更新（core-updater.ts，走 npm registry）不受影响。
@@ -69,31 +77,66 @@ let probing = false;
 /** 上次成功的源（statusFromInfo 用它回填 source）。 */
 let activeSource: AppUpdateSource = "github";
 
-/** 自更新用不到局域网：这里只需要一个占位上下文（`pickRelayFeedUrl` 只取 remote 通道）。 */
-const FEED_CTX: ChannelContext = { localRelayPort: 0, lanPhoneUrl: null, lanAddress: null };
+/**
+ * 本次要用的自更新源（读配置 + `MPI_APP_UPDATE_URL` 覆盖；纯函数在 shared/app-update-feed.ts）。
+ * 每次检查都重算：用户在设置里改了源，不需要重启应用就能生效。
+ */
+function updateFeedTarget(): AppUpdateFeedTarget {
+  const cfg = getConfig();
+  return resolveAppUpdateFeed({
+    overrideUrl: process.env.MPI_APP_UPDATE_URL,
+    source: cfg.appUpdateSource,
+    relayUrl: cfg.appUpdateEcsUrl,
+    token: cfg.appUpdateEcsToken,
+  });
+}
 
 /**
- * 中继镜像的 feed 地址（`<中继 http(s) 源>/download/app/`）；没有可用中继时返回 null。
+ * ECS 镜像的**短超时预探测**（关键：不这样做就得等 electron-updater 的 60s 默认超时）。
  *
- * 地址优先级：`MPI_APP_UPDATE_URL` 覆盖 > **通道列表里第一条启用的公网通道** > 旧的 `remoteRelayUrl`。
- * 拿到 `ws(s)://host/ws` 后换成 http(s) 并丢掉路径（见 shared/app-update-feed.ts）。
+ * 只取 `<feed>latest.yml`（generic provider 检查更新时读的就是它），带授权令牌：
+ * 2xx = 可用；401/403（中继开了硬门控而令牌不对）/超时/网络错误/非 2xx 一律当作不可用，
+ * 直接回退 GitHub（探测失败不报给 UI，否则会先闪一下错）。
  */
-function relayUpdateFeedUrl(): string | null {
-  const override = (process.env.MPI_APP_UPDATE_URL || "").trim();
-  if (override) return override.endsWith("/") ? override : override + "/";
-  const cfg = getConfig();
-  const channels = effectiveChannels(
-    cfg.relayChannels,
-    {
-      remoteRelayUrl: cfg.remoteRelayUrl,
-      mobileRelayUrl: cfg.mobileRelayUrl,
-      remoteRelayToken: cfg.remoteRelayToken,
-      remoteRelayFallbackEnabled: cfg.remoteRelayFallbackEnabled,
-      mobileRelayFallbackUrl: cfg.mobileRelayFallbackUrl,
-    },
-    FEED_CTX,
-  );
-  return relayAppUpdateFeedUrl(pickRelayFeedUrl(channels, FEED_CTX) || cfg.remoteRelayUrl);
+async function probeRelayFeed(target: AppUpdateFeedTarget): Promise<boolean> {
+  if (target.source !== "relay" || !target.url) return false;
+  let url: string;
+  try {
+    url = new URL("latest.yml", target.url).toString();
+  } catch {
+    return false;
+  }
+  try {
+    const response = await net.fetch(url, {
+      method: "GET",
+      headers: {
+        ...(target.token ? { authorization: `Bearer ${target.token}` } : {}),
+        "cache-control": "no-cache",
+      },
+      signal: AbortSignal.timeout(APP_UPDATE_ECS_PROBE_TIMEOUT_MS),
+    });
+    // 体不要了：探测只关心可达性与授权结果。
+    try {
+      await response.body?.cancel();
+    } catch {
+      /* bodyless response */
+    }
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 把 provider 切到指定源（relay 时同时带上授权令牌，check 与差量下载共用它）。 */
+function applyFeed(source: AppUpdateSource, target: AppUpdateFeedTarget): void {
+  if (source === "relay" && target.url) {
+    // GenericProvider 会读 `<url>/latest.yml`（windows 的 channel 文件名）。
+    autoUpdater.setFeedURL({ provider: "generic", url: target.url, channel: "latest" });
+    autoUpdater.requestHeaders = target.token ? { Authorization: `Bearer ${target.token}` } : null;
+    return;
+  }
+  autoUpdater.setFeedURL({ provider: "github", owner: OWNER, repo: REPO });
+  autoUpdater.requestHeaders = null;
 }
 
 function normalizeVersion(raw: string): string {
@@ -267,16 +310,10 @@ async function checkWithUpdater(): Promise<UpdateCheckResult | null> {
   return checkPromise;
 }
 
-/** 把 provider 切到指定源并检查一次。返回 null 表示该源不可用（没配中继）。 */
-async function checkOnFeed(source: AppUpdateSource): Promise<UpdateCheckResult | null> {
-  if (source === "relay") {
-    const url = relayUpdateFeedUrl();
-    if (!url) return null;
-    // GenericProvider 会读 `<url>/latest.yml`（windows 的 channel 文件名）。
-    autoUpdater.setFeedURL({ provider: "generic", url, channel: "latest" });
-  } else {
-    autoUpdater.setFeedURL({ provider: "github", owner: OWNER, repo: REPO });
-  }
+/** 把 provider 切到指定源并检查一次。源不可用（relay 但没授权）时返回 null。 */
+async function checkOnFeed(source: AppUpdateSource, target: AppUpdateFeedTarget): Promise<UpdateCheckResult | null> {
+  if (source === "relay" && !target.url) return null;
+  applyFeed(source, target);
   return await checkWithUpdater();
 }
 
@@ -285,18 +322,23 @@ async function checkOnFeed(source: AppUpdateSource): Promise<UpdateCheckResult |
  *
  * 为什么不用 electron-updater 自带的回退：它没有多源概念（provider 只有一个），
  * 「中继挂了再回 GitHub」必须自己写。探测期的 error 事件被 `probing` 抑制。
+ *
+ * **中继源先过 5s 预探测**（`probeRelayFeed`）：这一步是 2026-10-16 修「ECS 不通时干等
+ * 60s 才回退」的关键，也顺带把「中继开了硬门控而令牌不对（401）」直接当不可用。
  */
 async function checkWithFallback(): Promise<UpdateCheckResult | null> {
   configureUpdater();
   const current = normalizeVersion(app.getVersion());
-  const order: AppUpdateSource[] = relayUpdateFeedUrl() ? ["relay", "github"] : ["github"];
+  const target = updateFeedTarget();
+  const useRelay = target.source === "relay" && (await probeRelayFeed(target));
+  const order: AppUpdateSource[] = useRelay ? ["relay", "github"] : ["github"];
   let firstError: string | null = null;
   let staleRelay: UpdateCheckResult | null = null;
   for (const source of order) {
     probing = true;
     try {
-      const result = await checkOnFeed(source);
-      if (result === null) continue; // 该源没配（理论上只有 relay 会这样）
+      const result = await checkOnFeed(source, target);
+      if (result === null) continue; // 该源没配/没授权（理论上只有 relay 会这样）
       probing = false;
       // 防「镜像落后」：中继上的 latest.yml 比当前版本还旧，说明镜像没跟上（发版时推送失败 /
       // 手工回滚过）。这份结果不能信——继续问 GitHub，两边都答不上来才用它兜底。
@@ -315,8 +357,7 @@ async function checkWithFallback(): Promise<UpdateCheckResult | null> {
   }
   if (staleRelay) {
     // 回中继源，使 check 与后续 downloadUpdate 的 provider 一致。
-    const url = relayUpdateFeedUrl();
-    if (url) autoUpdater.setFeedURL({ provider: "generic", url, channel: "latest" });
+    applyFeed("relay", target);
     activeSource = "relay";
     lastUpdaterError = null;
     return staleRelay;

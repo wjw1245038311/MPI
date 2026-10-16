@@ -1253,6 +1253,15 @@ interface PiStore {
   setEarlierExpanded: (threadId: string, open: boolean) => void;
   repairSession: (threadId: string) => Promise<void>;
   setSoundOnComplete: (on: boolean) => Promise<void>;
+  /**
+   * 应用自更新源（设置 → 关于 MPI）：github（默认）或 ecs。
+   * 令牌只在这一步带上去（渲染层拿不到旧值），留空 = 保持现有；要清除传空串。
+   */
+  setAppUpdateSource: (patch: {
+    appUpdateSource?: "github" | "ecs";
+    appUpdateEcsUrl?: string;
+    appUpdateEcsToken?: string;
+  }) => Promise<void>;
   /** Voice system (语音系统): merge a partial voice config and persist it. */
   setVoiceConfig: (patch: Partial<NonNullable<AppConfig["voice"]>>) => Promise<void>;
   refreshOpenThreadModels: () => Promise<void>;
@@ -2789,6 +2798,17 @@ export const useStore = create<PiStore>()((set, get) => {
       set({ config });
     } catch (e: any) {
       get().pushToast("error", e?.message || "Failed to update settings");
+    }
+  },
+
+  setAppUpdateSource: async (patch) => {
+    try {
+      const config = await window.pi.app.setConfig(patch);
+      set({ config });
+    } catch (e: any) {
+      const zh = useStore.getState().config?.language === "zh";
+      get().pushToast("error", e?.message || (zh ? "保存更新源失败" : "Failed to save the update source"));
+      throw e;
     }
   },
 

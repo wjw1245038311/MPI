@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
-## Unreleased
+## v0.10.2（2026-10-16）
 
 1. **修：交接到新会话 = 选中文字即新会话的提示词，并直接开跑**——v0.10.0 / v0.10.1 把它做成了「开一个空会话、继承配置」（v0.10.1 还允许不选文字直接右键），但用户要的效果是：**在对话里选中一段文字 → 右键 →「交接到新会话」→ 这段文字立刻作为新会话的第一条提示词发出去**，新会话当场开始干活。现在按这个语义执行：交接项**只在选中了文字时出现**，并把选中的文字传给新会话作为首条提示词（模型 / 思考等级 / 权限 / 任务模式照旧继承，且继承必须先于第一轮——否则第一轮会跑在旧模型、旧权限上）；右键没选中文字时不再接管（输入框、侧栏等处保持各自原有菜单）。
 
@@ -56,6 +56,18 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 12. **新增（PWA）：浏览器里也能下载 agent 递交的文件**——安卓上一版接上了，PWA 遇到 `file` 块仍会被当文本吞掉（不报错、也不显示）。现在 PWA 认这个块：卡片显示可读名与「大小 · 类型」，点一下按需拉字节并触发浏览器下载，底部给进度与取消（复用懒加载视频那条 `.video-fetch` 反馈条，切会话时中止在途拉取）。**故意不走直连 URL**：跳域链接上的 `download` 属性会被浏览器忽略（变成直接导航），文件名也就由不了我们——而这条链路存在的意义之一就是把 64 位哈希名换成看得懂的名字；拉成 Blob 后同源，两件事都成立，代价是必须先下完整段（文件本来就是要整份拿走的）。顺带把 `mobile/shared/protocol.ts` 的块类型补上 `file`（主机那份上一版已加），并在 `test:attach-file` 里加了一条跳端哨兵——`test:pwa-shared` 只比函数行为，类型 union 漂移它测不到。**音频播放器仍未做**（PWA 里 audio 仍是占位卡片，维持 S5 当时的决定）。
 
    验证方式：`cd mobile/pwa && npx tsc --noEmit`（0 error）+ `npm run test:attach-file`（新增三端块类型一致性哨兵）+ `npm test -- pwa`（14 passed）+ `npm test -- remote`（9 passed）+ `npm run typecheck`。⚠️ **浏览器未实测**：手机浏览器打开 PWA → 对 agent 说「把 xxx.pdf 作为附件发我」→ 会话里出现 📄 卡片 → 点一下底部出「正在下载文件 42%（…）」→ 完成后浏览器保存为 `xxx.pdf`（不是哈希名）。
+
+13. **修：应用自更新不再被「手机远程控制」拖累——更新源独立成一项，且只有授权过的电脑才走自建 ECS 镜像**——自更新源一直是从**中继通道列表**里推的（那个列表只属于「手机远程控制」），于是没配手机通道的机器永远只查 GitHub，而小版本按发版铁律不推 GitHub，结果就是「检查更新永远说已是最新」；配了通道的机器又会在 ECS 不通时干等 electron-updater 的 **60s 默认超时**才回退。现在：① **配置解耦**——新增 `appUpdateSource`（`github` 默认 / `ecs`）、`appUpdateEcsUrl`（留空 = 内置 ECS 地址 `http://47.97.28.110:10445/download/app/`）、`appUpdateEcsToken`；升级上来的机器若已配过公网中继通道，会自动把这个推导结果迁进新字段（不会因为升级而丢掉小版本更新）。② **5 秒预探测**——选 ECS 的机器先自己 GET 一次 `<feed>latest.yml`（带 `Authorization: Bearer <令牌>`），5s 内不通 / 401 / 非 2xx 就**直接**回退 GitHub，不再等 60s；探通了才交给 electron-updater（检查与差量下载带同一个头）。③ **设置页**「关于 MPI → MPI 应用更新」新增「更新源」一项（下拉 + 地址 + 令牌 + 保存 + 清除令牌，另显示「本次来源」便于确认到底走了哪条路）；令牌与通道准入一样**不回显**给渲染层。默认仍是 GitHub，所以别人的安装不会碰这台 ECS。
+
+   验证方式：`npm run typecheck` + `npm run test:app-update-feed`（新增：源解析优先级、未授权不得探测 ECS、旧行为迁移、5s 常量、app-updater 源码级断言） + `npm test -- relay` + `npm test -- config`。应用内：设置 → 关于 MPI → 「更新源」选「我的 ECS 中继镜像」并保存 → 点「检查最新版本」→ 「本次来源」应显示 **ECS 中继镜像**；把地址故意改成 `http://127.0.0.1:1/download/app/` 再检查 → 应在 5 秒左右回退并显示 **GitHub**（而不是卡很久）。
+
+14. **新增：中继给桌面安装包目录加了准入闸门（默认软门控，只记日志不拦）**——`/download/app/`（`latest.yml` + 安装包 + `.blockmap`）此前完全公开。现在中继认 `Authorization: Bearer <令牌>`（令牌源：`RELAY_APP_TOKENS` / `RELAY_APP_TOKEN_FILE`，5s 热重载，加/吊销不用重启；与主机准入 `RELAY_HOST_TOKENS` **分开**）。**默认软门控**：配了令牌列表但请求没带/带错 → 只记一行 `app-mirror missing|bad <path>` 日志，照常放行（带对了记 `app-mirror ok`，用来判断什么时候能开严格模式）；要真拦需显式 `RELAY_APP_MIRROR_STRICT=1`（未授权 → 401 + `WWW-Authenticate: Bearer`）。为什么分两步：已经装出去的旧客户端不带令牌（小版本又不推 GitHub），先开硬门控它们就拿不到新版本、也回退不到 GitHub，只能手工装包——所以先用软门控观察一轮，日志里都是 `token-ok` 后再开严格模式。PWA / APK 等其它静态路径不受影响。
+
+   验证方式：`npm run test:relay-tls-static`（新增 part3：软门控下无令牌/错令牌仍 200 且日志留痕、带令牌可下、Range+令牌共存；严格模式下无/错令牌 401、对令牌 200）。部署侧：`systemctl status mpi-relay` 的 ready 行会打印 `app-mirror: OPEN` 或 `N token(s)/soft|strict`，一眼看出当前模式；手工验：`curl -H "Authorization: Bearer <令牌>" http://<中继>:10445/download/app/latest.yml`。
+
+15. **改：自更新源不再依赖通道列表（迁移与测试同步）**——`src/main/app-updater.ts` 里的中继地址推导（`relayUpdateFeedUrl` / `pickRelayFeedUrl` / `effectiveChannels`）整体换成 `shared/app-update-feed.ts` 的纯函数 `resolveAppUpdateFeed`，`MPI_APP_UPDATE_URL` 仍可临时覆盖；「镜像落后（版本比当前旧）」时继续问 GitHub 的防护保留。设置页文案与 `AGENTS.md` / `docs/RELEASE.md`（新增「3.1 镜像准入」）同步。
+
+   验证方式：`npm run typecheck` + `npm run test:app-update-feed` + `npm run test:manual-sync`（changelog 结构）。
 
 ## v0.10.1（2026-10-13）
 

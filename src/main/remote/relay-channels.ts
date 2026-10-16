@@ -48,6 +48,9 @@ export interface ChannelContext {
   lanAddress: string | null;
 }
 
+/** 只关心公网通道时的占位上下文（自更新源推导用不上局域网信息：local/lan 通道都不算镜像源）。 */
+export const REMOTE_CHANNEL_CTX: ChannelContext = { localRelayPort: 0, lanPhoneUrl: null, lanAddress: null };
+
 /** `ws(s)://host:port/path` → 同 host 的另一种协议（ws↔wss）。解析失败返回 null。 */
 export function flipScheme(url: string): string | null {
   try {

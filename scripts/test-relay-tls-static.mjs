@@ -52,7 +52,7 @@ function startRelay(extraEnv) {
     });
     child.on("exit", (code) => reject(new Error(`relay exited early (code ${code})`)));
   });
-  return { child, ready };
+  return { child, ready, output: () => buffer };
 }
 
 function makeStaticDir() {
@@ -227,9 +227,85 @@ async function part2Tls() {
   console.log("part2 (TLS + wss): passed");
 }
 
+/** 桌面自更新镜像（`/download/app/*`）的准入门控：软门控放行 + 严格模式 401。
+ *
+ * 这一层默认**不能拦**（老客户端不带令牌），所以两个模式都要钉住：软门控下没令牌/错令牌
+ * 必须照常 200（否则已经装出去的版本会断更新），严格模式才 401；令牌对了一律 200。
+ * 其它静态路径（PWA 本体）不受影响。
+ */
+async function part3AppMirror() {
+  const staticDir = makeStaticDir();
+  mkdirSync(join(staticDir, "download", "app"), { recursive: true });
+  writeFileSync(join(staticDir, "download", "app", "latest.yml"), "version: 0.10.2\npath: MPI-Setup-0.10.2.exe\n");
+  writeFileSync(join(staticDir, "download", "app", "MPI-Setup-0.10.2.exe"), EXE_BYTES);
+  const TOKEN = "test-app-mirror-token";
+
+  // 软门控（默认）：没令牌 → 照常放行，但日志里记一行
+  const soft = startRelay({ RELAY_STATIC_DIR: staticDir, RELAY_APP_TOKENS: TOKEN, RELAY_PORT: "0" });
+  try {
+    const port = await soft.ready;
+    const base = `http://127.0.0.1:${port}`;
+    let res = await fetch(`${base}/download/app/latest.yml`);
+    assert.equal(res.status, 200, "软门控下没带令牌也必须放行（旧客户端靠它拿更新）");
+    assert.match(await res.text(), /version: 0\.10\.2/);
+
+    res = await fetch(`${base}/download/app/latest.yml`, { headers: { authorization: "Bearer wrong-token" } });
+    assert.equal(res.status, 200, "软门控下错令牌也只记日志");
+
+    res = await fetch(`${base}/download/app/MPI-Setup-0.10.2.exe`, { headers: { authorization: `Bearer ${TOKEN}` } });
+    assert.equal(res.status, 200);
+    assert.deepEqual(Buffer.from(await res.arrayBuffer()), EXE_BYTES);
+
+    // Range 与令牌可以共存（electron-updater 的差量下载就是带 header 的 Range 请求）
+    res = await fetch(`${base}/download/app/MPI-Setup-0.10.2.exe`, {
+      headers: { authorization: `Bearer ${TOKEN}`, Range: "bytes=0-3" },
+    });
+    assert.equal(res.status, 206);
+    assert.equal(await res.text(), "MPI-");
+
+    // PWA 本体不受影响（只有 download/app 被门控）
+    res = await fetch(`${base}/`);
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), /mpi-pwa/);
+
+    // 软门控必须留下取证（否则没法判断「该不该开严格模式」：谁没带令牌、谁带了）
+    const logged = await new Promise((resolve) => setTimeout(() => resolve(soft.output()), 200));
+    assert.match(logged, /app-mirror (missing|bad) \/download\/app/, "软门控必须记一行缺失/错误令牌的日志");
+    assert.match(logged, /app-mirror ok \/download\/app/, "软门控下带对令牌也要记一行（开严格模式的依据）");
+  } finally {
+    soft.child.kill();
+  }
+
+  // 严格模式：没令牌/错令牌 → 401；对令牌 → 照常服务
+  const strict = startRelay({
+    RELAY_STATIC_DIR: staticDir,
+    RELAY_APP_TOKENS: TOKEN,
+    RELAY_APP_MIRROR_STRICT: "1",
+    RELAY_PORT: "0",
+  });
+  try {
+    const port = await strict.ready;
+    const base = `http://127.0.0.1:${port}`;
+    let res = await fetch(`${base}/download/app/latest.yml`);
+    assert.equal(res.status, 401, "严格模式下未授权请求必须拒");
+    assert.match(res.headers.get("www-authenticate") || "", /Bearer/i);
+
+    res = await fetch(`${base}/download/app/latest.yml`, { headers: { authorization: "Bearer wrong-token" } });
+    assert.equal(res.status, 401);
+
+    res = await fetch(`${base}/download/app/latest.yml`, { headers: { authorization: `Bearer ${TOKEN}` } });
+    assert.equal(res.status, 200, "带对令牌必须能拿 latest.yml（自更新靠它）");
+  } finally {
+    strict.child.kill();
+    rmSync(staticDir, { recursive: true, force: true });
+  }
+  console.log("part3 (app mirror gate): passed");
+}
+
 const main = (async () => {
   await part1Static();
   await part2Tls();
+  await part3AppMirror();
   console.log("relay tls/static tests passed");
 })().catch((e) => {
   console.error(e);

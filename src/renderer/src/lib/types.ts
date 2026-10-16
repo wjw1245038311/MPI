@@ -664,6 +664,20 @@ export interface AppConfig {
     /** Auto-read the reply when a turn settles on the visible thread. */
     ttsAutoRead?: boolean;
   };
+  /**
+   * 应用自更新源（2026-10-16 从「中继通道」里拆出来）：`github`（默认）或 `ecs`。
+   * `ecs` = 这台机器已授权，先用自建中继镜像（5s 预探测），超时才回退 GitHub。
+   */
+  appUpdateSource?: "github" | "ecs";
+  /** ECS 镜像 feed 地址；留空 = 内置默认地址。 */
+  appUpdateEcsUrl?: string;
+  /**
+   * 更新源准入令牌：**主进程不会把它发到渲染层**（只发 `appUpdateEcsTokenSet`），
+   * 与通道准入 token 同一规矩。
+   */
+  appUpdateEcsToken?: string;
+  /** 渲染层可见：上面那个令牌是否已设置（真值不出口）。 */
+  appUpdateEcsTokenSet?: boolean;
 }
 
 export type MessagingStatus = "off" | "connecting" | "connected" | "reconnecting" | "error";

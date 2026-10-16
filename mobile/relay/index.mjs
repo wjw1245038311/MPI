@@ -150,6 +150,10 @@ function serveStatic(req, res) {
     return false;
   }
   const root = resolve(STATIC_DIR);
+  // 桌面安装包镜像只给授权的电脑（软/硬门控，见上方 app-mirror 注释）。
+  if (pathname === APP_MIRROR_PREFIX || pathname.startsWith(APP_MIRROR_PREFIX + "/")) {
+    if (gateAppMirror(req, res, pathname)) return true;
+  }
   const filePath = resolve(join(root, pathname));
   if (filePath !== root && !filePath.startsWith(root + sep)) {
     res.writeHead(403, { "content-type": "text/plain" });
@@ -322,6 +326,109 @@ function tokenMatches(candidate) {
 }
 
 const hostAuthRequired = () => hostTokens.size > 0;
+
+/**
+ * 桌面自更新镜像的准入（2026-10-16）。
+ *
+ * 背景：`/download/app/`（安装包 + latest.yml）原来完全公开。现在它只服务
+ * 「经我授权的电脑」：客户端带上 `Authorization: Bearer <token>`（见 `src/main/app-updater.ts`）。
+ *
+ * **软门控**（默认）：令牌列表为空 = 完全开放；配了列表但请求没带/带错 → **只记一行日志，
+ * 照常放行**。要真拦需显式 `RELAY_APP_MIRROR_STRICT=1`（返回 401）——为什么分两步：
+ * 已经装出去的旧客户端不会带令牌（发版铁律：小版本不推 GitHub），一旦先开硬门控，
+ * 它们拿不到新版本、也回退不到 GitHub，只能手工装包。所以先用软门控观察一轮，
+ * 确认日志里都是 `token-ok` 后再开严格模式。
+ *
+ * 令牌源：`RELAY_APP_TOKENS=t1,t2` 或 `RELAY_APP_TOKEN_FILE=/path`（每行一个，`#` 注释），
+ * 与主机的 `RELAY_HOST_TOKENS` **分开**（后者只用于 host→relay 注册，改动会踢掉在线主机）。
+ */
+const APP_MIRROR_TOKENS_ENV = (process.env.RELAY_APP_TOKENS || "")
+  .split(",")
+  .map((token) => token.trim())
+  .filter(Boolean);
+const APP_MIRROR_TOKEN_FILE = process.env.RELAY_APP_TOKEN_FILE || "";
+const APP_MIRROR_STRICT = process.env.RELAY_APP_MIRROR_STRICT === "1";
+/** 镜像目录（尾斜杠）；`/download/app` 也认。 */
+const APP_MIRROR_PREFIX = "/download/app";
+
+function loadAppMirrorTokens() {
+  const tokens = new Set(APP_MIRROR_TOKENS_ENV);
+  if (APP_MIRROR_TOKEN_FILE) {
+    try {
+      for (const line of readFileSync(APP_MIRROR_TOKEN_FILE, "utf8").split(/\r?\n/)) {
+        const token = line.trim();
+        if (token && !token.startsWith("#")) tokens.add(token);
+      }
+    } catch (error) {
+      log(`app mirror token file unreadable (${APP_MIRROR_TOKEN_FILE}): ${error?.message || error}`);
+    }
+  }
+  return tokens;
+}
+
+let appMirrorTokens = loadAppMirrorTokens();
+function refreshAppMirrorTokens() {
+  if (!APP_MIRROR_TOKEN_FILE) return;
+  appMirrorTokens = loadAppMirrorTokens();
+}
+
+function appMirrorTokenMatches(candidate) {
+  if (typeof candidate !== "string" || !candidate) return false;
+  const a = Buffer.from(candidate);
+  let matched = false;
+  for (const token of appMirrorTokens) {
+    const b = Buffer.from(token);
+    if (a.length === b.length && timingSafeEqual(a, b)) matched = true;
+  }
+  return matched;
+}
+
+/** 从 `Authorization: Bearer <t>`（或 `?token=`，方便手动 curl）取令牌。 */
+function appMirrorRequestToken(req) {
+  const header = String(req.headers.authorization || "");
+  const bearer = /^Bearer\s+(.+)$/i.exec(header.trim());
+  if (bearer) return bearer[1].trim();
+  try {
+    return new URL(req.url || "/", "http://localhost").searchParams.get("token") || "";
+  } catch {
+    return "";
+  }
+}
+
+/** 软/硬门控结果：`open`（没配令牌）/`ok`/`missing`/`bad`。 */
+function checkAppMirrorAuth(req) {
+  if (appMirrorTokens.size === 0) return "open";
+  const token = appMirrorRequestToken(req);
+  if (!token) return "missing";
+  return appMirrorTokenMatches(token) ? "ok" : "bad";
+}
+
+/** 软门控的日志节流：同一状态 60s 最多一条，不把日志淹了。 */
+let appMirrorLogAt = 0;
+let appMirrorLogState = "";
+function logAppMirrorSoft(state, pathname) {
+  const now = Date.now();
+  if (state === appMirrorLogState && now - appMirrorLogAt < 60_000) return;
+  appMirrorLogState = state;
+  appMirrorLogAt = now;
+  log(`app-mirror ${state} ${pathname} (tokens=${appMirrorTokens.size}, strict=${APP_MIRROR_STRICT ? "on" : "off"}${APP_MIRROR_STRICT ? "" : ", serving anyway"})`);
+}
+
+/** 镜像路径的准入闸门：返回 true 表示已经回完响应（调用方直接 return）。 */
+function gateAppMirror(req, res, pathname) {
+  const state = checkAppMirrorAuth(req);
+  if (state === "open") return false;
+  // 软门控阶段 `ok` 也记一行：要判断「能不能开严格模式」，得先确认客户端确实带上了令牌。
+  if (state === "ok") {
+    if (!APP_MIRROR_STRICT) logAppMirrorSoft("ok", pathname);
+    return false;
+  }
+  logAppMirrorSoft(state, pathname);
+  if (!APP_MIRROR_STRICT) return false;
+  res.writeHead(401, { "content-type": "text/plain", "www-authenticate": 'Bearer realm="mpi-app-mirror"' });
+  res.end("unauthorized");
+  return true;
+}
 
 /** 检查结果：ok / 拒因（调用方负责回错并断开）。 */
 function checkHostAuth(frame) {
@@ -842,6 +949,7 @@ wss.on("connection", (ws) => {
 // 主机准入：token 文件每 5s 重读一次（吊销/新增不用重启；env 那份不可热改）。
 if (HOST_TOKEN_FILE) {
   setInterval(refreshHostTokens, 5_000).unref();
+  setInterval(refreshAppMirrorTokens, 5_000).unref();
 }
 
 // Heartbeat: ping every PING_MS; a socket that misses DEAD_MS/PING_MS pings is dead.
@@ -862,7 +970,7 @@ server.listen(PORT, HOST, () => {
   const actual = server.address()?.port ?? PORT;
   const scheme = tlsOptions ? "wss" : "ws";
   log(
-    `ready ${scheme}://${HOST}:${actual}/ws (ping ${PING_MS}ms, dead ~${DEAD_MS}ms${STATIC_DIR ? ", static: " + STATIC_DIR : ""}, hosts: ${hostAuthRequired() ? `${hostTokens.size} token(s)` : "OPEN"})`,
+    `ready ${scheme}://${HOST}:${actual}/ws (ping ${PING_MS}ms, dead ~${DEAD_MS}ms${STATIC_DIR ? ", static: " + STATIC_DIR : ""}, hosts: ${hostAuthRequired() ? `${hostTokens.size} token(s)` : "OPEN"}, app-mirror: ${appMirrorTokens.size === 0 ? "OPEN" : `${appMirrorTokens.size} token(s)${APP_MIRROR_STRICT ? "/strict" : "/soft"}`})`,
   );
 });
 

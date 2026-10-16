@@ -21,6 +21,7 @@ import {
   reloadConfig,
   sanitizeImportedConfig,
   updateConfig,
+  type AppConfig,
   type AutomationTask,
   type PermissionLevel,
 } from "./config";
@@ -913,6 +914,22 @@ const compactionEstimates = new Map<string, number>();
 let publishThreadContextUsageHook: ((localId: string) => void) | null = null;
 
 /** 本地 threadId → 广播目标；临时 id（opening-* / boot:*）没有稳定会话可通知。 */
+/**
+ * 渲染层可见的配置副本：**只去凭证，不改事实**。
+ *
+ * 1. 飞书 appSecret 一直就不出口（主进程独占）；
+ * 2. 自更新源令牌同理（2026-10-16）：渲染层只需要知道「有没有」，不需要拿到值
+ *    —— 设置页保存时只上传用户新填的那个（留空 = 保持现有）。
+ */
+function configForRenderer(cfg: AppConfig = getConfig()) {
+  const { appUpdateEcsToken, ...rest } = cfg;
+  return {
+    ...rest,
+    appUpdateEcsTokenSet: Boolean((appUpdateEcsToken || "").trim()),
+    ...(cfg.feishuChannel?.appSecret ? { feishuChannel: { ...cfg.feishuChannel, appSecret: "" } } : {}),
+  };
+}
+
 function configTargetFor(localId: string): { remoteThreadId?: string | null; sessionFile?: string | null } {
   const sessionFile = localId.endsWith(".jsonl") ? localId : null;
   return { remoteThreadId: sessionFile ? (remoteIdForSessionHook?.(sessionFile) ?? null) : null, sessionFile };
@@ -3934,11 +3951,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   });
   // The Feishu app secret never crosses into the renderer: it is masked here
   // and only ever written through messaging:setConfig.
-  ipcMain.handle("app:getConfig", () => {
-    const cfg = getConfig();
-    if (cfg.feishuChannel?.appSecret) return { ...cfg, feishuChannel: { ...cfg.feishuChannel, appSecret: "" } };
-    return cfg;
-  });
+  ipcMain.handle("app:getConfig", () => configForRenderer());
   ipcMain.handle("lanmode:status", () => lanModeStatus());
   ipcMain.handle("lanmode:set", (_e, args: { enabled?: boolean; port?: number }) => {
     // 设置页开关：先落盘配置再应用（与其它配置项一致，失败也不静默）。
@@ -4008,7 +4021,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     } else if (!prevExtAutoPick && next.extAutoPickModel !== false) {
       for (const h of bridges.values()) refreshWebSearchFlow(h.bridge);
     }
-    return next;
+    return configForRenderer(next);
   });
 
   // ---- 知芽 Zhiya: persona/agreement/workspace files, KB browsing, mem0 -----

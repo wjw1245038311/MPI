@@ -61,7 +61,7 @@ node scripts/dev-release.mjs --help          # 只有这三个开关，其余参
 
 | 分发点 | 内容 | 谁在用 |
 |---|---|---|
-| **中继镜像（ECS）** `<中继>/download/app/` | `latest.yml` + `MPI-Setup-<v>.exe` + `.blockmap` | **桌面自更新主源**（`src/main/app-updater.ts`：中继优先 → GitHub 回退） |
+| **中继镜像（ECS）** `<中继>/download/app/` | `latest.yml` + `MPI-Setup-<v>.exe` + `.blockmap` | **桌面自更新主源**，只服务设置了「我的 ECS 中继镜像」的机器（`src/main/app-updater.ts`：中继优先 → GitHub 回退） |
 | **中继（ECS）** `/var/www/mpi-mobile/download/` | `mpi-android*.json` 清单 + APK + patch | 手机 App 更新主源 |
 | **Seafile** `E:/Seafile/wei_jw2/我的资料库/Agent` | 桌面 exe + `.sha256`、安卓 APK | 局域网分发 / 手机直接下 |
 | **GitHub Release** | 同上（CI 异步上传） | 公网备份、别人安装；**只在大版本推** |
@@ -69,6 +69,22 @@ node scripts/dev-release.mjs --help          # 只有这三个开关，其余参
 
 **中继部署**：`scp mobile/relay/index.mjs root@<ecs>:/opt/mpi-relay/ && ssh root@<ecs> 'systemctl restart mpi-relay'`
 （systemd 单元 `mpi-relay`；改了中继代码要重部署，否则线上还是旧行为）。
+
+### 3.1 镜像准入（`/download/app/*`，2026-10-16 起）
+
+桌面安装包目录不再完全公开：中继认 `Authorization: Bearer <token>`（客户端 = 设置 →「关于 MPI →
+更新源 → 准入令牌」，存在 `config.json` 的 `appUpdateEcsToken`，**不回显给渲染层**）。
+
+| 环境变量 | 作用 |
+|---|---|
+| `RELAY_APP_TOKENS` | 令牌列表（逗号分隔），与主机准入的 `RELAY_HOST_TOKENS` **分开** |
+| `RELAY_APP_TOKEN_FILE` | 令牌文件（每行一个，`#` 注释）；**5s 热重载**，加/吊销不用重启 |
+| `RELAY_APP_MIRROR_STRICT` | `1` = 硬门控（未授权 → 401）；**不设 = 软门控**：只记一行 `app-mirror missing|bad|ok <path>` 日志，照常放行 |
+
+**默认必须保持软门控**：已经装出去的旧客户端不带令牌（小版本不推 GitHub），先开硬门控会让它们
+既拿不到新版本也回退不到 GitHub，只能手工装包。流程是「软门控观察一轮 → 日志里全是 `token-ok` →
+再开 `RELAY_APP_MIRROR_STRICT=1`」。`systemctl status mpi-relay` 的 ready 行会打印
+`app-mirror: OPEN` 或 `N token(s)/soft|strict`，一眼能看出当前模式。
 
 ## 4. 两条发布线（互不依赖）
 
