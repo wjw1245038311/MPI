@@ -4,6 +4,7 @@ import { unlink } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, shell } from "electron";
+import WebSocket from "ws";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
@@ -1413,6 +1414,8 @@ function makeRelayUplink(
     // 多上行共存时持久化文件按实例区分（见 relay-uplink.ts 的 instanceKey 注释）。
     ...(args.instanceKey ? { instanceKey: args.instanceKey } : {}),
     hostId: remoteHost.getStatus().hostId,
+    // 机器名：服务端设备表据它显示「哪台」（激活窗口里那个「设备名称」就是它）
+    hostName: hostname(),
     userDataDir: getConfigDir(),
     x25519PrivB64u: cryptoMaterial.x25519PrivB64u,
     x25519PubB64u: cryptoMaterial.x25519PubB64u,
@@ -3893,6 +3896,112 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   }
 
   /**
+   * **真实「转发可用」的证据**：对 `<地址>/ws` 做一次 WebSocket 握手（101 即成功）就走。
+   *
+   * 为什么不只看 HTTP：转发走的是 WS，而 `/healthz`、`/authz/check` 都是我们这套中继**顺带**提供的
+   * 端点——只填地址（不开准入）的自建中继照样能用 WS 转发，HTTP 探测却可能因为端点缺失而误报"连不上"。
+   * 这里**只握手、不注册**：验证连通性不该消耗设备名额（占用名额是「立即激活」的事）。
+   */
+  const probeRelaySocket = (wsUrl: string, timeoutMs = 8000): Promise<{ ok: boolean; error?: string }> =>
+    new Promise((resolve) => {
+      let settled = false;
+      let socket: WebSocket | null = null;
+      const finish = (result: { ok: boolean; error?: string }) => {
+        if (settled) return;
+        settled = true;
+        try {
+          socket?.close();
+        } catch {
+          /* 已经关了 */
+        }
+        resolve(result);
+      };
+      const timer = setTimeout(() => finish({ ok: false, error: "TIMEOUT" }), timeoutMs + 500);
+      try {
+        socket = new WebSocket(wsUrl, { handshakeTimeout: timeoutMs });
+      } catch {
+        clearTimeout(timer);
+        finish({ ok: false, error: "BAD_URL" });
+        return;
+      }
+      socket.on("open", () => {
+        clearTimeout(timer);
+        finish({ ok: true });
+      });
+      socket.on("error", (error: any) => {
+        clearTimeout(timer);
+        finish({ ok: false, error: /timeout|ETIMEDOUT/i.test(String(error?.message || "")) ? "TIMEOUT" : "UNREACHABLE" });
+      });
+    });
+
+  /** 转发地址候选：自定义中继只有一个；内置服务器按序试（tailnet TLS → 公网明文）。 */
+  const relayCandidates = (): string[] => {
+    const cfg = getConfig();
+    const custom = (cfg.customRelayUrl || "").trim();
+    if (custom) return [custom];
+    return builtinServer()?.hostUplinks ?? [];
+  };
+
+  /**
+   * 注册探测：握手后**发一次 `host.register` 看回帧**（`relay.ok` / `relay.error`），随即断开。
+   *
+   * 只在**中继没有 `/authz/check`**（不是我们这套 / 版本较老）且我们带了令牌时用：
+   * 这种情况下前面那条 WS 握手只能证明「地址上有个 WS 服务」，证明不了「它接受我的令牌」——
+   * 而后者恰恰决定转发能不能真起来。我们自己的中继不走这条（用 `/authz/check` 就够，
+   * 且不会因为「验证」而占掉一个设备名额）。
+   */
+  const probeRelayRegister = (
+    wsUrl: string,
+    hostId: string,
+    token: string,
+    timeoutMs = 8000,
+  ): Promise<{ ok: boolean; error?: string }> =>
+    new Promise((resolve) => {
+      let settled = false;
+      let socket: WebSocket | null = null;
+      const finish = (result: { ok: boolean; error?: string }) => {
+        if (settled) return;
+        settled = true;
+        try {
+          socket?.close();
+        } catch {
+          /* 已经关了 */
+        }
+        resolve(result);
+      };
+      const timer = setTimeout(() => finish({ ok: false, error: "TIMEOUT" }), timeoutMs + 500);
+      try {
+        socket = new WebSocket(wsUrl, { handshakeTimeout: timeoutMs });
+      } catch {
+        clearTimeout(timer);
+        finish({ ok: false, error: "BAD_URL" });
+        return;
+      }
+      socket.on("open", () => {
+        try {
+          socket?.send(JSON.stringify({ type: "host.register", hostId, ...(token ? { token } : {}), bootId: "verify-probe" }));
+        } catch {
+          clearTimeout(timer);
+          finish({ ok: false, error: "UNREACHABLE" });
+        }
+      });
+      socket.on("message", (raw: any) => {
+        clearTimeout(timer);
+        try {
+          const frame = JSON.parse(String(raw));
+          if (frame?.type === "relay.ok") finish({ ok: true });
+          else finish({ ok: false, error: typeof frame?.code === "string" ? frame.code : "RELAY_ERROR" });
+        } catch {
+          finish({ ok: false, error: "BAD_REPLY" });
+        }
+      });
+      socket.on("error", (error: any) => {
+        clearTimeout(timer);
+        finish({ ok: false, error: /timeout|ETIMEDOUT/i.test(String(error?.message || "")) ? "TIMEOUT" : "UNREACHABLE" });
+      });
+    });
+
+  /**
    * 授权/激活用的 HTTP 基地址：自定义中继优先，否则内置服务器（镜像与自检同源）。
    * 返回 null = 没得可打（既没自定义地址也没内置描述）。
    */
@@ -4022,49 +4131,65 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     const code = (cfg.serverAuthCode || (cfg.customRelayToken || "")).trim();
     const http = authzBase();
     if (!http) return { ok: false, error: "NO_SERVER" };
-    const headers: Record<string, string> = code ? { authorization: `Bearer ${code}` } : {};
-    // ① 授权自检（首选）
+
+    // ① 转发通道：按序试候选地址的 WS 握手 —— 这才是「能不能转发」的真凭据
+    //    （自定义中继只有一条；内置服务器 tailnet TLS 优先、公网明文兜底）。只握手不注册，不占名额。
+    let wsUrl = "";
+    let wsError: string | undefined;
+    for (const candidate of relayCandidates()) {
+      const probe = await probeRelaySocket(candidate);
+      if (probe.ok) {
+        wsUrl = candidate;
+        break;
+      }
+      wsError = probe.error;
+    }
+    if (!wsUrl) return { ok: false, error: wsError || "UNREACHABLE" };
+
+    // ② 授权与名额：只有我们这套中继有这些端点。拿不到不算"连不上"——地址能通就能转发，
+    //    只是说不清授权状态（自建中继通常不开准入），如实标注 open 即可。
+    let authz: any = null;
+    let authzError: string | undefined;
     try {
       const hostId = remoteHost.getStatus().hostId || "";
-      const res = await net.fetch(`${http}/authz/check?hostId=${encodeURIComponent(hostId)}`, { headers, signal: AbortSignal.timeout(8000) });
-      if (res.status === 401 || res.status === 403) return { ok: false, error: "BAD_CODE" };
-      if (res.ok) {
-        const body: any = await res.json().catch(() => ({}));
-        return {
-          ok: true,
-          server: http,
-          source,
-          // 中继没配主机准入时是开放模式：能连，但不代表码有效（界面照实说）。
-          open: Boolean(body?.open),
-          devices: Number(body?.devices) || 0,
-          maxDevices: Number(body?.maxDevices) || 0,
-          enforcing: Boolean(body?.enforcing),
-          activated: Boolean(body?.activated),
-        };
-      }
-      if (res.status !== 404) return { ok: false, error: `HTTP_${res.status}` };
+      const res = await net.fetch(`${http}/authz/check?hostId=${encodeURIComponent(hostId)}`, {
+        headers: code ? { authorization: `Bearer ${code}` } : {},
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.status === 401 || res.status === 403) authzError = "BAD_CODE";
+      else if (res.ok) authz = await res.json().catch(() => null);
+      else if (res.status !== 404) authzError = `HTTP_${res.status}`;
     } catch (error: any) {
-      // 连不上（超时/DNS/拒绝）与 404（老中继没这个端点）分开处理。
-      if (!/timeout|abort/i.test(String(error?.name || error?.message || ""))) {
-        try {
-          const res = await net.fetch(`${http}/healthz`, { signal: AbortSignal.timeout(5000) });
-          if (res.ok) return { ok: true, server: http, source, open: true, devices: 0, maxDevices: 0, enforcing: false };
-        } catch {
-          /* 兜底也失败 → 当作不可达 */
-        }
-        return { ok: false, error: "UNREACHABLE" };
+      authzError = /timeout|abort/i.test(String(error?.name || "")) ? "TIMEOUT" : "UNREACHABLE";
+    }
+
+    // ③ HTTP 判不了授权（中继没这个端点）又有令牌时：用一次注册探测确认「它收不收我这个令牌」。
+    //    令牌对 → 真的能用；令牌错 → 地址填了也走不通，必须如实报错。
+    if (!authz && code) {
+      const probe = await probeRelayRegister(wsUrl, remoteHost.getStatus().hostId || "", code);
+      if (!probe.ok) {
+        const reason = probe.error === "HOST_UNAUTHORIZED" ? "BAD_CODE" : probe.error === "HOST_DEVICE_LIMIT" ? "HOST_DEVICE_LIMIT" : undefined;
+        if (reason) return { ok: false, error: reason, server: http, wsUrl, source };
       }
-      return { ok: false, error: "TIMEOUT" };
     }
-    // ② 老中继没有 /authz/check（404）→ 健康检查兜底
-    try {
-      const res = await net.fetch(`${http}/healthz`, { signal: AbortSignal.timeout(5000) });
-      return res.ok
-        ? { ok: true, server: http, source, open: true, devices: 0, maxDevices: 0, enforcing: false }
-        : { ok: false, error: `HTTP_${res.status}` };
-    } catch {
-      return { ok: false, error: "UNREACHABLE" };
-    }
+
+    return {
+      ok: true,
+      server: http,
+      wsUrl,
+      source,
+      // open 的语义：中继没配准入（或没实现 /authz/check）→ 能用，但没有授权概念
+      open: authz ? Boolean(authz.open) : !code,
+      ...(authz
+        ? {
+            devices: Number(authz.devices) || 0,
+            maxDevices: Number(authz.maxDevices) || 0,
+            enforcing: Boolean(authz.enforcing),
+            activated: Boolean(authz.activated),
+          }
+        : {}),
+      ...(authzError ? { authzError } : {}),
+    };
   });
 
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());

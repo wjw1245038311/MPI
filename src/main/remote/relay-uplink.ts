@@ -71,6 +71,11 @@ export interface RelayUplinkOptions {
   relayToken?: string;
   hostId: string;
   /**
+   * 机器名（`os.hostname()`）：随 host.register 上报，服务端设备表里记下来，
+   * 这样在服务器侧一眼看出「已登记的 3 台分别是谁」。缺失不影响任何逻辑。
+   */
+  hostName?: string;
+  /**
    * 实例标识：多中继（主 + 备用）共存时，用它区分持久化文件
    * （`remote-relay-tokens[.<key>].json` / `remote-push-subscriptions[.<key>].json`）。
    *
@@ -294,6 +299,7 @@ export class RelayUplink implements RelayOutbound {
             type: "host.register",
             hostId: this.options.hostId,
             bootId: this.bootId,
+            ...(this.options.hostName ? { name: this.options.hostName } : {}),
             // P1 准入：没配 token 就不带这个字段（中继开放模式不认它）。
             ...(this.options.relayToken ? { token: this.options.relayToken } : {}),
           }),

@@ -369,6 +369,10 @@ const api = {
       maxDevices?: number;
       enforcing?: boolean;
       activated?: boolean;
+      /** WS 握手成功的那个地址（转发真正的入口）。 */
+      wsUrl?: string;
+      /** 授权自检失败原因（BAD_CODE/TIMEOUT/…）；地址能通时它不影响转发。 */
+      authzError?: string;
     }> => ipcRenderer.invoke("remote:testServer"),
     /** 本机中继（常驻）+ 局域网直连模式（P2）：进程状态 + 是否广告内网地址。
      *  注意：`enabled` = **中继进程在跑**（常驻，所以基本恒为 true）；

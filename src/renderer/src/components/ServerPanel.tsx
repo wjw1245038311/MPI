@@ -71,13 +71,21 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
         pushToast("error", verifyErrorText(result?.error, zh));
         return;
       }
-      const text = result.open
-        ? zh
-          ? `${result.server} 可达（该服务器未启用激活码校验）`
-          : `${result.server} reachable (no access-code check)`
-        : zh
-          ? `${result.server} 已连通 · 设备名额 ${result.devices ?? 0}/${result.maxDevices ?? 0}${result.activated === false ? "（本机尚未登记）" : ""}`
-          : `${result.server} connected · devices ${result.devices ?? 0}/${result.maxDevices ?? 0}`;
+      // 分两层说：① 转发通道（WS 握手）② 授权/名额（有 /authz/check 才说得清）
+      const parts: string[] = [];
+      parts.push(zh ? `转发通道可达（${result.wsUrl || result.server}）` : `Forwarding reachable (${result.wsUrl || result.server})`);
+      if (result.authzError === "BAD_CODE") {
+        parts.push(zh ? "激活码无效" : "access code rejected");
+      } else if (result.enforcing) {
+        parts.push(
+          zh
+            ? `设备名额 ${result.devices ?? 0}/${result.maxDevices ?? 0}${result.activated === false ? "（本机尚未登记）" : ""}`
+            : `devices ${result.devices ?? 0}/${result.maxDevices ?? 0}`,
+        );
+      } else {
+        parts.push(zh ? "该服务器未启用激活码校验" : "no access-code check on that server");
+      }
+      const text = parts.join(" · ");
       setTestResult({ ok: true, text });
       pushToast("success", text);
     } finally {
