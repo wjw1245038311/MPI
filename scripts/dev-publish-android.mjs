@@ -33,8 +33,8 @@
  * 注意：
  *   · APP 先看 GitHub 清单、版本不更新时才落到中继那份。开发期你装的一定比 GitHub 上的
  *     新，所以永远走中继 ✓（这也是不用改 APP 的原因）。
- *   · 分享链是 **http**（明文）→ 只有 debug 构建能下（`src/debug/AndroidManifest.xml`
- *     放行了明文）。换 release 构建时这条快路要改成 HTTPS。
+ *   · 分享链是 **http**（明文）→ 明文策略现在统一在 `src/main/res/xml/network_security_config.xml`
+ *     （2026-10-16 从 src/debug 提上来，调试/正式同一套），所以调试包与正式包都能下。
  *   · 版本号自增会弄脏 `mobile/app/app/build.gradle.kts`（开发期用；之后自行 revert 或提交）。
  */
 import { createHash } from "node:crypto";
