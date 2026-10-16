@@ -122,6 +122,30 @@ export function logChoiceFenceRepaired(detail: {
   });
 }
 
+/** ```choices 围栏出现在**工具结果**里（模型放错位置）：两端都只在助手正文块上跑面板升级，
+ *  工具结果永远只是原样文本（手机端是一个 <pre>）。这不是 bug 而是有意设计，但用户看到的是
+ *  「刚才那个面板怎么变成一坨 JSON 了」——所以记一行，下次几秒钟就能判出是位置问题。
+ *  （2026-10-16 真实发生：agent 用 codemode 发围栏，用户以为手机端坏了。） */
+export function logChoiceFenceInTool(detail: {
+  threadId: string;
+  messageKey: string;
+  index: number;
+  tool: string;
+  raw: string;
+}): void {
+  const key = `intool:${choiceFenceKey(detail.threadId, detail.messageKey, detail.index, detail.raw)}`;
+  if (!rememberChoiceFence(key)) return;
+  const flat = detail.raw.replace(/\s+/g, " ");
+  send("choice-fence-in-tool", {
+    thread: detail.threadId,
+    message: detail.messageKey,
+    index: detail.index,
+    tool: detail.tool,
+    len: detail.raw.length,
+    head: flat.slice(0, 240),
+  });
+}
+
 /** 开围栏的 info string 不是标准 `choices`（`choices>` / `Choices` / `choicesjson`）但已按
  *  面板渲染。以前这种形态会静默降级成代码块（既无面板也无提示），现在记一行笔误形态，
  *  便于以后判断容错规则该放宽还是该收紧。 */

@@ -108,10 +108,14 @@ const remotePanel = readFileSync(resolve(root, "src", "renderer", "src", "compon
 assert.match(remotePanel, /Relay connection/);
 assert.doesNotMatch(remotePanel, /Signal connection|Signal settings|Enable Signal/);
 assert.doesNotMatch(remotePanel, />Host ID<|>Transport<|>Last error<|STUN URLs|stunText/);
-// 手机通道地址：面板必须能看/能改，并在会给手机 tailnet 地址时报警（否则手机端配对必失败）
-assert.match(remotePanel, /手机通道地址/, "面板必须暴露 mobileRelayUrl（手机连的公网地址）");
+// 手机侧地址：2026-10-16 起由「设置 → 服务器」负责（RemotePanel 只显示“手机将连接”的最终地址），
+// 仍必须在给手机 tailnet/内网地址时报警（否则手机端配对必失败）。
+assert.match(remotePanel, /手机将连接/, "远程面板要显示主进程算出的最终手机地址");
 assert.match(remotePanel, /unreachableForPhone/, "必须能识别手机大概率连不上的地址（tailnet/内网）");
-assert.match(remotePanel, /phoneNeedsAttention/, "必须把“会给手机 tailnet 地址”的情况报出来");
+const serverPanel = readFileSync(resolve(root, "src", "renderer", "src", "components", "ServerPanel.tsx"), "utf8");
+assert.match(serverPanel, /手机地址/, "服务器面板必须能填/改给手机的地址（手机连的公网地址）");
+assert.match(serverPanel, /unreachableForPhone/, "服务器面板同样要报警不可达地址");
+assert.match(serverPanel, /serverAuthCode/, "服务器面板必须能填授权码（内置服务器的凭证）");
 assert.match(
   readFileSync(resolve(root, "src", "main", "ipc.ts"), "utf8"),
   /mobileRelayUrl: cfg\.mobileRelayUrl \|\| ""/,

@@ -70,10 +70,16 @@ node scripts/dev-release.mjs --help          # 只有这三个开关，其余参
 **中继部署**：`scp mobile/relay/index.mjs root@<ecs>:/opt/mpi-relay/ && ssh root@<ecs> 'systemctl restart mpi-relay'`
 （systemd 单元 `mpi-relay`；改了中继代码要重部署，否则线上还是旧行为）。
 
-### 3.1 镜像准入（`/download/app/*`，2026-10-16 起）
+### 3.1 授权码：一键两用（`/download/app/*` 与主机注册，2026-10-16 起）
 
-桌面安装包目录不再完全公开：中继认 `Authorization: Bearer <token>`（客户端 = 设置 →「关于 MPI →
-更新源 → 准入令牌」，存在 `config.json` 的 `appUpdateEcsToken`，**不回显给渲染层**）。
+「授权码」既是**主机上行注册**的凭证（`RELAY_HOST_TOKENS` / `RELAY_TOKEN_FILE`，中继在注册时校验），
+也是**桌面安装包镜像**的凭证（`Authorization: Bearer`）。客户端只有一处填它：设置 →「服务器」→
+内置服务器（我的 ECS）→ 授权码（存在 `config.json` 的 `serverAuthCode`，**不回显给渲染层**）。
+即「有码 = 这台电脑被授权用我的 ECS 转发对话 + 从它的镜像更新」；没码只能用自定义服务器（更新走 GitHub）。
+
+⚠️ **开启主机校验的顺序**：服务端一开 `RELAY_HOST_TOKENS`，所有**没带码**的主机立刻掉线（旧客户端
+根本不知道有这个码）。所以先在每台授权机器上装新版 MPI 并填好码，最后才在服务端加上校验；
+回滚 = 去掉 drop-in 里的 `RELAY_TOKEN_FILE` 并 `systemctl restart mpi-relay`。
 
 | 环境变量 | 作用 |
 |---|---|

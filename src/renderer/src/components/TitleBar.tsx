@@ -199,7 +199,7 @@ export function TitleBar() {
         )}
       </div>
       <div className="tb-spacer" />
-      <button className="tb-settings-btn" onClick={openSettings} title={language === "zh" ? "设置" : "Settings"} aria-label={language === "zh" ? "设置" : "Settings"}>
+      <button className="tb-settings-btn" onClick={() => openSettings()} title={language === "zh" ? "设置" : "Settings"} aria-label={language === "zh" ? "设置" : "Settings"}>
         <SettingsIcon size={15} />
       </button>
       <div className="tb-win">

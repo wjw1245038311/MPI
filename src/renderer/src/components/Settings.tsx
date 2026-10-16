@@ -12,6 +12,7 @@ import { thinkingLevelsFromMap, THINKING_LEVEL_ORDER as THINK_LEVELS } from "@re
 import { EDGE_VOICES, defaultEdgeVoice } from "../lib/edge-voices";
 import { Archive, Check, ChevronRight, Close, Edit, Plus, Refresh, Folder, Search, Trash } from "./icons";
 import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
+import { ServerPanel } from "./ServerPanel";
 import appIconUrl from "../../../../resources/icon.png";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
@@ -950,7 +951,7 @@ function ProviderCard({
  * Main panel
  * ------------------------------------------------------------------ */
 
-type Tab = "conversation" | "models" | "permissions" | "data" | "appearance" | "system";
+type Tab = "conversation" | "models" | "permissions" | "server" | "data" | "appearance" | "system";
 
 /** Mirror of main's DataMigrationStatus (preload inlines the same shape). */
 interface DataMigrationStatus {
@@ -1261,6 +1262,14 @@ export function Settings() {
   const language = config?.language || "en";
 
   const [tab, setTab] = useState<Tab>("conversation");
+  // 「手机远程控制」面板可以把用户直接送到某一栏（说 openSettings("server")），
+  // 请求是一次性的：消费完就清，不黏住下次打开。
+  const takeSettingsTab = useStore((s) => s.takeSettingsTab);
+  useEffect(() => {
+    if (!open) return;
+    const requested = takeSettingsTab();
+    if (requested) setTab(requested as Tab);
+  }, [open, takeSettingsTab]);
   // Auto-launch at system login — OS-level state (Electron login items), not
   // config.json; read live each time settings opens, edited as a draft.
   useEffect(() => {
@@ -2309,6 +2318,7 @@ export function Settings() {
               ["conversation", language === "zh" ? "对话设置" : "Conversation"],
               ["models", "模型与提供商"],
               ["permissions", language === "zh" ? "权限与安全" : "Permissions & security"],
+              ["server", language === "zh" ? "服务器" : "Server"],
               ["data", language === "zh" ? "数据管理" : "Data management"],
               ["appearance", language === "zh" ? "外观" : "Appearance"],
               ["system", language === "zh" ? "系统与诊断" : "System & diagnostics"],
@@ -2350,7 +2360,11 @@ export function Settings() {
                     ? language === "zh"
                       ? "权限与安全"
                       : "Permissions & security"
-                    : tab === "data"
+                    : tab === "server"
+                      ? language === "zh"
+                        ? "服务器"
+                        : "Server"
+                      : tab === "data"
                       ? language === "zh"
                         ? "数据管理"
                         : "Data management"
@@ -3346,6 +3360,7 @@ export function Settings() {
             )}
 
 
+            {tab === "server" && <ServerPanel language={language} />}
             {tab === "data" && (
               <div className="set-card">
                 <div className="set-card-title">{language === "zh" ? "存储位置" : "Storage locations"}</div>

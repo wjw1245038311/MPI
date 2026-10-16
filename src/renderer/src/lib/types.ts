@@ -665,19 +665,20 @@ export interface AppConfig {
     ttsAutoRead?: boolean;
   };
   /**
-   * 应用自更新源（2026-10-16 从「中继通道」里拆出来）：`github`（默认）或 `ecs`。
-   * `ecs` = 这台机器已授权，先用自建中继镜像（5s 预探测），超时才回退 GitHub。
+   * **服务器来源**（设置 →「服务器」，2026-10-16）：`builtin`（默认）= 内置服务器
+   * （我的 ECS，需授权码）；`custom` = 自己的中继（`relayChannels`）。
+   * 中继转发与应用更新源都跟随它。
    */
-  appUpdateSource?: "github" | "ecs";
-  /** ECS 镜像 feed 地址；留空 = 内置默认地址。 */
-  appUpdateEcsUrl?: string;
+  serverSource?: "builtin" | "custom";
   /**
-   * 更新源准入令牌：**主进程不会把它发到渲染层**（只发 `appUpdateEcsTokenSet`），
+   * 授权码（内置服务器的唯一凭证）：**主进程不会把它发到渲染层**（只发 `serverAuthCodeSet`），
    * 与通道准入 token 同一规矩。
    */
-  appUpdateEcsToken?: string;
-  /** 渲染层可见：上面那个令牌是否已设置（真值不出口）。 */
-  appUpdateEcsTokenSet?: boolean;
+  serverAuthCode?: string;
+  /** 渲染层可见：上面那个授权码是否已设置（真值不出口）。 */
+  serverAuthCodeSet?: boolean;
+  /** 本机中继静态目录（托管 PWA / 下载页；空 = 不托管）——服务器面板「高级」里编辑。 */
+  localRelayStaticDir?: string;
 }
 
 export type MessagingStatus = "off" | "connecting" | "connected" | "reconnecting" | "error";

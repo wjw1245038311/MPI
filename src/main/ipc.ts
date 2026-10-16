@@ -262,6 +262,7 @@ import {
 } from "../shared/thinking-levels";
 import { normalizeTaskModes, taskModeName, taskModeSummary } from "../shared/task-mode-catalog";
 import { stripImageDimensionNotes } from "../shared/image-notes";
+import { builtinServer, type BuiltinServer } from "../shared/builtin-server";
 import {
   AGREEMENT_FILE,
   PERSONA_FILE,
@@ -918,14 +919,14 @@ let publishThreadContextUsageHook: ((localId: string) => void) | null = null;
  * 渲染层可见的配置副本：**只去凭证，不改事实**。
  *
  * 1. 飞书 appSecret 一直就不出口（主进程独占）；
- * 2. 自更新源令牌同理（2026-10-16）：渲染层只需要知道「有没有」，不需要拿到值
+ * 2. 服务器授权码同理（2026-10-16）：渲染层只需要知道「有没有」，不需要拿到值
  *    —— 设置页保存时只上传用户新填的那个（留空 = 保持现有）。
  */
 function configForRenderer(cfg: AppConfig = getConfig()) {
-  const { appUpdateEcsToken, ...rest } = cfg;
+  const { serverAuthCode, ...rest } = cfg;
   return {
     ...rest,
-    appUpdateEcsTokenSet: Boolean((appUpdateEcsToken || "").trim()),
+    serverAuthCodeSet: Boolean((serverAuthCode || "").trim()),
     ...(cfg.feishuChannel?.appSecret ? { feishuChannel: { ...cfg.feishuChannel, appSecret: "" } } : {}),
   };
 }
@@ -1410,9 +1411,22 @@ function relayChannelContext(): ChannelContext {
 /**
  * S2：生效的通道列表 —— 配置里的通道列表，**或**从旧字段只读合成（从没保存过列表时）；
  * 局域网通道由运行时合成并置顶（同网段最快，设备端按序选路时优先）。
+ *
+ * 2026-10-16 新增「服务器」模型（设置 → 服务器）：
+ *  · `serverSource === "builtin"` → 只用**内置服务器**（我的 ECS）：主机上行取内置候选里
+ *    第一个地址，令牌 = 授权码（服务端 `RELAY_HOST_TOKENS` 校验，没码就一条也不挂）；
+ *    配对票里的手机地址来自内置描述（原生走公网明文，PWA 走公网 TLS）。
+ *  · `custom` → 走原来的通道逻辑（单条在「服务器」栏，多条/局域网在「高级」里）。
  */
 function effectiveRelayChannels(): RelayChannel[] {
   const cfg = getConfig();
+  if (cfg.serverSource === "builtin") {
+    const code = (cfg.serverAuthCode || "").trim();
+    const builtin = builtinServer();
+    // 没授权码 / 内置描述坏了 → 不挂任何上行（界面会显示「未授权」）。
+    if (!builtin || !code) return [];
+    return [builtinRelayChannel(builtin, code)];
+  }
   return effectiveChannels(
     cfg.relayChannels,
     {
@@ -1426,9 +1440,31 @@ function effectiveRelayChannels(): RelayChannel[] {
   );
 }
 
+/**
+ * 内置服务器 → 通道（主机上行取内置候选里的第一个，令牌 = 授权码）。
+ *
+ * 手机地址用**全部**内置候选（同一个通道带多个手机地址不太好表达，所以第一条用它、
+ * 其余地址通过 `phoneTicketAddresses` 的 auto 语义补 —— 这里只保证主机上行正确）。
+ */
+function builtinRelayChannel(builtin: BuiltinServer, authCode: string): RelayChannel {
+  return {
+    id: "builtin",
+    label: "内置服务器",
+    phoneUrl: builtin.phoneUrls[0],
+    hostUrl: builtin.hostUplinks[0],
+    token: authCode,
+    enabled: true,
+    kind: "remote",
+  };
+}
+
 /** S2：本次配对票里给手机的地址（有序；手动=选中那条，自动=全部启用）。 */
 function phoneTicketAddresses(): string[] {
   const cfg = getConfig();
+  if (cfg.serverSource === "builtin") {
+    const builtin = builtinServer();
+    return builtin ? [...builtin.phoneUrls] : [];
+  }
   return ticketAddresses(effectiveRelayChannels(), cfg.relayMode, cfg.activeChannelId);
 }
 
@@ -3989,6 +4025,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         "remoteRelayFallbackEnabled" in patch ||
         "mobileRelayFallbackUrl" in patch ||
         "relayChannels" in patch ||
+        "serverSource" in patch ||
+        "serverAuthCode" in patch ||
         "relayMode" in patch ||
         "activeChannelId" in patch ||
         "lanModePort" in patch)

@@ -18,7 +18,7 @@ import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
 import { splitChoiceSegments } from "../lib/choice-block";
 import type { ChoiceClampInfo, ChoiceFailure } from "../lib/choice-block";
-import { logChoiceFenceFailure, logChoiceFenceInfoString, logChoiceFenceRepaired } from "../lib/diag-watch";
+import { logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRepaired } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
 import { chatAttachmentUrl, parseAgentMediaRefs } from "../lib/chat-attachments";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
@@ -1978,7 +1978,7 @@ function BlockView({
   const name = effectiveToolName(block.name, run);
   // Plan-choice calls render as a compact option card instead of raw JSON.
   if (name === "mpi_ask_choice") return <ChoiceToolCard id={block.id} blockArgs={block.arguments} run={run} language={language} />;
-  return <ToolCard id={block.id} name={name} blockArgs={block.arguments} run={run} language={language} expandKey={expandKey} />;
+  return <ToolCard id={block.id} name={name} blockArgs={block.arguments} run={run} language={language} expandKey={expandKey} threadId={threadId} messageKey={messageKey} />;
 }
 
 const SkillInvocation = memo(function SkillInvocation({ name, language }: { name: string; language: "en" | "zh" }) {
@@ -2204,7 +2204,34 @@ function toolDuration(run?: ToolRun): string {
 
 // 同 Thinking：open 经 lib/expand-state 跨 HMR/重挂载保留；edit 卡自动展开
 // 也写入记录，避免热重载后重新折叠。
-const ToolCard = memo(function ToolCard({ id, name, blockArgs, run, language, expandKey }: { id: string; name: string; blockArgs?: unknown; run?: ToolRun; language: "en" | "zh"; expandKey?: string }) {
+const ToolCard = memo(function ToolCard({
+  id,
+  name,
+  blockArgs,
+  run,
+  language,
+  expandKey,
+  threadId,
+  messageKey,
+}: {
+  id: string;
+  name: string;
+  blockArgs?: unknown;
+  run?: ToolRun;
+  language: "en" | "zh";
+  expandKey?: string;
+  /** 诊断用：choices 围栏放错位置（工具结果）时记一行，见 logChoiceFenceInTool。 */
+  threadId?: string;
+  messageKey?: string;
+}) {
+  // ```choices 围栏若出现在**工具输出**里，两端都只会原样显示（有意设计），但用户会当成
+  // 「面板坏了」——记一行诊断，见 lib/diag-watch.ts 的 logChoiceFenceInTool。
+  const rawResult = run?.resultText ?? run?.partialText ?? "";
+  useEffect(() => {
+    if (!threadId || !messageKey || !rawResult) return;
+    const match = /```\s*choices/i.exec(rawResult);
+    if (match) logChoiceFenceInTool({ threadId, messageKey, index: match.index, tool: name, raw: rawResult });
+  }, [rawResult, threadId, messageKey, name]);
   // 展开状态存模块级 Map（lib/expand-state）：HMR/重挂载后恢复，不再被折叠回去。
   const [open, setOpen] = useState(() => (expandKey ? getExpandState(expandKey) : undefined) ?? false);
   const running = run?.running;

@@ -50,12 +50,13 @@ npm run test:zhiya   # 等价的单套件入口，名字见 package.json 的 scr
 - **GitHub 侧交给 CI，且只在大版本推**：小版本（patch）默认 `--no-github`——不推 GitHub、不建 Release，只发中继镜像 + Seafile；大版本（`--minor` / `--major`）才把 tag 推上去让 GitHub Actions 出 Release 安装包；本机不做手工上传产物。
 - **中继上传走公网 443、并发分片**：`scripts/relay-upload.mjs`（12 路，实测 137MB / 15.6s ≈ 8.8MB/s）；tailnet（`100.x`）是单条 DERP 隧道，并发无效（~0.8MB/s）。
 - **发版顺序**：① 改 `package.json` 版本 ② `changelog.md` 的 `Unreleased` 小节改名为 `## v<版本>（日期）` ③ `npm run dist` ④ 复制 exe + sha256 到 Seafile 并校验 ⑤ 提交、等确认后推送分支与 tag（触发 CI）。
-- **桌面端自更新走中继镜像优先**：`npm run release`（`scripts/publish-release.mjs`）在 GitHub Release
+- **桌面端自更新跟随「设置 → 服务器」**：`npm run release`（`scripts/publish-release.mjs`）在 GitHub Release
   之外，还会把 `latest.yml` + `MPI-Setup-<v>.exe` + `.blockmap` scp 到中继静态目录
   `/var/www/mpi-mobile/download/app/`（env：`MPI_RELAY_HOST` / `MPI_RELAY_APP_DIR`）。
-  客户端（`src/main/app-updater.ts`）**只在设置页选过「我的 ECS 中继镜像」的机器上**先探测
-  `<中继 http 源>/download/app/latest.yml`（5 秒超时，带 `Authorization: Bearer` 时用镜像准入令牌），
-  不通或版本比当前旧就回退 GitHub；默认来源是 GitHub（别人的安装不会碰这台 ECS）。
+  客户端（`src/main/app-updater.ts`）**只在「服务器」选了内置服务器（我的 ECS）且填了授权码**时，
+  先探测 `<镜像>/latest.yml`（5 秒超时，带 `Authorization: Bearer <授权码>`），不通或版本比当前旧
+  就回退 GitHub；自定义服务器不镜像安装包 → 直接 GitHub。地址不在配置里，以混淆常量内置在
+  `src/shared/builtin-server.ts`（**只是防 grep，不是安全边界**）。
   **该步骤失败默认中止发版**（镜像落后 = 客户端永远看不到新版本）；确实不推就加 `--no-relay`。
 - **可先行**：第 ④ 步不等 git（也不等 CI），本地包就绪即可分发——分发与代码提交解耦。
 - **发版本机不传 GitHub、不等 CI**：`npm run release` / `scripts/dev-release.mjs` 默认走 `publish-release.mjs --local`——

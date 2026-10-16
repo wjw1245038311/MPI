@@ -1,6 +1,7 @@
 import { app, net } from "electron";
 import { autoUpdater, type ProgressInfo, type UpdateCheckResult, type UpdateInfo } from "electron-updater";
 import { getConfig } from "./config";
+import { builtinServer } from "../shared/builtin-server";
 import {
   APP_UPDATE_ECS_PROBE_TIMEOUT_MS,
   resolveAppUpdateFeed,
@@ -79,15 +80,19 @@ let activeSource: AppUpdateSource = "github";
 
 /**
  * 本次要用的自更新源（读配置 + `MPI_APP_UPDATE_URL` 覆盖；纯函数在 shared/app-update-feed.ts）。
- * 每次检查都重算：用户在设置里改了源，不需要重启应用就能生效。
+ *
+ * 源**跟随「服务器」配置**（2026-10-16 定稿，不再有独立的更新源设置）：选了内置服务器
+ * 且填了授权码 → 走它的镜像（5s 预探测，不通回 GitHub）；自定义服务器不镜像安装包 → GitHub。
+ * 每次检查都重算：用户在设置里改了服务器，不需要重启应用就能生效。
  */
 function updateFeedTarget(): AppUpdateFeedTarget {
   const cfg = getConfig();
   return resolveAppUpdateFeed({
     overrideUrl: process.env.MPI_APP_UPDATE_URL,
-    source: cfg.appUpdateSource,
-    relayUrl: cfg.appUpdateEcsUrl,
-    token: cfg.appUpdateEcsToken,
+    serverSource: cfg.serverSource,
+    authCode: cfg.serverAuthCode,
+    // 地址来自混淆内置的描述（shared/builtin-server.ts）；没授权码时上面那个纯函数直接返回 GitHub。
+    mirrorUrl: builtinServer()?.mirrorUrl,
   });
 }
 

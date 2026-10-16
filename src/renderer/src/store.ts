@@ -1254,14 +1254,10 @@ interface PiStore {
   repairSession: (threadId: string) => Promise<void>;
   setSoundOnComplete: (on: boolean) => Promise<void>;
   /**
-   * 应用自更新源（设置 → 关于 MPI）：github（默认）或 ecs。
-   * 令牌只在这一步带上去（渲染层拿不到旧值），留空 = 保持现有；要清除传空串。
+   * 服务器来源与授权码（设置 →「服务器」）：内置服务器（我的 ECS）或自定义。
+   * 授权码只在这一步带上去（渲染层拿不到旧值），留空 = 保持现有；要清除传空串。
    */
-  setAppUpdateSource: (patch: {
-    appUpdateSource?: "github" | "ecs";
-    appUpdateEcsUrl?: string;
-    appUpdateEcsToken?: string;
-  }) => Promise<void>;
+  setServerConfig: (patch: { serverSource?: "builtin" | "custom"; serverAuthCode?: string }) => Promise<void>;
   /** Voice system (语音系统): merge a partial voice config and persist it. */
   setVoiceConfig: (patch: Partial<NonNullable<AppConfig["voice"]>>) => Promise<void>;
   refreshOpenThreadModels: () => Promise<void>;
@@ -1330,7 +1326,12 @@ interface PiStore {
 
   // settings overlay
   settingsOpen: boolean;
-  openSettings: () => void;
+  /** 一次性「请求打开的设置栏」（见 openSettings / takeSettingsTab）。 */
+  settingsRequestedTab: string | null;
+  /** 打开设置弹层；可选指定要落到哪一栏（如 "server"）——「手机远程控制」面板用它跳「服务器」。 */
+  openSettings: (tab?: string) => void;
+  /** 消费一次性「要打开的栏」请求（Settings 挂载/打开时读取，读完清空）。 */
+  takeSettingsTab: () => string | null;
   closeSettings: () => void;
 
   // search overlay
@@ -1784,6 +1785,7 @@ export const useStore = create<PiStore>()((set, get) => {
   extuiQueue: [],
   choiceDrafts: {},
   settingsOpen: false,
+  settingsRequestedTab: null,
   trashEntries: [],
 
   bootstrap: async () => {
@@ -2801,17 +2803,16 @@ export const useStore = create<PiStore>()((set, get) => {
     }
   },
 
-  setAppUpdateSource: async (patch) => {
+  setServerConfig: async (patch) => {
     try {
       const config = await window.pi.app.setConfig(patch);
       set({ config });
     } catch (e: any) {
       const zh = useStore.getState().config?.language === "zh";
-      get().pushToast("error", e?.message || (zh ? "保存更新源失败" : "Failed to save the update source"));
+      get().pushToast("error", e?.message || (zh ? "保存服务器设置失败" : "Failed to save server settings"));
       throw e;
     }
   },
-
   setVoiceConfig: async (patch) => {
     try {
       const current = useStore.getState().config?.voice;
@@ -3417,7 +3418,12 @@ export const useStore = create<PiStore>()((set, get) => {
     get().pushToast("error", message);
   },
 
-  openSettings: () => set({ settingsOpen: true }),
+  openSettings: (tab) => set({ settingsOpen: true, settingsRequestedTab: tab ?? null }),
+  takeSettingsTab: () => {
+    const tab = get().settingsRequestedTab;
+    if (tab) set({ settingsRequestedTab: null });
+    return tab;
+  },
   closeSettings: () => set({ settingsOpen: false }),
 
   searchOpen: false,
