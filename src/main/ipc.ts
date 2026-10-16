@@ -4285,14 +4285,19 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
        *
        * 为什么单独算：票里首位是「局域网明文」（给手机那种明文页面直连局域网用），
        * 而页面本身**必须是 https**（PWA 的 E2E 依赖 `crypto.subtle`，只在安全上下文可用）。
-       * 且云中继**不再托管 PWA**（它只转发 + 镜像安装包），所以能当页面入口的只有：
-       *   ① 本机中继的局域网 TLS（`wss://<内网IP>:<tlsPort>/ws` → `https://…`）
-       *   ② 自定义中继（用户自己的，可能也托管页面）
+       * 能当页面入口的有三种（按"离设备最近"排序）：
+       *   ① 本机中继的局域网 TLS（`wss://<内网IP>:<tlsPort>/ws` → `https://…`）：同网段最快
+       *   ② **中继服务器的公网 TLS**（`wss://<中继>:9443/ws` → `https://…`）：**任何网络都能打开**
+       *      ——这条是"在外网也能用网页版"的关键，所以 ECS 上仍托管一份 PWA（见 scripts/deploy-pwa.mjs）
+       *   ③ 自定义中继（用户自己的，可能也托管页面）
        * 都没有就返回 null，界面提示用户配局域网 TLS（而不是给一个打不开的地址）。
        */
       pairingPageUrl: (() => {
+        const builtinTls = (builtinServer()?.phoneUrls ?? []).find((url) => url.startsWith("wss://")) || "";
         const candidates = [
           ...lanModeStatus().tlsUrls,
+          // 只有配了激活码（= 这台机器真的用内置中继）时才把它当页面入口
+          (cfg.serverAuthCode || "").trim() ? builtinTls : "",
           (cfg.customRelayUrl || "").trim(),
         ];
         for (const url of candidates) {

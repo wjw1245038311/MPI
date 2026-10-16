@@ -274,8 +274,9 @@ Qoder Mobile 已实现的用户功能（官方文档 + 截图 + H5 bundle 拆解
 - relay 跑在 **aliyun-ecs**：systemd `mpi-relay` 绑 tailnet IP `<relay-tailnet-ip>:9443`，TLS 用
   `tailscale cert aliyun-ecs.<tailnet>.ts.net`（LE，90 天，另有每月续期 cron），
   `RELAY_STATIC_DIR=/var/www/mpi-mobile` 同机托管下载目录（APK + 清单 + 桌面安装包镜像）。
-  **2026-10-16 起云中继不再托管网页版 PWA**：PWA 由**桌面端的本机中继**托管（`localRelayStaticDir`），
-  再经 CF 隧道 / `tailscale serve` / 局域网 TLS 暴露给设备——云中继只做转发，别人自建中继几乎零改动。
+  网页版 PWA **两处都有**：① 云中继那份（`https://<中继>:9443/`）是**外网入口**，用 `npm run deploy-pwa`
+  同步（`scripts/deploy-pwa.mjs`）；② 桌面端本机中继那份（`localRelayStaticDir` + 局域网 TLS / `tailscale serve`）
+  是同网段/同 tailnet 时的近路入口。页面入口由主进程 `pairingPageUrl` 按「离设备最近」排序下发。
 - 入口：PWA `https://aliyun-ecs.<tailnet>.ts.net:9443/`，wss 同址 `/ws`。**仅 tailnet 可达**
   （公网未开）；手机需在 tailnet 内。
 - ⚠️ **WebPush 出口是硬约束**：大陆机器连不上 `fcm.googleapis.com`（relay 日志表现为
