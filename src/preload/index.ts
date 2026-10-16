@@ -339,6 +339,25 @@ const api = {
     getTransportConfig: () => ipcRenderer.invoke("remote:getTransportConfig"),
     setConfig: (patch: { signalingUrl?: string }) => ipcRenderer.invoke("remote:setConfig", patch),
     getRelayStatus: () => ipcRenderer.invoke("remote:getRelayStatus"),
+    /** 激活状态（激活窗口）：本机 id/名称 + 是否已登记 + 名额用量。 */
+    activationState: (): Promise<{
+      ok: boolean;
+      error?: string;
+      hostId: string;
+      name: string;
+      authorized: boolean;
+      server: string | null;
+      customRelay: boolean;
+      open?: boolean;
+      activated?: boolean;
+      devices?: number;
+      maxDevices?: number;
+      enforcing?: boolean;
+    }> => ipcRenderer.invoke("remote:activationState"),
+    /** 「立即激活」：落盘激活码 + 让服务器登记这台（满额返回 HOST_DEVICE_LIMIT）。 */
+    activate: (code: string): Promise<Record<string, unknown>> => ipcRenderer.invoke("remote:activate", code),
+    /** 「解除绑定」：让服务器删掉这台，腾出名额。 */
+    deactivate: (): Promise<Record<string, unknown>> => ipcRenderer.invoke("remote:deactivate"),
     /** 「验证连通性」：一次回答服务器通不通 / 授权码对不对 / 还剩几个设备名额。 */
     testServer: (): Promise<{
       ok: boolean;
@@ -349,6 +368,7 @@ const api = {
       devices?: number;
       maxDevices?: number;
       enforcing?: boolean;
+      activated?: boolean;
     }> => ipcRenderer.invoke("remote:testServer"),
     /** 本机中继（常驻）+ 局域网直连模式（P2）：进程状态 + 是否广告内网地址。
      *  注意：`enabled` = **中继进程在跑**（常驻，所以基本恒为 true）；

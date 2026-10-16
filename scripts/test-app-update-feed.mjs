@@ -38,29 +38,29 @@ assert.ok(builtin.phoneUrls.some((url) => url.startsWith("wss://")), "手机候�
 const GITHUB = { source: "github", url: null, token: "" };
 assert.deepEqual(resolveAppUpdateFeed({}), GITHUB, "什么都没配 → 只用 GitHub");
 assert.deepEqual(
-  resolveAppUpdateFeed({ serverSource: "builtin" }),
+  resolveAppUpdateFeed({}),
   GITHUB,
   "选了内置服务器但没授权码 → 不许去探测它的镜像",
 );
-assert.deepEqual(resolveAppUpdateFeed({ serverSource: "builtin", authCode: "   " }), GITHUB, "空白授权码同样不算授权");
+assert.deepEqual(resolveAppUpdateFeed({ authCode: "   " }), GITHUB, "空白授权码同样不算授权");
 assert.deepEqual(
-  resolveAppUpdateFeed({ serverSource: "custom", authCode: "code-1" }),
+  resolveAppUpdateFeed({ customRelayUrl: "wss://relay.example.com/ws", authCode: "code-1" }),
   { source: "github", url: null, token: "code-1" },
   "自定义服务器不镜像安装包 → 更新走 GitHub",
 );
 assert.deepEqual(
-  resolveAppUpdateFeed({ serverSource: "builtin", authCode: " code-1 ", mirrorUrl: builtin.mirrorUrl }),
+  resolveAppUpdateFeed({ authCode: " code-1 ", mirrorUrl: builtin.mirrorUrl }),
   { source: "relay", url: builtin.mirrorUrl, token: "code-1" },
   "内置 + 有码 → 用它自己的镜像（令牌 trim 后原样透传）",
 );
 assert.deepEqual(
-  resolveAppUpdateFeed({ serverSource: "builtin", authCode: "code-1", mirrorUrl: "" }),
+  resolveAppUpdateFeed({ authCode: "code-1", mirrorUrl: "" }),
   { source: "github", url: null, token: "code-1" },
   "内置描述坏掉（取不到镜像地址）→ 退回 GitHub，而不是崩",
 );
 // env 覆盖：调试/自建镜像用，不选内置也生效
 assert.deepEqual(
-  resolveAppUpdateFeed({ overrideUrl: "https://relay.example.com/download/app/", serverSource: "custom" }),
+  resolveAppUpdateFeed({ overrideUrl: "https://relay.example.com/download/app/", customRelayUrl: "wss://relay.example.com/ws" }),
   { source: "relay", url: "https://relay.example.com/download/app/", token: "" },
 );
 assert.deepEqual(resolveAppUpdateFeed({ overrideUrl: "不是地址" }), GITHUB, "非法覆盖地址 → 当作没有");
@@ -75,10 +75,12 @@ assert.match(builtinSource, /不是安全机制/, "必须写明这层只是混�
 
 // --- 配置层：新字段 + 旧字段迁移 --------------------------------------------------
 const config = read("src", "main", "config.ts");
-assert.match(config, /serverSource\?: "builtin" \| "custom"/);
+assert.match(config, /customRelayUrl\?: string/, "配置项：自定义中继（填了 → 更新走 GitHub）");
+assert.match(config, /customRelayToken\?: string/);
 assert.match(config, /serverAuthCode\?: string/);
-assert.match(config, /legacyUpdateSource/, "旧的 appUpdate* 必须有迁移路径");
-assert.match(config, /delete cachedRecord\.appUpdateSource/, "旧字段要从中去掉，不能两套概念共存");
+assert.match(config, /legacy\.appUpdateEcsToken/, "旧的 appUpdate* 必须有迁移路径（把令牌当激活码带走）");
+assert.match(config, /for \(const key of \[/, "旧字段要一次性抹掉，不能两套概念共存");
+assert.match(config, /customRelayUrl = url/, "旧通道列表里的公网地址要迁成 customRelay");
 
 // --- 客户端：源跟随服务器、短超时预探测、令牌走 Authorization 头 --------------------
 const updater = read("src", "main", "app-updater.ts");

@@ -385,25 +385,45 @@ let authDevices = loadAuthDevices();
 /** 日志里不回显明文码（前 8 位已够区分）。 */
 const codeFp = (code) => String(code || "").slice(0, 8);
 
-/** 登记/续期一次注册；满额返回 `{ok:false}`（调用方回 HOST_DEVICE_LIMIT 并断开）。 */
-function registerAuthDevice(code, hostId) {
-  if (!AUTH_DEVICES_FILE) return { ok: true, devices: 0, counted: false };
+/** 登记/续期一次注册（`name` = 机器名，给人看）；满额返回 `{ok:false}`。 */
+function registerAuthDevice(code, hostId, name = "") {
+  if (!AUTH_DEVICES_FILE) return { ok: true, devices: 0, counted: false, activated: true };
   const list = authDevices[code] || (authDevices[code] = []);
   const now = new Date().toISOString();
+  const cleanName = String(name || "").trim().slice(0, 64);
   const existing = list.find((item) => item.hostId === hostId);
   if (existing) {
     existing.lastSeen = now;
+    if (cleanName) existing.name = cleanName;
     saveAuthDevices();
-    return { ok: true, devices: list.length, counted: false };
+    return { ok: true, devices: list.length, counted: false, activated: true };
   }
-  if (list.length >= AUTH_MAX_DEVICES) return { ok: false, devices: list.length, counted: false };
-  list.push({ hostId, name: "", firstSeen: now, lastSeen: now });
+  if (list.length >= AUTH_MAX_DEVICES) return { ok: false, devices: list.length, counted: false, activated: false };
+  list.push({ hostId, name: cleanName, firstSeen: now, lastSeen: now });
   saveAuthDevices();
-  return { ok: true, devices: list.length, counted: true };
+  return { ok: true, devices: list.length, counted: true, activated: true };
 }
 
-/** `/authz/check` 的返回：只给用量与码指纹，不回显设备 id。 */
-function authzSummary(code) {
+/** 解除绑定（激活窗口的「解除绑定」）：删掉这台 → 腾出名额。 */
+function removeAuthDevice(code, hostId) {
+  if (!AUTH_DEVICES_FILE) return { removed: false, devices: 0 };
+  const list = authDevices[code] || [];
+  authDevices[code] = list.filter((item) => item.hostId !== hostId);
+  const removed = authDevices[code].length !== list.length;
+  if (removed) saveAuthDevices();
+  return { removed, devices: authDevices[code].length };
+}
+
+/** 设备清单（激活窗口自己看：带 hostId 是为了标出「这台」）。 */
+function authzDevices(code) {
+  return (authDevices[code] || []).map((item) => ({ hostId: item.hostId, name: item.name, lastSeen: item.lastSeen }));
+}
+
+/**
+ * `/authz/check` 的返回：用量 + 码指纹 + （给了 hostId 时）这台有没有登记。
+ * `deviceList` 默认不回（避免拿码的人枚举别人的机器），激活窗口显式要才给。
+ */
+function authzSummary(code, hostId = "", includeDevices = false) {
   const list = authDevices[code] || [];
   return {
     ok: true,
@@ -411,7 +431,34 @@ function authzSummary(code) {
     devices: list.length,
     maxDevices: AUTH_MAX_DEVICES,
     enforcing: Boolean(AUTH_DEVICES_FILE),
+    ...(hostId ? { activated: list.some((item) => item.hostId === hostId) } : {}),
+    ...(includeDevices ? { deviceList: authzDevices(code) } : {}),
   };
+}
+
+/** 读一个小 JSON 请求体（限 8KB；中继不解析业务帧，但自检/激活这几条要参数）。 */
+function readJsonBody(req, limit = 8 * 1024) {
+  return new Promise((resolve) => {
+    let size = 0;
+    const chunks = [];
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        resolve(null);
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
+      } catch {
+        resolve(null);
+      }
+    });
+    req.on("error", () => resolve(null));
+  });
 }
 
 /** 检查结果：ok / 拒因（调用方负责回错并断开）；`token` = 命中的授权码（空 = 开放模式）。 */
@@ -921,7 +968,7 @@ function handleDeviceFrame(conn, raw) {
 }
 
 // --- server -----------------------------------------------------------------------------
-function onRequest(req, res) {
+async function onRequest(req, res) {
   if (req.method === "GET" && req.url?.split("?")[0] === "/healthz") {
     const onlineDevices = [...devices.values()].filter((d) => isWsOpen(d.ws)).length;
     const paired = [...devices.values()].filter((d) => d.status === "approved").length;
@@ -935,9 +982,53 @@ function onRequest(req, res) {
     res.end(JSON.stringify(vapidKey ? { publicKey: vapidKey.pubB64u } : { error: "push not configured" }));
     return;
   }
+  /**
+   * 激活（授权）三件套（2026-10-16）：
+   *   GET  /authz/check       → 通不通 / 码对不对 / 名额用量（「验证连通性」）
+   *   POST /authz/activate    → 登记这台（「立即激活」；满额 409）
+   *   POST /authz/deactivate  → 删掉这台（「解除绑定」，腾名额）
+   * 都要 `Authorization: Bearer <激活码>`；中继没配码列表时按开放模式返回。
+   */
+  const authzPath = req.url?.split("?")[0] || "";
+  if (req.method === "POST" && (authzPath === "/authz/activate" || authzPath === "/authz/deactivate")) {
+    const reply = (status, body) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    const body = await readJsonBody(req);
+    const hostId = body && typeof body.hostId === "string" ? body.hostId.trim().slice(0, 64) : "";
+    if (!hostId) {
+      reply(400, { ok: false, error: "MISSING_HOST_ID" });
+      return;
+    }
+    if (!hostAuthRequired()) {
+      reply(200, { ok: true, open: true, code: "", devices: 0, maxDevices: AUTH_MAX_DEVICES, enforcing: false, activated: true });
+      return;
+    }
+    const code = matchedHostToken(authCodeFromRequest(req));
+    if (!code) {
+      reply(401, { ok: false, error: "BAD_CODE" });
+      return;
+    }
+    if (authzPath === "/authz/activate") {
+      const reg = registerAuthDevice(code, hostId, body && typeof body.name === "string" ? body.name : "");
+      if (!reg.ok) {
+        log(`auth activate rejected ${codeFp(code)} host=${hostId} (limit ${reg.devices}/${AUTH_MAX_DEVICES})`);
+        reply(409, { ok: false, error: "HOST_DEVICE_LIMIT", devices: reg.devices, maxDevices: AUTH_MAX_DEVICES });
+        return;
+      }
+      log(`auth activate ${codeFp(code)} host=${hostId}${reg.counted ? "" : " (already bound)"} (${reg.devices}/${AUTH_MAX_DEVICES})`);
+      reply(200, authzSummary(code, hostId, true));
+      return;
+    }
+    const removed = removeAuthDevice(code, hostId);
+    log(`auth deactivate ${codeFp(code)} host=${hostId} removed=${removed.removed} (${removed.devices}/${AUTH_MAX_DEVICES})`);
+    reply(200, { ...authzSummary(code, hostId, true), removed: removed.removed });
+    return;
+  }
   // 授权码自检（桌面端「验证连通性」用）：服务器通不通 / 码对不对 / 还剩几个设备名额。
   // 只回用量与码指纹，不回设备 id（那些留在设备表文件里）。
-  if (req.method === "GET" && req.url?.split("?")[0] === "/authz/check") {
+  if (req.method === "GET" && authzPath === "/authz/check") {
     const sendJson = (status, body) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
@@ -1022,7 +1113,7 @@ wss.on("connection", (ws) => {
         }
         // 设备额度（一个码最多 N 台；同一 hostId 重连不占新名额）。仅当配了设备表文件时启用。
         if (auth.token) {
-          const reg = registerAuthDevice(auth.token, hostId);
+          const reg = registerAuthDevice(auth.token, hostId, str(frame.name, 64));
           if (!reg.ok) {
             log(`host ${hostId} rejected (device limit ${reg.devices}/${AUTH_MAX_DEVICES} for code ${codeFp(auth.token)})`);
             send(ws, { type: "relay.error", code: "HOST_DEVICE_LIMIT", max: AUTH_MAX_DEVICES, devices: reg.devices });

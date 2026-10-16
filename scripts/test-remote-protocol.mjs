@@ -113,9 +113,11 @@ assert.doesNotMatch(remotePanel, />Host ID<|>Transport<|>Last error<|STUN URLs|s
 assert.match(remotePanel, /手机将连接/, "远程面板要显示主进程算出的最终手机地址");
 assert.match(remotePanel, /unreachableForPhone/, "必须能识别手机大概率连不上的地址（tailnet/内网）");
 const serverPanel = readFileSync(resolve(root, "src", "renderer", "src", "components", "ServerPanel.tsx"), "utf8");
-assert.match(serverPanel, /手机地址/, "服务器面板必须能填/改给手机的地址（手机连的公网地址）");
-assert.match(serverPanel, /unreachableForPhone/, "服务器面板同样要报警不可达地址");
-assert.match(serverPanel, /serverAuthCode/, "服务器面板必须能填授权码（内置服务器的凭证）");
+assert.match(serverPanel, /自定义中继|Custom relay/, "转发设置面板必须能填自己的中继地址（手机连的公网地址）");
+assert.match(serverPanel, /unreachableForPhone/, "转发设置面板要报警手机连不上的地址（tailnet/内网）");
+const activationDialog = readFileSync(resolve(root, "src", "renderer", "src", "components", "ActivationDialog.tsx"), "utf8");
+assert.match(activationDialog, /激活码|Access code/, "激活窗口必须能粘贴激活码");
+assert.match(activationDialog, /解除绑定|Unbind/, "激活窗口必须能解除绑定（换机/重装腾名额）");
 assert.match(
   readFileSync(resolve(root, "src", "main", "ipc.ts"), "utf8"),
   /mobileRelayUrl: cfg\.mobileRelayUrl \|\| ""/,

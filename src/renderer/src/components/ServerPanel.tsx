@@ -1,40 +1,20 @@
 /**
- * 设置 →「服务器」（2026-10-16 定稿：**默认极简**）。
+ * 设置 →「转发设置」（2026-10-16 定稿，照用户给的参考界面）。
  *
- * 主界面只有一张卡：当前转发服务器 + 状态 + `[验证连通性]` + `[配置]`。
- * 所有可配置项都在 `[配置]` 弹窗里：
- *   · 授权码（填了就用内置服务器：转发与更新都走它）
- *   · 「用自己的服务器」（折叠：手机地址 / 主机上行 / 准入令牌）
- *   · 「高级」（折叠：多通道 / 本机静态目录 / 局域网模式）
+ * 用户口径与参考图（某国产软件「代理设置」+「激活授权」两张图）：
+ *   · **转发地址**：一个复选框 + 地址 + 令牌，就这三行 —— 「用户自己设置代理就用用户自己的，
+ *     没设置看激活情况走内置」。所以这里没有来源下拉、没有状态卡、没有通道列表、没有手动选路；
+ *   · **授权**：是另一件事，放在独立的「激活授权」小窗里（设备标识 / 设备名称 / 粘贴激活码 /
+ *     激活状态 / 立即激活 · 解除绑定），入口就是本页一个按钮。
  *
- * 三条设计约束（都是用户直接定的）：
- *   1. **不出现「内置/自定义」这类术语** —— 填码即用内置服务器，地址不展示（以混淆常量内置）；
- *   2. 选路交给手机：配对票始终带**全部候选**（局域网 → 云中继 → 备用），所以这里没有「手动/自动」开关；
- *   3. 一个授权码最多 3 台设备，额度由服务端按 hostId 记账；「验证连通性」会把用量显示出来。
+ * 多通道通道列表已按用户决定删除；局域网模式与本机静态目录「位置待定」，暂存在本页折叠区，
+ * 不占默认版面（等用户整理清楚再决定搬去「高级设置」还是删掉）。
  */
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import {
-  channelDotColor,
-  statusClass,
-  statusLabel,
-  unreachableForPhone,
-  type LanModeStatus,
-  type RelayChannelRow,
-  type RelayStatus,
-} from "../lib/remote-panel-shared";
-import { Close, Cloud, Plug, Shield } from "./icons";
-
-interface TestResult {
-  ok: boolean;
-  error?: string;
-  server?: string;
-  source?: "builtin" | "custom";
-  open?: boolean;
-  devices?: number;
-  maxDevices?: number;
-  enforcing?: boolean;
-}
+import { unreachableForPhone, type LanModeStatus, type RelayStatus } from "../lib/remote-panel-shared";
+import { ActivationDialog } from "./ActivationDialog";
+import { Cloud, Shield } from "./icons";
 
 export function ServerPanel({ language }: { language: "en" | "zh" }) {
   const zh = language === "zh";
@@ -43,476 +23,284 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
   const pushToast = useStore((s) => s.pushToast);
 
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
-  const [channelRows, setChannelRows] = useState<RelayChannelRow[]>([]);
-  const [activeChannelId, setActiveChannelId] = useState("");
-  const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
-  const [localRelayStaticDir, setLocalRelayStaticDir] = useState("");
   const [lanMode, setLanMode] = useState<LanModeStatus | null>(null);
+  const [localRelayStaticDir, setLocalRelayStaticDir] = useState("");
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<TestResult | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [activationOpen, setActivationOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  // 弹窗草稿（打开时回填；授权码永远不回填值，只回填「有没有」）
-  const [sourceDraft, setSourceDraft] = useState<"builtin" | "custom">("builtin");
-  const [authCodeDraft, setAuthCodeDraft] = useState("");
-  const [showCustom, setShowCustom] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  // 表单草稿（打开页面时从配置回填；令牌/激活码永不回填值，只回填「有没有」）
+  const [custom, setCustom] = useState(false);
+  const [relayUrl, setRelayUrl] = useState("");
+  const [relayToken, setRelayToken] = useState("");
 
-  const authorized = Boolean(config?.serverAuthCodeSet);
-  const usingBuiltin = (config?.serverSource ?? "builtin") !== "custom";
-  const serverName = usingBuiltin
-    ? zh
-      ? "内置服务器（我的 ECS）"
-      : "Built-in server (my ECS)"
-    : zh
-      ? "自定义服务器"
-      : "Custom server";
+  const activated = Boolean(config?.serverAuthCodeSet);
+  const customTokenSet = Boolean(config?.customRelayTokenSet);
   const lastError = (relayStatus as any)?.lastErrorText || relayStatus?.lastError || "";
 
   useEffect(() => {
     if (!config) return;
-    setSourceDraft(config.serverSource === "custom" ? "custom" : "builtin");
-    setShowCustom(config.serverSource === "custom");
+    setCustom(Boolean((config.customRelayUrl || "").trim()));
+    setRelayUrl(config.customRelayUrl || "");
     if (typeof config.localRelayStaticDir === "string") setLocalRelayStaticDir(config.localRelayStaticDir);
-  }, [config?.serverSource, config?.localRelayStaticDir]);
+  }, [config?.customRelayUrl, config?.localRelayStaticDir]);
 
-  const loadRelay = async (syncDrafts: boolean) => {
+  const loadRelay = async () => {
     try {
-      const relay = (await window.pi.remote.getRelayStatus()) as RelayStatus;
-      setRelayStatus(relay);
-      if (syncDrafts) {
-        setChannelRows((relay.relayChannels ?? []).map((row) => ({ ...row, tokenDraft: "" })));
-        setActiveChannelId(relay.activeChannelId || relay.relayChannels?.find((row) => row.enabled && row.id !== "lan")?.id || "");
-      }
+      setRelayStatus((await window.pi.remote.getRelayStatus()) as RelayStatus);
+      setLanMode((await window.pi.remote.getLanMode()) as LanModeStatus);
     } catch {
       /* 面板可能比 IPC 桥活得久一点（重载瞬间） */
     }
   };
 
   useEffect(() => {
-    void loadRelay(true);
-    void (async () => {
-      try {
-        setLanMode((await window.pi.remote.getLanMode()) as LanModeStatus);
-      } catch {
-        setLanMode(null);
-      }
-    })();
-    const timer = window.setInterval(() => void loadRelay(false), 2000);
+    void loadRelay();
+    const timer = window.setInterval(() => void loadRelay(), 3000);
     return () => window.clearInterval(timer);
   }, []);
 
-  /** 「验证连通性」：服务器可达 + 授权码有效 + 设备名额用量（一次请求）。 */
+  /** 「验证连通性」：服务器可达 + 激活码有效 + 本机是否已登记 + 名额用量。 */
   const verify = async () => {
     setTesting(true);
     try {
-      const result = (await window.pi.remote.testServer()) as TestResult;
-      setTestResult(result);
-      if (result.ok) {
-        pushToast(
-          "success",
-          result.open
-            ? zh
-              ? `服务器可达：${result.server}（该服务器未启用授权码校验）`
-              : `Reachable: ${result.server} (no access-code check)`
-            : zh
-              ? `已连通：已用 ${result.devices ?? 0}/${result.maxDevices ?? 0} 台设备`
-              : `Connected: ${result.devices ?? 0}/${result.maxDevices ?? 0} devices used`,
-        );
-      } else {
-        pushToast("error", verifyErrorText(result.error, zh));
+      const result: any = await window.pi.remote.testServer();
+      if (!result?.ok) {
+        setTestResult({ ok: false, text: verifyErrorText(result?.error, zh) });
+        pushToast("error", verifyErrorText(result?.error, zh));
+        return;
       }
+      const text = result.open
+        ? zh
+          ? `${result.server} 可达（该服务器未启用激活码校验）`
+          : `${result.server} reachable (no access-code check)`
+        : zh
+          ? `${result.server} 已连通 · 设备名额 ${result.devices ?? 0}/${result.maxDevices ?? 0}${result.activated === false ? "（本机尚未登记）" : ""}`
+          : `${result.server} connected · devices ${result.devices ?? 0}/${result.maxDevices ?? 0}`;
+      setTestResult({ ok: true, text });
+      pushToast("success", text);
     } finally {
       setTesting(false);
     }
   };
 
-  const saveSource = async (patch?: { serverAuthCode: string }) => {
-    setBusy(true);
+  /** 保存「转发地址」：勾了就用自定义中继（清掉内置激活码以外的绑定不影响），没勾就回到内置。 */
+  const saveRelay = async () => {
+    setSaving(true);
     try {
+      const url = relayUrl.trim();
+      if (custom && !/^wss?:\/\//i.test(url)) {
+        pushToast("error", zh ? "地址要以 ws:// 或 wss:// 开头" : "Address must start with ws:// or wss://");
+        return;
+      }
       await setServerConfig({
-        serverSource: sourceDraft,
-        ...(patch ?? (authCodeDraft.trim() ? { serverAuthCode: authCodeDraft.trim() } : {})),
+        customRelayUrl: custom ? url : "",
+        ...(custom && relayToken.trim() ? { customRelayToken: relayToken.trim() } : {}),
+        ...(!custom ? { customRelayToken: "" } : {}),
+        localRelayStaticDir: localRelayStaticDir.trim(),
       });
-      if (!patch) setAuthCodeDraft("");
-      await loadRelay(true);
-      setDialogOpen(false);
-      pushToast("success", zh ? "服务器设置已保存" : "Server settings saved");
+      setRelayToken("");
+      await loadRelay();
+      pushToast("success", zh ? "转发设置已保存" : "Relay settings saved");
     } catch {
       // store 已经弹过错误提示
     } finally {
-      setBusy(false);
-    }
-  };
-
-  const updateChannel = (id: string, patch: Partial<RelayChannelRow>) => {
-    setChannelRows((rows) => rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
-  };
-  const addChannel = () => {
-    const id = `ch${Date.now().toString(36)}`;
-    setChannelRows((rows) => [
-      ...rows,
-      { id, label: zh ? "新服务器" : "New server", phoneUrl: "", hostUrl: "", hostUrlConfigured: false, hasToken: false, enabled: true, kind: "remote", tokenDraft: "" },
-    ]);
-    setEditingChannelId(id);
-  };
-  const removeChannel = (id: string) => {
-    setChannelRows((rows) => rows.filter((row) => row.id !== id));
-    if (activeChannelId === id) setActiveChannelId("");
-  };
-
-  /** 保存自定义服务器（含高级里的通道列表与静态目录；token 留空 = 保持现有）。 */
-  const saveCustom = async () => {
-    setBusy(true);
-    try {
-      await window.pi.app.setConfig({
-        serverSource: "custom",
-        relayChannels: channelRows
-          .filter((row) => row.id !== "lan")
-          .map((row) => ({
-            id: row.id,
-            label: row.label.trim() || row.id,
-            phoneUrl: row.phoneUrl.trim(),
-            ...(row.hostUrlConfigured && row.hostUrl.trim() ? { hostUrl: row.hostUrl.trim() } : {}),
-            ...(row.tokenDraft.trim() ? { token: row.tokenDraft.trim() } : {}),
-            enabled: row.enabled,
-            kind: row.kind,
-          })),
-        localRelayStaticDir: localRelayStaticDir.trim(),
-      });
-      await loadRelay(true);
-      setDialogOpen(false);
-      pushToast("success", zh ? "服务器已保存（配对二维码请重新生成）" : "Server saved (regenerate the pairing QR)");
-    } catch (error: any) {
-      pushToast("error", error?.message || (zh ? "保存服务器失败" : "Failed to save the server"));
-    } finally {
-      setBusy(false);
+      setSaving(false);
     }
   };
 
   const toggleLanMode = async () => {
-    setBusy(true);
     try {
       setLanMode((await window.pi.remote.setLanMode({ enabled: !lanMode?.advertiseLan })) as LanModeStatus);
-    } finally {
-      setBusy(false);
+    } catch {
+      /* 忽略：状态会由轮询纠正 */
     }
   };
 
-  const primaryRow = channelRows.find((row) => row.kind === "remote" && row.enabled) || channelRows.find((row) => row.kind === "remote");
-  const phoneRelayUrl = relayStatus?.phoneRelayUrl || "";
+  /** 当前生效的是谁：自定义地址 > 内置（激活码）> 仅局域网/本机。 */
+  const effectiveSource = custom
+    ? zh
+      ? "自定义中继"
+      : "Custom relay"
+    : activated
+      ? zh
+        ? "内置服务器（我的 ECS）"
+        : "Built-in server (my ECS)"
+      : zh
+        ? "未激活（仅局域网/本机）"
+        : "Not activated (LAN/local only)";
 
   return (
     <div className="set-remote-stack">
-      {/* ---- 唯一的主卡：当前转发服务器 + 状态 + 两个按钮 ---- */}
       <div className="set-card">
         <div className="set-card-head">
           <span className="set-card-icon"><Cloud size={14} /></span>
-          <div className="set-card-title">{zh ? "转发服务器" : "Relay server"}</div>
+          <div className="set-card-title">{zh ? "转发设置" : "Relay settings"}</div>
         </div>
-        <div className="set-remote-status" aria-live="polite">
-          <span className="set-diag-k">{serverName}</span>
-          <span className={`set-remote-status-value ${statusClass(relayStatus?.state || "disabled")}`}>
-            <span className="set-remote-status-dot" aria-hidden="true" />
-            {statusLabel(relayStatus?.state || "disabled", zh)}
-            {lastError ? ` · ${lastError}` : ""}
-          </span>
+        <div className="set-hint">
+          {zh
+            ? "手机经它连到本机；中继只转发不解析，提示词、代码、会话与文件端到端加密。自己没搭中继就不用勾，填个激活码走内置服务器就行。"
+            : "Phones reach this machine through it; the relay only forwards, prompts, code, sessions and files stay end-to-end encrypted. If you don't run your own relay, leave this unchecked and just paste an access code."}
         </div>
-        {usingBuiltin && !authorized && (
-          <div className="set-hint">
-            {zh ? "还没填授权码：转发与更新都走 GitHub。点「配置」粘贴授权码即可用我的服务器。" : "No access code yet — forwarding and updates use GitHub. Click Configure to paste one."}
-          </div>
+
+        <label className="set-check" style={{ marginTop: 10 }}>
+          <input
+            type="checkbox"
+            checked={custom}
+            onChange={(e) => {
+              setCustom(e.target.checked);
+              setTestResult(null);
+            }}
+          />
+          <span>{zh ? "自定义中继" : "Custom relay"}</span>
+        </label>
+
+        {custom && (
+          <>
+            <label className="set-addprov-field wide">
+              <span>{zh ? "地址" : "Address"}</span>
+              <input
+                className="set-input"
+                value={relayUrl}
+                onChange={(e) => setRelayUrl(e.target.value)}
+                placeholder="例如 wss://relay.example.com/ws"
+                spellCheck={false}
+              />
+            </label>
+            <label className="set-addprov-field wide">
+              <span>{zh ? "令牌" : "Token"}</span>
+              <input
+                className="set-input"
+                type="password"
+                autoComplete="off"
+                value={relayToken}
+                onChange={(e) => setRelayToken(e.target.value)}
+                placeholder={customTokenSet ? (zh ? "已设置，留空则保持不变" : "set; leave empty to keep") : zh ? "你的中继要求的准入令牌（可留空）" : "your relay's token (optional)"}
+                spellCheck={false}
+              />
+            </label>
+            {unreachableForPhone(relayUrl) && (
+              <div className="set-hint" style={{ color: "#c0392b" }}>
+                {zh ? "⚠ tailnet / 内网地址手机连不上，扫描后会卡在连接超时。" : "⚠ Tailnet/private address — a phone outside that network cannot reach it."}
+              </div>
+            )}
+          </>
         )}
-        <div className="set-diag-btns" style={{ marginTop: 8 }}>
+
+        <div className="set-diag-btns" style={{ marginTop: 10 }}>
+          <button className="set-btn primary" onClick={() => void saveRelay()} disabled={saving}>
+            {saving ? (zh ? "保存中…" : "Saving…") : zh ? "保存" : "Save"}
+          </button>
           <button className="set-btn ghost" onClick={() => void verify()} disabled={testing}>
             {testing ? (zh ? "验证中…" : "Testing…") : zh ? "验证连通性" : "Test connection"}
           </button>
-          <button className="set-btn primary" onClick={() => setDialogOpen(true)} disabled={busy}>
-            {zh ? "配置" : "Configure"}
-          </button>
         </div>
+
         {testResult && (
           <div className="set-hint" style={testResult.ok ? undefined : { color: "#c0392b" }}>
-            {testResult.ok
-              ? testResult.open
-                ? zh
-                  ? `✓ ${testResult.server} 可达（该服务器未启用授权码校验）`
-                  : `✓ ${testResult.server} reachable (no access-code check)`
-                : zh
-                  ? `✓ 已连通 ${testResult.server} · 设备名额 ${testResult.devices ?? 0}/${testResult.maxDevices ?? 0}`
-                  : `✓ ${testResult.server} · devices ${testResult.devices ?? 0}/${testResult.maxDevices ?? 0}`
-              : `✗ ${verifyErrorText(testResult.error, zh)}`}
+            {testResult.ok ? `✓ ${testResult.text}` : `✗ ${testResult.text}`}
           </div>
         )}
-        {phoneRelayUrl && (
-          <div className="set-hint" style={{ wordBreak: "break-all" }}>
-            {zh ? "手机将连接：" : "Phone connects to: "}
-            <code>{phoneRelayUrl}</code>
-          </div>
-        )}
+
+        <div className="set-remote-status" style={{ marginTop: 10 }}>
+          <span className="set-diag-k">{zh ? "当前" : "Current"}</span>
+          <span className={`set-remote-status-value ${custom || activated ? "connected" : "disabled"}`}>
+            <span className="set-remote-status-dot" aria-hidden="true" />
+            {effectiveSource}
+            {lastError ? ` · ${lastError}` : ""}
+          </span>
+        </div>
       </div>
 
-      {/* ---- 配置弹窗 ---- */}
-      {dialogOpen && (
-        <div className="settings-backdrop" onMouseDown={() => setDialogOpen(false)}>
-          <div className="set-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" style={{ width: "min(560px, 94vw)" }}>
-            <section className="set-main">
-              <header className="set-head">
-                <h2><Cloud size={16} style={{ verticalAlign: "-3px", marginRight: 8 }} />{zh ? "配置服务器" : "Configure server"}</h2>
-                <button className="set-iconbtn" onClick={() => setDialogOpen(false)} aria-label={zh ? "关闭" : "Close"}>
-                  <Close size={14} />
-                </button>
-              </header>
-              <div className="set-body">
-                <div className="set-card">
-                  <div className="set-card-title">{zh ? "授权码" : "Access code"}</div>
-                  <div className="set-hint">
-                    {zh
-                      ? "有码：转发对话与安装包更新都走我的 ECS（地址内置、不显示）；没码：只能用你自己的服务器，更新走 GitHub。一个码最多 3 台设备。"
-                      : "With a code, forwarding and app updates use my ECS (address built in, never shown). Without one, use your own server and updates come from GitHub. One code covers up to 3 devices."}
-                  </div>
-                  <label className="set-addprov-field wide">
-                    <span>{zh ? "授权码" : "Access code"}</span>
-                    <input
-                      className="set-input"
-                      type="password"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={authCodeDraft}
-                      onChange={(e) => {
-                        setAuthCodeDraft(e.target.value);
-                        if (e.target.value.trim()) setSourceDraft("builtin");
-                      }}
-                      placeholder={
-                        authorized ? (zh ? "已设置，留空则保持不变" : "set; leave empty to keep") : zh ? "粘贴授权码" : "paste the access code"
-                      }
-                    />
-                  </label>
-                  <div className="set-diag-btns" style={{ marginTop: 8 }}>
-                    <button className="set-btn primary" onClick={() => void saveSource()} disabled={busy || sourceDraft !== "builtin"}>
-                      {busy ? (zh ? "保存中…" : "Saving…") : zh ? "保存并启用" : "Save & enable"}
-                    </button>
-                    {authorized && (
-                      <button className="set-btn ghost" onClick={() => void saveSource({ serverAuthCode: "" })} disabled={busy}>
-                        {zh ? "清除授权码" : "Clear code"}
-                      </button>
-                    )}
-                  </div>
-                  <div className="set-hint">
-                    <Shield size={12} style={{ verticalAlign: "-2px", marginRight: 4 }} />
-                    {authorized
-                      ? zh
-                        ? "当前：内置服务器（已授权）"
-                        : "Current: built-in server (authorized)"
-                      : zh
-                        ? "当前：未授权"
-                        : "Current: not authorized"}
-                  </div>
-                </div>
-
-                <div className="set-card">
-                  <details open={showCustom} onToggle={(e) => setShowCustom((e.target as HTMLDetailsElement).open)}>
-                    <summary className="set-card-title" style={{ cursor: "pointer" }}>
-                      <Plug size={13} style={{ verticalAlign: "-2px", marginRight: 6 }} />
-                      {zh ? "用自己的服务器" : "Use my own server"}
-                    </summary>
-                    <div className="set-hint" style={{ marginTop: 8 }}>
-                      {zh
-                        ? "把转发指向你自己的中继（应用更新仍走 GitHub）。保存后会切换到自定义服务器。"
-                        : "Point forwarding at your own relay (app updates still come from GitHub). Saving switches to the custom server."}
-                    </div>
-                    {primaryRow ? (
-                      <>
-                        <label className="set-addprov-field wide">
-                          <span>{zh ? "手机地址（公网可达）" : "Phone URL (public)"}</span>
-                          <input
-                            className="set-input"
-                            value={primaryRow.phoneUrl}
-                            onChange={(e) => updateChannel(primaryRow.id, { phoneUrl: e.target.value })}
-                            placeholder="wss://relay.example.com/ws"
-                            spellCheck={false}
-                          />
-                        </label>
-                        <label className="set-addprov-field wide">
-                          <span>{zh ? "主机上行（留空 = 推导）" : "Host uplink (empty = derived)"}</span>
-                          <input
-                            className="set-input"
-                            value={primaryRow.hostUrlConfigured ? primaryRow.hostUrl : ""}
-                            onChange={(e) => updateChannel(primaryRow.id, { hostUrl: e.target.value })}
-                            placeholder={primaryRow.hostUrl || "ws://127.0.0.1:9001/ws"}
-                            spellCheck={false}
-                          />
-                        </label>
-                        <label className="set-addprov-field wide">
-                          <span>{zh ? "准入令牌（你的中继要求的，可留空）" : "Access token (your relay's own; optional)"}</span>
-                          <input
-                            className="set-input"
-                            value={primaryRow.tokenDraft}
-                            onChange={(e) => updateChannel(primaryRow.id, { tokenDraft: e.target.value })}
-                            placeholder={primaryRow.hasToken ? (zh ? "已设置，留空则保持不变" : "set; leave empty to keep") : ""}
-                            spellCheck={false}
-                          />
-                        </label>
-                        {unreachableForPhone(primaryRow.phoneUrl) && (
-                          <div className="set-hint" style={{ color: "#c0392b" }}>
-                            {zh ? "⚠ tailnet / 内网地址手机连不上，扫描后会卡在连接超时。" : "⚠ Tailnet/private address — a phone outside that network cannot reach it."}
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div className="set-hint">{zh ? "还没有服务器，先加一条。" : "No server yet — add one."}</div>
-                    )}
-                    <div className="set-diag-btns" style={{ marginTop: 8 }}>
-                      <button className="set-btn ghost" onClick={addChannel} disabled={busy}>
-                        {zh ? "＋ 添加" : "＋ Add"}
-                      </button>
-                      <button className="set-btn primary" onClick={() => void saveCustom()} disabled={busy || !primaryRow}>
-                        {busy ? (zh ? "保存中…" : "Saving…") : zh ? "改为使用它" : "Use this server"}
-                      </button>
-                    </div>
-                  </details>
-                </div>
-
-                <div className="set-card">
-                  <details open={showAdvanced} onToggle={(e) => setShowAdvanced((e.target as HTMLDetailsElement).open)}>
-                    <summary className="set-card-title" style={{ cursor: "pointer" }}>
-                      {zh ? "高级（多通道 · 局域网 · 静态目录）" : "Advanced (channels · LAN · static dir)"}
-                    </summary>
-                    <div className="set-hint" style={{ marginTop: 8 }}>
-                      {zh
-                        ? "配对票会带上全部候选（局域网优先），手机按序试连——不需要手动选路。"
-                        : "The pairing ticket carries every candidate (LAN first) and the phone tries them in order — no manual routing."}
-                    </div>
-                    {channelRows.map((row) => {
-                      const state = relayStatus?.channels?.find((c) => c.key === row.id)?.state;
-                      const editing = editingChannelId === row.id;
-                      return (
-                        <div key={row.id} style={{ borderTop: "1px solid var(--border, #2a3140)", padding: "8px 0" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span
-                              style={{ width: 8, height: 8, borderRadius: "50%", background: channelDotColor(row, state), flex: "0 0 auto" }}
-                              title={row.id === "lan" ? (zh ? "局域网通道（自动探测）" : "LAN channel (auto)") : state || (zh ? "未启用" : "disabled")}
-                            />
-                            <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-                              <strong style={{ fontWeight: 600 }}>{row.label}</strong>
-                              {row.id !== "lan" && !row.enabled && <em style={{ opacity: 0.7, fontSize: 12 }}>{zh ? " 已关闭" : " off"}</em>}
-                              <div style={{ fontSize: 12, wordBreak: "break-all" }}>{row.phoneUrl || (zh ? "（未填手机地址）" : "(no phone URL)")}</div>
-                            </div>
-                            {row.id !== "lan" && (
-                              <div style={{ display: "flex", gap: 6, flex: "0 0 auto" }}>
-                                <button type="button" className="set-btn" onClick={() => updateChannel(row.id, { enabled: !row.enabled })}>
-                                  {row.enabled ? (zh ? "停用" : "Disable") : zh ? "启用" : "Enable"}
-                                </button>
-                                <button type="button" className="set-btn" onClick={() => setEditingChannelId(editing ? null : row.id)}>
-                                  {editing ? (zh ? "收起" : "Collapse") : zh ? "编辑" : "Edit"}
-                                </button>
-                                <button type="button" className="set-btn" onClick={() => removeChannel(row.id)}>
-                                  {zh ? "删除" : "Delete"}
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                          {editing && (
-                            <div style={{ marginTop: 8, paddingLeft: 16 }}>
-                              <label className="set-addprov-field wide">
-                                <span>{zh ? "名称" : "Label"}</span>
-                                <input className="set-input" value={row.label} onChange={(e) => updateChannel(row.id, { label: e.target.value })} spellCheck={false} />
-                              </label>
-                              <label className="set-addprov-field wide">
-                                <span>{zh ? "手机地址" : "Phone URL"}</span>
-                                <input className="set-input" value={row.phoneUrl} onChange={(e) => updateChannel(row.id, { phoneUrl: e.target.value })} spellCheck={false} />
-                              </label>
-                              <label className="set-addprov-field wide">
-                                <span>{zh ? "主机上行（留空 = 推导）" : "Host uplink (empty = derived)"}</span>
-                                <input
-                                  className="set-input"
-                                  value={row.hostUrlConfigured ? row.hostUrl : ""}
-                                  onChange={(e) => updateChannel(row.id, { hostUrl: e.target.value })}
-                                  placeholder={row.hostUrl || "ws://127.0.0.1:9001/ws"}
-                                  spellCheck={false}
-                                />
-                              </label>
-                              <label className="set-addprov-field wide">
-                                <span>{zh ? "准入 token（留空 = 保持现有）" : "Access token (empty = keep)"}</span>
-                                <input
-                                  className="set-input"
-                                  value={row.tokenDraft}
-                                  onChange={(e) => updateChannel(row.id, { tokenDraft: e.target.value })}
-                                  spellCheck={false}
-                                />
-                              </label>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                    <button type="button" className="set-btn" style={{ marginTop: 8 }} onClick={addChannel}>
-                      {zh ? "＋ 添加新服务器地址" : "＋ Add server address"}
-                    </button>
-                    <label className="set-addprov-field wide" style={{ marginTop: 12 }}>
-                      <span>{zh ? "本机中继静态目录（托管 PWA / 下载页，可留空）" : "Local relay static dir (optional)"}</span>
-                      <input
-                        className="set-input"
-                        value={localRelayStaticDir}
-                        onChange={(event) => setLocalRelayStaticDir(event.target.value)}
-                        spellCheck={false}
-                      />
-                    </label>
-                    <div className="set-remote-toggle-row" style={{ marginTop: 12 }}>
-                      <div className="set-remote-toggle-copy">
-                        <span className="set-remote-toggle-label">{zh ? "局域网模式（手机同网段直连）" : "LAN mode (same network)"}</span>
-                        <span className="set-remote-toggle-state">{lanMode?.advertiseLan ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}</span>
-                      </div>
-                      <button
-                        type="button"
-                        className={`set-toggle ${lanMode?.advertiseLan ? "on" : ""}`}
-                        role="switch"
-                        aria-checked={!!lanMode?.advertiseLan}
-                        aria-label={zh ? "切换局域网模式" : "Toggle LAN mode"}
-                        onClick={() => void toggleLanMode()}
-                        disabled={busy}
-                      >
-                        <span className="set-toggle-knob" />
-                      </button>
-                    </div>
-                    {lanMode?.url && (
-                      <div className="set-hint" style={{ wordBreak: "break-all" }}>
-                        {zh ? "手机填写地址：" : "Phone relay URL: "}
-                        <code>{lanMode.url}</code>
-                      </div>
-                    )}
-                    {lanMode?.lastError && <div className="set-hint" style={{ color: "#c0392b" }}>{lanMode.lastError}</div>}
-                    <div className="set-diag-btns" style={{ marginTop: 10 }}>
-                      <button className="set-btn primary" onClick={() => void saveCustom()} disabled={busy}>
-                        {zh ? "保存高级设置" : "Save advanced"}
-                      </button>
-                    </div>
-                  </details>
-                </div>
-              </div>
-            </section>
-          </div>
+      {/* ---- 激活（授权）：独立小窗，这里只放入口 ---- */}
+      <div className="set-card">
+        <div className="set-card-head">
+          <span className="set-card-icon"><Shield size={14} /></span>
+          <div className="set-card-title">{zh ? "激活授权" : "Activation"}</div>
         </div>
-      )}
+        <div className="set-hint">
+          {zh
+            ? "激活码用于「用我的内置服务器转发对话 + 从它更新」；一个码最多 3 台设备。软件功能本身不受限制。"
+            : "The access code enables forwarding and app updates through my built-in server; one code covers up to 3 devices. The app itself is never restricted."}
+        </div>
+        <div className="set-diag-btns" style={{ marginTop: 8 }}>
+          <button className="set-btn primary" onClick={() => setActivationOpen(true)}>
+            {zh ? (activated ? "查看 / 解除绑定" : "立即激活…") : activated ? "Manage activation" : "Activate…"}
+          </button>
+        </div>
+      </div>
+
+      {/* ---- 待定：局域网模式与本机静态目录（位置未定，暂放折叠区） ---- */}
+      <details className="set-card">
+        <summary className="set-card-title" style={{ cursor: "pointer" }}>
+          {zh ? "局域网直连 / 本机静态目录（位置待定）" : "LAN direct / local static dir (placement TBD)"}
+        </summary>
+        <div className="set-hint" style={{ marginTop: 8 }}>
+          {zh
+            ? "这两项还没定好放哪，先留在这里：局域网模式让手机在同一网段直连（不依赖公网中继）。"
+            : "These two are not finalised yet: LAN mode lets the phone connect on the same network without the public relay."}
+        </div>
+        <div className="set-remote-toggle-row">
+          <div className="set-remote-toggle-copy">
+            <span className="set-remote-toggle-label">{zh ? "局域网模式" : "LAN mode"}</span>
+            <span className="set-remote-toggle-state">{lanMode?.advertiseLan ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}</span>
+          </div>
+          <button
+            type="button"
+            className={`set-toggle ${lanMode?.advertiseLan ? "on" : ""}`}
+            role="switch"
+            aria-checked={!!lanMode?.advertiseLan}
+            aria-label={zh ? "切换局域网模式" : "Toggle LAN mode"}
+            onClick={() => void toggleLanMode()}
+          >
+            <span className="set-toggle-knob" />
+          </button>
+        </div>
+        {lanMode?.url && (
+          <div className="set-hint" style={{ wordBreak: "break-all" }}>
+            {zh ? "手机填写地址：" : "Phone relay URL: "}
+            <code>{lanMode.url}</code>
+          </div>
+        )}
+        {lanMode?.lastError && <div className="set-hint" style={{ color: "#c0392b" }}>{lanMode.lastError}</div>}
+        <label className="set-addprov-field wide" style={{ marginTop: 10 }}>
+          <span>{zh ? "本机中继静态目录（托管 PWA / 下载页，可留空）" : "Local relay static dir (optional)"}</span>
+          <input
+            className="set-input"
+            value={localRelayStaticDir}
+            onChange={(event) => setLocalRelayStaticDir(event.target.value)}
+            spellCheck={false}
+          />
+        </label>
+        <div className="set-diag-btns" style={{ marginTop: 8 }}>
+          <button className="set-btn ghost" onClick={() => void saveRelay()} disabled={saving}>
+            {zh ? "保存" : "Save"}
+          </button>
+        </div>
+      </details>
+
+      {activationOpen && <ActivationDialog language={language} onClose={() => setActivationOpen(false)} />}
     </div>
   );
 }
 
 /** 「验证连通性」失败原因 → 人话。 */
-function verifyErrorText(error: string | undefined, zh: boolean): string {
+export function verifyErrorText(error: string | undefined, zh: boolean): string {
   switch (error) {
     case "BAD_CODE":
-      return zh ? "授权码不对（或已被撤销）。" : "Wrong access code (or revoked).";
+      return zh ? "激活码不对（或已被撤销）。" : "Wrong access code (or revoked).";
     case "UNREACHABLE":
-      return zh ? "连不上服务器：检查网络，或换一条地址。" : "Server unreachable — check the network or the address.";
+      return zh ? "连不上服务器：检查网络或地址。" : "Server unreachable — check the network or the address.";
     case "TIMEOUT":
-      return zh ? "连接超时（8 秒）。" : "Timed out after 8s.";
+      return zh ? "连接超时。" : "Timed out.";
     case "NO_SERVER":
       return zh ? "还没配置服务器。" : "No server configured.";
-    case "BAD_URL":
-      return zh ? "服务器地址不是 ws(s):// 形式。" : "Server address must be a ws(s):// URL.";
+    case "NO_CODE":
+      return zh ? "还没填激活码。" : "No access code yet.";
+    case "HOST_DEVICE_LIMIT":
+      return zh ? "此激活码已达设备上限（3 台），请先解除绑定一台。" : "Device limit reached (3) — unbind one first.";
     default:
-      return error ? `${zh ? "验证失败：" : "Test failed: "}${error}` : zh ? "验证失败。" : "Test failed.";
+      return error ? `${zh ? "失败：" : "Failed: "}${error}` : zh ? "失败。" : "Failed.";
   }
 }

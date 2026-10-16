@@ -5,7 +5,6 @@ import { writeJsonAtomic } from "./json-store";
 import type { FeishuChannelConfig, WeChatChannelConfig } from "./messaging/types";
 import type { AutoPolicy, PoolEntry } from "./model-autopilot";
 import type { RelayChannel, RelayMode } from "./remote/relay-channels";
-import { effectiveChannels, pickRelayFeedUrl, REMOTE_CHANNEL_CTX } from "./remote/relay-channels";
 import { sanitizeWeChatConfig } from "./messaging/wechat-text";
 
 /**
@@ -285,13 +284,16 @@ export interface AppConfig {
   /** 通道配置结构版本（首次保存通道列表时写入；用于迁移与回滚）。 */
   relayChannelsVersion?: number;
   /**
-   * **服务器来源**（2026-10-16 起，设置 →「服务器」分栏；中继转发与自更新源都跟随它）。
+   * **自定义中继**（设置 →「转发设置」，2026-10-16 定稿）：用户填了自己的地址就用自己的。
    *
-   * `builtin`（默认）= 内置服务器（我的 ECS）+ **授权码**：主机上行与安装包镜像都走它；
-   * `custom` = 用户自己的中继（`relayChannels` / 旧字段），安装包更新走 GitHub。
+   * 留空 = 用**内置服务器**（我的 ECS，需激活码）；填了就完全走它（应用更新则回到 GitHub，
+   * 因为自定义中继不镜像安装包）。一条地址同时当主机上行与手机地址——自建中继的实际用法
+   * 就是这样（`wss://relay.example.com/ws`）；需要分开填属于「高级」，暂不做。
    * 内置服务器的地址不在配置里（以混淆形式内置在 `shared/builtin-server.ts`）。
    */
-  serverSource?: "builtin" | "custom";
+  customRelayUrl?: string;
+  /** 自定义中继的准入令牌（那个中继自己要求的准入）。 */
+  customRelayToken?: string;
   /**
    * **授权码**：内置服务器的唯一凭证（同时用于中继注册与镜像下载）。
    * 与通道的准入 token 无关（那条服务于自定义服务器）。**不返回给渲染层**。
@@ -496,7 +498,6 @@ const DEFAULTS: AppConfig = {
   remoteReplaceSameNameOffline: true,
   remoteRelayFallbackEnabled: true,
   mobileRelayFallbackUrl: "",
-  serverSource: "builtin",
   relayMode: "manual",
   lanModeEnabled: false,
   lanModePort: 9001,
@@ -661,10 +662,12 @@ export function loadConfig(userDataDir: string): AppConfig {
         localRelayStaticDir:
           typeof parsed.localRelayStaticDir === "string" ? parsed.localRelayStaticDir.trim() : DEFAULTS.localRelayStaticDir,
         relayChannels: sanitizeRelayChannels(parsed.relayChannels),
-        serverSource:
-          parsed.serverSource === "custom" || parsed.serverSource === "builtin"
-            ? parsed.serverSource
-            : DEFAULTS.serverSource,
+        ...(typeof parsed.customRelayUrl === "string" && parsed.customRelayUrl.trim()
+          ? { customRelayUrl: parsed.customRelayUrl.trim() }
+          : {}),
+        ...(typeof parsed.customRelayToken === "string" && parsed.customRelayToken.trim()
+          ? { customRelayToken: parsed.customRelayToken.trim() }
+          : {}),
         ...(typeof parsed.serverAuthCode === "string" && parsed.serverAuthCode.trim()
           ? { serverAuthCode: parsed.serverAuthCode.trim() }
           : {}),
@@ -736,42 +739,41 @@ export function loadConfig(userDataDir: string): AppConfig {
         wechatChannel: sanitizeWeChatChannel(parsed.wechatChannel),
         voice: sanitizeVoice(parsed.voice),
       };
-      // 迁移（2026-10-16）：旧的「更新源」三件套 + 中继通道列表 → 新的「服务器」模型。
-      // 规则（只在 serverSource 还没值时跑一次）：
-      //   · 旧配置选过 ecs（或有镜像令牌）→ 内置服务器 + 把令牌当授权码（升级不掉授权）；
-      //   · 否则配过公网中继通道 → 自定义服务器（保持现有行为）；
-      //   · 都没有 → 默认内置服务器（未授权状态，等用户填码）。
-      // 旧字段一律删掉，不再写回配置（避免两套概念共存）。
-      // 旧字段只在 parsed（磁盘原文）里读；cached 上一律抹掉（那是未知键，留着就会一直写回文件）。
+      // 迁移（2026-10-16 二版）：旧的「更新源三件套 / 通道列表 / serverSource」→ 新模型。
+      // 规则（只在 customRelayUrl 还没值时跑一次）：
+      //   · 有自定义中继（旧通道列表里第一条启用的公网通道，或旧 remoteRelayUrl）→ 写进 customRelay；
+      //   · 否则什么都不配 → 只用内置服务器（等激活码）。
+      // 旧字段一律删掉（多通道能力按用户决定砍掉），避免两套概念共存。
       const legacy = parsed as unknown as Record<string, unknown>;
-      const legacyUpdateSource = legacy.appUpdateSource;
-      const legacyUpdateToken = legacy.appUpdateEcsToken;
       const cachedRecord = cached as unknown as Record<string, unknown>;
-      delete cachedRecord.appUpdateSource;
-      delete cachedRecord.appUpdateEcsUrl;
-      delete cachedRecord.appUpdateEcsToken;
-      if (parsed.serverSource !== "custom" && parsed.serverSource !== "builtin") {
-        const legacyCode = typeof legacyUpdateToken === "string" ? legacyUpdateToken.trim() : "";
-        if (legacyUpdateSource === "ecs" || (legacyCode && legacyUpdateSource !== "github")) {
-          cached.serverSource = "builtin";
-          if (!cached.serverAuthCode && legacyCode) cached.serverAuthCode = legacyCode;
-        } else {
-          const channels = effectiveChannels(
-            cached.relayChannels,
-            {
-              remoteRelayUrl: cached.remoteRelayUrl,
-              mobileRelayUrl: parsed.mobileRelayUrl,
-              remoteRelayToken: cached.remoteRelayToken,
-              remoteRelayFallbackEnabled: cached.remoteRelayFallbackEnabled,
-              mobileRelayFallbackUrl: cached.mobileRelayFallbackUrl,
-            },
-            REMOTE_CHANNEL_CTX,
-          );
-          const hasCustomRelay = Boolean(
-            pickRelayFeedUrl(channels, REMOTE_CHANNEL_CTX) || cached.remoteRelayUrl,
-          );
-          cached.serverSource = hasCustomRelay ? "custom" : "builtin";
+      const legacyToken = typeof legacy.appUpdateEcsToken === "string" ? legacy.appUpdateEcsToken.trim() : "";
+      // 兼容上一版的「更新源」字段：当时选了 ecs 的机器，把令牌当激活码带走，别丢授权。
+      if (!cached.serverAuthCode && legacyToken) cached.serverAuthCode = legacyToken;
+      if (!cached.customRelayUrl) {
+        const stored = cached.relayChannels;
+        const remoteChannel = Array.isArray(stored)
+          ? stored.find((channel) => channel.enabled && channel.kind === "remote")
+          : undefined;
+        const url = ((remoteChannel ? remoteChannel.hostUrl || remoteChannel.phoneUrl : "") || cached.remoteRelayUrl || "").trim();
+        // 只接受 ws(s):// 且**不是本机回环**的地址：旧配置里总有 `ws://127.0.0.1:9001/ws`
+        // （那是常驻的本机中继，不等于「用户有自己的中继」）。
+        if (url && /^wss?:\/\//i.test(url) && !/^wss?:\/\/(127\.0\.0\.1|localhost)([:/]|$)/i.test(url)) {
+          cached.customRelayUrl = url;
+          const token = (remoteChannel?.token || cached.remoteRelayToken || "").trim();
+          if (token) cached.customRelayToken = token;
         }
+      }
+      for (const key of [
+        "appUpdateSource",
+        "appUpdateEcsUrl",
+        "appUpdateEcsToken",
+        "serverSource",
+        "relayChannels",
+        "relayChannelsVersion",
+        "relayMode",
+        "activeChannelId",
+      ]) {
+        delete cachedRecord[key];
       }
       return cached;
     } catch {
@@ -1008,8 +1010,9 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
     out.relayChannelsVersion = 1;
   }
   // 服务器来源 / 授权码：跟 voice 的 API key 一样属于「用户凭证」，备份与恢复时一并带上。
-  if (p.serverSource === "builtin" || p.serverSource === "custom") out.serverSource = p.serverSource;
   if (typeof p.serverAuthCode === "string") out.serverAuthCode = p.serverAuthCode.trim();
+  if (typeof p.customRelayUrl === "string") out.customRelayUrl = p.customRelayUrl.trim();
+  if (typeof p.customRelayToken === "string") out.customRelayToken = p.customRelayToken.trim();
   if (p.relayMode === "manual" || p.relayMode === "auto") out.relayMode = p.relayMode;
   if (typeof p.activeChannelId === "string") out.activeChannelId = p.activeChannelId.trim();
   if (typeof p.lanModePort === "number" && p.lanModePort > 0 && p.lanModePort < 65536) out.lanModePort = Math.floor(p.lanModePort);
@@ -1026,16 +1029,6 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
 export function updateConfig(patch: Partial<AppConfig>): AppConfig {
   if (!cached) throw new Error("config not loaded");
   const next: Partial<AppConfig> = { ...patch };
-  // 通道列表保存：token **不回显**给渲染层，所以条目里没带 token 就沿用旧值（留空 = 保持现有）。
-  if (Array.isArray(next.relayChannels)) {
-    const previous = new Map((cached.relayChannels ?? []).map((channel) => [channel.id, channel]));
-    next.relayChannels = next.relayChannels.map((channel) => {
-      if (channel.token) return channel;
-      const old = previous.get(channel.id);
-      return old?.token ? { ...channel, token: old.token } : channel;
-    });
-    next.relayChannelsVersion = 1;
-  }
   cached = {
     ...cached,
     ...next,

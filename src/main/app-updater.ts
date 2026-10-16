@@ -89,7 +89,7 @@ function updateFeedTarget(): AppUpdateFeedTarget {
   const cfg = getConfig();
   return resolveAppUpdateFeed({
     overrideUrl: process.env.MPI_APP_UPDATE_URL,
-    serverSource: cfg.serverSource,
+    customRelayUrl: cfg.customRelayUrl,
     authCode: cfg.serverAuthCode,
     // 地址来自混淆内置的描述（shared/builtin-server.ts）；没授权码时上面那个纯函数直接返回 GitHub。
     mirrorUrl: builtinServer()?.mirrorUrl,

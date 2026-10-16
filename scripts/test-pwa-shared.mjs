@@ -17,10 +17,13 @@ const cases = [
   ["thread.prompt", "sess-abc", { text: "hello" }],
   ["ui.respond", "s2", { id: "r9" }, { requestId: "req-1", threadId: "t7", seq: 42, sentAt: 1_700_000_000_000 }],
 ];
+// sentAt 由各自实现取 Date.now()，两次调用跨过毫秒边界就会差 1ms（负载高时必现的抖动）。
+// 这里只比「结构与其他字段是否逐字一致」，时间戳归一化掉（显式给了 sentAt 的 case 不受影响）。
+const normalize = (envelope) => ({ ...envelope, sentAt: 0 });
 for (const [type, sessionId, payload, extra] of cases) {
   const a = desktop.makeEnvelope(type, sessionId, payload, extra);
   const b = shared.makeEnvelope(type, sessionId, payload, extra);
-  assert.deepEqual(b, a, `makeEnvelope(${type})`);
+  assert.deepEqual(normalize(b), normalize(a), `makeEnvelope(${type})`);
 }
 
 // --- parseEnvelope: valid inputs ---------------------------------------------------

@@ -160,13 +160,14 @@ test("ipc/config 接线：通道列表驱动，旧的「主+备两条」写法�
   const ipc = readFileSync(new URL("../src/main/ipc.ts", import.meta.url), "utf8");
   const cfg = readFileSync(new URL("../src/main/config.ts", import.meta.url), "utf8");
 
-  for (const pat of [/effectiveChannels\(/, /uplinkChannels\(/, /hostUrlFor\(/, /ticketAddresses\(/]) {
+  // 2026-10-16：多通道/选路已删，ipc 只用「合成局域网通道 + 挂全部启用上行 + 推导主机地址」这三件
+  for (const pat of [/lanChannel\(/, /uplinkChannels\(/, /hostUrlFor\(/]) {
     assert.match(ipc, pat, `主进程要走通道模块：${pat}`);
   }
   assert.ok(!/fallbackRelayUplink/.test(ipc), "旧的「备用上行」专用变量应已移除（改由通道列表 + Map 管理）");
   assert.match(ipc, /instanceKey: channel\.id/, "持久化实例键必须来自通道 id（多通道各自独立 deviceToken）");
-  assert.match(cfg, /relayChannels\?: RelayChannel\[\]/, "配置项：通道列表");
-  assert.match(cfg, /relayMode: RelayMode/, "配置项：选路模式");
+  assert.match(cfg, /customRelayUrl\?: string/, "配置项：自定义中继地址（多通道已按用户决定删除）");
+  assert.match(cfg, /customRelayToken\?: string/, "配置项：自定义中继令牌");
   assert.match(ipc, /mobileRelayUrls: \(\) => phoneTicketAddresses\(\)/, "S3：票里要带整份有序地址列表");
   assert.match(readFileSync(new URL("../src/main/remote/host.ts", import.meta.url), "utf8"), /relayUrls/, "S3：RemoteHost 要把 relayUrls 写进票");
   // S6：主机侧「通道列表下发」——类型系统已保证 backend 实现（RemoteBackend 必实现 getRelayInfo）
@@ -178,9 +179,9 @@ test("ipc/config 接线：通道列表驱动，旧的「主+备两条」写法�
   // 2026-10-16：通道编辑整体搬到「设置 → 服务器」分栏（ServerPanel），所以这里改看那份。
   const panel = readFileSync(new URL("../src/renderer/src/components/ServerPanel.tsx", import.meta.url), "utf8");
   // 2026-10-16：选路开关撤掉（配对票始终带全部候选，手机按序试连）——不许再出现
-  assert.ok(!/Auto-pick best channel|relayMode/.test(panel), "服务器面板不应再有「手动/自动选路」开关");
-  for (const pat of [/relayChannels/, /Add server address/, /saveCustom/]) {
-    assert.match(panel, pat, `面板必须能管理通道列表：${pat}`);
+  assert.ok(!/Auto-pick best channel|relayMode|relayChannels/.test(panel), "转发设置面板不应再有选路开关/多通道列表");
+  for (const pat of [/customRelayUrl|relayUrl/, /自定义中继|Custom relay/, /saveRelay/]) {
+    assert.match(panel, pat, `转发设置面板必须能配自定义中继：${pat}`);
   }
   assert.ok(!/\u4e2d\u7ee7\u5730\u5740\uff08WSS\uff09/.test(panel), "旧的「中继地址（WSS）」字段应已移除");
 });

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, shell } from "electron";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
@@ -190,15 +190,7 @@ import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
 import { RelayUplink } from "./remote/relay-uplink";
 import { RelayFanout } from "./remote/relay-fanout";
-import {
-  effectiveChannels,
-  hostUrlFor,
-  lanChannel,
-  ticketAddresses,
-  uplinkChannels,
-  type ChannelContext,
-  type RelayChannel,
-} from "./remote/relay-channels";
+import { hostUrlFor, lanChannel, uplinkChannels, type ChannelContext, type RelayChannel } from "./remote/relay-channels";
 import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } from "./remote/services";
 import { RemoteService, type RemoteBackend } from "./remote/service";
 import {
@@ -1440,42 +1432,47 @@ function relayChannelContext(): ChannelContext {
 }
 
 /**
- * S2：生效的通道列表 —— 配置里的通道列表，**或**从旧字段只读合成（从没保存过列表时）；
- * 局域网通道由运行时合成并置顶（同网段最快，设备端按序选路时优先）。
+ * 生效的通道列表（2026-10-16 定稿：**一条中继 + 可选的局域网/本机备用**）。
  *
- * 2026-10-16 新增「服务器」模型（设置 → 服务器）：
- *  · `serverSource === "builtin"` → 只用**内置服务器**（我的 ECS）：主机上行取内置候选里
- *    第一个地址，令牌 = 授权码（服务端 `RELAY_HOST_TOKENS` 校验，没码就一条也不挂）；
- *    配对票里的手机地址来自内置描述（原生走公网明文，PWA 走公网 TLS）。
- *  · `custom` → 走原来的通道逻辑（单条在「服务器」栏，多条/局域网在「高级」里）。
+ * 用户口径：「用户自己设置代理就用用户自己的，没设置看激活情况走内置」——所以这里没有来源选择：
+ *   · `customRelayUrl` 有值 → 就用它（主机上行 = 手机地址 = 同一个 ws(s) 地址）；
+ *   · 否则有激活码 → 内置服务器（我的 ECS）；
+ *   · 都没有 → 只剩局域网/本机备用（云中继不挂）。
+ * 多通道通道列表已按用户决定删除（那是为「一朋友一条道」设计的）。
  */
 function effectiveRelayChannels(): RelayChannel[] {
   const cfg = getConfig();
-  if (cfg.serverSource === "builtin") {
+  const ctx = relayChannelContext();
+  const channels: RelayChannel[] = [];
+  // ① 局域网通道（运行时合成；手机同网段时最快，放在最前）
+  const lan = lanChannel(ctx);
+  if (lan) channels.push(lan);
+  // ② 云中继：自定义优先，其次内置（有激活码才挂）
+  const custom = (cfg.customRelayUrl || "").trim();
+  if (custom) {
+    channels.push({
+      id: "custom",
+      label: cfg.customRelayToken ? "自定义中继" : "自定义中继",
+      phoneUrl: custom,
+      hostUrl: custom,
+      ...(cfg.customRelayToken ? { token: cfg.customRelayToken } : {}),
+      enabled: true,
+      kind: "remote",
+    });
+  } else {
     const code = (cfg.serverAuthCode || "").trim();
     const builtin = builtinServer();
-    // 没授权码 / 内置描述坏了 → 不挂任何上行（界面会显示「未授权」）。
-    if (!builtin || !code) return [];
-    return [builtinRelayChannel(builtin, code)];
+    if (builtin && code) channels.push(builtinRelayChannel(builtin, code));
   }
-  return effectiveChannels(
-    cfg.relayChannels,
-    {
-      remoteRelayUrl: cfg.remoteRelayUrl,
-      mobileRelayUrl: cfg.mobileRelayUrl,
-      remoteRelayToken: cfg.remoteRelayToken,
-      remoteRelayFallbackEnabled: cfg.remoteRelayFallbackEnabled,
-      mobileRelayFallbackUrl: cfg.mobileRelayFallbackUrl,
-    },
-    relayChannelContext(),
-  );
+  // ③ 本机中继备用（常驻；主中继挂了手机可切它，也不依赖 Tailscale）
+  if (cfg.remoteRelayFallbackEnabled !== false) {
+    channels.push({ id: "local", label: "本机中继", phoneUrl: (cfg.mobileRelayFallbackUrl || "").trim(), enabled: true, kind: "local" });
+  }
+  return channels;
 }
 
 /**
- * 内置服务器 → 通道（主机上行取内置候选里的第一个，令牌 = 授权码）。
- *
- * 手机地址用**全部**内置候选（同一个通道带多个手机地址不太好表达，所以第一条用它、
- * 其余地址通过 `phoneTicketAddresses` 的 auto 语义补 —— 这里只保证主机上行正确）。
+ * 内置服务器 → 通道（主机上行取内置候选里的第一个，令牌 = 激活码）。
  */
 function builtinRelayChannel(builtin: BuiltinServer, authCode: string): RelayChannel {
   return {
@@ -1489,20 +1486,29 @@ function builtinRelayChannel(builtin: BuiltinServer, authCode: string): RelayCha
   };
 }
 
-/** S2：本次配对票里给手机的地址（有序；手动=选中那条，自动=全部启用）。 */
+/**
+ * S2：本次配对票里给手机的地址（有序）——**始终带全部候选**，手机按序试连：
+ * 局域网（若开）→ 云中继（自定义或内置）→ 备用公网地址。
+ * 本机回环地址（`ws://127.0.0.1`）对手机没意义，不进票。
+ */
 function phoneTicketAddresses(): string[] {
   const cfg = getConfig();
-  // 2026-10-16 起**一个二维码带全部候选**（局域网优先 → 云中继 → 备用），手机按序试连：
-  // 选路交给手机，用户不再需要理解「手动/自动」这层概念（那个开关已撤）。
-  // 注意：候选地址必须对应**主机真的挂了上行**的中继，否则手机会朝一个没人接的地址白试。
+  const urls: string[] = [];
+  const push = (raw: string) => {
+    const url = (raw || "").trim();
+    if (!url || /^wss?:\/\/(127\.0\.0\.1|localhost)([:/]|$)/i.test(url)) return;
+    if (!urls.includes(url)) urls.push(url);
+  };
   const lan = lanChannel(relayChannelContext());
-  const lanUrls = lan && lan.enabled ? [(lan.phoneUrl || "").trim()].filter(Boolean) : [];
-  if (cfg.serverSource === "builtin") {
-    const builtin = builtinServer();
-    return builtin ? [...lanUrls, ...builtin.phoneUrls] : lanUrls;
+  if (lan?.enabled) push(lan.phoneUrl);
+  const custom = (cfg.customRelayUrl || "").trim();
+  if (custom) {
+    push(custom);
+  } else if ((cfg.serverAuthCode || "").trim()) {
+    for (const url of builtinServer()?.phoneUrls ?? []) push(url);
   }
-  const custom = ticketAddresses(effectiveRelayChannels(), "auto", cfg.activeChannelId);
-  return [...lanUrls, ...custom.filter((url) => !lanUrls.includes(url))];
+  push(cfg.mobileRelayFallbackUrl || "");
+  return urls;
 }
 
 /**
@@ -1566,7 +1572,7 @@ function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
     relayFanout.setUplinks(uplinks);
   }
   appendDiagLog(
-    `relay-channels mode=${cfg.relayMode} uplinks=${uplinks.map((uplink) => uplink.instanceKey()).join(",") || "-"} ticketAddr=${phoneTicketAddresses().length}`,
+    `relay-channels uplinks=${uplinks.map((uplink) => uplink.instanceKey()).join(",") || "-"} ticketAddr=${phoneTicketAddresses().length}`,
   );
 }
 
@@ -3887,6 +3893,123 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   }
 
   /**
+   * 授权/激活用的 HTTP 基地址：自定义中继优先，否则内置服务器（镜像与自检同源）。
+   * 返回 null = 没得可打（既没自定义地址也没内置描述）。
+   */
+  const authzBase = (): string | null => {
+    const cfg = getConfig();
+    const custom = (cfg.customRelayUrl || "").trim();
+    if (custom) return httpOriginOf(custom);
+    return httpOriginOf(builtinServer()?.mirrorUrl || "");
+  };
+
+  /** 本机设备身份（激活窗口要显示）：hostId 持久化在 userData，名称取系统机器名。 */
+  const deviceIdentity = () => ({
+    hostId: remoteHost.getStatus().hostId || "",
+    name: hostname(),
+  });
+
+  /**
+   * 激活状态：本机是否已在这台服务器上登记 + 名额用量。
+   * 打 `GET /authz/check`（带激活码与 hostId）；服务器没配校验时按开放模式返回。
+   */
+  ipcMain.handle("remote:activationState", async () => {
+    const cfg = getConfig();
+    const id = deviceIdentity();
+    const code = (cfg.serverAuthCode || "").trim();
+    const base = authzBase();
+    const baseState = {
+      ...id,
+      authorized: Boolean(code),
+      server: base,
+      customRelay: Boolean((cfg.customRelayUrl || "").trim()),
+    };
+    if (!base) return { ...baseState, ok: false, error: "NO_SERVER" };
+    try {
+      const url = `${base}/authz/check?hostId=${encodeURIComponent(id.hostId)}`;
+      const res = await net.fetch(url, {
+        headers: code ? { authorization: `Bearer ${code}` } : {},
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) return { ...baseState, ok: false, error: res.status === 401 ? "BAD_CODE" : `HTTP_${res.status}` };
+      const body: any = await res.json().catch(() => ({}));
+      return {
+        ...baseState,
+        ok: true,
+        open: Boolean(body?.open),
+        activated: Boolean(body?.activated),
+        devices: Number(body?.devices) || 0,
+        maxDevices: Number(body?.maxDevices) || 0,
+        enforcing: Boolean(body?.enforcing),
+      };
+    } catch (error: any) {
+      return { ...baseState, ok: false, error: /timeout|abort/i.test(String(error?.name || "")) ? "TIMEOUT" : "UNREACHABLE" };
+    }
+  });
+
+  /** 「立即激活」：先落盘激活码，再让服务器登记这台（满额 409）。 */
+  ipcMain.handle("remote:activate", async (_e, code: unknown) => {
+    const next = String(code || "").trim();
+    if (next) updateConfig({ serverAuthCode: next });
+    const cfg = getConfig();
+    const effective = next || (cfg.serverAuthCode || "").trim();
+    const base = authzBase();
+    const id = deviceIdentity();
+    if (!base) return { ok: false, error: "NO_SERVER" };
+    if (!effective) return { ok: false, error: "NO_CODE" };
+    try {
+      const res = await net.fetch(`${base}/authz/activate`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${effective}` },
+        body: JSON.stringify({ hostId: id.hostId, name: id.name }),
+        signal: AbortSignal.timeout(8000),
+      });
+      const body: any = await res.json().catch(() => ({}));
+      if (res.status === 401) return { ok: false, error: "BAD_CODE" };
+      if (res.status === 409) {
+        return { ok: false, error: "HOST_DEVICE_LIMIT", devices: Number(body?.devices) || 0, maxDevices: Number(body?.maxDevices) || 0 };
+      }
+      if (!res.ok) return { ok: false, error: `HTTP_${res.status}` };
+      // 激活成功后立刻重挂上行：不重启应用就能连上
+      applyRelayUplinkConfig(remoteHost);
+      return {
+        ok: true,
+        ...id,
+        open: Boolean(body?.open),
+        activated: true,
+        devices: Number(body?.devices) || 0,
+        maxDevices: Number(body?.maxDevices) || 0,
+        enforcing: Boolean(body?.enforcing),
+      };
+    } catch (error: any) {
+      return { ok: false, error: /timeout|abort/i.test(String(error?.name || "")) ? "TIMEOUT" : "UNREACHABLE" };
+    }
+  });
+
+  /** 「解除绑定」：让服务器删掉本机那条记录，腾出名额（换机/重装用）。 */
+  ipcMain.handle("remote:deactivate", async () => {
+    const cfg = getConfig();
+    const code = (cfg.serverAuthCode || "").trim();
+    const base = authzBase();
+    const id = deviceIdentity();
+    if (!base) return { ok: false, error: "NO_SERVER" };
+    if (!code) return { ok: false, error: "NO_CODE" };
+    try {
+      const res = await net.fetch(`${base}/authz/deactivate`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${code}` },
+        body: JSON.stringify({ hostId: id.hostId }),
+        signal: AbortSignal.timeout(8000),
+      });
+      const body: any = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, error: res.status === 401 ? "BAD_CODE" : `HTTP_${res.status}` };
+      return { ok: true, removed: Boolean(body?.removed), devices: Number(body?.devices) || 0, maxDevices: Number(body?.maxDevices) || 0 };
+    } catch (error: any) {
+      return { ok: false, error: /timeout|abort/i.test(String(error?.name || "")) ? "TIMEOUT" : "UNREACHABLE" };
+    }
+  });
+
+  /**
    * 「验证连通性」（2026-10-16）：一次请求回答「服务器通不通 + 授权码对不对 + 还剩几个设备名额」。
    *
    * 打的是中继的 `GET /authz/check`（带 `Authorization: Bearer <授权码>`）。自定义服务器可能没有
@@ -3895,24 +4018,15 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
    */
   ipcMain.handle("remote:testServer", async () => {
     const cfg = getConfig();
-    const source = cfg.serverSource === "custom" ? "custom" : "builtin";
-    let code = (cfg.serverAuthCode || "").trim();
-    let wsUrl = "";
-    if (source === "builtin") {
-      wsUrl = builtinServer()?.hostUplinks[0] || "";
-    } else {
-      const channels = effectiveRelayChannels();
-      const picked = channels.find((channel) => channel.enabled && channel.kind === "remote");
-      wsUrl = picked ? hostUrlFor(picked, relayChannelContext()) : "";
-      if (!code && picked?.token) code = picked.token;
-    }
-    if (!wsUrl) return { ok: false, error: "NO_SERVER" };
-    const http = httpOriginOf(wsUrl);
-    if (!http) return { ok: false, error: "BAD_URL" };
+    const source = (cfg.customRelayUrl || "").trim() ? "custom" : "builtin";
+    const code = (cfg.serverAuthCode || (cfg.customRelayToken || "")).trim();
+    const http = authzBase();
+    if (!http) return { ok: false, error: "NO_SERVER" };
     const headers: Record<string, string> = code ? { authorization: `Bearer ${code}` } : {};
     // ① 授权自检（首选）
     try {
-      const res = await net.fetch(`${http}/authz/check`, { headers, signal: AbortSignal.timeout(8000) });
+      const hostId = remoteHost.getStatus().hostId || "";
+      const res = await net.fetch(`${http}/authz/check?hostId=${encodeURIComponent(hostId)}`, { headers, signal: AbortSignal.timeout(8000) });
       if (res.status === 401 || res.status === 403) return { ok: false, error: "BAD_CODE" };
       if (res.ok) {
         const body: any = await res.json().catch(() => ({}));
@@ -3925,6 +4039,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           devices: Number(body?.devices) || 0,
           maxDevices: Number(body?.maxDevices) || 0,
           enforcing: Boolean(body?.enforcing),
+          activated: Boolean(body?.activated),
         };
       }
       if (res.status !== 404) return { ok: false, error: `HTTP_${res.status}` };
@@ -3955,7 +4070,6 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());
   ipcMain.handle("remote:getRelayStatus", () => {
     const cfg = getConfig();
-    const ctx = relayChannelContext();
     const addresses = phoneTicketAddresses();
     return {
       ...(relayFanout?.getStatus() ?? { state: "disabled" as const, relayUrl: cfg.remoteRelayUrl, lastError: null }),
@@ -3968,23 +4082,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       // S3 起票里会带整列表，这里先把后续地址暴露给面板。
       phoneTicketAddresses: addresses,
       phoneRelayFallbackUrl: addresses[1] || "",
-      relayMode: cfg.relayMode,
-      activeChannelId: cfg.activeChannelId || "",
       channels: relayFanout?.statuses() ?? [],
-      /** S5：面板编辑用的生效通道列表（`hostUrl` 为**推导后**的实际值）。
-       *  不回传 token，只给 `hasToken`（留存语义：条目不带 token = 保持现有，见 updateConfig）。 */
-      relayChannels: effectiveRelayChannels().map((channel) => ({
-        id: channel.id,
-        label: channel.label,
-        phoneUrl: channel.phoneUrl,
-        hostUrl: hostUrlFor(channel, ctx),
-        hostUrlConfigured: !!channel.hostUrl,
-        hasToken: !!channel.token,
-        enabled: channel.enabled,
-        kind: channel.kind,
-      })),
-      /** 是否已存过通道列表（false = 当前列表是从旧字段合成的，首次保存后才落盘）。 */
-      relayChannelsStored: !!cfg.relayChannels?.length,
     };
   });
   ipcMain.handle("remote:createPairing", (_e, args?: { autoApprove?: boolean }) => remoteHost.createPairingTicket({ autoApprove: args?.autoApprove === true }));
@@ -4130,8 +4228,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         "remoteRelayToken" in patch ||
         "remoteRelayFallbackEnabled" in patch ||
         "mobileRelayFallbackUrl" in patch ||
-        "relayChannels" in patch ||
-        "serverSource" in patch ||
+        "customRelayUrl" in patch ||
+        "customRelayToken" in patch ||
         "serverAuthCode" in patch ||
         "relayMode" in patch ||
         "activeChannelId" in patch ||

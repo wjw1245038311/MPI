@@ -665,11 +665,14 @@ export interface AppConfig {
     ttsAutoRead?: boolean;
   };
   /**
-   * **服务器来源**（设置 →「服务器」，2026-10-16）：`builtin`（默认）= 内置服务器
-   * （我的 ECS，需授权码）；`custom` = 自己的中继（`relayChannels`）。
-   * 中继转发与应用更新源都跟随它。
+   * **自定义中继**（设置 →「转发设置」）：填了就用用户自己的中继（主机上行与手机地址同一个地址）；
+   * 留空 = 用内置服务器（我的 ECS，需激活码）。
    */
-  serverSource?: "builtin" | "custom";
+  customRelayUrl?: string;
+  /** 自定义中继的准入令牌（**值不回显**给渲染层，只给 `customRelayTokenSet`）。 */
+  customRelayToken?: string;
+  /** 渲染层可见：自定义中继令牌是否已设置。 */
+  customRelayTokenSet?: boolean;
   /**
    * 授权码（内置服务器的唯一凭证）：**主进程不会把它发到渲染层**（只发 `serverAuthCodeSet`），
    * 与通道准入 token 同一规矩。

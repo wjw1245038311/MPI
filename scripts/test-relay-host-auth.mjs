@@ -193,12 +193,45 @@ const hostRegister = (hostId, extra = {}) => ({ type: "host.register", hostId, b
     const bad = await fetch(`http://127.0.0.1:${port}/authz/check`, { headers: { authorization: "Bearer nope" } });
     assert.equal(bad.status, 401, "错码要 401（客户端「验证连通性」据此报错）");
 
-    // 撤销一台设备：删掉它 → 额度腾出来（无需重启中继）
-    const table = JSON.parse(readFileSync(devicesFile, "utf8"));
-    table["share-code"] = table["share-code"].filter((d) => d.hostId !== "dev-b");
-    writeFileSync(devicesFile, JSON.stringify(table));
-    // 设备表在注册时读取（不是常驻内存副本），所以下一台应当被接纳…… 这里验证「删了就能再进」
-    assert.equal(table["share-code"].length, 2);
+    // 「立即激活」/「解除绑定」端点：先腾一个名额，再登记一台并记下机器名
+    const unbind = await fetch(`http://127.0.0.1:${port}/authz/deactivate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer share-code" },
+      body: JSON.stringify({ hostId: "dev-b" }),
+    });
+    assert.equal(unbind.status, 200, "解除绑定要 200");
+    const afterUnbind = await unbind.json();
+    assert.equal(afterUnbind.removed, true, "解除绑定应真的删掉那台");
+    assert.equal(afterUnbind.devices, 2, "解除后用量减一");
+
+    const activate = await fetch(`http://127.0.0.1:${port}/authz/activate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer share-code" },
+      body: JSON.stringify({ hostId: "dev-e", name: "WJW-PC" }),
+    });
+    assert.equal(activate.status, 200, "腾出名额后激活应成功");
+    const activated = await activate.json();
+    assert.equal(activated.devices, 3, "激活后用量加一");
+    assert.ok(
+      activated.deviceList?.some((d) => d.hostId === "dev-e" && d.name === "WJW-PC"),
+      "设备表要记住机器名（服务器侧能看出是哪台）",
+    );
+
+    const overflow = await fetch(`http://127.0.0.1:${port}/authz/activate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer share-code" },
+      body: JSON.stringify({ hostId: "dev-f", name: "another" }),
+    });
+    assert.equal(overflow.status, 409, "第 4 台激活必须 409（额度 3 台）");
+    assert.equal((await overflow.json()).error, "HOST_DEVICE_LIMIT");
+
+    const wrongCode = await fetch(`http://127.0.0.1:${port}/authz/activate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer wrong" },
+      body: JSON.stringify({ hostId: "dev-g" }),
+    });
+    assert.equal(wrongCode.status, 401, "错码激活要 401");
+
     console.log("ok 5 - 一个码最多 3 台设备（hostId 区分，重连不占名额）+ /authz/check 自检");
   } finally {
     await relay.stop();

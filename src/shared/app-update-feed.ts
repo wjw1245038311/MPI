@@ -17,8 +17,8 @@ export const APP_UPDATE_ECS_PROBE_TIMEOUT_MS = 5000;
 export interface AppUpdateFeedInput {
   /** `MPI_APP_UPDATE_URL` 临时覆盖（最高优先级，只影响到配了它的进程）。 */
   overrideUrl?: string | null;
-  /** `config.serverSource`：`builtin` = 用内置服务器（我的 ECS）；其它/缺省 = 只用 GitHub。 */
-  serverSource?: string | null;
+  /** `config.customRelayUrl`：填了就说明用户用了自己的中继（它不镜像安装包）→ 更新走 GitHub。 */
+  customRelayUrl?: string | null;
   /**
    * 内置服务器的镜像地址（由调用方从 `shared/builtin-server.ts` 解出来传进来）。
    * 这样本模块保持零依赖：地址从哪来是「内置描述」的事，这里只管「该不该用、用哪个」。
@@ -58,7 +58,7 @@ function normalizeFeedUrl(raw: string | null | undefined): string | null {
 /**
  * 解析本次自更新要用的源。
  *
- * 优先级：`MPI_APP_UPDATE_URL` 覆盖（视为 relay）> `serverSource === "builtin"`
+ * 优先级：`MPI_APP_UPDATE_URL` 覆盖（视为 relay）> **没配自定义中继**
  * 且**有授权码**（镜像地址来自内置服务器，见 shared/builtin-server.ts）> GitHub。
  * 注意「授权」就在这里：没码的机器**根本不会去探测 ECS 镜像**（别人的安装不受影响），
  * 而自定义服务器不镜像安装包 → 也走 GitHub。
@@ -67,7 +67,7 @@ export function resolveAppUpdateFeed(input: AppUpdateFeedInput): AppUpdateFeedTa
   const token = String(input.authCode || "").trim();
   const override = normalizeFeedUrl(input.overrideUrl);
   if (override) return { source: "relay", url: override, token };
-  if (String(input.serverSource || "").trim() === "builtin" && token) {
+  if (!String(input.customRelayUrl || "").trim() && token) {
     const url = normalizeFeedUrl(input.mirrorUrl);
     if (url) return { source: "relay", url, token };
   }

@@ -1257,7 +1257,13 @@ interface PiStore {
    * 服务器来源与授权码（设置 →「服务器」）：内置服务器（我的 ECS）或自定义。
    * 授权码只在这一步带上去（渲染层拿不到旧值），留空 = 保持现有；要清除传空串。
    */
-  setServerConfig: (patch: { serverSource?: "builtin" | "custom"; serverAuthCode?: string }) => Promise<void>;
+  setServerConfig: (patch: {
+    customRelayUrl?: string;
+    customRelayToken?: string;
+    serverAuthCode?: string;
+    /** 本机中继静态目录（服务器页的「位置待定」折叠区也存这一项）。 */
+    localRelayStaticDir?: string;
+  }) => Promise<void>;
   /** Voice system (语音系统): merge a partial voice config and persist it. */
   setVoiceConfig: (patch: Partial<NonNullable<AppConfig["voice"]>>) => Promise<void>;
   refreshOpenThreadModels: () => Promise<void>;
