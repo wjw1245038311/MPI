@@ -201,3 +201,54 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
     );
   });
 }
+
+/**
+ * 探测某个候选是否**可达**（只做一次 WS 握手，随即关闭；不认证、不注册、不占设备名额）。
+ *
+ * 用途：后台择优——已经连着公网中继时，想知道"现在能不能改走局域网"。
+ */
+export function probeRelayUrl(url: string, timeoutMs = 3000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    try {
+      const ws = new WebSocket(url);
+      const timer = setTimeout(() => {
+        try { ws.close(); } catch { /* 已经关了 */ }
+        finish(false);
+      }, timeoutMs);
+      ws.onopen = () => {
+        clearTimeout(timer);
+        try { ws.close(); } catch { /* 已经关了 */ }
+        finish(true);
+      };
+      ws.onerror = () => {
+        clearTimeout(timer);
+        finish(false);
+      };
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+/**
+ * 后台择优：**只朝更近的方向切**（公网/中继 → 局域网），从不反向。
+ *
+ * 为什么只单向：反向（局域网 → 公网）意味着设备已经离开那个网络了，那是**正常重连回落**的
+ * 职责（现有看门狗 + 候选顺序就够了）；而在这里双向切换会在网络抖动时来回抖。
+ * 返回 null = 不需要动（已在更近的路上 / 没有更近的候选 / 排序里它本来就在首位）。
+ *
+ * 决策抽成纯函数便于单测；真正的可达性探测由调用方用 `probeRelayUrl` 完成。
+ */
+export function shouldSwitchToBetterPath(currentUrl: string, orderedCandidates: string[]): string | null {
+  const best = (orderedCandidates || []).map((url) => String(url || "").trim()).filter(Boolean)[0];
+  if (!best || best === currentUrl) return null;
+  if (!isPrivateRelayUrl(best)) return null; // 目标不是"更近的路"
+  if (isPrivateRelayUrl(currentUrl)) return null; // 已经在局域网上了，不折腾
+  return best;
+}

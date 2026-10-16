@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { relayCandidates, sameOriginRelayUrl, isPrivateRelayUrl, pickRelayUrl, mergeHostRelayInfo, remainingCandidates, connectFirstReachable } = await import("../mobile/pwa/src/lib/relay-select.ts");
+const { relayCandidates, sameOriginRelayUrl, isPrivateRelayUrl, shouldSwitchToBetterPath, pickRelayUrl, mergeHostRelayInfo, remainingCandidates, connectFirstReachable } = await import("../mobile/pwa/src/lib/relay-select.ts");
 
 test("S6 候选顺序：主机下发的顺序优先，上次可用退为回落，单值最后；去重去空", () => {
   assert.deepEqual(
@@ -162,4 +162,20 @@ test("安全上下文优先级：局域网 TLS 先于同源、同源先于公网
   );
   assert.equal(isPrivateRelayUrl("wss://192.168.1.5:9443/ws"), true);
   assert.equal(isPrivateRelayUrl("wss://relay.example.com/ws"), false);
+});
+
+test("后台择优：只朝更近的方向切（公网 → 局域网），已在局域网则不折腾", () => {
+  const ordered = ["wss://10.215.35.72:9443/ws", "wss://47.97.28.110:9443/ws"];
+  assert.equal(
+    shouldSwitchToBetterPath("wss://47.97.28.110:9443/ws", ordered),
+    "wss://10.215.35.72:9443/ws",
+    "当前在公网中继、局域网 TLS 可用 → 切过去",
+  );
+  assert.equal(shouldSwitchToBetterPath("wss://10.215.35.72:9443/ws", ordered), null, "已经在局域网 → 不动");
+  assert.equal(
+    shouldSwitchToBetterPath("ws://10.215.35.72:9001/ws", ["wss://47.97.28.110:9443/ws"]),
+    null,
+    "首选不是局域网 → 不做反向切换（离开网络交给正常重连回落）",
+  );
+  assert.equal(shouldSwitchToBetterPath("wss://a/ws", []), null, "没有候选 → 不动");
 });
