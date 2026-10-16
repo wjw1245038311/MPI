@@ -51,6 +51,8 @@ fun HomeScreen(
 ) {
     val host = state.host
     val session = state.session
+    // 已经连上过再进入连接态 = 断线重连 → 文案显示「重新连接中…」（与首次连接区分）
+    val reconnecting = state.everConnected
 
     Column(modifier = modifier.fillMaxSize().statusBarsPadding()) {
         TopBar(
@@ -78,7 +80,7 @@ fun HomeScreen(
 
         val failure = (session as? SessionState.Failed)?.reason
         if (failure != null && failure.isTerminal) {
-            Banner(text = session.label(), tone = Tone.Error, actionLabel = "添加设备", onAction = onOpenHosts)
+            Banner(text = session.label(reconnecting), tone = Tone.Error, actionLabel = "添加设备", onAction = onOpenHosts)
         }
 
         if (host.error != null) {
@@ -89,10 +91,10 @@ fun HomeScreen(
             // 有本地缓存时先渲染列表（秒开），连接状态交给顶栏，不拿转圈挡住一切
             (session is SessionState.Connecting || session is SessionState.Authenticating) &&
                 host.projects.isEmpty() ->
-                CenteredMessage(loading = true, text = session.label())
+                CenteredMessage(loading = true, text = session.label(reconnecting))
 
             failure != null && host.projects.isEmpty() ->
-                CenteredMessage(text = session.label(), actionLabel = "立即重连", onAction = onReconnect)
+                CenteredMessage(text = session.label(reconnecting), actionLabel = "立即重连", onAction = onReconnect)
 
             host.projects.isEmpty() && !host.loading ->
                 CenteredMessage(

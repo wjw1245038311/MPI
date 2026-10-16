@@ -160,6 +160,18 @@ class HostSession(
      * 每几秒一轮 `hello ok` + `REPLACED` + `gone (code=1000)`（2026-09-26 真机取证）。
      * 现在 close 只负责放弃 socket，重建一律由 `onClosed(expected)` → [ensureConnected] 单飞发起。
      */
+    /**
+     * 「按最新候选重连」：地址不同就先换址，再照 [kick] 走（同一会话，不丢打开中的会话）。
+     *
+     * 与 [kick] 的分工：网络恢复只是重试**同一地址**；回前台/重新打开会话时主机可能已经把
+     * 更好的通道（局域网）写进列表了，这时才需要换址。
+     */
+    fun kickAt(url: String?) {
+        val next = url?.trim().orEmpty()
+        if (next.isNotEmpty() && next != client.url) client.redirect(next)
+        kick()
+    }
+
     fun kick() {
         if (stopped) return
         if (_state.value is SessionState.Connected) return

@@ -108,6 +108,8 @@ data class AppUiState(
     val initializing: Boolean = true,
     val pairings: List<PairingRecord> = emptyList(),
     val activeHostId: String? = null,
+    /** 是否成功连上过（≥1 次）：断线重连时的文案据此变「重新连接中…」。 */
+    val everConnected: Boolean = false,
     val session: SessionState = SessionState.Disconnected,
     val host: HostSnapshot = HostSnapshot(),
     val pairing: PairingUi? = null,
@@ -240,6 +242,11 @@ class AppViewModel(
     private var session: HostSession? = null
     private var requester: Requester? = null
     private var repository: HostRepository? = null
+    /** 当前挂着的配对记录与本次实际使用的地址（回前台择优重连要用）。 */
+    private var currentRecord: PairingRecord? = null
+    private var currentUrl: String = ""
+    /** 是否成功连上过（用来把「首次连接」与「断线重连」的文案分开）。 */
+    private var everConnected = false
     private var threadSession: ThreadSession? = null
     private var threadActions: ThreadActions? = null
     /** 附件直连（P2）：上行分片 PUT / 下行换读 URL。与 [threadActions] 同生命周期。 */
@@ -1809,7 +1816,21 @@ class AppViewModel(
      * 不用再「完全关掉 App」。
      */
     fun kickConnection() {
-        session?.kick()
+        val current = session ?: return
+        // 连着就别动：kick 自己会短路，重挂反而会打断活跃会话（并触发一次 replaced）
+        if (current.isAuthenticated) return
+        val record = currentRecord
+        if (record == null) {
+            current.kick()
+            return
+        }
+        // **回前台时按最新候选重算一次**（2026-10-16）：后台期间主机可能下发了新的通道列表
+        // （局域网新增/中继换址），而 kick 只在**同一个地址**上重试。
+        // 注意这里用 kickAt（换址 + 重连，同一 HostSession）而不是整条 attach 重挂——
+        // 后者会走 detachSession，把用户正在看的会话一起关掉（真机上是"回来就被弹回列表"）。
+        val best = RelaySelect.pick(record.relayUrl, record.relayUrls, record.lastGoodRelayUrl)
+        current.kickAt(best.ifEmpty { null })
+        if (best.isNotEmpty()) currentUrl = best
     }
 
     // ---- 内部 ----
@@ -1911,6 +1932,8 @@ class AppViewModel(
         )
         val chosenUrl = candidates.firstOrNull() ?: record.relayUrl
         val client = RelayClient(chosenUrl)
+        currentRecord = record
+        currentUrl = chosenUrl
         val newSession = HostSession(client, record, deviceIdentity, deviceName, scope)
         val newRequester = Requester(
             transport = newSession,
@@ -1978,6 +2001,15 @@ class AppViewModel(
             }
         }
 
+        // 「连上过」标记：用于把首次连接与断线重连的文案分开（Flutter/Compose 侧读 ui.everConnected）
+        scope.launch {
+            newSession.state.collect { state ->
+                if (state is SessionState.Connected && !everConnected) {
+                    everConnected = true
+                    _ui.update { it.copy(everConnected = true) }
+                }
+            }
+        }
         _ui.update { it.copy(activeHostId = record.hostId, problems = emptyList()) }
         newRepository.start()
         newSession.connect()

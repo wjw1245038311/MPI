@@ -24,10 +24,15 @@ fun RemoteThreadState.label(): String = when (this) {
     RemoteThreadState.Unknown -> "状态未知"
 }
 
-/** 会话状态徽章的字色/底色由 UI 决定，这里只给文案。 */
-fun SessionState.label(): String = when (this) {
-    SessionState.Disconnected -> "未连接"
-    SessionState.Connecting -> "连接中…"
+/**
+ * 会话状态徽章的字色/底色由 UI 决定，这里只给文案。
+ *
+ * [reconnecting]（2026-10-16）：**已经连上过**之后再进入连接态 = 断线重连，文案改成
+ * 「重新连接中…」，与首次连接区分开（用户口径：后台断了就显示重连，别让人以为卡住了）。
+ */
+fun SessionState.label(reconnecting: Boolean = false): String = when (this) {
+    SessionState.Disconnected -> if (reconnecting) "已断开" else "未连接"
+    SessionState.Connecting -> if (reconnecting) "重新连接中…" else "连接中…"
     SessionState.Authenticating -> "认证中…"
     is SessionState.Connected -> "已连接"
     is SessionState.Failed -> detail

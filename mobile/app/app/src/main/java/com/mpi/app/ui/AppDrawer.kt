@@ -68,7 +68,7 @@ fun AppDrawerContent(
         DrawerHeader(
             deviceName = state.activeHost?.shownName ?: "未选择主机",
             online = state.session is SessionState.Connected,
-            statusLabel = if (state.session is SessionState.Connected) "已连接" else state.session.label(),
+            statusLabel = if (state.session is SessionState.Connected) "已连接" else state.session.label(state.everConnected),
             onClick = onOpenHosts,
             onRefresh = onRefresh,
         )

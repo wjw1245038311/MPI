@@ -53,9 +53,27 @@ sealed interface RelayState {
  * （中继日志指纹：同一 deviceId 每几秒一轮 `hello ok` + `REPLACED` + `gone (code=1000)`）。
  */
 class RelayClient(
-    private val url: String,
+    url: String,
     pingIntervalSeconds: Long = 20,
 ) {
+    /**
+     * 当前要连的中继地址。
+     *
+     * 为什么可变（2026-10-16）：回前台时主机可能已经下发了**更新的通道列表**（局域网地址
+     * 新增/中继换址），而旧实现只在同一个地址上重试——设备就永远回不到更近的路。
+     * [redirect] 换地址但不打断会话对象：状态机、订阅、E2E 密钥都留在同一个 HostSession 里，
+     * 因此不会把用户从正在看的会话里踢出来（对比"整条重挂"的代价）。
+     */
+    @Volatile
+    var url: String = url
+        private set
+
+    /** 换一个中继地址（下一次 [connect] 生效；调用方通常紧接一次 [HostSession.kickAt]）。 */
+    fun redirect(newUrl: String) {
+        val next = newUrl.trim()
+        if (next.isNotEmpty()) url = next
+    }
+
     private val httpClient = OkHttpClient.Builder()
         .pingInterval(pingIntervalSeconds, TimeUnit.SECONDS)
         .build()
