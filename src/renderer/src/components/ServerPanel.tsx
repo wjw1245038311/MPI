@@ -12,7 +12,7 @@
  */
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import { unreachableForPhone, type RelayStatus } from "../lib/remote-panel-shared";
+import { unreachableForPhone, type LanModeStatus, type RelayStatus } from "../lib/remote-panel-shared";
 import { ActivationDialog } from "./ActivationDialog";
 import { Cloud, Shield } from "./icons";
 
@@ -23,7 +23,12 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
   const pushToast = useStore((s) => s.pushToast);
 
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
+  /** 本机中继状态（局域网入口 / TLS 入口）——只在高级区展示。 */
+  const [lanMode, setLanMode] = useState<LanModeStatus | null>(null);
   const [localRelayStaticDir, setLocalRelayStaticDir] = useState("");
+  const [certDraft, setCertDraft] = useState("");
+  const [keyDraft, setKeyDraft] = useState("");
+  const [tlsPortDraft, setTlsPortDraft] = useState("9443");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [activationOpen, setActivationOpen] = useState(false);
@@ -43,11 +48,15 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
     setCustom(Boolean((config.customRelayUrl || "").trim()));
     setRelayUrl(config.customRelayUrl || "");
     if (typeof config.localRelayStaticDir === "string") setLocalRelayStaticDir(config.localRelayStaticDir);
+    setCertDraft(config.localRelayCertFile || "");
+    setKeyDraft(config.localRelayKeyFile || "");
+    if (config.localRelayTlsPort) setTlsPortDraft(String(config.localRelayTlsPort));
   }, [config?.customRelayUrl, config?.localRelayStaticDir]);
 
   const loadRelay = async () => {
     try {
       setRelayStatus((await window.pi.remote.getRelayStatus()) as RelayStatus);
+      setLanMode((await window.pi.remote.getLanMode()) as LanModeStatus);
     } catch {
       /* 面板可能比 IPC 桥活得久一点（重载瞬间） */
     }
@@ -107,6 +116,9 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
         ...(custom && relayToken.trim() ? { customRelayToken: relayToken.trim() } : {}),
         ...(!custom ? { customRelayToken: "" } : {}),
         localRelayStaticDir: localRelayStaticDir.trim(),
+        localRelayCertFile: certDraft.trim(),
+        localRelayKeyFile: keyDraft.trim(),
+        ...(/^\d+$/.test(tlsPortDraft.trim()) ? { localRelayTlsPort: Number(tlsPortDraft.trim()) } : {}),
       });
       setRelayToken("");
       await loadRelay();
@@ -274,6 +286,34 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
             spellCheck={false}
           />
         </label>
+        <div className="set-hint" style={{ marginTop: 12, fontWeight: 600 }}>
+          {zh ? "局域网 TLS（https 页面走局域网直连的前提）" : "LAN TLS (required for LAN direct from https pages)"}
+        </div>
+        <div className="set-hint">
+          {zh
+            ? "证书与私钥都填（PEM 路径）时，本机中继会在下面这个端口上同时提供 wss 入口：https 页面里的浏览器禁止连明文 ws，只有 wss 才能走局域网。证书由自签 CA 签发，使用前需在各设备上安装一次根证书。"
+            : "With both files set (PEM paths), the local relay also serves wss on the port below: browsers on https pages refuse plain ws, so only wss can stay on the LAN. The cert is issued by the self-signed CA — install that root once per device."}
+        </div>
+        <label className="set-addprov-field wide">
+          <span>{zh ? "证书（.crt）" : "Certificate (.crt)"}</span>
+          <input className="set-input" value={certDraft} onChange={(e) => setCertDraft(e.target.value)} spellCheck={false} />
+        </label>
+        <label className="set-addprov-field wide">
+          <span>{zh ? "私钥（.key）" : "Private key (.key)"}</span>
+          <input className="set-input" value={keyDraft} onChange={(e) => setKeyDraft(e.target.value)} spellCheck={false} />
+        </label>
+        <label className="set-addprov-field wide">
+          <span>{zh ? "TLS 端口" : "TLS port"}</span>
+          <input className="set-input" value={tlsPortDraft} onChange={(e) => setTlsPortDraft(e.target.value)} spellCheck={false} />
+        </label>
+        {(lanMode?.tlsUrls?.length ?? 0) > 0 && (
+          <div className="set-hint" style={{ wordBreak: "break-all" }}>
+            {zh ? "局域网 TLS 入口：" : "LAN TLS entry: "}
+            {(lanMode?.tlsUrls || []).map((url) => (
+              <div key={url}><code>{url}</code></div>
+            ))}
+          </div>
+        )}
         <div className="set-diag-btns" style={{ marginTop: 8 }}>
           <button className="set-btn ghost" onClick={() => void saveRelay()} disabled={saving}>
             {zh ? "保存" : "Save"}

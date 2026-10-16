@@ -89,6 +89,12 @@ export function pickLanAddress(ifaces: NodeJS.Dict<NetworkInterfaceInfo[]>): Lan
 /** 配对链接里给手机的中继地址（内网入口）。 */
 export const lanRelayUrl = (address: string, port: number = LAN_RELAY_PORT): string => `ws://${address}:${port}/ws`;
 
+/** TLS 监听默认端口（自签证书，给 https 页面用；明文监听仍在 LAN_RELAY_PORT）。 */
+export const LAN_RELAY_TLS_PORT = 9443;
+
+/** 局域网 TLS 入口（`https` 页面只能连它）。 */
+export const lanRelayTlsUrl = (address: string, port: number = LAN_RELAY_TLS_PORT): string => `wss://${address}:${port}/ws`;
+
 /** 本机回环入口——CF 隧道与主机上行 #2 指向它。 */
 export const localRelayUrl = (port: number = LAN_RELAY_PORT): string => `ws://${LOCAL_RELAY_HOST}:${port}/ws`;
 
@@ -113,8 +119,11 @@ export interface LanRelayStatus {
   /**
    * **全部**内网候选地址（有序）：配对票与通道列表都按它逐个给出，
    * 让手机在"换了网卡/换了网段"时仍能试到其中一条（见 `lanAddresses`）。
+   * 配了证书时，明文（`ws://…:port`）在前、TLS（`wss://…:tlsPort`）在后。
    */
   urls: string[];
+  /** **TLS 入口**（`wss://<内网IP>:<tlsPort>/ws`）；没配证书时为空。https 页面只能用这些。 */
+  tlsUrls: string[];
   /** 实际绑定地址：`0.0.0.0`（LAN 开）或 `127.0.0.1`（LAN 关）。 */
   bindHost: string;
   /** 是否把内网地址广告给手机。 */
@@ -140,6 +149,11 @@ export interface StartLocalRelayOptions {
   bindHost?: string;
   /** 是否把内网地址广告给手机，默认 true。 */
   advertiseLan?: boolean;
+  /** TLS 证书 / 私钥（可选）。两者都给才会在 `tlsPort` 上开 TLS 监听。 */
+  tlsCertFile?: string;
+  tlsKeyFile?: string;
+  /** TLS 监听端口（默认 9443）；明文监听始终在 `port`。 */
+  tlsPort?: number;
   /**
    * 挑不到网卡时是否算失败。
    * 默认 false（进程照起，只是不广告内网地址）；
@@ -163,8 +177,14 @@ export interface StartLocalRelayOptions {
 /**
  * 起一个本机中继子进程。
  *
- * 不做的事：不开 TLS（本机/局域网内，且控制通道本来就有应用层 E2E）、不配 host token
- * （这台中继只服务本机的手机；准入是公网中继那侧的事）。
+ * **TLS（2026-10-16 起可选）**：配了证书后，主监听改到 `tlsPort`（默认 9443，自签证书、绑 0.0.0.0，
+ * 局域网可达），原来的明文监听退为「第二个监听」继续留在 `port`（9001）——**主机上行、CF 隧道、
+ * tailscale serve 都还指着它，不能动**。这样与 ECS 那边「9443 TLS + 明文」完全同构。
+ * 为什么需要：PWA 的 E2E 依赖 `crypto.subtle`，而浏览器只在**安全上下文**（https）提供它；
+ * 而 https 页面又禁止连明文 `ws://`。所以「局域网直连」要能服务 https 页面，就必须有 wss 入口。
+ *
+ * 不配证书 = 保持旧行为（只在 `port` 上开明文监听）；不配 host token（这台中继只服务本机；
+ * 准入是公网中继那侧的事）。
  */
 export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHandle {
   const log = options.log ?? (() => {});
@@ -180,6 +200,7 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
     port,
     address: null,
     urls: [],
+    tlsUrls: [],
     bindHost,
     advertiseLan,
     lastError: null,
@@ -195,6 +216,8 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
   if (requireLanAddress && !picked) {
     return { ...empty, status: { ...base, lastError: "找不到可用的局域网网卡（手机连不上）" } };
   }
+  const tlsPort = options.tlsPort && options.tlsPort > 0 ? options.tlsPort : LAN_RELAY_TLS_PORT;
+  const tlsReady = Boolean(options.tlsCertFile && options.tlsKeyFile && existsSync(options.tlsCertFile) && existsSync(options.tlsKeyFile));
   const spawnImpl = options.spawnImpl ?? spawn;
   let child: ChildProcess | null = null;
   try {
@@ -204,9 +227,17 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
         // Electron 当普通 Node 用（打包版没有独立的 node 可执行文件）。
         ELECTRON_RUN_AS_NODE: "1",
         RELAY_HOST: bindHost,
-        RELAY_PORT: String(port),
-        // 本机中继不需要公网明文监听，也不需要准入列表。
-        RELAY_PLAIN_PORT: "",
+        // 有证书 → 主监听 = TLS（tlsPort），明文退为第二个监听（port，给主机上行/CF/tailscale）；
+        // 没证书 → 保持旧行为：主监听就是明文（port），不开第二个监听。
+        ...(tlsReady
+          ? {
+              RELAY_PORT: String(tlsPort),
+              RELAY_TLS_CERT: String(options.tlsCertFile),
+              RELAY_TLS_KEY: String(options.tlsKeyFile),
+              RELAY_PLAIN_PORT: String(port),
+              RELAY_PLAIN_HOST: bindHost,
+            }
+          : { RELAY_PORT: String(port), RELAY_PLAIN_PORT: "" }),
         RELAY_HOST_TOKENS: "",
         // VAPID 密钥必须落在 userData（见选项注释）：否则应用更新即换密钥、推送订阅全失效。
         ...(options.vapidKeyFile ? { RELAY_VAPID_KEY_FILE: options.vapidKeyFile } : {}),
@@ -228,6 +259,7 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
     `local-relay starting on ${bindHost}:${port}` +
       (picked ? ` (lan ${picked.address} ${picked.iface})` : " (无可广告的局域网网卡)") +
       (lanPicks.length > 1 ? ` [候选 ${lanPicks.map((p) => p.address).join(",")}]` : "") +
+      (tlsReady ? ` [TLS :${tlsPort}]` : "") +
       (url ? "" : " [不广告内网地址]"),
   );
   return {
@@ -239,8 +271,14 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
       localUrl: localRelayUrl(port),
       port,
       address: picked?.address ?? null,
-      // 全部候选（手机按序试；票里会逐个给出）
-      urls: url ? lanPicks.map((item) => lanRelayUrl(item.address, port)) : [],
+      // 全部候选（手机按序试；票里会逐个给出）：明文在前（不装证书也能用）、TLS 在后（https 页面用）
+      urls: url
+        ? [
+            ...lanPicks.map((item) => lanRelayUrl(item.address, port)),
+            ...(tlsReady ? lanPicks.map((item) => lanRelayTlsUrl(item.address, tlsPort)) : []),
+          ]
+        : [],
+      tlsUrls: url && tlsReady ? lanPicks.map((item) => lanRelayTlsUrl(item.address, tlsPort)) : [],
       bindHost,
       advertiseLan,
       lastError: !picked && advertiseLan ? "找不到可用的局域网网卡（手机连不上）" : null,

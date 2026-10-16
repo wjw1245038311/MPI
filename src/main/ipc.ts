@@ -1345,6 +1345,7 @@ function lanModeStatus(): LanRelayStatus {
     port,
     address: null,
     urls: [],
+    tlsUrls: [],
     bindHost: cfg.lanModeEnabled ? LAN_RELAY_BIND_HOST : LOCAL_RELAY_HOST,
     advertiseLan: !!cfg.lanModeEnabled,
     lastError: null,
@@ -1382,6 +1383,10 @@ function applyLanMode(): LanRelayStatus {
     port,
     bindHost,
     advertiseLan,
+    // 局域网 TLS（可选）：配了证书就在 tlsPort 上开 wss，明文监听继续留在 port（主机上行/CF/tailscale 用）。
+    ...(cfg.localRelayCertFile ? { tlsCertFile: cfg.localRelayCertFile } : {}),
+    ...(cfg.localRelayKeyFile ? { tlsKeyFile: cfg.localRelayKeyFile } : {}),
+    ...(typeof cfg.localRelayTlsPort === "number" && cfg.localRelayTlsPort > 0 ? { tlsPort: cfg.localRelayTlsPort } : {}),
     // VAPID 密钥固定落 userData：写在安装目录的话，应用一更新就换密钥 → 推送订阅全失效。
     vapidKeyFile: join(getConfigDir(), "relay-vapid.json"),
     // 静态目录（托管 PWA / 下载页）：空 = 不托管。

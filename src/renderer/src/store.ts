@@ -1261,8 +1261,12 @@ interface PiStore {
     customRelayUrl?: string;
     customRelayToken?: string;
     serverAuthCode?: string;
-    /** 本机中继静态目录（服务器页的「位置待定」折叠区也存这一项）。 */
+    /** 本机中继静态目录（转发设置的高级折叠区）。 */
     localRelayStaticDir?: string;
+    /** 局域网 TLS（证书 / 私钥 / 端口）：填了才有 wss 内网入口。 */
+    localRelayCertFile?: string;
+    localRelayKeyFile?: string;
+    localRelayTlsPort?: number;
   }) => Promise<void>;
   /** Voice system (语音系统): merge a partial voice config and persist it. */
   setVoiceConfig: (patch: Partial<NonNullable<AppConfig["voice"]>>) => Promise<void>;

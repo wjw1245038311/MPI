@@ -682,6 +682,10 @@ export interface AppConfig {
   serverAuthCodeSet?: boolean;
   /** 本机中继静态目录（托管 PWA / 下载页；空 = 不托管）——服务器面板「高级」里编辑。 */
   localRelayStaticDir?: string;
+  /** 局域网 TLS 证书 / 私钥（PEM 路径）与端口：填了才有 wss 内网入口（https 页面要用）。 */
+  localRelayCertFile?: string;
+  localRelayKeyFile?: string;
+  localRelayTlsPort?: number;
 }
 
 export type MessagingStatus = "off" | "connecting" | "connected" | "reconnecting" | "error";

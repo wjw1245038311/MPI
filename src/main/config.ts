@@ -309,6 +309,17 @@ export interface AppConfig {
   /** 局域网中继端口（默认 9001）。 */
   lanModePort: number;
   /**
+   * **局域网 TLS**（2026-10-16）：本机中继的证书与私钥（PEM 路径）。
+   * 两者都填且文件存在 → 在 `localRelayTlsPort`（默认 9443）上开 wss，明文监听继续留在
+   * `lanModePort`（主机上行 / CF 隧道 / tailscale serve 都指着它）。为什么需要：PWA 的 E2E
+   * 依赖 `crypto.subtle`（只在 https 安全上下文可用），而 https 页面又禁止连 `ws://`——
+   * 没有 wss 入口，局域网直连就服务不了 https 页面。证书由自签 CA 签发，**设备需装一次根证书**。
+   */
+  localRelayCertFile?: string;
+  localRelayKeyFile?: string;
+  /** 局域网 TLS 监听端口（默认 9443）。 */
+  localRelayTlsPort?: number;
+  /**
    * 本机中继的静态目录（托管网页 PWA / 下载页）。空 = 不托管。
    * 设为目录后，经 CF 隧道的 `https://relay.<域名>/` 就是 PWA 界面，同域名 `/ws` 是数据通道。
    */
@@ -661,6 +672,15 @@ export function loadConfig(userDataDir: string): AppConfig {
             : DEFAULTS.lanModePort,
         localRelayStaticDir:
           typeof parsed.localRelayStaticDir === "string" ? parsed.localRelayStaticDir.trim() : DEFAULTS.localRelayStaticDir,
+        ...(typeof parsed.localRelayCertFile === "string" && parsed.localRelayCertFile.trim()
+          ? { localRelayCertFile: parsed.localRelayCertFile.trim() }
+          : {}),
+        ...(typeof parsed.localRelayKeyFile === "string" && parsed.localRelayKeyFile.trim()
+          ? { localRelayKeyFile: parsed.localRelayKeyFile.trim() }
+          : {}),
+        ...(typeof parsed.localRelayTlsPort === "number" && parsed.localRelayTlsPort > 0 && parsed.localRelayTlsPort < 65536
+          ? { localRelayTlsPort: Math.floor(parsed.localRelayTlsPort) }
+          : {}),
         relayChannels: sanitizeRelayChannels(parsed.relayChannels),
         ...(typeof parsed.customRelayUrl === "string" && parsed.customRelayUrl.trim()
           ? { customRelayUrl: parsed.customRelayUrl.trim() }
@@ -1005,6 +1025,11 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (typeof p.mobileRelayFallbackUrl === "string") out.mobileRelayFallbackUrl = p.mobileRelayFallbackUrl.trim();
   if (typeof p.lanModeEnabled === "boolean") out.lanModeEnabled = p.lanModeEnabled;
   if (typeof p.localRelayStaticDir === "string") out.localRelayStaticDir = p.localRelayStaticDir.trim();
+  if (typeof p.localRelayCertFile === "string") out.localRelayCertFile = p.localRelayCertFile.trim();
+  if (typeof p.localRelayKeyFile === "string") out.localRelayKeyFile = p.localRelayKeyFile.trim();
+  if (typeof p.localRelayTlsPort === "number" && p.localRelayTlsPort > 0 && p.localRelayTlsPort < 65536) {
+    out.localRelayTlsPort = Math.floor(p.localRelayTlsPort);
+  }
   if (Array.isArray(p.relayChannels)) {
     out.relayChannels = sanitizeRelayChannels(p.relayChannels) ?? [];
     out.relayChannelsVersion = 1;

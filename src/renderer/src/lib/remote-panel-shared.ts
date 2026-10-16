@@ -77,8 +77,10 @@ export type LanModeStatus = {
   bindHost: string;
   advertiseLan: boolean;
   lastError: string | null;
-  /** **全部**内网候选入口（手机可能只在其中一张网卡的网段上）。 */
+  /** **全部**内网候选入口（明文在前、TLS 在后；手机可能只在其中一张网卡的网段上）。 */
   urls?: string[];
+  /** 局域网 **TLS** 入口（`wss://`）；没配证书时为空。https 页面只能用这些。 */
+  tlsUrls?: string[];
 };
 
 /** 中继托管的手机 App 安装包清单（/download/mpi-android.json）；中继不可达时
