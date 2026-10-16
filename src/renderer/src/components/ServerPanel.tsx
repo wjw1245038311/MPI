@@ -246,12 +246,18 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
         </div>
         <div className="set-hint">
           {zh
-            ? "激活码用于「用我的内置服务器转发对话 + 从它更新」；一个码最多 3 台设备。软件功能本身不受限制。"
-            : "The access code enables forwarding and app updates through my built-in server; one code covers up to 3 devices. The app itself is never restricted."}
+            ? "激活码用于启用内置服务器，从而经它转发对话并从它获取应用更新。每个激活码最多绑定三台设备；应用自身的功能不受激活状态限制。"
+            : "The access code enables the built-in server, which forwards conversations and delivers app updates. Each code binds at most three devices; the application itself is never restricted by activation."}
         </div>
         <div className="set-diag-btns" style={{ marginTop: 8 }}>
           <button className="set-btn primary" onClick={() => setActivationOpen(true)}>
-            {zh ? (activated ? "查看 / 解除绑定" : "立即激活…") : activated ? "Manage activation" : "Activate…"}
+            {zh
+              ? activated
+                ? "查看激活状态 / 解除绑定"
+                : "立即激活"
+              : activated
+                ? "View activation / unbind"
+                : "Activate now"}
           </button>
         </div>
       </div>
