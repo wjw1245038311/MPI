@@ -213,7 +213,10 @@ export default function App() {
   const [connState, setConnState] = useState("idle");
   const [connErr, setConnErr] = useState<string | null>(null);
   /** Both client-creation sites share this: track state + last error (REPLACED etc.). */
+  /** 是否成功连上过（用来区分"首次连接"与"断线重连"的文案）。 */
+  const everOpenedRef = useRef(false);
   const onClientState = (s: string, err: string | null) => {
+    if (s === "open") everOpenedRef.current = true;
     setConnState(s);
     // 错误要“粘”住：重连重试会把 state 置回 connecting 且 err=null，如果跟着清，
     // 身份不被认可（4001/AUTH_FAILED）这类永不恢复的错误就会一闪而过。只有真连上才清。
@@ -893,6 +896,35 @@ export default function App() {
     setView("pairing");
   };
 
+  /**
+   * **回前台时确保连着**（2026-10-16）：整条走一次 `startSession`——既重连、又重算候选
+   * （局域网 TLS 在首位，等于顺便择优），并复用现成的重认证 / 重新订阅 / resync 路径。
+   * 后台期间不重连这件事在 RelayClient.setBackgrounded 里（省无线电唤醒）。
+   */
+  const ensureConnected = () => {
+    const client = clientRef.current;
+    if (!client || client.getState() === "open") return;
+    const record = pairings.find((item) => item.hostId === hostId) ?? pairings[0];
+    if (!record) return;
+    void (async () => {
+      const device = await storeRef.current.getDevice();
+      if (device) startSession(record, device.seedB64url, device.name);
+    })();
+  };
+
+  useEffect(() => {
+    const onVisibility = () => {
+      const client = clientRef.current;
+      if (!client) return;
+      const hidden = document.visibilityState === "hidden";
+      client.setBackgrounded(hidden); // 后台：不排重连（浏览器本来也会冻结）
+      if (!hidden) ensureConnected(); // 回前台：没连着就整条重来（顺带择优）
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pairings, hostId]);
+
   /** 多设备切换：关掉当前会话与连接，再按选中的 pairing 重连（复用 startSession）。 */
   const switchHost = (record: PairingRecord) => {
     if (record.hostId === hostId) return;
@@ -1012,7 +1044,9 @@ export default function App() {
     : hostId
       ? connState === "open"
         ? `在线${activeRelayUrl ? ` · ${relayLabel(activeRelayUrl)}` : ""}`
-        : "连接中…"
+        : everOpenedRef.current
+          ? "重新连接中…"
+          : "连接中…"
       : "";
 
   /**

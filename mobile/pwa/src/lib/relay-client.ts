@@ -46,6 +46,8 @@ export class RelayClient {
   private lastError: string | null = null;
   private retryCount = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 页面是否在后台（在后台不排重连；见 setBackgrounded）。 */
+  private backgrounded = false;
   /** When set, the client keeps itself alive (auto-reconnect + re-hello). */
   private stayAlive = false;
   private helloCreds: { deviceId: string; deviceToken: string; hostId?: string } | null = null;
@@ -355,6 +357,11 @@ export class RelayClient {
         this.lastError = `closed ${code}${reason ? ` "${reason}"` : ""}`;
       }
       if (!isCurrent || !this.stayAlive) return;
+      // 后台期间不排重连：等回到前台由 App 整条重来（省无线电唤醒；后台靠 WebPush 通知）。
+      if (this.backgrounded) {
+        this.setState("closed", this.lastError);
+        return;
+      }
       // Unexpected drop: back off and reconnect (daemon-style, no retry cap).
       this.setState("connecting", this.lastError);
       const delay = Math.min(RECONNECT_BASE_MS * 2 ** this.retryCount, RECONNECT_MAX_MS);
@@ -388,6 +395,24 @@ export class RelayClient {
     }
     this.options.onFrame?.(frame);
     for (const listener of [...this.listeners]) listener(frame);
+  }
+
+  /**
+   * **页面在后台时不要主动重连**（2026-10-16，用户口径：后台断了就先别管，打开会话再连）。
+   *
+   * 理由：移动端浏览器在后台本来就会冻结定时器/挂起连接，主动重连只会白耗**无线电唤醒**；
+   * 后台期间需要的"有事找你"由 WebPush 承担（S7）——点通知回到前台即可。
+   * 回前台时调用 `setBackgrounded(false)`，若还没连上就立刻续一次（App 侧还会整条走
+   * `startSession`，顺带重算候选 = 择优）。
+   */
+  setBackgrounded(value: boolean): void {
+    if (this.backgrounded === value) return;
+    this.backgrounded = value;
+    if (value) {
+      this.clearReconnectTimer();
+      return;
+    }
+    if (this.stayAlive && !this.isOpen()) this.openSocket();
   }
 
   private clearReconnectTimer(): void {
