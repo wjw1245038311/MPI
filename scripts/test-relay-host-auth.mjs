@@ -239,4 +239,69 @@ const hostRegister = (hostId, extra = {}) => ({ type: "host.register", hostId, b
   }
 }
 
+
+// ---- 6. 加固（2026-10-16 用户要求"全做"）：/healthz 收敛 + 按 IP 限速 + 单 IP 连接上限 ----
+{
+  const dir = mkdtempSync(join(tmpdir(), "mpi-relay-hardening-"));
+  const tokenFile = join(dir, "codes.txt");
+  writeFileSync(tokenFile, "share-code");
+  const relay = startRelay({
+    RELAY_TOKEN_FILE: tokenFile,
+    RELAY_AUTH_FAIL_LIMIT: "3",
+    RELAY_AUTH_BLOCK_MS: "2000",
+  });
+  try {
+    const port = await relay.ready;
+    const base = `http://127.0.0.1:${port}`;
+
+    // ① /healthz 收敛：配了准入时，无码只回 {ok:true}（不再免费告诉扫描者有多少主机/设备）
+    const bare = await (await fetch(`${base}/healthz`)).json();
+    assert.deepEqual(bare, { ok: true }, "配了准入时 /healthz 不得回计数");
+    const privileged = await (
+      await fetch(`${base}/healthz`, { headers: { authorization: "Bearer share-code" } })
+    ).json();
+    assert.equal(typeof privileged.hosts, "number", "带有效激活码才给计数");
+
+    // ② 按 IP 限速：连续错码达到阈值 → 封禁期内**即便码是对的**也拒（挡暴力猜）
+    for (let i = 0; i < 3; i++) {
+      await fetch(`${base}/authz/check`, { headers: { authorization: "Bearer wrong" } });
+    }
+    const blocked = await fetch(`${base}/authz/check`, { headers: { authorization: "Bearer share-code" } });
+    assert.equal(blocked.status, 429, "封禁期内应 429（先挡猜码，再谈对不对）");
+    const blockedHealth = await fetch(`${base}/healthz`, { headers: { authorization: "Bearer share-code" } });
+    assert.equal(blockedHealth.status, 429, "被封的 IP 连 /healthz 也拒");
+    await sleep(2_200);
+    const recovered = await fetch(`${base}/authz/check`, { headers: { authorization: "Bearer share-code" } });
+    assert.equal(recovered.status, 200, "封禁到期后自动恢复（不用重启中继）");
+    console.log("ok 6 - 加固：/healthz 收敛 + 按 IP 限速（含自动解封）");
+  } finally {
+    await relay.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ---- 7. 单 IP 并发 WS 连接上限 ----
+{
+  const relay = startRelay({ RELAY_MAX_WS_PER_IP: "2" });
+  try {
+    const port = await relay.ready;
+    const openOne = () =>
+      new Promise((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+        ws.on("open", () => resolve(ws));
+        ws.on("error", (e) => resolve({ error: e.message }));
+      });
+    const a = await openOne();
+    const b = await openOne();
+    assert.ok(a instanceof WebSocket && b instanceof WebSocket, "前两条连接应建立");
+    const third = await openOne();
+    assert.ok(third?.error, "第 3 条连接应被拒（上限 2）");
+    a.close();
+    b.close();
+    console.log("ok 7 - 单 IP 并发 WS 连接上限（超限直接 429）");
+  } finally {
+    await relay.stop();
+  }
+}
+
 console.log("relay-host-auth tests passed");

@@ -16,6 +16,14 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    验证方式：`npm run typecheck` + `npm run test:relay-host-auth`（第 5 组：3 台额度 / 第 4 台拒 / 重连不占额 / `activate` 记名且满额 409 / `deactivate` 腾名额 / 错码 401 / `/authz/check` 不回显设备 id）+ `npm run test:relay-tls-static` + `npm test -- relay-channels`（断言转发设置面板只有自定义中继三件套、不再有选路/多通道）+ `npm run test:app-update-feed`（自定义中继 → 更新走 GitHub）+ 全量 `npm test`（140 passed / 3 skipped / 0 failed）。应用内：设置 →「转发设置」→ 勾「自定义中继」填你自己的地址 → 保存 → 点「验证连通性」；不勾 → 打开「激活授权」粘贴激活码 → 「立即激活」→ 状态显示「产品已激活 · 设备名额 1/3」，「解除绑定」应能把名额释放掉。
 
+3. **修：内置服务器的上行其实一直没连上（自签证书没固定 CA），顺带补候选挑选 + 骚扰加固**——用户问「别人知道 IP 和端口就能转发吗」，实测回答的过程中发现：dev 实例日志写着 `uplinks=builtin,local`，但 **ECS 那条从未注册成功**——`wss://aliyun-ecs.tail38d5a.ts.net:9443/ws` 在 Node 侧报 `self-signed certificate in certificate chain`，于是手机其实一直靠 CF 隧道（`relay.whomidas.cn` → 本机中继）兜底，只是「一个二维码带全部候选」让它看起来还正常。修法不是关校验（`rejectUnauthorized:false` 会把 TLS 变成摆设），而是**把自签 CA 固定下来**：`resources/mpi-relay-ca.crt` 随包分发（公共证书、不含私钥），WS 客户端与所有探测都带上它；同时开机探一次候选（tailnet TLS → 公网明文）挑第一条真能握手的地址，避免没有 tailnet 的机器在单地址上死等。实测：固定 CA 后按 IP 与按 tailnet 域名都能握手（证书 SAN 覆盖两者）。
+
+   验证方式：`npm run typecheck` + 全量 `npm test`。应用内/日志：重启后 `mpi-diag.log` 应出现 `builtin-uplink 选定 wss://…`，ECS 侧 `journalctl -u mpi-relay | grep 'auth device registered'` 应出现本机 hostId（带机器名）。
+
+4. **加固：/healthz 收敛 + 按 IP 限速 + 单 IP 连接上限 + 主机准入已开**——地址公开是必然的（手机要连），但不能再免费送情报与资源：① `/healthz` 在配了准入后**没带有效激活码只回 `{ok:true}`**（之前公开 `hosts/devices/tickets` 计数）；② `host.register` 未授权 / `/authz/*` 错码累计达阈值（60s 内 10 次）→ 该 IP **封 60s**（封禁期内即使码正确也 429；设备 hello 失败**故意不计入**——主机重启后手机带旧令牌重试是正常现象，封它会把你自己的手机锁在门外）；③ 单 IP 并发 WS 连接超 20 → 直接 429；④ ECS 上打开了主机准入（`RELAY_TOKEN_FILE` + `RELAY_AUTH_FILE` + 3 台上限），实测无令牌注册 `HOST_UNAUTHORIZED`、带码 `relay.ok`。镜像硬门控按约定**暂未开**（老客户端不带令牌，等设备升级完再开）。
+
+   验证方式：`npm run test:relay-host-auth`（新增第 6、7 组：/healthz 无码只回 ok、带码给计数、错码 3 次即封且到期自动恢复、单 IP 连接上限拒绝第 3 条）+ 全量 `npm test`。线上：`curl http://47.97.28.110:10445/healthz` → `{"ok":true}`；带 `Authorization: Bearer <码>` → 完整计数。
+
 ## v0.10.3（2026-10-16）
 
 1. **改：中继/更新合流成「设置 → 服务器」一栏——内置服务器（我的 ECS，凭授权码）+ 自定义服务器**——转发地址原先长在「手机远程控制」弹层里（通道列表：多行、类型、上移下移、token 草稿），而自更新源又从同一个地方推导，两件互不相干的事被绑在一起：**没配手机通道的机器永远只查 GitHub**（小版本不推 GitHub → 永远查不到更新），配了通道的机器还会在 ECS 不通时干等 60s 默认超时；面板本身 800 多行，用户找不到重点。现在：

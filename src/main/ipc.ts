@@ -257,6 +257,7 @@ import {
 import { normalizeTaskModes, taskModeName, taskModeSummary } from "../shared/task-mode-catalog";
 import { stripImageDimensionNotes } from "../shared/image-notes";
 import { builtinServer, type BuiltinServer } from "../shared/builtin-server";
+import { relayCaPem } from "./relay-tls";
 import {
   AGREEMENT_FILE,
   PERSONA_FILE,
@@ -1411,6 +1412,8 @@ function makeRelayUplink(
     relayUrl: args.relayUrl,
     // P1 准入（见 docs/RELAY-SHARING.md §3.1）：中继配了允许列表时必须带。
     ...(args.relayToken ? { relayToken: args.relayToken } : {}),
+    // 自签中继的 CA（内置服务器就是）；自定义中继一般用受信证书，给空数组不影响。
+    tlsCa: relayCaPem({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath || "", appPath: app.getAppPath() }),
     // 多上行共存时持久化文件按实例区分（见 relay-uplink.ts 的 instanceKey 注释）。
     ...(args.instanceKey ? { instanceKey: args.instanceKey } : {}),
     hostId: remoteHost.getStatus().hostId,
@@ -1465,7 +1468,10 @@ function effectiveRelayChannels(): RelayChannel[] {
   } else {
     const code = (cfg.serverAuthCode || "").trim();
     const builtin = builtinServer();
-    if (builtin && code) channels.push(builtinRelayChannel(builtin, code));
+    if (builtin && code) {
+      scheduleBuiltinProbe();
+      channels.push(builtinRelayChannel(builtin, code, builtinHostUrl));
+    }
   }
   // ③ 本机中继备用（常驻；主中继挂了手机可切它，也不依赖 Tailscale）
   if (cfg.remoteRelayFallbackEnabled !== false) {
@@ -1475,14 +1481,100 @@ function effectiveRelayChannels(): RelayChannel[] {
 }
 
 /**
+ * **真实「转发可用」的证据**：对 `<地址>/ws` 做一次 WebSocket 握手（101 即成功）就走。
+ *
+ * 为什么不只看 HTTP：转发走的是 WS，而 `/healthz`、`/authz/check` 都是我们这套中继**顺带**提供的
+ * 端点——只填地址（不开准入）的自建中继照样能用 WS 转发，HTTP 探测却可能因为端点缺失而误报"连不上"。
+ * 这里**只握手、不注册**：验证连通性不该消耗设备名额（占用名额是「立即激活」的事）。
+ */
+const probeRelaySocket = (wsUrl: string, timeoutMs = 8000): Promise<{ ok: boolean; error?: string }> =>
+  new Promise((resolve) => {
+    let settled = false;
+    let socket: WebSocket | null = null;
+    const finish = (result: { ok: boolean; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket?.close();
+      } catch {
+        /* 已经关了 */
+      }
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish({ ok: false, error: "TIMEOUT" }), timeoutMs + 500);
+    try {
+      socket = new WebSocket(wsUrl, {
+        handshakeTimeout: timeoutMs,
+        ...(relayCa().length ? { ca: relayCa() } : {}),
+      });
+    } catch {
+      clearTimeout(timer);
+      finish({ ok: false, error: "BAD_URL" });
+      return;
+    }
+    socket.on("open", () => {
+      clearTimeout(timer);
+      finish({ ok: true });
+    });
+    socket.on("error", (error: any) => {
+      clearTimeout(timer);
+      finish({ ok: false, error: /timeout|ETIMEDOUT/i.test(String(error?.message || "")) ? "TIMEOUT" : "UNREACHABLE" });
+    });
+  });
+
+  /**
+ * 内置服务器的**上行候选挑选**：开机探一次（带固定 CA），挑第一条真能握手的地址。
+ *
+ * 为什么需要：候选是「tailnet TLS → 公网明文」，而没有 tailnet 的机器解析不了那个域名、
+ * 或者证书/网络抖动时，单地址死等会让整条上行永远连不上（2026-10-16 的真实故障：
+ * dev 实例 `uplinks=builtin,local` 但 ECS 那条从未注册成功）。探一次只花几秒，
+ * 之后 `configure()` 用选中的地址，重连也走它。
+ */
+let builtinHostUrl: string | null = null;
+let builtinProbeStarted = false;
+const scheduleBuiltinProbe = () => {
+  if (builtinProbeStarted || (getConfig().customRelayUrl || "").trim()) return;
+  builtinProbeStarted = true;
+  void (async () => {
+    const candidates = builtinServer()?.hostUplinks ?? [];
+    for (const candidate of candidates) {
+      const probe = await probeRelaySocket(candidate, 4000);
+      if (probe.ok) {
+        builtinHostUrl = candidate;
+        appendDiagLog(`builtin-uplink 选定 ${candidate}`);
+        break;
+      }
+      appendDiagLog(`builtin-uplink 候选不可用 ${candidate}（${probe.error}）`);
+    }
+    if (builtinHostUrl && builtinHostUrl !== candidates[0]) builtinRepickUplinks?.();
+  })();
+};
+
+/** 固定 CA（自签中继用）；每次读缓存，成本为零。 */
+const relayCa = () =>
+  relayCaPem({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath || "", appPath: app.getAppPath() });
+
+/** 挑到非默认候选时重新挂上行（由 registerIpcHandlers 注入，因为 remoteHost 在那儿才存在）。 */
+let builtinRepickUplinks: (() => void) | null = null;
+
+/** 转发地址候选：自定义中继只有一个；内置服务器按序试（tailnet TLS → 公网明文）。 */
+const relayCandidates = (): string[] => {
+  const cfg = getConfig();
+  const custom = (cfg.customRelayUrl || "").trim();
+  if (custom) return [custom];
+  return builtinServer()?.hostUplinks ?? [];
+};
+
+
+/**
  * 内置服务器 → 通道（主机上行取内置候选里的第一个，令牌 = 激活码）。
  */
-function builtinRelayChannel(builtin: BuiltinServer, authCode: string): RelayChannel {
+function builtinRelayChannel(builtin: BuiltinServer, authCode: string, hostUrl?: string | null): RelayChannel {
   return {
     id: "builtin",
     label: "内置服务器",
     phoneUrl: builtin.phoneUrls[0],
-    hostUrl: builtin.hostUplinks[0],
+    hostUrl: hostUrl || builtin.hostUplinks[0],
     token: authCode,
     enabled: true,
     kind: "remote",
@@ -3896,53 +3988,6 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   }
 
   /**
-   * **真实「转发可用」的证据**：对 `<地址>/ws` 做一次 WebSocket 握手（101 即成功）就走。
-   *
-   * 为什么不只看 HTTP：转发走的是 WS，而 `/healthz`、`/authz/check` 都是我们这套中继**顺带**提供的
-   * 端点——只填地址（不开准入）的自建中继照样能用 WS 转发，HTTP 探测却可能因为端点缺失而误报"连不上"。
-   * 这里**只握手、不注册**：验证连通性不该消耗设备名额（占用名额是「立即激活」的事）。
-   */
-  const probeRelaySocket = (wsUrl: string, timeoutMs = 8000): Promise<{ ok: boolean; error?: string }> =>
-    new Promise((resolve) => {
-      let settled = false;
-      let socket: WebSocket | null = null;
-      const finish = (result: { ok: boolean; error?: string }) => {
-        if (settled) return;
-        settled = true;
-        try {
-          socket?.close();
-        } catch {
-          /* 已经关了 */
-        }
-        resolve(result);
-      };
-      const timer = setTimeout(() => finish({ ok: false, error: "TIMEOUT" }), timeoutMs + 500);
-      try {
-        socket = new WebSocket(wsUrl, { handshakeTimeout: timeoutMs });
-      } catch {
-        clearTimeout(timer);
-        finish({ ok: false, error: "BAD_URL" });
-        return;
-      }
-      socket.on("open", () => {
-        clearTimeout(timer);
-        finish({ ok: true });
-      });
-      socket.on("error", (error: any) => {
-        clearTimeout(timer);
-        finish({ ok: false, error: /timeout|ETIMEDOUT/i.test(String(error?.message || "")) ? "TIMEOUT" : "UNREACHABLE" });
-      });
-    });
-
-  /** 转发地址候选：自定义中继只有一个；内置服务器按序试（tailnet TLS → 公网明文）。 */
-  const relayCandidates = (): string[] => {
-    const cfg = getConfig();
-    const custom = (cfg.customRelayUrl || "").trim();
-    if (custom) return [custom];
-    return builtinServer()?.hostUplinks ?? [];
-  };
-
-  /**
    * 注册探测：握手后**发一次 `host.register` 看回帧**（`relay.ok` / `relay.error`），随即断开。
    *
    * 只在**中继没有 `/authz/check`**（不是我们这套 / 版本较老）且我们带了令牌时用：
@@ -3971,7 +4016,10 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       };
       const timer = setTimeout(() => finish({ ok: false, error: "TIMEOUT" }), timeoutMs + 500);
       try {
-        socket = new WebSocket(wsUrl, { handshakeTimeout: timeoutMs });
+        socket = new WebSocket(wsUrl, {
+          handshakeTimeout: timeoutMs,
+          ...(relayCa().length ? { ca: relayCa() } : {}),
+        });
       } catch {
         clearTimeout(timer);
         finish({ ok: false, error: "BAD_URL" });
@@ -4191,6 +4239,9 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       ...(authzError ? { authzError } : {}),
     };
   });
+
+  // 内置上行候选重挑（探到别的候选可用时）→ 重新挂一次上行
+  builtinRepickUplinks = () => applyRelayUplinkConfig(remoteHost);
 
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());
   ipcMain.handle("remote:getRelayStatus", () => {

@@ -469,6 +469,67 @@ function checkHostAuth(frame) {
 }
 
 /**
+ * 骚扰加固（2026-10-16，用户要求"全做"）。
+ *
+ * 威胁模型：地址公开是必然的（手机要连），**激活码**才是钥匙。但地址公开后仍有两类骚扰：
+ *   ① 反复猜码 / 反复建连（每次失败都要走一遍鉴权与日志）；
+ *   ② 单 IP 开一堆 WS 连接占资源。
+ * 这里用最小的形态挡住（内存态、按 IP 计）：
+ *   · 认证类失败（host.register 未授权、/authz/* 错码）→ 记一笔；
+ *     60s 窗口内失败 ≥ `RELAY_AUTH_FAIL_LIMIT`（默认 10）→ 该 IP **封 60s**（不再走鉴权）；
+ *   · 单 IP 并发 WS 连接 > `RELAY_MAX_WS_PER_IP`（默认 20）→ 新连接直接 429；
+ *   · 计时表定期清理（防 IP 海量变化把表撑爆）。
+ *
+ * ⚠️ 反代后面所有请求都来自同一个 IP（CF/nginx 默认只给 127.0.0.1）：那时以 `X-Forwarded-For`
+ * 第一跳为准；自建直连（当前 ECS 就是）本来就只有真实 IP。
+ */
+const AUTH_FAIL_LIMIT = Math.max(1, Number(process.env.RELAY_AUTH_FAIL_LIMIT || 10));
+const AUTH_BLOCK_MS = Math.max(1000, Number(process.env.RELAY_AUTH_BLOCK_MS || 60_000));
+const MAX_WS_PER_IP = Math.max(1, Number(process.env.RELAY_MAX_WS_PER_IP || 20));
+const authFailures = new Map();
+const wsConns = new Map();
+
+function clientIp(req) {
+  const forwarded = String(req?.headers?.["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req?.socket?.remoteAddress || "unknown";
+}
+
+function authBlocked(ip) {
+  const entry = authFailures.get(ip);
+  return Boolean(entry && entry.blockedUntil > Date.now());
+}
+
+function noteAuthFailure(ip, why) {
+  const now = Date.now();
+  const entry = authFailures.get(ip) || { count: 0, firstAt: now, blockedUntil: 0 };
+  if (now - entry.firstAt > AUTH_BLOCK_MS) {
+    entry.count = 0;
+    entry.firstAt = now;
+  }
+  entry.count += 1;
+  if (entry.count >= AUTH_FAIL_LIMIT && entry.blockedUntil <= now) {
+    entry.blockedUntil = now + AUTH_BLOCK_MS;
+    log(`ratelimit ${ip} blocked ${AUTH_BLOCK_MS / 1000}s after ${entry.count} auth failures (last: ${why})`);
+  }
+  authFailures.set(ip, entry);
+}
+
+function noteConn(delta, ip) {
+  const next = Math.max(0, (wsConns.get(ip) || 0) + delta);
+  if (next === 0) wsConns.delete(ip);
+  else wsConns.set(ip, next);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of authFailures) {
+    if (entry.blockedUntil <= now && now - entry.firstAt > AUTH_BLOCK_MS) authFailures.delete(ip);
+  }
+  if (authFailures.size > 5000) authFailures.clear();
+  if (wsConns.size > 5000) wsConns.clear();
+}, 300_000).unref();
+
+/**
  * 桌面自更新镜像的准入（2026-10-16）。
  *
  * 背景：`/download/app/`（安装包 + latest.yml）原来完全公开。现在它只服务
@@ -886,6 +947,8 @@ function handleDeviceFrame(conn, raw) {
         ? devices.get(devKey(hostId, deviceId))
         : deviceRecords(deviceId).find((r) => r.token && r.token === str(frame.deviceToken, 128));
       if (!rec || !rec.token || rec.token !== str(frame.deviceToken, 128)) {
+        // **故意不计入限速**：主机重启/换域名后，手机带着旧令牌重试是正常现象（重连期可能每 2s 一次），
+        // 按 IP 封掉会把你自己的手机锁在门外。真正的暴力面是「猜激活码」（host.register / /authz/*）。
         log(`device ${deviceId} hello rejected (auth failed)`);
         tryClose(conn.ws, CLOSE_AUTH_FAILED, "AUTH_FAILED");
         return;
@@ -970,6 +1033,20 @@ function handleDeviceFrame(conn, raw) {
 // --- server -----------------------------------------------------------------------------
 async function onRequest(req, res) {
   if (req.method === "GET" && req.url?.split("?")[0] === "/healthz") {
+    // 收敛（2026-10-16）：配了准入（对外服务）时，**没带有效激活码只回 {ok:true}**——
+    // 之前公开回 hosts/devices/tickets 计数，等于免费给扫描者做情报。自用/开放模式保持原样。
+    const ip = clientIp(req);
+    if (authBlocked(ip)) {
+      // 封禁优先：被封的 IP 连健康检查也不给（否则等于留了个可用的探测信道）。
+      res.writeHead(429, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "RATE_LIMITED" }));
+      return;
+    }
+    if (hostAuthRequired() && !matchedHostToken(authCodeFromRequest(req))) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
     const onlineDevices = [...devices.values()].filter((d) => isWsOpen(d.ws)).length;
     const paired = [...devices.values()].filter((d) => d.status === "approved").length;
     res.writeHead(200, { "content-type": "application/json" });
@@ -1005,8 +1082,14 @@ async function onRequest(req, res) {
       reply(200, { ok: true, open: true, code: "", devices: 0, maxDevices: AUTH_MAX_DEVICES, enforcing: false, activated: true });
       return;
     }
+    const ip = clientIp(req);
+    if (authBlocked(ip)) {
+      reply(429, { ok: false, error: "RATE_LIMITED" });
+      return;
+    }
     const code = matchedHostToken(authCodeFromRequest(req));
     if (!code) {
+      noteAuthFailure(ip, "authz bad code");
       reply(401, { ok: false, error: "BAD_CODE" });
       return;
     }
@@ -1037,9 +1120,15 @@ async function onRequest(req, res) {
       sendJson(200, { ok: true, open: true, code: "", devices: 0, maxDevices: AUTH_MAX_DEVICES, enforcing: false });
       return;
     }
+    const ip = clientIp(req);
+    if (authBlocked(ip)) {
+      sendJson(429, { ok: false, error: "RATE_LIMITED" });
+      return;
+    }
     const code = authCodeFromRequest(req);
     const matched = matchedHostToken(code);
     if (!matched) {
+      noteAuthFailure(ip, "authz check bad code");
       sendJson(401, { ok: false, error: "BAD_CODE" });
       return;
     }
@@ -1063,13 +1152,25 @@ function attachUpgrade(target) {
       socket.destroy();
       return;
     }
+    const ip = clientIp(req);
+    if (authBlocked(ip) || (wsConns.get(ip) || 0) >= MAX_WS_PER_IP) {
+      log(`upgrade rejected ip=${ip} blocked=${authBlocked(ip)} conns=${wsConns.get(ip) || 0}/${MAX_WS_PER_IP}`);
+      try {
+        socket.write("HTTP/1.1 429 Too Many Requests" + String.fromCharCode(13,10) + "Connection: close" + String.fromCharCode(13,10) + String.fromCharCode(13,10));
+      } catch { /* socket 可能已经关了 */ }
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   });
 }
 
 attachUpgrade(server);
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  const ip = clientIp(req);
+  noteConn(1, ip);
+  ws.on("close", () => noteConn(-1, ip));
   const conn = { role: null, id: "", authHostId: "", ws };
   ws.isAlive = true;
 
@@ -1105,8 +1206,15 @@ wss.on("connection", (ws) => {
         const hostId = str(frame.hostId, 64);
         if (!hostId) return tryClose(ws, CLOSE_BAD_FIRST_FRAME, "BAD_FIRST_FRAME");
         // P1 准入：给了 token 列表就必须命中（开放模式直接放行）。
+        const ip = clientIp(req);
+        if (authBlocked(ip)) {
+          log(`host ${hostId} rejected (rate limited)`);
+          send(ws, { type: "relay.error", code: "RATE_LIMITED" });
+          return tryClose(ws, CLOSE_HOST_UNAUTHORIZED, "RATE_LIMITED");
+        }
         const auth = checkHostAuth(frame);
         if (!auth.ok) {
+          noteAuthFailure(ip, "host.register unauthorized");
           log(`host ${hostId} rejected (unauthorized)`);
           send(ws, { type: "relay.error", code: "HOST_UNAUTHORIZED" });
           return tryClose(ws, CLOSE_HOST_UNAUTHORIZED, "HOST_UNAUTHORIZED");

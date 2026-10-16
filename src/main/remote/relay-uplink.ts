@@ -76,6 +76,11 @@ export interface RelayUplinkOptions {
    */
   hostName?: string;
   /**
+   * TLS 信任链（PEM 数组）：连接自签证书的中继时用它固定 CA（见 main/relay-tls.ts）。
+   * 空数组 = 用 Node 默认信任链（走公网受信证书的中继不用它）。
+   */
+  tlsCa?: string[] | undefined;
+  /**
    * 实例标识：多中继（主 + 备用）共存时，用它区分持久化文件
    * （`remote-relay-tokens[.<key>].json` / `remote-push-subscriptions[.<key>].json`）。
    *
@@ -280,7 +285,11 @@ export class RelayUplink implements RelayOutbound {
     this.setState("connecting", null);
     let ws: WebSocket;
     try {
-      ws = new WebSocket(this.options.relayUrl);
+      // 自签中继：把我们的 CA 固定下来（不关校验——`rejectUnauthorized:false` 会让 TLS 形同虚设）。
+      ws = new WebSocket(
+        this.options.relayUrl,
+        this.options.tlsCa?.length ? { ca: this.options.tlsCa } : undefined,
+      );
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
       this.setState("error", this.lastError);
