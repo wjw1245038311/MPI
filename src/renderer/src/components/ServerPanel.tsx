@@ -129,15 +129,15 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
   /** 当前生效的是谁：自定义地址 > 内置（激活码）> 仅局域网/本机。 */
   const effectiveSource = custom
     ? zh
-      ? "自定义中继"
-      : "Custom relay"
+      ? "自定义中继（自建）"
+      : "Custom relay (self-hosted)"
     : activated
       ? zh
-        ? "内置服务器（我的 ECS）"
-        : "Built-in server (my ECS)"
+        ? "内置服务器（已激活）"
+        : "Built-in server (activated)"
       : zh
-        ? "未激活（仅局域网/本机）"
-        : "Not activated (LAN/local only)";
+        ? "未激活：仅局域网与本机中继可用"
+        : "Not activated: LAN and local relay only";
 
   return (
     <div className="set-remote-stack">
@@ -148,8 +148,8 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
         </div>
         <div className="set-hint">
           {zh
-            ? "手机经它连到本机；中继只转发不解析，提示词、代码、会话与文件端到端加密。自己没搭中继就不用勾，填个激活码走内置服务器就行。"
-            : "Phones reach this machine through it; the relay only forwards, prompts, code, sessions and files stay end-to-end encrypted. If you don't run your own relay, leave this unchecked and just paste an access code."}
+            ? "本页用于指定手机与本机之间所经的中继服务器。默认使用内置服务器（须先在「激活授权」中填写激活码）；若你已自行部署中继，可启用下方选项并填写其地址。中继仅转发数据帧、不解析内容，提示词、代码、会话与文件均以端到端加密传输。"
+            : "This page selects the relay that carries traffic between your phone and this machine. The built-in server is used by default (enter an access code under Activation first); if you run your own relay, enable the option below and fill in its address. The relay only forwards frames and never parses them — prompts, code, sessions and files stay end-to-end encrypted."}
         </div>
 
         <label className="set-check" style={{ marginTop: 10 }}>
@@ -161,33 +161,48 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
               setTestResult(null);
             }}
           />
-          <span>{zh ? "自定义中继" : "Custom relay"}</span>
+          <span>{zh ? "自定义中继（使用自建中继，地址与令牌由你维护）" : "Custom relay (use my own relay; address and token are mine)"}</span>
         </label>
 
         {custom && (
           <>
             <label className="set-addprov-field wide">
-              <span>{zh ? "地址" : "Address"}</span>
+              <span>{zh ? "中继地址（WebSocket 服务地址）" : "Relay address (WebSocket endpoint)"}</span>
               <input
                 className="set-input"
                 value={relayUrl}
                 onChange={(e) => setRelayUrl(e.target.value)}
-                placeholder="例如 wss://relay.example.com/ws"
+                placeholder={zh ? "例如 wss://relay.example.com/ws（手机亦经此地址接入，须为手机可达）" : "e.g. wss://relay.example.com/ws (the phone uses it too, so it must be reachable)"}
                 spellCheck={false}
               />
             </label>
             <label className="set-addprov-field wide">
-              <span>{zh ? "令牌" : "Token"}</span>
+              <span>{zh ? "准入令牌（中继端校验使用方身份）" : "Access token (the relay checks it)"}</span>
               <input
                 className="set-input"
                 type="password"
                 autoComplete="off"
                 value={relayToken}
                 onChange={(e) => setRelayToken(e.target.value)}
-                placeholder={customTokenSet ? (zh ? "已设置，留空则保持不变" : "set; leave empty to keep") : zh ? "你的中继要求的准入令牌（可留空）" : "your relay's token (optional)"}
+                placeholder={customTokenSet ? (zh ? "已设置；留空则保持不变" : "set; leave empty to keep") : zh ? "中继未启用准入校验时可留空" : "leave empty if your relay has no allowlist"}
                 spellCheck={false}
               />
             </label>
+            <div className="set-hint">
+              {zh
+                ? "令牌的作用：向中继证明「本机获准使用该中继」。中继若未启用准入校验（未配置令牌列表），留空即可；若已启用，此处须与中继端配置的令牌一致，否则主机注册会被拒绝（HOST_UNAUTHORIZED），转发与更新均不可用。令牌仅随主机注册与镜像请求发送，不写入配对二维码，不会下发给手机。"
+                : "What the token does: it proves to the relay that this machine is allowed to use it. If your relay has no allowlist configured, leave it empty; if it has one, the value must match, otherwise host registration is rejected (HOST_UNAUTHORIZED) and neither forwarding nor updates will work. The token is only sent with host registration and mirror requests — never written into the pairing QR code or handed to the phone."}
+            </div>
+            <details>
+              <summary className="set-hint" style={{ cursor: "pointer" }}>
+                {zh ? "如何设置自己的中继" : "How to set up your own relay"}
+              </summary>
+              <div className="set-hint" style={{ marginTop: 4 }}>
+                {zh
+                  ? "① 在中继主机上部署 MPI 中继服务（mobile/relay/index.mjs），使其监听 ws(s)://<主机>:<端口>/ws；② 如需限制使用，在中继端配置准入令牌（环境变量 RELAY_TOKEN_FILE 指向一个文本文件，每行一个令牌）；③ 回到本页启用自定义中继，填入地址（中继端已启用准入时一并填入相同令牌），点击「验证连通性」；④ 显示「转发通道可达」即表示主机已能通过该中继服务手机，随后在「配对手机」中重新生成二维码即可。"
+                  : "① Deploy the MPI relay (mobile/relay/index.mjs) on the relay host so it listens on ws(s)://<host>:<port>/ws; ② optionally restrict access by configuring an allowlist on the relay (env RELAY_TOKEN_FILE pointing at a text file with one token per line); ③ enable Custom relay here, fill in the address (and the same token if the relay enforces one), then click Test connection; ④ once it reports the forwarding channel as reachable, regenerate the pairing QR under “Pair a phone”."}
+              </div>
+            </details>
             {unreachableForPhone(relayUrl) && (
               <div className="set-hint" style={{ color: "#c0392b" }}>
                 {zh ? "⚠ tailnet / 内网地址手机连不上，扫描后会卡在连接超时。" : "⚠ Tailnet/private address — a phone outside that network cannot reach it."}
@@ -212,7 +227,7 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
         )}
 
         <div className="set-remote-status" style={{ marginTop: 10 }}>
-          <span className="set-diag-k">{zh ? "当前" : "Current"}</span>
+          <span className="set-diag-k">{zh ? "当前生效" : "In effect"}</span>
           <span className={`set-remote-status-value ${custom || activated ? "connected" : "disabled"}`}>
             <span className="set-remote-status-dot" aria-hidden="true" />
             {effectiveSource}
