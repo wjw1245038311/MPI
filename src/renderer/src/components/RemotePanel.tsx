@@ -21,10 +21,11 @@ import {
   unreachableForPhone,
   type Pairing,
   type PhoneAppInfo,
+  type LanModeStatus,
   type RelayStatus,
   type RemoteStatus,
 } from "../lib/remote-panel-shared";
-import { Bell, Check, Cloud, Plug, QrCode, Smartphone } from "./icons";
+import { Bell, Check, Cloud, Gauge, Plug, QrCode, Smartphone } from "./icons";
 
 export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const zh = language === "zh";
@@ -48,6 +49,9 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [phoneRelayUrl, setPhoneRelayUrl] = useState("");
   /** 生效来源：内置服务器（地址不外显，只给标签）/ 自定义中继（显示用户自己的地址）。 */
   const [relaySource, setRelaySource] = useState<"builtin" | "custom">("builtin");
+  /** 局域网直连模式（手机同网段时走最快那条路；开关在这里，因为它是"手机怎么连"的事）。 */
+  const [lanMode, setLanMode] = useState<LanModeStatus | null>(null);
+  const [lanBusy, setLanBusy] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const refresh = async () => {
@@ -63,6 +67,22 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       setRelaySource(relay.source === "custom" ? "custom" : "builtin");
     } catch {
       /* same reload race */
+    }
+    try {
+      setLanMode((await window.pi.remote.getLanMode()) as LanModeStatus);
+    } catch {
+      /* same reload race */
+    }
+  };
+
+  const toggleLanMode = async () => {
+    setLanBusy(true);
+    try {
+      setLanMode((await window.pi.remote.setLanMode({ enabled: !lanMode?.advertiseLan })) as LanModeStatus);
+    } catch {
+      /* 状态会由轮询纠正 */
+    } finally {
+      setLanBusy(false);
     }
   };
 
@@ -183,6 +203,44 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
             ? "转发地址、授权码（内置服务器）、自定义中继、局域网模式与多通道都在那一栏。"
             : "Relay address, access code (built-in server), custom relays, LAN mode and multi-channel setup all live there."}
         </div>
+      </div>
+
+      <div className="set-card">
+        <div className="set-card-head">
+          <span className="set-card-icon"><Gauge size={14} /></span>
+          <div className="set-card-title">{zh ? "局域网直连（同一网段时最快）" : "LAN direct (fastest on the same network)"}</div>
+        </div>
+        <div className="set-hint">
+          {zh
+            ? "开启后，手机与这台电脑在同一网段时直接走内网（不经公网中继，更快、更省流量）；不同网段或连不上时自动回落到公网。配对二维码里会带上全部内网候选地址，手机按顺序试。"
+            : "When on, a phone on the same network connects directly over the LAN (faster, no cloud relay traffic); it falls back to the public relay when unreachable. The pairing QR carries every LAN candidate."}
+        </div>
+        <div className="set-remote-toggle-row">
+          <div className="set-remote-toggle-copy">
+            <span className="set-remote-toggle-label">{zh ? "局域网直连" : "LAN direct"}</span>
+            <span className="set-remote-toggle-state">{lanMode?.advertiseLan ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}</span>
+          </div>
+          <button
+            type="button"
+            className={`set-toggle ${lanMode?.advertiseLan ? "on" : ""}`}
+            role="switch"
+            aria-checked={!!lanMode?.advertiseLan}
+            aria-label={zh ? "切换局域网直连" : "Toggle LAN direct"}
+            onClick={() => void toggleLanMode()}
+            disabled={lanBusy}
+          >
+            <span className="set-toggle-knob" />
+          </button>
+        </div>
+        {(lanMode?.urls?.length ?? 0) > 0 && (
+          <div className="set-hint" style={{ wordBreak: "break-all" }}>
+            {zh ? "手机可用的内网入口：" : "LAN entry points: "}
+            {(lanMode?.urls || (lanMode?.url ? [lanMode.url] : [])).map((url) => (
+              <div key={url}><code>{url}</code></div>
+            ))}
+          </div>
+        )}
+        {lanMode?.lastError && <div className="set-hint" style={{ color: "#c0392b" }}>{lanMode.lastError}</div>}
       </div>
 
       <div className="set-card">

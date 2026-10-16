@@ -42,8 +42,10 @@ export type RelayMode = "manual" | "auto";
 export interface ChannelContext {
   /** 本机中继端口。 */
   localRelayPort: number;
-  /** 局域网广告地址（`lanModeStatus().url`；未开启局域网时为 null）。 */
+  /** 局域网广告地址（`lanModeStatus().url`；未开启局域网时为 null）。留作单值兼容。 */
   lanPhoneUrl: string | null;
+  /** **全部**局域网候选地址（`lanModeStatus().urls`）：手机可能只在其中一张网卡的网段上。 */
+  lanPhoneUrls?: string[];
   /** 局域网内网 IP（`lanModeStatus().address`；取不到为 null）。 */
   lanAddress: string | null;
 }
@@ -125,16 +127,31 @@ export function fromLegacy(legacy: {
   return channels;
 }
 
-/** 局域网通道（由运行时状态合成，不进配置）。 */
-export function lanChannel(ctx: ChannelContext): RelayChannel | null {
-  if (!ctx.lanPhoneUrl) return null;
-  return {
-    id: "lan",
-    label: "局域网直连",
-    phoneUrl: ctx.lanPhoneUrl,
+/**
+ * 局域网通道（由运行时状态合成，不进配置）：**每个内网地址一条**。
+ *
+ * 为什么不是一个：手机可能在另一张网卡的网段上（桌面自开热点 → 手机 `192.168.137.x`，
+ * 以太网却是 `10.x`）。多给几条候选，手机按序试就能自己找到通的那张网卡；
+ * 只给一条时它会试不通并回落到公网。主流做法（WebRTC ICE 的 host candidates）同样是把
+ * 所有网卡候选都报出来。首条沿用 `lan` 这个 id（既有引用不变），其余为 `lan-2`、`lan-3`…
+ *
+ * 注意：这些通道的**主机上行**在上层被统一成回环（见 ipc 的 effectiveRelayChannels），
+ * 因为本机中继只有一台，同一 hostId 注册两次会互相顶掉。
+ */
+export function lanChannels(ctx: ChannelContext): RelayChannel[] {
+  const urls = ctx.lanPhoneUrls?.length ? ctx.lanPhoneUrls : ctx.lanPhoneUrl ? [ctx.lanPhoneUrl] : [];
+  return urls.filter(Boolean).map((url, index) => ({
+    id: index === 0 ? "lan" : `lan-${index + 1}`,
+    label: index === 0 ? "局域网直连" : `局域网直连 ${index + 1}`,
+    phoneUrl: url,
     enabled: true,
-    kind: "lan",
-  };
+    kind: "lan" as const,
+  }));
+}
+
+/** 局域网通道（首条；保留给既有调用方与测试）。 */
+export function lanChannel(ctx: ChannelContext): RelayChannel | null {
+  return lanChannels(ctx)[0] ?? null;
 }
 
 /**

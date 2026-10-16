@@ -48,7 +48,15 @@ const VIRTUAL_IFACE = /(vethernet|vmware|virtualbox|hyper-v|loopback|tailscale|z
  * 抽成纯函数是因为「挑错网卡」的表现很有迷惑性：中继起来了、日志也正常，但手机连不上
  * （连到了 VMware 的虚拟网段）。
  */
-export function pickLanAddress(ifaces: NodeJS.Dict<NetworkInterfaceInfo[]>): LanAddress | null {
+/**
+ * 全部可广告的内网地址（有序，与 `pickLanAddress` 同一套过滤与排序）。
+ *
+ * 为什么要全给：手机可能在**另一张网卡**的网段上（典型：桌面自己开热点 → 手机在
+ * `192.168.137.x`，而以太网是 `10.x`）。只广告一个地址时手机会试不通并回落到公网，
+ * 明明"就在同一个热点上"却走了远路。主流做法（WebRTC ICE 的 host candidates）也是把所有
+ * 网卡候选都报出来，由客户端挑通的。
+ */
+export function lanAddresses(ifaces: NodeJS.Dict<NetworkInterfaceInfo[]>): LanAddress[] {
   const candidates: Array<{ entry: LanAddress; rank: number }> = [];
   for (const [name, list] of Object.entries(ifaces || {})) {
     if (!list || VIRTUAL_IFACE.test(name)) continue;
@@ -67,10 +75,15 @@ export function pickLanAddress(ifaces: NodeJS.Dict<NetworkInterfaceInfo[]>): Lan
       candidates.push({ entry: { address, iface: name }, rank });
     }
   }
-  if (!candidates.length) return null;
-  // 公有地址（rank 3）理论上也能用，但更可能是热点/异常环境——只在没有私网候选时才用。
+  if (!candidates.length) return [];
+  // 公有地址（rank 3）理论上也能用，但更可能是热点/异常环境——排在私网候选之后。
   candidates.sort((a, b) => a.rank - b.rank);
-  return candidates[0].entry;
+  return candidates.map((c) => c.entry);
+}
+
+/** 挑一个（列表首个）：仍是配对票里排第一的那个内网地址。 */
+export function pickLanAddress(ifaces: NodeJS.Dict<NetworkInterfaceInfo[]>): LanAddress | null {
+  return lanAddresses(ifaces)[0] ?? null;
 }
 
 /** 配对链接里给手机的中继地址（内网入口）。 */
@@ -95,8 +108,13 @@ export interface LanRelayStatus {
   /** 本机回环入口（进程起来后总是可用）——主机上行 #2 / CF 隧道用。 */
   localUrl: string | null;
   port: number;
-  /** 挑到的内网网卡地址（仅用于广告；没挑到不影响进程）。 */
+  /** 挑到的内网网卡地址（首个候选；仅用于广告，没挑到不影响进程）。 */
   address: string | null;
+  /**
+   * **全部**内网候选地址（有序）：配对票与通道列表都按它逐个给出，
+   * 让手机在"换了网卡/换了网段"时仍能试到其中一条（见 `lanAddresses`）。
+   */
+  urls: string[];
   /** 实际绑定地址：`0.0.0.0`（LAN 开）或 `127.0.0.1`（LAN 关）。 */
   bindHost: string;
   /** 是否把内网地址广告给手机。 */
@@ -161,6 +179,7 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
     localUrl: null,
     port,
     address: null,
+    urls: [],
     bindHost,
     advertiseLan,
     lastError: null,
@@ -171,7 +190,8 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
     return { ...empty, status: { ...base, lastError: `找不到中继脚本（${options.entryPath ?? "-"}）` } };
   }
   const interfaces = options.interfaces ?? networkInterfaces();
-  const picked = pickLanAddress(interfaces);
+  const lanPicks = lanAddresses(interfaces);
+  const picked = lanPicks[0] ?? null;
   if (requireLanAddress && !picked) {
     return { ...empty, status: { ...base, lastError: "找不到可用的局域网网卡（手机连不上）" } };
   }
@@ -207,6 +227,7 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
   log(
     `local-relay starting on ${bindHost}:${port}` +
       (picked ? ` (lan ${picked.address} ${picked.iface})` : " (无可广告的局域网网卡)") +
+      (lanPicks.length > 1 ? ` [候选 ${lanPicks.map((p) => p.address).join(",")}]` : "") +
       (url ? "" : " [不广告内网地址]"),
   );
   return {
@@ -218,6 +239,8 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
       localUrl: localRelayUrl(port),
       port,
       address: picked?.address ?? null,
+      // 全部候选（手机按序试；票里会逐个给出）
+      urls: url ? lanPicks.map((item) => lanRelayUrl(item.address, port)) : [],
       bindHost,
       advertiseLan,
       lastError: !picked && advertiseLan ? "找不到可用的局域网网卡（手机连不上）" : null,

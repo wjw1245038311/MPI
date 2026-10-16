@@ -12,7 +12,7 @@
  */
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import { unreachableForPhone, type LanModeStatus, type RelayStatus } from "../lib/remote-panel-shared";
+import { unreachableForPhone, type RelayStatus } from "../lib/remote-panel-shared";
 import { ActivationDialog } from "./ActivationDialog";
 import { Cloud, Shield } from "./icons";
 
@@ -23,7 +23,6 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
   const pushToast = useStore((s) => s.pushToast);
 
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
-  const [lanMode, setLanMode] = useState<LanModeStatus | null>(null);
   const [localRelayStaticDir, setLocalRelayStaticDir] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
@@ -49,7 +48,6 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
   const loadRelay = async () => {
     try {
       setRelayStatus((await window.pi.remote.getRelayStatus()) as RelayStatus);
-      setLanMode((await window.pi.remote.getLanMode()) as LanModeStatus);
     } catch {
       /* 面板可能比 IPC 桥活得久一点（重载瞬间） */
     }
@@ -117,14 +115,6 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
       // store 已经弹过错误提示
     } finally {
       setSaving(false);
-    }
-  };
-
-  const toggleLanMode = async () => {
-    try {
-      setLanMode((await window.pi.remote.setLanMode({ enabled: !lanMode?.advertiseLan })) as LanModeStatus);
-    } catch {
-      /* 忽略：状态会由轮询纠正 */
     }
   };
 
@@ -262,45 +252,25 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
         </div>
       </div>
 
-      {/* ---- 待定：局域网模式与本机静态目录（位置未定，暂放折叠区） ---- */}
+      {/* ---- 高级：本机中继静态目录（自托管 PWA / 下载页）----
+          局域网模式已搬到「手机远程控制」（那是"手机怎么连"的事），这里只剩这项：
+          它决定本机中继要不要托管一份 PWA 界面（`relay.whomidas.cn` 那条 CF 隧道就是它在服务）。 */}
       <details className="set-card">
         <summary className="set-card-title" style={{ cursor: "pointer" }}>
-          {zh ? "局域网直连 / 本机静态目录（位置待定）" : "LAN direct / local static dir (placement TBD)"}
+          {zh ? "高级：本机中继静态目录" : "Advanced: local relay static dir"}
         </summary>
         <div className="set-hint" style={{ marginTop: 8 }}>
           {zh
-            ? "这两项还没定好放哪，先留在这里：局域网模式让手机在同一网段直连（不依赖公网中继）。"
-            : "These two are not finalised yet: LAN mode lets the phone connect on the same network without the public relay."}
+            ? "填了目录后，本机中继会用它托管 PWA 界面与下载页（把网页版放在这台电脑上，不依赖云中继）。留空 = 不托管。"
+            : "With a directory set, the local relay hosts the PWA UI and downloads from this machine (no cloud relay needed). Empty = not hosted."}
         </div>
-        <div className="set-remote-toggle-row">
-          <div className="set-remote-toggle-copy">
-            <span className="set-remote-toggle-label">{zh ? "局域网模式" : "LAN mode"}</span>
-            <span className="set-remote-toggle-state">{lanMode?.advertiseLan ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}</span>
-          </div>
-          <button
-            type="button"
-            className={`set-toggle ${lanMode?.advertiseLan ? "on" : ""}`}
-            role="switch"
-            aria-checked={!!lanMode?.advertiseLan}
-            aria-label={zh ? "切换局域网模式" : "Toggle LAN mode"}
-            onClick={() => void toggleLanMode()}
-          >
-            <span className="set-toggle-knob" />
-          </button>
-        </div>
-        {lanMode?.url && (
-          <div className="set-hint" style={{ wordBreak: "break-all" }}>
-            {zh ? "手机填写地址：" : "Phone relay URL: "}
-            <code>{lanMode.url}</code>
-          </div>
-        )}
-        {lanMode?.lastError && <div className="set-hint" style={{ color: "#c0392b" }}>{lanMode.lastError}</div>}
-        <label className="set-addprov-field wide" style={{ marginTop: 10 }}>
-          <span>{zh ? "本机中继静态目录（托管 PWA / 下载页，可留空）" : "Local relay static dir (optional)"}</span>
+        <label className="set-addprov-field wide" style={{ marginTop: 8 }}>
+          <span>{zh ? "静态目录" : "Static directory"}</span>
           <input
             className="set-input"
             value={localRelayStaticDir}
             onChange={(event) => setLocalRelayStaticDir(event.target.value)}
+            placeholder={zh ? "例如 E:\MyWorkspace\Software\cloudflared\static" : "e.g. E:\path\to\static"}
             spellCheck={false}
           />
         </label>

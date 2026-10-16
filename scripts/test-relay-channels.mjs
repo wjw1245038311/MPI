@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { fromLegacy, lanChannel, effectiveChannels, hostUrlFor, uplinkChannels, ticketAddresses, validateChannels, pickRelayFeedUrl, flipScheme } =
+const { fromLegacy, lanChannel, lanChannels, effectiveChannels, hostUrlFor, uplinkChannels, ticketAddresses, validateChannels, pickRelayFeedUrl, flipScheme } =
   await import("../src/main/remote/relay-channels.ts");
 
 const ctx = (over = {}) => ({ localRelayPort: 9001, lanPhoneUrl: null, lanAddress: null, ...over });
@@ -161,7 +161,7 @@ test("ipc/config 接线：通道列表驱动，旧的「主+备两条」写法�
   const cfg = readFileSync(new URL("../src/main/config.ts", import.meta.url), "utf8");
 
   // 2026-10-16：多通道/选路已删，ipc 只用「合成局域网通道 + 挂全部启用上行 + 推导主机地址」这三件
-  for (const pat of [/lanChannel\(/, /uplinkChannels\(/, /hostUrlFor\(/]) {
+  for (const pat of [/lanChannels\(/, /uplinkChannels\(/, /hostUrlFor\(/]) {
     assert.match(ipc, pat, `主进程要走通道模块：${pat}`);
   }
   assert.ok(!/fallbackRelayUplink/.test(ipc), "旧的「备用上行」专用变量应已移除（改由通道列表 + Map 管理）");
@@ -184,6 +184,19 @@ test("ipc/config 接线：通道列表驱动，旧的「主+备两条」写法�
     assert.match(panel, pat, `转发设置面板必须能配自定义中继：${pat}`);
   }
   assert.ok(!/\u4e2d\u7ee7\u5730\u5740\uff08WSS\uff09/.test(panel), "旧的「中继地址（WSS）」字段应已移除");
+});
+
+// ---- 多内网候选（2026-10-16）：每个内网地址一条通道，手机按序试 ----
+test("多内网候选：每个地址一条通道（id 首条 lan，其余 lan-2/3…），lanChannel 仍取首条", () => {
+  const multi = { ...ctx(), lanPhoneUrl: "ws://192.168.137.1:9001/ws", lanPhoneUrls: ["ws://192.168.137.1:9001/ws", "ws://10.215.35.72:9001/ws"] };
+  const list = lanChannels(multi);
+  assert.equal(list.length, 2, "两个内网候选要合成两条通道");
+  assert.deepEqual(list.map((c) => c.id), ["lan", "lan-2"], "首条沿用 lan（既有引用不变）");
+  assert.deepEqual(list.map((c) => c.phoneUrl), multi.lanPhoneUrls, "手机地址按顺序给，先试第一条");
+  assert.ok(list.every((c) => c.kind === "lan" && c.enabled), "都是局域网通道且默认启用");
+  assert.equal(lanChannel(multi)?.id, "lan", "单值入口仍返回首条");
+  // 只有单值时行为不变（旧调用方不受影响）
+  assert.equal(lanChannels(ctx()).length, 0, "未广告内网地址时一条都不给");
 });
 
 console.log("relay-channels tests passed");

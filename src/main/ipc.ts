@@ -191,7 +191,7 @@ import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
 import { RelayUplink } from "./remote/relay-uplink";
 import { RelayFanout } from "./remote/relay-fanout";
-import { hostUrlFor, lanChannel, uplinkChannels, type ChannelContext, type RelayChannel } from "./remote/relay-channels";
+import { hostUrlFor, lanChannels, uplinkChannels, type ChannelContext, type RelayChannel } from "./remote/relay-channels";
 import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } from "./remote/services";
 import { RemoteService, type RemoteBackend } from "./remote/service";
 import {
@@ -1344,6 +1344,7 @@ function lanModeStatus(): LanRelayStatus {
     localUrl: null,
     port,
     address: null,
+    urls: [],
     bindHost: cfg.lanModeEnabled ? LAN_RELAY_BIND_HOST : LOCAL_RELAY_HOST,
     advertiseLan: !!cfg.lanModeEnabled,
     lastError: null,
@@ -1434,7 +1435,8 @@ function relayChannelContext(): ChannelContext {
   const cfg = getConfig();
   const port = cfg.lanModePort && cfg.lanModePort > 0 ? cfg.lanModePort : LAN_RELAY_PORT;
   const lan = lanModeStatus();
-  return { localRelayPort: port, lanPhoneUrl: lan.url, lanAddress: lan.address };
+  // lanPhoneUrls = 全部内网候选（手机可能只在其中一张网卡的网段上），见 relay-channels.lanChannels。
+  return { localRelayPort: port, lanPhoneUrl: lan.url, lanPhoneUrls: lan.urls, lanAddress: lan.address };
 }
 
 /**
@@ -1457,8 +1459,9 @@ function effectiveRelayChannels(): RelayChannel[] {
   // `replaced` 并被 4006 关闭；两个 uplink 又都会自动重连 → 无限互顶、手机路由跟着抖）。
   // 上行去重只按地址字符串比对，所以这里把两条归一成同一个地址，自然只留一条上行；
   // **手机地址（phoneUrl）照旧用内网 IP** —— 那才是"同网段直连"的意义所在。
-  const lan = lanChannel(ctx);
-  if (lan) channels.push({ ...lan, hostUrl: `ws://127.0.0.1:${ctx.localRelayPort}/ws` });
+  for (const lan of lanChannels(ctx)) {
+    channels.push({ ...lan, hostUrl: `ws://127.0.0.1:${ctx.localRelayPort}/ws` });
+  }
   // ② 云中继：自定义优先，其次内置（有激活码才挂）
   const custom = (cfg.customRelayUrl || "").trim();
   if (custom) {
@@ -1600,8 +1603,7 @@ function phoneTicketAddresses(): string[] {
     if (!url || /^wss?:\/\/(127\.0\.0\.1|localhost)([:/]|$)/i.test(url)) return;
     if (!urls.includes(url)) urls.push(url);
   };
-  const lan = lanChannel(relayChannelContext());
-  if (lan?.enabled) push(lan.phoneUrl);
+  for (const lan of lanChannels(relayChannelContext())) push(lan.phoneUrl);
   const custom = (cfg.customRelayUrl || "").trim();
   if (custom) {
     push(custom);
