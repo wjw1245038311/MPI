@@ -51,6 +51,8 @@ export type RelayStatus = {
   activeChannelId?: string;
   /** 生效来源：`builtin` = 内置服务器（地址不外显）/ `custom` = 用户自己的中继。 */
   source?: "builtin" | "custom";
+  /** 配对票里给手机的**全部**候选地址（有序）。 */
+  phoneTicketAddresses?: string[];
 };
 
 /** S5：渲染层通道行（`tokenDraft` 仅渲染层用：留空 = 保持现有 token，见 config.updateConfig）。 */
@@ -168,6 +170,25 @@ export function statusLabel(state: string, zh: boolean): string {
   if (state === "connecting") return "Connecting";
   if (state === "error") return "Connection error";
   return "Not connected";
+}
+
+/**
+ * 从配对票地址里挑一个**能安全打开页面**的入口：取首个 `wss://` 并换成 `https://`。
+ *
+ * 为什么必须这样做：二维码会把设备带到那个网址去加载 PWA，而 **PWA 的端到端加密依赖
+ * `crypto.subtle`，浏览器只在安全上下文（https / localhost）提供它**。票里现在排第一的是
+ * 局域网**明文**入口（`ws://…:9001`，为了手机那种明文页面能直连局域网），直接拿它当页面网址
+ * 会让新设备打开一个**明文页**、拿不到 `crypto.subtle`、E2E 直接失效——所以页面网址一律优先
+ * 挑 `wss://`（局域网 TLS → 云中继 TLS → 备用），只有完全没有 wss 时才退回明文（调用方需提示）。
+ */
+export function securePageOrigin(urls: Array<string | null | undefined>): string | null {
+  for (const raw of urls) {
+    const url = String(raw || "").trim();
+    if (!url.startsWith("wss://")) continue;
+    const origin = relayOrigin(url);
+    if (origin) return origin;
+  }
+  return null;
 }
 
 /** 通道圆点颜色（服务器面板的通道列表与状态行共用）。 */
