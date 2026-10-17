@@ -36,6 +36,7 @@ export function findTrustedDevice<T extends TrustedDeviceLike>(
  *
  * - 名字为空不参与（避免把用户自起的名字跟空名字混为一谈）；
  * - 只挑**离线**的（有活跃连接说明它正在用，替换会把人家踢掉）；
+ * - 名字比较用 [`normalizeDeviceName`]（去掉 PWA 名字末尾的设备短号）；
  * - 同名有多条时只收敛**最久没露面**的那一条——一次配对只换一条，避免误伤扩散。
  */
 export function pickSameNameOfflineReplacement<T extends TrustedDeviceLike>(
@@ -43,13 +44,35 @@ export function pickSameNameOfflineReplacement<T extends TrustedDeviceLike>(
   name: string,
   isOnline: (deviceId: string) => boolean,
 ): T | null {
-  const target = String(name || "").trim();
+  const target = normalizeDeviceName(name);
   if (!target) return null;
-  const candidates = devices.filter((d) => d.name === target && !isOnline(d.deviceId));
+  const candidates = devices.filter((d) => normalizeDeviceName(d.name) === target && !isOnline(d.deviceId));
   if (!candidates.length) return null;
   return candidates.reduce((oldest, d) =>
     (d.lastSeenAt ?? d.addedAt) < (oldest.lastSeenAt ?? oldest.addedAt) ? d : oldest,
   );
+}
+
+/**
+ * 设备名归一化（用于「同名」判定）：
+ *
+ *   `MPI PWA · Windows/Chrome · 0MpXz`  →  `MPI PWA · Windows/Chrome`
+ *   `HONOR PGT-AN00`                   →  `HONOR PGT-AN00`（原生 App 名字，原样）
+ *
+ * 为什么必须要（2026-10 实测）：PWA 的设备名带 4 位短号（`mobile/pwa/src/lib/device-name.ts`，
+ * 用来区分同名设备），而短号由**公钥**派生 —— 换个 origin / 清掉浏览器数据就是一把新公钥，
+ * 于是名字永远不同，`pickSameNameOfflineReplacement` 这个“按同名收敛”的机制**永远不会命中**，
+ * 「已信任设备」会堆一排 MPI PWA。所以比较前先归一化。
+ *
+ * 规则：只在**≥ 3 段**（用 `·` 分隔）时丢掉最后一段；2 段以内的名字（用户自起的）保持原样，
+ * 以免把中文里带分隔符的自定义名字拆错。
+ */
+export function normalizeDeviceName(name: string): string {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  const parts = raw.split("·").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 3) return parts.slice(0, -1).join(" · ");
+  return raw;
 }
 
 /** 设备短号（面板里区分同名设备用）：`device-85pUtRIs…` → `85pUt`。 */

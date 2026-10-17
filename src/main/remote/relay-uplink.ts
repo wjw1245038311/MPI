@@ -41,6 +41,20 @@ const CONTROL_TYPES = new Set([
   "revoked",
 ]);
 
+/**
+ * `relay.error` 里**属于连接级**的码（中继发完就会断开）：只有这些能写进 `lastError`。
+ * 其余（`DEVICE_OFFLINE` / `NO_ROUTE` / `INVALID_TICKET` / `INVALID_FRAME` …）是单帧或
+ * 单设备的操作失败——手机锁屏、后台断线都会触发，不该把主机上行标成“出错”。
+ */
+const CONNECTION_LEVEL_ERRORS = new Set([
+  "HOST_UNAUTHORIZED",
+  "HOST_DEVICE_LIMIT",
+  "HOST_RESTARTED",
+  "REPLACED",
+  "REVOKED",
+  "PAYLOAD_TOO_LARGE",
+]);
+
 export type RelayUplinkState = "disabled" | "connecting" | "connected" | "error";
 
 /**
@@ -339,7 +353,12 @@ export class RelayUplink implements RelayOutbound {
       if (!msg || typeof msg !== "object") return;
       const type = typeof msg.type === "string" ? msg.type : "";
       if (type === "relay.error") {
-        this.lastError = typeof msg.code === "string" ? String(msg.code) : "relay error";
+        const code = typeof msg.code === "string" ? String(msg.code) : "relay error";
+        // 只有「连接级」的拒绕才算连接错误（中继随后会断开）；其余是单帧/单设备的操作失败
+        // （`DEVICE_OFFLINE` / `NO_ROUTE` / `INVALID_TICKET` …）。把它们存进 lastError 会让界面
+        // 出现「已连接 · DEVICE_OFFLINE」这种自相矛盾的状态（state 仍是 connected，lastError 却是脏的）。
+        if (CONNECTION_LEVEL_ERRORS.has(code)) this.lastError = code;
+        else appendDiagLog(`relay-error ${code}（设备/帧级，不计入连接状态）`);
         return;
       }
       if (CONTROL_TYPES.has(type)) {

@@ -86,6 +86,26 @@ export function pickLanAddress(ifaces: NodeJS.Dict<NetworkInterfaceInfo[]>): Lan
   return lanAddresses(ifaces)[0] ?? null;
 }
 
+/**
+ * Tailscale/CGNAT 地址（`100.64.0.0/10`）。
+ *
+ * 为何单独取：`lanAddresses` 故意**跳过** Tailscale 网卡（那种地址不是"局域网"，广告给普通手机会白试一个超时）。
+ * 但它对**同一 tailnet 里的电脑**是最好的一条入口：tailnet IP 固定、不进公网，而且自签证书的 SAN
+ * 里一般就包含它。所以单独拿出来，只用于「本机网页入口」与证书 SAN。
+ */
+export function tailnetAddress(ifaces: NodeJS.Dict<NetworkInterfaceInfo[]> = networkInterfaces()): string | null {
+  for (const list of Object.values(ifaces || {})) {
+    for (const info of list || []) {
+      if (!info || info.internal) continue;
+      if (info.family !== "IPv4" && (info.family as unknown as number) !== 4) continue;
+      const address = String(info.address || "");
+      const second = Number(address.split(".")[1]);
+      if (address.startsWith("100.") && second >= 64 && second <= 127) return address;
+    }
+  }
+  return null;
+}
+
 /** 配对链接里给手机的中继地址（内网入口）。 */
 export const lanRelayUrl = (address: string, port: number = LAN_RELAY_PORT): string => `ws://${address}:${port}/ws`;
 
@@ -168,6 +188,15 @@ export interface StartLocalRelayOptions {
   vapidKeyFile?: string;
   /** 静态目录（托管 PWA / 下载页）。空 = 不托管。 */
   staticDir?: string;
+  /**
+   * 主机准入 token（中继端 `RELAY_HOST_TOKENS`）。
+   *
+   * 本机中继也会绑 `0.0.0.0` —— 同网段任何设备都能对它 `host.register`，用同一个 hostId
+   * **顶掉你的上行**（中继对同 hostId 重注册会 _replaced_）。所以这里也启用准入，token 取激活码。
+   * 空 = 不启用（未激活的机器仍是开放模式，与改造前一致）。
+   * 注：token 只用于 host→relay 注册，**不进配对票**，设备侧不受影响。
+   */
+  hostToken?: string;
   /** 注入用（测试里换成假实现，不真的拉子进程）。 */
   spawnImpl?: typeof spawn;
   interfaces?: NodeJS.Dict<NetworkInterfaceInfo[]>;
@@ -238,7 +267,7 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
               RELAY_PLAIN_HOST: bindHost,
             }
           : { RELAY_PORT: String(port), RELAY_PLAIN_PORT: "" }),
-        RELAY_HOST_TOKENS: "",
+        RELAY_HOST_TOKENS: options.hostToken ? String(options.hostToken) : "",
         // VAPID 密钥必须落在 userData（见选项注释）：否则应用更新即换密钥、推送订阅全失效。
         ...(options.vapidKeyFile ? { RELAY_VAPID_KEY_FILE: options.vapidKeyFile } : {}),
         // 静态目录：托管 PWA / 下载页（CF 路下同一域名既是界面又是通道）。

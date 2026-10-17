@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   findTrustedDevice,
+  normalizeDeviceName,
   pickSameNameOfflineReplacement,
   shortDeviceId,
 } from "../src/shared/remote-device-match.ts";
@@ -91,10 +92,39 @@ const b = defaultDeviceName(androidChrome, "device-CCCCDDDD");
 assert.notEqual(a.split("· ").at(-1), b.split("· ").at(-1));
 assert.equal(LEGACY_DEVICE_NAME, "MPI PWA");
 
+// --- 设备名归一化（短号不参与“同名”判定）----------------------------------------
+assert.equal(
+  normalizeDeviceName("MPI PWA · Windows/Chrome · 0MpXz"),
+  "MPI PWA · Windows/Chrome",
+  "PWA 名字末尾的短号要丢掉（换 origin 就是一把新公钥，短号永远不同）",
+);
+assert.equal(normalizeDeviceName("HONOR PGT-AN00"), "HONOR PGT-AN00", "原生 App 名字不动");
+assert.equal(normalizeDeviceName("我的电脑 · 书房"), "我的电脑 · 书房", "2 段以内的自定义名不动");
+assert.equal(normalizeDeviceName("  "), "");
+
+// 归一化后“同名离线替换”对 PWA 才真正生效（以前短号不同 → 永不命中）
+const pwaOld = device({ deviceId: "device-old000000001", name: "MPI PWA · Windows/Chrome · fhoa" });
+const newPwaName = "MPI PWA · Windows/Chrome · Zxiz";
+assert.equal(
+  pickSameNameOfflineReplacement([pwaOld], newPwaName, () => false)?.deviceId,
+  pwaOld.deviceId,
+  "同一台电脑同一浏览器换 origin（短号不同）应被收敛成同一台",
+);
+assert.equal(
+  pickSameNameOfflineReplacement([pwaOld], "MPI PWA · Windows/Edge · Zxiz", () => false),
+  null,
+  "不同浏览器不算同一台",
+);
+
 // --- 接线：主机 / PWA / 面板 / config --------------------------------------------
 const host = read("src", "main", "remote", "host.ts");
 assert.match(host, /findTrustedDevice\(/, "approvePairing 必须按 deviceId→公钥 匹配（不再只认 deviceId）");
 assert.match(host, /pickSameNameOfflineReplacement\(/, "approvePairing 必须做「同名离线替换」");
+assert.match(
+  read("src", "shared", "remote-device-match.ts"),
+  /normalizeDeviceName\(d\.name\) === target/,
+  "同名判必须用归一化后的名字（否则 PWA 短号不同就永远不命中）",
+);
 assert.match(host, /replaceSameNameOfflineDevice\?\.\(\) !== false/, "必须支持在设置里关掉同名替换");
 assert.match(host, /notifyRevoked\?\.\(replaced\.deviceId\)/, "被替换的旧绑定要顺手撤掉中继 token");
 assert.match(host, /remote-rename device=/, "重连时要刷新设备名（改过名的设备不必重新配对才能看到）");

@@ -6633,6 +6633,154 @@ textarea.modal-input {
   background: #c64d42;
   box-shadow: 0 0 0 3px rgba(198, 77, 66, 0.14);
 }
+
+/* ---- 手机远程控制（2026-10 两块结构：配对 / 设备）---------------------------------
+   状态只占标题下的一行，不是卡片；诊断默认收起，里面有地址、开关与原始错误码。 */
+.set-remote-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px;
+}
+.set-remote-line .set-remote-status-value {
+  font-family: inherit;
+  font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.set-btn-sm {
+  padding: 4px 9px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+.set-card-diag {
+  background: var(--surface-muted);
+  border-style: dashed;
+}
+
+/* 配对卡：左码右行；窄屏自动堆叠。 */
+.set-pair-body {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.set-pair-qr {
+  flex: 0 0 auto;
+  line-height: 0;
+}
+.set-pair-qr img {
+  display: block;
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px;
+}
+.set-pair-qr.faded {
+  opacity: 0.22;
+}
+.set-pair-qr-skeleton {
+  width: 220px;
+  height: 220px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+.set-pair-side {
+  flex: 1 1 260px;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.set-pair-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.set-pair-k {
+  flex: 0 0 74px;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding-top: 5px;
+}
+.set-pair-v {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+}
+.set-pair-countdown {
+  font-family: var(--mono);
+  color: var(--text);
+}
+/* 入口行：范围标签 + 地址 + 复制，一行内对齐（窄屏自动换行）。 */
+.set-pair-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.set-pair-scope {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.set-pair-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  word-break: break-all;
+  color: var(--text);
+}
+
+/* 设备行：名字左、操作右，横线只出现在相邻行之间。 */
+.set-dev-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 12.5px;
+}
+.set-dev-row + .set-dev-row {
+  border-top: 1px solid var(--border);
+}
+.set-dev-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.set-dev-state {
+  margin-left: 6px;
+  font-size: 11.5px;
+}
+.set-dev-state.on {
+  color: #2f9e62;
+}
+.set-dev-state.off {
+  color: var(--text-dim);
+}
+.set-dev-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.set-dev-pending {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+}
 .set-diag-err {
   background: #fdf3f1;
   border: 1px solid #ecc;

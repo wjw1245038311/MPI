@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
-import { homedir, hostname } from "node:os";
+import { homedir, hostname, networkInterfaces } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, shell } from "electron";
 import WebSocket from "ws";
@@ -191,8 +191,8 @@ import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
 import { RelayUplink } from "./remote/relay-uplink";
 import { RelayFanout } from "./remote/relay-fanout";
-import { hostUrlFor, lanChannels, uplinkChannels, type ChannelContext, type RelayChannel } from "./remote/relay-channels";
-import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } from "./remote/services";
+import { lanChannels, planUplinks, uplinkChannels, type ChannelContext, type RelayChannel } from "./remote/relay-channels";
+import { WEB_ENTRY_TTL_MS, localEntryCandidates, resolveWebEntry, webEntryCandidates, httpOriginOf as httpOriginOfUrl, type WebEntry } from "./remote/web-entry";import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } from "./remote/services";
 import { RemoteService, type RemoteBackend } from "./remote/service";
 import {
   createSystemNotificationCenter,
@@ -221,11 +221,15 @@ import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, agentImageFor,
 import {
   LAN_RELAY_BIND_HOST,
   LAN_RELAY_PORT,
+  LAN_RELAY_TLS_PORT,
   LOCAL_RELAY_HOST,
+  lanAddresses,
   resolveLanRelayEntry,
   startLocalRelay,
+  tailnetAddress,
   type LanRelayStatus,
 } from "./lan-mode";
+import { ensureLocalRelayCert } from "./local-relay-cert";
 import { createAttachmentServer } from "./remote/attachment-server";
 import { AttachmentTokenStore } from "./remote/attachment-tokens";
 import type { Server } from "node:http";import {
@@ -257,7 +261,7 @@ import {
 import { normalizeTaskModes, taskModeName, taskModeSummary } from "../shared/task-mode-catalog";
 import { stripImageDimensionNotes } from "../shared/image-notes";
 import { builtinServer, type BuiltinServer } from "../shared/builtin-server";
-import { relayCaPem } from "./relay-tls";
+import { relayCaPem, resolveRelayCaPath } from "./relay-tls";
 import {
   AGREEMENT_FILE,
   PERSONA_FILE,
@@ -919,14 +923,7 @@ let publishThreadContextUsageHook: ((localId: string) => void) | null = null;
  */
 /** `ws(s)://host:port/ws` → `http(s)://host:port`（自检端点用）。 */
 function httpOriginOf(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    const scheme = parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
-    if (scheme !== "https:" && scheme !== "http:") return null;
-    return `${scheme}//${parsed.host}`;
-  } catch {
-    return null;
-  }
+  return httpOriginOfUrl(url);
 }
 
 /** 中继错误码 → 用户能行动的中文（`null` 原样返回）。 */
@@ -1331,6 +1328,10 @@ export function stopRemoteHost(): void {
 //   · 本机入口 ws://127.0.0.1:<port>/ws  —— CF 隧道 / 主机上行 #2 走它（公网保底路），总是可用
 // 因此进程**常驻**（应用启动即起）；`lanModeEnabled` 只决定「绑定地址」与「要不要广告内网地址」。
 let lanRelay: ReturnType<typeof startLocalRelay> | null = null;
+/** 当前本机中继用的准入 token（变了要重起子进程才能生效）。 */
+let lanRelayHostToken = "";
+/** 本机 CA 证书路径（供设备装根证书；由 local-relay-cert 维护）。 */
+let localRelayCaFile = "";
 
 /** 当前本机中继状态（给设置页与诊断用）。 */
 function lanModeStatus(): LanRelayStatus {
@@ -1353,22 +1354,44 @@ function lanModeStatus(): LanRelayStatus {
 }
 
 /**
- * 确保本机中继在跑（幂等）；绑定地址/端口/是否广告 变化时重启。
+ * 本机中继的准入 token：**取激活码**（同一把已经在你手里的钥匙）。
  *
- * 为什么常驻：CF 保底路需要 `ws://127.0.0.1:<port>/ws` 一直存在（主机上行 #2 与隧道都指向它）；
- * 而局域网那条只是**同一个进程的另一个入口**，所以不再单独拉起第二个进程。
+ * 为何要：本机中继绑 `0.0.0.0`，同网段任何设备都能对它 `host.register`，用同一个 hostId 把你
+ * 的上行顶掉（中继对同 hostId 重注册会 _replaced_）。未激活的机器仍为开放模式（与改造前一致）。
+ * token 只作用于 host→relay 注册，**不进配对票**。
  */
-function applyLanMode(): LanRelayStatus {
+function localRelayToken(): string {
+  const cfg = getConfig();
+  return (cfg.serverAuthCode || "").trim() || (cfg.remoteRelayToken || "").trim();
+}
+
+/** 本机证书要覆盖的地址：全部内网 IPv4 + tailnet IPv4（+ 回环由证书里的 localhost 覆盖）。 */
+function localRelayCertAddresses(): string[] {
+  const lan = lanAddresses(networkInterfaces()).map((entry) => entry.address);
+  const tailnet = tailnetAddress();
+  return [...new Set([...lan, ...(tailnet ? [tailnet] : [])])];
+}
+
+/**
+ * 起/重起本机中继（幂等）。异步是因为证书可能现场生成（自签，需 RSA 密钥）。
+ *
+ * 证书来源优先级：① 现有配置里能用且覆盖当前地址的 → 复用；② 否则自动重签/生成
+ * （见 `local-relay-cert.ts`：机器 CA + 叶子，SAN 覆盖全部内网与 tailnet 地址）。
+ */
+async function applyLanMode(): Promise<LanRelayStatus> {
   const cfg = getConfig();
   const port = cfg.lanModePort && cfg.lanModePort > 0 ? cfg.lanModePort : LAN_RELAY_PORT;
   const advertiseLan = !!cfg.lanModeEnabled;
   const bindHost = advertiseLan ? LAN_RELAY_BIND_HOST : LOCAL_RELAY_HOST;
+  const token = localRelayToken();
+  const tlsPort = typeof cfg.localRelayTlsPort === "number" && cfg.localRelayTlsPort > 0 ? cfg.localRelayTlsPort : LAN_RELAY_TLS_PORT;
   if (
     lanRelay &&
     lanRelay.status.enabled &&
     lanRelay.status.port === port &&
     lanRelay.status.bindHost === bindHost &&
-    lanRelay.status.advertiseLan === advertiseLan
+    lanRelay.status.advertiseLan === advertiseLan &&
+    lanRelayHostToken === token
   ) {
     return lanRelay.status;
   }
@@ -1378,25 +1401,44 @@ function applyLanMode(): LanRelayStatus {
     resourcesPath: process.resourcesPath || "",
     appPath: app.getAppPath(),
   });
+
+  // 证书：能用旧用旧，否则自动生成/重签（失败只意味着“没有 https 入口”，不影响明文监听）。
+  const cert = await ensureLocalRelayCert({
+    dir: join(getConfigDir(), "relay-tls"),
+    certFile: cfg.localRelayCertFile,
+    keyFile: cfg.localRelayKeyFile,
+    addresses: localRelayCertAddresses(),
+    hostname: hostname(),
+    log: appendDiagLog,
+  });
+  // 复用旧证书时目录里可能没有本机 CA（那是随包 CA 签的）→ 回落到随包 CA，
+  // 这样界面上的「装根证书」链接指向的始终是**能验证当前证书**的那个文件。
+  localRelayCaFile =
+    cert?.caFile ||
+    resolveRelayCaPath({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath || "", appPath: app.getAppPath() }) ||
+    "";
+
   lanRelay = startLocalRelay({
     entryPath,
     port,
     bindHost,
     advertiseLan,
-    // 局域网 TLS（可选）：配了证书就在 tlsPort 上开 wss，明文监听继续留在 port（主机上行/CF/tailscale 用）。
-    ...(cfg.localRelayCertFile ? { tlsCertFile: cfg.localRelayCertFile } : {}),
-    ...(cfg.localRelayKeyFile ? { tlsKeyFile: cfg.localRelayKeyFile } : {}),
-    ...(typeof cfg.localRelayTlsPort === "number" && cfg.localRelayTlsPort > 0 ? { tlsPort: cfg.localRelayTlsPort } : {}),
+    // TLS：有证书就在 tlsPort 上开 wss（https 页面只能用它），明文监听继续留在 port。
+    ...(cert ? { tlsCertFile: cert.certFile, tlsKeyFile: cert.keyFile, tlsPort } : {}),
+    // 准入：同网段设备不能白注册把你的上行顶掉（见 localRelayToken）。
+    ...(token ? { hostToken: token } : {}),
     // VAPID 密钥固定落 userData：写在安装目录的话，应用一更新就换密钥 → 推送订阅全失效。
     vapidKeyFile: join(getConfigDir(), "relay-vapid.json"),
     // 静态目录（托管 PWA / 下载页）：空 = 不托管。
     staticDir: cfg.localRelayStaticDir || "",
     log: appendDiagLog,
   });
+  lanRelayHostToken = token;
   appendDiagLog(
     `local-relay ${lanRelay.status.enabled ? "on" : "failed"} bind=${bindHost}:${port}` +
       `${lanRelay.status.url ? ` lan=${lanRelay.status.url}` : ""}` +
       `${lanRelay.status.localUrl ? ` local=${lanRelay.status.localUrl}` : ""}` +
+      `${cert ? ` tls=${cert.generated ? "new" : "reuse"}` : " tls=none"} token=${token ? "on" : "open"}` +
       `${lanRelay.status.lastError ? ` err=${lanRelay.status.lastError}` : ""}`,
   );
   return lanRelay.status;
@@ -1465,7 +1507,12 @@ function effectiveRelayChannels(): RelayChannel[] {
   // 上行去重只按地址字符串比对，所以这里把两条归一成同一个地址，自然只留一条上行；
   // **手机地址（phoneUrl）照旧用内网 IP** —— 那才是"同网段直连"的意义所在。
   for (const lan of lanChannels(ctx)) {
-    channels.push({ ...lan, hostUrl: `ws://127.0.0.1:${ctx.localRelayPort}/ws` });
+    channels.push({
+      ...lan,
+      hostUrl: `ws://127.0.0.1:${ctx.localRelayPort}/ws`,
+      // 本机中继现在也启用准入（token = 激活码）：同网段设备不能白注册把上行顶掉。
+      ...(localRelayToken() ? { token: localRelayToken() } : {}),
+    });
   }
   // ② 云中继：自定义优先，其次内置（有激活码才挂）
   const custom = (cfg.customRelayUrl || "").trim();
@@ -1491,7 +1538,14 @@ function effectiveRelayChannels(): RelayChannel[] {
   if (cfg.remoteRelayFallbackEnabled !== false) {
     // 本机中继通道：**只作主机上行**（让经 tailscale serve / 局域网入口进来的设备能找到主机），
     // 不写手机地址（那由 lan 通道给；CF 已按用户决定去掉）。
-    channels.push({ id: "local", label: "本机中继", phoneUrl: "", enabled: true, kind: "local" });
+    channels.push({
+      id: "local",
+      label: "本机中继",
+      phoneUrl: "",
+      ...(localRelayToken() ? { token: localRelayToken() } : {}),
+      enabled: true,
+      kind: "local",
+    });
   }
   return channels;
 }
@@ -1623,6 +1677,58 @@ function phoneTicketAddresses(): string[] {
   return urls;
 }
 
+// ---- 网页入口（中继托管的 PWA + 本机快路径）——见 remote/web-entry.ts ----------------------
+let webEntryCache: { at: number; value: WebEntries } | null = null;
+
+/** 一次解析出来的两组入口：`any` = 中继（默认，任何网络可开）、`local` = 本机（同网/tailnet 更快）。 */
+interface WebEntries {
+  any: WebEntry | null;
+  local: WebEntry | null;
+}
+
+/** 改了中继配置（授权码 / 自定义地址）就作废缓存，否则面板会继续展示旧入口最多 5 分钟。 */
+export function clearWebEntryCache(): void {
+  webEntryCache = null;
+}
+
+/** 本机 CA 的 PEM（探本机 https 入口时用；未生成时为空）。 */
+function localRelayCaPem(): string[] {
+  if (!localRelayCaFile) return [];
+  try {
+    return existsSync(localRelayCaFile) ? [readFileSync(localRelayCaFile, "utf8")] : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 本次生效的网页入口（带 5 分钟缓存）。
+ *
+ * · `any`：自定义中继 → 内置服务器候选（tailnet TLS 在前、公网在后）。**二维码默认用它**。
+ * · `local`：本机 https 入口（tailnet IP 在前）。只在本机确实托管了 PWA 时才算数（verified）。
+ */
+async function currentWebEntry(cfg: AppConfig): Promise<WebEntries> {
+  if (webEntryCache && Date.now() - webEntryCache.at < WEB_ENTRY_TTL_MS) return webEntryCache.value;
+  const anyCandidates = webEntryCandidates({
+    customRelayUrl: cfg.customRelayUrl,
+    builtinPhoneUrls: builtinServer()?.phoneUrls ?? [],
+    authCode: cfg.serverAuthCode,
+  });
+  const localCandidates = localEntryCandidates({
+    addresses: lanAddresses(networkInterfaces()).map((entry) => entry.address),
+    tailnet: tailnetAddress(),
+    tlsPort: cfg.localRelayTlsPort,
+    lanEnabled: Boolean(cfg.lanModeEnabled),
+  });
+  const [any, local] = await Promise.all([
+    resolveWebEntry(anyCandidates, { ca: relayCa() }),
+    resolveWebEntry(localCandidates, { ca: [...relayCa(), ...localRelayCaPem()] }),
+  ]);
+  const value: WebEntries = { any, local };
+  webEntryCache = { at: Date.now(), value };
+  return value;
+}
+
 /**
  * 按配置启/停/重指中继上行（S1/S2）。
  *
@@ -1639,31 +1745,30 @@ function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
   // 选路开关已撤（2026-10-16）：始终挂全部启用通道；配对票也带全部候选。
   const wanted = cfg.remoteRelayEnabled ? uplinkChannels(channels, "auto", cfg.activeChannelId) : [];
 
-  // ① 摘掉不再需要的上行
+  // **同址归并**：同一台中继只允许挂一条上行，否则同 hostId 注册两次 → 双方互顶（4006 REPLACED）
+  // → 每秒重连一次，手机侧就是「连上了但 connection not ready」。
+  // 关键：归并结果要拿全集去停旧实例（不能只看本轮）—— 开机时 lan 地址可能晚几秒才就绪，
+  // 先起的 `local` 必须被后来的 `lan` 顶掉，而不是两者共存（见 planUplinks 注释）。
+  const { chosen, skipped } = planUplinks(wanted, ctx);
+  for (const item of skipped) {
+    appendDiagLog(`relay-channel skip id=${item.channel.id}（主机上行与 ${item.takenBy} 是同一台中继：${item.hostUrl}）`);
+  }
+  const keep = new Set(chosen.map((item) => item.channel.id));
+
+  // ① 摘掉不再需要的上行（含被同址归并掉的旧实例）
   for (const [id, uplink] of [...channelUplinks]) {
-    if (wanted.some((channel) => channel.id === id)) continue;
+    if (keep.has(id)) continue;
     uplink.stop();
     channelUplinks.delete(id);
   }
 
   // ② 新建 / 重指（channel.id 作持久化实例键：多通道共存时各自独立的 deviceToken 与推送订阅）
-  //    同址去重：同一主机上行地址只允许挂一次——同 hostId 在同一中继注册两次会互相顶掉。
-  //    （保存时由 validateChannels 报错；这里是运行期兵底，防旧配置直接踩坑）
-  const hostUrlSeen = new Map<string, string>();
-  for (const channel of wanted) {
-    const hostUrl = hostUrlFor(channel, ctx);
-    if (!hostUrl) continue;
-    const takenBy = hostUrlSeen.get(hostUrl);
-    if (takenBy) {
-      appendDiagLog(`relay-channel skip id=${channel.id}（主机上行与 ${takenBy} 是同一台中继：${hostUrl}）`);
-      continue;
-    }
-    hostUrlSeen.set(hostUrl, channel.id);
+  for (const { channel, hostUrl } of chosen) {
     let uplink = channelUplinks.get(channel.id);
     if (!uplink) {
       uplink = makeRelayUplink({ relayUrl: hostUrl, relayToken: channel.token, instanceKey: channel.id }, remoteHost);
       channelUplinks.set(channel.id, uplink);
-    } else {
+    } else if (uplink.getStatus().relayUrl !== hostUrl) {
       uplink.configure(hostUrl);
     }
     if (uplink.getStatus().state === "disabled") uplink.start();
@@ -3918,7 +4023,12 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   activeRemoteHost = remoteHost;
   remoteHost.start();
   // 本机中继（常驻）：契约是「应用启动即起」——CF 保底路依赖它的 127.0.0.1 入口。
-  applyLanMode();
+  // 异步：缺证书时会现场生成（自签），不阻塞启动但也不吞错误。
+  // 顺序很重要：本机中继就绪后**再**规划上行。否则 lan 通道还没地址，只能先挂 local；
+  // 等 lan 就绪时又会多挂一条指向同一台中继的上行 → 同 hostId 互顶（4006 REPLACED）无限重连。
+  void applyLanMode()
+    .then(() => applyRelayUplinkConfig(remoteHost))
+    .catch((error) => appendDiagLog(`local-relay 启动失败：${(error as Error)?.message || error}`));
   // 附件服务：配了公网入口/证书就**预热**起来。
   // 为什么不靠懒启动：公网入口（反向隧道绑在 ECS 上的端口）在 App 起来后就该可用——
   // 否则隧道指向的本地端口没人监听，第一次访问直接失败（用户看到的是「附件直连坏了」，
@@ -4149,6 +4259,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       if (!res.ok) return { ok: false, error: `HTTP_${res.status}` };
       // 激活成功后立刻重挂上行：不重启应用就能连上
       applyRelayUplinkConfig(remoteHost);
+      clearWebEntryCache();
       return {
         ok: true,
         ...id,
@@ -4264,9 +4375,11 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   builtinRepickUplinks = () => applyRelayUplinkConfig(remoteHost);
 
   ipcMain.handle("remote:getStatus", () => remoteHost.getStatus());
-  ipcMain.handle("remote:getRelayStatus", () => {
+  ipcMain.handle("remote:getRelayStatus", async () => {
     const cfg = getConfig();
     const addresses = phoneTicketAddresses();
+    // 网页入口：只有一个来源（中继托管的 PWA），探测结果缓存 5 分钟。
+    const webEntry = await currentWebEntry(cfg);
     return {
       ...(() => {
         const fanout = relayFanout?.getStatus() ?? { state: "disabled" as const, relayUrl: cfg.remoteRelayUrl, lastError: null };
@@ -4281,31 +4394,25 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       // **本次配对票里实际会告诉手机的地址**（S2：由通道列表算出，局域网优先）。
       phoneRelayUrl: addresses[0] || "",
       /**
-       * **配对二维码/配对链接该指向哪个网页入口**（2026-10-16 新增）。
+       * **配对二维码/链接该指向的网页入口 | 单一来源**（2026-10 收敛）。
        *
-       * 为什么单独算：票里首位是「局域网明文」（给手机那种明文页面直连局域网用），
-       * 而页面本身**必须是 https**（PWA 的 E2E 依赖 `crypto.subtle`，只在安全上下文可用）。
-       * 能当页面入口的有三种（按"离设备最近"排序）：
-       *   ① 本机中继的局域网 TLS（`wss://<内网IP>:<tlsPort>/ws` → `https://…`）：同网段最快
-       *   ② **中继服务器的公网 TLS**（`wss://<中继>:9443/ws` → `https://…`）：**任何网络都能打开**
-       *      ——这条是"在外网也能用网页版"的关键，所以 ECS 上仍托管一份 PWA（见 scripts/deploy-pwa.mjs）
-       *   ③ 自定义中继（用户自己的，可能也托管页面）
-       * 都没有就返回 null，界面提示用户配局域网 TLS（而不是给一个打不开的地址）。
+       * 产品模型：只有「我的中继托管的 PWA」这一条受支持（页面与 `/ws` 同源 ⇒ 设备的同源
+       * 通道必然可达）。所以**二维码的默认入口**只可能是中继的 origin。
+       *
+       * 但局域网/tailnet 确实更快（用户实测：本机 176ms vs 中继 280ms），所以另外给一条
+       * `localPageUrl`（本机 https 入口）——**只在它真的托管着 PWA 时才给**（verified），
+       * 且明确标“同网段/tailnet 用”，不当默认（离开那个网络就打不开）。
+       *
+       * 探测（`/manifest.webmanifest` 200）**不阻塞界面**：中继探不到只标 `webEntryVerified:false`，
+       * 仍然把 origin 交给面板（否则中继蹭一下不可达，用户就看不到唯一入口了）。
        */
-      pairingPageUrl: (() => {
-        const builtinTls = (builtinServer()?.phoneUrls ?? []).find((url) => url.startsWith("wss://")) || "";
-        const candidates = [
-          ...lanModeStatus().tlsUrls,
-          // 只有配了激活码（= 这台机器真的用内置中继）时才把它当页面入口
-          (cfg.serverAuthCode || "").trim() ? builtinTls : "",
-          (cfg.customRelayUrl || "").trim(),
-        ];
-        for (const url of candidates) {
-          const origin = httpOriginOf(url);
-          if (origin) return origin;
-        }
-        return null;
-      })(),
+      pairingPageUrl: webEntry?.any?.origin ?? null,
+      webEntrySource: webEntry?.any?.source ?? null,
+      webEntryVerified: Boolean(webEntry?.any?.verified),
+      /** 本机快路径入口（仅当本机确实托管了 PWA 且探测通过）。 */
+      localPageUrl: webEntry?.local?.verified ? webEntry.local.origin : null,
+      /** 本机 CA 证书路径（设备装一次根证书，本机入口就不再弹证书警告）。 */
+      localCaFile: localRelayCaFile || null,
       // S3 起票里会带整列表，这里先把后续地址暴露给面板。
       phoneTicketAddresses: addresses,
       phoneRelayFallbackUrl: addresses[1] || "",
@@ -4420,7 +4527,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   // and only ever written through messaging:setConfig.
   ipcMain.handle("app:getConfig", () => configForRenderer());
   ipcMain.handle("lanmode:status", () => lanModeStatus());
-  ipcMain.handle("lanmode:set", (_e, args: { enabled?: boolean; port?: number }) => {
+  ipcMain.handle("lanmode:set", async (_e, args: { enabled?: boolean; port?: number }) => {
     // 设置页开关：先落盘配置再应用（与其它配置项一致，失败也不静默）。
     updateConfig({
       ...(typeof args?.enabled === "boolean" ? { lanModeEnabled: args.enabled } : {}),
@@ -4463,10 +4570,11 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         "lanModePort" in patch)
     ) {
       applyRelayUplinkConfig(remoteHost);
+      clearWebEntryCache();
     }
-    // 本机中继的静态目录/端口变了要重启子进程（VAPID 路径固定指向 userData，不需重启）。
-    if (patch && ("localRelayStaticDir" in patch || "lanModePort" in patch)) {
-      applyLanMode();
+    // 本机中继的静态目录/端口/证书变了要重启子进程（VAPID 路径固定指向 userData，不需重启）。
+    if (patch && ("localRelayStaticDir" in patch || "lanModePort" in patch || "localRelayCertFile" in patch)) {
+      void applyLanMode();
     }
     if ((next.piCliPath || "") !== (prevCli || "")) {
       resetPiRuntime();

@@ -490,11 +490,12 @@ export default function App() {
   /** (Re)connect to a stored pairing. The first socket open triggers re-auth via
    * attachAutoReauth, which also reinstalls E2E crypto; home shows immediately. */
   /** 「网络恢复时择优」的监听（每次 startSession 重挂，避免叠加；没有定时器）。 */
-  const pathOptimizerRef = useRef<{ onOnline: () => void } | null>(null);
+  const pathOptimizerRef = useRef<{ onOnline: () => void; firstOptimize?: number } | null>(null);
   const stopPathOptimizer = () => {
     const current = pathOptimizerRef.current;
     if (!current) return;
     window.removeEventListener("online", current.onOnline);
+    if (current.firstOptimize) window.clearTimeout(current.firstOptimize);
     pathOptimizerRef.current = null;
   };
 
@@ -574,7 +575,11 @@ export default function App() {
     };
     const onOnline = () => void optimize();
     window.addEventListener("online", onOnline);
-    pathOptimizerRef.current = { onOnline };
+    // 首次连接**先连同源**（必然可达，不会撞不在网段的地址），再在这里静默探一次「更近的路」，
+    // 能连就切过去（单向）。这是 relay-select 把同源排第一后仍能「都通时走最快」的配套。
+    // 延迟 1.5s：别和首屏的快照拉取抢带宽。
+    const firstOptimize = window.setTimeout(() => void optimize(), 1_500);
+    pathOptimizerRef.current = { onOnline, firstOptimize };
   };
 
   // 扫码即配对：桌面二维码现在是 https 链接 https://<relay>/#pair=<payload>（mpi://

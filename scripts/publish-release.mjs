@@ -80,6 +80,8 @@ let seafileDir = null;
 let noPush = false;
 let forceUpload = false;
 let noRelay = false;
+/** --no-pwa: 不同步中继上的网页版（默认同步；见 syncPwaToRelay）。 */
+let noPwa = false;
 /** >0 → --wait-ci mode (minutes); don't upload locally, wait for GitHub Actions assets. */
 let waitCiMinutes = 0;
 /** --local: 只拿本地产物分发（中继镜像 + Seafile），不传 GitHub、不等 CI（发版默认）。 */
@@ -92,6 +94,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--no-push') noPush = true;
   else if (a === '--force-upload') forceUpload = true;
   else if (a === '--no-relay') noRelay = true;
+  else if (a === '--no-pwa') noPwa = true;
   else if (a === '--local') localOnly = true;
   else if (a === '--no-github') noGithub = true;
   else if (a === '--wait-ci') {
@@ -397,6 +400,32 @@ async function mirrorToRelay(rel) {
   }
 }
 
+/**
+ * 把网页版（PWA）同步到中继静态目录 —— 中继上的页面就是这个模型里**唯一的网页入口**。
+ *
+ * 为什么必须进发版流程：网页版与桌面端共用一套远程协议，中继上那份一落后就可能连不上。
+ * 实测记录（`scripts/deploy-pwa.mjs` 文件头）：2026-10-16 ECS 上那份还是 10-09 的构建。
+ * 构建 + 上传 + 远端校验全交给 deploy-pwa.mjs（它还会清掉旧 bundle 并验证 index.html 引用一致）。
+ *
+ * 跳过条件：`--no-pwa`，或在 CI 里跑（GitHub Actions 没有这台机器的 SSH 凭据）。
+ */
+function syncPwaToRelay() {
+  console.log('\nPWA 同步 → 中继（网页版入口，与本次桌面端同版本）');
+  const script = path.join(REPO_ROOT, 'scripts', 'deploy-pwa.mjs');
+  const args = [script];
+  if (process.env.MPI_PWA_NO_BUILD === '1') args.push('--no-build');
+  if (process.env.MPI_RELAY_HOST) args.push('--host', process.env.MPI_RELAY_HOST);
+  if (process.env.MPI_RELAY_PWA_DIR) args.push('--dir', process.env.MPI_RELAY_PWA_DIR);
+  const result = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });
+  if (result.status !== 0) {
+    throw new Error(
+      `deploy-pwa.mjs 退出码 ${result.status}：中继上的网页版可能落后于本次桌面端。` +
+        '修好 SSH/目录后重跑本脚本（幂等），或加 --no-pwa 显式跳过。',
+    );
+  }
+  console.log('✓ 网页版已同步到中继');
+}
+
 // ---------- changelog 正文提取 ----------
 function changelogBody(v) {
   const md = fs.readFileSync(path.join(REPO_ROOT, 'changelog.md'), 'utf8');
@@ -545,6 +574,13 @@ function changelogBody(v) {
     console.log('\n（--no-relay：跳过中继镜像，客户端会回退 GitHub）');
   } else {
     await mirrorToRelay(final);
+  }
+
+  // 7.5) 网页版同步（中继托管 PWA = 唯一的网页入口），与 7 同属“中继侧必须及格”的步骤。
+  if (noPwa || process.env.CI === 'true') {
+    console.log(`\n（${noPwa ? '--no-pwa' : 'CI'}：跳过 PWA 同步——中继上的网页版不会随本次发版更新）`);
+  } else {
+    syncPwaToRelay();
   }
 
   // seafile 分发副本（用本地产物；未本地构建时跳过并提示）

@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { fromLegacy, lanChannel, lanChannels, effectiveChannels, hostUrlFor, uplinkChannels, ticketAddresses, validateChannels, pickRelayFeedUrl, flipScheme } =
+const { fromLegacy, lanChannel, lanChannels, effectiveChannels, hostUrlFor, planUplinks, uplinkChannels, ticketAddresses, validateChannels, pickRelayFeedUrl, flipScheme } =
   await import("../src/main/remote/relay-channels.ts");
 
 const ctx = (over = {}) => ({ localRelayPort: 9001, lanPhoneUrl: null, lanAddress: null, ...over });
@@ -160,10 +160,12 @@ test("ipc/config 接线：通道列表驱动，旧的「主+备两条」写法�
   const ipc = readFileSync(new URL("../src/main/ipc.ts", import.meta.url), "utf8");
   const cfg = readFileSync(new URL("../src/main/config.ts", import.meta.url), "utf8");
 
-  // 2026-10-16：多通道/选路已删，ipc 只用「合成局域网通道 + 挂全部启用上行 + 推导主机地址」这三件
-  for (const pat of [/lanChannels\(/, /uplinkChannels\(/, /hostUrlFor\(/]) {
+  // 2026-10-16：多通道/选路已删。2026-10-17：上行规划（含同址归并）抽成 planUplinks ——
+  // 不再由 ipc 自己算 hostUrlFor，所以守卫改看 planUplinks 是否被接线（防止哪天又手写一份去重）。
+  for (const pat of [/lanChannels\(/, /uplinkChannels\(/, /planUplinks\(/]) {
     assert.match(ipc, pat, `主进程要走通道模块：${pat}`);
   }
+  assert.match(ipc, /keep\.has\(id\)/, "同址归并的结果必须用来停掉旧实例（跨轮次稳定）");
   assert.ok(!/fallbackRelayUplink/.test(ipc), "旧的「备用上行」专用变量应已移除（改由通道列表 + Map 管理）");
   assert.match(ipc, /instanceKey: channel\.id/, "持久化实例键必须来自通道 id（多通道各自独立 deviceToken）");
   assert.match(cfg, /customRelayUrl\?: string/, "配置项：自定义中继地址（多通道已按用户决定删除）");
@@ -197,6 +199,36 @@ test("多内网候选：每个地址一条通道（id 首条 lan，其余 lan-2/
   assert.equal(lanChannel(multi)?.id, "lan", "单值入口仍返回首条");
   // 只有单值时行为不变（旧调用方不受影响）
   assert.equal(lanChannels(ctx()).length, 0, "未广告内网地址时一条都不给");
+});
+
+// ---- ⑥ 同址归并：同一台中继只挂一条上行（跨轮次也要稳定）----
+test("同址归并：lan 与 local 指向同一台中继 → 只留 lan，local 被跳过", () => {
+  const c = { ...ctx(), lanAddress: "10.0.0.5", lanPhoneUrls: ["ws://10.0.0.5:9001/ws"] };
+  // 局域网通道的主机上行显式指向回环（与 local 通道同一个中继进程）
+  const channels = [
+    ...lanChannels(c).map((ch) => ({ ...ch, hostUrl: "ws://127.0.0.1:9001/ws" })),
+    { id: "local", label: "本机中继", phoneUrl: "", enabled: true, kind: "local" },
+  ];
+  const { chosen, skipped } = planUplinks(channels, c);
+  assert.deepEqual(chosen.map((item) => item.channel.id), ["lan"], "只保留一条上行");
+  assert.equal(chosen[0].hostUrl, "ws://127.0.0.1:9001/ws");
+  assert.deepEqual(skipped.map((item) => [item.channel.id, item.takenBy]), [["local", "lan"]], "local 被 lan 顶掉");
+});
+
+test("同址归并：局域网关闭时 local 独自成立；不同地址各留一条", () => {
+  const off = planUplinks([{ id: "local", label: "本机中继", phoneUrl: "", enabled: true, kind: "local" }], ctx());
+  assert.deepEqual(off.chosen.map((item) => item.channel.id), ["local"]);
+  assert.equal(off.chosen[0].hostUrl, "ws://127.0.0.1:9001/ws");
+
+  const two = planUplinks(
+    [
+      { id: "builtin", label: "内置", phoneUrl: "wss://ecs:9443/ws", hostUrl: "wss://ecs:9443/ws", enabled: true, kind: "remote" },
+      { id: "local", label: "本机中继", phoneUrl: "", enabled: true, kind: "local" },
+    ],
+    ctx(),
+  );
+  assert.deepEqual(two.chosen.map((item) => item.channel.id), ["builtin", "local"], "不同中继各自一条");
+  assert.deepEqual(two.skipped, []);
 });
 
 console.log("relay-channels tests passed");

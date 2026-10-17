@@ -41,17 +41,21 @@ export function sameOriginRelayUrl(loc: { origin?: string } | undefined = typeof
 }
 
 /**
- * 是不是**局域网候选**（私网地址）。
+ * 它是**局域网候选**（私网地址或 tailnet）吗？
  *
- * 为什么需要它：HTTPS 页面里明文 `ws://` 全被浏览器拦掉，剩下的 wss 里既有**局域网 TLS**
- * （最快、且不出网）又有**公网中继 TLS**。用户要的是「都通时走最快的」——所以安全上下文里
- * 要先把局域网 TLS 排前面，再退到同源/公网。设备不在那个网段时它会快速失败并继续往下试。
+ * 仅用于「后台择优」的方向判定（只切向更近的路），**不再决定首次连接的顺序**。
+ * 2026-10-17 真机修正：minibox（不在那网段）每次刷新都会先撞
+ * `wss://10.215.35.72:9443/ws` 并报 `WebSocket is closed before the connection is established`，
+ * 然后把“刚连上、E2E 未就绪”的窗口拖长 → 首页卡在
+ * 「数据刷新失败：cannot send projects request (connection not ready)」。
  */
 export function isPrivateRelayUrl(url: string): boolean {
   try {
     const host = new URL(url).hostname;
     if (!host) return false;
     if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return true;
+    // tailnet（100.64.0.0/10）同样是“近端”地址
+    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)) return true;
     return /\.local$/i.test(host);
   } catch {
     return false;
@@ -76,12 +80,20 @@ export function relayCandidates(
   const sameOrigin = sameOriginRelayUrl(options.location);
   const hostList = (input.relayUrls ?? []).map((url) => String(url || "").trim()).filter(Boolean);
   if (secure) {
-    // HTTPS 页面：明文候选全被浏览器拦掉，所以在 **wss 候选之间**排优先级，
-    // 顺序 = 局域网 TLS（最快、不出网）→ 同源（页面就是它发来的，必然可达）→ 公网中继 TLS。
-    // 这一条正是「都通时走最快」在安全上下文里的落地：页面即使从公网中继打开，
-    // 设备在局域网时也会先命中局域网 TLS，而不是被"同源优先"钉在公网上。
-    for (const url of hostList.filter((url) => isPrivateRelayUrl(url))) push(url);
+    // HTTPS 页面：明文候选全被浏览器拦掉，只在 **wss 候选之间**排优先级。
+    //
+    // 顺序 = **同源优先** → 局域网/tailnet TLS → 其它公网 TLS。
+    //
+    // 2026-10-17 真机修正（minibox）：以前是“局域网优先”，理由是「都通时走最快」。但设备
+    // 不在那个网段时，那条候选要等 TCP 超时（浏览器报 `WebSocket is closed before the
+    // connection is established`），把“刚连上、E2E 未就绪”的窗口拖得很长 → 首页卡在
+    // 「cannot send projects request (connection not ready)」。而**同源是唯一必然可达的候选**
+    // （页面就是它发过来的），先连它永远是对的。
+    //
+    // “更快”不会丢：连上后由 App 的路径择优（`shouldSwitchToBetterPath` + `probeRelayUrl`）
+    // 在启动时与 `online` 时各探一次，能连就切到近端（单向，只切更近）。
     if (sameOrigin) push(sameOrigin);
+    for (const url of hostList.filter((url) => isPrivateRelayUrl(url))) push(url);
     for (const url of hostList.filter((url) => !isPrivateRelayUrl(url))) push(url);
   } else {
     // 明文页面：主机顺序优先（首个 = 首选，局域网明文通常最快），同源退为回落。

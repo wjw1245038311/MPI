@@ -70,7 +70,16 @@ for (const raw of invalidSamples) {
 
 // --- responseFor / errorFor -----------------------------------------------------------
 const request = desktop.makeEnvelope("thread.prompt", "s1", { text: "hi" }, { requestId: "req-7", sentAt: 9 });
-assert.deepEqual(shared.responseFor(request, { ok: true }), desktop.responseFor(request, { ok: true }));
-assert.deepEqual(shared.errorFor(request, "THREAD_BUSY", "busy"), desktop.errorFor(request, "THREAD_BUSY", "busy"));
+// responseFor/errorFor 的结果也带 `sentAt`，且各自取 Date.now() —— 两侧调用跨过毫秒边界就会差 1ms
+// （并发跑测试时偶发）。与上面 makeEnvelope 同一处理：只比结构与其它字段。
+const withoutSentAt = (envelope) => ({ ...envelope, sentAt: 0 });
+assert.deepEqual(
+  withoutSentAt(shared.responseFor(request, { ok: true })),
+  withoutSentAt(desktop.responseFor(request, { ok: true })),
+);
+assert.deepEqual(
+  withoutSentAt(shared.errorFor(request, "THREAD_BUSY", "busy")),
+  withoutSentAt(desktop.errorFor(request, "THREAD_BUSY", "busy")),
+);
 
 console.log("pwa-shared protocol equivalence tests passed");

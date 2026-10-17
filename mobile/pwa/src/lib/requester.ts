@@ -26,6 +26,15 @@ export interface RequesterOptions {
   requestTimeoutMs?: number;
   onStaleConnection?: () => void;
   /**
+   * 发送前「等连接就绪」的上限（默认 8s）。
+   *
+   * 为什么要等：`sendData` 在**E2E 握手未完成**或 socket 刚关闭时返回 false。页面刚刷新、
+   * 切回前台、重新配对后重建 socket 时，UI 会立即发 `projects.list` —— 以前这一步会直接
+   * reject，于是首页挂着「数据刷新失败：cannot send projects request (connection not ready)」
+   * 直到下一次状态变化。而握手通常只需几百毫秒，所以退避重试到就绪比报错合理得多。
+   */
+  readyRetryWindowMs?: number;
+  /**
    * Attached to every envelope. The host's RemoteService reads threadId from the
    * ENVELOPE (requiredThread), not the payload — per-thread requesters must set this.
    */
@@ -68,12 +77,14 @@ export class Requester {
     this.label = `${options.threadId ? `thread:${options.threadId.slice(0, 8)}` : `home:${this.sessionId.slice(-4)}`}@${cid}`;
     this.onStaleConnection = options.onStaleConnection;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
+    this.readyRetryWindowMs = options.readyRetryWindowMs ?? 8_000;
     this.threadId = options.threadId;
     // Subscribe before any traffic can flow (RelayClient does not buffer frames).
     this.detachFrame = client.onFrame((frame) => this.handleFrame(frame));
   }
 
   private readonly requestTimeoutMs: number;
+  private readonly readyRetryWindowMs: number;
   private readonly onStaleConnection?: () => void;
   private readonly threadId?: string;
 
@@ -100,10 +111,11 @@ export class Requester {
         reject(new Error(`timed out waiting for ${label} response`));
       }, timeoutMs ?? this.requestTimeoutMs);
       this.pending.set(requestId, { resolve: resolve as (value: unknown) => void, reject, timer });
-      // sendData is async only when E2E crypto is active. A false result means
-      // the frame could not go out at all — socket closed OR E2E handshake not
-      // finished yet; either way the next (re)auth cycle retries.
-      void Promise.resolve(this.client.sendData(envelope)).then((sent) => {
+      // sendData 在 **E2E 握手未完成** 或 socket 刚关闭时返回 false。页面刚刷新 / 切回前台 /
+      // 重建 socket 后立即发请求时这是常态（几百毫秒），直接报错会让首页挂着
+      // 「connection not ready」直到下一次状态变化。所以在这里短退避重试，窗口内的
+      // 成功就当没事（外层 timer 仍然兜住整体超时）。
+      void this.sendWhenReady(envelope).then((sent) => {
         if (!sent) {
           clearTimeout(timer);
           this.pending.delete(requestId);
@@ -112,6 +124,23 @@ export class Requester {
         }
       });
     });
+  }
+
+  /** 等到能发（最多 `readyRetryWindowMs`）；返回 false = 彻底发不出去。 */
+  private async sendWhenReady(envelope: unknown): Promise<boolean> {
+    const deadline = Date.now() + Math.max(0, this.readyRetryWindowMs);
+    let delay = 80;
+    for (;;) {
+      if (this.isDetached) return false;
+      try {
+        if (await Promise.resolve(this.client.sendData(envelope))) return true;
+      } catch {
+        /* 发送抛错按"还没就绪"处理 */
+      }
+      if (Date.now() + delay > deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(Math.round(delay * 1.6), 500);
+    }
   }
 
   /** Drop all waiters and the frame subscription. */

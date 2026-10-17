@@ -33,6 +33,12 @@ export type RelayStatus = {
   state: "disabled" | "connecting" | "connected" | "error";
   relayUrl: string;
   lastError: string | null;
+  /**
+   * 人话版的 lastError（主进程把 HOST_UNAUTHORIZED / DEVICE_OFFLINE 这类协议码翻成能读的一句话）。
+   * 界面一律显示这个，**绝不把原始码直接拼给用户**——`已连接 · DEVICE_OFFLINE` 那种自相矛盾
+   * 就是直接拼原始码拼出来的（设备级事件被当成了连接状态）。原始码只在诊断里出现。
+   */
+  lastErrorText?: string;
   /** 旧字段（S5 前的「手机通道地址」）：保留读取兼容，界面不再编辑。 */
   mobileRelayUrl?: string;
   /** **本次配对票里实际会告诉手机的地址**（局域网模式 > 手机通道地址 > relayUrl，与主机一致）。 */
@@ -54,10 +60,21 @@ export type RelayStatus = {
   /** 配对票里给手机的**全部**候选地址（有序）。 */
   phoneTicketAddresses?: string[];
   /**
-   * 二维码该指向的**网页入口**（主进程算好的 https 原址）：本机中继的局域网 TLS → CF 隧道 →
-   * 自定义中继；都没有时为 null（此时不要给用户一个打不开的地址，而要提示从哪个入口打开）。
+   * 二维码/链接指向的**网页入口**（单一来源：中继托管的 PWA 的 origin；null = 没配中继）。
+   * 2026-10 收敛：不再有「局域网 TLS → 本机 IP」候选（那些只会制造设备列表垃圾）。
    */
   pairingPageUrl?: string | null;
+  /** 该入口属于哪个中继。 */
+  webEntrySource?: "builtin" | "custom" | null;
+  /** 探测过 `/manifest.webmanifest` 且 200。false = 中继暂时不可达（入口仍可用，只是未确认）。 */
+  webEntryVerified?: boolean;
+  /**
+   * 本机快路径入口（`https://<内网IP|tailnet IP>:<tlsPort>`）。
+   * 仅当本机确实托管了 PWA 且探测通过时给 —— 同一局域网 / tailnet 的浏览器用它更快（不进公网）。
+   */
+  localPageUrl?: string | null;
+  /** 本机 CA 证书路径（设备装一次就不弹证书警告）。 */
+  localCaFile?: string | null;
 };
 
 /** S5：渲染层通道行（`tokenDraft` 仅渲染层用：留空 = 保持现有 token，见 config.updateConfig）。 */

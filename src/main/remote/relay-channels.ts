@@ -173,6 +173,51 @@ export function uplinkChannels(channels: RelayChannel[], mode: RelayMode, active
   return channels.filter((c) => c.enabled);
 }
 
+/** 一条计划中的上行：通道 + 推导后的实际地址。 */
+export interface PlannedUplink {
+  channel: RelayChannel;
+  hostUrl: string;
+}
+
+/** 被「同址归并」跳过的通道（同一台中继只允许挂一条上行）。 */
+export interface SkippedUplink extends PlannedUplink {
+  /** 已占用该地址的通道 id。 */
+  takenBy: string;
+}
+
+/**
+ * 上行规划：**同一台中继只允许挂一条上行**，否则同一个 hostId 在同一台中继上注册两次，
+ * 双方互顶（4006 `REPLACED`）→ 两个 uplink 都自动重连 → 每秒互踢一次，手机侧表现为
+ * 「连上了中继，但数据刷新失败：connection not ready」。
+ *
+ * 为何必须抽成纯函数：这个归并在**跨不同轮次的配置应用**时也要稳定。典型场景是开机时
+ * `lanModeStatus()` 还没就绪 → 先只挂了 `local`；几秒后局域网地址出现，`lan` 也被挂上，
+ * 两条都指向 `127.0.0.1` → 如果归并只看「本轮」，旧遗留的那个不会被踢掉，就互顶了。
+ * 所以调用方要用本函数返回的 `chosen` 全集去**停掉未入选的旧实例**。
+ *
+ * 优先级 = 通道数组原序（`effectiveRelayChannels` 把 `lan` 排在 `local` 前面）。
+ */
+export function planUplinks(channels: RelayChannel[], ctx: ChannelContext): {
+  chosen: PlannedUplink[];
+  skipped: SkippedUplink[];
+} {
+  const chosen: PlannedUplink[] = [];
+  const skipped: SkippedUplink[] = [];
+  const byHostUrl = new Map<string, string>();
+  for (const channel of channels) {
+    const hostUrl = hostUrlFor(channel, ctx);
+    if (!hostUrl) continue;
+    const takenBy = byHostUrl.get(hostUrl);
+    if (takenBy) {
+      skipped.push({ channel, hostUrl, takenBy });
+      continue;
+    }
+    byHostUrl.set(hostUrl, channel.id);
+    chosen.push({ channel, hostUrl });
+  }
+  return { chosen, skipped };
+}
+
 /**
  * 配对票里给手机的地址（有序）。
  * 自动模式带**全部**（局域网优先）；手动模式只带选中那条。

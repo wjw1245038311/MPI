@@ -118,6 +118,20 @@ const ifaces = (...entries) => Object.fromEntries(entries);
     assert.match(noIface.status.lastError || "", /网卡/, "要说清是找不到网卡");
     assert.equal(calls.length, 1, "没有网卡时不该真去拉子进程");
 
+    // 准入 token（用激活码）：本机中继也绑 0.0.0.0，同网段设备不能白注册把上行顶掉。
+    const tokenCalls = [];
+    startLocalRelay({
+      entryPath: entry,
+      port: 9123,
+      hostToken: "CODE-123",
+      spawnImpl: (cmd, args, opts) => {
+        tokenCalls.push(opts);
+        return { stdout: { on() {} }, stderr: { on() {} }, on() {}, kill() {} };
+      },
+      interfaces: ifaces(iface("WLAN", "192.168.5.6")),
+    });
+    assert.equal(tokenCalls.at(-1).env.RELAY_HOST_TOKENS, "CODE-123", "hostToken 必须传给中继（否则准入是摆设）");
+
     // 脚本缺失 → 不启动
     const noEntry = startLanRelay({ entryPath: null, spawnImpl: fakeSpawn, interfaces: ifaces(iface("WLAN", "192.168.5.6")) });
     assert.equal(noEntry.status.enabled, false);

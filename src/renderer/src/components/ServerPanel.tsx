@@ -7,12 +7,16 @@
  *   · **授权**：是另一件事，放在独立的「激活授权」小窗里（设备标识 / 设备名称 / 粘贴激活码 /
  *     激活状态 / 立即激活 · 解除绑定），入口就是本页一个按钮。
  *
- * 多通道通道列表已按用户决定删除；局域网模式与本机静态目录「位置待定」，暂存在本页折叠区，
- * 不占默认版面（等用户整理清楚再决定搬去「高级设置」还是删掉）。
+ * 多通道通道列表已按用户决定删除。
+ *
+ * 2026-10 再次收敛（用户定稿）：**PWA 只部署在中继上**，所以「本机中继静态目录 / 局域网 TLS
+ * 证书 / 私钥 / TLS 端口」这四个字段从界面移除（配置字段仍读取，不覆盖老值）。
+ * 理由：网页版需要 https（`crypto.subtle`），而本机 https 需要自签证书 + 每台设备装根证书
+ * + 一个随 DHCP 变化的 IP —— 而 PWA 的设备身份绑在 origin 的 IndexedDB 上，IP 一变就是新设备。
  */
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import { unreachableForPhone, type LanModeStatus, type RelayStatus } from "../lib/remote-panel-shared";
+import { unreachableForPhone, type RelayStatus } from "../lib/remote-panel-shared";
 import { ActivationDialog } from "./ActivationDialog";
 import { Cloud, Shield } from "./icons";
 
@@ -23,12 +27,6 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
   const pushToast = useStore((s) => s.pushToast);
 
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
-  /** 本机中继状态（局域网入口 / TLS 入口）——只在高级区展示。 */
-  const [lanMode, setLanMode] = useState<LanModeStatus | null>(null);
-  const [localRelayStaticDir, setLocalRelayStaticDir] = useState("");
-  const [certDraft, setCertDraft] = useState("");
-  const [keyDraft, setKeyDraft] = useState("");
-  const [tlsPortDraft, setTlsPortDraft] = useState("9443");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [activationOpen, setActivationOpen] = useState(false);
@@ -47,16 +45,11 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
     if (!config) return;
     setCustom(Boolean((config.customRelayUrl || "").trim()));
     setRelayUrl(config.customRelayUrl || "");
-    if (typeof config.localRelayStaticDir === "string") setLocalRelayStaticDir(config.localRelayStaticDir);
-    setCertDraft(config.localRelayCertFile || "");
-    setKeyDraft(config.localRelayKeyFile || "");
-    if (config.localRelayTlsPort) setTlsPortDraft(String(config.localRelayTlsPort));
-  }, [config?.customRelayUrl, config?.localRelayStaticDir]);
+  }, [config?.customRelayUrl]);
 
   const loadRelay = async () => {
     try {
       setRelayStatus((await window.pi.remote.getRelayStatus()) as RelayStatus);
-      setLanMode((await window.pi.remote.getLanMode()) as LanModeStatus);
     } catch {
       /* 面板可能比 IPC 桥活得久一点（重载瞬间） */
     }
@@ -115,10 +108,6 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
         customRelayUrl: custom ? url : "",
         ...(custom && relayToken.trim() ? { customRelayToken: relayToken.trim() } : {}),
         ...(!custom ? { customRelayToken: "" } : {}),
-        localRelayStaticDir: localRelayStaticDir.trim(),
-        localRelayCertFile: certDraft.trim(),
-        localRelayKeyFile: keyDraft.trim(),
-        ...(/^\d+$/.test(tlsPortDraft.trim()) ? { localRelayTlsPort: Number(tlsPortDraft.trim()) } : {}),
       });
       setRelayToken("");
       await loadRelay();
@@ -264,62 +253,14 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
         </div>
       </div>
 
-      {/* ---- 高级：本机中继静态目录（自托管 PWA / 下载页）----
-          局域网模式已搬到「手机远程控制」（那是"手机怎么连"的事），这里只剩这项：
-          它决定本机中继要不要托管一份 PWA 界面（`relay.whomidas.cn` 那条 CF 隧道就是它在服务）。 */}
-      <details className="set-card">
-        <summary className="set-card-title" style={{ cursor: "pointer" }}>
-          {zh ? "高级：本机中继静态目录" : "Advanced: local relay static dir"}
-        </summary>
-        <div className="set-hint" style={{ marginTop: 8 }}>
-          {zh
-            ? "填了目录后，本机中继会用它托管 PWA 界面与下载页（把网页版放在这台电脑上，不依赖云中继）。留空 = 不托管。"
-            : "With a directory set, the local relay hosts the PWA UI and downloads from this machine (no cloud relay needed). Empty = not hosted."}
-        </div>
-        <label className="set-addprov-field wide" style={{ marginTop: 8 }}>
-          <span>{zh ? "静态目录" : "Static directory"}</span>
-          <input
-            className="set-input"
-            value={localRelayStaticDir}
-            onChange={(event) => setLocalRelayStaticDir(event.target.value)}
-            placeholder={zh ? "例如 E:\MyWorkspace\Software\cloudflared\static" : "e.g. E:\path\to\static"}
-            spellCheck={false}
-          />
-        </label>
-        <div className="set-hint" style={{ marginTop: 12, fontWeight: 600 }}>
-          {zh ? "局域网 TLS（https 页面走局域网直连的前提）" : "LAN TLS (required for LAN direct from https pages)"}
-        </div>
-        <div className="set-hint">
-          {zh
-            ? "证书与私钥都填（PEM 路径）时，本机中继会在下面这个端口上同时提供 wss 入口：https 页面里的浏览器禁止连明文 ws，只有 wss 才能走局域网。证书由自签 CA 签发，使用前需在各设备上安装一次根证书。"
-            : "With both files set (PEM paths), the local relay also serves wss on the port below: browsers on https pages refuse plain ws, so only wss can stay on the LAN. The cert is issued by the self-signed CA — install that root once per device."}
-        </div>
-        <label className="set-addprov-field wide">
-          <span>{zh ? "证书（.crt）" : "Certificate (.crt)"}</span>
-          <input className="set-input" value={certDraft} onChange={(e) => setCertDraft(e.target.value)} spellCheck={false} />
-        </label>
-        <label className="set-addprov-field wide">
-          <span>{zh ? "私钥（.key）" : "Private key (.key)"}</span>
-          <input className="set-input" value={keyDraft} onChange={(e) => setKeyDraft(e.target.value)} spellCheck={false} />
-        </label>
-        <label className="set-addprov-field wide">
-          <span>{zh ? "TLS 端口" : "TLS port"}</span>
-          <input className="set-input" value={tlsPortDraft} onChange={(e) => setTlsPortDraft(e.target.value)} spellCheck={false} />
-        </label>
-        {(lanMode?.tlsUrls?.length ?? 0) > 0 && (
-          <div className="set-hint" style={{ wordBreak: "break-all" }}>
-            {zh ? "局域网 TLS 入口：" : "LAN TLS entry: "}
-            {(lanMode?.tlsUrls || []).map((url) => (
-              <div key={url}><code>{url}</code></div>
-            ))}
-          </div>
-        )}
-        <div className="set-diag-btns" style={{ marginTop: 8 }}>
-          <button className="set-btn ghost" onClick={() => void saveRelay()} disabled={saving}>
-            {zh ? "保存" : "Save"}
-          </button>
-        </div>
-      </details>
+      {/* 本机托管网页版（静态目录 / 局域网 TLS 证书 / 私钥 / TLS 端口）已按定稿移除：
+          PWA 只部署在中继上，本机再提供 https 页面只会让设备列表随 DHCP 变化不断增长。
+          四个配置字段仍在 config 里读取（老配置不报错），但界面不再编辑、保存时也不回写。 */}
+      <div className="set-hint">
+        {zh
+          ? "网页版由中继服务器提供：在「手机远程控制」里复制链接或扫码，即可在其它电脑的浏览器打开。本机不再托管网页版。"
+          : "The web UI is served by the relay: copy the link or scan the code under Phone remote control to open it on another computer. This machine no longer hosts the web UI."}
+      </div>
 
       {activationOpen && <ActivationDialog language={language} onClose={() => setActivationOpen(false)} />}
     </div>

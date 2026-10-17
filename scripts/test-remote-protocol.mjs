@@ -105,8 +105,13 @@ for (const stunUrl of [
 
 const remotePanel = readFileSync(resolve(root, "src", "renderer", "src", "components", "RemotePanel.tsx"), "utf8");
 // 面板只展示中继连接状态（WebRTC/信令卡已删；后端代码仍在，只是没有 UI 入口）。
-assert.match(remotePanel, /Relay connection/);
-assert.doesNotMatch(remotePanel, /Signal connection|Signal settings|Enable Signal/);
+// 2026-10：状态压成一行（就绪/连接中/未就绪）+ 「诊断」折叠，不再有独立的“Relay connection”卡片。
+assert.match(remotePanel, /就绪/, "面板要有一行中继状态摘要");
+assert.match(remotePanel, /诊断/, "地址/开关/原始错误码要收进诊断折叠");
+assert.doesNotMatch(remotePanel, /Relay connection|Signal connection|Signal settings|Enable Signal/);
+// 原始协议码不得直接拼到状态行（`已连接 · DEVICE_OFFLINE` 就是这么拼出来的）：
+// 界面只用主进程翻好的人话 `lastErrorText`，且连接已建立时不显示任何错误文案。
+assert.doesNotMatch(remotePanel, /relayStatus\?\.lastError\b/, "状态行不得直接渲染原始错误码");
 assert.doesNotMatch(remotePanel, />Host ID<|>Transport<|>Last error<|STUN URLs|stunText/);
 // 手机侧地址：2026-10-16 起由「设置 → 服务器」负责（RemotePanel 只显示“手机将连接”的最终地址），
 // 仍必须在给手机 tailnet/内网地址时报警（否则手机端配对必失败）。

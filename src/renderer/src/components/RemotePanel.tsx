@@ -1,24 +1,28 @@
 /**
- * 「Android 手机远程控制」面板（侧栏弹层）。
+ * 「Android 手机远程控制」面板 —— 2026-10 定稿形状：**只有两块**。
  *
- * 2026-10-16 拆分：**中继/服务器相关的一切已搬到「设置 → 服务器」分栏**（`ServerPanel.tsx`）——
- * 通道列表、选路模式、授权码、局域网模式、本机静态目录都在那边。这里只保留「跟手机有关的事」：
- * 连接状态摘要、手机 App 下载、配对二维码、待批准/已信任设备。
+ *   ① 配对     ：一个二维码（打开即生成）+ 倒计时 + 「另一台电脑」复制链接 + 重新生成
+ *   ② 设备管理 ：待批准（有才出现）+ 已信任设备（在线优先）
  *
- * 为什么分：这块面板原来 800 多行，转发地址、自更新源、`token` 草稿混在一起，用户找不到重点，
- * 也让「更新源」跟「手机面板」互相绑架（没配手机通道 → 永远查不到更新）。
+ * 其余一切都收进顶部那一行状态里的「诊断」折叠：手机将连的地址、内网入口、局域网开关、
+ * 同名替换开关、转发设置入口、原始错误码。
+ *
+ * 为什么这么改（上一版是 5 张平铺卡片）：
+ *   · 转发地址/局域网/App 下载三块对"配好之后"的用户毫无用处，却占了大半屏；
+ *   · 「扫码将打开：（当前没有可用的网页入口）」是一段把系统配置失败甩给用户的红字，
+ *     而且它和下面的二维码**判定源不同**（pairingPageUrl vs 三级兜底），会自相矛盾；
+ *   · 两个复选框的默认值都等于唯一选择（自动批准 / 同名替换都默认 true），勾选框是噪音。
+ *
+ * 服务器（转发地址 / 授权码）仍在「设置 → 服务器」，这里只留一个诊断里的入口。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { useStore } from "../store";
 import { shortDeviceId } from "../../../shared/remote-device-match";
 import {
   pairingScanUrl,
   pairingUri,
-  relayOrigin,
-  securePageOrigin,
   statusClass,
-  statusLabel,
   unreachableForPhone,
   type Pairing,
   type PhoneAppInfo,
@@ -26,7 +30,10 @@ import {
   type RelayStatus,
   type RemoteStatus,
 } from "../lib/remote-panel-shared";
-import { Bell, Check, Cloud, Gauge, Plug, QrCode, Smartphone } from "./icons";
+import { Bell, Check, Cloud, QrCode } from "./icons";
+
+/** 二维码尺寸（屏幕像素）：比上一版小一档，配对卡不再压满整屏。 */
+const QR_SIZE = 220;
 
 export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const zh = language === "zh";
@@ -36,26 +43,31 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [qr, setQr] = useState<string | null>(null);
-  /** 配对二维码的内容：有中继时是打开中继网页的 https 链接，无中继时是 mpi:// 链接。 */
+  /** 配对链接：手机扫它、另一台电脑粘贴它。 */
   const [scanUrl, setScanUrl] = useState<string | null>(null);
-  /** 扫码后是否免去桌面端再点一次「允许」（票=凭据，默认开）。 */
-  const [autoApprove, setAutoApprove] = useState(true);
-  /** 同名且离线的旧绑定是否在配对时被替换（= config.remoteReplaceSameNameOffline）。 */
-  const [replaceSameName, setReplaceSameName] = useState(true);
   const [phoneApp, setPhoneApp] = useState<PhoneAppInfo | null>(null);
-  /** 下载码只留一个：中继（主）；GitHub 降级为一行文本备用地址。地址只放进 <img title>，不占版面。 */
-  const [appQr, setAppQr] = useState<string | null>(null);
   const [relayStatus, setRelayStatus] = useState<RelayStatus | null>(null);
-  /** 本次配对票里实际会告诉手机的地址（主进程算好；由「服务器」决定）。 */
   const [phoneRelayUrl, setPhoneRelayUrl] = useState("");
-  /** 生效来源：内置服务器（地址不外显，只给标签）/ 自定义中继（显示用户自己的地址）。 */
   const [relaySource, setRelaySource] = useState<"builtin" | "custom">("builtin");
-  /** 二维码会指向的网页入口（主进程算好；null = 没有可用的 https 页面入口）。 */
+  /** 二维码指向的 https 页面入口（主进程算好；null = 没有可用的网页入口）。 */
   const [pairingPageUrl, setPairingPageUrl] = useState<string | null>(null);
-  /** 局域网直连模式（手机同网段时走最快那条路；开关在这里，因为它是"手机怎么连"的事）。 */
+  /** 该入口的探测结果（false = 中继暂时不可达，入口仍可用但未确认）。 */
+  const [pageVerified, setPageVerified] = useState(false);
+  /** 本机快路径入口（同一局域网 / tailnet；仅当本机确实托管了 PWA 时给）。 */
+  const [localPageUrl, setLocalPageUrl] = useState<string | null>(null);
+  /** 本机 CA 证书路径（装一次根证书就不再弹警告）。 */
+  const [localCaFile, setLocalCaFile] = useState<string | null>(null);
+  /** 本机入口对应的配对链接（同一张票，只换 origin 前缀）。 */
+  const [localScanUrl, setLocalScanUrl] = useState<string | null>(null);
   const [lanMode, setLanMode] = useState<LanModeStatus | null>(null);
   const [lanBusy, setLanBusy] = useState(false);
+  /** 同名离线替换（默认 true；设置项本身没变，只是从主界面挪进诊断）。 */
+  const [replaceSameName, setReplaceSameName] = useState(true);
   const [busy, setBusy] = useState(false);
+  /** 诊断折叠（默认收起）。 */
+  const [diagOpen, setDiagOpen] = useState(false);
+  /** 票据剩余时间每秒刷新。 */
+  const [now, setNow] = useState(() => Date.now());
 
   const refresh = async () => {
     try {
@@ -69,6 +81,9 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       setPhoneRelayUrl(relay.phoneRelayUrl || "");
       setRelaySource(relay.source === "custom" ? "custom" : "builtin");
       setPairingPageUrl(relay.pairingPageUrl ?? null);
+      setPageVerified(Boolean(relay.webEntryVerified));
+      setLocalPageUrl(relay.localPageUrl ?? null);
+      setLocalCaFile(relay.localCaFile ?? null);
     } catch {
       /* same reload race */
     }
@@ -93,7 +108,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   useEffect(() => {
     void refresh();
     void (async () => {
-      // 「同名离线自动替换」开关的当前值存在 config 里（不在 remote 状态里）
+      // 「同名离线自动替换」的当前值存在 config 里（不在 remote 状态里）
       try {
         const cfg = (await window.pi.app.getConfig()) as { remoteReplaceSameNameOffline?: boolean };
         if (typeof cfg?.remoteReplaceSameNameOffline === "boolean") setReplaceSameName(cfg.remoteReplaceSameNameOffline);
@@ -102,9 +117,11 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       }
     })();
     const timer = window.setInterval(() => void refresh(), 1500);
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
     const off = window.pi.remote.onPairingRequest(() => void refresh());
     return () => {
       window.clearInterval(timer);
+      window.clearInterval(tick);
       off();
     };
   }, []);
@@ -125,282 +142,362 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     };
   }, [relayStatus?.relayUrl]);
 
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      // 只发中继源的码。中继清单不可达（stale）时不生成码——下面的 GitHub 文本地址兜底。
-      const url = phoneApp?.ok && !phoneApp.stale ? phoneApp.url : "";
-      const image = url
-        ? await QRCode.toDataURL(url, { width: 172, margin: 1, errorCorrectionLevel: "M" }).catch(() => null)
-        : null;
-      if (alive) setAppQr(image);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [phoneApp]);
+  /**
+   * 网页入口：**只有一个来源**（主进程探测过的中继 origin）。
+   * 不再做「本机 TLS → 中继」那种多源兜底 —— 那个兜底正是“红字说没入口、二维码却有入口”的起因。
+   */
+  const entryOrigin = pairingPageUrl;
 
   const createPairing = async () => {
     setBusy(true);
     try {
-      const next = (await window.pi.remote.createPairing(autoApprove)) as Pairing;
-      // 二维码的**网址**优先用给手机的地址（公网）：用系统相机/浏览器扫时也不该去打开打不开的
-      // tailnet 页（典型症状：浏览器 timeout，而中继日志里一条 pair.request 都没有）。
-      // App 内「扫码配对」只读 payload，用哪个网址都一样。
-      // 二维码指向**能打开页面**的 https 入口（主进程算好的 pairingPageUrl：局域网 TLS → CF → 自定义）；
-      // 云中继不再托管 PWA，所以绝不把它的地址当页面入口。兜底才用票里首个 wss。
-      const pageOrigin =
-        relayStatus?.pairingPageUrl ??
-        securePageOrigin(relayStatus?.phoneTicketAddresses ?? [phoneRelayUrl]) ??
-        relayOrigin(phoneRelayUrl) ??
-        relayOrigin(next.relayUrl || "");
-      const url = pairingScanUrl(next, pageOrigin);
+      // 票本身就是凭据（5 分钟过期 + 只能换一次设备身份），所以固定自动批准。
+      const next = (await window.pi.remote.createPairing(true)) as Pairing;
+      const url = pairingScanUrl(next, entryOrigin);
       setPairing(next);
       setScanUrl(url);
-      setQr(await QRCode.toDataURL(url, { width: 260, margin: 1, errorCorrectionLevel: "M" }));
+      // 本机入口用**同一张票**，只把 origin 前缀换成本机 https（两条链接互通）。
+      setLocalScanUrl(localPageUrl ? pairingScanUrl(next, localPageUrl) : null);
+      setNow(Date.now());
+      setQr(await QRCode.toDataURL(url, { width: QR_SIZE, margin: 1, errorCorrectionLevel: "M" }));
     } finally {
       setBusy(false);
     }
   };
 
+  // 打开即生成一次（服务器状态还没到位时先等第一轮 refresh，否则会退化成一串 mpi:// 链接）。
+  const autoGenerated = useRef(false);
+  useEffect(() => {
+    if (autoGenerated.current || !relayStatus) return;
+    autoGenerated.current = true;
+    void createPairing();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relayStatus]);
+
   const copyScanUrl = async () => {
-    if (!scanUrl) return;
+    await copyLink(scanUrl, zh ? "链接已复制" : "Link copied");
+  };
+
+  const copyLocalScanUrl = async () => {
+    await copyLink(localScanUrl, zh ? "本机入口链接已复制" : "Local entry link copied");
+  };
+
+  const copyLink = async (value: string | null, okText: string) => {
+    if (!value) return;
     try {
-      await navigator.clipboard.writeText(scanUrl);
-      pushToast("success", zh ? "链接已复制" : "Link copied");
+      await navigator.clipboard.writeText(value);
+      pushToast("success", okText);
     } catch {
       pushToast("error", zh ? "复制失败" : "Copy failed");
     }
   };
 
+  /** 没有扫码能力时（例如把链接发给自己）——App 的粘贴框只认 mpi:// 载荷。 */
+  const copyMpiUri = async () => {
+    if (!pairing) return;
+    try {
+      await navigator.clipboard.writeText(pairingUri(pairing));
+      pushToast("success", zh ? "App 链接已复制" : "App link copied");
+    } catch {
+      pushToast("error", zh ? "复制失败" : "Copy failed");
+    }
+  };
+
+  const remaining = pairing ? Math.max(0, Math.floor((pairing.expiresAt - now) / 1000)) : 0;
+  const expired = Boolean(pairing) && remaining <= 0;
+  const countdown = `${String(Math.floor(remaining / 60)).padStart(1, "0")}:${String(remaining % 60).padStart(2, "0")}`;
+
+  const health = (() => {
+    const state = relayStatus?.state || "disabled";
+    if (state === "connected") return { tone: "connected", text: zh ? "就绪" : "Ready" };
+    if (state === "connecting") return { tone: "connecting", text: zh ? "连接中" : "Connecting" };
+    return { tone: "error", text: zh ? "未就绪" : "Not ready" };
+  })();
+  const healthDetail = relayStatus?.state === "connected" ? "" : (relayStatus?.lastErrorText || "").trim();
+  const sourceLabel = relaySource === "builtin" ? (zh ? "内置服务器" : "built-in server") : zh ? "自定义中继" : "custom relay";
+
+  const devices = status?.devices ?? [];
+  const online = devices.filter((device) => device.authenticated);
+  const offline = devices.filter((device) => !device.authenticated);
+  const pending = status?.pendingPairings ?? [];
+
   return (
     <div className="set-remote-stack">
-      <div className="set-card">
-        <div className="set-card-head">
-          <span className="set-card-icon"><Smartphone size={14} /></span>
-          <div className="set-card-title">{zh ? "Android 手机远程控制" : "Android remote companion"}</div>
-        </div>
-        <div className="set-hint">
-          {zh
-            ? "手机经服务器（或局域网直连）连到本机；中继只转发不解析，提示词、代码、会话与文件端到端加密。"
-            : "Phones reach this machine through the server (or over the LAN); the relay only forwards, prompts, code, sessions and files stay end-to-end encrypted."}
-        </div>
-        <div className="set-remote-status" aria-live="polite">
-          <span className="set-diag-k">{zh ? "中继连接状态" : "Relay connection"}</span>
-          <span className={`set-remote-status-value ${statusClass(relayStatus?.state || "disabled")}`}>
-            <span className="set-remote-status-dot" aria-hidden="true" />
-            {statusLabel(relayStatus?.state || "disabled", zh)}
-            {relayStatus?.lastError ? ` · ${relayStatus.lastError}` : ""}
-          </span>
-        </div>
-        <div className="set-hint" style={{ wordBreak: "break-all" }}>
-          {zh ? "手机将连接：" : "Phone connects to: "}
-          {relaySource === "builtin" ? (
-            <span>{zh ? "内置服务器（实际地址含在配对二维码里）" : "Built-in server (actual address is in the pairing QR)"}</span>
-          ) : (
-            <code>{phoneRelayUrl || "—"}</code>
-          )}
-        </div>
-        {/* 服务器（转发地址 / 授权码 / 局域网 / 多通道）在设置里，这里只给入口 —— 
-            面板从 800 行瘦下来就靠这一刀：本面板不再承担转发地址的编辑。 */}
-        <div className="set-diag-btns" style={{ marginTop: 8 }}>
-          <button className="set-btn ghost" onClick={() => openSettings("server")}>
-            <Cloud size={13} style={{ verticalAlign: "-2px", marginRight: 6 }} />
-            {zh ? "打开「设置 → 服务器」" : "Open Settings → Server"}
-          </button>
-        </div>
-        <div className="set-hint">
-          {zh
-            ? "转发地址、授权码（内置服务器）、自定义中继、局域网模式与多通道都在那一栏。"
-            : "Relay address, access code (built-in server), custom relays, LAN mode and multi-channel setup all live there."}
-        </div>
+      {/* ---- 状态：一行，不是卡片（"配好之后"的唯一常驻信息） ---- */}
+      <div className="set-remote-line" aria-live="polite">
+        <span className={`set-remote-status-value ${statusClass(relayStatus?.state || "disabled")}`}>
+          <span className="set-remote-status-dot" aria-hidden="true" />
+          {health.text} · {sourceLabel}
+          {healthDetail ? ` · ${healthDetail}` : ""}
+        </span>
+        <button className="set-btn ghost set-btn-sm" onClick={() => setDiagOpen((open) => !open)}>
+          {diagOpen ? (zh ? "收起诊断" : "Hide details") : zh ? "诊断" : "Details"}
+        </button>
       </div>
 
-      <div className="set-card">
-        <div className="set-card-head">
-          <span className="set-card-icon"><Gauge size={14} /></span>
-          <div className="set-card-title">{zh ? "局域网直连（同一网段时最快）" : "LAN direct (fastest on the same network)"}</div>
-        </div>
-        <div className="set-hint">
-          {zh
-            ? "开启后，手机与这台电脑在同一网段时直接走内网（不经公网中继，更快、更省流量）；连不上时自动回落到中继服务器。配对二维码里会带上全部内网候选地址，手机按顺序试。"
-            : "When on, a phone on the same network connects directly over the LAN (faster, no relay traffic); it falls back to the relay server when unreachable. The pairing QR carries every LAN candidate."}
-        </div>
-        <div className="set-remote-toggle-row">
-          <div className="set-remote-toggle-copy">
-            <span className="set-remote-toggle-label">{zh ? "局域网直连" : "LAN direct"}</span>
-            <span className="set-remote-toggle-state">{lanMode?.advertiseLan ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}</span>
-          </div>
-          <button
-            type="button"
-            className={`set-toggle ${lanMode?.advertiseLan ? "on" : ""}`}
-            role="switch"
-            aria-checked={!!lanMode?.advertiseLan}
-            aria-label={zh ? "切换局域网直连" : "Toggle LAN direct"}
-            onClick={() => void toggleLanMode()}
-            disabled={lanBusy}
-          >
-            <span className="set-toggle-knob" />
-          </button>
-        </div>
-        {(lanMode?.urls?.length ?? 0) > 0 && (
+      {diagOpen && (
+        <div className="set-card set-card-diag">
           <div className="set-hint" style={{ wordBreak: "break-all" }}>
-            {zh ? "手机可用的内网入口：" : "LAN entry points: "}
-            {(lanMode?.urls || (lanMode?.url ? [lanMode.url] : [])).map((url) => (
-              <div key={url}><code>{url}</code></div>
-            ))}
-          </div>
-        )}
-        {lanMode?.lastError && <div className="set-hint" style={{ color: "#c0392b" }}>{lanMode.lastError}</div>}
-      </div>
-
-      <div className="set-card">
-        <div className="set-card-head">
-          <span className="set-card-icon"><Plug size={14} /></span>
-          <div className="set-card-title">{zh ? "手机 App（安卓）" : "Phone app (Android)"}</div>
-        </div>
-        {phoneApp?.ok ? (
-          <div className="set-remote-pairing">
-            {appQr ? (
-              <div className="set-app-qrs">
-                <div className="set-app-qr">
-                  <img src={appQr} alt={zh ? "下载安卓 App" : "Download the Android app"} width={172} height={172} title={phoneApp.url} />
-                </div>
-              </div>
+            {zh ? "手机将连接：" : "Phone connects to: "}
+            {relaySource === "builtin" ? (
+              <span>{zh ? "内置服务器（地址含在配对链接里）" : "Built-in server (address is inside the pairing link)"}</span>
             ) : (
-              <div className="set-hint">{zh ? "中继暂不可达，用下面的备用地址" : "Relay unreachable — use the fallback below"}</div>
-            )}
-            {phoneApp.github && (
-              <div className="set-hint">
-                <a href={phoneApp.github} target="_blank" rel="noreferrer">{zh ? "GitHub 下载" : "Download from GitHub"}</a>
-              </div>
+              <code>{phoneRelayUrl || "—"}</code>
             )}
           </div>
-        ) : (
-          <div className="set-hint">
-            {zh
-              ? `暂未取到安装包信息${phoneApp && !phoneApp.ok ? `（${phoneApp.error}）` : ""}`
-              : `No package info${phoneApp && !phoneApp.ok ? ` (${phoneApp.error})` : ""}.`}
+          <div className="set-hint" style={{ wordBreak: "break-all" }}>
+            {zh ? "内网入口：" : "LAN entry: "}
+            {lanMode?.urls?.length ? (
+              lanMode.urls.map((url) => <div key={url}><code>{url}</code></div>)
+            ) : (
+              <span>{zh ? "未开启（同一 Wi-Fi 下的手机会走服务器）" : "off (phones on the same Wi-Fi go through the server)"}</span>
+            )}
           </div>
-        )}
-      </div>
+          {lanMode?.lastError && <div className="set-hint" style={{ color: "#c0392b" }}>{lanMode.lastError}</div>}
+          <div className="set-remote-toggle-row">
+            <div className="set-remote-toggle-copy">
+              <span className="set-remote-toggle-label">{zh ? "局域网直连" : "LAN direct"}</span>
+              <span className="set-remote-toggle-state">{lanMode?.advertiseLan ? (zh ? "已开启" : "On") : zh ? "已关闭" : "Off"}</span>
+            </div>
+            <button
+              type="button"
+              className={`set-toggle ${lanMode?.advertiseLan ? "on" : ""}`}
+              role="switch"
+              aria-checked={!!lanMode?.advertiseLan}
+              aria-label={zh ? "切换局域网直连" : "Toggle LAN direct"}
+              onClick={() => void toggleLanMode()}
+              disabled={lanBusy}
+            >
+              <span className="set-toggle-knob" />
+            </button>
+          </div>
+          <label className="set-check" style={{ marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={replaceSameName}
+              onChange={async (e) => {
+                const next = e.target.checked;
+                setReplaceSameName(next);
+                await window.pi.app.setConfig({ remoteReplaceSameNameOffline: next });
+              }}
+            />
+            <span>{zh ? "同名且离线的旧设备在配对时被替换" : "Replace same-named offline device on pairing"}</span>
+          </label>
+          {healthDetail && <div className="set-hint" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{healthDetail}</div>}
+          <div className="set-diag-btns" style={{ marginTop: 10 }}>
+            <button className="set-btn ghost" onClick={() => openSettings("server")}>
+              <Cloud size={13} style={{ verticalAlign: "-2px", marginRight: 6 }} />
+              {zh ? "转发设置（服务器 / 授权码）" : "Relay settings (server / access code)"}
+            </button>
+            <button className="set-btn ghost" onClick={() => void copyMpiUri()} disabled={!pairing || expired}>
+              {zh ? "复制 mpi:// 链接（粘贴进 App）" : "Copy mpi:// link (paste into app)"}
+            </button>
+          </div>
+        </div>
+      )}
 
+      {/* ---- ① 配对 ---- */}
       <div className="set-card">
         <div className="set-card-head">
           <span className="set-card-icon"><QrCode size={14} /></span>
-          <div className="set-card-title">{zh ? "配对手机" : "Pair a phone"}</div>
+          <div className="set-card-title">{zh ? "配对" : "Pair a device"}</div>
         </div>
-        <div className="set-hint">
-          {zh
-            ? "扫码打开中继网页并自动配对（安卓 App 里也可以点「扫码配对」扫同一个码）。二维码含 5 分钟有效的票据。"
-            : "Scanning opens the relay page and pairs automatically (the Android app's own scanner accepts the same code). The ticket expires after five minutes."}
-        </div>
-        <label className="set-check" style={{ marginTop: 10 }} title={zh ? "票在有效期内即代表你刚刚主动发起配对" : "The ticket itself is the credential"}>
-          <input type="checkbox" checked={autoApprove} onChange={(e) => setAutoApprove(e.target.checked)} />
-          <span>{zh ? "扫码后自动批准（无需在桌面点允许）" : "Auto-approve after scan"}</span>
-        </label>
-        <label
-          className="set-check"
-          style={{ marginTop: 6 }}
-          title={
-            zh
-              ? "手机端每换一个网址打开就是一套新的浏览器存储 → 新设备身份；打开它就用同名且离线的旧记录替换（只换最久没露面的那条）"
-              : "Each different web address means a new browser storage and thus a new device identity; replacing the same-named offline record keeps the list from filling up"
-          }
-        >
-          <input
-            type="checkbox"
-            checked={replaceSameName}
-            onChange={async (e) => {
-              const next = e.target.checked;
-              setReplaceSameName(next);
-              await window.pi.app.setConfig({ remoteReplaceSameNameOffline: next });
-            }}
-          />
-          <span>{zh ? "同名离线设备自动替换（避免重复绑定）" : "Replace same-named offline device"}</span>
-        </label>
-        <div className="set-hint" style={{ wordBreak: "break-all" }}>
-          {zh ? "扫码将打开：" : "The QR opens: "}
-          {pairingPageUrl ? <code>{pairingPageUrl}</code> : <strong>{zh ? "（当前没有可用的网页入口）" : "(no page entry available)"}</strong>}
-        </div>
-        {!pairingPageUrl && (
-          <div className="set-hint" style={{ color: "#c0392b" }}>
-            {zh
-              ? "云中继只转发、不托管网页版，所以要先有一条能打开页面的入口：在「转发设置 → 高级」填好局域网 TLS 证书，设备打开 https://<内网IP>:9443/ 即可（离开局域网时用已装的安卓 App）。"
-              : "The cloud relay only forwards and no longer hosts the web UI. Configure the LAN TLS certs under Relay settings → Advanced, then open https://<LAN-IP>:9443/ on the device (use the installed Android app when away from the LAN)."}
+
+        <div className="set-pair-body">
+          <div className={`set-pair-qr${expired ? " faded" : ""}`}>
+            {qr ? (
+              <img src={qr} alt={zh ? "配对二维码" : "Pairing QR code"} width={QR_SIZE} height={QR_SIZE} />
+            ) : (
+              <div className="set-pair-qr-skeleton">{busy ? (zh ? "生成中…" : "Generating…") : "—"}</div>
+            )}
           </div>
-        )}
-        <button className="set-btn primary" style={{ marginTop: 12 }} onClick={createPairing} disabled={busy}>
-          {zh ? "生成配对二维码" : "Generate pairing QR"}
-        </button>
-        {relaySource === "custom" && unreachableForPhone(phoneRelayUrl) && (
-          <div className="set-hint" style={{ color: "#c0392b" }}>
-            {zh
-              ? "⚠ 这是 tailnet / 内网地址——手机（没有 Tailscale、不在同一网段）连不上，扫描后会卡在连接超时。要到外网用就关掉「局域网模式」并在「设置 → 服务器」里换成公网地址；要局域网直连就把手机连到同一 WiFi。"
-              : "⚠ This is a tailnet/private address — a phone without Tailscale or outside that network cannot reach it and will time out. Turn off LAN mode and set a public address in Settings → Server, or join the phone to the same Wi-Fi."}
-          </div>
-        )}
-        {pairing && (
-          <div className="set-remote-pairing">
-            {qr && <img src={qr} alt={zh ? "手机配对二维码" : "Phone pairing QR code"} width={260} height={260} />}
-            {scanUrl && <div className="set-hint" style={{ wordBreak: "break-all" }}>{scanUrl}</div>}
-            <div className="set-diag-btns">
-              <button className="set-btn ghost" onClick={() => void copyScanUrl()}>{zh ? "复制链接" : "Copy link"}</button>
-              {scanUrl?.startsWith("http") && (
-                <a className="set-btn ghost" style={{ textDecoration: "none" }} href={scanUrl} target="_blank" rel="noreferrer">
-                  {zh ? "在浏览器打开" : "Open in browser"}
-                </a>
-              )}
+
+          <div className="set-pair-side">
+            <div className="set-pair-row">
+              <span className="set-pair-k">{zh ? "手机" : "Phone"}</span>
+              <div className="set-pair-v">{zh ? "扫码即可，无需再点确认" : "Scan it — nothing else to confirm"}</div>
             </div>
-            <details>
-              <summary className="set-hint">{zh ? "粘贴到安卓 App（mpi:// 链接）" : "Paste into the Android app (mpi:// link)"}</summary>
-              <textarea className="set-input" rows={4} readOnly value={pairingUri(pairing)} />
-            </details>
-            <div className="set-hint">{zh ? `指纹：${pairing.fingerprint}` : `Fingerprint: ${pairing.fingerprint}`}</div>
+
+            <div className="set-pair-row">
+              <span className="set-pair-k">{zh ? "另一台电脑" : "Another computer"}</span>
+              <div className="set-pair-v">
+                {entryOrigin ? (
+                  <>
+                    <div className="set-pair-entry">
+                      <span className="set-pair-scope">{zh ? "任何网络" : "Any network"}</span>
+                      <code className="set-pair-url">{entryOrigin}</code>
+                      <button className="set-btn ghost set-btn-sm" onClick={() => void copyScanUrl()} disabled={!scanUrl || expired}>
+                        {zh ? "复制链接" : "Copy"}
+                      </button>
+                    </div>
+                    {localPageUrl && (
+                      <div className="set-pair-entry" style={{ marginTop: 6 }}>
+                        <span className="set-pair-scope">{zh ? "同网段更快" : "LAN / tailnet"}</span>
+                        <code className="set-pair-url">{localPageUrl}</code>
+                        <button className="set-btn ghost set-btn-sm" onClick={() => void copyLocalScanUrl()} disabled={!localScanUrl || expired}>
+                          {zh ? "复制" : "Copy"}
+                        </button>
+                      </div>
+                    )}
+                    <div className="set-hint" style={{ marginTop: 4 }}>
+                      {zh
+                        ? "粘贴到那台电脑的浏览器即可；首次会有证书提示，点「继续访问」"
+                        : "Paste it into that computer's browser; accept the certificate warning on first open"}
+                      {localCaFile && (
+                        <>
+                          {" · "}
+                          <a
+                            href="#"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              void window.pi.settings.openPath(localCaFile);
+                            }}
+                          >
+                            {zh ? "装一次根证书可免提示" : "install the root cert once"}
+                          </a>
+                        </>
+                      )}
+                      {localPageUrl && (
+                        <div style={{ marginTop: 2 }}>
+                          {zh ? "（本机入口换了网络就打不开，也不要频繁换：每换一个地址就是一台新设备）" : "(the local entry only works on that network — and every new address means a new device)"}
+                        </div>
+                      )}
+                      {!pageVerified && (
+                        <div style={{ color: "#b26a00", marginTop: 2 }}>
+                          {zh ? "中继暂未响应，上面的中继入口未验证" : "Relay not responding — the any-network entry is unverified"}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <span className="set-hint">
+                    {zh ? "暂不可用：还没配中继服务器（去「诊断」里打开转发设置）" : "Unavailable: no relay configured (open Relay settings under Details)"}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="set-pair-row">
+              <span className="set-pair-k">{zh ? "有效期" : "Expires"}</span>
+              <div className="set-pair-v">
+                {pairing ? (
+                  <span className="set-pair-countdown">
+                    {expired ? (zh ? "已过期，请重新生成" : "Expired — generate again") : countdown}
+                  </span>
+                ) : (
+                  <span className="set-hint">—</span>
+                )}
+                <button className="set-btn ghost set-btn-sm" style={{ marginLeft: 8 }} onClick={() => void createPairing()} disabled={busy}>
+                  {busy ? (zh ? "生成中…" : "Generating…") : zh ? "重新生成" : "Regenerate"}
+                </button>
+              </div>
+            </div>
+
+            {phoneApp?.ok && (phoneApp.url || phoneApp.github) && (
+              <div className="set-hint" style={{ marginTop: 2 }}>
+                {zh ? "还没装 App？" : "No app yet? "}
+                {phoneApp.url && (
+                  <a href={phoneApp.url} target="_blank" rel="noreferrer">
+                    {zh ? "下载安卓安装包" : "Download the Android app"}
+                  </a>
+                )}
+                {phoneApp.url && phoneApp.github ? " · " : null}
+                {phoneApp.github && (
+                  <a href={phoneApp.github} target="_blank" rel="noreferrer">
+                    GitHub
+                  </a>
+                )}
+              </div>
+            )}
+
+            {relaySource === "custom" && unreachableForPhone(phoneRelayUrl) && (
+              <div className="set-hint" style={{ color: "#c0392b" }}>
+                {zh
+                  ? "⚠ 当前是 tailnet / 内网地址，外网设备连不上。"
+                  : "⚠ This is a tailnet/private address — devices outside that network cannot reach it."}
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
-      {!!status?.pendingPairings.length && (
-        <div className="set-card">
-          <div className="set-card-head">
-            <span className="set-card-icon"><Bell size={14} /></span>
-            <div className="set-card-title">{zh ? "待批准设备" : "Pending devices"}</div>
-          </div>
-          {status.pendingPairings.map((device) => (
-            <div className="set-diag-btns" key={device.connectionId}>
-              <span>{device.name} · {device.deviceId}</span>
-              <button className="set-btn primary" onClick={async () => { await window.pi.remote.approvePairing(device.connectionId); await refresh(); }}>
-                {zh ? "允许" : "Approve"}
-              </button>
-              <button className="set-btn ghost" onClick={async () => { await window.pi.remote.rejectPairing(device.connectionId); await refresh(); }}>
-                {zh ? "拒绝" : "Reject"}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {!!status?.devices.length && (
-        <div className="set-card">
-          <div className="set-card-head">
-            <span className="set-card-icon"><Check size={14} /></span>
-            <div className="set-card-title">{zh ? "已信任设备" : "Trusted devices"}</div>
-          </div>
-          {status.devices.map((device) => (
-            <div className="set-diag-btns" key={device.deviceId}>
-              <span>
-                {device.name}
-                <span className="set-diag-k"> · #{shortDeviceId(device.deviceId)} · </span>
-                {device.authenticated ? (zh ? "已连接" : "connected") : zh ? "离线" : "offline"}
+      {/* ---- ② 设备管理（待批准 + 已信任） ---- */}
+      <div className="set-card">
+        <div className="set-card-head">
+          <span className="set-card-icon"><Check size={14} /></span>
+          <div className="set-card-title">
+            {zh ? "已信任设备" : "Trusted devices"}
+            {devices.length > 0 && (
+              <span className="set-diag-k" style={{ fontWeight: 400, marginLeft: 8, fontSize: 12 }}>
+                {zh ? `${online.length} 在线 / ${offline.length} 离线` : `${online.length} online / ${offline.length} offline`}
               </span>
-              <button className="set-btn ghost" onClick={async () => { await window.pi.remote.revokeDevice(device.deviceId); await refresh(); }}>
-                {zh ? "撤销" : "Revoke"}
+            )}
+          </div>
+        </div>
+
+        {pending.length > 0 && (
+          <div className="set-dev-pending">
+            <div className="set-hint" style={{ marginBottom: 6 }}>
+              {zh ? "待批准（有人在扫你的码）" : "Waiting for approval"}
+            </div>
+            {pending.map((device) => (
+              <div className="set-dev-row" key={device.connectionId}>
+                <span className="set-dev-name">
+                  <Bell size={12} style={{ verticalAlign: "-1px", marginRight: 6 }} />
+                  {device.name}
+                </span>
+                <span className="set-dev-actions">
+                  <button
+                    className="set-btn primary set-btn-sm"
+                    onClick={async () => {
+                      await window.pi.remote.approvePairing(device.connectionId);
+                      await refresh();
+                    }}
+                  >
+                    {zh ? "允许" : "Approve"}
+                  </button>
+                  <button
+                    className="set-btn ghost set-btn-sm"
+                    onClick={async () => {
+                      await window.pi.remote.rejectPairing(device.connectionId);
+                      await refresh();
+                    }}
+                  >
+                    {zh ? "拒绝" : "Reject"}
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {devices.length === 0 ? (
+          pending.length === 0 && (
+            <div className="set-hint">{zh ? "还没有配对任何设备。用上面的二维码配一台。" : "No devices yet — pair one with the code above."}</div>
+          )
+        ) : (
+          [...online, ...offline].map((device) => (
+            <div className="set-dev-row" key={device.deviceId}>
+              <span className="set-dev-name" title={device.name}>
+                {device.name}
+                <span className="set-diag-k"> · #{shortDeviceId(device.deviceId)}</span>
+                <span className={`set-dev-state ${device.authenticated ? "on" : "off"}`}>
+                  {device.authenticated ? (zh ? "在线" : "online") : zh ? "离线" : "offline"}
+                </span>
+              </span>
+              <button
+                className="set-btn ghost set-btn-sm"
+                onClick={async () => {
+                  await window.pi.remote.revokeDevice(device.deviceId);
+                  await refresh();
+                }}
+              >
+                {zh ? "移除" : "Remove"}
               </button>
             </div>
-          ))}
-        </div>
-      )}
+          ))
+        )}
+      </div>
     </div>
   );
 }

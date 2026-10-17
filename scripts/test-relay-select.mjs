@@ -142,25 +142,27 @@ test("同源候选：非 http(s) 页面不给（本地文件 / 无 location）",
   assert.equal(sameOriginRelayUrl({ origin: "https://h:8765" }), "wss://h:8765/ws", "https → wss，同主机同端口，路径 /ws");
 });
 
-test("安全上下文优先级：局域网 TLS 先于同源、同源先于公网中继（都通时走最快）", () => {
+test("安全上下文优先级：同源先（必然可达），其次局域网/tailnet TLS，再次公网", () => {
   const input = {
     relayUrls: ["ws://10.215.35.72:9001/ws", "wss://10.215.35.72:9443/ws", "ws://47.97.28.110:10445/ws", "wss://47.97.28.110:9443/ws"],
     relayUrl: "ws://47.97.28.110:10445/ws",
   };
   assert.deepEqual(
     relayCandidates(input, { secureContext: true, location: { origin: "https://47.97.28.110:9443" } }),
-    ["wss://10.215.35.72:9443/ws", "wss://47.97.28.110:9443/ws"],
-    "页面从公网中继打开、设备却在局域网时，应先命中局域网 TLS（同源与公网中继是同一台，去重）",
+    ["wss://47.97.28.110:9443/ws", "wss://10.215.35.72:9443/ws"],
+    "页面从中继打开：先连同源（必然可达），近端候选留给连上后的择优（minibox 实测：先撞不在网段的地址会拖长握手窗口）",
   );
   assert.deepEqual(
     relayCandidates(
       { relayUrls: ["wss://10.215.35.72:9443/ws", "wss://relay.example.com:9443/ws"] },
       { secureContext: true, location: { origin: "https://relay.example.com:9443" } },
     ),
-    ["wss://10.215.35.72:9443/ws", "wss://relay.example.com:9443/ws"],
-    "局域网 TLS 第一，其次同源",
+    ["wss://relay.example.com:9443/ws", "wss://10.215.35.72:9443/ws"],
+    "同源第一，局域网 TLS 第二",
   );
   assert.equal(isPrivateRelayUrl("wss://192.168.1.5:9443/ws"), true);
+  assert.equal(isPrivateRelayUrl("wss://100.90.55.36:9443/ws"), true, "tailnet 地址也算近端");
+  assert.equal(isPrivateRelayUrl("wss://47.97.28.110:9443/ws"), false);
   assert.equal(isPrivateRelayUrl("wss://relay.example.com/ws"), false);
 });
 
