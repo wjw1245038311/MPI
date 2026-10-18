@@ -1241,6 +1241,22 @@ function writeThinkingIntent(key: string | null, level: string | null | undefine
   updateConfig({ threadThinking: { ...current, [key]: level } });
 }
 
+/** 读「该会话上次选的模型」（config.threadModels）；没有则返回 null（跟随 pi 默认）。 */
+function readModelIntent(key: string | null): { provider: string; id: string } | null {
+  if (!key) return null;
+  const entry = getConfig().threadModels?.[key];
+  return entry && entry.provider && entry.id ? { provider: entry.provider, id: entry.id } : null;
+}
+
+/** 记一次模型选择（桌面/手机/agent 三个入口都经过 publishThreadConfigChange）。同值不写盘。 */
+function writeModelIntent(key: string | null, model: { provider?: string; id?: string } | null | undefined): void {
+  if (!key || !model?.provider || !model?.id) return;
+  const current = getConfig().threadModels || {};
+  const prev = current[key];
+  if (prev && prev.provider === model.provider && prev.id === model.id) return;
+  updateConfig({ threadModels: { ...current, [key]: { provider: model.provider, id: model.id } } });
+}
+
 /**
  * 桥没开时的可选档位：从 models.json 的 `thinkingLevelMap` 推（与设置页同一规则）。
  * 以前这里直接硬编码 `["off"]`，于是未打开的会话在界面上看起来「不支持思考」。
@@ -1886,6 +1902,11 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ) => {
     const built = buildConfigPatch(patch);
     if (!built) return;
+    // 模型选择要落盘：pi 进程重生后会回到全局默认模型（settings.json），
+    // 不记这一层就会出现「明明选了 4.1，重开/切回来 pill 显示别的」。
+    if (built.model !== undefined) {
+      writeModelIntent(threadThinkingKey(target.sessionFile ?? target.remoteThreadId ?? null), built.model);
+    }
     if (target.remoteThreadId) {
       // 手机协议只懂两档权限（sandbox|full）；桌面渲染器要真实档位（含只读/严格）。
       const wire = { ...built };
@@ -5844,6 +5865,25 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
       if (state.sessionFile) {
         const perms = getConfig().threadPermissions;
         if (perms[state.sessionFile] !== permission) updateConfig({ threadPermissions: { ...perms, [state.sessionFile]: permission } });
+      }
+      // 恢复该会话上次选的模型：pi 重生后一律回到 settings.json 的全局默认，
+      // 不恢复就是「pill 显示别的模型」。失败不拦打开（宁可显示默认也不打不开）。
+      const modelIntent = readModelIntent(threadThinkingKey(state.sessionFile ?? finalId));
+      if (modelIntent) {
+        const cur = (state.model || {}) as { provider?: string; id?: string };
+        if (cur.provider !== modelIntent.provider || cur.id !== modelIntent.id) {
+          try {
+            await applyModelSwitchWithThinking(
+              { sessionFile: state.sessionFile ?? undefined },
+              handle,
+              modelIntent.provider,
+              modelIntent.id,
+              "desktop",
+            );
+          } catch (e: any) {
+            appendDiagLog(`[model-intent] restore failed ${modelIntent.provider}/${modelIntent.id}: ${e?.message || e}`);
+          }
+        }
       }
       const gathered = await gatherThread(handle.bridge, finalId, permission);
       // 兜底：刚启动完的 pi 可能还在加载 providers——短暂重试，避免 UI 卡在

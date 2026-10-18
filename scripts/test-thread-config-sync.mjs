@@ -185,6 +185,16 @@ console.log("thread-config sync tests passed");
   );
   assert.deepEqual(pruned.threadTaskModes, { [UUID_A]: "review" }, "只保留会话文件还在的键");
   assert.deepEqual(pruned.threadThinking, { [UUID_A]: "high" }, "存在的键不动");
+  assert.deepEqual(
+    pruneThreadKeyedMaps({ threadModels: { [UUID_A]: { provider: "deepseek", id: "deepseek-flash" } } }, new Set([UUID_A])).threadModels,
+    { [UUID_A]: { provider: "deepseek", id: "deepseek-flash" } },
+    "模型本意按同一把 UUID 键保留",
+  );
+  assert.deepEqual(
+    pruneThreadKeyedMaps({ threadModels: { [UUID_B]: { provider: "deepseek", id: "deepseek-flash" } } }, new Set([UUID_A])).threadModels,
+    {},
+    "模型本意孤儿键清空",
+  );
   assert.deepEqual(pruned.dropped, [UUID_B], "孤儿键被报告出来（供日志）");
 
   // 从没发过消息的草稿：两边都是孤儿 → 一起清掉。

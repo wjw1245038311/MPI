@@ -326,12 +326,18 @@ if (!gotLock) {
         if (uuid) uuids.add(uuid);
       }
       const cfg = getConfig();
-      const pruned = pruneThreadKeyedMaps(
-        { threadTaskModes: cfg.threadTaskModes, threadThinking: cfg.threadThinking },
+      // 三张表的 value 类型不同（string / {provider,id}），用 unknown 统一走清理，
+      // 结果再按各自的类型收回（清理只做键过滤，不改 value）。
+      const pruned = pruneThreadKeyedMaps<unknown>(
+        { threadTaskModes: cfg.threadTaskModes, threadThinking: cfg.threadThinking, threadModels: cfg.threadModels },
         uuids,
       );
       if (pruned.dropped.length > 0) {
-        updateConfig({ threadTaskModes: pruned.threadTaskModes, threadThinking: pruned.threadThinking });
+        updateConfig({
+          threadTaskModes: pruned.threadTaskModes as Record<string, string>,
+          threadThinking: pruned.threadThinking as Record<string, string>,
+          threadModels: pruned.threadModels as Record<string, { provider: string; id: string }>,
+        });
         appendDiagLog(`[thread-config] pruned ${pruned.dropped.length} orphan keys (sessions=${uuids.size})`);
       }
     } catch (e: any) {

@@ -186,6 +186,11 @@ export interface AppConfig {
    * clamps to the new model's `thinkingLevelMap` and never restores — can put it
    * back when the target model supports it (see src/shared/thinking-levels.ts). */
   threadThinking?: Record<string, string>;
+  /** Per-thread **selected model**, keyed by the same session UUID as
+   * `threadTaskModes`/`threadThinking`. pi 进程重生（关掉再打开、重启应用）时会回到
+   * settings.json 的全局 defaultProvider/defaultModel，所以不记这一层就会出现
+   * 「明明选了 4.1，切回来/重开后 pill 显示别的模型」。 */
+  threadModels?: Record<string, { provider: string; id: string }>;
   /** Extension tools the user has persistently trusted (“始终允许该工具” on an
    * approval card, or added in Settings → Conversation): auto-approved by the
    * permission gate in sandbox/strict; still blocked under readonly / enforced

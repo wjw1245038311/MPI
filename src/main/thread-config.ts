@@ -109,7 +109,7 @@ export function planModeClear(): Pick<ModeApplication, "modeId" | "state"> {
 export const THREAD_KEYED_MAP_LIMIT = 400;
 
 /**
- * 清掉 `threadTaskModes` / `threadThinking` 里的孤儿键 —— 两者都按会话 UUID 索引，
+ * 清掉 `threadTaskModes` / `threadThinking` / `threadModels` 里的孤儿键 —— 都按会话 UUID 索引，
  * 但只有「删除会话」这一条路径会回收它们：实测本机已攒到 143 个模式键，而其中绝大多数
  * 对应的会话早已不存在（从没发过消息的草稿、或已删会话的其他设备残留）。
  *
@@ -123,10 +123,19 @@ export const THREAD_KEYED_MAP_LIMIT = 400;
  * 纯函数：不读盘、不写配置，便于单测；调用方负责 updateConfig + 日志。
  */
 export function pruneThreadKeyedMaps<T>(
-  maps: { threadTaskModes?: Record<string, T> | null; threadThinking?: Record<string, T> | null },
+  maps: {
+    threadTaskModes?: Record<string, T> | null;
+    threadThinking?: Record<string, T> | null;
+    threadModels?: Record<string, T> | null;
+  },
   existingUuids: ReadonlySet<string>,
   limit = THREAD_KEYED_MAP_LIMIT,
-): { threadTaskModes: Record<string, T>; threadThinking: Record<string, T>; dropped: string[] } {
+): {
+  threadTaskModes: Record<string, T>;
+  threadThinking: Record<string, T>;
+  threadModels: Record<string, T>;
+  dropped: string[];
+} {
   const dropped = new Set<string>();
   const cleanOne = (raw: Record<string, T> | null | undefined): Record<string, T> => {
     let next: Record<string, T> = {};
@@ -144,6 +153,7 @@ export function pruneThreadKeyedMaps<T>(
   return {
     threadTaskModes: cleanOne(maps.threadTaskModes),
     threadThinking: cleanOne(maps.threadThinking),
+    threadModels: cleanOne(maps.threadModels),
     dropped: [...dropped],
   };
 }
