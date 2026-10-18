@@ -1,29 +1,12 @@
-import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import {
-  createReadStream,
-  createWriteStream,
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-} from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { beginTransfer, endTransfer, updateTransfer } from "./transfer-monitor";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { getBundledRuntime, resetPiRuntime, resolvePiRuntime } from "./pi-bridge";
 import {
-  activateRuntimeRoot,
   cleanupRuntimeVersions,
-  getActiveRuntimePaths,
   getActiveRuntimeRoot,
   getRuntimePackageManifest,
   installRuntimePackage,
   runtimeBaseDir as managedRuntimeBaseDir,
-  runtimeVersionsDir,
 } from "./runtime-package";
 
 /**
@@ -31,39 +14,27 @@ import {
  *
  * The runtime managed by MPI is NOT a global npm/pnpm install, so
  * `pi update` refuses to touch it (detectInstallMethod returns "unknown").
- * New releases embed a standalone runtime archive in the installer and use
- * the npm path only as a compatibility fallback when it does not match the
- * latest Pi:
  *
+ * 只有一条可用路线：**安装发行包里内置的 standalone 运行时归档**。
  *   1. Ask https://pi.dev/api/latest-version for the latest release
  *      (the same endpoint pi's own version check uses).
- *   2. Prefer the standalone runtime archive embedded in the app release.
- *   3. Download the npm tarball from the registry (integrity-verified) only
- *      when no matching standalone archive is available.
- *   4. The tarball does not include node_modules, but it ships
- *      npm-shrinkwrap.json (a full lockfile with `resolved` + `integrity`
- *      for every transitive dependency). We install each dependency the
- *      way `npm install --ignore-scripts` would: download its tarball,
- *      verify integrity, extract it under node_modules/<key>, skipping
- *      entries whose os/cpu don't match this platform. No npm needed.
- *   5. Activate by switching `<userData>/runtime/current.json` to a versioned
+ *   2. 设备上的 pi 低于内置版本（或就是要内置那一版）→ 直接装内置归档
+ *      （离线、带 size/sha512 校验、不需要装依赖）。
+ *   3. 上游比内置更新 → **应用内做不到**：pi 1.x 的 npm 包不再随包发布
+ *      `npm-shrinkwrap.json`（也没有 bundleDependencies），原来「下载 tarball
+ *      → 按锁逐个装依赖」的 registry 路线建不出可用的树，2026-10 起已删除。
+ *      这种情况在下载之前就明确报错并指向「升级 MPI 本体」，见
+ *      `coreUpdateBlockedMessage()`；新版本随 MPI 发行包内置。
+ *   4. Activate by switching `<userData>/runtime/current.json` to a versioned
  *      tree. The pointer takes precedence over the legacy bundled copy and
  *      avoids fighting file locks on the running app's own resources.
  *
- * The previously active tree is renamed to `pi.old-<n>` rather than
- * deleted: a running thread may still hold native modules (.node addons)
- * open from it, which Windows refuses to delete. Startup cleans them up.
+ * 旧的运行时树由 `cleanupRuntimeVersions()` 在启动时清理（运行中的会话可能还
+ * 占着原生模块，Windows 不允许删）。
  */
 
 const VERSION_URL = "https://pi.dev/api/latest-version";
-const REGISTRY = "https://registry.npmjs.org";
-const DEFAULT_PACKAGE = "@earendil-works/pi-coding-agent";
 const FETCH_TIMEOUT_MS = 30_000;
-const DOWNLOAD_TIMEOUT_MS = 120_000;
-const DEP_CONCURRENCY = 8;
-const RENAME_RETRY_COUNT = 10;
-const RENAME_RETRY_BASE_DELAY_MS = 200;
-const RENAME_RETRY_MAX_DELAY_MS = 1_500;
 
 export type UpdateStage = "checking" | "downloading" | "installing" | "pruning" | "activating" | "done" | "error";
 
@@ -81,6 +52,10 @@ export interface CoreUpdateStatus {
   note?: string | null;
   /** Where the active app-managed runtime lives (legacy bundled dir or userData runtime). */
   source: "userData" | "bundled" | null;
+  /** 发行包内置的运行时版本（dev 模式 / 旧安装包为 null）。 */
+  embedded?: string | null;
+  /** 「更新 Pi」按钮是否真能到达 latest（能装内置归档才算）。 */
+  inAppUpdatable?: boolean;
   error?: string;
 }
 
@@ -89,6 +64,8 @@ export interface CoreUpdateResult {
   updated: boolean;
   from?: string | null;
   to?: string;
+  /** 上游比内置新（或没有内置归档）⇒ 应用内装不了，需要升级 MPI 本体。 */
+  blocked?: boolean;
   message: string;
 }
 
@@ -99,18 +76,6 @@ type ProgressFn = (p: CoreUpdateProgress) => void;
 /** Root of the updatable runtime area under Electron's userData dir. */
 export function runtimeBaseDir(): string {
   return managedRuntimeBaseDir();
-}
-
-interface LockEntry {
-  version?: string;
-  resolved?: string;
-  integrity?: string;
-  optional?: boolean;
-  link?: boolean;
-  os?: string[];
-  cpu?: string[];
-  engines?: { node?: string };
-  hasInstallScript?: boolean;
 }
 
 /** Version of the runtime the app currently uses (userData copy wins over bundled). */
@@ -154,12 +119,6 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** ">=22.19.0" → "22.19.0" (we only ever see a single lower bound in practice). */
-function parseMinNodeVersion(range: string): string | null {
-  const m = /(\d+\.\d+\.\d+|\d+\.\d+|\d+)/.exec(range);
-  return m ? m[1] : null;
-}
-
 async function fetchJson<T>(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<T> {
   const res = await fetch(url, {
     headers: { accept: "application/json", "user-agent": "mpi-updater" },
@@ -167,100 +126,6 @@ async function fetchJson<T>(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   return (await res.json()) as T;
-}
-
-/** sha512-<base64> (npm "integrity") verification, streaming. */
-async function verifyIntegrity(file: string, integrity?: string): Promise<void> {
-  if (!integrity) return;
-  const m = /^(sha\d+)-(.+)$/.exec(integrity);
-  if (!m) return; // unknown scheme; npm would reject, but don't hard-fail here
-  const hash = createHash(m[1]);
-  await new Promise<void>((resolve, reject) => {
-    const s = createReadStream(file);
-    s.on("data", (d) => hash.update(d));
-    s.on("end", () => resolve());
-    s.on("error", reject);
-  });
-  const actual = hash.digest("base64");
-  if (actual !== m[2]) throw new Error(`integrity check failed for ${file} (${m[1]})`);
-}
-
-/** Download url → dest with optional byte-level progress (needs
- * content-length for totals) and an optional external abort signal (the
- * long-task monitor's cancel button). The fixed timeout is combined with the
- * external signal; aborts surface as a friendly error. */
-async function downloadFile(
-  url: string,
-  dest: string,
-  onBytes?: (got: number, total: number) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const ctrl = new AbortController();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    ctrl.abort();
-  }, DOWNLOAD_TIMEOUT_MS);
-  if (signal) {
-    if (signal.aborted) ctrl.abort();
-    else signal.addEventListener("abort", () => ctrl.abort(), { once: true });
-  }
-  const abortError = (): Error =>
-    timedOut
-      ? new Error(`下载超时（${Math.round(DOWNLOAD_TIMEOUT_MS / 1000)}s）：${url}`)
-      : new Error(signal?.aborted ? "下载已取消" : `download aborted: ${url}`);
-
-  try {
-    const res = await fetch(url, { signal: ctrl.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status} downloading ${url}`);
-    const total = Number(res.headers.get("content-length")) || 0;
-    const body = res.body as unknown as { getReader: () => { read: () => Promise<{ done: boolean; value?: Uint8Array }> } } | null;
-    await new Promise<void>((resolve, reject) => {
-      if (!body) {
-        reject(new Error(`empty response body for ${url}`));
-        return;
-      }
-      const reader = body.getReader();
-      const out = createWriteStream(dest);
-      let got = 0;
-      const pump = async (): Promise<void> => {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const buf = Buffer.from(value as Uint8Array);
-          got += buf.length;
-          if (!out.write(buf)) await new Promise<void>((r) => out.once("drain", () => r()));
-          onBytes?.(got, total);
-        }
-        out.end(() => resolve());
-        out.on("error", reject);
-      };
-      pump().catch((e) => {
-        out.destroy();
-        reject(e);
-      });
-    });
-  } catch (e) {
-    if (ctrl.signal.aborted) throw abortError();
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function runCommand(cmd: string, args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { windowsHide: true });
-    let stderr = "";
-    p.stderr.on("data", (d: Buffer) => {
-      stderr += d.toString("utf8");
-    });
-    p.on("error", reject);
-    p.on("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${cmd} ${args[0] || ""} exited with code ${code}${stderr ? `: ${stderr.trim().slice(-300)}` : ""}`));
-    });
-  });
 }
 
 /**
@@ -276,156 +141,6 @@ function rmSafe(target: string): void {
   } catch {
     /* best effort */
   }
-}
-
-function isRetryableRenameError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | null)?.code;
-  return code === "EPERM" || code === "EBUSY" || code === "EACCES" || code === "ENOTEMPTY";
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Windows Defender, indexers, and shell preview handlers can briefly retain a
- * handle to a freshly extracted directory. A single renameSync therefore
- * makes an otherwise valid update fail. Retry only the Windows-style
- * transient errors, and keep the destination replacement limited to the
- * disposable staging tree used by this updater.
- */
-async function renameWithRetry(source: string, destination: string, replaceDestination = false): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= RENAME_RETRY_COUNT; attempt++) {
-    try {
-      if (replaceDestination && existsSync(destination)) rmSafe(destination);
-      renameSync(source, destination);
-      return;
-    } catch (error) {
-      lastError = error;
-      if (!isRetryableRenameError(error) || attempt === RENAME_RETRY_COUNT) throw error;
-      const delay = Math.min(RENAME_RETRY_MAX_DELAY_MS, RENAME_RETRY_BASE_DELAY_MS * 2 ** attempt);
-      await wait(delay);
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
-}
-
-/**
- * Absolute path to a trustworthy tar. On Windows we must NOT take whatever
- * `tar` sits first on PATH: Git-for-Windows ships GNU tar, which parses the
- * colon in `C:\...` paths as a remote-host separator and fails with
- * "Cannot connect to C:". The OS-shipped bsdtar in System32 handles
- * drive-letter paths correctly and has been present since Windows 10 1803.
- */
-function tarBinary(): string {
-  if (process.platform === "win32") {
-    return join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
-  }
-  return "tar";
-}
-
-/** os/cpu filters honour npm semantics, including "!" negation entries. */
-function platformMatches(e: LockEntry): boolean {
-  const matches = (list: string[] | undefined, value: string): boolean => {
-    if (!list || list.length === 0) return true;
-    const neg = list.filter((x) => x.startsWith("!"));
-    if (neg.length > 0) return !neg.some((x) => x.slice(1) === value);
-    return list.includes(value);
-  };
-  return matches(e.os, process.platform) && matches(e.cpu, process.arch);
-}
-
-/** Recursive prune mirroring the standalone runtime builder. */
-function pruneTree(dir: string): void {
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    const abs = join(dir, name);
-    let isDir = false;
-    try {
-      isDir = statSync(abs).isDirectory();
-    } catch {
-      continue;
-    }
-    if (isDir) {
-      if (
-        name === "@types" ||
-        name === "test" ||
-        name === "tests" ||
-        name === "__tests__" ||
-        name === ".github" ||
-        name === "docs" ||
-        name === "examples" ||
-        name === "example" ||
-        name === "benchmark" ||
-        name === "benchmarks" ||
-        name === "coverage" ||
-        name === "__mocks__"
-      ) {
-        rmSafe(abs);
-        continue;
-      }
-      pruneTree(abs);
-    } else if (
-      /\.(?:map|d\.ts|d\.mts|d\.cts|ts|mts|cts)$/i.test(name) ||
-      /^(?:README|CHANGELOG|HISTORY|CONTRIBUTING)(?:\.(?:md|markdown|txt|rst)|$)/i.test(name)
-    ) {
-      rmSafe(abs);
-    }
-  }
-}
-
-/**
- * Bounded concurrency pool. On the first failure it stops handing out NEW
- * items but waits for the in-flight workers to settle before throwing — the
- * caller's cleanup (rmSafe on the staging dir) must not race workers that
- * are still writing inside it.
- */
-async function mapPool<T>(items: T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
-  let next = 0;
-  let failed = false;
-  let firstError: unknown = null;
-  const workers: Promise<void>[] = [];
-  for (let w = 0; w < Math.min(limit, items.length); w++) {
-    workers.push(
-      (async () => {
-        for (;;) {
-          if (failed) return;
-          const i = next++;
-          if (i >= items.length) return;
-          try {
-            await fn(items[i], i);
-          } catch (e) {
-            if (!failed) {
-              failed = true;
-              firstError = e;
-            }
-            return;
-          }
-        }
-      })(),
-    );
-  }
-  await Promise.all(workers);
-  if (firstError) throw firstError;
-}
-
-/**
- * npm tarballs wrap contents in a single root folder — usually `package/`,
- * but not always (e.g. @types tarballs are packed as `<name> <version>/`).
- * Locate that folder instead of assuming a name.
- */
-function singleRootDir(dir: string): string {
-  const entries = readdirSync(dir).filter((n) => !n.startsWith("."));
-  if (entries.length !== 1) {
-    throw new Error(`unexpected tarball layout in ${dir}: expected one root folder, found [${entries.join(", ")}]`);
-  }
-  return join(dir, entries[0]);
 }
 
 /* ------------------------------ public API ------------------------------ */
@@ -455,43 +170,85 @@ export async function checkForCoreUpdate(cliOverride?: string): Promise<CoreUpda
   } catch {
     /* no resolvable pi at all — keep the managed value (possibly null) */
   }
+  // 发行包内置的运行时版本：决定「更新 Pi」按钮能不能真的到达 latest。
+  const embedded = getRuntimePackageManifest()?.runtimeVersion ?? null;
   try {
     const rel = await fetchJson<{ version?: string; packageName?: string; note?: string | null }>(VERSION_URL);
     const latest = typeof rel.version === "string" ? rel.version.trim() : "";
-    if (!latest) return { current, latest: null, hasUpdate: false, source, error: "版本检查返回为空" };
+    if (!latest) {
+      return { current, latest: null, hasUpdate: false, source, embedded, inAppUpdatable: false, error: "版本检查返回为空" };
+    }
     if (!current) {
-      return { current: null, latest, hasUpdate: false, source, error: "无法确定当前 Pi 版本（未找到可用的 pi）" };
+      return {
+        current: null,
+        latest,
+        hasUpdate: false,
+        source,
+        embedded,
+        inAppUpdatable: canUpdateInApp(null, embedded, latest),
+        error: "无法确定当前 Pi 版本（未找到可用的 pi）",
+      };
     }
     const hasUpdate = compareVersions(latest, current) > 0;
-    return { current, latest, hasUpdate, note: rel.note || null, source };
+    return {
+      current,
+      latest,
+      hasUpdate,
+      note: rel.note || null,
+      source,
+      embedded,
+      inAppUpdatable: canUpdateInApp(current, embedded, latest),
+    };
   } catch (e: any) {
-    return { current, latest: null, hasUpdate: false, source, error: e?.message || String(e) };
+    return { current, latest: null, hasUpdate: false, source, embedded, inAppUpdatable: false, error: e?.message || String(e) };
   }
 }
 
 /**
- * 「更新 Pi」该不该直接装 MPI 自带的运行时归档（而不是去 npm 下载）。
+ * 「更新 Pi」该不该直接装 MPI 自带的运行时归档（而不是去 registry 拿）。
  *
  * 规则（按用户的决定）：**设备上的 pi 低于本安装包内置的版本，就直接装内置那份**。
  * 内置归档是打包时生成、带 size/sha512 校验的完整树（node + pi + 依赖），不需要再装
- * 依赖——而 pi 1.x 的 npm 包已不再随包发布 `npm-shrinkwrap.json`，原来的“按锁装依赖”
- * 路径对 1.x 根本跑不通。只有上游确实比内置更新时才有必要走 registry。
+ * 依赖——而 pi 1.x 的 npm 包已不再随包发布 `npm-shrinkwrap.json`，registry 路线建不出
+ * 可用的树。因此这里只在「设备比内置旧」或「要的就是内置这一版」时返回 true。
  */
 export function shouldInstallEmbeddedRuntime(current: string | null, embedded: string | null, targetVersion: string): boolean {
-  if (!embedded) return false; // 没有内置归档（dev / 旧发行版）⇒ 只能走 registry
+  if (!embedded) return false; // 没有内置归档（dev / 旧发行版）⇒ 应用内装不了
   if (embedded === targetVersion) return true; // 要的就是这一版：一个归档解决
   return !current || compareVersions(current, embedded) < 0; // 设备比内置旧 ⇒ 先吃内置（离线、快）
+}
+
+/**
+ * 「更新 Pi」能不能到达目标版本？只有两种情况能：
+ *   · 设备版本已经 ≥ 上游最新（无需安装）；
+ *   · 目标版本（或比设备新的版本）就在 MPI 内置归档里 —— 直接装内置那份。
+ *
+ * 上游比内置更新时**应用内做不到**：pi 1.x 的 npm 包不再随包发布
+ * `npm-shrinkwrap.json`，registry 路线建不出可用的运行时树（2026-10 已删除该路径）。
+ * 内置归档是打包时生成、带 size/sha512 校验的完整树（node + pi + 依赖），不需要装依赖。
+ */
+export function canUpdateInApp(current: string | null, embedded: string | null, latest: string | null): boolean {
+  if (!latest) return false;
+  if (current && compareVersions(latest, current) <= 0) return true; // 已是最新，无需安装
+  return shouldInstallEmbeddedRuntime(current, embedded, latest);
+}
+
+/** 上游超前、应用内装不了时的说明（设置面板与更新按钮共用同一段文案）。 */
+export function coreUpdateBlockedMessage(latest: string, embedded: string | null, current?: string | null): string {
+  const now = current ? `当前 v${current}` : "当前版本";
+  if (embedded) {
+    return `上游 Pi 已发布 v${latest}，但 MPI 只能安装自己内置的运行时（本版内置 v${embedded}）。`
+      + "pi 1.x 的 npm 包不再提供依赖锁文件，应用内无法从 registry 拼出完整运行时；"
+      + `请在「MPI 应用更新」里升级 MPI 本体（新版本会内置更新的 Pi 运行时），${now} 保持可用。`;
+  }
+  return `上游 Pi 已发布 v${latest}，但当前 MPI 没有内置 Pi 运行时（开发模式或旧安装包），无法在应用内更新。`
+    + `请安装带内置运行时的 MPI 发行版（${now}）。`;
 }
 
 /** Download and activate the latest pi core. Safe to call when already latest
  * (resolves with updated=false). Progress is reported via onProgress. */
 export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUpdateResult> {
   const progress: ProgressFn = onProgress || (() => undefined);
-  /** Long-task-monitor entry for the network phase (set once downloading starts). */
-  let coreTransferId: string | null = null;
-  // Never reuse a failed staging tree in the same process. A previous attempt
-  // may have left a locked package directory behind after its cleanup failed.
-  const staging = join(runtimeBaseDir(), `.staging-${process.pid}-${Date.now()}-${randomUUID().slice(0, 8)}`);
 
   try {
     // ---- check -----------------------------------------------------------
@@ -503,15 +260,12 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
       return { ok: true, updated: false, from: status.current, message: `Pi 已是最新版本（v${status.current}）` };
     }
     const targetVersion = status.latest;
-    const runtimeNode = getActiveRuntimePaths()?.node || getBundledRuntime()?.node || null;
     progress({ stage: "checking", message: `发现新版本 v${targetVersion}（当前 v${status.current || "?"}）` });
 
-    // A release built with the standalone runtime already contains a verified
-    // one-archive path. Prefer it whenever the packaged Pi is newer than what
-    // this machine has — not only when it happens to equal the registry's
-    // latest. That keeps "更新 Pi" working offline and avoids the npm dependency
-    // install entirely (pi 1.x tarballs no longer ship npm-shrinkwrap.json, so
-    // the registry path can't build a tree for them).
+    // 只有发行包内置的运行时归档可以装。设备比内置旧就装它（离线、有校验），
+    // 这样「更新 Pi」在断网/上游超前时也仍然可用。
+    // 上游比内置更新的情况在**下载之前**就明确失败：旧实现会先下载整个 tarball，
+    // 才发现 pi 1.x 不带 npm-shrinkwrap.json（registry 路线已删除）。
     const standalone = getRuntimePackageManifest();
     const embedded = standalone?.runtimeVersion || null;
     if (standalone && embedded && shouldInstallEmbeddedRuntime(status.current, embedded, targetVersion)) {
@@ -530,163 +284,14 @@ export async function installCoreUpdate(onProgress?: ProgressFn): Promise<CoreUp
       };
     }
 
-    // ---- resolve tarball -------------------------------------------------
-    const manifest = await fetchJson<{ dist?: { tarball?: string; integrity?: string } }>(
-      `${REGISTRY}/${DEFAULT_PACKAGE}/${targetVersion}`,
-    );
-    const tarballUrl = manifest.dist?.tarball;
-    if (!tarballUrl) throw new Error("无法从 npm registry 获取安装包地址");
-
-    // ---- stage area ------------------------------------------------------
-    rmSafe(staging);
-    mkdirSync(staging, { recursive: true });
-    const tgz = join(staging, "pi.tgz");
-
-    // Long-task monitor entry covering the whole network phase (main tarball
-    // + dependency tarballs). Cancel aborts every in-flight fetch.
-    const dlCtrl = new AbortController();
-    coreTransferId = beginTransfer({ kind: "download", label: "正在下载 Pi 核心…", cancellable: true, onCancel: () => dlCtrl.abort() });
-
-    let lastPct = -1;
-    progress({ stage: "downloading", message: "正在下载 Pi 核心…", pct: 0 });
-    await downloadFile(
-      tarballUrl,
-      tgz,
-      (got, total) => {
-        if (total > 0) {
-          const pct = Math.min(99, Math.floor((got / total) * 100));
-          if (pct !== lastPct) {
-            lastPct = pct;
-            progress({ stage: "downloading", message: "正在下载 Pi 核心…", pct });
-          }
-        }
-        updateTransfer(coreTransferId!, { doneBytes: got, ...(total ? { totalBytes: total } : {}) });
-      },
-      dlCtrl.signal,
-    );
-    await verifyIntegrity(tgz, manifest.dist?.integrity);
-
-    // ---- extract main package --------------------------------------------
-    progress({ stage: "installing", message: "正在解压安装包…" });
-    const extractDir = join(staging, "extracted");
-    mkdirSync(extractDir, { recursive: true });
-    await runCommand(tarBinary(), ["-xzf", tgz, "-C", extractDir]);
-    const root = singleRootDir(extractDir);
-    if (!existsSync(join(root, "dist", "cli.js"))) throw new Error("安装包内容异常：缺少 dist/cli.js");
-
-    // ---- engine check ----------------------------------------------------
-    const lockPath = join(root, "npm-shrinkwrap.json");
-    if (!existsSync(lockPath)) {
-      throw new Error(
-        `无法从 npm 安装包构建运行时：v${targetVersion} 的包里没有 npm-shrinkwrap.json（pi 1.x 起不再随包发布）。` +
-          "请升级 MPI 本体到内置该版本运行时的发行版。",
-      );
-    }
-    const lock = JSON.parse(readFileSync(lockPath, "utf8")) as { packages?: Record<string, LockEntry> };
-    const packages = lock.packages || {};
-    const requiredNode = packages[""]?.engines?.node;
-    const bundled = runtimeNode ? { node: runtimeNode } : null;
-    if (!runtimeNode) throw new Error("No managed Node runtime is available to install the Pi update");
-    if (!bundled) throw new Error("未找到内置 Node 运行时，无法安装更新");
-    if (requiredNode) {
-      const min = parseMinNodeVersion(requiredNode);
-      const nodeVersion = await runNodeVersion(bundled.node);
-      if (min && nodeVersion && compareVersions(nodeVersion, min) < 0) {
-        throw new Error(`新版本要求 Node ${requiredNode}，而内置 Node 为 v${nodeVersion}。请更新 MPI 本体。`);
-      }
-    }
-
-    // ---- install dependencies from the lockfile ---------------------------
-    const deps = Object.entries(packages)
-      .filter(([key, e]) => key !== "" && !e.link && !!e.resolved)
-      .filter(([, e]) => platformMatches(e));
-
-    let done = 0;
-    const extractTmp = join(staging, "dep-tmp");
-    mkdirSync(extractTmp, { recursive: true });
-    await mapPool(deps, DEP_CONCURRENCY, async ([key, e], i) => {
-      const dest = join(root, ...key.split("/"));
-      const tmpDir = join(extractTmp, `d${i}`);
-      const tmpTgz = join(extractTmp, `d${i}.tgz`);
-      mkdirSync(tmpDir, { recursive: true });
-      try {
-        await downloadFile(e.resolved as string, tmpTgz, undefined, dlCtrl.signal);
-        await verifyIntegrity(tmpTgz, e.integrity);
-        await runCommand(tarBinary(), ["-xzf", tmpTgz, "-C", tmpDir]);
-        mkdirSync(dirname(dest), { recursive: true });
-        await renameWithRetry(singleRootDir(tmpDir), dest, true);
-      } finally {
-        rmSafe(tmpDir);
-        rmSafe(tmpTgz);
-      }
-      done++;
-      if (done % 5 === 0 || done === deps.length) {
-        progress({
-          stage: "installing",
-          message: `正在安装依赖（${done}/${deps.length}）…`,
-          pct: Math.floor((done / deps.length) * 100),
-        });
-      }
-    });
-
-    if (coreTransferId) endTransfer(coreTransferId);
-    coreTransferId = null;
-
-    // ---- prune ------------------------------------------------------------
-    progress({ stage: "pruning", message: "正在精简运行时文件…" });
-    pruneTree(root);
-
-    // ---- activate ---------------------------------------------------------
-    progress({ stage: "activating", message: "正在激活新版本…" });
-    const targetRoot = join(runtimeVersionsDir(), targetVersion);
-    mkdirSync(runtimeVersionsDir(), { recursive: true });
-    rmSafe(targetRoot);
-    mkdirSync(targetRoot, { recursive: true });
-    // The target version tree is disposable too: a previous interrupted run
-    // may have left its `pi` directory behind while cleanup was still locked.
-    await renameWithRetry(root, join(targetRoot, "pi"), true);
-    const nodeName = process.platform === "win32" ? "node.exe" : "node";
-    mkdirSync(join(targetRoot, "node"), { recursive: true });
-    cpSync(runtimeNode, join(targetRoot, "node", nodeName));
-    // Carry the bundled npm CLI over from the previous runtime. This registry
-    // path builds a bare pi tree without it; without this step extension
-    // package installs would break on machines that have no system Node.js.
-    const prevRoot = getActiveRuntimeRoot();
-    if (prevRoot && resolve(prevRoot) !== resolve(targetRoot) && existsSync(join(prevRoot, "npm"))) {
-      cpSync(join(prevRoot, "npm"), join(targetRoot, "npm"));
-    }
-    activateRuntimeRoot(targetRoot, targetVersion);
-    rmSafe(staging);
-    resetPiRuntime(); // next thread open resolves the new runtime
-
-    progress({ stage: "done", message: `已更新到 v${targetVersion}` });
-    return {
-      ok: true,
-      updated: true,
-      from: status.current,
-      to: targetVersion,
-      message: `Pi 核心已更新到 v${targetVersion}，新开的会话将使用新版本。`,
-    };
+    const blocked = coreUpdateBlockedMessage(targetVersion, embedded, status.current);
+    progress({ stage: "error", message: blocked });
+    return { ok: false, updated: false, blocked: true, from: status.current, message: blocked };
   } catch (e: any) {
-    rmSafe(staging);
-    if (coreTransferId) endTransfer(coreTransferId);
-    coreTransferId = null;
     const message = e?.message || String(e);
     progress({ stage: "error", message });
     return { ok: false, updated: false, message: `Pi 更新失败：${message}` };
   }
-}
-
-function runNodeVersion(node: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    const p = spawn(node, ["-v"], { windowsHide: true });
-    let out = "";
-    p.stdout.on("data", (d: Buffer) => {
-      out += d.toString("utf8");
-    });
-    p.on("error", () => resolve(null));
-    p.on("exit", () => resolve(out.trim().replace(/^v/, "") || null));
-  });
 }
 
 /**

@@ -160,12 +160,24 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** Map electron-updater's raw errors to user-readable Chinese (no releases yet / GitHub unreachable). */
-function friendlyUpdaterError(message: unknown): string {
+/** Map electron-updater's raw errors to user-readable Chinese (no releases yet / GitHub unreachable).
+ *
+ * `noRelay`：这台机器没有可用的中继镜像（未激活 / 自定义服务器 / 上游没配置），
+ * 更新检查只能走 GitHub。国内网络常见 `net::ERR_CONNECTION_RESET`（连接被重置），
+ * 这种时候必须告诉用户「打开发布页手动下载」，而不是只丢一句「无法连接」。 */
+function friendlyUpdaterError(message: unknown, noRelay = false): string {
   const m = String(message || "");
   if (/404|not found|no release/i.test(m)) return "GitHub 仓库还没有发布版本（或无法访问该仓库）";
-  if (/(ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|fetch failed|network)/i.test(m)) return "无法连接 GitHub，请检查网络后重试";
-  return m;
+  const reset = /ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_CONNECTION_ABORTED/i.test(m);
+  const networkIssue = reset
+    || /(ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ESOCKETTIMEDOUT|EAI_AGAIN|ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ERR_ADDRESS_UNREACHABLE|ERR_PROXY_CONNECTION_FAILED|ERR_TUNNEL_CONNECTION_FAILED|ERR_SSL_|net::ERR_|fetch failed|network)/i.test(m);
+  if (!networkIssue) return m;
+  const base = reset
+    ? "连接 GitHub 被中断（net::ERR_CONNECTION_RESET，常见于国内网络）"
+    : "无法连接 GitHub，请检查网络后重试";
+  return noRelay
+    ? `${base}。未激活内置服务器时，更新检查只能走 GitHub：可以点「打开发布页」手动下载安装包，或先激活服务器再重试。`
+    : base;
 }
 
 function isWindowsInstallerSupported(): boolean {
@@ -357,7 +369,8 @@ async function checkWithFallback(): Promise<UpdateCheckResult | null> {
     } catch (error: any) {
       probing = false;
       lastUpdaterError = null; // 探测期的错误不进 UI，两源都失败才报
-      if (!firstError) firstError = friendlyUpdaterError(error?.message || String(error));
+      // noRelay：只有 GitHub 一条路（没配中继 / 中继探测不通）——错误文案要给出下载页兜底。
+      if (!firstError) firstError = friendlyUpdaterError(error?.message || String(error), target.source !== "relay");
     }
   }
   if (staleRelay) {
@@ -385,7 +398,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
     const info = result?.updateInfo || latestUpdateInfo;
     return info ? statusFromInfo(current, info) : emptyStatus(current, lastUpdaterError || undefined);
   } catch (error: any) {
-    const message = friendlyUpdaterError(error?.message || String(error));
+    const message = friendlyUpdaterError(error?.message || String(error), updateFeedTarget().source !== "relay");
     lastUpdaterError = message;
     return emptyStatus(current, message);
   }

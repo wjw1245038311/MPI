@@ -83,6 +83,8 @@ PI_PACKAGE_DIR=<...>/pkgroot/package npm run bundle
 
 理由：安装包自带的 runtime 归档已经是**完整可用的树**（node + pi + 依赖，打包时生成），拿它做升级既不需要联网也不需要装依赖；只有确实需要比内置更新的版本才有必要走 npm。
 
+> **2026-10-17 修订：registry 路线已删除。** 上表最后两行（「走 registry」）在实际使用中只会失败：pi 1.x 的包里既无 `npm-shrinkwrap.json` 也无 `bundleDependencies`，registry 装载不出可用的运行时树，而且旧实现会先下载完整个 tarball 才报错。现在 `installCoreUpdate()` 在**下载之前**就判定：只有 `shouldInstallEmbeddedRuntime()` 为真才装内置归档，否则直接返回「上游 vX 未内置，请升级 MPI 本体」的说明（`coreUpdateBlockedMessage()`），设置面板据此把按钮置于「需先升级 MPI 本体」。新 pi 版本统一随 MPI 发行包内置（`piRuntimeVersion` + `npm run bundle`）。相关真值表断言仍由 `scripts/test-core-update-route.mjs` 钉住。
+
 ### 本机 dev 已切到 1.2.0（手工激活，可一键回退）
 
 ```bash

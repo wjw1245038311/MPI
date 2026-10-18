@@ -97,6 +97,12 @@ assert.match(
 assert.doesNotMatch(updater, /relayUpdateFeedUrl|pickRelayFeedUrl|effectiveChannels/, "更新源不许再依赖中继通道列表");
 assert.match(updater, /staleRelay/, "镜像落后（版本比当前旧）时应继续问 GitHub");
 
+// 未激活（无授权码 → 只能走 GitHub）时的网络失败：必须给可读兜底，
+// 而不是把 Chromium 的 `net::ERR_CONNECTION_RESET` 原样丢到界面上。
+assert.match(updater, /ERR_CONNECTION_RESET/, "Chromium 的连接重置错误必须有映射");
+assert.match(updater, /未激活内置服务器时/, "只能走 GitHub 时要提示可点「打开发布页」手动下载");
+assert.match(updater, /function friendlyUpdaterError\(message: unknown, noRelay = false\)/, "错误映射要区分「只有 GitHub 一条路」");
+
 // --- 中继：/download/app/* 的准入（默认软门控、显式 strict 才 401）----------------
 const relay = read("mobile", "relay", "index.mjs");
 assert.match(relay, /accept-ranges/, "中继静态服务必须声明 accept-ranges");

@@ -6685,6 +6685,8 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
         from: result.from ?? null,
         to: result.to ?? null,
         output: result.message,
+        // 上游比内置新（或没有内置归档）：应用内装不了，UI 用提示而不是报错。
+        ...(result.blocked ? { blocked: true } : {}),
         // Cancelled download surfaces as a neutral toast, not an error.
         ...(!result.ok && /已取消/.test(result.message) ? { cancelled: true } : {}),
       };

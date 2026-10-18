@@ -10,7 +10,7 @@ import { register } from "node:module";
 
 // core-updater → runtime-package 会拉 electron，这个 loader 同时补 .ts 后缀。
 register(new URL("./electron-stub-loader.mjs", import.meta.url));
-const { shouldInstallEmbeddedRuntime } = await import("../src/main/core-updater.ts");
+const { shouldInstallEmbeddedRuntime, canUpdateInApp } = await import("../src/main/core-updater.ts");
 
 let n = 0;
 const ok = (m) => {
@@ -39,5 +39,16 @@ ok("缺内置归档时保持旧行为");
 assert.equal(shouldInstallEmbeddedRuntime("1.10.0", "1.9.0", "1.11.0"), false, "按语义化版本比较，不按字典序");
 assert.equal(shouldInstallEmbeddedRuntime("1.9.0", "1.10.0", "1.11.0"), true, "1.9 < 1.10");
 ok("版本号按数字段比较（1.10 > 1.9）");
+
+// canUpdateInApp(当前, 内置, 上游)：「更新 Pi」按钮能不能真的到达最新版
+// （做不到就应在面板里灰掉，而不是让用户点一个注定失败、还会先下载整包的按钮）
+assert.equal(canUpdateInApp("1.2.0", "1.2.0", "1.3.0"), false, "上游超前内置：应用内装不了");
+assert.equal(canUpdateInApp("0.87.0", "1.2.0", "1.3.0"), true, "先吃内置：能装上一个可用版本");
+assert.equal(canUpdateInApp("1.2.0", "1.2.0", "1.2.0"), true, "已是最新：无需安装，但不是装不了");
+assert.equal(canUpdateInApp("1.3.0", "1.2.0", "1.4.0"), false, "设备比内置新：既不能降级也不能走 registry");
+assert.equal(canUpdateInApp(null, "1.2.0", "1.3.0"), true, "本机没有可用运行时：装内置");
+assert.equal(canUpdateInApp("1.2.0", null, "1.3.0"), false, "dev / 旧安装包无内置归档：装不了");
+assert.equal(canUpdateInApp("1.2.0", "1.2.0", null), false, "拿不到上游版本：不当成可更新");
+ok("canUpdateInApp：只有「已最新」或「能装内置」才算可用");
 
 console.log(`\ncore-update-route 测试通过：${n} 项`);

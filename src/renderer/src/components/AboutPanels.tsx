@@ -256,6 +256,8 @@ export function PiCoreUpdatePanel() {
     hasUpdate: boolean;
     note?: string | null;
     source: string | null;
+    embedded?: string | null;
+    inAppUpdatable?: boolean;
     error?: string;
   } | null>(null);
   const [progress, setProgress] = useState<{ stage: string; message: string; pct?: number } | null>(null);
@@ -296,6 +298,9 @@ export function PiCoreUpdatePanel() {
           pushToast("info", res.output);
         } else if (res.cancelled) {
           pushToast("info", "已取消");
+        } else if (res.blocked) {
+          // 上游比内置新：不是错误，是一条「请升级 MPI 本体」的说明。
+          pushToast("info", res.output);
         } else {
           pushToast("error", res.output);
         }
@@ -334,6 +339,9 @@ export function PiCoreUpdatePanel() {
   };
 
   const liveUpdatePct = progress ? overallUpdatePct(progress.stage, progress.pct) : null;
+  // 上游比 MPI 内置的新：应用内装不了（pi 1.x 的 npm 包不再提供依赖锁文件），
+  // 只能等内置该运行时的 MPI 版本。此时不应让用户点一个注定失败的下载。
+  const coreBlocked = Boolean(updateStatus?.hasUpdate && updateStatus?.inAppUpdatable === false);
 
   return (
     <div className="set-card">
@@ -361,12 +369,30 @@ export function PiCoreUpdatePanel() {
         </div>
       </div>
       {updateStatus?.note && <div className="set-hint" style={{ marginBottom: 12 }}>{updateStatus.note}</div>}
+      {coreBlocked && (
+        <div className="set-hint" style={{ marginBottom: 12 }}>
+          {updateStatus?.embedded ? (
+            <>
+              上游 Pi v{updateStatus?.latest} 还不能在应用内安装：pi 1.x 的 npm 包不再提供依赖锁文件，
+              MPI 只能安装自己内置的运行时（本版内置 {"v" + updateStatus.embedded}）。
+              请在上方「MPI 应用更新」里升级 MPI 本体，新版本会一并内置更新的 Pi 运行时。
+            </>
+          ) : (
+            <>
+              上游 Pi v{updateStatus?.latest} 无法在应用内安装：当前实例没有内置 Pi 运行时
+              （开发模式或旧安装包）。请使用带内置运行时的 MPI 发行版。
+            </>
+          )}
+        </div>
+      )}
       <div>
-        <button className="set-btn primary" onClick={runUpdate} disabled={updating}>
+        <button className="set-btn primary" onClick={runUpdate} disabled={updating || coreBlocked}>
           {updating ? (
             <>
               <span className="spinner" /> 检查并更新中…
             </>
+          ) : coreBlocked ? (
+            updateStatus?.embedded ? "需先升级 MPI 本体" : "无法在应用内更新"
           ) : updateStatus?.hasUpdate && updateStatus.latest ? (
             `更新到 v${updateStatus.latest}`
           ) : (

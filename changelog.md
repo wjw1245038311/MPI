@@ -18,6 +18,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    - **发版链**：`publish-release.mjs` 新增 PWA 同步（中继上的网页版跟随本次桌面端；`--no-pwa` 或 CI 跳过）。
    验证方式：打开手机面板 → 只剩两块，顶部一行状态可点开「诊断」；「另一台电脑」给出中继与本机两条链接，复制任一条到另一台电脑浏览器即可配对；在另一台电脑上清站点数据后重新配对，设备列表应**替换**同浏览器同平台那条旧记录而不是新增；桌面日志出现 `local-relay … tls=reuse token=on`，且不再出现反复成对的 `registered` / `gone (4006 REPLACED)`（正常应是 `relay-channels uplinks=lan,builtin` + 一行 `relay-channel skip id=local`）。
 
+2. **修：上游 Pi 比内置新时「更新 Pi」必然失败（先下载整包，再报缺 npm-shrinkwrap.json）**——pi 1.x 的 npm 包从 1.2 起不再随包发布 `npm-shrinkwrap.json`（也没有 `bundleDependencies`），原来「下载 registry tarball → 按锁逐个装依赖」的路线对 1.x 根本建不出可用的运行时树，于是用户看到的是「已下载完 → 红字失败」。现在在**下载之前**就判定：只有「设备版本低于/等于内置归档」才走应用内安装（离线、带 size + sha512 校验）；上游超前时直接说明「请升级 MPI 本体（新版本会内置更新的 Pi 运行时）」，不再白下载整个包。设置面板里此时按钮变成「需先升级 MPI 本体」并附一段说明，提示按「提示」而不是「错误」弹出。registry 相关死代码（tarball 下载 / 按锁装依赖 / 剪枝 / 并发池）一并删除。
+   验证方式：`npm run typecheck` + `npm run test:core-update-route`（新增 `canUpdateInApp` 真值表：本机 1.2 + 内置 1.2 + 上游 1.3 → 不可应用内更新；本机 0.87 + 内置 1.2 → 可以先吃内置）。应用内：设置 →「关于 MPI」→「更新 Pi 核心」，本机 pi 已是 1.2.0、上游 1.3.0 → 按钮显示「需先升级 MPI 本体」并置灰，点了不会开始下载。
+
+3. **修：未激活机器「检查更新」把原始网络错误丢到界面上（net::ERR_CONNECTION_RESET）**——没填激活码时更新源只能是 GitHub（既定设计：授权码缺失时不去碰内置服务器的镜像），国内网络下 Chromium 报 `net::ERR_CONNECTION_RESET`，而旧文案只映射了 `ENOTFOUND/ECONNREFUSED/ETIMEDOUT/EAI_AGAIN`，原始错误串于是直接显示在「最新版本」格里。现在把 Chromium 的 `ERR_CONNECTION_*` / `ERR_INTERNET_*` / `ERR_NAME_NOT_RESOLVED` / `ERR_SSL_*` 等一并映射成中文，并在「只有 GitHub 一条路」时补一句「可以点『打开发布页』手动下载安装包，或先激活服务器再重试」。
+   验证方式：`npm run test:app-update-feed`（新增 3 条断言：错误映射、未激活提示、`noRelay` 参数）。应用内：未激活机器（无授权码）→ 设置 →「关于 MPI」→「检查最新版本」，GitHub 不通时显示「连接 GitHub 被中断（net::ERR_CONNECTION_RESET，常见于国内网络）。未激活内置服务器时……」，并可直接点「打开发布页」下载。
+
 ## v0.10.4（2026-10-16）
 
 1. **改：「服务器」拆成「转发设置 + 激活授权」两件事（照参考界面重做），一个二维码带全部候选，一个激活码最多 3 台设备**——上一版把「来源选择 / 授权码 / 多通道 / 局域网 / 静态目录」全堆在设置的一栏里，用户反馈「还是啰嗦，理想情况只要配置一个服务器、验证连通性就行」。参照用户给的界面（某软件的「代理设置」+「激活授权」）重做：
