@@ -6,6 +6,21 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 ## Unreleased
 
+1. **修：重启后首屏卡 15s（会话逐行解析是平方级）+ 缓存落盘**——`boot window-ready-to-show` 9.9s、`ipc-slow app:getProjects 16s`、`app:getTotalUsage 16s`，随后打开/新建会话排队 3～12s。定因二层：
+   - **根因**：`session-store` 的 `forEachLine()` 自己拼 `buf += chunk` + `buf.slice`，遇到超长行（工具输出/base64）退化成平方级复制。同一批数据（205 会话 / 350MB）用它是 **15.8s**，换成 node 原生 `readline` 后 **1.4s**（本机实测；摘要 1395ms / 用量 1462ms）。这个函数是摘要/用量/历史/搜索的公共入口，10 倍差直接体现在启动与打开会话上。
+   - **叠加**：摘要/用量缓存以前只在内存，每次重启都全量重算。现在按「文件 mtime + size」持久化到 `<userData>/session-cache.json`（schema 1；「今天」的用量带日期，跨天重算；写盘失败不影响主流程），重启后仅 stat 一轮（38ms）；扫描循环每处理完一个文件让出一次事件循环。
+   - 补观测：`perf scan-summary/scan-usage`、`perf warm-spare ready <ms>`（冷启动下限，实测 6.2s）、`perf thread-open adopted=<bool> modelWaits=<n> total=<ms>`（实测复用备用进程 691ms）。
+   验证方式：`npm run typecheck` + `npm test -- session-cache` + `npm test -- usage`。应用内：重启后看 `logs/mpi-diag.log`：不应再出现 `ipc-slow app:getProjects/getTotalUsage`；`perf scan-*` 若出现应在 ~1.5s 量级；`<userData>/session-cache.json` 首次扫描后生成；新建会话 `perf thread-open` 应 `adopted=true` 或 `cold=true`+`warm-spare ready` 耗时。
+
+2. **修：切换会话再切回来，滚动位置丢失**——排查下来是四层叠加（都已在 `Chat` 里改掉）：
+   - **不再读切换后的 DOM 存位置**：旧逻辑在切换后的 layout effect 里补存上一会话，那时 DOM 已经换成新会话、`scrollTop` 被浏览器钳制，存下的是错值（常为 0）。现在只在滚动事件里更新，并同时记「当时是否在底部跟随」（`stick`）。
+   - **记锚点而不是像素**：像素偏移在 transcript 分阶段渲染（估算高度→真实高度）时一定漂；现在记「视口顶部那条消息的 `data-message-key` + 它在视口里的偏移」，恢复时按这条消息重新定位，每帧重算。
+   - **恢复期间临时关掉 `content-visibility`**：视口外消息按 `contain-intrinsic-size: auto 420px` 估高，会让锚点一直追一个还在变形的布局；恢复的那 1–10 秒强制真实高度，收手后再打开（并补 8 帧收尾校准抵消重新估算带来的位移）。
+   - **用户接管只认真实输入**：以前把「`scrollTop` 与预期不一致」当成用户滚动，但布局重排/浏览器滚动锚定也会产生差异 → 恢复常在第 3 帧自我中止。现在只认滚轮/指针/按键时间窗。
+   验证方式：`npm run typecheck`。应用内（重点用两条**老会话**）：A 里往上翻一页 → 切到 B → 切回 A，落点应和切走前一致；多切几轮（含流式输出/工具运行中）后不应出现概率性上下偏移；在底部跟随时切走再回来应仍在底部；恢复后立即滚轮，位置应跟手、不被拽回。
+3. **修：启动时先闪一下英文界面（约 2s）再看回中文**——渲染层 store 的 `config` 初始为 null，首帧用 `config?.language || "en"` 渲染，等异步 `app:getConfig` 回来才切回中文。现在主进程在 `registerIpc` 注册了一个同步通道 `app:bootConfig`（与 `app:getConfig` 同一份脱敏结果），preload 在模块初始化时 `sendSync` 取一次挂到 `window.pi.bootConfig`，store 用它做初始 config → 首帧即为正确语言/主题；通道失败则退回旧行为（null）。
+   验证方式：`npm run typecheck`。应用内：重启/启动 MPI，窗口出现时界面应直接是中文（不再出现约 2 秒英文界面）；切成英文再重启，首帧应直接是英文。
+
 1. **改：会话列表加时间分组 + 相对时间，旧会话降噪（防误点）**——侧栏会话行以前只显示 `10/17 20:30` 这类数字，昨天的会话和今天的会话长得一模一样，在多条会话之间很容易点错（2026-10-18 反馈：本来要打开前一天那个「服务器设置」的会话，结果点进了今天的）。现在：
    - **分组**：项目内未置顶区按「今天 / 昨天 / 本周 / 更早」插组标题；置顶区**不插**标题（拖拽排序按下标工作，插行会打乱视觉顺序）。标题按可读性/接近性原则调过：`10.5px / 600 / letter-spacing .08em` + `--text-dim`（浅色 4.56:1、深色 8.88:1；原来是 `--text-faint` 2.41:1），上下间距 **16px / 4px**（标题离自己那组更近）。**不带分隔线、不带底色**，也不用 sticky（试过：渐变侧栏上的实色吸附块必有色差，且会遮住首行标题，已回退）。
    - **相对时间**：一小时以内给「刚刚 / N 分钟前」；更早一律**带日期**（`今天 09:30` / `昨天 20:15` / `周三 14:02` / `10-01 08:00`，跨年带年份），今天的时间用强调色，悬停显示完整时间。

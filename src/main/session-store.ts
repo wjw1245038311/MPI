@@ -1,9 +1,9 @@
-import { createReadStream, existsSync, readdirSync, statSync, type Stats } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync, type Stats } from "node:fs";
+import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { earlierDisplayMessages } from "./context-estimate";
-import { getConfig } from "./config";
+import { getConfig, getConfigDir } from "./config";
 import { getTrashDir } from "./trash-store";
 
 /**
@@ -90,32 +90,28 @@ export function listAllSessionFiles(root: string): string[] {
 }
 
 /** Stream a file line-by-line using only `\n` as delimiter (JSONL-safe). */
+/**
+ * 逐行读一个 JSONL 文件。
+ *
+ * 2026-10-18 改成 node 的 readline：旧实现是自己维护 `buf += chunk` + `buf.indexOf` +
+ * `buf.slice`，遇到**超长行**（工具输出/base64 图片、单行可达 MB）时退化成平方级复制，
+ * 实测 205 个会话 / 350MB 全量解析要 **15.8s**（同样的数据用 readline 只要 1.4s）。
+ * 这个函数是会话摘要/用量/历史/搜索的公共入口，这里的 10 倍差直接就是启动卡 15s 的根因之一。
+ */
 export function forEachLine(file: string, onLine: (line: string) => void): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const decoder = new StringDecoder("utf8");
-    let buf = "";
-    const stream = createReadStream(file, { encoding: "utf8" as BufferEncoding });
-    stream.on("data", (chunk: string | Buffer) => {
-      buf += decoder.write(Buffer.from(chunk));
-      while (true) {
-        const nl = buf.indexOf("\n");
-        if (nl === -1) break;
-        let line = buf.slice(0, nl);
-        buf = buf.slice(nl + 1);
-        if (line.endsWith("\r")) line = line.slice(0, -1);
+  return (async () => {
+    const rl = createInterface({
+      input: createReadStream(file, { encoding: "utf8" }),
+      crlfDelay: Infinity,
+    });
+    try {
+      for await (const line of rl) {
         if (line.length) onLine(line);
       }
-    });
-    stream.on("end", () => {
-      buf += decoder.end();
-      if (buf.length) {
-        if (buf.endsWith("\r")) buf = buf.slice(0, -1);
-        if (buf.length) onLine(buf);
-      }
-      resolve();
-    });
-    stream.on("error", reject);
-  });
+    } finally {
+      rl.close();
+    }
+  })();
 }
 
 function textOfContent(content: unknown): string {
@@ -233,6 +229,7 @@ async function readThreadSummary(file: string): Promise<{ summary: ThreadSummary
   }
   // 缓存结果（含损坏文件的 null，避免反复重读）；简单封顶。
   summaryCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, result });
+  summaryCacheMutated = true;
   if (summaryCache.size > 4096) summaryCache.clear();
   return result;
 }
@@ -573,10 +570,128 @@ function localDayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// ---------------------------------------------------------------------------
+// 扫描耗时日志的注入点：session-store 不 import electron（测试要能用），
+// 由主进程在启动时把 appendDiagLog 注进来。
+// ---------------------------------------------------------------------------
+let scanLogger: ((line: string) => void) | null = null;
+/** 主进程启动时注入 `appendDiagLog`；测试里保持 null（不落日志）。 */
+export function setScanLogger(fn: (line: string) => void): void {
+  scanLogger = fn;
+}
+
+// ---------------------------------------------------------------------------
+// 缓存落盘（2026-10-18）
+//
+// 实测：205 个会话 / 350MB 全量解析一次（摘要或用量各一遍）在冷启动时把主线程占满，
+// 表现为 `ipc-slow app:getProjects 16s`、`app:getTotalUsage 16s`、窗口首屏 9.9s、
+// 后续 `thread:open` 排队 3～12s。以前摘要/用量缓存只在内存里，每次重启都重算。
+// 现在按「文件 mtime + size」持久化到 `<userData>/session-cache.json`：
+//   · 重启后只需 stat 一轮（205 文件实测 38ms），冷启动不再卡壳；
+//   · 「今天」的用量值带日期，跨天失效重算（与内存逻辑一致）；
+//   · 写盘失败不影响主流程（缓存丢了只是下次慢一点）。
+// ---------------------------------------------------------------------------
+const SESSION_CACHE_SCHEMA = 1;
+let sessionCacheLoaded = false;
+let sessionCacheSaveTimer: ReturnType<typeof setTimeout> | null = null;
+/** 本次 scan 是否真的重读过文件（只重读才需要落盘）。 */
+let summaryCacheMutated = false;
+
+function sessionCachePath(): string | null {
+  try {
+    const dir = getConfigDir();
+    return dir ? join(dir, "session-cache.json") : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadSessionCacheIfNeeded(): void {
+  if (sessionCacheLoaded) return;
+  sessionCacheLoaded = true;
+  const file = sessionCachePath();
+  if (!file || !existsSync(file)) return;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return;
+  }
+  if (!parsed || parsed.schema !== SESSION_CACHE_SCHEMA) return;
+  const dk = localDayKey(new Date());
+  usageCacheDay = dk;
+  for (const entry of Array.isArray(parsed.summary) ? parsed.summary : []) {
+    if (!Array.isArray(entry) || entry.length < 4) continue;
+    const [path, mtimeMs, size, result] = entry;
+    if (typeof path !== "string" || typeof mtimeMs !== "number" || typeof size !== "number") continue;
+    summaryCache.set(path, { mtimeMs, size, result: result ?? null });
+  }
+  for (const entry of Array.isArray(parsed.usage) ? parsed.usage : []) {
+    if (!Array.isArray(entry) || entry.length < 8) continue;
+    const [path, mtimeMs, size, tokens, cost, todayTokens, todayCost, day] = entry;
+    if (typeof path !== "string" || typeof mtimeMs !== "number" || typeof size !== "number") continue;
+    // 「今天」只对写入当天有效：跨天就丢掉这条，让下次扫描重算
+    if (day !== dk) continue;
+    usageCache.set(path, {
+      mtimeMs,
+      size,
+      tokens: tokens || 0,
+      cost: cost || 0,
+      todayTokens: todayTokens || 0,
+      todayCost: todayCost || 0,
+    });
+  }
+}
+
+function saveSessionCacheNow(): void {
+  if (sessionCacheSaveTimer) {
+    clearTimeout(sessionCacheSaveTimer);
+    sessionCacheSaveTimer = null;
+  }
+  const file = sessionCachePath();
+  if (!file) return;
+  const dk = usageCacheDay || localDayKey(new Date());
+  const payload = {
+    schema: SESSION_CACHE_SCHEMA,
+    savedAt: Date.now(),
+    summary: [...summaryCache].map(([path, e]) => [path, e.mtimeMs, e.size, e.result]),
+    usage: [...usageCache].map(([path, e]) => [
+      path,
+      e.mtimeMs,
+      e.size,
+      e.tokens,
+      e.cost,
+      e.todayTokens,
+      e.todayCost,
+      dk,
+    ]),
+  };
+  try {
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(payload), "utf8");
+    renameSync(tmp, file);
+  } catch {
+    /* 缓存写失败不影响主流程 */
+  }
+}
+
+function scheduleSessionCacheSave(): void {
+  if (sessionCacheSaveTimer) return;
+  sessionCacheSaveTimer = setTimeout(() => {
+    sessionCacheSaveTimer = null;
+    saveSessionCacheNow();
+  }, 1500);
+}
+
+/** 冷启动解析时每处理完一个文件让出一次事件循环，避免把 IPC 队列饿死。 */
+const yieldToLoop = (): Promise<void> => new Promise((r) => setImmediate(r));
+
 /** Aggregate token/cost usage across every session file (all-time plus local-today). */
 export async function getTotalUsage(): Promise<TotalUsage> {
+  const scanStartedAt = Date.now();
   const root = getSessionsDir();
   if (!existsSync(root)) return { tokens: 0, cost: 0, sessions: 0, todayTokens: 0, todayCost: 0 };
+  loadSessionCacheIfNeeded();
   const files = listAllSessionFiles(root);
   const now = new Date();
   const dayStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -623,9 +738,16 @@ export async function getTotalUsage(): Promise<TotalUsage> {
       cost += r.cost;
       todayTokens += r.todayTokens;
       todayCost += r.todayCost;
+      // 冷启动时（重启后首次）这里会连续解析几百 MB；让出一拍，IPC 不至于全排队。
+      await yieldToLoop();
     }
   }
   await Promise.all(Array.from({ length: Math.min(8, Math.max(1, toParse.length)) }, worker));
+  if (toParse.length) scheduleSessionCacheSave();
+  // 只有「真的重解析了一批」才记日志：平时轮询全命中缓存，不要刷屏。
+  if (toParse.length > 20) {
+    scanLogger?.(`perf scan-usage files=${files.length} parsed=${toParse.length} ${Date.now() - scanStartedAt}ms`);
+  }
 
   // Prune entries for files that no longer exist (deleted/trashed sessions).
   const alive = new Set(files);
@@ -636,8 +758,10 @@ export async function getTotalUsage(): Promise<TotalUsage> {
 
 /** Read every session file under the sessions dir, grouped by real cwd. */
 export async function scanProjects(): Promise<ProjectSummary[]> {
+  const scanStartedAt = Date.now();
   const root = getSessionsDir();
   if (!existsSync(root)) return [];
+  loadSessionCacheIfNeeded();
 
   const groups = new Map<string, ProjectSummary>();
   // light concurrency limit
@@ -655,17 +779,27 @@ export async function scanProjects(): Promise<ProjectSummary[]> {
       const idx = cursor++;
       const file = queue[idx];
       const read = await readThreadSummary(file);
-      if (!read) continue;
-      const { summary, cwd } = read;
-      let group = groups.get(cwd);
-      if (!group) {
-        group = { cwd, name: basename(cwd) || cwd, threads: [] };
-        groups.set(cwd, group);
+      if (read) {
+        const { summary, cwd } = read;
+        let group = groups.get(cwd);
+        if (!group) {
+          group = { cwd, name: basename(cwd) || cwd, threads: [] };
+          groups.set(cwd, group);
+        }
+        group.threads.push(summary);
       }
-      group.threads.push(summary);
+      // 冷启动时要全量解析所有会话（这里是首屏最大的阻塞源）；让出一拍避免 IPC 饿死。
+      await yieldToLoop();
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, queue.length)) }, worker));
+  if (summaryCacheMutated) {
+    summaryCacheMutated = false;
+    scheduleSessionCacheSave();
+  }
+  // 冷扫描（重启后首次）才记数：命中缓存时这里只有 stat 成本。
+  const scanMs = Date.now() - scanStartedAt;
+  if (scanMs > 400) scanLogger?.(`perf scan-summary files=${queue.length} ${scanMs}ms`);
 
   const projects = [...groups.values()];
   for (const p of projects) p.threads.sort((a, b) => b.updatedAt - a.updatedAt);

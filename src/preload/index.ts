@@ -34,6 +34,21 @@ function on(channel: string, cb: (payload: any) => void): Unsub {
 }
 
 const api = {
+  /**
+   * 启动配置（同步取一次）。
+   *
+   * 以前 store 的 `config` 初始值是 null，首帧用 `config?.language || "en"` —— 启动时
+   * 会先闪一下英文界面，等异步 getConfig 回来才切回中文（发布版实测约 2s）。
+   * 主进程在 registerIpc 时已注册同步通道，preload 在这里就能拿到真实配置，
+   * 首帧直接是正确语言/主题；失败则退回 null（行为同旧版）。
+   */
+  bootConfig: ((): unknown => {
+    try {
+      return ipcRenderer.sendSync("app:bootConfig") ?? null;
+    } catch {
+      return null;
+    }
+  })(),
   app: {
     getVersion: () => ipcRenderer.invoke("app:getVersion"),
     getConfig: () => ipcRenderer.invoke("app:getConfig"),

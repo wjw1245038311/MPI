@@ -146,7 +146,7 @@ import {
   previewWindowMoveEnd,
   previewWindowMoveStart,
 } from "./preview-window";
-import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readEarlierMessages, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, type ThreadHistory, type ThreadSearchHit } from "./session-store";
+import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readEarlierMessages, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, setScanLogger, type ThreadHistory, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
 import { emptyTrash, listTrash, moveToTrash, purgeFromTrash, restoreFromTrash } from "./trash-store";
 import {
@@ -1118,6 +1118,7 @@ export function ensureWarmBridge(): void {
   const handle = createHandle(cwd, undefined, undefined, "sandbox", sendToRenderer);
   warmHandle = handle;
   warmAppendFp = appendPromptFingerprint();
+  const spawnStartedAt = Date.now();
   // eslint-disable-next-line no-console
   console.log("[pi] warm spare spawning (cwd=" + cwd + ")");
   handle.bridge
@@ -1125,6 +1126,8 @@ export function ensureWarmBridge(): void {
     .then(() => handle.bridge.getState()) // wait until pi answers: fully booted
     .then(() => {
       if (warmHandle === handle) {
+        // 新会话的「冷启动下限」就看这一条（docs: boot/perf 观测）。
+        appendDiagLog(`perf warm-spare ready ${Date.now() - spawnStartedAt}ms`);
         // eslint-disable-next-line no-console
         console.log("[pi] warm spare ready — thread opens are now fast");
       }
@@ -1796,6 +1799,17 @@ function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
 }
 
 export function registerIpc(getWin: () => BrowserWindow | null): void {
+  // 启动配置：preload 用 sendSync 一次拿到（首帧就是正确语言/主题，不再先闪英文）。
+  // 与 app:getConfig 同一份脱敏结果（serverAuthCode / 飞书 secret 不外发）。
+  ipcMain.on("app:bootConfig", (event) => {
+    try {
+      event.returnValue = configForRenderer();
+    } catch {
+      event.returnValue = null;
+    }
+  });
+  // session-store 不 import electron（测试要能用），扫描耗时日志由这里注入。
+  setScanLogger(appendDiagLog);
   // ---- IPC 慢调用观测（2026-10-18）--------------------------------------------
   // 用户反馈「每次打开要 10 来秒、新建会话也卡几秒」，而日志里看不到任何耗时。
   // 这里把所有 ipcMain.handle 套一层计时，**只记 ≥300ms 的**（正常路径零日志噪音）：
@@ -5755,6 +5769,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
 const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
   ipcMain.handle("thread:open", async (_e, args: { cwd: string; sessionFile?: string; name?: string; permission?: PermissionLevel }) => {
+    const openStartedAt = Date.now();
     const { cwd, sessionFile, name } = args;
     if (sessionFile && bridges.has(sessionFile)) {
       const existing = bridges.get(sessionFile)!;
@@ -5845,6 +5860,11 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
           break;
         }
       }
+      // 新会话的耗时拆分：冷启动（spawn）vs 复用备用进程 vs 等模型列表（modelWaits）。
+      appendDiagLog(
+        `perf thread-open adopted=${adopted} cold=${!adopted} modelWaits=${modelTries} total=${Date.now() - openStartedAt}ms` +
+          (sessionFile ? " switch" : " new"),
+      );
       // P1-12: restore per-thread auto mode. New sessions (no messages yet)
       // explicitly pick their initial model — this also fixes the "new session
       // starts on drifted pi global default" quirk for auto threads.

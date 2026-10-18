@@ -1765,7 +1765,9 @@ export const useStore = create<PiStore>()((set, get) => {
   };
 
   return ({
-  config: null,
+  // preload 同步取的启动配置：首帧就能用对语言/主题，不再先闪一下英文再切回中文。
+  // bootstrap() 随后会再异步拉一次（服务端脱敏后的最新值）覆盖它。
+  config: (window.pi?.bootConfig as AppConfig | null) ?? null,
   runtime: null,
   projects: [],
   projectsLoading: false,

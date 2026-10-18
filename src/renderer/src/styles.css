@@ -1043,6 +1043,11 @@ body.sidebar-resizing * {
   content-visibility: auto;
   contain-intrinsic-size: auto 420px;
 }
+/* 恢复阅读位置期间临时关掉高度估算：视口外消息按 420px 估算，会让锚点一直追变形中的布局。
+   只有切会话的那 1~5 秒生效，恢复完成后恢复 content-visibility。 */
+.messages.no-cv > .msg.assistant {
+  content-visibility: visible;
+}
 .msg-avatar {
   width: 26px;
   height: 26px;

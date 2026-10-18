@@ -48,8 +48,19 @@ export function Chat() {
   const renameThread = useStore((s) => s.renameThread);
   const switchThreadFolder = useStore((s) => s.switchThreadFolder);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const scrollPositionsRef = useRef(new Map<string, number>());
-  const previousActiveThreadIdRef = useRef(activeThreadId);
+  const scrollPositionsRef = useRef<
+    Map<string, { top: number; max: number; stick: boolean; anchor?: { key: string; index: number; delta: number } }>
+  >(new Map());
+  // 恢复进行中：会话切回后 transcript 是分阶段渲染的（第一次 layout 时 scrollHeight
+  // 往往只有真实的一半），这期间**任何 follow / 记忆写入都会把好位置覆盖成错值**
+  // （见 2026-10-18 的 [scroll] 日志：restore 先读到被 follow 写坏的 {top:5814,stick:true}）。
+  // 恢复期间：暂停跟随、暂停写记忆；用户一旦主动滚动就立即让位。
+  const restoreGuardRef = useRef<{ id: string | null; active: boolean }>({ id: null, active: false });
+  /** 当前恢复循环的取消函数。流式输出会让恢复 effect 每帧重跑，**不能**用 effect cleanup 取消它（否则永远收敛不了）。 */
+  const restoreCancelRef = useRef<(() => void) | null>(null);
+  /** 恢复期间临时关掉 content-visibility：否则视口外消息按 420px 估算，恢复时高度一直在变。 */
+  const [restoring, setRestoring] = useState(false);
+  const isRestoring = () => restoreGuardRef.current.active && restoreGuardRef.current.id === activeThreadId;
   const lastAutoScrollThreadIdRef = useRef<string | null>(null);
   const lastRestoreThreadIdRef = useRef<string | null>(null);
   const highlightedUserMessageRef = useRef<HTMLElement | null>(null);
@@ -151,12 +162,51 @@ export function Chat() {
     };
   }, []);
 
+  /** 按 key + 同名节点下标取回锚点元素（同一 key 会出现在 .msg-item 与内部 .msg 上）。 */
+  const resolveAnchorNode = (el: HTMLDivElement, a: { key: string; index: number }): HTMLElement | null => {
+    const nodes = Array.from(el.querySelectorAll<HTMLElement>(`[data-message-key="${CSS.escape(a.key)}"]`));
+    return nodes[a.index] ?? nodes[0] ?? null;
+  };
+
+  /** 取「视口顶部那条消息」及其相对视口的偏移。位置记忆用它做锚，
+   *  因为像素偏移在 transcript 分阶段渲染（估算高度→真实高度）时一定会漂。 */
+  const captureAnchor = (el: HTMLDivElement): { key: string; index: number; delta: number } | null => {
+    const host = el.querySelector(".messages");
+    if (!host) return null;
+    const nodes = host.querySelectorAll<HTMLElement>("[data-message-key]");
+    if (!nodes.length) return null;
+    const top = el.getBoundingClientRect().top;
+    let best: HTMLElement | null = null;
+    for (const node of nodes) {
+      if (node.getBoundingClientRect().bottom > top + 1) {
+        best = node;
+        break;
+      }
+    }
+    if (!best) best = nodes[nodes.length - 1];
+    const key = best.dataset.messageKey;
+    if (!key) return null;
+    const sameKey = Array.from(nodes).filter((n) => n.dataset.messageKey === key);
+    const index = Math.max(0, sameKey.indexOf(best));
+    const delta = best.getBoundingClientRect().top - top;
+    return { key, index, delta };
+  };
+
   const rememberScrollPosition = () => {
     const el = scrollRef.current;
     if (!el || !activeThreadId) return;
+    if (isRestoring()) return; // 恢复期间不覆盖记忆（见 restoreGuardRef 注释）
     lastScrollTopRef.current = el.scrollTop;
-    scrollPositionsRef.current.set(activeThreadId, el.scrollTop);
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el);
+    // 记住「位置 + 当时的跟随意图」：只记 top 不够——如果用户本来就在底部跟随，
+    // 换回这个会话时应当回到底部；如果本来在上翻阅读，要回到那个 offset。
+    scrollPositionsRef.current.set(activeThreadId, {
+      top: el.scrollTop,
+      max: el.scrollHeight - el.clientHeight,
+      stick: stickRef.current,
+      // 跟随态不需要锚；阅读态必须带锚，否则后续任意一次滚动都会把锚冲掉。
+      anchor: stickRef.current ? undefined : (captureAnchor(el) ?? undefined),
+    });
     // 距离只用于「重新武装」跟随（用户滚回底部附近），绝不用于解除：
     // 任何真实上滚输入（滚轮/滚动条/键盘）都会先被方向检测捕获
     // （handleWheel / handleUserScroll 的上移分支）。而 stick=true 时距离
@@ -164,7 +214,9 @@ export function Chat() {
     // 浏览器滚动锚定产生的非用户位移，按距离解除会把流式跟随无声杀死。
     // 注意：本函数只在「有活跃输入」或程序化同步（stick 已为 true）时被调用；
     // 无输入的布局位移走 handleUserScroll 的只记录分支，不经过这里重新武装。
-    if (!stickRef.current && near) stickRef.current = true;
+    if (!stickRef.current && near) {
+      stickRef.current = true;
+    }
     setAtBottom(near);
   };
 
@@ -200,6 +252,15 @@ export function Chat() {
   const handleUserScroll = () => {
     const el = scrollRef.current;
     if (!el || !activeThreadId) return;
+    if (isRestoring()) {
+      // 恢复中的程序化位移：只同步基准，不当成用户意图。
+      if (!hasScrollGesture()) {
+        lastScrollTopRef.current = el.scrollTop;
+        return;
+      }
+      // 用户开始滚动 → 恢复让位，位置以用户为准。
+      restoreGuardRef.current = { id: activeThreadId, active: false };
+    }
     const prev = lastScrollTopRef.current;
     const cur = el.scrollTop;
     lastScrollTopRef.current = cur;
@@ -208,19 +269,29 @@ export function Chat() {
       // Upward. With gesture evidence: read-history intent, release follow.
       // Without: layout shift — record only, never re-arm or release.
       if (!hasScrollGesture()) {
-        scrollPositionsRef.current.set(activeThreadId, cur);
+        scrollPositionsRef.current.set(activeThreadId, {
+          top: cur,
+          max: el.scrollHeight - el.clientHeight,
+          stick: stickRef.current,
+          anchor: stickRef.current ? undefined : (captureAnchor(el) ?? undefined),
+        });
         setAtBottom(near);
         return;
       }
       stickRef.current = false;
-      scrollPositionsRef.current.set(activeThreadId, cur);
+      scrollPositionsRef.current.set(activeThreadId, {
+        top: cur,
+        max: el.scrollHeight - el.clientHeight,
+        stick: false,
+        anchor: captureAnchor(el) ?? undefined,
+      });
       setAtBottom(near);
       return;
     }
     // Non-upward. Re-arm only on user-driven movement back into the band —
     // layout-induced downward shifts must not override a released follow.
     if (!hasScrollGesture()) {
-      scrollPositionsRef.current.set(activeThreadId, cur);
+      scrollPositionsRef.current.set(activeThreadId, { top: cur, max: el.scrollHeight - el.clientHeight, stick: stickRef.current });
       setAtBottom(near);
       return;
     }
@@ -249,7 +320,7 @@ export function Chat() {
     // already active thread, follow only while the user's intent is to follow
     // (stick): any upward scroll — wheel or scrollbar drag — pauses it until
     // they scroll back into the near-bottom band (handleUserScroll).
-    if (!switchedThread && stickRef.current) {
+    if (!switchedThread && stickRef.current && !isRestoring()) {
       el.scrollTop = el.scrollHeight;
       rememberScrollPosition();
     } else if (!switchedThread && activeThreadId && !scrollPositionsRef.current.has(activeThreadId)) {
@@ -288,26 +359,128 @@ export function Chat() {
     }
   }, [thread?.streaming, activeThreadId]);
 
-  // The chat DOM is reused when activeThreadId changes. Without an explicit
-  // per-thread position, the browser clamps the reused scroll container to
-  // the new transcript's top, so returning to a thread loses its last view.
-  useLayoutEffect(() => {
-    const previousThreadId = previousActiveThreadIdRef.current;
-    const el = scrollRef.current;
-    if (
-      previousThreadId &&
-      previousThreadId !== activeThreadId &&
-      el &&
-      !scrollPositionsRef.current.has(previousThreadId)
-    ) {
-      scrollPositionsRef.current.set(previousThreadId, el.scrollTop);
-    }
-    previousActiveThreadIdRef.current = activeThreadId;
-  }, [activeThreadId]);
+  // The chat DOM is reused when activeThreadId changes, so switching threads
+  // must restore the saved view explicitly.
+  //
+  // 2026-10-18 修「切走再切回来丢失位置」：
+  //   ① 以前只在切换后的 layout effect 里读 DOM 补存上一会话 —— 那时 DOM 已换成
+  //      新会话、scrollTop 已被浏览器钳制，存下的是错值（常是 0 或钳制后的值）。
+  //      现在只信滚动事件里记录的值（handleUserScroll / rememberScrollPosition），
+  //      并同时记住「当时是否在底部跟随」（stick）：底部会话换回来直接回底部。
+  //   ② 长会话的消息块用 content-visibility，隐藏区块从估算高度变真实高度会让
+  //      scrollTop 漂移；以前只补一帧，现在按「高度稳定就停」纠正若干帧。
+  const applySavedScroll = (
+    el: HTMLDivElement,
+    mem: { top: number; max: number; stick: boolean; anchor?: { key: string; index: number; delta: number } },
+  ) => {
+    restoreGuardRef.current = { id: activeThreadId, active: true };
+    setRestoring(true);
+    // 立即生效（别等下一次 React 提交）：首帧就要用真实高度算锚点，
+    // 否则老会话（消息多、估算差得远）会先按 420px 估高定位一次。
+    const messagesEl = el.querySelector<HTMLElement>(".messages");
+    messagesEl?.classList.add("no-cv");
+    let expected = -1;
+    let lastHeight = -1;
+    let frames = 0;
+    let raf = 0;
+    const apply = () => {
+      const max = Math.max(0, el.scrollHeight - el.clientHeight);
+      // 只信 stick：不要用 top≈max 判断「当时在底部」（流式时 top 恰好等于当时的 max）。
+      if (mem.stick) {
+        el.scrollTop = max;
+      } else if (mem.anchor) {
+        // 关键：按「顶部那条消息」定位，而不是按像素偏移。每一帧重算它相对视口的位置，
+        // 上方内容（图片/工具输出/content-visibility）长高多少就补多少。
+        const node = resolveAnchorNode(el, mem.anchor);
+        if (node) {
+          const deltaNow = node.getBoundingClientRect().top - el.getBoundingClientRect().top;
+          el.scrollTop = Math.min(Math.max(0, el.scrollTop + deltaNow - mem.anchor.delta), max);
+        } else {
+          el.scrollTop = Math.min(mem.top, max);
+        }
+      } else {
+        el.scrollTop = Math.min(mem.top, max);
+      }
+      expected = el.scrollTop;
+      lastScrollTopRef.current = el.scrollTop; // programmatic: not user intent
+      stickRef.current = mem.stick;
+      setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el));
+    };
+    apply();
+    // 收尾：先撤 no-cv（视口外块高度会重新变回估算值 → 总高度再变一次），
+    // 再补几帧按锚点补偿，然后才放手。否则就是我们自己把落点带偏（概率性偏移）。
+    let finished = false;
+    const settle = (reason: string) => {
+      if (finished) return;
+      finished = true;
+      setRestoring(false);
+      messagesEl?.classList.remove("no-cv");
+      let verify = 0;
+      const verifyStep = () => {
+        verify++;
+        // 用户在这几帧里滚动 → 立即让位，别再拽回去。
+        if (hasScrollGesture()) {
+          restoreGuardRef.current = { id: null, active: false };
+          return;
+        }
+        apply();
+        if (verify < 8) {
+          raf = window.requestAnimationFrame(verifyStep);
+          return;
+        }
+        restoreGuardRef.current = { id: null, active: false };
+      };
+      raf = window.requestAnimationFrame(verifyStep);
+    };
+    let stableFrames = 0;
+    const step = () => {
+      frames++;
+      // 切回已知会话时 transcript 会先按估算高度渲染、再逐段变真实高度（隐藏块/图片/
+      // 代码高亮），所以不能只补一两帧：高度稳定连续 10 帧（~166ms）才收手，
+      // 上限 ~5s；用户一滚动立即让位。
+      if (frames > 600) return settle("timeout"); // ~10s 兜底（老会话首次全量布局可能较慢）
+      // 用**真实输入事件**判断用户接管；不能拿 scrollTop 与 expected 的差：布局重排/
+      // 浏览器滚动锚定也会产生差异，被误判成「用户接管」后恢复就半途而废（偏移的主要来源）。
+      if (hasScrollGesture()) return settle("user");
+      // 高度稳定 + （有锚点时）锚点已回到目标偏移，二者都满足才算好。
+      let anchorOk = true;
+      if (mem.anchor && !mem.stick) {
+        const node = resolveAnchorNode(el, mem.anchor);
+        if (node) {
+          const deltaNow = node.getBoundingClientRect().top - el.getBoundingClientRect().top;
+          anchorOk = Math.abs(deltaNow - mem.anchor.delta) <= 2;
+        }
+      }
+      if (el.scrollHeight === lastHeight && anchorOk) {
+        stableFrames++;
+        if (stableFrames >= 10) return settle("stable");
+      } else {
+        stableFrames = 0;
+        lastHeight = el.scrollHeight;
+        apply();
+      }
+      // 锚点模式：即使高度没变，锚点自身位置也可能因上方 DOM 调整而变化。
+      if (mem.anchor && !mem.stick && Math.abs(el.scrollTop - expected) <= 1) {
+        const node = resolveAnchorNode(el, mem.anchor);
+        if (node) {
+          const deltaNow = node.getBoundingClientRect().top - el.getBoundingClientRect().top;
+          if (Math.abs(deltaNow - mem.anchor.delta) > 1) apply();
+        }
+      }
+      raf = window.requestAnimationFrame(step);
+    };
+    raf = window.requestAnimationFrame(step);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      settle("cancel");
+    };
+  };
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (!el || !activeThreadId || thread?.loading) return;
+    if (!el || !activeThreadId || thread?.loading) {
+      return;
+    }
     const switchedThread = lastRestoreThreadIdRef.current !== activeThreadId;
     // First restore after mount (e.g. the session reopened on startup): keep
     // stick as-is so a fresh long transcript still lands at the latest message
@@ -315,55 +488,51 @@ export function Chat() {
     const firstRestore = lastRestoreThreadIdRef.current === null;
     lastRestoreThreadIdRef.current = activeThreadId;
     const saved = scrollPositionsRef.current.get(activeThreadId);
-
-    if (switchedThread && saved !== undefined) {
-      // Thread switch: the saved position is authoritative. Re-derive follow
-      // intent from where we land — a stale stick=true left by another thread
-      // must not yank this one to its bottom on the next content change.
-      const restore = () => {
-        const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-        el.scrollTop = Math.min(saved, maxScrollTop);
-        lastScrollTopRef.current = el.scrollTop; // programmatic: not user intent
-        const near = el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el);
-        stickRef.current = near;
-        setAtBottom(near);
-      };
-
-      restore();
-      const frame = window.requestAnimationFrame(restore);
-      return () => window.cancelAnimationFrame(frame);
+    // 切换会话：上一会话未收敛的恢复循环必须立刻停（否则会把旧位置套到新容器上）。
+    if (switchedThread) {
+      const cancelPrev = restoreCancelRef.current;
+      restoreCancelRef.current = null;
+      cancelPrev?.();
     }
 
-    if (switchedThread && saved === undefined && !firstRestore) {
+    if (switchedThread && saved) {
+      restoreCancelRef.current = applySavedScroll(el, saved);
+      return; // 故意不返回 cleanup：流式输出时 effect 频繁重跑，交给恢复自身的收敛条件
+    }
+
+    if (switchedThread && !firstRestore) {
       // First visit to this thread while the app is running: no saved view to
       // honor, so re-derive follow intent from wherever the reused container
       // currently sits instead of inheriting a stale stick from another thread.
-      const near = el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el);
-      stickRef.current = near;
-      setAtBottom(near);
+      // 首次进入（本次进程内）：默认跟随底部。此时 transcript 还在分阶段渲染，
+      // 用当下的 scrollTop 当记忆会存下被钳制的错值（切回来就落到顶部）。
+      stickRef.current = true;
+      setAtBottom(true);
       lastScrollTopRef.current = el.scrollTop;
+      scrollPositionsRef.current.set(activeThreadId, { top: el.scrollHeight, max: el.scrollHeight - el.clientHeight, stick: true });
     }
 
-    if (!switchedThread && saved !== undefined) {
+    if (!switchedThread && saved) {
+      if (isRestoring()) return;
       // Same-thread content growth: never write scrollTop while the user is
       // reading history — scroll events lag a frame, so a stale saved value
       // would yank an in-progress scroll-up back to the bottom.
+      const near = el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el);
       if (stickRef.current) {
-        // Follow mode: pin straight to the new bottom. Re-applying `saved`
-        // leaves a one-frame intermediate position Δ above it; when a single
-        // commit grows more than the near-bottom band (common in long threads:
-        // content-visibility groups resolving estimate→actual height), the
-        // scroll event's distance check latches stick off and follow dies
-        // mid-stream. Pinning directly leaves no out-of-band intermediate.
+        // Follow mode: pin straight to the new bottom (see the long comment
+        // about content-visibility intermediate positions in git history).
         el.scrollTop = el.scrollHeight;
         lastScrollTopRef.current = el.scrollTop; // programmatic: not user intent
         setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el));
+        scrollPositionsRef.current.set(activeThreadId, { top: el.scrollTop, max: el.scrollHeight - el.clientHeight, stick: true });
       } else {
-        scrollPositionsRef.current.set(activeThreadId, el.scrollTop);
-        setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el));
+        // 阅读历史时的内容增长（工具输出/流式）：位置以**用户最后一次滚动**为准，
+        // 不在这里写记忆 —— 分阶段渲染的 scrollHeight 会把它覆盖成钳制值。
+        setAtBottom(near);
       }
     }
   }, [activeThreadId, count, streaming?.blocks?.length, thread?.loading, thinkingActive]);
+  useEffect(() => () => restoreCancelRef.current?.(), []);
 
   useEffect(() => {
     if (!previewImage) return;
@@ -793,7 +962,7 @@ export function Chat() {
         <>
           <div className="chat-stage">
             <div className="chat-scroll" ref={scrollRef} onScroll={handleUserScroll} onWheel={handleWheel}>
-          <div className={`messages${searchingDim ? " searching" : ""}`}>
+          <div className={`messages${searchingDim ? " searching" : ""}${restoring ? " no-cv" : ""}`}>
             {headGroups.map((g) =>
               g.role === "compaction" ? (
                 <CompactionDivider key={g.key} group={g} threadId={activeThreadId} language={language} onPreviewImage={setPreviewImage} />
