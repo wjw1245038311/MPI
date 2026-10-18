@@ -1156,6 +1156,7 @@ function refreshWarmBridgeIfStale(): void {
   if (fp === warmAppendFp) return;
   // eslint-disable-next-line no-console
   console.log("[pi] zhiya files changed -> restarting warm spare with fresh system prompt");
+  appendDiagLog("perf warm-spare dropped reason=zhiya-fingerprint-changed（下次打开会话会冷启动）");
   dropWarmBridge();
   ensureWarmBridge();
 }
@@ -1741,9 +1742,10 @@ function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
   const ctx = relayChannelContext();
   const channels = effectiveRelayChannels();
 
-  // 全局开关仍生效：关闭 relay uplink 时一条也不挂
-  // 选路开关已撤（2026-10-16）：始终挂全部启用通道；配对票也带全部候选。
-  const wanted = cfg.remoteRelayEnabled ? uplinkChannels(channels, "auto", cfg.activeChannelId) : [];
+  // 上行为**总是挂**：这条链路就是产品能力本身（手机/浏览器靠它才连得上）。
+  // 2026-10-18 删除了旧的全局开关 `remoteRelayEnabled` —— 它默认 false、界面里又没有任何
+  // 写入入口，新装机填了激活码也挂不上上行（用户无从发现）。
+  const wanted = uplinkChannels(channels, "auto", cfg.activeChannelId);
 
   // **同址归并**：同一台中继只允许挂一条上行，否则同 hostId 注册两次 → 双方互顶（4006 REPLACED）
   // → 每秒重连一次，手机侧就是「连上了但 connection not ready」。
@@ -1794,6 +1796,23 @@ function applyRelayUplinkConfig(remoteHost: RemoteHost): void {
 }
 
 export function registerIpc(getWin: () => BrowserWindow | null): void {
+  // ---- IPC 慢调用观测（2026-10-18）--------------------------------------------
+  // 用户反馈「每次打开要 10 来秒、新建会话也卡几秒」，而日志里看不到任何耗时。
+  // 这里把所有 ipcMain.handle 套一层计时，**只记 ≥300ms 的**（正常路径零日志噪音）：
+  //   grep ipc-slow 就能看出到底卡在哪个调用上（是扫描会话、解析 runtime，还是 spawn pi）。
+  const SLOW_IPC_MS = 300;
+  const rawHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = ((channel: string, listener: (event: unknown, ...args: unknown[]) => unknown) =>
+    rawHandle(channel, async (event: unknown, ...args: unknown[]) => {
+      const started = Date.now();
+      try {
+        return await listener(event, ...args);
+      } finally {
+        const ms = Date.now() - started;
+        if (ms >= SLOW_IPC_MS) appendDiagLog(`ipc-slow ${channel} ${ms}ms`);
+      }
+    })) as unknown as typeof ipcMain.handle;
+
   let remotePublish: ((channel: string, payload: unknown) => void) | null = null;
   const send = (channel: string, payload: unknown) => {
     const w = getWin();
@@ -4558,7 +4577,6 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     if (
       patch &&
       ("remoteRelayUrl" in patch ||
-        "remoteRelayEnabled" in patch ||
         "remoteRelayToken" in patch ||
         "remoteRelayFallbackEnabled" in patch ||
         "mobileRelayFallbackUrl" in patch ||

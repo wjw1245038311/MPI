@@ -245,8 +245,6 @@ export interface AppConfig {
   remoteStunUrls: string[];
   /** Mobile cloud relay WSS endpoint (docs/MOBILE-DESIGN.md). Empty = not configured. */
   remoteRelayUrl: string;
-  /** Whether the mobile relay uplink should stay connected across restarts. */
-  remoteRelayEnabled: boolean;
   /**
    * 中继准入 token（P1，见 docs/RELAY-SHARING.md §3.1）：中继侧配了 RELAY_HOST_TOKENS 时，
    * 主机注册必须带上它。**只用于 host→relay 注册**，绝不进配对票（否则设备也拿到主机凭证）。
@@ -505,7 +503,6 @@ const DEFAULTS: AppConfig = {
   remoteSignalingEnabled: false,
   remoteStunUrls: [...BUILT_IN_REMOTE_STUN_URLS],
   remoteRelayUrl: "",
-  remoteRelayEnabled: false,
   remoteRelayToken: "",
   remoteReplaceSameNameOffline: true,
   remoteRelayFallbackEnabled: true,
@@ -697,9 +694,6 @@ export function loadConfig(userDataDir: string): AppConfig {
           ? { activeChannelId: parsed.activeChannelId.trim() }
           : {}),
         ...(typeof parsed.relayChannelsVersion === "number" ? { relayChannelsVersion: Math.floor(parsed.relayChannelsVersion) } : {}),
-        remoteRelayEnabled: typeof parsed.remoteRelayEnabled === "boolean"
-          ? parsed.remoteRelayEnabled
-          : DEFAULTS.remoteRelayEnabled,
         diffViewMode: parsed.diffViewMode === "blocks" ? "blocks" : DEFAULTS.diffViewMode,
         trashEnabled: typeof parsed.trashEnabled === "boolean" ? parsed.trashEnabled : DEFAULTS.trashEnabled,
         todoAttachmentDir:
@@ -1042,7 +1036,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   if (p.relayMode === "manual" || p.relayMode === "auto") out.relayMode = p.relayMode;
   if (typeof p.activeChannelId === "string") out.activeChannelId = p.activeChannelId.trim();
   if (typeof p.lanModePort === "number" && p.lanModePort > 0 && p.lanModePort < 65536) out.lanModePort = Math.floor(p.lanModePort);
-  if (typeof p.remoteRelayEnabled === "boolean") out.remoteRelayEnabled = p.remoteRelayEnabled;
+  // 注：`remoteRelayEnabled` 已于 2026-10-18 删除（上行为总是挂）。旧配置/旧脚本里残留的值一律忽略。
 
   // Voice settings are portable (no machine-specific paths); the API key is a
   // user credential like any other and travels with config backups on purpose.

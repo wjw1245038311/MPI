@@ -20,6 +20,14 @@ import { pruneThreadKeyedMaps } from "./thread-config";
 import { pruneChatAttachments } from "./chat-attachment-store";
 import { appendDiagLog } from "./diag-log";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
+
+/**
+ * 启动耗时基线（2026-10-18）。用户反馈「每次打开要 10 来秒」，但日志里看不出卡在哪。
+ * 在 4 个关键边界各记一条 `boot <阶段> <毫秒>`（相对**进程启动**，含模块加载）：
+ *   require-done → when-ready → ipc-registered → window-ready-to-show
+ * 看差值就知道是主进程初始化慢（含原生模块/asar 加载），还是渲染层首屏慢。
+ */
+const bootMark = (stage: string) => appendDiagLog(`boot ${stage} ${Math.round(performance.now())}ms`);
 import { stopMemoryEndpoint } from "./memory-endpoint";
 import { disposeMemoryIndex } from "./memory-service";
 import { ensureBackfilled as backfillObservedTools } from "./observed-tools";
@@ -183,6 +191,7 @@ function createWindow(): void {
 
   mainWindow.on("ready-to-show", () => {
     if (!mainWindow) return;
+    bootMark("window-ready-to-show");
     // On Windows, explicitly reapply the ICO after Chromium has created the
     // native HWND. This prevents development and upgraded installs from
     // falling back to Electron's executable icon in the taskbar.
@@ -255,7 +264,9 @@ if (!gotLock) {
     showMainWindow();
   });
 
+  bootMark("require-done");
   app.whenReady().then(() => {
+    bootMark("when-ready");
     loadConfig(app.getPath("userData"));
     // Apply data-location migrations recorded by Settings (session store /
     // todo data). Must run before the window opens so the UI reads from the
@@ -353,6 +364,7 @@ if (!gotLock) {
     // them now). Best effort — leftovers simply wait for the next launch.
     cleanupOldRuntimes();
     registerIpc(getWin);
+    bootMark("ipc-registered");
     // One-time backfill of the observed-tools registry from historical session
     // files so the trusted-tools picker is populated on first open. Background,
     // byte-budgeted, best effort.
