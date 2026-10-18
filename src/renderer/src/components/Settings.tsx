@@ -1903,6 +1903,18 @@ export function Settings() {
   };
 
   /* ---- save ---- */
+  /**
+   * thinking 草稿 → settings.json 的 patch。
+   *
+   * 主进程的 writeThinking 对 `undefined` 是「跳过、保留原值」，只有 `""`/`null`
+   * 才会真正删键（见 src/main/models-service.ts）。而界面里「（未设）」和
+   * 「换默认提供商时清掉旧 defaultModel」都只会产生 `undefined` —— 不归一成 ""，
+   * 就会表现为「选了（未设）/换了提供商，保存后没变化」。
+   * 草稿本身是整份读出来的（readThinking），所以整份回写安全。
+   */
+  const thinkingPatch = (draftThinking: ThinkingDefaults): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(draftThinking).map(([k, v]) => [k, v === undefined ? "" : v]));
+
   const saveModels = async () => {
     if (Object.values(invalidJson).some((valid) => !valid)) return pushToast("error", "请先修正标红的高级 JSON 字段");
     setSaving("models");
@@ -1914,6 +1926,15 @@ export function Settings() {
         setInitialProviders(JSON.stringify(savedModels.providers || {}));
       } else {
         setInitialProviders(JSON.stringify(draft.providers));
+      }
+      // 「默认提供商 / 默认模型」两个下拉在**本页**（模型与提供商），但同属
+      // settings.json 的 thinking 草稿，以前只有「对话设置」页的保存按钮会写盘 ——
+      // 于是点本页右上角「保存模型配置」后关闭仍弹「放弃未保存的更改？」。
+      // 现在本页的保存按钮同时落盘 thinking：页面上的东西点了保存就真的都保存了。
+      if (thinkDirty) {
+        const res = await window.pi.settings.saveThinking(thinkingPatch(thinking));
+        setThinking(res);
+        setInitialThinking(JSON.stringify(res));
       }
       await refreshOpenThreadModels();
       setFlash("models");
@@ -1947,7 +1968,7 @@ export function Settings() {
   const saveConversation = async () => {
     setSaving("conversation");
     try {
-      const res = await window.pi.settings.saveThinking(thinking as Record<string, unknown>);
+      const res = await window.pi.settings.saveThinking(thinkingPatch(thinking));
       setThinking(res);
       setInitialThinking(JSON.stringify(res));
       if (qaDirty) {
