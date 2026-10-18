@@ -1751,6 +1751,15 @@ function onlyRightPanel(keep: RightPanelFlag | null) {
   };
 }
 
+/**
+ * preload 同步取到的启动配置（首帧即用对语言/主题）。
+ *
+ * 必须用 `typeof window` 判断，不能用可选链：**没声明 `window` 时 `window.pi?.x`
+ * 同样抛 ReferenceError**。L1 测试（scripts/test-quote.mjs 等）直接在 node 里
+ * import 本文件，没有 window 全局，忘了这层判断会让整套测试在建 store 时就炸。
+ */
+const bootConfig = typeof window === "undefined" ? null : ((window as any).pi?.bootConfig as AppConfig | null) ?? null;
+
 export const useStore = create<PiStore>()((set, get) => {
   /** Move an unsent draft to `newKey` when the destination holds nothing;
    * keep both otherwise so no in-progress text is ever lost. Used by the
@@ -1767,7 +1776,7 @@ export const useStore = create<PiStore>()((set, get) => {
   return ({
   // preload 同步取的启动配置：首帧就能用对语言/主题，不再先闪一下英文再切回中文。
   // bootstrap() 随后会再异步拉一次（服务端脱敏后的最新值）覆盖它。
-  config: (window.pi?.bootConfig as AppConfig | null) ?? null,
+  config: bootConfig,
   runtime: null,
   projects: [],
   projectsLoading: false,
