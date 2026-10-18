@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, Fragment } from "react";
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { localizeAutomationThreadTitle, remapLastActiveThread, useStore } from "../store";
 import { formatTokens } from "../lib/format";
+import { bucketLabel, dayBucket, sessionTimeLabel } from "../lib/relative-time";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { MPI_FILE_MIME, MPI_SESSION_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
@@ -15,6 +16,23 @@ function leadingPinned<T extends { pinned?: boolean }>(list: T[]): number {
   let n = 0;
   while (n < list.length && list[n].pinned) n++;
   return n;
+}
+
+/** 会话列表按自然日分段：返回该行之前应插入的组标题（不需插标题时返回 null）。
+ *
+ * 置顶区（列表前导的 pinned 区）**不插组标题**——拖拽排序按下标工作，插行会打乱视觉顺序；
+ * 同一段内的行返回 null（只在桶变化时出一个标题）。 */
+function recentGroupLabel<T extends { updatedAt: number; pinned?: boolean }>(
+  list: T[],
+  index: number,
+  now: number,
+  zh: boolean,
+): string | null {
+  const pinnedCount = leadingPinned(list);
+  if (index < pinnedCount) return null;
+  const bucket = dayBucket(list[index].updatedAt, now);
+  if (index === pinnedCount) return bucketLabel(bucket, zh);
+  return dayBucket(list[index - 1].updatedAt, now) === bucket ? null : bucketLabel(bucket, zh);
 }
 
 /**
@@ -91,6 +109,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const activeThreadId = useStore((s) => s.activeThreadId);
   const sidebarTab = useStore((s) => s.sidebarTab);
   const language = useStore((s) => s.config?.language || "en");
+  // 会话分组 / 行内相对时间的基准。每次渲染重算：跨零点或列表刷新时分组会自己跟着变。
+  const now = Date.now();
   const zhiyaOpen = useStore((s) => s.zhiyaOpen);
   // Zhiya（知芽）is a dev-only panel: hidden in packaged releases.
   // Absent/corrupt config means the trash is on (safe default, see main/config.ts).
@@ -553,53 +573,56 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                   {open && (
                     <div className="thread-list">
                       {p.threads.length === 0 && <div className="ft-empty">暂无会话</div>}
-                      {p.threads.map((t) => {
+                      {p.threads.map((t, index) => {
                         const running = runningSet.has(t.file);
                         const title = localizeAutomationThreadTitle(t.title, language);
                         const openThread = () => onThreadClick(p.cwd, t.file);
+                        const bucket = dayBucket(t.updatedAt, now);
+                        const groupLabel = recentGroupLabel(p.threads, index, now, language === "zh");
                         return (
-                          <div
-                            key={t.file}
-                            className={`thread ${activeThreadId === t.file ? "active" : ""} ${dropClass("thread", t.file)} ${dragItem?.id === t.file ? "dragging" : ""}`}
-                            role="button"
-                            tabIndex={0}
-                            onClick={openThread}
-                            onContextMenu={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              setProjectMenu(null);
-                              const P = leadingPinned(p.threads);
-                              const idx = p.threads.findIndex((x) => x.file === t.file);
-                              setThreadMenu({
-                                cwd: p.cwd,
-                                file: t.file,
-                                name: title,
-                                pinned: !!t.pinned,
-                                pinnedRank: idx < P ? idx : -1,
-                                pinnedCount: P,
-                                x: Math.min(event.clientX, window.innerWidth - 190),
-                                y: Math.min(event.clientY, window.innerHeight - 70),
-                              });
-                            }}
-                            {...dndHandlers(
-                              "thread",
-                              p.threads.map((x) => ({ id: x.file, pinned: x.pinned })),
-                              t.file,
-                              { file: t.file, title },
-                            )}
-                            onKeyDown={(event) => {
-                              if (event.target !== event.currentTarget) return;
-                              if (event.key === "Enter" || event.key === " ") {
+                          <Fragment key={t.file}>
+                            {groupLabel && <div className="thread-group">{groupLabel}</div>}
+                            <div
+                              className={`thread ${activeThreadId === t.file ? "active" : ""} ${bucket === "today" ? "fresh" : ""} ${dropClass("thread", t.file)} ${dragItem?.id === t.file ? "dragging" : ""}`}
+                              role="button"
+                              tabIndex={0}
+                              onClick={openThread}
+                              onContextMenu={(event) => {
                                 event.preventDefault();
-                                openThread();
+                                event.stopPropagation();
+                                setProjectMenu(null);
+                                const P = leadingPinned(p.threads);
+                                const idx = p.threads.findIndex((x) => x.file === t.file);
+                                setThreadMenu({
+                                  cwd: p.cwd,
+                                  file: t.file,
+                                  name: title,
+                                  pinned: !!t.pinned,
+                                  pinnedRank: idx < P ? idx : -1,
+                                  pinnedCount: P,
+                                  x: Math.min(event.clientX, window.innerWidth - 190),
+                                  y: Math.min(event.clientY, window.innerHeight - 70),
+                                });
+                              }}
+                              {...dndHandlers(
+                                "thread",
+                                p.threads.map((x) => ({ id: x.file, pinned: x.pinned })),
+                                t.file,
+                                { file: t.file, title },
+                              )}
+                              onKeyDown={(event) => {
+                                if (event.target !== event.currentTarget) return;
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  openThread();
+                                }
+                              }}
+                              title={
+                                language === "zh"
+                                  ? `${title}（拖到输入框可引用此会话）`
+                                  : `${title} (drag to the composer to reference this session)`
                               }
-                            }}
-                            title={
-                              language === "zh"
-                                ? `${title}（拖到输入框可引用此会话）`
-                                : `${title} (drag to the composer to reference this session)`
-                            }
-                          >
+                            >
                             <div className="thread-title">
                               {running && <span className="thread-running" />}
                               {t.pinned && (
@@ -663,9 +686,14 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                             </div>
                             {t.preview && t.preview !== t.title && <div className="thread-preview">{t.preview}</div>}
                             <div className="thread-meta">
-                              {language === "zh" ? `${t.messageCount} 条` : `${t.messageCount} ${t.messageCount === 1 ? "message" : "messages"}`} · {new Date(t.updatedAt).toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                              {language === "zh" ? `${t.messageCount} 条` : `${t.messageCount} ${t.messageCount === 1 ? "message" : "messages"}`}
+                              {" · "}
+                              <span className={`thread-time ${bucket === "today" ? "today" : ""}`} title={new Date(t.updatedAt).toLocaleString()}>
+                                {sessionTimeLabel(t.updatedAt, language === "zh", now)}
+                              </span>
+                              </div>
                             </div>
-                          </div>
+                          </Fragment>
                         );
                       })}
                     </div>

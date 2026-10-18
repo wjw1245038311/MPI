@@ -536,6 +536,41 @@ body.sidebar-resizing * {
   margin-top: 2px;
 }
 
+/* 会话时间分组标题（2026-10-18，v2）。依据：
+   · NN/g 接近性原则：标题离自己的组更近、离上一组更远（上下 16px / 4px，行间 1px）；
+   · WCAG AA：--text-dim（浅色 4.56:1 / 深色 8.88:1）；
+   · 主流侧栏（VS Code / Notion / Linear / ChatGPT）的组标题**不带分隔线、不带底色**，
+     分组信息全部交给「间距 + 字重/字号/字距」。
+   已回退尝试过的两种做法：① 真粘顶（sticky）需要实底遮行，而侧栏是渐变背景，
+   实色块与渐变永远有色差，截图里就是一条发白横带；② 右侧细线让组标题看起来像表格表头。 */
+.thread-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 4px;
+  padding: 0 9px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  user-select: none;
+}
+/* 今天：左侧内嵌细条（box-shadow 不会与拖拽的 ::before/::after 插入指示器冲突）。
+   颜色用 accent 的 55% 混合，避免满饱和的深绿看着像「重新引用块」。 */
+.thread.fresh {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.thread.fresh.active {
+  box-shadow: var(--shadow-sm), inset 2px 0 0 var(--accent);
+}
+.thread-time.today {
+  color: var(--accent);
+  font-weight: 600;
+}
+.thread-time {
+  font-variant-numeric: tabular-nums;
+}
+
 /* file tree tab */
 .sb-tabs {
   display: flex;
