@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
-## Unreleased
+## v0.11.2（2026-10-19）
 
 1. **修（构建工具）：`npm run dist` 不再因为全局 pi 版本滞后而直接失败**——2026-10-19 发 v0.11.1 时踩到：本机全局 `pi` 还是 0.87.0，而仓库要求 `piRuntimeVersion: 1.3.0`，`bundle-runtime.mjs` 找不包就抛「Could not locate @earendil-works/pi-coding-agent v1.3.0」，只能手工 `PI_PACKAGE_DIR=…` 绕过。现在多了一条**回落**：在全局 npm 与 PATH 都没命中时，去应用自己的运行时目录找（`<userData>/runtime/versions/<ver>/pi`，打包版 `MPI` 与开发版 `MPI Dev` 都扫；另可由 `MPI_USER_DATA_DIR` / `MPI_CONFIG_DIR` 指定），且只认版本匹配的目录。
    验证方式：`npm run bundle`（不设 `PI_PACKAGE_DIR`）应打印「pi 包回落到应用运行时目录：…\runtime\versions\<ver>\pi」并正常生成 `runtime-release/MPI-Runtime-<ver>-<平台>.tar.gz`；随后 `npm run dist` 可直接出包。（本机已验证：exit=0，产物 47.7MB。）
