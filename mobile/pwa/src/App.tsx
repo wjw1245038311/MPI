@@ -369,7 +369,12 @@ export default function App() {
 
   // Mirror the session snapshots into React state.
   useEffect(() => {
-    if (!session) return;
+    if (!session) {
+      // 换主机 / 断开时旧快照必须作废：否则「首页列表还是上一台的会话」会在
+      // 新会话首次 refresh 落地前被渲染出来，点开就是 NOT_FOUND（2026-10-19 真机复发）。
+      setSnap(null);
+      return;
+    }
     setSnap(session.getSnapshot());
     return session.subscribe(setSnap);
   }, [session]);
@@ -518,6 +523,9 @@ export default function App() {
     sessionRef.current = null;
     sessionHostRef.current = record.hostId;
     setSession(null);
+    // 旧主机的首页快照立刻作废（含 projects/threads）——「自动打开最近会话」的 effect
+    // 依赖 hostId + snap，留着旧 snap 就会拿上一台的 threadId 去新主机开会话 → NOT_FOUND。
+    setSnap(null);
     const identity = createDeviceIdentity(seedB64url);
     // S6：主机给的顺序取候选（跳过已试过的），首位 = 主机首选；旧记录回落上次可用
     const candidates = remainingCandidates(record, tried);
@@ -802,7 +810,15 @@ export default function App() {
         if (openingRef.current === threadId) {
           setThreadSession(null);
           setOpenThreadId(null);
-          setError(e instanceof Error ? e.message : String(e));
+          const message = e instanceof Error ? e.message : String(e);
+          // 主机不认这条会话（典型：刚从另一台主机切过来、点了列表里的旧条目）——
+          // 说人话并顺手刷新列表，而不是把协议的 NOT_FOUND 原文糊在界面上。
+          setError(
+            /NOT_FOUND/.test(message)
+              ? "这条会话不在这台主机上（可能刚切换过设备），已回到列表并刷新"
+              : message,
+          );
+          if (/NOT_FOUND/.test(message)) void sessionRef.current?.refresh();
         }
       }
     } finally {

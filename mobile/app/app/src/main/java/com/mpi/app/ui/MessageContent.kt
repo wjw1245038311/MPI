@@ -18,6 +18,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -186,7 +187,12 @@ internal fun parseSegments(text: String): List<Segment> {
 }
 
 /** 行内切分结果：文本 + 是否代码 + 是否粗体。 */
-internal data class InlineToken(val text: String, val code: Boolean = false, val bold: Boolean = false)
+internal data class InlineToken(
+    val text: String,
+    val code: Boolean = false,
+    val bold: Boolean = false,
+    val italic: Boolean = false,
+)
 
 /**
  * 行内切分：`code` 与 `**粗体**`。
@@ -201,15 +207,29 @@ internal fun splitInline(text: String): List<InlineToken> {
     val tokens = mutableListOf<InlineToken>()
     text.split('`').forEachIndexed { index, part ->
         if (index % 2 == 1) {
+            // 行内代码：里面的 ** / * 一律当字面量
             if (part.isNotEmpty()) tokens += InlineToken(part, code = true)
-        } else {
-            part.split("**").forEachIndexed { pieceIndex, piece ->
-                if (piece.isNotEmpty()) tokens += InlineToken(piece, bold = pieceIndex % 2 == 1)
-            }
+            return@forEachIndexed
         }
+        // 非代码段：**粗体** / *斜体* / _斜体_（都不跨行；行首列表符号没有闭合标记，不会被误判）
+        var last = 0
+        for (match in INLINE_EMPHASIS.findAll(part)) {
+            if (match.range.first > last) tokens += InlineToken(part.substring(last, match.range.first))
+            val raw = match.value
+            if (raw.startsWith("**")) {
+                tokens += InlineToken(raw.substring(2, raw.length - 2), bold = true)
+            } else {
+                tokens += InlineToken(raw.substring(1, raw.length - 1), italic = true)
+            }
+            last = match.range.last + 1
+        }
+        if (last < part.length) tokens += InlineToken(part.substring(last))
     }
     return tokens
 }
+
+/** 行内强调：粗体 → 斜体（星号 / 下划线），都不跨行。 */
+private val INLINE_EMPHASIS = Regex("""(\*\*[^*\n]+\*\*)|(\*[^*\s\n][^*\n]*\*)|(_[^_\s\n][^_\n]*_)""")
 
 private fun inlineStyled(
     text: String,
@@ -223,6 +243,10 @@ private fun inlineStyled(
             }
 
             token.bold -> withStyle(SpanStyle(color = baseColor, fontWeight = FontWeight.Bold)) {
+                append(token.text)
+            }
+
+            token.italic -> withStyle(SpanStyle(color = baseColor, fontStyle = FontStyle.Italic)) {
                 append(token.text)
             }
 

@@ -437,6 +437,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .msg-role { font-size: 11px; color: var(--muted); letter-spacing: 0.4px; }
 
 .msg-text { margin: 0; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+.msg-text .inline-code { font-family: var(--mono); font-size: 0.92em; background: var(--control); border-radius: 4px; padding: 1px 4px; }
+.msg-text strong { font-weight: 600; }
 .message.user .msg-text { white-space: pre-wrap; }
 
 .msg-thinking { font-size: 12px; color: var(--muted); border-left: 2px solid var(--border); padding-left: 8px; }

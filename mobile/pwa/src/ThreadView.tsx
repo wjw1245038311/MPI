@@ -15,6 +15,7 @@ import { extractVideoPoster, looksLikeVideo } from "./lib/video-attach";
 import { requestDirectPlaybackUrl, uploadVideoDirect } from "./lib/attachment-direct";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
+import { parseInline } from "./lib/inline";
 import { withChoiceSegments } from "./lib/choice-block";
 import type { ChoiceFailure } from "./lib/choice-block";
 import { ChoicePanel } from "./components/ChoicePanel";
@@ -316,7 +317,19 @@ function MessageText({ text, choiceCtx }: { text: string; choiceCtx?: ChoiceCont
         }
         return (
           <p key={`t${i}`} className="msg-text">
-            {item.text}
+            {parseInline(item.text).map((token, ti) =>
+              token.kind === "bold" ? (
+                <strong key={ti}>{token.text}</strong>
+              ) : token.kind === "italic" ? (
+                <em key={ti}>{token.text}</em>
+              ) : token.kind === "code" ? (
+                <code key={ti} className="inline-code">
+                  {token.text}
+                </code>
+              ) : (
+                token.text
+              ),
+            )}
           </p>
         );
       })}

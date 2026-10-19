@@ -25,6 +25,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 6. **修（PWA）：多设备切换后列表还是上一台的、点会话直接 `NOT_FOUND: Thread not found`，且切不回去**——2026-10-19 thinkbook 真机（绑了 workstation + MiniBox）：刷新后默认连 workstation，点 MiniBox 就报 `NOT_FOUND` 并且再也切不回来。根因两处：① `startSession` 只 `setSession(null)`（要等下一次 render 才生效），而 `enterHome` 立刻用 `sessionRef.current` 判断要不要新建会话——于是**复用了上一台主机的 HostSession**，首页列表还是 workstation 的；点开列表里的 threadId 时请求已经发到 MiniBox（`clientRef` 已是新的），主机自然 `NOT_FOUND`。② `switchHost` 用渲染态的 `hostId` 提前返回，而切换时 `hostId` 已经改成 MiniBox → 再点一次是空操作，界面永久卡死。现在：`startSession` 在 detach 后**同步清空 `sessionRef`** 并记录 `sessionHostRef`（会话实际所属主机）；`switchHost` 改按 `sessionHostRef + sessionRef` 判定（宿主相同且会话还在才跳过）；`disconnect` 一并清这两个 ref。
    验证方式：`npm run typecheck` + `npm test -- pwa`（新增 `pwa-host-switch`：三条源码不变量——startSession 同步清 ref、switchHost 不再用渲染态 hostId、disconnect 双清）。应用内：绑两台主机 → 刷新页面 → 点另一台主机的卡片：列表应变成那台的，点开会话正常；再切回来也正常（不再 NOT_FOUND / 卡死）。
 
+7. **修（PWA/安卓）：正文里的 `**重点**` 原样显示成星号**——手机端正文是纯文本打印（PWA 只切代码围栏；安卓只有 `**` 与行内代码），桌面端走完整 markdown 渲染，所以同一段回复桌面是加粗、手机满屏 `*`。现在 PWA 新增 `parseInline()`（粗体 / 行内代码 / 斜体，均不跨行，行首列表符号不会被误判），安卓的 `splitInline` 也补上斜体（`*x*` / `_x_`）并改成同一套正则（未闭合的 `**` 不再被当成粗体）。
+   验证方式：`npm run typecheck` + `npm test -- pwa`（新增 `pwa-inline` 7 项：粗体、行内代码、斜体、列表符号、未闭合标记、不跨行、空串）+ `cd mobile/app && ... ./gradlew :app:testDebugUnitTest`（`MarkdownSegmentsTest` 新增斜体/列表符号两项）。应用内：让模型输出带 `**加粗**`、`*斜体*`、`` `代码` `` 的回复，手机端应显示为粗体/斜体/等宽，列表 `* 项` 保持原样。
+
 ## v0.11.1（2026-10-19）
 
 1. **修：一台配错中继凭证的主机会把整个 NAT 后面的 PWA / 主机自己的重连全部卡死（中继侧）**——2026-10-19 实测：某台主机（新身份 `l6madOc…`、没带 token）`host.register` 被拒后**每 1.8 秒重试一次**，每 10 次失败触发一次「该 IP 封 60s」；而那 60s 里 **`/ws` upgrade 也被拒（429）**，于是同一路由器后面的合法设备（PWA 浏览器）和主机自己的断线重连全都开不出连接 —— 该 IP 约 **75%** 的时间不可用（当天 320 次拒绝、29 次封禁）。三处改动：

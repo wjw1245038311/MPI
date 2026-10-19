@@ -83,6 +83,23 @@ class MarkdownSegmentsTest {
     }
 
     @Test
+    fun `italic with asterisks and underscores is recognized`() {
+        val star = splitInline("这是 *斜体* 与 _也是_")
+        assertTrue(star.any { it.italic && it.text == "斜体" })
+        assertTrue(star.any { it.italic && it.text == "也是" })
+        assertTrue("斜体不应被当成粗体", star.none { it.bold })
+    }
+
+    @Test
+    fun `list bullets are not treated as italic`() {
+        // 行首 "* " + 空格：没有闭合标记，不能被当成斜体（真机截图里满屏星号的一种）
+        val src = "* 第一项 * 第二项"
+        val tokens = splitInline(src)
+        assertEquals(src, tokens.joinToString("") { it.text })
+        assertTrue(tokens.none { it.italic || it.bold })
+    }
+
+    @Test
     fun `unpaired markers are kept as literal text`() {
         val tokens = splitInline("一个星号 * 和半个反引号 `")
         val text = tokens.joinToString("") { it.text }
