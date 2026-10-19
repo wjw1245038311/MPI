@@ -1282,6 +1282,9 @@ body.sidebar-resizing * {
 }
 /* ---- 视频附件（飞书式：气泡里只有一个视频框，点一下直接全屏；见 chat-attachment-protocol.ts）---- */
 /* 渲染在用户消息的附件区（.msg-user-files 是 grid）——justify-self 防止被拉到整列宽。 */
+.msg-user-audio { width: 240px; max-width: 100%; height: 36px; margin-top: 4px; }
+.msg-user-audio-missing { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; margin-top: 4px; border: 1px solid var(--border); border-radius: 10px; font-size: 12px; color: var(--text-dim); }
+.msg-user-audio-missing em { font-style: normal; opacity: 0.7; }
 .msg-user-video-card {
   position: relative;
   justify-self: start;

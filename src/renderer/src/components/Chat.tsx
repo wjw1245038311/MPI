@@ -1566,7 +1566,9 @@ function MessageGroupInner({
             {m.attachments && m.attachments.length > 0 && (
               <div className="msg-user-files" aria-label={language === "zh" ? "文件附件与引用" : "File attachments and quotes"}>
                 {m.attachments.map((attachment, index) =>
-                  attachment.kind === "video" && attachment.path ? (
+                  attachment.kind === "audio" ? (
+                    <UserAudio key={`audio-${index}`} name={attachment.name} path={attachment.path} language={language} />
+                  ) : attachment.kind === "video" && attachment.path ? (
                     // 视频附件：给内联播放器（否则只是一张文件名卡片，得点开才知道是视频）。
                     // 走 chatatt:// 协议取字节——路径在 %TEMP%/mpi-clipboard，渲染层不直读文件。
                     <UserVideo key={`video-${index}`} name={attachment.name} path={attachment.path} language={language} />
@@ -2172,6 +2174,29 @@ const SkillInvocation = memo(function SkillInvocation({ name, language }: { name
  * 调用点在用户消息的附件列表里（`attachment.kind === "video"`，由 store.ts 的
  * parseUserMessage 根据主机写入的 `attach="video"` 信封标记）。
  */
+/** 手机端录的语音/音频：气泡里直接给一个紧凑播放条（不再显示「文件附件」卡片）。 */
+function UserAudio({ name, path, language }: { name: string; path?: string; language: "en" | "zh" }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div className="msg-user-audio-missing" title={path || name}>
+        <span aria-hidden="true">🎧</span>
+        <span>{language === "zh" ? "音频无法播放" : "Audio unavailable"}</span>
+        <em>{name}</em>
+      </div>
+    );
+  }
+  return (
+    <audio
+      className="msg-user-audio"
+      controls
+      preload="metadata"
+      src={chatAttachmentUrl(name)}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function UserVideo({ name, path, language }: { name: string; path: string; language: "en" | "zh" }) {
   const [failed, setFailed] = useState(false);
   const [playing, setPlaying] = useState(false);

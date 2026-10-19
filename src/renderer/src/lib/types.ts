@@ -245,7 +245,7 @@ export interface ViewAttachment {
    *
    * "video" marks a phone-side video attachment (`attach="video"` 信封): 渲染成
    * 内联播放器而不是文件卡片——见 Chat.tsx 的 UserVideo。 */
-  kind?: "file" | "quote" | "video";
+  kind?: "file" | "quote" | "video" | "audio";
 }
 
 /** Quote metadata carried by a prompt attachment: the selected text plus its

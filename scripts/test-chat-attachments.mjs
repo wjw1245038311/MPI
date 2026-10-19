@@ -109,6 +109,33 @@ const envelope = (name, path) => `<file name="${name}" path="${path}" attach="vi
   assert.deepEqual(mixed.attachments.map((a) => a.kind), [undefined, "video"], "混合场景各归各的");
 }
 
+// --- 1b. 媒体引用（attach="media" kind=…）不再显示「文件附件」卡片 -----------------
+// 2026-10-19 真机：手机发图/视频/音频时，气泡下面多出一张「文件附件」卡片（内容是内容哈希），
+// 观感很差。图片/视频/音频的本体已经由快照块内联渲染，所以它们不进出卡片；
+// 只有真正的文件才保留卡片。
+{
+  const media = (name, kind) =>
+    `<file name="${name}" path="/c/${name}" attach="media" kind="${kind}" note="media attachment; playable/viewable in MPI clients" />`;
+
+  const image = parseUserMessage(`看图${media("abc.jpg", "image")}`);
+  assert.deepEqual(image.attachments, [], "图片不再生成附件卡片（本体已内联）");
+
+  const video = parseUserMessage(`看视频${media("abc.mp4", "video")}`);
+  assert.equal(video.attachments[0]?.kind, "video", "视频仍标 video（内联播放器）");
+
+  const audio = parseUserMessage(`听语音${media("abc.m4a", "audio")}`);
+  assert.equal(audio.attachments[0]?.kind, "audio", "音频标 audio（气泡里给紧凑播放条）");
+
+  const file = parseUserMessage(`收文件${media("abc.zip", "file")}`);
+  assert.equal(file.attachments.length, 1, "普通文件仍保留附件卡片");
+  assert.equal(file.attachments[0]?.kind, undefined, "文件不带媒体 kind");
+
+  // 可见文本里都不能残留原始标签
+  for (const parsed of [image, video, audio, file]) {
+    assert.ok(!parsed.text.includes("attach="), "信封必须从可见文本里剔掉");
+  }
+}
+
 // --- 2. chatatt:// URL + 文件名白名单 ------------------------------------------
 
 {

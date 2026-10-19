@@ -94,6 +94,10 @@ export function parseUserMessage(text: string): ParsedUserMessage {
 
   let visible = "";
   let cursor = 0;
+  // 是否消费过信封（无论有没有生成附件条目）。
+  // 图片走「本体已内联、不生成卡片」分支：不设这个标记的话，attachments 为空会让函数
+  // 把原文整体返回 → 气泡里冒出原始 <file …/> 标签（2026-10-19 真机）。
+  let consumed = false;
   let match: RegExpExecArray | null;
   while ((match = envelopeBlock.exec(normalized))) {
     if (match[3] !== undefined || match[4] === undefined) {
@@ -106,6 +110,7 @@ export function parseUserMessage(text: string): ParsedUserMessage {
 
       visible += normalized.slice(cursor, match.index);
       cursor = envelopeBlock.lastIndex;
+      consumed = true;
       const attachment: ViewAttachment = { name };
       const path = readAttribute(attrs, "path");
       const note = readAttribute(attrs, "note");
@@ -113,11 +118,24 @@ export function parseUserMessage(text: string): ParsedUserMessage {
       if (path) attachment.path = path;
       if (note) attachment.note = note;
       if (error) attachment.error = error;
-      // 手机端发来的视频：主机写入的信封带 attach="video"（见 main/remote/video-refs.ts）。
-      // 标成 video 让渲染层用内联播放器而不是“文件附件”卡片——否则用户看到一张
-      // 文件名卡片，得自己点开才能发现是个视频。
-      if (readAttribute(attrs, "attach") === "video") attachment.kind = "video";
-      attachments.push(attachment);
+      // 媒体引用的 kind（见 main/remote/video-refs.ts 的 mediaRefEnvelope）：
+      //   attach="video"（旧式）或 attach="media" kind="image|video|audio|file"。
+      // 图片/视频/音频的**本体**已经由快照里的 image/video/audio 块内联渲染，
+      // 再叠一张「文件附件」卡片既重复又难看（2026-10-19 真机）——所以它们不进出卡片；
+      // 只有真正的文件（kind="file" / 老信封）才保留卡片。
+      const mediaKind = readAttribute(attrs, "kind");
+      const attach = readAttribute(attrs, "attach");
+      if (attach === "video" || mediaKind === "video") {
+        attachment.kind = "video";
+        attachments.push(attachment);
+      } else if (mediaKind === "audio") {
+        attachment.kind = "audio";
+        attachments.push(attachment);
+      } else if (mediaKind === "image") {
+        // 图片已经有内联预览，不显示附件卡片
+      } else {
+        attachments.push(attachment);
+      }
     } else {
       // A <quote> block: the body is the quoted passage itself.
       const attrs = match[4] || "";
@@ -126,6 +144,7 @@ export function parseUserMessage(text: string): ParsedUserMessage {
 
       visible += normalized.slice(cursor, match.index);
       cursor = envelopeBlock.lastIndex;
+      consumed = true;
       const attachment: ViewAttachment = { name: "引用", kind: "quote", note: body };
       const transcript = readAttribute(attrs, "transcript");
       if (transcript) attachment.path = transcript;
@@ -133,7 +152,7 @@ export function parseUserMessage(text: string): ParsedUserMessage {
     }
   }
 
-  if (!attachments.length) return { text: normalized, attachments };
+  if (!consumed) return { text: normalized, attachments };
   visible += normalized.slice(cursor);
   return { text: visible.trim(), attachments };
 }
