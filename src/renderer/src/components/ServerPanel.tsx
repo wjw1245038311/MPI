@@ -95,6 +95,21 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
     }
   };
 
+  /**
+   * 静默落盘（自动保存用）：不带 toast，失败交给 store 统一提示。
+   *
+   * 为什么要有它：2026-10-19 真机，用户改了「自定义中继」却没点保存，重启后回到旧配置；
+   * 更坑的是旧配置迁移会从历史字段把地址还原回来，看起来像「保存没生效」。
+   */
+  const persistRelay = async (patch: Record<string, unknown>) => {
+    try {
+      await setServerConfig(patch as never);
+      await loadRelay();
+    } catch {
+      /* store 已提示 */
+    }
+  };
+
   /** 保存「转发地址」：勾了就用自定义中继（清掉内置激活码以外的绑定不影响），没勾就回到内置。 */
   const saveRelay = async () => {
     setSaving(true);
@@ -150,8 +165,11 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
             type="checkbox"
             checked={custom}
             onChange={(e) => {
-              setCustom(e.target.checked);
+              const next = e.target.checked;
+              setCustom(next);
               setTestResult(null);
+              // 取消勾选 = 回到内置服务器，立即落盘（否则重启后又被旧字段还原）
+              if (!next) void persistRelay({ customRelayUrl: "", customRelayToken: "" });
             }}
           />
           <span>{zh ? "自定义中继（使用自建中继，地址与令牌由你维护）" : "Custom relay (use my own relay; address and token are mine)"}</span>
@@ -165,6 +183,11 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
                 className="set-input"
                 value={relayUrl}
                 onChange={(e) => setRelayUrl(e.target.value)}
+                onBlur={() => {
+                  const url = relayUrl.trim();
+                  if (!custom || !/^wss?:\/\//i.test(url)) return;
+                  void persistRelay({ customRelayUrl: url, ...(relayToken.trim() ? { customRelayToken: relayToken.trim() } : {}) });
+                }}
                 placeholder={zh ? "例如 wss://relay.example.com/ws（手机亦经此地址接入，须为手机可达）" : "e.g. wss://relay.example.com/ws (the phone uses it too, so it must be reachable)"}
                 spellCheck={false}
               />
@@ -177,6 +200,11 @@ export function ServerPanel({ language }: { language: "en" | "zh" }) {
                 autoComplete="off"
                 value={relayToken}
                 onChange={(e) => setRelayToken(e.target.value)}
+                onBlur={() => {
+                  const token = relayToken.trim();
+                  if (!custom || !token) return;
+                  void persistRelay({ customRelayToken: token });
+                }}
                 placeholder={customTokenSet ? (zh ? "已设置；留空则保持不变" : "set; leave empty to keep") : zh ? "中继未启用准入校验时可留空" : "leave empty if your relay has no allowlist"}
                 spellCheck={false}
               />

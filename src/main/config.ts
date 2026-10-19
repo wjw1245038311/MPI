@@ -304,6 +304,14 @@ export interface AppConfig {
    */
   serverAuthCode?: string;
   /**
+   * 旧配置迁移的**一次性**标记（2026-10-19）。
+   *
+   * 那段迁移会把 `remoteRelayUrl` / 老通道列表里的地址还原成 `customRelayUrl`；
+   * 只要用户清空自定义中继，下次启动就会再被还原一次（"设置没保存"的真凶）。
+   * 迁移跑完写 2，此后永不再跑。
+   */
+  serverMigration?: number;
+  /**
    * 局域网直连模式（P2，见 docs/RELAY-SHARING.md §3.2）：桌面端自己起一个只绑局域网的中继，
    * 手机连内网地址 → 不依赖 Tailscale/公网，附件也走内网。**代价是没有推送通道**。
    *
@@ -685,6 +693,7 @@ export function loadConfig(userDataDir: string): AppConfig {
           ? { localRelayTlsPort: Math.floor(parsed.localRelayTlsPort) }
           : {}),
         relayChannels: sanitizeRelayChannels(parsed.relayChannels),
+        ...(typeof parsed.serverMigration === "number" ? { serverMigration: Math.floor(parsed.serverMigration) } : {}),
         ...(typeof parsed.customRelayUrl === "string" && parsed.customRelayUrl.trim()
           ? { customRelayUrl: parsed.customRelayUrl.trim() }
           : {}),
@@ -769,6 +778,8 @@ export function loadConfig(userDataDir: string): AppConfig {
       const legacyToken = typeof legacy.appUpdateEcsToken === "string" ? legacy.appUpdateEcsToken.trim() : "";
       // 兼容上一版的「更新源」字段：当时选了 ecs 的机器，把令牌当激活码带走，别丢授权。
       if (!cached.serverAuthCode && legacyToken) cached.serverAuthCode = legacyToken;
+      // 一次性：跑过就标记，避免用户清空自定义中继后又被旧字段还原（2026-10-19 真机）。
+      if ((cached.serverMigration ?? 0) < 2) {
       if (!cached.customRelayUrl) {
         const stored = cached.relayChannels;
         const remoteChannel = Array.isArray(stored)
@@ -794,6 +805,14 @@ export function loadConfig(userDataDir: string): AppConfig {
         "activeChannelId",
       ]) {
         delete cachedRecord[key];
+      }
+      cached.serverMigration = 2;
+      // 立刻落盘：本轮里用户可能再也不点保存，不写就会在下次启动重跑一遍迁移。
+      try {
+        writeJsonAtomic(file, cached, { pretty: true });
+      } catch {
+        /* 写失败不影响本次启动 */
+      }
       }
       return cached;
     } catch {
@@ -1036,6 +1055,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   }
   // 服务器来源 / 授权码：跟 voice 的 API key 一样属于「用户凭证」，备份与恢复时一并带上。
   if (typeof p.serverAuthCode === "string") out.serverAuthCode = p.serverAuthCode.trim();
+  if (typeof p.serverMigration === "number") out.serverMigration = Math.floor(p.serverMigration);
   if (typeof p.customRelayUrl === "string") out.customRelayUrl = p.customRelayUrl.trim();
   if (typeof p.customRelayToken === "string") out.customRelayToken = p.customRelayToken.trim();
   if (p.relayMode === "manual" || p.relayMode === "auto") out.relayMode = p.relayMode;
