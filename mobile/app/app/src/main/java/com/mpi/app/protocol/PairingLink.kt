@@ -16,6 +16,8 @@ data class PairingPayload(
     val relayUrls: List<String> = emptyList(),
     /** 桌面机器名，多设备列表用来区分主机。 */
     val hostName: String? = null,
+    /** 主机身份公钥（SPKI PEM）—— 新版票自带；有值时按值比对，比哈希校验更强。 */
+    val hostPublicKeyPem: String? = null,
     /** 过期时间戳（ms）；0 = 载荷里没带。 */
     val expiresAt: Long = 0,
 ) {
@@ -71,6 +73,7 @@ object PairingLink {
             relayUrl = text("relayUrl"),
             relayUrls = stringList("relayUrls"),
             hostName = text("hostName"),
+            hostPublicKeyPem = text("hostPublicKeyPem"),
             expiresAt = expiresAt,
         )
     }

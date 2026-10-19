@@ -8,7 +8,7 @@
 // Relative (not an alias) so node-based tests can import this module directly.
 // src/lib → pwa → mobile → shared
 import { makeEnvelope } from "../../../shared/protocol";
-import { deviceProofText, hostProofText, verifyHostSignature, type DeviceIdentity } from "./device-identity";
+import { deviceProofText, hostIdFor, hostProofText, verifyHostSignature, type DeviceIdentity } from "./device-identity";
 import { E2E_BINARY_CAP, decodeBinaryFrame, encodeBinaryFrame, supportsBinaryFrames } from "./e2e-binary";
 import {
   deriveAesKeyRaw,
@@ -139,6 +139,42 @@ export interface PairingResult {
   /** Host X25519 public key (b64url) — persist it; the session key is re-derived
    * locally on every reconnect, no renegotiation needed. */
   hostX25519PubB64u: string;
+  /** 主机身份公钥（SPKI PEM）——**必须落盘**（pinning）：下次重连用它校验对端没换身份。 */
+  hostPublicKeyPem: string;
+}
+
+/**
+ * 主机身份绑定（2026-10-19 审计，docs/SECURITY-AUDIT-2026-10-19-RELAY-MITM.md §2）。
+ *
+ * 只验「签名与对端递来的公钥自洽」是不够的：中继可以递**自己的**公钥并自签，手机照样通过。
+ * 所以必须补两道：
+ *   1. `sha256(主机公钥) === 票里的 hostId` —— hostId 来自扫码（带外），中继改不了；
+ *   2. 与本地已配对记录里的身份公钥比对 —— 一旦 pin 过，换公钥一律拒。
+ *
+ * 旧记录没有 pin、旧票没有 `hostPublicKeyPem` → 对应检查跳过（仅第 1 道必须过）。
+ * 校验通过后调用方应把本次的 `hostPublicKeyPem` 写回记录，完成 pinning。
+ */
+export function checkHostIdentity(args: {
+  /** 票里的 hostId（= 主机身份公钥哈希），来自扫码这一带外通道。 */
+  hostId: string;
+  /** 对端在 pair.challenge 里递来的身份公钥。 */
+  hostPublicKeyPem: string;
+  /** 票里自带的主机身份公钥（新版票才有）——比哈希比对更强，有就必须一致。 */
+  ticketHostPublicKeyPem?: string;
+  /** 本地已配对记录里的身份公钥（pinning）。 */
+  pinnedHostPublicKeyPem?: string;
+}): void {
+  const { hostId, hostPublicKeyPem, ticketHostPublicKeyPem, pinnedHostPublicKeyPem } = args;
+  if (!hostPublicKeyPem) throw new Error("pair.challenge 缺少主机身份公钥（可能存在中间人）——已拒绝");
+  if (ticketHostPublicKeyPem && ticketHostPublicKeyPem !== hostPublicKeyPem) {
+    throw new Error("主机身份公钥与配对票不符（可能存在中间人）——已拒绝建立会话");
+  }
+  if (hostIdFor(hostPublicKeyPem) !== hostId) {
+    throw new Error("主机身份公钥与配对票里的 hostId 不符（可能存在中间人）——已拒绝建立会话，请重新扫码");
+  }
+  if (pinnedHostPublicKeyPem && pinnedHostPublicKeyPem !== hostPublicKeyPem) {
+    throw new Error("主机身份公钥已变化（可能存在中间人）——已拒绝建立会话，请重新扫码配对");
+  }
 }
 
 /** Answer a pair.challenge with a signed pair.hello and wait for pair.accepted. */
@@ -150,6 +186,8 @@ async function answerChallenge(
   ticket: string,
   acceptedTimeoutMs: number,
   onStage?: (stage: PairingStage) => void,
+  /** 身份绑定参数：票里的公钥 + 本地 pin（见 checkHostIdentity）。 */
+  binding?: { ticketHostPublicKeyPem?: string; pinnedHostPublicKeyPem?: string },
 ): Promise<PairingResult> {
   const challenge = await awaitFrameOrError(client, (f) => f.type === "pair.challenge", "pair.challenge", 20_000);
   const cp = (challenge.payload || {}) as Record<string, unknown>;
@@ -162,6 +200,13 @@ async function answerChallenge(
   const hostPublicKeyPem = String(cp.hostPublicKeyPem ?? "");
   const hostSignature = String(cp.signature ?? "");
   const hostX25519Pub = String(cp.hostX25519Pub ?? "");
+  // 先做身份绑定：公钥必须能哈希回票里的 hostId，且与本地 pin 一致。
+  checkHostIdentity({
+    hostId,
+    hostPublicKeyPem,
+    ticketHostPublicKeyPem: binding?.ticketHostPublicKeyPem,
+    pinnedHostPublicKeyPem: binding?.pinnedHostPublicKeyPem,
+  });
   if (!hostX25519Pub || !verifyHostSignature(hostPublicKeyPem, hostProofText(hostId, connectionId, challengeValue, hostX25519Pub), hostSignature)) {
     throw new Error("主机身份校验失败（可能存在中间人）——请确认连接的是你自己的桌面端");
   }
@@ -214,7 +259,7 @@ async function answerChallenge(
       },
     });
   }
-  return { deviceToken, hostX25519PubB64u };
+  return { deviceToken, hostX25519PubB64u, hostPublicKeyPem };
 }
 
 /** Run the full pairing handshake. Resolves with the stable deviceToken. */
@@ -240,7 +285,10 @@ export async function runPairing(
   }
 
   onStage?.("waiting-challenge");
-  const result = await answerChallenge(client, payload.hostId, identity, deviceName, payload.ticket, 5 * 60_000, (s) => onStage?.(s)).catch((e: Error) => fail(e.message));
+  const result = await answerChallenge(client, payload.hostId, identity, deviceName, payload.ticket, 5 * 60_000, (s) => onStage?.(s), {
+    // 票里带身份公钥时直接按值比对（比哈希更强）；旧票只有 hostId，走哈希校验。
+    ticketHostPublicKeyPem: payload.hostPublicKeyPem,
+  }).catch((e: Error) => fail(e.message));
   onStage?.("approved");
   return result;
 }
@@ -252,8 +300,10 @@ export async function reauthenticate(
   hostId: string,
   identity: DeviceIdentity,
   deviceName: string,
+  /** 已配对记录里的主机身份公钥（pinning）；旧记录没有 → 只做 hostId 哈希校验。 */
+  pinnedHostPublicKeyPem?: string,
 ): Promise<PairingResult> {
-  return answerChallenge(client, hostId, identity, deviceName, "", 30_000);
+  return answerChallenge(client, hostId, identity, deviceName, "", 30_000, undefined, { pinnedHostPublicKeyPem });
 }
 
 /**
@@ -267,12 +317,14 @@ export function attachAutoReauth(
   identity: DeviceIdentity,
   deviceName: string,
   onReauth?: (result: PairingResult) => void,
+  /** 已配对记录里的主机身份公钥（pinning）。 */
+  pinnedHostPublicKeyPem?: string,
 ): () => void {
   let inFlight = false;
   const off = client.onState((state) => {
     if (state !== "open" || inFlight) return;
     inFlight = true;
-    reauthenticate(client, hostId, identity, deviceName)
+    reauthenticate(client, hostId, identity, deviceName, pinnedHostPublicKeyPem)
       .then((result) => onReauth?.(result))
       .catch(() => { /* surfaced via UI error state; next open retries */ })
       .finally(() => {

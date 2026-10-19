@@ -21,6 +21,13 @@ export interface PairingRecord {
   deviceToken: string | null;
   /** Host X25519 pub (b64url) for E2E key derivation; optional for pre-S3 records. */
   hostX25519PubB64u?: string;
+  /**
+   * 主机**身份**公钥（SPKI PEM）—— pinning 用（2026-10-19 审计）。
+   *
+   * 重连时要拿它比对 pair.challenge 里的 `hostPublicKeyPem`：不一致就说明对端换了身份
+   * （中继 MITM），必须拒。旧记录没有这个字段 → 首次重连时按 `hostId` 哈希校验后回填。
+   */
+  hostPublicKeyPem?: string;
   pairedAt: number;
   /** 配对载荷里带来的桌面机器名（旧记录可能没有）；多设备列表用它区分主机。 */
   hostName?: string;

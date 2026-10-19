@@ -47,8 +47,8 @@ class FakeHost(
     private val challengeValue: String = "challenge-test",
 ) {
     /** 主机身份密钥（Ed25519）：签 v2 证明用（见 docs/RELAY-SHARING.md §9）。 */
-    private val hostSeed = ByteArray(32) { 0x21.toByte() }
-    val hostPublicKeyPem: String = ed25519SpkiPem(org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters(hostSeed, 0).generatePublicKey().encoded)
+    private val hostSeed = HOST_SEED
+    val hostPublicKeyPem: String = pemForSeed(hostSeed)
     private val x25519PrivB64u: String = Base64Url.encode(ByteArray(32) { 0x33.toByte() })
     val x25519PubB64u: String = Base64Url.encode(X25519.publicKeyFromPrivate(Base64Url.decode(x25519PrivB64u)))
 
@@ -257,8 +257,15 @@ class FakeHost(
         found!!
     }
 
-    private companion object {
-        const val FRAME_TIMEOUT_MS = 10_000L
+    companion object {
+        private const val FRAME_TIMEOUT_MS = 10_000L
+
+        /** 假主机的固定身份种子。票里的 hostId 必须由它的 PEM 哈希得出（2026-10-19 审计）。 */
+        val HOST_SEED: ByteArray = ByteArray(32) { 0x21.toByte() }
+
+        /** 由种子推导 SPKI PEM（与桌面 identity.ts 同一格式）。 */
+        fun pemForSeed(seed: ByteArray): String =
+            ed25519SpkiPem(org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters(seed, 0).generatePublicKey().encoded)
     }
 }
 

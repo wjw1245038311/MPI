@@ -44,6 +44,7 @@
     "test:relay-uplink-backoff": "node --experimental-transform-types scripts/test-relay-uplink-backoff.mjs",
     "test:pwa-shared": "node --experimental-strip-types scripts/test-pwa-shared.mjs",
     "test:pwa-pairing": "node --experimental-transform-types scripts/test-pwa-pairing.mjs",
+    "test:pwa-host-identity": "node --experimental-strip-types scripts/test-pwa-host-identity.mjs",
     "test:pwa-home": "node --experimental-transform-types scripts/test-pwa-home.mjs",
     "test:pwa-thread": "node --experimental-transform-types scripts/test-pwa-thread.mjs",
     "test:pwa-choice": "node --experimental-transform-types scripts/test-pwa-choice.mjs",

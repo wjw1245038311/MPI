@@ -52,6 +52,50 @@ fun deviceIdFor(publicKeyPem: String): String {
     return "device-" + Base64Url.encode(hash).take(24)
 }
 
+/**
+ * hostId = sha256(SPKI PEM) base64url[:24]（**无**前缀），与桌面 `hostIdFor` / PWA 逐字节一致。
+ *
+ * 配对票里的 `hostId` 就是主机身份公钥的哈希。手机必须自己算一遍并与票里的值比对：
+ * 否则中继递来**自己的**公钥 + 自签证明也能过验签（2026-10-19 审计）。
+ */
+fun hostIdFor(publicKeyPem: String): String {
+    val hash = MessageDigest.getInstance("SHA-256").digest(publicKeyPem.toByteArray(Charsets.UTF_8))
+    return Base64Url.encode(hash).take(24)
+}
+
+/** 主机身份绑定失败（可能是中继 MITM，也可能是桌面端重装了身份）。 */
+class HostIdentityException(message: String) : Exception(message)
+
+/**
+ * 主机身份绑定（与 PWA 的 `checkHostIdentity` 同一套规则，见 docs/SECURITY-AUDIT-2026-10-19-RELAY-MITM.md §2）：
+ *
+ *  1. `sha256(对端公钥) === 票里的 hostId` —— hostId 来自扫码（带外通道），中继改不了；
+ *  2. 票里若自带 `hostPublicKeyPem`，必须与对端完全一致（比哈希更强）；
+ *  3. 本地已 pin 过的主机身份公钥不得变化 —— 否则就是换了一个对端。
+ *
+ * 旧记录（无 pin）/旧票（无 `hostPublicKeyPem`）→ 跳过对应检查（仅第 1 条必须过），
+ * 调用方校验通过后应把本次公钥写回记录，完成 pinning。
+ */
+fun checkHostIdentity(
+    hostId: String,
+    hostPublicKeyPem: String,
+    ticketHostPublicKeyPem: String? = null,
+    pinnedHostPublicKeyPem: String? = null,
+) {
+    if (hostPublicKeyPem.isEmpty()) {
+        throw HostIdentityException("pair.challenge 缺少主机身份公钥（可能存在中间人）——已拒绝")
+    }
+    if (!ticketHostPublicKeyPem.isNullOrEmpty() && ticketHostPublicKeyPem != hostPublicKeyPem) {
+        throw HostIdentityException("主机身份公钥与配对票不符（可能存在中间人）——已拒绝建立会话")
+    }
+    if (hostIdFor(hostPublicKeyPem) != hostId) {
+        throw HostIdentityException("主机身份公钥与配对票里的 hostId 不符（可能存在中间人）——已拒绝建立会话，请重新扫码")
+    }
+    if (!pinnedHostPublicKeyPem.isNullOrEmpty() && pinnedHostPublicKeyPem != hostPublicKeyPem) {
+        throw HostIdentityException("主机身份公钥已变化（可能存在中间人）——已拒绝建立会话，请重新扫码配对")
+    }
+}
+
 fun ed25519Sign(seed: ByteArray, message: ByteArray): ByteArray {
     val signer = Ed25519Signer()
     signer.init(true, Ed25519PrivateKeyParameters(seed, 0))

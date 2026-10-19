@@ -28,6 +28,13 @@ data class PairingRecord(
     val deviceToken: String? = null,
     /** 主机 X25519 公钥（b64url），用于派生 E2E 会话密钥。 */
     val hostX25519PubB64u: String? = null,
+    /**
+     * 主机**身份**公钥（SPKI PEM）—— pinning（2026-10-19 审计）。
+     *
+     * 重连时与 pair.challenge 里的 `hostPublicKeyPem` 比对：不一致就说明对端换了身份
+     * （中继 MITM），必须拒。旧记录没有这个字段 → 首次重连按 hostId 哈希校验后回填。
+     */
+    val hostPublicKeyPem: String? = null,
     val pairedAt: Long,
     /** 配对载荷带来的桌面机器名。 */
     val hostName: String? = null,

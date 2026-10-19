@@ -9,6 +9,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 1. **修（构建工具）：`npm run dist` 不再因为全局 pi 版本滞后而直接失败**——2026-10-19 发 v0.11.1 时踩到：本机全局 `pi` 还是 0.87.0，而仓库要求 `piRuntimeVersion: 1.3.0`，`bundle-runtime.mjs` 找不包就抛「Could not locate @earendil-works/pi-coding-agent v1.3.0」，只能手工 `PI_PACKAGE_DIR=…` 绕过。现在多了一条**回落**：在全局 npm 与 PATH 都没命中时，去应用自己的运行时目录找（`<userData>/runtime/versions/<ver>/pi`，打包版 `MPI` 与开发版 `MPI Dev` 都扫；另可由 `MPI_USER_DATA_DIR` / `MPI_CONFIG_DIR` 指定），且只认版本匹配的目录。
    验证方式：`npm run bundle`（不设 `PI_PACKAGE_DIR`）应打印「pi 包回落到应用运行时目录：…\runtime\versions\<ver>\pi」并正常生成 `runtime-release/MPI-Runtime-<ver>-<平台>.tar.gz`；随后 `npm run dist` 可直接出包。（本机已验证：exit=0，产物 47.7MB。）
 
+2. **安全（P0）：手机端补上「主机身份绑定 + pinning」——中继不再能靠换公钥冒充桌面端**——2026-10-19 审计发现：配对证明 v2 只把 **X25519 公钥**绑进了签名，**身份公钥**却没有和票里的 `hostId` 绑定（`hostId` 本身就是身份公钥的 sha256 前 24 位），而验签用的正是中继递来的那把公钥。于是中继拿自己的 Ed25519 + X25519 自签一帧 `pair.challenge`，手机照单全收；再用同一张票（`ticket.register` / `pair.request` 都过中继手，且扫码配对**默认自动批准**）以「新设备」身份注册进桌面端，就能逐帧解密再转发——界面完全正常。本地 PoC 已复现「中继解出 `thread.prompt` 明文」。修法（三端同一套规则，`checkHostIdentity`）：① `sha256(对端公钥) === 票里的 hostId`（hostId 来自扫码这一带外通道，中继改不了）；② 票里自带 `hostPublicKeyPem` 时按值比对；③ 已配对记录**落盘主机身份公钥**并做 pinning，重连时一变就拒。旧记录/旧票仍可配对（只做哈希校验），成功一次后自动回填 pin。
+   验证方式：`npm run typecheck` + `npm test -- pwa`（新增 `pwa-host-identity`：中继换公钥、已 pin 后换公钥、票内公钥不符、空公钥四种情形必须拒；`pwa-pairing` 真主机配对仍通过）+ `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest`（新增 `HostIdentityTest` 7 项，含与 PWA 逐字节一致的 PEM/hostId 向量）。应用内：手机/PWA 配对与重连应完全照常；若桌面端**重装过**（身份换了）而手机还留着旧记录，重连会明确提示「主机身份公钥已变化（可能存在中间人）——请重新扫码配对」，重新扫码即恢复。残余风险见 `docs/SECURITY-AUDIT-2026-10-19-RELAY-MITM.md`（代码分发通道 B 尚未处理）。
+
 ## v0.11.1（2026-10-19）
 
 1. **修：一台配错中继凭证的主机会把整个 NAT 后面的 PWA / 主机自己的重连全部卡死（中继侧）**——2026-10-19 实测：某台主机（新身份 `l6madOc…`、没带 token）`host.register` 被拒后**每 1.8 秒重试一次**，每 10 次失败触发一次「该 IP 封 60s」；而那 60s 里 **`/ws` upgrade 也被拒（429）**，于是同一路由器后面的合法设备（PWA 浏览器）和主机自己的断线重连全都开不出连接 —— 该 IP 约 **75%** 的时间不可用（当天 320 次拒绝、29 次封禁）。三处改动：

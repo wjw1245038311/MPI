@@ -87,6 +87,8 @@ class HostSession(
     private val deviceName: String,
     private val scope: CoroutineScope,
     private val backoffMs: List<Long> = DEFAULT_BACKOFF,
+    /** 可选的本地存储：重认证成功后用它把主机身份公钥（pin）回填进记录。 */
+    private val keyStore: KeyStore? = null,
 ) : RequestTransport {
 
     private val _state = MutableStateFlow<SessionState>(SessionState.Disconnected)
@@ -109,6 +111,13 @@ class HostSession(
     private var authJob: Job? = null
     private var reconnectJob: Job? = null
     private var attempt = 0
+
+    /**
+     * 已钉住的主机身份公钥（pinning，2026-10-19 审计）。
+     * 旧记录没有 pin → 首次重认证只做 hostId 哈希校验，成功后回填并落盘。
+     */
+    @Volatile
+    private var pinnedHostKeyPem: String? = record.hostPublicKeyPem
 
     /** 认证连续失败次数：网络抖动很常见，不能一次就判「需要重新配对」。 */
     private var authAttempts = 0
@@ -408,9 +417,18 @@ class HostSession(
                     identity = identity,
                     deviceToken = token,
                     deviceName = deviceName,
+                    pinnedHostPublicKeyPem = pinnedHostKeyPem,
                 )
                 aesKey = result.aesKey
                 binaryFrames = result.binaryFrames
+                // pinning 回填：旧记录首次重认证后把主机身份公钥存下来（下次起突变即拒）。
+                val freshPin = result.hostPublicKeyPem
+                if (freshPin.isNotEmpty() && freshPin != pinnedHostKeyPem) {
+                    pinnedHostKeyPem = freshPin
+                    keyStore?.let { store ->
+                        runCatching { store.savePairing(record.copy(hostPublicKeyPem = freshPin)) }
+                    }
+                }
                 attempt = 0
                 authAttempts = 0
                 authDeniedCount = 0

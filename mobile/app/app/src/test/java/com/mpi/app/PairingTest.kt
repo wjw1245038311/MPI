@@ -15,6 +15,7 @@ import com.mpi.app.protocol.encryptFrame
 import com.mpi.app.protocol.deviceProofText
 import com.mpi.app.protocol.ed25519Sign
 import com.mpi.app.protocol.ed25519SpkiPem
+import com.mpi.app.protocol.hostIdFor
 import com.mpi.app.protocol.hostProofText
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -43,13 +44,14 @@ import org.junit.Test
  */
 class PairingTest : RelayTestBase() {
 
-    private val hostId = "host-pair-test"
+    private val deviceToken = "device-token-from-host"
     private val ticket = "ticket-android-1"
     private val connectionId = "conn-1"
     private val challengeValue = "challenge-abc"
-    private val deviceToken = "device-token-from-host"
     private val hostSeed = ByteArray(32) { 0x21.toByte() }
     private val hostPublicKeyPem = ed25519SpkiPem(org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters(hostSeed, 0).generatePublicKey().encoded)
+    // 票里的 hostId 必须就是主机身份公钥的哈希（2026-10-19 审计）：假主机也不能凭空自定义。
+    private val hostId = hostIdFor(hostPublicKeyPem)
     private val hostX25519Priv = Base64Url.encode(ByteArray(32) { 0x33.toByte() })
     private val hostX25519Pub = Base64Url.encode(X25519.publicKeyFromPrivate(Base64Url.decode(hostX25519Priv)))
 

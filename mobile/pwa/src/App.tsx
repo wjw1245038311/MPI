@@ -544,13 +544,15 @@ export default function App() {
           ...record,
           deviceToken: result.deviceToken || null,
           hostX25519PubB64u: result.hostX25519PubB64u || record.hostX25519PubB64u,
+          // pinning：旧记录首次重连后回填；以后公钥一变就拒绝（checkHostIdentity）
+          hostPublicKeyPem: result.hostPublicKeyPem || record.hostPublicKeyPem,
         });
         // `lastGoodRelayUrl` 只在「不是主机首选」时才有意义，交给 host.info 合并决定
         await syncHostRelayInfo(client, record.hostId, chosenUrl);
       })();
       void sessionRef.current?.refresh(); // the open-triggered refresh may have raced AUTH_REQUIRED
       void threadSessionRef.current?.resync().catch(() => {}); // same race for an open conversation
-    });
+    }, record.hostPublicKeyPem);
     client.connect();
     enterHome(client, record);
     setupWebPush(client, record.relayUrl);
@@ -669,6 +671,8 @@ export default function App() {
         deviceId: identity.deviceId,
         deviceToken: pairResult.deviceToken || null,
         hostX25519PubB64u: pairResult.hostX25519PubB64u || undefined,
+        // pinning：把主机身份公钥落盘，后续重连校验对端没被换（2026-10-19 审计）
+        hostPublicKeyPem: pairResult.hostPublicKeyPem || undefined,
         pairedAt: Date.now(),
         hostName: payload.hostName,
         lastSeenAt: Date.now(),
@@ -682,7 +686,7 @@ export default function App() {
         void syncHostRelayInfo(liveClient, payload.hostId, chosenUrl);
         void sessionRef.current?.refresh();
         void threadSessionRef.current?.resync().catch(() => {});
-      });
+      }, pairResult.hostPublicKeyPem);
       setHostId(payload.hostId);
       enterHome(liveClient, record);
       setupWebPush(liveClient, chosenUrl);

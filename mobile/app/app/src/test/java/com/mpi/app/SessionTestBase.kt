@@ -5,6 +5,7 @@ import com.mpi.app.data.PairingRecord
 import com.mpi.app.data.RelayClient
 import com.mpi.app.data.SessionState
 import com.mpi.app.protocol.createDeviceIdentity
+import com.mpi.app.protocol.hostIdFor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -19,7 +20,8 @@ import kotlinx.coroutines.withTimeout
  */
 abstract class SessionTestBase : RelayTestBase() {
 
-    protected val hostId = "host-session-test"
+    /** 票里的 hostId 必须就是主机身份公钥的哈希（2026-10-19 审计）。 */
+    protected val hostId = hostIdFor(FakeHost.pemForSeed(FakeHost.HOST_SEED))
     protected val deviceToken = "session-device-token"
 
     protected fun newScope(): CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())

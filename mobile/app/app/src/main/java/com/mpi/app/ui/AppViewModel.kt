@@ -368,6 +368,8 @@ class AppViewModel(
                             onStage = { stage ->
                                 _ui.update { state -> state.copy(pairing = PairingUi(stage)) }
                             },
+                            // 票里自带身份公钥时按值比对（比 hostId 哈希校验更强）
+                            ticketHostPublicKeyPem = payload.hostPublicKeyPem,
                         )
                         chosenUrl = url
                         attempt to r
@@ -391,6 +393,8 @@ class AppViewModel(
                     deviceId = deviceIdentity.deviceId,
                     deviceToken = result.deviceToken,
                     hostX25519PubB64u = result.hostX25519PubB64u,
+                    // pinning：把主机身份公钥落盘，后续重连校验对端没被换（2026-10-19 审计）
+                    hostPublicKeyPem = result.hostPublicKeyPem,
                     pairedAt = now,
                     hostName = payload.hostName,
                     lastSeenAt = now,
@@ -1934,7 +1938,7 @@ class AppViewModel(
         val client = RelayClient(chosenUrl)
         currentRecord = record
         currentUrl = chosenUrl
-        val newSession = HostSession(client, record, deviceIdentity, deviceName, scope)
+        val newSession = HostSession(client, record, deviceIdentity, deviceName, scope, keyStore = keyStore)
         val newRequester = Requester(
             transport = newSession,
             // 请求超时但连接还在 → 主机 uplink 可能静默掉线，重握手一次

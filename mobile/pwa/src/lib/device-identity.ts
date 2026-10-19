@@ -126,6 +126,18 @@ function deviceIdFor(publicKeyPem: string): string {
   return `device-${toBase64Url(sha256(utf8Bytes(publicKeyPem))).slice(0, 24)}`;
 }
 
+/**
+ * hostId = sha256(SPKI PEM) base64url[:24]（**无** `device-` 前缀），与桌面端
+ * `src/main/remote/identity.ts` 的 `hostIdFor` 逐字节一致。
+ *
+ * 用途（2026-10-19 审计）：配对票里的 `hostId` 就是主机身份公钥的哈希。手机必须自己算出这个
+ * 哈希并与票里的值比对，否则中继递来**自己的**身份公钥 + 自签证明就能通过验签（见
+ * docs/SECURITY-AUDIT-2026-10-19-RELAY-MITM.md §2）。
+ */
+export function hostIdFor(publicKeyPem: string): string {
+  return toBase64Url(sha256(utf8Bytes(publicKeyPem))).slice(0, 24);
+}
+
 /** Create a fresh identity (or restore from a stored seed). */
 export function createDeviceIdentity(seedB64url?: string): DeviceIdentity {
   const priv = seedB64url ? fromBase64Url(seedB64url) : ed25519.utils.randomPrivateKey();

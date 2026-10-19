@@ -5,7 +5,9 @@ import com.mpi.app.protocol.E2E_BINARY_CAP
 import com.mpi.app.protocol.supportsBinaryFrames
 import com.mpi.app.protocol.DeviceIdentity
 import com.mpi.app.protocol.Envelope
+import com.mpi.app.protocol.HostIdentityException
 import com.mpi.app.protocol.X25519
+import com.mpi.app.protocol.checkHostIdentity
 import com.mpi.app.protocol.deriveAesKey
 import com.mpi.app.protocol.deviceProofText
 import com.mpi.app.protocol.ed25519RawFromPem
@@ -58,6 +60,8 @@ class PairingResult(
     val hostX25519PubB64u: String,
     /** 已派生的 AES-256-GCM 会话密钥。 */
     val aesKey: ByteArray,
+    /** 主机**身份**公钥（SPKI PEM）——必须落盘做 pinning（重连时校验对端没换身份）。 */
+    val hostPublicKeyPem: String = "",
 )
 
 object Pairing {
@@ -90,6 +94,8 @@ object Pairing {
         deviceName: String,
         acceptedTimeoutMs: Long = ACCEPTED_TIMEOUT_MS,
         onStage: (PairingStage) -> Unit = {},
+        /** 票里自带的主机身份公钥（新版票才有）——有值就按值比对，比哈希更强。 */
+        ticketHostPublicKeyPem: String? = null,
     ): PairingResult {
         onStage(PairingStage.Connecting)
         connectAndAwaitOpen(client)
@@ -102,7 +108,16 @@ object Pairing {
                 throw PairingException("无法发送 pair.request（连接已关闭）")
             }
             onStage(PairingStage.WaitingChallenge)
-            return answerChallenge(stream, hostId, identity, deviceName, ticket, acceptedTimeoutMs, onStage)
+            return answerChallenge(
+                stream,
+                hostId,
+                identity,
+                deviceName,
+                ticket,
+                acceptedTimeoutMs,
+                onStage,
+                ticketHostPublicKeyPem = ticketHostPublicKeyPem,
+            )
         } finally {
             stream.close()
         }
@@ -120,6 +135,8 @@ object Pairing {
         deviceName: String,
         acceptedTimeoutMs: Long = REAUTH_ACCEPTED_TIMEOUT_MS,
         onStage: (PairingStage) -> Unit = {},
+        /** 已配对记录里的主机身份公钥（pinning）；旧记录没有 → 只做 hostId 哈希校验。 */
+        pinnedHostPublicKeyPem: String? = null,
     ): PairingResult {
         onStage(PairingStage.Connecting)
         connectAndAwaitOpen(client)
@@ -129,7 +146,16 @@ object Pairing {
                 throw PairingException("无法发送 hello（连接已关闭）")
             }
             onStage(PairingStage.WaitingChallenge)
-            return answerChallenge(stream, hostId, identity, deviceName, "", acceptedTimeoutMs, onStage)
+            return answerChallenge(
+                stream,
+                hostId,
+                identity,
+                deviceName,
+                "",
+                acceptedTimeoutMs,
+                onStage,
+                pinnedHostPublicKeyPem = pinnedHostPublicKeyPem,
+            )
         } finally {
             stream.close()
         }
@@ -145,6 +171,8 @@ object Pairing {
         ticket: String,
         acceptedTimeoutMs: Long,
         onStage: (PairingStage) -> Unit,
+        ticketHostPublicKeyPem: String? = null,
+        pinnedHostPublicKeyPem: String? = null,
     ): PairingResult {
         val challenge = stream.await("pair.challenge", CHALLENGE_TIMEOUT_MS)
         val sessionId = challenge.str("sessionId") ?: throw PairingException("pair.challenge 缺少 sessionId")
@@ -157,6 +185,18 @@ object Pairing {
         val hostPem = payload.str("hostPublicKeyPem").orEmpty()
         val hostSig = payload.str("signature").orEmpty()
         val hostX25519PubFromChallenge = payload.str("hostX25519Pub").orEmpty()
+        // 身份绑定（2026-10-19 审计）：公钥必须能哈希回票里的 hostId，且与本地 pin 一致。
+        // 只验「签名与对端递来的公钥自洽」是不够的——中继可以递自己的公钥并自签。
+        try {
+            checkHostIdentity(
+                hostId = hostId,
+                hostPublicKeyPem = hostPem,
+                ticketHostPublicKeyPem = ticketHostPublicKeyPem,
+                pinnedHostPublicKeyPem = pinnedHostPublicKeyPem,
+            )
+        } catch (e: HostIdentityException) {
+            throw PairingException(e.message ?: "主机身份校验失败（可能存在中间人）")
+        }
         val hostRawKey = ed25519RawFromPem(hostPem)
         val hostProofOk = hostRawKey != null && hostX25519PubFromChallenge.isNotEmpty() &&
             ed25519Verify(
@@ -220,6 +260,8 @@ object Pairing {
             aesKey = aesKey,
             // 只有主机也声明了 e2e-bin 才切二进制（否则保持 JSON，老主机不受影响）
             binaryFrames = supportsBinaryFrames(acceptedPayload["caps"]),
+            // pinning：调用方负责把它写回本地记录
+            hostPublicKeyPem = hostPem,
         )
     }
 
