@@ -191,6 +191,14 @@ export default function App() {
   }, []);
   const [session, setSession] = useState<HostSession | null>(null);
   const sessionRef = useRef<HostSession | null>(null);
+  /**
+   * 当前 HostSession/连接**实际属于哪台主机**（2026-10-19 修多设备切换）。
+   *
+   * 不能拿 `hostId` 判：switchHost 里 setHostId 是异步落地，而 enterHome 会用
+   * sessionRef 里那个**上一台**的 HostSession（setSession(null) 要等下一次 render 才生效）。
+   * 结果就是「切到 MiniBox 后列表还是 workstation 的，点开会话 → NOT_FOUND」。
+   */
+  const sessionHostRef = useRef<string | null>(null);
   /** 降级看门狗定时器（连不上就换下一条通道）。 */
   const degradeWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   sessionRef.current = session;
@@ -504,6 +512,11 @@ export default function App() {
     clientRef.current?.close();
     if (degradeWatchdogRef.current) { clearTimeout(degradeWatchdogRef.current); degradeWatchdogRef.current = null; }
     sessionRef.current?.detach();
+    // **必须同步清 ref**：enterHome 靠 sessionRef 判断要不要新建 HostSession，
+    // 而 setSession(null) 要到下一次 render 才生效——不清就会复用上一台主机的会话
+    // （列表是旧的、请求发到新主机上 → NOT_FOUND）。
+    sessionRef.current = null;
+    sessionHostRef.current = record.hostId;
     setSession(null);
     const identity = createDeviceIdentity(seedB64url);
     // S6：主机给的顺序取候选（跳过已试过的），首位 = 主机首选；旧记录回落上次可用
@@ -890,6 +903,8 @@ export default function App() {
     setThreadActions(null);
     setUiError(null);
     sessionRef.current?.detach();
+    sessionRef.current = null;
+    sessionHostRef.current = null;
     clientRef.current?.close();
     setSession(null);
     setSnap(null);
@@ -938,7 +953,9 @@ export default function App() {
 
   /** 多设备切换：关掉当前会话与连接，再按选中的 pairing 重连（复用 startSession）。 */
   const switchHost = (record: PairingRecord) => {
-    if (record.hostId === hostId) return;
+    // 只有「同一台主机且会话确实在」才跳过；否则重切一次（切换失败后 hostId 已经
+    // 改成新主机、会话却还是旧的，用 hostId 判会直接 return，界面就永久卡死）。
+    if (record.hostId === sessionHostRef.current && sessionRef.current) return;
     closeThread();
     snapshotCache.memory.clear(); // 内存层只按 threadId 键控，换主机后必须作废（IDB 按 hostId 隔离，留着）
     setError(null);

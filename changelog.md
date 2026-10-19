@@ -22,6 +22,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    验证方式：`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest`（新增 `ChoiceLangToleranceTest` 5 项：`Choices`/`choices>` 升级、`choicesjson` 非合法正文保持代码块、正文合法则升级、未定稿不升级）。应用内：让模型用 `choices>` 或大写 `Choices` 写围栏，安卓也应出面板。
 
 
+6. **修（PWA）：多设备切换后列表还是上一台的、点会话直接 `NOT_FOUND: Thread not found`，且切不回去**——2026-10-19 thinkbook 真机（绑了 workstation + MiniBox）：刷新后默认连 workstation，点 MiniBox 就报 `NOT_FOUND` 并且再也切不回来。根因两处：① `startSession` 只 `setSession(null)`（要等下一次 render 才生效），而 `enterHome` 立刻用 `sessionRef.current` 判断要不要新建会话——于是**复用了上一台主机的 HostSession**，首页列表还是 workstation 的；点开列表里的 threadId 时请求已经发到 MiniBox（`clientRef` 已是新的），主机自然 `NOT_FOUND`。② `switchHost` 用渲染态的 `hostId` 提前返回，而切换时 `hostId` 已经改成 MiniBox → 再点一次是空操作，界面永久卡死。现在：`startSession` 在 detach 后**同步清空 `sessionRef`** 并记录 `sessionHostRef`（会话实际所属主机）；`switchHost` 改按 `sessionHostRef + sessionRef` 判定（宿主相同且会话还在才跳过）；`disconnect` 一并清这两个 ref。
+   验证方式：`npm run typecheck` + `npm test -- pwa`（新增 `pwa-host-switch`：三条源码不变量——startSession 同步清 ref、switchHost 不再用渲染态 hostId、disconnect 双清）。应用内：绑两台主机 → 刷新页面 → 点另一台主机的卡片：列表应变成那台的，点开会话正常；再切回来也正常（不再 NOT_FOUND / 卡死）。
+
 ## v0.11.1（2026-10-19）
 
 1. **修：一台配错中继凭证的主机会把整个 NAT 后面的 PWA / 主机自己的重连全部卡死（中继侧）**——2026-10-19 实测：某台主机（新身份 `l6madOc…`、没带 token）`host.register` 被拒后**每 1.8 秒重试一次**，每 10 次失败触发一次「该 IP 封 60s」；而那 60s 里 **`/ws` upgrade 也被拒（429）**，于是同一路由器后面的合法设备（PWA 浏览器）和主机自己的断线重连全都开不出连接 —— 该 IP 约 **75%** 的时间不可用（当天 320 次拒绝、29 次封禁）。三处改动：
