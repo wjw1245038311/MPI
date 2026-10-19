@@ -177,41 +177,56 @@ private fun ListLine(marker: String, text: String, depth: Int, bodyColor: androi
     }
 }
 
-/** 表格：每行等宽分列 + 细边框（宽表靠外层横向滚动，见调用方）。 */
+/**
+ * 表格：列数 ≤3 时按可用宽度等分（贴屏、自动换行）；
+ * 更多列时给每列固定宽度并允许整体横向滚动。
+ *
+ * ⚠️ 不能用「horizontalScroll + weight」：横向滚动给 Row 的是**无界宽度**，
+ * `weight` 在无界约束下非法（2026-10-19 真机：表格整块渲染不出来）。两者必须二选一。
+ */
 @Composable
 private fun MdTable(table: MdBlock.Table, bodyColor: androidx.compose.ui.graphics.Color) {
     val border = MpiTheme.colors.border
-    Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-        Row(Modifier.fillMaxWidth()) {
-            table.header.forEachIndexed { index, cell ->
-                Text(
-                    text = inlineStyled(cell, bodyColor, MpiTheme.colors.codeBg),
-                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                    color = bodyColor,
-                    textAlign = alignOf(table.align, index),
-                    modifier = Modifier
-                        .weight(1f)
-                        .border(0.5.dp, border)
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                )
-            }
+    val scrollable = table.header.size > 3
+    val rowWidth: Modifier = if (scrollable) Modifier.width((140 * table.header.size).dp) else Modifier.fillMaxWidth()
+    val container: Modifier = if (scrollable) Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()) else Modifier.fillMaxWidth()
+    Column(container) {
+        Row(rowWidth) {
+            TableCells(table.header, table.align, scrollable = scrollable, bold = true, bodyColor = bodyColor, border = border)
         }
         table.rows.forEach { row ->
-            Row(Modifier.fillMaxWidth()) {
-                table.header.indices.forEach { index ->
-                    Text(
-                        text = inlineStyled(row.getOrNull(index).orEmpty(), bodyColor, MpiTheme.colors.codeBg),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = bodyColor,
-                        textAlign = alignOf(table.align, index),
-                        modifier = Modifier
-                            .weight(1f)
-                            .border(0.5.dp, border)
-                            .padding(horizontal = 6.dp, vertical = 4.dp),
-                    )
-                }
+            Row(rowWidth) {
+                val cells = table.header.indices.map { row.getOrNull(it).orEmpty() }
+                TableCells(cells, table.align, scrollable = scrollable, bold = false, bodyColor = bodyColor, border = border)
             }
         }
+    }
+}
+
+/** 一行里的所有单元格（RowScope：等分宽度时要用 weight）。 */
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.TableCells(
+    cells: List<String>,
+    align: List<String?>,
+    scrollable: Boolean,
+    bold: Boolean,
+    bodyColor: androidx.compose.ui.graphics.Color,
+    border: androidx.compose.ui.graphics.Color,
+) {
+    cells.forEachIndexed { index, cell ->
+        Text(
+            text = inlineStyled(cell, bodyColor, MpiTheme.colors.codeBg),
+            style = if (bold) {
+                MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+            } else {
+                MaterialTheme.typography.bodySmall
+            },
+            color = bodyColor,
+            textAlign = alignOf(align, index),
+            modifier = (if (scrollable) Modifier.width(140.dp) else Modifier.weight(1f))
+                .border(0.5.dp, border)
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+        )
     }
 }
 

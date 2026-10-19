@@ -43,6 +43,11 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
     PWA 另加了 `?dbg=1` 下的计时日志（`[mpi-timing] connect-start / socket-open / auth-ok`），便于下次定位到底耗时在「建连」还是「认证」。
    验证方式：`npm run typecheck` + `npm test -- relay-select`（顺序断言已改：lastGood 提前）+ `cd mobile/app && ... ./gradlew :app:testDebugUnitTest`（`RelaySelectTest` 同步更新）。应用内：两台主机来回切，第二次起应基本秒连。
 
+11. **修（手机端）：表格整块显示不出来 / 右侧被裁**——2026-10-19 真机截图：两列表格在手机上被截断，右侧列看不到也滑不动。根因是安卓把表格放进了**横向滚动容器**又给单元格用了 `weight(1f)`：滚动给 Row 的是无界宽度，`weight` 在无界约束下非法，整块布局失效；PWA 侧则是表格按内容宽度撑开、超出屏幕被裁。现在：
+    - 安卓：**≤3 列按可用宽度等分并自动换行**（贴屏、不用滑）；>3 列才给每列固定宽度 + 整体横向滚动（两者二选一，不再混用 `weight` 与 `horizontalScroll`）；
+    - PWA：表格 `width: 100%` + 单元格 `word-break/overflow-wrap`，先按屏宽换行，实在放不下才由外层容器横向滚动。
+   验证方式：`npm run typecheck` + `npm test -- pwa` + `cd mobile/app && ... ./gradlew :app:testDebugUnitTest`。应用内：让模型输出一张两列表格（如上面那种测项/结果），手机上应完整显示、长文本自动换行；再输出一张 5 列表格，应可左右滑动。
+
 ## v0.11.1（2026-10-19）
 
 1. **修：一台配错中继凭证的主机会把整个 NAT 后面的 PWA / 主机自己的重连全部卡死（中继侧）**——2026-10-19 实测：某台主机（新身份 `l6madOc…`、没带 token）`host.register` 被拒后**每 1.8 秒重试一次**，每 10 次失败触发一次「该 IP 封 60s」；而那 60s 里 **`/ws` upgrade 也被拒（429）**，于是同一路由器后面的合法设备（PWA 浏览器）和主机自己的断线重连全都开不出连接 —— 该 IP 约 **75%** 的时间不可用（当天 320 次拒绝、29 次封禁）。三处改动：
