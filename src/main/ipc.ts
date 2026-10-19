@@ -3633,20 +3633,6 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       await bridge.bridge.abort();
       return { ok: true };
     },
-    // 撤回手机端「已插入、尚未执行」的插话：整队清空 pi 的 steering + follow-up，
-    // 文本原样带回给手机回填草稿（pi 没有按条撤回）。
-    async (threadId) => {
-      const ref = await remoteThread(threadId);
-      const bridge = [ref.localId, ref.sessionFile]
-        .filter((id): id is string => Boolean(id))
-        .map((id) => bridges.get(id))
-        .find(Boolean);
-      if (!bridge) return { steering: [], followUp: [] };
-      const cleared = (await bridge.bridge.clearQueue()) as { steering?: unknown; followUp?: unknown } | null;
-      const strings = (value: unknown): string[] =>
-        Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && !!item.trim()) : [];
-      return { steering: strings(cleared?.steering), followUp: strings(cleared?.followUp) };
-    },
   );
 
   const filePreviewService = new FilePreviewService(
@@ -3879,7 +3865,6 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     steer: (threadId, text, images, files, videos, media) => threadService.steer(threadId, text, images, files, videos, media),
     followUp: (threadId, text, images, files, videos, media) => threadService.followUp(threadId, text, images, files, videos, media),
     abort: (threadId) => threadService.abort(threadId),
-    clearQueue: (threadId) => threadService.clearQueue(threadId),
     renameThread: async (threadId, name) => {
       const ref = await remoteThread(threadId);
       const handle = await ensureRemoteBridge(ref);
@@ -6326,22 +6311,6 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
     const merged = [...(args.images || []), ...images];
     await h.bridge.steer(text, merged.length ? merged : undefined);
     return { ok: true };
-  });
-
-  /**
-   * 撤回 pi 侧尚未投递的插话（steer / follow-up）。
-   *
-   * 为什么需要：Alt+Enter 的「立即插入」一经发出就进了 pi 的队列，但要等到下一个 LLM
-   * 调用边界才真正注入上下文——这段窗口里用户常常发现写错了，却没有任何入口撤回。
-   * pi 的 `clear_queue` 正好覆盖这个窗口（整队清空），内容原样返回以便回填草稿。
-   */
-  ipcMain.handle("thread:clearQueue", async (_e, args: { threadId: string }) => {
-    const h = bridges.get(args.threadId);
-    if (!h) return { steering: [], followUp: [] };
-    const cleared = (await h.bridge.clearQueue()) as { steering?: unknown; followUp?: unknown } | null;
-    const strings = (value: unknown): string[] =>
-      Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && !!item.trim()) : [];
-    return { steering: strings(cleared?.steering), followUp: strings(cleared?.followUp) };
   });
 
   ipcMain.handle("thread:followUp", async (_e, args: { threadId: string; text: string; images?: unknown[]; attachments?: Attachment[] }) => {

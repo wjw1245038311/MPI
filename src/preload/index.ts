@@ -434,8 +434,6 @@ const api = {
       ipcRenderer.invoke("thread:prompt", args),
     steer: (args: { threadId: string; text: string; images?: unknown[]; attachments?: PromptAttachment[] }) =>
       ipcRenderer.invoke("thread:steer", args),
-    /** 撤回 pi 侧尚未投递的插话队列（返回被清掉的内容，供回填草稿）。 */
-    clearQueue: (args: { threadId: string }) => ipcRenderer.invoke("thread:clearQueue", args),
     followUp: (args: { threadId: string; text: string; images?: unknown[]; attachments?: PromptAttachment[] }) =>
       ipcRenderer.invoke("thread:followUp", args),
     abort: (threadId: string) => ipcRenderer.invoke("thread:abort", threadId),

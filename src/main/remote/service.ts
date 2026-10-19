@@ -45,11 +45,6 @@ export interface RemoteBackend {
   steer(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined): Promise<unknown>;
   followUp(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined): Promise<unknown>;
   abort(threadId: string): Promise<unknown>;
-  /**
-   * 撤回 pi 侧尚未投递的插话（`clear_queue`）：steering + follow-up 队列**整队清空**，
-   * 返回被清掉的文本（pi 只能整队清，没有按条撤回）。消息一旦已被模型消费，返回空数组。
-   */
-  clearQueue(threadId: string): Promise<{ steering: string[]; followUp: string[] }>;
   /** 重命名会话（pi RPC `set_session_name`）。 */
   renameThread(threadId: string, name: string): Promise<unknown>;
   /** 置顶 / 取消置顶（写 config.pinnedThreads；草稿会话不可置顶）。 */
@@ -410,11 +405,6 @@ export class RemoteService {
         const threadId = this.requiredThread(request);
         this.assertWriter(threadId, context);
         return responseFor(request, await this.backend.abort(threadId));
-      }
-      case "thread.clearQueue": {
-        const threadId = this.requiredThread(request);
-        this.assertWriter(threadId, context);
-        return responseFor(request, await this.backend.clearQueue(threadId));
       }
       case "thread.rename": {
         const threadId = this.requiredThread(request);

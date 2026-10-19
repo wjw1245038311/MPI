@@ -74,12 +74,6 @@ class ThreadActions(
     suspend fun abort(): JsonElement? = writeRequest("thread.abort", buildJsonObject { }, "abort")
 
     /**
-     * 撤回 pi 侧尚未投递的插话（`thread.clearQueue`）：整队清空 steering + follow-up，
-     * 返回被清掉的文本。消息已被模型消费时返回空数组。
-     */
-    suspend fun clearQueue(): JsonElement? = writeRequest("thread.clearQueue", buildJsonObject { }, "clearQueue")
-
-    /**
      * 按需取回附件字节，**直接写进目标文件**（视频原片不再随快照下发后的取字节入口）。
      *
      * 只读，**不需要写租约**（与 `stt.transcribe` 同类）：拉字节不该抢会话的编辑权。

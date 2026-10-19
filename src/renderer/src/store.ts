@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { normalizePiQueue, mergeRetractedQueue, EMPTY_PI_QUEUE, isQueuedText, isRetractedGhost } from "./lib/queue-retract";
 import type {
   AppConfig,
   AppRuntime,
@@ -839,9 +838,6 @@ function detectBricked(errMsg?: unknown): { kind: "whitespace" | "stale-compacti
 function reduceThread(t: ThreadState, event: any): ThreadState {
   if (!event || typeof event !== "object") return t;
   switch (event.type) {
-    case "queue_update":
-      // pi 侧待投递队列：steering = 已「立即插入」但还没注入上下文的消息（可撤回的窗口）。
-      return { ...t, piQueue: normalizePiQueue(event) };
     case "agent_start":
       // turnStartedAt 只在「本轮还没在等」时才取当前时刻：正常发送路径已在用户按下
       // 发送时就写过它，这里覆盖会让秒数从 agent_start 重新起算。自动续跑等未经
@@ -1249,13 +1245,6 @@ interface PiStore {
   startReleaseReview: (review: { cwd: string; nextVersion: string; message: string }) => Promise<boolean>;
   setPendingFollowUp: (threadId: string, pending: PendingFollowUp | null) => void;
   sendPendingSteering: (threadId: string) => Promise<void>;
-  /**
-   * 撤回 pi 侧尚未投递的插话（`clear_queue`），并把清掉的内容回填到「待处理后续」卡片。
-   * 用于 Alt+Enter「立即插入」后发现自己写错、而模型还没看到的那一刻。
-   */
-  retractQueuedMessages: (threadId: string) => Promise<void>;
-  /** 消息级撤回（右键自己的消息）：排队中 → 从 pi 队列删；已被消费 → 从这条之前分支。 */
-  retractMessage: (threadId: string, messageKey: string) => Promise<void>;
   abortThread: (id: string) => Promise<void>;
   /** Manually compact the thread's context (pi /compact). */
   compactContext: (threadId: string, instructions?: string) => Promise<void>;
@@ -2730,79 +2719,6 @@ export const useStore = create<PiStore>()((set, get) => {
     get().setPendingFollowUp(threadId, null);
     const { imgs, atts } = pendingToArgs(p);
     await get().sendPrompt(threadId, pendingPromptText(p), imgs, atts, "steer");
-  },
-
-  retractQueuedMessages: async (threadId) => {
-    const zh = get().config?.language === "zh";
-    let cleared: unknown = null;
-    try {
-      cleared = await window.pi.thread.clearQueue({ threadId });
-    } catch (e: any) {
-      get().pushToast("error", e?.message || (zh ? "撤回失败" : "Retract failed"));
-      return;
-    }
-    const queue = normalizePiQueue(cleared);
-    const count = queue.steering.length + queue.followUp.length;
-    const clearedTexts = [...queue.steering, ...queue.followUp].map((item) => item.trim()).filter(Boolean);
-    set((s) => {
-      const t = s.threads[threadId];
-      if (!t) return s;
-      // 撤回的内容既然从未被 pi 投递，本地那条**乐观回显气泡**就成了幽灵：
-      // 不删掉的话界面上看起来“撤回没生效”（气泡还在、下面又多一张待处理卡片）。
-      const messages = count > 0 ? t.messages.filter((m) => !isRetractedGhost(m, clearedTexts)) : t.messages;
-      return {
-        threads: {
-          ...s.threads,
-          [threadId]: {
-            ...t,
-            piQueue: EMPTY_PI_QUEUE,
-            messages,
-            pendingFollowUp: count > 0 ? mergeRetractedQueue(t.pendingFollowUp, queue) : t.pendingFollowUp,
-          },
-        },
-      };
-    });
-    get().pushToast(
-      count > 0 ? "success" : "info",
-      count > 0
-        ? zh
-          ? `已撤回 ${count} 条待投递插话，已放回「待处理后续」可再编辑`
-          : `Retracted ${count} queued message(s) — restored to the pending follow-up card`
-        : zh
-          ? "没有被撤回的内容（可能已经被模型执行了）"
-          : "Nothing to retract (it may already have been used by the model)",
-    );
-  },
-
-  /**
-   * 消息级「撤回」（飞书/微信式）：对**自己的某条消息**右键。
-   *
-   * pi 没有删消息的 RPC，所以只有两种诚实语义：
-   *   · 还在 pi 待投递队列里 → 直接从队列抹掉（clear_queue）+ 收回待处理卡片；
-   *   · 已被模型消费 → 从这条之前**开新分支**（原会话保留），原文放回输入框。
-   */
-  retractMessage: async (threadId, messageKey) => {
-    const zh = get().config?.language === "zh";
-    const t = get().threads[threadId];
-    const message = t?.messages.find((m) => m.key === messageKey);
-    if (!t || !message || message.role !== "user") return;
-    const text = (message.text || "").trim();
-    const queued = isQueuedText(t.piQueue, text);
-    if (queued) {
-      await get().retractQueuedMessages(threadId);
-      return;
-    }
-    if (!message.branchEntryId) {
-      get().pushToast(
-        "warning",
-        zh
-          ? "这条已经被模型处理，且找不到可分支的位置（可能是很早的消息）。直接说「忽略上一条」更稳。"
-          : "That message was already processed and cannot be branched from. Ask the agent to ignore it instead.",
-      );
-      return;
-    }
-    // 已被消费：开新分支（原分支保留），pi 会把分叉前那条提示词回填到输入框。
-    await get().forkThread(threadId, message.branchEntryId);
   },
 
   abortThread: async (id) => {

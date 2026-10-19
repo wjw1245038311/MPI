@@ -81,7 +81,6 @@ export class ThreadService {
     private readonly steerFn: (threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined) => Promise<unknown>,
     private readonly followUpFn: (threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined) => Promise<unknown>,
     private readonly abortFn: (threadId: string) => Promise<unknown>,
-    private readonly clearQueueFn: (threadId: string) => Promise<{ steering: string[]; followUp: string[] }>,
   ) {}
 
   get(threadId: string): Promise<RemoteThreadSnapshot> { return this.getFn(threadId); }
@@ -92,7 +91,6 @@ export class ThreadService {
   steer(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined): Promise<unknown> { return this.steerFn(threadId, text, images, files, videos, media); }
   followUp(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined): Promise<unknown> { return this.followUpFn(threadId, text, images, files, videos, media); }
   abort(threadId: string): Promise<unknown> { return this.abortFn(threadId); }
-  clearQueue(threadId: string): Promise<{ steering: string[]; followUp: string[] }> { return this.clearQueueFn(threadId); }
 }
 
 export class FilePreviewService {

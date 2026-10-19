@@ -844,49 +844,6 @@ class AppViewModel(
         _ui.update { it.copy(pendingFollowUp = null, draft = text) }
     }
 
-    /**
-     * 消息级撤回（长按自己的消息）：排队中 → 走 clear_queue；已被模型消费 → 只能说清原因。
-     * 安卓端没有 pi fork 入口，所以不做「从这条之前分支」（桌面端有）。
-     */
-    fun retractMessage(text: String) {
-        val target = text.trim()
-        if (target.isEmpty()) return
-        val queued = _ui.value.thread?.piQueue?.texts?.any { it.trim() == target } == true
-        if (!queued) {
-            _ui.update { it.copy(sendNote = "这条已被模型处理，撤不回了（可以让 agent 忽略上一条）") }
-            return
-        }
-        retractQueuedMessages()
-    }
-
-    /**
-     * 撤回「已插入、尚未执行」的插话（pi 的 `clear_queue`）。
-     * 文本回填到「待处理后续」卡片（可 ✎ 再编辑 / ⚡ 再插入），不丢消息。
-     */
-    fun retractQueuedMessages() {
-        val actions = threadActions ?: return
-        scope.launch {
-            try {
-                val cleared = actions.clearQueue()
-                val texts = queueTextsOf(cleared)
-                if (texts.isEmpty()) {
-                    _ui.update { it.copy(sendNote = "没有被撤回的内容（可能已经被模型处理了）") }
-                    return@launch
-                }
-                val current = _ui.value.pendingFollowUp
-                val merged = mergeRetractedText(current, texts)
-                _ui.update {
-                    it.copy(
-                        pendingFollowUp = merged,
-                        sendNote = "已撤回 ${texts.size} 条待投递插话，已放回「待处理后续」可再编辑",
-                    )
-                }
-            } catch (e: Exception) {
-                _ui.update { it.copy(sendError = com.mpi.app.data.friendlyError(e)) }
-            }
-        }
-    }
-
     fun dismissSendError() = _ui.update { it.copy(sendError = null) }
 
     /**

@@ -33,8 +33,6 @@ export const REMOTE_REQUEST_TYPES = [
   "thread.steer",
   "thread.followUp",
   "thread.abort",
-  // 撤回 pi 侧尚未投递的插话（steer/follow-up 队列整队清空；手机端「已插入、尚未执行」横幅用）
-  "thread.clearQueue",
   // 会话列表的元数据操作（手机端长按菜单用）
   "thread.rename",
   "thread.setPinned",

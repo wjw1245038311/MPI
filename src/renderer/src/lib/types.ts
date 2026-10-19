@@ -461,13 +461,6 @@ export interface ThreadState {
   pendingEditorText?: string;
   /** Follow-up queued via Enter while streaming; delivered when the agent settles. */
   pendingFollowUp?: PendingFollowUp | null;
-  /**
-   * pi 侧**待投递**的插话队列（`queue_update` 事件同步）。
-   *
-   * steering = 已用 Alt+Enter「立即插入」但还没被注入上下文的消息；此时可以用
-   * 「撤回」把它们整队清掉并回填草稿（见 lib/queue-retract.ts）。
-   */
-  piQueue?: { steering: string[]; followUp: string[] };
 }
 
 export interface PreviewPayload {

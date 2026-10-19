@@ -568,18 +568,6 @@ export class PiBridge {
   abort(): Promise<unknown> {
     return this.send("abort");
   }
-  /**
-   * 清空 pi 侧**待投递**的插话队列（steering + follow-up），返回被清掉的内容。
-   *
-   * 用途（2026-10-19）：用户 Alt+Enter 立即插入后发现写错了，而 pi 还没把这条消息
-   * 注入上下文——此时它仍躺在 `_steeringMessages` 队列里（pi 的 agent-session 只在
-   * 真正 `message_start` 时才出队），可以用 `clear_queue` 安全撤回。
-   * 注意：pi 只能**整队清空**（没有按条撤回），调用方必须把返回文本回填给用户，
-   * 否则等于把他的消息丢了。
-   */
-  clearQueue(): Promise<unknown> {
-    return this.send("clear_queue");
-  }
   /** Manually compact the conversation context (same as /compact in the TUI).
    * Resolves with { summary, firstKeptEntryId, tokensBefore, estimatedTokensAfter, ... }. */
   compact(customInstructions?: string): Promise<unknown> {

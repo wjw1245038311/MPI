@@ -15,8 +15,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 3. **修：模型名不再只显示裸 id——消息底部与冷会话的模型 pill 都显示可读名字**——界面两处一直显示 `deepseek-flash` 而不是 “DeepSeek V4.1 Flash”：① 对话框消息底部（`Chat.tsx`）直接渲染会话文件里的 `model` 字符串，从没查过模型列表；② 冷会话（桥未开）的 pill 取自磁盘快照，而 `readThreadHistory()` 只能给出 `{provider,id}`（name 只在 pi 运行时的模型对象里），于是掉回 `id`。现在：主进程按 provider+id 在「pi 报过的模型 + models.json 配置」里补 `name`（`modelWithName`，用于 `thread:loadHistory` 与远程快照）；渲染层新增 `modelLabel()`，消息底部按会话模型列表把 id 映射成显示名，查不到一律回落 id（绝不空白）。
    验证方式：`npm run typecheck` + `npm test -- model-label`（新增 8 项：id→名、无列表回落 id、自带 name 优先、provider 不匹配不借用别家名、空值返回空串）。应用内：重启后打开任意会话——消息底部应显示 “DeepSeek V4.1 Flash” 这类名字（列表里没有该模型时才显示 id）；右下角模型 pill 在会话刚打开、桥还没起来时也应直接显示名字，不再先是 `deepseek-flash` 再跳变。
 
-4. **新增：撤回「已插入、尚未执行」的插话**——Alt+Enter 的「立即插入」= pi 的 `steer`，消息先进入 pi 的待投递队列，要到下一个 LLM 调用边界才注入上下文（pi 的 `agent-session` 在 `message_start` 时才出队）。这段窗口里用户常发现写错了，却没有任何入口撤回。现在：pi 的 `queue_update` 事件同步到界面（**桌面 + PWA + 安卓三端**），输入框上方出现「已插入、尚未执行 · N 条待投递」横幅，点 × / 「撤回」即经 `thread.clearQueue` 调 pi 的 `clear_queue` 整队撤回，并把清掉的文本回填到「待处理后续」卡片（可 ✎ 再编辑 / ⚡ 再插入），不会丢消息。限制：pi 只支持**整队清空**（没有按条撤回），且只返回文本——随插话发送的图片/文件无法找回；若消息已被模型消费（已注入上下文），撤回会提示「没有被撤回的内容」，此时只能再发一条纠正或 abort + 从该消息前分支。
-   验证方式：`npm run typecheck` + `npm test -- queue-retract`（新增 8 项：脏数据过滤、计数与顺序、无卡片时新建、合并时保留原附件、空撤回不改状态、仅 followUp 回填，以及 bridge/ipc/preload 与「协议白名单 + PWA/安卓撤回入口」的接线契约）+ `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest`（新增 `QueueRetractTest` 5 项）。应用内：运行中按 Alt+Enter 发一条插话 → 输入框上方出现黄色「已插入、尚未执行」横幅 → 点 × → 插话消失且内容出现在「待处理后续」卡片里；等模型已经看到那条插话后再点 ×，应提示「没有被撤回的内容」。
+4. **修：模型 pill 每回合退回裸 id（config_changed 覆盖丢 name）**——广播补丁里的 `model` 一直是 `{provider,id}`，而 `publishThreadContextUsage` **每回合结束都推一次**，渲染层直接覆盖 `thread.model`，显示名随即丢失 → pill 从「DeepSeek V4.1 Flash」变回 `deepseek-flash`。现在：`ThreadConfigPatch.model` 允许带 `name`，主机在两处广播前用 `modelWithName()` 补名；渲染层兜底——补丁没带 name 时沿用同模型的旧 name，或从会话的模型列表里查。
+   验证方式：`npm run typecheck` + `npm test -- thread-config`（新增第 5 组：name 透传 + 主机两处补名 + 渲染层兜底的源码契约）。应用内：切模型后聊一轮，pill 应保持「DeepSeek V4.1 Flash」不再退回 id。
+
+5. **修：安卓 choices 面板对写歪的围栏标签不认（桌面/PWA 正常）**——2026-10-19 真机：同一段回复在桌面与 PWA 出面板、安卓只显示灰底代码块。根因是安卓用 `code.lang != "choices"` 做**精确字符串比较**；桌面/PWA 一直用大小写不敏感、且容忍 `choices>` 这类尾随噪声的规则。现在安卓也有 `isChoicesLang()`（同一条正则），并补上「写歪标签（`choicesjson` 等）只有在正文严格合法时才升级」的疑似档，避免把普通 json 代码块误判成面板。
+   验证方式：`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest`（新增 `ChoiceLangToleranceTest` 5 项：`Choices`/`choices>` 升级、`choicesjson` 非合法正文保持代码块、正文合法则升级、未定稿不升级）。应用内：让模型用 `choices>` 或大写 `Choices` 写围栏，安卓也应出面板。
+
 
 ## v0.11.1（2026-10-19）
 
@@ -1909,14 +1913,3 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 3. **压缩后上下文用量显示为 0**：改用 `compaction_end` 的 `estimatedTokensAfter` 估算值展示，直到下次回复拿到真实 token 数。
 
-5. **修：模型 pill 每回合退回裸 id（config_changed 覆盖丢 name）**——广播补丁里的 `model` 一直是 `{provider,id}`，而 `publishThreadContextUsage` **每回合结束都推一次**，渲染层直接覆盖 `thread.model`，显示名随即丢失 → pill 从「DeepSeek V4.1 Flash」变回 `deepseek-flash`。现在：`ThreadConfigPatch.model` 允许带 `name`，主机在两处广播前用 `modelWithName()` 补名；渲染层兜底——补丁没带 name 时沿用同模型的旧 name，或从会话的模型列表里查。
-   验证方式：`npm run typecheck` + `npm test -- thread-config`（新增第 5 组：name 透传 + 主机两处补名 + 渲染层兜底的源码契约）。应用内：切模型后聊一轮，pill 应保持「DeepSeek V4.1 Flash」不再退回 id。
-
-7. **新增：消息级「撤回」（飞书/微信式）——右键自己的消息；修：撤回后气泡不消失**——上一版的撤回入口只有输入框上方那条「已插入、尚未执行」横幅，且撤回后本地的**乐观回显气泡**不会被清掉，看起来像「撤回没生效」。现在：
-   - 桌面：**右键自己的消息** → 「撤回」。还在 pi 待投递队列里 → 直接从队列删掉并收回「待处理后续」卡片；已被模型消费 → 从这条之前开新分支（原分支保留），原文放回输入框，等于「撤回 + 重发」；
-   - 安卓：长按自己的消息 → 「撤回 / 复制」（已被消费时明确提示撤不回，建议让 agent 忽略上一条——安卓没有 pi fork 入口）；
-   - 撤回时同步删除匹配的乐观气泡（只删 opt- 前缀、文本匹配的），不再留幽灵消息。
-   验证方式：npm run typecheck + npm test -- queue-retract（新增第 9/10 组：isQueuedText 判定、isRetractedGhost 只清匹配的乐观气泡）+ cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest。应用内：运行中 Alt+Enter 发一条插话 → 右键它 → 「撤回」→ 气泡消失且内容回到「待处理后续」；对已被模型处理的消息右键 → 菜单显示「撤回（从这条之前分支）」，点后进入新分支且原文在输入框。
-
-6. **修：安卓 choices 面板对写歪的围栏标签不认（桌面/PWA 正常）**——2026-10-19 真机：同一段回复在桌面与 PWA 出面板、安卓只显示灰底代码块。根因是安卓用 `code.lang != "choices"` 做**精确字符串比较**；桌面/PWA 一直用大小写不敏感、且容忍 `choices>` 这类尾随噪声的规则。现在安卓也有 `isChoicesLang()`（同一条正则），并补上「写歪标签（`choicesjson` 等）只有在正文严格合法时才升级」的疑似档，避免把普通 json 代码块误判成面板。
-   验证方式：`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest`（新增 `ChoiceLangToleranceTest` 5 项：`Choices`/`choices>` 升级、`choicesjson` 非合法正文保持代码块、正文合法则升级、未定稿不升级）。应用内：让模型用 `choices>` 或大写 `Choices` 写围栏，安卓也应出面板。

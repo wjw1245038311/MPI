@@ -143,14 +143,6 @@ export class ThreadActions {
     return this.writeRequest("thread.abort", {}, "abort");
   }
 
-  /**
-   * 撤回 pi 侧尚未投递的插话（`thread.clearQueue`）：整队清空 steering + follow-up，
-   * 返回被清掉的文本（主机侧走同一个 `clear_queue`）。已注入上下文的消息撤不回来。
-   */
-  clearQueue(): Promise<{ steering: string[]; followUp: string[] }> {
-    return this.writeRequest("thread.clearQueue", {}, "clearQueue");
-  }
-
   /** 按需取回一个附件的字节，拼成 objectURL（点开视频才拉）。
    *
    * 只读、不需要写租约（与 stt.transcribe 同类）：拉字节不该抢会话的编辑权。
