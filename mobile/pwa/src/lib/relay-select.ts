@@ -79,6 +79,11 @@ export function relayCandidates(
   };
   const sameOrigin = sameOriginRelayUrl(options.location);
   const hostList = (input.relayUrls ?? []).map((url) => String(url || "").trim()).filter(Boolean);
+  // **最近真正连通过的那条排最前**（2026-10-19 真机：多设备来回切时每次都要白等 8s×N）。
+  // lastGood 表示「上次实际连上的地址」——同一台主机刚连过，它就是最优起点；
+  // 主机列表顺序仍然保留在后面（lastGood 过期时按主机顺序回落）。
+  // 旧记录没有 lastGood → 行为不变。
+  push(input.lastGoodRelayUrl);
   if (secure) {
     // HTTPS 页面：明文候选全被浏览器拦掉，只在 **wss 候选之间**排优先级。
     //
@@ -100,8 +105,6 @@ export function relayCandidates(
     for (const url of hostList) push(url);
     if (sameOrigin) push(sameOrigin);
   }
-  // 上次可用只作回落；主机列表缺失（旧记录）时它自然成为首位，S4 老行为不破。
-  push(input.lastGoodRelayUrl);
   push(input.relayUrl);
   return ordered;
 }

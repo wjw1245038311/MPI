@@ -1,6 +1,7 @@
 /**
  * S4 选路纯函数（mobile/pwa/src/lib/relay-select.ts），S6 起顺序规则调整：
- *   ① 候选顺序 = 主机下发的 relayUrls 原序 → lastGood（回落）→ 单值；去重去空
+ *   ① 候选顺序 = **lastGood（最近真正连通过的那条）** → 主机 relayUrls 原序 → 单值；去重去空
+ *      （2026-10-19 改：多设备来回切时，死候选排前面会导致每次白等一个降级超时）
  *   ② `mergeHostRelayInfo`：host.info 列表合并（顺序以主机为准；lastGood 只在降级时保留）
  *   ③ 逐条尝试、每条独立超时；全失败抛出可读错误
  */
@@ -9,19 +10,19 @@ import test from "node:test";
 
 const { relayCandidates, sameOriginRelayUrl, isPrivateRelayUrl, shouldSwitchToBetterPath, pickRelayUrl, mergeHostRelayInfo, remainingCandidates, connectFirstReachable } = await import("../mobile/pwa/src/lib/relay-select.ts");
 
-test("S6 候选顺序：主机下发的顺序优先，上次可用退为回落，单值最后；去重去空", () => {
+test("候选顺序：上次可用排最前，其后主机顺序，单值最后；去重去空", () => {
   assert.deepEqual(
     relayCandidates({ relayUrl: "ws://c/ws", relayUrls: ["ws://a/ws", "ws://b/ws"], lastGoodRelayUrl: "ws://b/ws" }),
-    ["ws://a/ws", "ws://b/ws", "ws://c/ws"],
-    "主机顺序原样在前（lastGood 已在列表内则不重复）",
+    ["ws://b/ws", "ws://a/ws", "ws://c/ws"],
+    "lastGood 提前（它是刚连通过的那条），其余按主机顺序，单值补末尾",
   );
   assert.deepEqual(relayCandidates({ relayUrl: "ws://a/ws", relayUrls: ["ws://a/ws"] }), ["ws://a/ws"], "重复只留一个");
   assert.deepEqual(relayCandidates({ relayUrl: "", relayUrls: ["", "  "] }), [], "空串/空白一律剔除");
   assert.deepEqual(relayCandidates({ relayUrl: " ws://a/ws ", relayUrls: undefined }), ["ws://a/ws"], "两端空白要 trim");
   assert.deepEqual(
     relayCandidates({ relayUrl: "ws://c/ws", relayUrls: ["ws://a/ws"], lastGoodRelayUrl: "ws://gone/ws" }),
-    ["ws://a/ws", "ws://gone/ws", "ws://c/ws"],
-    "不在主机列表里的上次可用退为回落点，但仍先于单值字段",
+    ["ws://gone/ws", "ws://a/ws", "ws://c/ws"],
+    "不在主机列表里的上次可用也排最前（过期时由降级看门狗在 3s 内换下一条）",
   );
   assert.deepEqual(
     relayCandidates({ relayUrl: "ws://c/ws", lastGoodRelayUrl: "ws://b/ws" }),
@@ -30,12 +31,12 @@ test("S6 候选顺序：主机下发的顺序优先，上次可用退为回落�
   );
 });
 
-test("S6 重连取址：主机首选优先于上次可用", () => {
+test("重连取址：有上次可用就先试它（切换设备不必再撞死候选）", () => {
   assert.equal(pickRelayUrl({ relayUrl: "ws://c/ws", relayUrls: ["ws://a/ws"] }), "ws://a/ws");
   assert.equal(
     pickRelayUrl({ relayUrl: "ws://c/ws", relayUrls: ["ws://a/ws"], lastGoodRelayUrl: "ws://b/ws" }),
-    "ws://a/ws",
-    "桌面改了顺序 → 手机重连即跟随",
+    "ws://b/ws",
+    "刚连通过的那条优先；主机列表仍是后续回落",
   );
   assert.equal(pickRelayUrl({ relayUrl: "ws://c/ws", lastGoodRelayUrl: "ws://b/ws" }), "ws://b/ws");
   assert.equal(pickRelayUrl({ relayUrl: "ws://c/ws" }), "ws://c/ws");

@@ -36,7 +36,13 @@ const DBG_ENABLED = typeof window !== "undefined" && new URLSearchParams(window.
  * 降级看门狗：某条通道连上超时（毫秒）就换下一条（S4 缺口补齐）。
  * 8s 比单条去探测宽松——ECS/CF 走公网首连本来就慢，误判会比不降级更糟。
  */
-const RELAY_DEGRADE_MS = 8_000;
+/**
+ * 首选通道连不上多久就换下一条。
+ *
+ * 2026-10-19：8s → 3s。真机「每次切设备都要等 30 秒」的根因就是「两条死候选 × 8s」；
+ * 正常 TLS/WS 握手 < 1s，3s 足够判死，同时把最坏等待压到 ~6s。
+ */
+const RELAY_DEGRADE_MS = 3_000;
 
 // 壳（0.2.7+）回前台时靠这个值判断页面是否已过期 → 与中继的 index.html 对比，
 // 不同就自动 reload。契约见 docs/ANDROID-SHELL.md #11。
@@ -531,7 +537,17 @@ export default function App() {
     const candidates = remainingCandidates(record, tried);
     const chosenUrl = candidates[0] ?? pickRelayUrl(record);
     setActiveRelayUrl(chosenUrl);
+    const tConnect = performance.now();
     const client = new RelayClient({ url: chosenUrl, onStateChange: onClientState });
+    if (DBG_ENABLED) {
+      const logTiming = (stage: string) => console.info(`[mpi-timing] ${stage} ${Math.round(performance.now() - tConnect)}ms host=${record.hostId.slice(0, 6)} url=${chosenUrl}`);
+      logTiming("connect-start");
+      const off = client.onState((state) => {
+        if (state !== "open") return;
+        logTiming("socket-open");
+        off();
+      });
+    }
     clientRef.current = client;
     setHostId(record.hostId);
     setError(null);
@@ -558,6 +574,7 @@ export default function App() {
     }
     client.setHelloCreds(identity.deviceId, record.deviceToken, record.hostId);
     attachAutoReauth(client, record.hostId, identity, name, (result) => {
+      if (DBG_ENABLED) console.info(`[mpi-timing] auth-ok ${Math.round(performance.now() - tConnect)}ms host=${record.hostId.slice(0, 6)}`);
       if (result.deviceToken) client.setHelloCreds(identity.deviceId, result.deviceToken, record.hostId);
       // S6：先落盘本次重认证结果，再拉 host.info——两者都是 read-modify-write，串行化避免互相覆盖。
       void (async () => {

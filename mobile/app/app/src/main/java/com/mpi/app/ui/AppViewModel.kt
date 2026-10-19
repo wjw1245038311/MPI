@@ -2059,7 +2059,7 @@ class AppViewModel(
          * 通道降级看门狗的超时（毫秒）：比 PWA 侧单条探测宽——ECS/CF 走公网首连本来就慢，
          * 误判成“连不上”而去降级，比多等几秒更糟。
          */
-        private const val RELAY_DEGRADE_MS = 8_000L
+        private const val RELAY_DEGRADE_MS = 3_000L
         private const val MAX_ATTACHMENTS = 3
 
         // ---- 语音对话模式（阶段 1）----

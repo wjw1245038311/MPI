@@ -18,10 +18,12 @@ object RelaySelect {
             val url = raw?.trim().orEmpty()
             if (url.isNotEmpty()) ordered.add(url)
         }
+        // 最近真正连通过的那条排最前（2026-10-19 真机：多设备来回切每次白等 8s×N）。
+        // lastGood = 上次实际连上的地址；同一台主机刚连过，它就是最优起点。
+        // 主机列表顺序仍保留在后面（lastGood 过期时按主机顺序回落）；旧记录没有它 → 行为不变。
+        push(lastGoodRelayUrl)
         // S6：主机顺序优先（首个 = 首选）——「桌面选哪条、手机跟哪条」。
         relayUrls.forEach { push(it) }
-        // 上次可用只作回落；主机列表缺失（旧记录）时它自然成为首位，S4 老行为不破。
-        push(lastGoodRelayUrl)
         push(relayUrl)
         return ordered.toList()
     }

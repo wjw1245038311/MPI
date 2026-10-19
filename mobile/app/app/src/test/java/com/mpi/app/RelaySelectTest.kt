@@ -6,21 +6,22 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * S4 多通道选路（与 PWA 的 relay-select 同口径），S6 起顺序规则调整：
- * 候选顺序 = 主机 relayUrls 原序 → lastGood（回落）→ 单值；去重去空；重连取首位。
+ * S4 多通道选路（与 PWA 的 relay-select 同口径）。2026-10-19 调整顺序：
+ * 候选顺序 = **lastGood（最近真正连通过的那条）** → 主机 relayUrls 原序 → 单值；去重去空；重连取首位。
+ * 原因：多设备来回切时，死候选排前面会让每次切换都白等一个降级超时（真机 8s×2 ≈ 16s）。
  * 另有 [RelaySelect.mergeHostRelayInfo]：host.info 列表合并（顺序以主机为准；lastGood 只在降级时保留）。
  */
 class RelaySelectTest {
 
     @Test
-    fun candidatesPutHostOrderFirstThenLastGoodThenSingle() {
+    fun candidatesPutLastGoodFirstThenHostOrderThenSingle() {
         val list = RelaySelect.candidates(
             relayUrl = "ws://c/ws",
             relayUrls = listOf("ws://a/ws", "ws://b/ws"),
             lastGoodRelayUrl = "ws://b/ws",
         )
-        // lastGood 已在主机列表里 → 不重复；单值补末尾
-        assertEquals(listOf("ws://a/ws", "ws://b/ws", "ws://c/ws"), list)
+        // lastGood 提前（刚连通过的那条）；其余按主机顺序；单值补末尾
+        assertEquals(listOf("ws://b/ws", "ws://a/ws", "ws://c/ws"), list)
     }
 
     @Test
@@ -31,18 +32,18 @@ class RelaySelectTest {
     }
 
     @Test
-    fun candidatesKeepLastGoodAsFallbackAfterHostOrder() {
-        // 不在主机列表里的上次可用退为回落点，但仍先于单值字段
+    fun candidatesKeepUnknownLastGoodStillFirst() {
+        // 不在主机列表里的上次可用也排最前；过期时由 3s 降级看门狗换下一条
         val list = RelaySelect.candidates("ws://c/ws", listOf("ws://a/ws"), "ws://gone/ws")
-        assertEquals(listOf("ws://a/ws", "ws://gone/ws", "ws://c/ws"), list)
+        assertEquals(listOf("ws://gone/ws", "ws://a/ws", "ws://c/ws"), list)
         // 旧记录没有 relayUrls → 保留 S4 的「上次可用优先」
         assertEquals(listOf("ws://b/ws", "ws://c/ws"), RelaySelect.candidates("ws://c/ws", emptyList(), "ws://b/ws"))
     }
 
     @Test
-    fun pickPrefersHostPrimaryOverLastGood() {
-        // S6：桌面改了顺序 → 手机重连即跟随
-        assertEquals("ws://a/ws", RelaySelect.pick("ws://c/ws", listOf("ws://a/ws"), "ws://b/ws"))
+    fun pickPrefersLastGoodThenHostPrimary() {
+        // 刚连通过的那条优先；主机列表仍是后续回落
+        assertEquals("ws://b/ws", RelaySelect.pick("ws://c/ws", listOf("ws://a/ws"), "ws://b/ws"))
         assertEquals("ws://b/ws", RelaySelect.pick("ws://c/ws", emptyList(), "ws://b/ws"))
         assertEquals("ws://c/ws", RelaySelect.pick("ws://c/ws", emptyList(), null))
     }

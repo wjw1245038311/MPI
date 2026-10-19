@@ -37,6 +37,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    实现：`mobile/pwa/src/lib/block-md.ts` 与安卓 `ui/BlockMarkdown.kt`（同构）。
    验证方式：`npm run typecheck` + `npm test -- pwa`（`pwa-blocks` 扩到 10 项：嵌套、表格、转义竖线）+ `cd mobile/app && ... ./gradlew :app:testDebugUnitTest`（`BlockMarkdownTest` 扩到 10 项）。应用内：让模型输出一张对比表和两级项目符号，手机端应显示为带边框的表格与缩进列表。
 
+10. **改（PWA/安卓）：切换设备不再白等一个降级超时**——多设备来回切时，候选地址一直按「主机下发顺序」排，刚连通过的那条被排到后面；如果前面是当前网络不通的局域网/tailnet 地址，就要逐条等降级看门狗超时才轮到可用的那条（实测 8s×2 ≈ 16s，观感就是"切一次要二三十秒"）。两处调整：
+    - 候选顺序：**最近真正连通过的那条（lastGoodRelayUrl）排最前**，其后仍是主机下发的顺序（lastGood 过期时 3s 内降级换下一条）；
+    - 降级看门狗 **8s → 3s**（正常 TLS/WS 握手 < 1s，3s 足够判死），最坏等待从 16s 压到 ~6s。
+    PWA 另加了 `?dbg=1` 下的计时日志（`[mpi-timing] connect-start / socket-open / auth-ok`），便于下次定位到底耗时在「建连」还是「认证」。
+   验证方式：`npm run typecheck` + `npm test -- relay-select`（顺序断言已改：lastGood 提前）+ `cd mobile/app && ... ./gradlew :app:testDebugUnitTest`（`RelaySelectTest` 同步更新）。应用内：两台主机来回切，第二次起应基本秒连。
+
 ## v0.11.1（2026-10-19）
 
 1. **修：一台配错中继凭证的主机会把整个 NAT 后面的 PWA / 主机自己的重连全部卡死（中继侧）**——2026-10-19 实测：某台主机（新身份 `l6madOc…`、没带 token）`host.register` 被拒后**每 1.8 秒重试一次**，每 10 次失败触发一次「该 IP 封 60s」；而那 60s 里 **`/ws` upgrade 也被拒（429）**，于是同一路由器后面的合法设备（PWA 浏览器）和主机自己的断线重连全都开不出连接 —— 该 IP 约 **75%** 的时间不可用（当天 320 次拒绝、29 次封禁）。三处改动：
