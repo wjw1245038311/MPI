@@ -6811,6 +6811,10 @@ textarea.modal-input {
 .set-dev-state.off {
   color: var(--text-dim);
 }
+/* 被同名新设备收敛的旧记录：令牌仍在（随时能重连），只弱化展示——不隐藏。 */
+.set-dev-row.set-dev-superseded {
+  opacity: 0.55;
+}
 .set-dev-actions {
   display: inline-flex;
   gap: 6px;

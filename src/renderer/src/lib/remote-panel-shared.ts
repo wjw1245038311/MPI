@@ -25,7 +25,14 @@ export type RemoteStatus = {
   signalingEnabled: boolean;
   signalingUrl: string;
   signalingState: string;
-  devices: Array<{ deviceId: string; name: string; connectedAt: number; authenticated: boolean }>;
+  devices: Array<{
+    deviceId: string;
+    name: string;
+    connectedAt: number;
+    authenticated: boolean;
+    /** 已被同名新设备收敛的旧记录（令牌仍在、仍可重连）：置底 + 标灰，不隐藏。 */
+    superseded?: boolean;
+  }>;
   pendingPairings: Array<{ connectionId: string; deviceId: string; name: string }>;
 };
 

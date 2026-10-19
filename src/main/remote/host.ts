@@ -220,6 +220,7 @@ export class RemoteHost {
         name: device.name,
         connectedAt: this.connectionsForDevice(device.deviceId)[0]?.connectedAt || 0,
         authenticated: !!this.connectionsForDevice(device.deviceId).length,
+        superseded: !!device.supersededBy,
       })),
       pendingPairings: [...this.connections.values()]
         .filter((c) => !!c.deviceId && !c.authenticated)
@@ -416,12 +417,17 @@ export class RemoteHost {
           (deviceId) => this.connectionsForDevice(deviceId).length > 0,
         );
         if (replaced) {
-          // 网页端换 origin / 清数据会换出全新身份，名字一样就当成同一台手机来收敛——
+          // 网页端换 origin / 清数据会换出全新身份，名字一样就当成同一台手机来看待——
           // 否则「已信任设备」会堆一排一模一样的 MPI PWA。只收敛最久没露面的那一条。
-          this.identity.trustedDevices = this.identity.trustedDevices.filter((device) => device !== replaced);
-          // 同时撤掉它在中继上的 token，否则那条旧绑定会变成僵尸记录
-          this.options.relay?.notifyRevoked?.(replaced.deviceId);
-          appendDiagLog(`remote-pair replace-same-name old=${replaced.deviceId} new=${connection.deviceId} name=${replaced.name}`);
+          //
+          // ⚠️ **只打标，不删记录、不撤销令牌**（2026-10-19 修）：这里以前是「删记录 +
+          // relay.notifyRevoked」，等于把一个用户还开着的页面静默踢下线——它之后每轮
+          // `hello` 都拿到 4001 AUTH_FAILED，客户端无限重连、界面永远转圈（真机取证：
+          // 用户开了两个 PWA 页面，ECS 日志里 `revoked by host` 后面紧跟 23 条
+          // `hello rejected (auth failed)`）。现在旧设备仍可重连，面板里置底标灰 + 「旧」徽标。
+          replaced.supersededBy = connection.deviceId;
+          replaced.supersededAt = Date.now();
+          appendDiagLog(`remote-pair supersede old=${replaced.deviceId} new=${connection.deviceId} name=${replaced.name}（不撤销令牌）`);
         }
       } else {
         appendDiagLog(`remote-pair keep-duplicate new=${connection.deviceId} name=${connection.deviceName || "-"}（同名替换已关闭）`);
@@ -435,6 +441,9 @@ export class RemoteHost {
     };
     device.name = connection.deviceName || device.name;
     device.lastSeenAt = Date.now();
+    // 它自己回来了/重新配上了：不再算「被收敛的旧设备」，面板恢复正常显示。
+    delete device.supersededBy;
+    delete device.supersededAt;
     if (!existing) this.identity.trustedDevices.push(device);
     saveIdentity(this.options.userDataDir, this.identity);
     connection.authenticated = true;

@@ -218,7 +218,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
 
   const devices = status?.devices ?? [];
   const online = devices.filter((device) => device.authenticated);
-  const offline = devices.filter((device) => !device.authenticated);
+  const offline = devices.filter((device) => !device.authenticated && !device.superseded);
+  // 被「同名新设备」收敛的旧记录：令牌仍在（随时能重连），所以只置底 + 标灰 + 「旧」徽标，
+  // 不隐藏——否则用户没法发现/移除一台仍然有效的设备。
+  const superseded = devices.filter((device) => !device.authenticated && device.superseded);
   const pending = status?.pendingPairings ?? [];
 
   return (
@@ -476,13 +479,23 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
             <div className="set-hint">{zh ? "还没有配对任何设备。用上面的二维码配一台。" : "No devices yet — pair one with the code above."}</div>
           )
         ) : (
-          [...online, ...offline].map((device) => (
-            <div className="set-dev-row" key={device.deviceId}>
+          [...online, ...offline, ...superseded].map((device) => (
+            <div className={`set-dev-row${device.superseded ? " set-dev-superseded" : ""}`} key={device.deviceId}>
               <span className="set-dev-name" title={device.name}>
                 {device.name}
                 <span className="set-diag-k"> · #{shortDeviceId(device.deviceId)}</span>
                 <span className={`set-dev-state ${device.authenticated ? "on" : "off"}`}>
-                  {device.authenticated ? (zh ? "在线" : "online") : zh ? "离线" : "offline"}
+                  {device.authenticated
+                    ? zh
+                      ? "在线"
+                      : "online"
+                    : device.superseded
+                      ? zh
+                        ? "旧设备"
+                        : "superseded"
+                      : zh
+                        ? "离线"
+                        : "offline"}
                 </span>
               </span>
               <button

@@ -126,7 +126,10 @@ assert.match(
   "同名判必须用归一化后的名字（否则 PWA 短号不同就永远不命中）",
 );
 assert.match(host, /replaceSameNameOfflineDevice\?\.\(\) !== false/, "必须支持在设置里关掉同名替换");
-assert.match(host, /notifyRevoked\?\.\(replaced\.deviceId\)/, "被替换的旧绑定要顺手撤掉中继 token");
+// 2026-10-19 修：同名离线收敛**不得**删记录/撤 token——旧页面还得能重连。
+assert.doesNotMatch(host, /notifyRevoked\?\.\(replaced\.deviceId\)/, "同名收敛绝不能撤销旧设备的中继 token（那会让旧页面永远转圈）");
+assert.match(host, /replaced\.supersededBy = connection\.deviceId/, "同名收敛改为打标（supersededBy），记录与令牌都保留");
+assert.match(host, /delete device\.supersededBy/, "设备自己重新连上/配后要清掉旧标记");
 assert.match(host, /remote-rename device=/, "重连时要刷新设备名（改过名的设备不必重新配对才能看到）");
 assert.match(host, /remote-device-match/, "逻辑必须来自共享模块（而不是 host.ts 里另写一份）");
 
@@ -138,6 +141,7 @@ assert.doesNotMatch(pwa, /name: "MPI PWA"/, "不应再有写死的设备名");
 const panel = read("src", "renderer", "src", "components", "RemotePanel.tsx");
 assert.match(panel, /shortDeviceId\(device\.deviceId\)/, "面板已信任设备列表要显示短号");
 assert.match(panel, /remoteReplaceSameNameOffline/, "面板开关必须写回 config");
+assert.match(panel, /device\.superseded/, "被收敛的旧设备要在面板里单独标记（置底 + 「旧」徽标）");
 
 const config = read("src", "main", "config.ts");
 assert.match(config, /remoteReplaceSameNameOffline: true/, "默认开启同名离线替换");

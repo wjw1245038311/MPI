@@ -371,6 +371,11 @@ export interface RemoteDeviceInfo {
   name: string;
   connectedAt: number;
   authenticated: boolean;
+  /**
+   * 已被「同名新设备」收敛的旧记录（2026-10-19）：**令牌仍在、仍可重连**，
+   * 面板只把它置底标灰（以前是直接删掉 + 撤销令牌，旧页面于是永远转圈）。
+   */
+  superseded?: boolean;
 }
 
 export class RemoteProtocolError extends Error {

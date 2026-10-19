@@ -18,6 +18,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    - App 的 `ensureConnected` 改用 `client.isOpen()`（真实 readyState）而不是 `getState()`，并把 REVOKED 显示成「设备已被桌面端撤销，需重新配对」+ 修复卡片。
    验证方式：`npm run typecheck` + `npm test -- pwa`（新增 `pwa-relay-client-heal`：revoked/4002 各只建 1 条连接、死 socket 5s 后重开、4001 仍会重试）。应用内：手机/PWA 被桌面端「撤销设备」后，页面应显示「此设备已被桌面端撤销…请重新配对」而不是无限转圈；笔记本合盖再打开（或标签页长时间后台）回前台，连接应在 5 秒内自己恢复，不必刷新。
 
+3. **改：多开 PWA 页面不再静默把旧设备踢掉（同名离线设备只打标、不撤令牌）**——2026-10-19 真机取证：用户开着**两个 MPI mobile 页面**（不同 origin → 两套设备身份，归一化后同名）。主机配对新的那个时走「同名离线设备收敛」，把旧记录**直接删掉 + `relay.notifyRevoked`**——旧页面拿着已删除的令牌重连，每轮 `hello` 都是 4001 AUTH_FAILED（ECS 日志：`revoked by host` 后紧跟 23 条 `hello rejected (auth failed)`）。现在只打标（`supersededBy` / `supersededAt`，写进 `remote-identity.json`）：
+   - **记录与令牌都保留**，旧页面照样能重连；设备自己重新连上/再配对后标记自动清除；
+   - 设置 → 远程面板里把被收敛的旧记录**置底 + 标灰 + 「旧设备」徽标**。
+     （为什么不彻底隐藏：它的令牌还有效，藏起来用户就没法发现/移除一台仍然能连进来的设备。）
+   验证方式：`npm run typecheck` + `npm test -- device-dedup`（已改断言：反向钉住「同名收敛不得调 `notifyRevoked`」，并要求出现 `supersededBy` 打标与面板标记）。应用内：同一台电脑用两个不同 origin 各开一个 PWA 页面 → 两边**都不被踢**；桌面端设置里旧的同名记录显示置底标灰的「旧设备」，仍可手动移除；旧页面刷新/重连仍能连上。
+
 
 
 ## v0.11.0（2026-10-18）

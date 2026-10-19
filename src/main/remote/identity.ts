@@ -9,6 +9,16 @@ export interface TrustedRemoteDevice {
   publicKeyPem: string;
   addedAt: number;
   lastSeenAt?: number;
+  /**
+   * 被「同名新设备」收敛时的去向（2026-10-19）。
+   *
+   * **只影响列表展示，不再撤销它的令牌**：以前这里直接删记录 + 调 `notifyRevoked`，
+   * 用户开着两个 PWA 页面（不同 origin → 两套身份、归一化后同名）时，后配的那个会
+   * 静默把先配的踢下线；先配的页面回来后每轮 `hello` 都被 4001 拒，界面永远转圈。
+   * 现在保留记录与令牌（旧页面照样能重连），面板里置底标灰 + 「旧」徽标。
+   */
+  supersededBy?: string;
+  supersededAt?: number;
 }
 export interface HostIdentity {
   hostId: string;

@@ -20,6 +20,9 @@ export interface TrustedDeviceLike {
   publicKeyPem: string;
   addedAt: number;
   lastSeenAt?: number;
+  /** 被同名新设备收敛时打的标（仅展示用；**不得**因此撤销令牌，见下方说明）。 */
+  supersededBy?: string;
+  supersededAt?: number;
 }
 
 /** ① deviceId 命中 → ② 公钥命中；都没有 = 新设备。 */
@@ -38,6 +41,10 @@ export function findTrustedDevice<T extends TrustedDeviceLike>(
  * - 只挑**离线**的（有活跃连接说明它正在用，替换会把人家踢掉）；
  * - 名字比较用 [`normalizeDeviceName`]（去掉 PWA 名字末尾的设备短号）；
  * - 同名有多条时只收敛**最久没露面**的那一条——一次配对只换一条，避免误伤扩散。
+ *
+ * ⚠️ **调用方必须只用它做「展示层的收敛」**（打标/置底），**不得**因此删除记录或撤销中继
+ * token（2026-10-19 真机取证：以前这么做，用户开着两个 PWA 页面时，后配的那个会静默
+ * 把先配的踢下线，先配的页面之后每轮 `hello` 都 4001，界面永远转圈）。
  */
 export function pickSameNameOfflineReplacement<T extends TrustedDeviceLike>(
   devices: readonly T[],
