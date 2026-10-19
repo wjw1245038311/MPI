@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { normalizePiQueue, mergeRetractedQueue, EMPTY_PI_QUEUE } from "./lib/queue-retract";
 import type {
   AppConfig,
   AppRuntime,
@@ -838,6 +839,9 @@ function detectBricked(errMsg?: unknown): { kind: "whitespace" | "stale-compacti
 function reduceThread(t: ThreadState, event: any): ThreadState {
   if (!event || typeof event !== "object") return t;
   switch (event.type) {
+    case "queue_update":
+      // pi 侧待投递队列：steering = 已「立即插入」但还没注入上下文的消息（可撤回的窗口）。
+      return { ...t, piQueue: normalizePiQueue(event) };
     case "agent_start":
       // turnStartedAt 只在「本轮还没在等」时才取当前时刻：正常发送路径已在用户按下
       // 发送时就写过它，这里覆盖会让秒数从 agent_start 重新起算。自动续跑等未经
@@ -1245,6 +1249,11 @@ interface PiStore {
   startReleaseReview: (review: { cwd: string; nextVersion: string; message: string }) => Promise<boolean>;
   setPendingFollowUp: (threadId: string, pending: PendingFollowUp | null) => void;
   sendPendingSteering: (threadId: string) => Promise<void>;
+  /**
+   * 撤回 pi 侧尚未投递的插话（`clear_queue`），并把清掉的内容回填到「待处理后续」卡片。
+   * 用于 Alt+Enter「立即插入」后发现自己写错、而模型还没看到的那一刻。
+   */
+  retractQueuedMessages: (threadId: string) => Promise<void>;
   abortThread: (id: string) => Promise<void>;
   /** Manually compact the thread's context (pi /compact). */
   compactContext: (threadId: string, instructions?: string) => Promise<void>;
@@ -2719,6 +2728,43 @@ export const useStore = create<PiStore>()((set, get) => {
     get().setPendingFollowUp(threadId, null);
     const { imgs, atts } = pendingToArgs(p);
     await get().sendPrompt(threadId, pendingPromptText(p), imgs, atts, "steer");
+  },
+
+  retractQueuedMessages: async (threadId) => {
+    const zh = get().config?.language === "zh";
+    let cleared: unknown = null;
+    try {
+      cleared = await window.pi.thread.clearQueue({ threadId });
+    } catch (e: any) {
+      get().pushToast("error", e?.message || (zh ? "撤回失败" : "Retract failed"));
+      return;
+    }
+    const queue = normalizePiQueue(cleared);
+    const count = queue.steering.length + queue.followUp.length;
+    set((s) => {
+      const t = s.threads[threadId];
+      if (!t) return s;
+      return {
+        threads: {
+          ...s.threads,
+          [threadId]: {
+            ...t,
+            piQueue: EMPTY_PI_QUEUE,
+            pendingFollowUp: count > 0 ? mergeRetractedQueue(t.pendingFollowUp, queue) : t.pendingFollowUp,
+          },
+        },
+      };
+    });
+    get().pushToast(
+      count > 0 ? "success" : "info",
+      count > 0
+        ? zh
+          ? `已撤回 ${count} 条待投递插话，已放回「待处理后续」可再编辑`
+          : `Retracted ${count} queued message(s) — restored to the pending follow-up card`
+        : zh
+          ? "没有被撤回的内容（可能已经被模型执行了）"
+          : "Nothing to retract (it may already have been used by the model)",
+    );
   },
 
   abortThread: async (id) => {

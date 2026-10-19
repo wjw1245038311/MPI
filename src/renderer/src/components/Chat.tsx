@@ -3,7 +3,7 @@ import { getDisplayThreadTitle, getEarlierViews, normalizeThreadFile, useStore }
 import { getTtsState, speakMessage, stopTts, subscribeTts } from "../lib/tts";
 import { parseSkillBlock } from "../lib/skill-block";
 import { Markdown } from "../lib/markdown";
-import { formatClock } from "../lib/format";
+import { formatClock, modelLabel } from "../lib/format";
 import { collectFileArtifacts } from "../lib/artifacts";
 import { parseHtmlReferenceText } from "../lib/html-reference";
 import { diffLines } from "../lib/diff";
@@ -1425,6 +1425,8 @@ function MessageGroupInner({
   const openPreview = useStore((s) => s.openPreview);
   const cwd = useStore((s) => s.threads[threadId]?.cwd || "");
   const language = useStore((s) => s.config?.language || "en");
+  // 消息底部只带裸模型 id（会话文件里就存 id）——展示时用会话的模型列表映射成显示名。
+  const threadModels = useStore((s) => s.threads[threadId]?.models);
   const userAvatar = useStore((s) => s.config?.userAvatar);
   const agentAvatar = useStore((s) => s.config?.agentAvatar);
   const [forking, setForking] = useState(false);
@@ -1728,7 +1730,7 @@ function MessageGroupInner({
         )}
         {!streaming && (
           <div className="msg-footer">
-            {last.model && <span>{last.model}</span>}
+            {last.model && <span>{modelLabel(last.model, threadModels)}</span>}
             {last.timestamp && <span>{formatClock(last.timestamp)}</span>}
             <span className="msg-actions">
               {speechTextOfGroup(group) && (

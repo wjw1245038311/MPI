@@ -2277,6 +2277,34 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }
   }
 
+  /**
+   * 模型显示名解析（2026-10-19）。
+   *
+   * 会话文件里只存裸 id（`"model":"deepseek-flash"`），而 `name`（如 “DeepSeek V4.1 Flash”）
+   * 只在 pi 运行时的模型对象里。冷会话（桥没开）走磁盘快照时只能拿到 `{provider,id}`，
+   * 界面就只能显示 id。这里按 provider+id 在「pi 报过的模型 + models.json 配置」里补 name。
+   */
+  function modelNameFromCatalog(provider?: string | null, id?: string | null): string | null {
+    if (!id) return null;
+    const candidates = [
+      ...(Array.isArray(lastKnownPiModels) ? lastKnownPiModels : []),
+      ...configuredRemoteModelOptions(),
+    ] as any[];
+    const hit = candidates.find(
+      (m) => m && String(m.id || "") === String(id) && (!provider || String(m.provider || "") === String(provider)),
+    );
+    const name = typeof hit?.name === "string" ? hit.name.trim() : "";
+    // name 与 id 相同时（如 deepseek-v4-flash）不必多存一个字段。
+    return name && name !== id ? name : null;
+  }
+
+  /** 给 `{provider,id}` 补上显示名；已有 name 或查不到就原样返回。 */
+  function modelWithName<T extends { provider?: string; id?: string; name?: string } | null | undefined>(model: T): T {
+    if (!model?.id || model.name) return model;
+    const name = modelNameFromCatalog(model.provider, model.id);
+    return name ? ({ ...model, name } as T) : model;
+  }
+
   function remoteSkills(value: unknown, cwd: string): RemoteSkill[] {
     const skills: RemoteSkill[] = [];
     const seen = new Set<string>();
@@ -3014,7 +3042,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     // running → 在飞工具确实还在途，不收口；非 running → 被中断的工具文件里没有
     // toolResult，收口掉免得远程视图永远转圈（原「磁盘快照一律 idle」的语义保留给桥没开的情况）。
     const state = remoteState(!!openState?.isStreaming, messages.length > 0);
-    const snapshotModel = openState?.model ?? history.model;
+    const snapshotModel = modelWithName(openState?.model ?? history.model);
     return {
       id: threadId,
       projectId: ref.projectId,
@@ -5776,7 +5804,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       cwd: hist.cwd || cwd,
       sessionFile,
       sessionName: hist.sessionName,
-      model: hist.model,
+      model: modelWithName(hist.model),
       thinkingLevel: hist.thinkingLevel || "off",
       isStreaming: false,
       messages: hist.messages,
@@ -6280,6 +6308,22 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
     const merged = [...(args.images || []), ...images];
     await h.bridge.steer(text, merged.length ? merged : undefined);
     return { ok: true };
+  });
+
+  /**
+   * 撤回 pi 侧尚未投递的插话（steer / follow-up）。
+   *
+   * 为什么需要：Alt+Enter 的「立即插入」一经发出就进了 pi 的队列，但要等到下一个 LLM
+   * 调用边界才真正注入上下文——这段窗口里用户常常发现写错了，却没有任何入口撤回。
+   * pi 的 `clear_queue` 正好覆盖这个窗口（整队清空），内容原样返回以便回填草稿。
+   */
+  ipcMain.handle("thread:clearQueue", async (_e, args: { threadId: string }) => {
+    const h = bridges.get(args.threadId);
+    if (!h) return { steering: [], followUp: [] };
+    const cleared = (await h.bridge.clearQueue()) as { steering?: unknown; followUp?: unknown } | null;
+    const strings = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && !!item.trim()) : [];
+    return { steering: strings(cleared?.steering), followUp: strings(cleared?.followUp) };
   });
 
   ipcMain.handle("thread:followUp", async (_e, args: { threadId: string; text: string; images?: unknown[]; attachments?: Attachment[] }) => {

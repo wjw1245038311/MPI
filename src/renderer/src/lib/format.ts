@@ -11,6 +11,28 @@ export function modelShort(m: ModelInfo | null | undefined): string {
   return n.length > 22 ? n.slice(0, 21) + "…" : n;
 }
 
+/**
+ * 模型显示名解析（2026-10-19）。
+ *
+ * 会话文件里只存裸 id（`"model":"deepseek-flash"`），消息底部又是直接渲染这个字符串；
+ * 所以必须过一个映射：按 id（有 provider 时一并校验）在会话的模型列表里找 `name`，
+ * 找不到才回落 id —— 宁可显示 id，也不能显示空白。
+ */
+export function modelLabel(
+  value: { provider?: string; id?: string; name?: string } | string | null | undefined,
+  models?: Array<{ provider?: string; id?: string; name?: string }> | null,
+): string {
+  if (!value) return "";
+  const id = typeof value === "string" ? value : value.id || "";
+  const provider = typeof value === "string" ? "" : value.provider || "";
+  const ownName = typeof value === "string" ? "" : value.name || "";
+  if (!id) return ownName;
+  const hit = (models || []).find(
+    (m) => m && String(m.id || "") === id && (!provider || !m.provider || m.provider === provider),
+  );
+  return ownName || (hit?.name || "") || id;
+}
+
 export function formatBytes(n: number): string {
   if (!n) return "0 B";
   const u = ["B", "KB", "MB", "GB"];

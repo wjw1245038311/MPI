@@ -9,7 +9,8 @@ import type { AppHelperSpec, ComposerDraft, HtmlElementReference, ModelInfo, Per
 import { MPI_FILE_MIME, MPI_SESSION_MIME, parseSessionDragPayload } from "../lib/file-drag";
 import { extractVideoPoster, looksLikeVideo } from "../lib/video-poster";
 import { SttError, startRecording, sttRecordErrorText, sttTranscribeErrorText, type RecordingHandle } from "../lib/stt";
-import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh, Settings, Mic, Info } from "./icons";
+import { Plus, Send, Stop, Shield, Edit, Zap, Folder, Search, Check, ChevronRight, Bell, Compress, Refresh, Settings, Mic, Info, Close } from "./icons";
+import { piQueueCount, piQueueTexts } from "../lib/queue-retract";
 import { LongTaskMonitor } from "./LongTaskMonitor";
 import { TaskModesModal } from "./TaskModesModal";
 import { TaskModeDetailModal } from "./TaskModeDetailModal";
@@ -113,6 +114,10 @@ export function Composer({ threadId }: { threadId: string }) {
   // re-render the entire composer (textarea included).
   const isStreaming = useStore((s) => !!s.threads[threadId]?.isStreaming);
   const pending = useStore((s) => s.threads[threadId]?.pendingFollowUp || null);
+  // pi 侧待投递的插话（Alt+Enter「立即插入」后、模型还没看到的那段窗口）。
+  const piQueue = useStore((s) => s.threads[threadId]?.piQueue);
+  const retractQueuedMessages = useStore((s) => s.retractQueuedMessages);
+  const queuedCount = piQueueCount(piQueue);
   const injected = useStore((s) => s.threads[threadId]?.pendingEditorText);
   const permission = useStore((s) => s.threads[threadId]?.permission);
   // Task-mode preset (pill left of the permission one): raw config refs so
@@ -1126,6 +1131,28 @@ export function Composer({ threadId }: { threadId: string }) {
               </button>
               <button className="pf-btn steer" title={language === "zh" ? "立即插入上下文执行" : "Steer now (insert into context as soon as possible)"} onClick={() => sendPendingSteering(threadId)}>
                 <Zap size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {queuedCount > 0 && (
+          <div className="pending-fu queued-steer">
+            <div className="pf-main">
+              <div className="pf-label">
+                <span className="pf-dot" />
+                {language === "zh" ? "已插入、尚未执行" : "Queued steer (not used yet)"}
+                <span className="pf-sub">· {language === "zh" ? `${queuedCount} 条待投递` : `${queuedCount} pending`}</span>
+              </div>
+              <div className="pf-text">{piQueueTexts(piQueue).join(" / ").slice(0, 160)}</div>
+            </div>
+            <div className="pf-actions">
+              <button
+                className="pf-btn"
+                title={language === "zh" ? "撤回待投递插话（放回待处理后续再编辑）" : "Retract queued messages"}
+                onClick={() => void retractQueuedMessages(threadId)}
+              >
+                <Close size={14} />
               </button>
             </div>
           </div>
