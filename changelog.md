@@ -4,6 +4,11 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## Unreleased
+
+1. **修（构建工具）：`npm run dist` 不再因为全局 pi 版本滞后而直接失败**——2026-10-19 发 v0.11.1 时踩到：本机全局 `pi` 还是 0.87.0，而仓库要求 `piRuntimeVersion: 1.3.0`，`bundle-runtime.mjs` 找不包就抛「Could not locate @earendil-works/pi-coding-agent v1.3.0」，只能手工 `PI_PACKAGE_DIR=…` 绕过。现在多了一条**回落**：在全局 npm 与 PATH 都没命中时，去应用自己的运行时目录找（`<userData>/runtime/versions/<ver>/pi`，打包版 `MPI` 与开发版 `MPI Dev` 都扫；另可由 `MPI_USER_DATA_DIR` / `MPI_CONFIG_DIR` 指定），且只认版本匹配的目录。
+   验证方式：`npm run bundle`（不设 `PI_PACKAGE_DIR`）应打印「pi 包回落到应用运行时目录：…\runtime\versions\<ver>\pi」并正常生成 `runtime-release/MPI-Runtime-<ver>-<平台>.tar.gz`；随后 `npm run dist` 可直接出包。（本机已验证：exit=0，产物 47.7MB。）
+
 ## v0.11.1（2026-10-19）
 
 1. **修：一台配错中继凭证的主机会把整个 NAT 后面的 PWA / 主机自己的重连全部卡死（中继侧）**——2026-10-19 实测：某台主机（新身份 `l6madOc…`、没带 token）`host.register` 被拒后**每 1.8 秒重试一次**，每 10 次失败触发一次「该 IP 封 60s」；而那 60s 里 **`/ws` upgrade 也被拒（429）**，于是同一路由器后面的合法设备（PWA 浏览器）和主机自己的断线重连全都开不出连接 —— 该 IP 约 **75%** 的时间不可用（当天 320 次拒绝、29 次封禁）。三处改动：

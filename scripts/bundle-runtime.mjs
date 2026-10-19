@@ -184,6 +184,49 @@ function isExpectedPiPackage(dir) {
   return existsSync(join(dir, "dist", "cli.js")) && readPiVersion(dir) === EXPECTED_PI_VERSION;
 }
 
+/**
+ * 应用自己解出来的 Pi 包位置：`<userData>/runtime/versions/<ver>/pi`
+ * （布局见 `src/main/runtime-package.ts` 的 `runtimeVersionsDir()`）。
+ *
+ * 为什么要这条回落（2026-10-19）：这台开发机上全局 `pi` 还停在 0.87.0，而仓库要求
+ * `piRuntimeVersion: 1.3.0` —— 于是 `npm run dist` 在第一步 `bundle` 就直接抛
+ * 「Could not locate @earendil-works/pi-coding-agent v1.3.0」，只能每次手工
+ * `PI_PACKAGE_DIR=…` 绕过。而**正确版本本来就在本机**（MPI 自己下载的运行时）。
+ *
+ * 只收版本匹配的目录（`isExpectedPiPackage` 已校验 dist/cli.js + version）。
+ */
+function appRuntimePiPackages() {
+  const versionsDirs = [];
+  const appData = process.env.APPDATA?.trim();
+  if (appData) {
+    // 打包版（MPI）与开发版（MPI Dev）各有一份 userData，两个都要看。
+    for (const name of ["MPI", "MPI Dev"]) versionsDirs.push(join(appData, name, "runtime", "versions"));
+  }
+  // 自定义/便携配置目录（与主进程 getConfigDir() 对齐的手工覆盖）。
+  for (const key of ["MPI_USER_DATA_DIR", "MPI_CONFIG_DIR"]) {
+    const dir = process.env[key]?.trim();
+    if (dir) versionsDirs.push(join(dir, "runtime", "versions"));
+  }
+
+  const found = [];
+  for (const versionsDir of versionsDirs) {
+    let entries = [];
+    try {
+      entries = readdirSync(versionsDir, { withFileTypes: true });
+    } catch {
+      continue; // 没这份安装/运行时是正常情况
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const candidate = join(versionsDir, entry.name, "pi");
+      if (!isExpectedPiPackage(candidate)) continue;
+      log(`pi 包回落到应用运行时目录：${candidate}`);
+      found.push(candidate);
+    }
+  }
+  return found;
+}
+
 function locatePiPackage() {
   const explicit = process.env.PI_PACKAGE_DIR?.trim();
   if (explicit) {
@@ -207,6 +250,10 @@ function locatePiPackage() {
     const candidate = join(dir, "node_modules", "@earendil-works", "pi-coding-agent");
     if (existsSync(shim) && isExpectedPiPackage(candidate)) return candidate;
   }
+
+  // 最后：回落到应用自带的运行时（最常见的那台机器：全局 pi 滞后，而 MPI 自己
+  // 下载的 <userData>/runtime/versions/<ver>/pi 就是要求的版本）。
+  for (const candidate of appRuntimePiPackages()) return candidate;
   return null;
 }
 
@@ -291,7 +338,11 @@ function main() {
 
   const source = locatePiPackage();
   if (!source) {
-    throw new Error(`Could not locate @earendil-works/pi-coding-agent v${EXPECTED_PI_VERSION}. Set PI_PACKAGE_DIR to a matching package or install that version globally.`);
+    throw new Error(
+      `Could not locate @earendil-works/pi-coding-agent v${EXPECTED_PI_VERSION}. ` +
+        "Set PI_PACKAGE_DIR to a matching package, install that version globally, " +
+        `or keep a matching app runtime at <userData>/runtime/versions/${EXPECTED_PI_VERSION}/pi.`,
+    );
   }
 
   rmSync(STAGE, { recursive: true, force: true });
