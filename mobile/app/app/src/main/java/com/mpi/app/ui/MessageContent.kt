@@ -2,7 +2,12 @@ package com.mpi.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -89,17 +94,77 @@ internal fun RenderSegments(
                     }
 
                     is Segment.Body -> if (segment.text.isNotBlank()) {
-                        Text(
-                            text = inlineStyled(segment.text, bodyColor, MpiTheme.colors.codeBg),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = bodyColor,
-                        )
+                        // 块级渲染（标题 / 列表 / 引用 / 段落）：与桌面/PWA 同构。
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            for (block in remember(segment.text) { parseBlocks(segment.text) }) {
+                                when (block) {
+                                    is MdBlock.Heading -> Text(
+                                        text = inlineStyled(block.text, bodyColor, MpiTheme.colors.codeBg),
+                                        style = MaterialTheme.typography.bodyLarge.copy(
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = when (block.level) {
+                                                1 -> 19.sp
+                                                2 -> 18.sp
+                                                3 -> 17.sp
+                                                else -> 16.sp
+                                            },
+                                        ),
+                                        color = bodyColor,
+                                    )
+
+                                    is MdBlock.Bullets -> for (item in block.items) {
+                                        ListLine(marker = "•", text = item, bodyColor = bodyColor)
+                                    }
+
+                                    is MdBlock.Ordered -> block.items.forEachIndexed { index, item ->
+                                        ListLine(marker = "${block.start + index}.", text = item, bodyColor = bodyColor)
+                                    }
+
+                                    is MdBlock.Quote -> Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Box(
+                                            Modifier
+                                                .width(2.dp)
+                                                .heightIn(min = 14.dp)
+                                                .background(MpiTheme.colors.border),
+                                        )
+                                        Text(
+                                            text = inlineStyled(block.text, MpiTheme.colors.textDim, MpiTheme.colors.codeBg),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MpiTheme.colors.textDim,
+                                        )
+                                    }
+
+                                    is MdBlock.Para -> Text(
+                                        text = inlineStyled(block.text, bodyColor, MpiTheme.colors.codeBg),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = bodyColor,
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     is Segment.Choice -> Unit
                 }
             }
         }
+    }
+}
+
+/** 列表行：项目符号/序号 + 正文（正文仍走行内样式）。 */
+@Composable
+private fun ListLine(marker: String, text: String, bodyColor: androidx.compose.ui.graphics.Color) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(text = marker, style = MaterialTheme.typography.bodyLarge, color = bodyColor)
+        Text(
+            text = inlineStyled(text, bodyColor, MpiTheme.colors.codeBg),
+            style = MaterialTheme.typography.bodyLarge,
+            color = bodyColor,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

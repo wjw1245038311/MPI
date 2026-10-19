@@ -437,6 +437,14 @@ button:disabled { opacity: 0.5; cursor: default; }
 .msg-role { font-size: 11px; color: var(--muted); letter-spacing: 0.4px; }
 
 .msg-text { margin: 0; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+.msg-h { margin: 2px 0 4px; font-weight: 600; line-height: 1.35; }
+.msg-h1 { font-size: 1.18em; }
+.msg-h2 { font-size: 1.12em; }
+.msg-h3 { font-size: 1.06em; }
+.msg-h4, .msg-h5, .msg-h6 { font-size: 1em; color: var(--text-dim); }
+.msg-list { margin: 4px 0; padding-left: 1.25em; }
+.msg-list li { margin: 2px 0; }
+.msg-quote { margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--border); color: var(--text-dim); white-space: pre-wrap; }
 .msg-text .inline-code { font-family: var(--mono); font-size: 0.92em; background: var(--control); border-radius: 4px; padding: 1px 4px; }
 .msg-text strong { font-weight: 600; }
 .message.user .msg-text { white-space: pre-wrap; }

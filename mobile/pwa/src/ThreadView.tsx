@@ -16,6 +16,7 @@ import { requestDirectPlaybackUrl, uploadVideoDirect } from "./lib/attachment-di
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
 import { parseInline } from "./lib/inline";
+import { parseBlocks, type MdBlock } from "./lib/block-md";
 import { withChoiceSegments } from "./lib/choice-block";
 import type { ChoiceFailure } from "./lib/choice-block";
 import { ChoicePanel } from "./components/ChoicePanel";
@@ -281,6 +282,73 @@ function pwaClampedNote(clamped: { questions: number; options: number }): string
   return `此面板已截断显示：${parts.join(" 与 ")}超出上限（最多 6 题、每题最多 6 个选项）。`;
 }
 
+/** 行内：粗体 / 斜体 / 行内代码（见 lib/inline.ts）。 */
+function InlineText({ text }: { text: string }) {
+  return (
+    <>
+      {parseInline(text).map((token, i) =>
+        token.kind === "bold" ? (
+          <strong key={i}>{token.text}</strong>
+        ) : token.kind === "italic" ? (
+          <em key={i}>{token.text}</em>
+        ) : token.kind === "code" ? (
+          <code key={i} className="inline-code">
+            {token.text}
+          </code>
+        ) : (
+          token.text
+        ),
+      )}
+    </>
+  );
+}
+
+/** 块级：标题 / 列表 / 引用 / 段落（见 lib/block-md.ts）。 */
+function MessageBlocks({ text }: { text: string }) {
+  const blocks = useMemo<MdBlock[]>(() => parseBlocks(text), [text]);
+  return (
+    <>
+      {blocks.map((block, i) => {
+        if (block.kind === "h") {
+          return (
+            <p key={i} className={`msg-h msg-h${block.level}`}>
+              <InlineText text={block.text} />
+            </p>
+          );
+        }
+        if (block.kind === "ul" || block.kind === "ol") {
+          const items = block.items.map((item, j) => (
+            <li key={j}>
+              <InlineText text={item} />
+            </li>
+          ));
+          return block.kind === "ol" ? (
+            <ol key={i} className="msg-list" start={block.start}>
+              {items}
+            </ol>
+          ) : (
+            <ul key={i} className="msg-list">
+              {items}
+            </ul>
+          );
+        }
+        if (block.kind === "quote") {
+          return (
+            <blockquote key={i} className="msg-quote">
+              <InlineText text={block.text} />
+            </blockquote>
+          );
+        }
+        return (
+          <p key={i} className="msg-text">
+            <InlineText text={block.text} />
+          </p>
+        );
+      })}
+    </>
+  );
+}
+
 /** 正文：按代码围栏切段；已定稿 assistant 消息里的合法 choices 围栏升级为交互面板，其余纯文本。 */
 function MessageText({ text, choiceCtx }: { text: string; choiceCtx?: ChoiceContext | null }) {
   const segments = useMemo(() => parseSegments(text), [text]);
@@ -315,23 +383,7 @@ function MessageText({ text, choiceCtx }: { text: string; choiceCtx?: ChoiceCont
             </div>
           ) : null;
         }
-        return (
-          <p key={`t${i}`} className="msg-text">
-            {parseInline(item.text).map((token, ti) =>
-              token.kind === "bold" ? (
-                <strong key={ti}>{token.text}</strong>
-              ) : token.kind === "italic" ? (
-                <em key={ti}>{token.text}</em>
-              ) : token.kind === "code" ? (
-                <code key={ti} className="inline-code">
-                  {token.text}
-                </code>
-              ) : (
-                token.text
-              ),
-            )}
-          </p>
-        );
+        return <MessageBlocks key={`t${i}`} text={item.text} />;
       })}
     </>
   );
