@@ -75,3 +75,19 @@ assert.match(ipc, /"thread:clearQueue"/, "ipc 必须暴露 thread:clearQueue");
 assert.match(ipc, /bridge\.clearQueue\(\)/, "ipc 必须真的调用 bridge.clearQueue()");
 assert.match(preload, /clearQueue: \(args: \{ threadId: string \}\)/, "preload 必须注入 clearQueue");
 console.log("[7] bridge / ipc / preload 三处接线齐全");
+
+// 8) 三端接线：协议白名单与两个移动客户端的撤回入口都得在，
+//    否则手机上那个「×」点了会得到 MODEL_UNAVAILABLE 之类的莫名错误。
+const desktopProtocol = readFileSync(join(ROOT, "src/main/remote/protocol.ts"), "utf8");
+const sharedProtocol = readFileSync(join(ROOT, "mobile/shared/protocol.ts"), "utf8");
+assert.match(desktopProtocol, /"thread\.clearQueue"/, "桌面协议白名单必须包含 thread.clearQueue");
+assert.match(sharedProtocol, /"thread\.clearQueue"/, "PWA 共享协议白名单必须包含 thread.clearQueue（两端要一致）");
+const pwaActions = readFileSync(join(ROOT, "mobile/pwa/src/lib/thread-actions.ts"), "utf8");
+assert.match(pwaActions, /clearQueue\(\)[\s\S]{0,160}thread\.clearQueue/, "PWA 必须实现 clearQueue()");
+const pwaSession = readFileSync(join(ROOT, "mobile/pwa/src/lib/thread-session.ts"), "utf8");
+assert.match(pwaSession, /case "queue_update"/, "PWA 必须消费 queue_update 事件");
+const androidActions = readFileSync(join(ROOT, "mobile/app/app/src/main/java/com/mpi/app/data/ThreadActions.kt"), "utf8");
+assert.match(androidActions, /thread\.clearQueue/, "安卓必须实现 clearQueue()");
+const androidSession = readFileSync(join(ROOT, "mobile/app/app/src/main/java/com/mpi/app/data/ThreadSession.kt"), "utf8");
+assert.match(androidSession, /"queue_update" ->/, "安卓必须消费 queue_update 事件");
+console.log("[8] 协议白名单 + PWA/安卓 撤回入口齐全");

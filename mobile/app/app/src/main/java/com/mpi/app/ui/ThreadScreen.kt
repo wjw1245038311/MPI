@@ -108,6 +108,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mpi.app.data.Attachment
+import com.mpi.app.data.PiQueue
 import com.mpi.app.data.ThreadView
 import com.mpi.app.data.VideoMediaCache
 import com.mpi.app.data.VoiceSpeechContent
@@ -226,6 +227,8 @@ fun ThreadScreen(
     onDismissSendNote: () -> Unit,
     onSteerPending: () -> Unit,
     onReEditPending: () -> Unit,
+    /** 撤回「已插入、尚未执行」的插话（pi 的 clear_queue）。 */
+    onRetractQueue: () -> Unit,
     onDismissSendError: () -> Unit,
     configSheetOpen: Boolean,
     configBusy: Boolean,
@@ -489,6 +492,7 @@ fun ThreadScreen(
             voiceChatActive = voiceChat != null,
             onStopVoiceChat = onStopVoiceChat,
             pendingFollowUp = pendingFollowUp,
+            piQueue = view.piQueue,
             sendError = sendError,
             sendNote = sendNote,
             onDismissSendNote = onDismissSendNote,
@@ -500,6 +504,7 @@ fun ThreadScreen(
             onAbort = onAbort,
             onSteerPending = onSteerPending,
             onReEditPending = onReEditPending,
+            onRetractQueue = onRetractQueue,
             onDismissSendError = onDismissSendError,
         )
 
@@ -558,6 +563,8 @@ private fun Composer(
     voiceChatActive: Boolean,
     onStopVoiceChat: () -> Unit,
     pendingFollowUp: String?,
+    /** pi 侧待投递的插话队列（已「立即插入」、模型还没看到）。 */
+    piQueue: PiQueue,
     sendError: String?,
     /** 主机回退成排队时的说明（非错误）。 */
     sendNote: String?,
@@ -569,6 +576,8 @@ private fun Composer(
     onAbort: () -> Unit,
     onSteerPending: () -> Unit,
     onReEditPending: () -> Unit,
+    /** 撤回「已插入、尚未执行」的插话（pi 的 clear_queue）。 */
+    onRetractQueue: () -> Unit,
     onDismissSendError: () -> Unit,
 ) {
     // 相册（Android 13+ 系统照片选择器，无需权限）/ 任意文件
@@ -702,6 +711,10 @@ private fun Composer(
 
         if (pendingFollowUp != null) {
             PendingFollowUpBanner(text = pendingFollowUp, onReEdit = onReEditPending, onSteer = onSteerPending)
+        }
+
+        if (piQueue.total > 0) {
+            QueuedSteerBanner(queue = piQueue, onRetract = onRetractQueue)
         }
 
         // composer 卡片（对齐套壳版：输入在上、按钮行在下）
@@ -919,6 +932,52 @@ private fun PendingFollowUpBanner(text: String, onReEdit: () -> Unit, onSteer: (
         }
         Text(
             text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(end = 8.dp, start = 12.dp),
+        )
+    }
+}
+
+/**
+ * 「已插入、尚未执行」横幅：这条插话**已经发给 pi**（steer），但还没被注入上下文，
+ * 因此可以用 clear_queue 撤回（撤回后文本回填到「待处理后续」卡片，可再编辑/再插入）。
+ */
+@Composable
+private fun QueuedSteerBanner(queue: PiQueue, onRetract: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFFF8F4E9))
+            .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFFD9A441)))
+            Spacer(Modifier.size(6.dp))
+            Text(
+                text = "已插入、尚未执行",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFA97A1F),
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = "· ${queue.total} 条待投递",
+                style = MaterialTheme.typography.labelSmall,
+                color = MpiTheme.colors.textFaint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(start = 4.dp),
+            )
+            TextButton(onClick = onRetract) {
+                Text("撤回", color = Color(0xFFA97A1F))
+            }
+        }
+        Text(
+            text = queue.texts.joinToString(" / "),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 2,

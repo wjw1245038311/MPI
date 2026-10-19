@@ -666,6 +666,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .pending-fu { display: flex; align-items: flex-start; gap: 8px; padding: 7px 8px 7px 10px; background: linear-gradient(180deg, #fbfdf9, #f2f8f0); border: 1px solid #d9e8dc; border-left: 3px solid var(--accent); border-radius: 10px; animation: pf-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
 @keyframes pf-in { from { opacity: 0; transform: translateY(6px) scale(0.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .pending-fu .pf-main { flex: 1; min-width: 0; }
+/* 「已插入、尚未执行」的插话队列：这一条**已发给主机**，可撤回（与待处理后续区分）。 */
+.pending-fu.queued-steer { background: linear-gradient(180deg, #fdfbf5, #f8f4e9); border-color: #ecdfc4; border-left-color: #d9a441; }
+.pending-fu.queued-steer .pf-label { color: #a97a1f; }
+.pending-fu.queued-steer .pf-dot { background: #d9a441; }
 .pending-fu .pf-label { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--accent); }
 .pending-fu .pf-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pf-pulse 1.4s ease-in-out infinite; flex: none; }
 @keyframes pf-pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(46, 125, 82, 0.35); } 50% { opacity: 0.55; box-shadow: 0 0 0 4px rgba(46, 125, 82, 0); } }

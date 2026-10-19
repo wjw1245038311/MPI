@@ -63,6 +63,11 @@ data class ThreadView(
      * 实时快照到达后置回 null；离线时一直有值，UI 据此提示「离线：显示本地缓存」。
      */
     val cachedAt: Long? = null,
+    /**
+     * pi 侧**待投递**的插话队列（`queue_update` 事件同步）。
+     * steering = 已「立即插入」但尚未被注入上下文的消息 —— 这段窗口内可以撤回。
+     */
+    val piQueue: PiQueue = PiQueue(),
 ) {
     /** 列表要渲染的全部消息（历史 + 流式中）。 */
     val renderable: List<ThreadMessage>
@@ -465,6 +470,13 @@ class ThreadSession(
         if (deltaType != "text_delta" && deltaType != "thinking_delta") flushDeltas()
 
         when (kind) {
+            "queue_update" -> {
+                // pi 侧待投递队列：steering = 已「立即插入」但还没注入上下文的消息（可撤回窗口）。
+                val steering = event?.get("steering")?.let(::jsonStringList).orEmpty()
+                val followUp = event?.get("followUp")?.let(::jsonStringList).orEmpty()
+                patch { it.copy(piQueue = PiQueue(steering = steering, followUp = followUp)) }
+            }
+
             "agent_start" -> patch { it.copy(running = true) }
 
             "message_start" -> handleMessageStart(event, seq)
@@ -959,6 +971,22 @@ class ThreadSession(
 }
 
 private fun JsonObject.str(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
+
+/** JSON 字符串数组 → List<String>（过滤空串与非字符串项；队列事件用）。 */
+private fun jsonStringList(value: kotlinx.serialization.json.JsonElement): List<String> =
+    (value as? kotlinx.serialization.json.JsonArray)
+        ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+        ?.filter { it.isNotBlank() }
+        .orEmpty()
+
+/** pi 侧待投递的插话队列（steering = 已「立即插入」、尚未注入上下文）。 */
+data class PiQueue(
+    val steering: List<String> = emptyList(),
+    val followUp: List<String> = emptyList(),
+) {
+    val total: Int get() = steering.size + followUp.size
+    val texts: List<String> get() = steering + followUp
+}
 
 private fun JsonObject.bool(key: String): Boolean =
     this[key]?.jsonPrimitive?.contentOrNull == "true"

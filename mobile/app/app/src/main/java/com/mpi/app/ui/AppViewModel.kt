@@ -844,6 +844,34 @@ class AppViewModel(
         _ui.update { it.copy(pendingFollowUp = null, draft = text) }
     }
 
+    /**
+     * 撤回「已插入、尚未执行」的插话（pi 的 `clear_queue`）。
+     * 文本回填到「待处理后续」卡片（可 ✎ 再编辑 / ⚡ 再插入），不丢消息。
+     */
+    fun retractQueuedMessages() {
+        val actions = threadActions ?: return
+        scope.launch {
+            try {
+                val cleared = actions.clearQueue()
+                val texts = queueTextsOf(cleared)
+                if (texts.isEmpty()) {
+                    _ui.update { it.copy(sendNote = "没有被撤回的内容（可能已经被模型处理了）") }
+                    return@launch
+                }
+                val current = _ui.value.pendingFollowUp
+                val merged = mergeRetractedText(current, texts)
+                _ui.update {
+                    it.copy(
+                        pendingFollowUp = merged,
+                        sendNote = "已撤回 ${texts.size} 条待投递插话，已放回「待处理后续」可再编辑",
+                    )
+                }
+            } catch (e: Exception) {
+                _ui.update { it.copy(sendError = com.mpi.app.data.friendlyError(e)) }
+            }
+        }
+    }
+
     fun dismissSendError() = _ui.update { it.copy(sendError = null) }
 
     /**

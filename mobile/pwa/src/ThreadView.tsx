@@ -1339,6 +1339,30 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     prevRunningRef.current = running;
   }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // pi 侧待投递的插话（已「立即插入」、模型还没看到）——可撤回。
+  const queuedCount = (view.piQueue?.steering.length || 0) + (view.piQueue?.followUp.length || 0);
+  const retractQueue = async () => {
+    if (!actions || sending) return;
+    setSendError(null);
+    try {
+      const cleared = await actions.clearQueue();
+      const texts = [...(cleared?.steering || []), ...(cleared?.followUp || [])].filter(Boolean);
+      if (!texts.length) {
+        setSendError("没有被撤回的内容（可能已经被模型处理了）");
+        return;
+      }
+      // 回填到「待处理后续」卡片：可再编辑 / 再插入，不丢消息。
+      setPendingFu((prev) =>
+        prev
+          ? { ...prev, text: [prev.text, ...texts].filter(Boolean).join("\n\n") }
+          : { text: texts.join("\n\n"), images: [], files: [], videos: [] },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setSendError(message.startsWith("THREAD_BUSY") ? "该会话正被其他设备操作，请稍后再试。" : `撤回失败：${message}`);
+    }
+  };
+
   const doAbort = async () => {
     if (!actions || sending) return;
     setSendError(null);
@@ -1897,6 +1921,24 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                     onClick={() => void sendPendingSteering()}
                   >
                     <IconZap />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {queuedCount > 0 && (
+              <div className="pending-fu queued-steer">
+                <div className="pf-main">
+                  <div className="pf-label">
+                    <span className="pf-dot" />
+                    已插入、尚未执行
+                    <span className="pf-sub">· {queuedCount} 条待投递</span>
+                  </div>
+                  <div className="pf-text">{[...(view.piQueue?.steering || []), ...(view.piQueue?.followUp || [])].join(" / ").slice(0, 160)}</div>
+                </div>
+                <div className="pf-actions">
+                  <button type="button" className="pf-btn" title="撤回待投递插话" aria-label="撤回待投递插话" onClick={() => void retractQueue()}>
+                    ×
                   </button>
                 </div>
               </div>

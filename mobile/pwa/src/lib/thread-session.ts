@@ -84,6 +84,11 @@ export interface ThreadView {
   /** S6.3: pending ui.request (approval card). Survives resync — the host keeps
    * the dialog open while the agent is paused, so a reconnect must re-show it. */
   pendingUi: RemoteUiRequest | null;
+  /**
+   * pi 侧**待投递**的插话队列（`queue_update` 事件同步）。
+   * steering = 已「立即插入」但尚未被注入上下文的消息 —— 这段窗口内可以撤回。
+   */
+  piQueue: { steering: string[]; followUp: string[] };
 }
 
 export interface ThreadSessionOptions {
@@ -228,7 +233,7 @@ export class ThreadSession {
     threadId: string,
     options: ThreadSessionOptions = {},
   ) {
-    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], taskMode: null, availableModes: [], contextUsage: null, compacting: false, cachedAt: null, pendingUi: null };
+    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], taskMode: null, availableModes: [], contextUsage: null, compacting: false, cachedAt: null, pendingUi: null, piQueue: { steering: [], followUp: [] } };
     this.client = client;
     this.onSnapshot = options.onSnapshot;
     // threadId goes on the ENVELOPE (host's requiredThread reads it there); the
@@ -525,6 +530,13 @@ export class ThreadSession {
   private applyEvent(payload: RemoteThreadEventPayload, seq: number): void {
     const ev = ((payload.data?.event || {}) as Record<string, any>);
     switch (payload.kind) {
+      case "queue_update": {
+        // pi 侧待投递队列：steering = 已「立即插入」但还没注入上下文的消息（可撤回窗口）。
+        const strings = (value: unknown): string[] =>
+          Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && !!item.trim()) : [];
+        this.patch({ piQueue: { steering: strings(ev.steering), followUp: strings(ev.followUp) } });
+        break;
+      }
       case "agent_start":
         // summary.state 也要跟着走（见 settleTurn 的长注释）：否则快照落在回合中途会把
         // 界面锁在「运行中」，且顶栏徽标会一直显示旧状态。
