@@ -845,6 +845,21 @@ class AppViewModel(
     }
 
     /**
+     * 消息级撤回（长按自己的消息）：排队中 → 走 clear_queue；已被模型消费 → 只能说清原因。
+     * 安卓端没有 pi fork 入口，所以不做「从这条之前分支」（桌面端有）。
+     */
+    fun retractMessage(text: String) {
+        val target = text.trim()
+        if (target.isEmpty()) return
+        val queued = _ui.value.thread?.piQueue?.texts?.any { it.trim() == target } == true
+        if (!queued) {
+            _ui.update { it.copy(sendNote = "这条已被模型处理，撤不回了（可以让 agent 忽略上一条）") }
+            return
+        }
+        retractQueuedMessages()
+    }
+
+    /**
      * 撤回「已插入、尚未执行」的插话（pi 的 `clear_queue`）。
      * 文本回填到「待处理后续」卡片（可 ✎ 再编辑 / ⚡ 再插入），不丢消息。
      */

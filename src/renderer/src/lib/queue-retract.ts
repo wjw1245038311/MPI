@@ -67,3 +67,29 @@ export function mergeRetractedQueue(
     ...(pending?.quotes ? { quotes: pending.quotes } : {}),
   };
 }
+
+/** 这条文本是否还在 pi 待投递队列里（消息级撤回据此决定「直接删」还是「开分支」）。 */
+export function isQueuedText(queue: PiQueueState | null | undefined, text: string): boolean {
+  const target = (text || "").trim();
+  if (!target) return false;
+  return piQueueTexts(queue).some((item) => item.trim() === target);
+}
+
+/**
+ * 撤回后该删掉的本地「幽灵气泡」：从未被 pi 投递过（乐观回显），且文本与撤回内容匹配。
+ *
+ * 不删的话界面上看起来「撤回没生效」——气泡还在、下面又多出一张待处理卡片。
+ */
+export function isRetractedGhost(
+  message: { role?: string; key?: string; text?: string },
+  cleared: string[],
+): boolean {
+  if (message.role !== "user") return false;
+  if (!message.key || !message.key.startsWith("opt-")) return false;
+  const text = (message.text || "").trim();
+  if (!text) return false;
+  return cleared.some((item) => {
+    const candidate = item.trim();
+    return !!candidate && (text === candidate || text.startsWith(candidate) || candidate.startsWith(text));
+  });
+}

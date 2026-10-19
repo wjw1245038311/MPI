@@ -68,6 +68,20 @@ export function Chat() {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  /** 消息右键菜单（目前只有「撤回」）。只对**自己的消息**弹，不在选中文字时抢走引用菜单。 */
+  const [msgMenu, setMsgMenu] = useState<{ x: number; y: number; key: string } | null>(null);
+
+  useEffect(() => {
+    if (!msgMenu) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setMsgMenu(null); };
+    const onScroll = () => setMsgMenu(null);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [msgMenu]);
   // In-conversation search (header button / Ctrl+F): find occurrences across
   // the finalized messages of this thread and step through them.
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
@@ -962,7 +976,22 @@ export function Chat() {
         <>
           <div className="chat-stage">
             <div className="chat-scroll" ref={scrollRef} onScroll={handleUserScroll} onWheel={handleWheel}>
-          <div className={`messages${searchingDim ? " searching" : ""}${restoring ? " no-cv" : ""}`}>
+          <div
+            className={`messages${searchingDim ? " searching" : ""}${restoring ? " no-cv" : ""}`}
+            onContextMenu={(event) => {
+              // 选中文字时留给「引用/待办/交接」菜单；这里只管「右键自己的消息 → 撤回」。
+              const sel = window.getSelection();
+              if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+              const el = (event.target as HTMLElement).closest("[data-message-key]");
+              if (!el || !el.classList.contains("user")) return;
+              const key = el.getAttribute("data-message-key");
+              if (!key) return;
+              event.preventDefault();
+              event.stopPropagation();
+              setMsgMenu({ x: event.clientX, y: event.clientY, key });
+            }}
+            onClick={() => setMsgMenu(null)}
+          >
             {headGroups.map((g) =>
               g.role === "compaction" ? (
                 <CompactionDivider key={g.key} group={g} threadId={activeThreadId} language={language} onPreviewImage={setPreviewImage} />
@@ -1055,6 +1084,39 @@ export function Chat() {
           <Composer threadId={activeThreadId} />
         </>
       )}
+      {msgMenu && (() => {
+        const target = thread.messages.find((m) => m.key === msgMenu.key);
+        const text = (target?.text || "").trim();
+        const queued = !!text && [...(thread.piQueue?.steering || []), ...(thread.piQueue?.followUp || [])].some((item) => item.trim() === text);
+        return (
+          <div
+            className="msg-ctx-menu"
+            style={{ left: msgMenu.x, top: msgMenu.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            role="menu"
+          >
+            <button
+              className="msg-ctx-item"
+              role="menuitem"
+              title={
+                queued
+                  ? language === "zh" ? "从 pi 待投递队列里撤回" : "Remove from the pending queue"
+                  : language === "zh" ? "已被模型处理：从这条之前开新分支，原文放回输入框" : "Already processed: fork before this message"
+              }
+              onClick={() => {
+                const key = msgMenu.key;
+                setMsgMenu(null);
+                void useStore.getState().retractMessage(activeThreadId, key);
+              }}
+            >
+              {queued
+                ? language === "zh" ? "撤回" : "Retract"
+                : language === "zh" ? "撤回（从这条之前分支）" : "Retract (fork before)"}
+            </button>
+          </div>
+        );
+      })()}
       {previewImage && (
         <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" onMouseDown={() => setPreviewImage(null)}>
           <button className="image-lightbox-close" title="关闭" onClick={() => setPreviewImage(null)}>×</button>

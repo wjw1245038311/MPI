@@ -1912,5 +1912,11 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 5. **修：模型 pill 每回合退回裸 id（config_changed 覆盖丢 name）**——广播补丁里的 `model` 一直是 `{provider,id}`，而 `publishThreadContextUsage` **每回合结束都推一次**，渲染层直接覆盖 `thread.model`，显示名随即丢失 → pill 从「DeepSeek V4.1 Flash」变回 `deepseek-flash`。现在：`ThreadConfigPatch.model` 允许带 `name`，主机在两处广播前用 `modelWithName()` 补名；渲染层兜底——补丁没带 name 时沿用同模型的旧 name，或从会话的模型列表里查。
    验证方式：`npm run typecheck` + `npm test -- thread-config`（新增第 5 组：name 透传 + 主机两处补名 + 渲染层兜底的源码契约）。应用内：切模型后聊一轮，pill 应保持「DeepSeek V4.1 Flash」不再退回 id。
 
+7. **新增：消息级「撤回」（飞书/微信式）——右键自己的消息；修：撤回后气泡不消失**——上一版的撤回入口只有输入框上方那条「已插入、尚未执行」横幅，且撤回后本地的**乐观回显气泡**不会被清掉，看起来像「撤回没生效」。现在：
+   - 桌面：**右键自己的消息** → 「撤回」。还在 pi 待投递队列里 → 直接从队列删掉并收回「待处理后续」卡片；已被模型消费 → 从这条之前开新分支（原分支保留），原文放回输入框，等于「撤回 + 重发」；
+   - 安卓：长按自己的消息 → 「撤回 / 复制」（已被消费时明确提示撤不回，建议让 agent 忽略上一条——安卓没有 pi fork 入口）；
+   - 撤回时同步删除匹配的乐观气泡（只删 opt- 前缀、文本匹配的），不再留幽灵消息。
+   验证方式：npm run typecheck + npm test -- queue-retract（新增第 9/10 组：isQueuedText 判定、isRetractedGhost 只清匹配的乐观气泡）+ cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest。应用内：运行中 Alt+Enter 发一条插话 → 右键它 → 「撤回」→ 气泡消失且内容回到「待处理后续」；对已被模型处理的消息右键 → 菜单显示「撤回（从这条之前分支）」，点后进入新分支且原文在输入框。
+
 6. **修：安卓 choices 面板对写歪的围栏标签不认（桌面/PWA 正常）**——2026-10-19 真机：同一段回复在桌面与 PWA 出面板、安卓只显示灰底代码块。根因是安卓用 `code.lang != "choices"` 做**精确字符串比较**；桌面/PWA 一直用大小写不敏感、且容忍 `choices>` 这类尾随噪声的规则。现在安卓也有 `isChoicesLang()`（同一条正则），并补上「写歪标签（`choicesjson` 等）只有在正文严格合法时才升级」的疑似档，避免把普通 json 代码块误判成面板。
    验证方式：`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest`（新增 `ChoiceLangToleranceTest` 5 项：`Choices`/`choices>` 升级、`choicesjson` 非合法正文保持代码块、正文合法则升级、未定稿不升级）。应用内：让模型用 `choices>` 或大写 `Choices` 写围栏，安卓也应出面板。

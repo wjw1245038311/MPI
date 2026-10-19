@@ -264,6 +264,7 @@ fun MpiApp(container: AppContainer) {
                                 onSteerPending = viewModel::steerPendingFollowUp,
                                 onReEditPending = viewModel::reEditPendingFollowUp,
                                 onRetractQueue = viewModel::retractQueuedMessages,
+                                onRetractMessage = viewModel::retractMessage,
                                 onDismissSendError = viewModel::dismissSendError,
                                 configSheetOpen = state.configSheetOpen,
                                 configBusy = state.configBusy,

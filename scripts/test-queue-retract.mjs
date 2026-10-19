@@ -91,3 +91,19 @@ assert.match(androidActions, /thread\.clearQueue/, "安卓必须实现 clearQueu
 const androidSession = readFileSync(join(ROOT, "mobile/app/app/src/main/java/com/mpi/app/data/ThreadSession.kt"), "utf8");
 assert.match(androidSession, /"queue_update" ->/, "安卓必须消费 queue_update 事件");
 console.log("[8] 协议白名单 + PWA/安卓 撤回入口齐全");
+
+// 9) 消息级撤回的两个判定（「直接删」还是「开分支」；以及幽灵气泡清理）
+const { isQueuedText, isRetractedGhost } = await import("../src/renderer/src/lib/queue-retract.ts");
+assert.equal(isQueuedText(queue, "改口径：用 A 方案"), true, "队列里的文本应判为可撤回");
+assert.equal(isQueuedText(queue, "  改口径：用 A 方案  "), true, "两侧空白不影响判定");
+assert.equal(isQueuedText(queue, "不在队列里"), false);
+assert.equal(isQueuedText(queue, ""), false);
+assert.equal(isQueuedText(null, "x"), false);
+console.log("[9] isQueuedText：判断消息是否还在待投递队列");
+
+const clearedTexts = ["这个服务太吃内存了"];
+assert.equal(isRetractedGhost({ role: "user", key: "opt-abc", text: "这个服务太吃内存了" }, clearedTexts), true, "乐观回显气泡应被清掉");
+assert.equal(isRetractedGhost({ role: "user", key: "real-1", text: "这个服务太吃内存了" }, clearedTexts), false, "已落盘的消息不能删");
+assert.equal(isRetractedGhost({ role: "assistant", key: "opt-abc", text: "这个服务太吃内存了" }, clearedTexts), false, "只清用户气泡");
+assert.equal(isRetractedGhost({ role: "user", key: "opt-abc", text: "别的内容" }, clearedTexts), false);
+console.log("[10] isRetractedGhost：只删与撤回内容匹配的乐观气泡");
