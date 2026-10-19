@@ -5,7 +5,7 @@
  * S6 adds the send bar (prompt/steer + abort + sandbox/full toggle) and the
  * full-screen approval card (ui.request → ui.respond, §4.5 diff preview).
  */
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { RemotePermission, RemoteThreadState, RemoteUiRequest } from "../../shared/protocol";
 import type { ThreadActions, SendMode } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
@@ -318,8 +318,8 @@ function MessageBlocks({ text }: { text: string }) {
         }
         if (block.kind === "ul" || block.kind === "ol") {
           const items = block.items.map((item, j) => (
-            <li key={j}>
-              <InlineText text={item} />
+            <li key={j} style={item.depth ? { marginLeft: item.depth * 16 } : undefined}>
+              <InlineText text={item.text} />
             </li>
           ));
           return block.kind === "ol" ? (
@@ -330,6 +330,38 @@ function MessageBlocks({ text }: { text: string }) {
             <ul key={i} className="msg-list">
               {items}
             </ul>
+          );
+        }
+        if (block.kind === "table") {
+          const alignStyle = (index: number): CSSProperties | undefined => {
+            const align = block.align[index];
+            return align ? { textAlign: align } : undefined;
+          };
+          return (
+            <div key={i} className="msg-table-wrap">
+              <table className="msg-table">
+                <thead>
+                  <tr>
+                    {block.header.map((cell, c) => (
+                      <th key={c} style={alignStyle(c)}>
+                        <InlineText text={cell} />
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, r) => (
+                    <tr key={r}>
+                      {block.header.map((_, c) => (
+                        <td key={c} style={alignStyle(c)}>
+                          <InlineText text={row[c] ?? ""} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           );
         }
         if (block.kind === "quote") {

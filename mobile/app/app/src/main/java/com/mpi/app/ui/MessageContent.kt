@@ -1,6 +1,7 @@
 package com.mpi.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -113,12 +115,14 @@ internal fun RenderSegments(
                                     )
 
                                     is MdBlock.Bullets -> for (item in block.items) {
-                                        ListLine(marker = "•", text = item, bodyColor = bodyColor)
+                                        ListLine(marker = "•", text = item.text, depth = item.depth, bodyColor = bodyColor)
                                     }
 
                                     is MdBlock.Ordered -> block.items.forEachIndexed { index, item ->
-                                        ListLine(marker = "${block.start + index}.", text = item, bodyColor = bodyColor)
+                                        ListLine(marker = "${block.start + index}.", text = item.text, depth = item.depth, bodyColor = bodyColor)
                                     }
+
+                                    is MdBlock.Table -> MdTable(block, bodyColor)
 
                                     is MdBlock.Quote -> Row(
                                         Modifier.fillMaxWidth(),
@@ -156,8 +160,13 @@ internal fun RenderSegments(
 
 /** 列表行：项目符号/序号 + 正文（正文仍走行内样式）。 */
 @Composable
-private fun ListLine(marker: String, text: String, bodyColor: androidx.compose.ui.graphics.Color) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun ListLine(marker: String, text: String, depth: Int, bodyColor: androidx.compose.ui.graphics.Color) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = (depth * 16).dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         Text(text = marker, style = MaterialTheme.typography.bodyLarge, color = bodyColor)
         Text(
             text = inlineStyled(text, bodyColor, MpiTheme.colors.codeBg),
@@ -166,6 +175,50 @@ private fun ListLine(marker: String, text: String, bodyColor: androidx.compose.u
             modifier = Modifier.weight(1f),
         )
     }
+}
+
+/** 表格：每行等宽分列 + 细边框（宽表靠外层横向滚动，见调用方）。 */
+@Composable
+private fun MdTable(table: MdBlock.Table, bodyColor: androidx.compose.ui.graphics.Color) {
+    val border = MpiTheme.colors.border
+    Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+        Row(Modifier.fillMaxWidth()) {
+            table.header.forEachIndexed { index, cell ->
+                Text(
+                    text = inlineStyled(cell, bodyColor, MpiTheme.colors.codeBg),
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = bodyColor,
+                    textAlign = alignOf(table.align, index),
+                    modifier = Modifier
+                        .weight(1f)
+                        .border(0.5.dp, border)
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                )
+            }
+        }
+        table.rows.forEach { row ->
+            Row(Modifier.fillMaxWidth()) {
+                table.header.indices.forEach { index ->
+                    Text(
+                        text = inlineStyled(row.getOrNull(index).orEmpty(), bodyColor, MpiTheme.colors.codeBg),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = bodyColor,
+                        textAlign = alignOf(table.align, index),
+                        modifier = Modifier
+                            .weight(1f)
+                            .border(0.5.dp, border)
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun alignOf(align: List<String?>, index: Int): TextAlign = when (align.getOrNull(index)) {
+    "center" -> TextAlign.Center
+    "right" -> TextAlign.End
+    else -> TextAlign.Start
 }
 
 internal sealed interface Segment {
