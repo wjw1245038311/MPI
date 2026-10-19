@@ -188,16 +188,22 @@ private fun ListLine(marker: String, text: String, depth: Int, bodyColor: androi
 private fun MdTable(table: MdBlock.Table, bodyColor: androidx.compose.ui.graphics.Color) {
     val border = MpiTheme.colors.border
     val scrollable = table.header.size > 3
+    // 列宽按内容长度分配（CJK 记 2）：等分会让「结果」这种长列挤成一条竖条，
+    // 与桌面端的 auto 布局观感差很远（2026-10-19 真机反馈）。
+    val weights = table.header.indices.map { index ->
+        val texts = listOf(table.header.getOrNull(index).orEmpty()) + table.rows.map { it.getOrNull(index).orEmpty() }
+        texts.maxOf { cellWidth(it) }.coerceIn(6, 30).toFloat()
+    }
     val rowWidth: Modifier = if (scrollable) Modifier.width((140 * table.header.size).dp) else Modifier.fillMaxWidth()
     val container: Modifier = if (scrollable) Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()) else Modifier.fillMaxWidth()
     Column(container) {
         Row(rowWidth) {
-            TableCells(table.header, table.align, scrollable = scrollable, bold = true, bodyColor = bodyColor, border = border)
+            TableCells(table.header, table.align, weights, scrollable = scrollable, bold = true, bodyColor = bodyColor, border = border)
         }
         table.rows.forEach { row ->
             Row(rowWidth) {
                 val cells = table.header.indices.map { row.getOrNull(it).orEmpty() }
-                TableCells(cells, table.align, scrollable = scrollable, bold = false, bodyColor = bodyColor, border = border)
+                TableCells(cells, table.align, weights, scrollable = scrollable, bold = false, bodyColor = bodyColor, border = border)
             }
         }
     }
@@ -208,6 +214,7 @@ private fun MdTable(table: MdBlock.Table, bodyColor: androidx.compose.ui.graphic
 private fun androidx.compose.foundation.layout.RowScope.TableCells(
     cells: List<String>,
     align: List<String?>,
+    weights: List<Float>,
     scrollable: Boolean,
     bold: Boolean,
     bodyColor: androidx.compose.ui.graphics.Color,
@@ -223,12 +230,15 @@ private fun androidx.compose.foundation.layout.RowScope.TableCells(
             },
             color = bodyColor,
             textAlign = alignOf(align, index),
-            modifier = (if (scrollable) Modifier.width(140.dp) else Modifier.weight(1f))
+            modifier = (if (scrollable) Modifier.width(140.dp) else Modifier.weight(weights.getOrElse(index) { 1f }))
                 .border(0.5.dp, border)
                 .padding(horizontal = 6.dp, vertical = 4.dp),
         )
     }
 }
+
+/** 单元格内容宽度估算：CJK/全角记 2，其余记 1（用于按内容分配列宽）。 */
+private fun cellWidth(text: String): Int = text.fold(0) { acc, ch -> acc + if (ch.code > 0x2E80) 2 else 1 }
 
 private fun alignOf(align: List<String?>, index: Int): TextAlign = when (align.getOrNull(index)) {
     "center" -> TextAlign.Center

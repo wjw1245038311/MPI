@@ -120,6 +120,13 @@ class DirectUploadException(message: String) : Exception(message)
 /** 主机签发的直连目标（`attachment.url` 的回包）。 */
 data class DirectTarget(
     val url: String,
+    /**
+     * 主机声明的**全部可用基地址**（有序：局域网 → 公网 → tailnet）。
+     *
+     * 2026-10-19 真机：主机开了局域网模式时只广告内网地址，手机在 5G 上必然连不上 →
+     * 每次都静默回落中继分片（500KB 图片要好几秒）。现在按顺序探测，第一个可达的用它。
+     */
+    val bases: List<String> = emptyList(),
     val token: String,
     /** 写：主机预分配的附件名（消息里只带它）；读：附件名。内容寻址后**就是内容 key**。 */
     val name: String,
@@ -185,8 +192,16 @@ internal fun parseDirectTarget(payload: JsonElement?): DirectTarget? {
     // `url` 为空有两种合法情况：① 内容去重命中（字节已在主机）；② 主机没有公网直连入口
     // （新装的机器），此时只给令牌，客户端改走中继分片 `attachment.upload`。
     if (url.isNullOrEmpty() && deduped != true && token.isEmpty()) return null
+    val bases = runCatching {
+        (direct["bases"] as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+            ?.map { it.trim().trimEnd('/') }
+            ?.filter { it.isNotEmpty() }
+            .orEmpty()
+    }.getOrDefault(emptyList())
     return DirectTarget(
         url = url.orEmpty(),
+        bases = bases,
         token = token,
         name = name,
         expiresAt = runCatching { direct["expiresAt"]?.jsonPrimitive?.longOrNull }.getOrNull() ?: 0L,
@@ -227,6 +242,36 @@ class DirectAttachments(
     private val request: suspend (type: String, payload: JsonElement?, threadId: String?, timeoutMs: Long?) -> JsonElement?,
     private val http: OkHttpClient = defaultHttpClient(),
 ) {
+    /**
+     * 逐个探测主机声明的基地址，返回第一个可达的（任何 HTTP 响应都算——`/` 正常回 404）。
+     *
+     * 为什么要先探：局域网地址在 5G 上要等到 TCP 超时才会失败，白白拖慢上传；这里给每条
+     * 2.5s 上限，全失败就直接走中继分片（与旧行为一致）。
+     */
+    private suspend fun pickReachableBase(target: DirectTarget): String? {
+        for (base in target.bases) {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val probe = http.newBuilder()
+                        .connectTimeout(2500, TimeUnit.MILLISECONDS)
+                        .readTimeout(2500, TimeUnit.MILLISECONDS)
+                        .build()
+                    val request = okhttp3.Request.Builder().url(base.trimEnd('/') + "/").get().build()
+                    probe.newCall(request).execute().use { true }
+                }.getOrDefault(false)
+            }
+            if (ok) return base
+        }
+        return null
+    }
+
+    /** 把 target 的 url 换成「可达基地址 + /att/token」；全不可达 → url 置空（调用方走中继）。 */
+    private suspend fun withReachableBase(target: DirectTarget): DirectTarget {
+        if (target.bases.isEmpty()) return target
+        val base = pickReachableBase(target) ?: return target.copy(url = "")
+        return target.copy(url = base.trimEnd('/') + "/att/" + target.token)
+    }
+
     /**
      * 申请直连 URL。直连不可用（主机回 `DIRECT_UNAVAILABLE` / 不可达 / 超时）→ null。
      *
@@ -300,13 +345,16 @@ class DirectAttachments(
             sha256 = contentHash,
         ) ?: return null
 
+        // 主机可能同时声明「局域网 + 公网」多个入口：先探可达的那个，避免在 5G 上死等内网地址。
+        val resolved = withReachableBase(target)
+
         // 去重命中：字节已在主机（可能是别的会话、甚至别的设备上传的同一份内容）→ 直接交名下。
         // 封面也不用重传：主机上的那个对象本来就有封面（首次上传时落的）。
-        if (target.deduped == true) return target.name
+        if (resolved.deduped == true) return resolved.name
 
         // 主机没有公网直连入口（新装机很常见，如 MiniBox）→ 改走中继分片。
         // 视频封面是观感优化，中继路径不送（消息里还会再带一份缩略图）。
-        if (target.url.isEmpty()) return relayUploadChunks(target, size, open, onProgress)
+        if (resolved.url.isEmpty()) return relayUploadChunks(resolved, size, open, onProgress)
 
         // 分片上传 + 末片屏障（与图/音/文件共用同一套实现）。
         //
@@ -314,19 +362,19 @@ class DirectAttachments(
         // 两种失败形态都要兜：返回 problem（服务端拒）和**抛异常**（连接被拒/超时/中断）——
         // 2026-10-10 首次真机测试就踩在这：只兜了 problem，而连接失败是抛异常，附件被静默丢掉。
         val outcome = try {
-            putAllChunks(target, size, open, sessionKey, onProgress)
+            putAllChunks(resolved, size, open, sessionKey, onProgress)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             return relayUploadChunks(target, size, open, onProgress)
         }
-        if (outcome.problem != null) return relayUploadChunks(target, size, open, onProgress)
+        if (outcome.problem != null) return relayUploadChunks(resolved, size, open, onProgress)
 
         // 封面是观感优化：送失败不算上传失败（消息里还会再带一份，主机侧幂等）。
         if (posterB64 != null) {
-            runCatching { postPoster(target.url, posterB64) }
+            runCatching { postPoster(resolved.url, posterB64) }
         }
-        return target.name
+        return resolved.name
     }
 
     /**
@@ -352,7 +400,7 @@ class DirectAttachments(
         if (size <= 0L) return null
         val contentHash = sha256OfStream(open)
             ?: throw DirectUploadException("无法读取文件以计算校验值（文件被移动或权限不足？）")
-        val target = requestTarget(
+        val rawTarget = requestTarget(
             threadId = threadId,
             mode = "write",
             originalName = originalName,
@@ -361,6 +409,8 @@ class DirectAttachments(
             sha256 = contentHash,
             workspace = workspace,
         ) ?: return null
+        // 多入口（局域网 + 公网）先探可达的那条（5G 上不能死等内网地址）。
+        val target = withReachableBase(rawTarget)
         // 去重命中：字节已在主机。请求了工作区时不等于“什么都不做”——主机在 mint 阶段
         // 就已经把文件放进 mpi-inbox 并把路径回给你了（见 ipc.ts 的 deduped 分支）。
         if (target.deduped == true) {
@@ -559,12 +609,18 @@ class DirectAttachments(
             onError("主机未声明加密（enc=${target.enc}）")
             return false
         }
+        // 多入口：先探可达的那条（否则 5G 上会对着内网地址等到超时）。
+        val resolved = withReachableBase(target)
+        if (resolved.url.isEmpty()) {
+            onError("主机的直连入口都不可达")
+            return false
+        }
         val key = AttachmentCrypto.deriveKey(sessionKey, target.token, AttachmentCrypto.DOWN, target.name)
         output.parentFile?.mkdirs()
         var ok = false
         try {
             // 第一片：既定 total，也直接拿来写（少一次往返）。
-            val head = fetchRangeSlice(target.url, 0, chunkBytes)
+            val head = fetchRangeSlice(resolved.url, 0, chunkBytes)
             if (head == null) {
                 onError("取片失败：offset=0（网络/令牌/主机不可达）")
                 return false
@@ -599,7 +655,7 @@ class DirectAttachments(
                             launch(Dispatchers.IO) {
                                 gate.withPermit {
                                     if (failure.get() != null) return@withPermit
-                                    val slice = fetchRangeSlice(target.url, offset, chunkBytes)
+                                    val slice = fetchRangeSlice(resolved.url, offset, chunkBytes)
                                     if (slice == null) {
                                         failure.compareAndSet(null, "取片失败：offset=$offset（网络/令牌/主机不可达）")
                                         return@withPermit

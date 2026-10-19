@@ -3223,34 +3223,47 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
    * 为什么检测而不是写死：机器名/域名因机而异，写死就等于把配置钉在一台机器上。
    * 优先级：环境变量覆盖（开发/测试） > tailscale CLI 读取 `Self.DNSName`。
    */
-  async function resolveAttachmentBaseUrl(): Promise<string | null> {
-    // LAN 模式优先：同网段直连内网地址（快、不占公网、不需要反向隧道）。
-    // 这是「一键局域网」的核心——开了就把附件从公网入口切到内网。
-    const lan = lanModeStatus().attachmentBase;
-    if (lan) return lan;
-    const override = process.env.MPI_ATTACHMENT_BASE_URL || getConfig().attachmentBaseUrl;
-    if (override) return override.replace(/\/+$/, "");
-    if (attachmentBaseUrlResolved) return attachmentBaseUrl;
+  async function resolveAttachmentBaseUrls(): Promise<string[]> {
+    const out: string[] = [];
+    const push = (raw?: string | null) => {
+      const value = String(raw || "").trim().replace(/\/+$/, "");
+      if (value && !out.includes(value)) out.push(value);
+    };
+    // 1) 局域网（同网段时最快，但不适用于手机走 5G 的情况）
+    push(lanModeStatus().attachmentBase);
+    // 2) 配置/环境里的公网入口（反向隧道 / 域名）
+    push(process.env.MPI_ATTACHMENT_BASE_URL || getConfig().attachmentBaseUrl);
+    // 3) tailnet 推导的 https 入口（手机装了 Tailscale 时可用）
+    if (attachmentBaseUrlResolved) {
+      push(attachmentBaseUrl);
+      return out;
+    }
     attachmentBaseUrlResolved = true;
     try {
       const { execFileSync } = await import("node:child_process");
-      // 优先级：环境变量 > 配置里的绝对路径 > PATH。
-      // Windows 上 Tailscale 默认不把 CLI 放进 PATH，所以配置项是主要的兜底手段。
       const bin = process.env.MPI_TAILSCALE_BIN || getConfig().tailscaleBin || "tailscale";
-      const raw = execFileSync(bin, ["status", "--json"], {
-        timeout: 5_000,
-        encoding: "utf8",
-        windowsHide: true,
-      });
+      const raw = execFileSync(bin, ["status", "--json"], { timeout: 5_000, encoding: "utf8", windowsHide: true });
       const dnsName = String(JSON.parse(raw)?.Self?.DNSName || "").replace(/\.$/, "");
-      if (dnsName) attachmentBaseUrl = `https://${dnsName}:${ATTACHMENT_PUBLIC_PORT}`;
-      else appendDiagLog("attachment-direct unavailable: tailscale reports no DNS name");
+      if (dnsName) {
+        attachmentBaseUrl = `https://${dnsName}:${ATTACHMENT_PUBLIC_PORT}`;
+        push(attachmentBaseUrl);
+      } else {
+        appendDiagLog("attachment-direct unavailable: tailscale reports no DNS name");
+      }
     } catch (error) {
-      // 常见原因：tailscale CLI 不在 PATH（Windows 默认不装进 PATH）。此时直连不可用，
-      // 但功能整体不坏——客户端会回落。要开启就设 MPI_TAILSCALE_BIN 或把它加进 PATH。
       appendDiagLog(`attachment-direct unavailable: ${String((error as Error)?.message).slice(0, 60)}`);
     }
-    return attachmentBaseUrl;
+    return out;
+  }
+
+  /**
+   * 单值版本（保留给「要不要启服务」这类只需判断有无入口的地方）。
+   *
+   * 多入口的顺序很重要：局域网 → 公网配置 → tailnet。手机在 5G 上时局域网那条必然
+   * 连不上，必须继续试后面的（客户端按 issueAttachmentUrl 回的 `bases` 逐个探测）。
+   */
+  async function resolveAttachmentBaseUrl(): Promise<string | null> {
+    return (await resolveAttachmentBaseUrls())[0] ?? null;
   }
 
   /** 懒启动附件 HTTP 服务（首次需要直连时才开端口；只绑本机，由 tailscale serve 转发）。 */
@@ -3903,6 +3916,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       // 因为「这台机器没有公网入口」就把整个附件上传拒掉——新装的机器（如 MiniBox）
       // 正是这种情况，旧那套公网隧道又已废弃（2026-10-09）。
       const base = await ensureAttachmentServer();
+      const bases = await resolveAttachmentBaseUrls();
       if (input.mode === "read") {
         const name = input.name || "";
         // 作用域沿用按需拉取那一套（只能取本会话引用过的附件）。
@@ -3911,7 +3925,14 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         }
         const token = attachmentTokens.mint({ mode: "read", threadId, deviceId, name, ...(input.mimeType ? { mimeType: input.mimeType } : {}) });
         appendDiagLog(`attachment-direct mint read name=${name.slice(0, 36)} dev=${deviceId.slice(0, 12)}`);
-        return { url: base ? `${base}/att/${token.token}` : "", token: token.token, name, expiresAt: token.expiresAt, ...attachmentEncField(deviceId) };
+        return {
+          url: base ? `${base}/att/${token.token}` : "",
+          bases,
+          token: token.token,
+          name,
+          expiresAt: token.expiresAt,
+          ...attachmentEncField(deviceId),
+        };
       }
       // 写入令牌。
       // 内容寻址（P1，见 docs/attachment-content-addressing.md）：客户端**先算好**整文件 SHA-256 再 mint →
@@ -3967,6 +3988,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       );
       return {
         url: base ? `${base}/att/${token.token}` : "",
+        bases,
         token: token.token,
         name,
         ...(contentKey ? { key: `sha256:${contentKey}`, deduped: false } : {}),

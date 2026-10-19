@@ -74,6 +74,8 @@ export interface RemoteBackend {
     input: { mode: "read" | "write"; name?: string; originalName?: string; mimeType?: string; size?: number; sha256?: string; workspace?: boolean },
   ): Promise<{
     url: string;
+    /** 可用基地址（有序：局域网 → 公网 → tailnet）。客户端逐个探测，第一个能连上的用它上传。 */
+    bases?: string[];
     token: string;
     name: string;
     expiresAt: number;
