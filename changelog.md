@@ -4,6 +4,16 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## Unreleased
+
+1. **修：一台配错中继凭证的主机会把整个 NAT 后面的 PWA / 主机自己的重连全部卡死（中继侧）**——2026-10-19 实测：某台主机（新身份 `l6madOc…`、没带 token）`host.register` 被拒后**每 1.8 秒重试一次**，每 10 次失败触发一次「该 IP 封 60s」；而那 60s 里 **`/ws` upgrade 也被拒（429）**，于是同一路由器后面的合法设备（PWA 浏览器）和主机自己的断线重连全都开不出连接 —— 该 IP 约 **75%** 的时间不可用（当天 320 次拒绝、29 次封禁）。三处改动：
+   - **`/ws` upgrade 不再看 IP 封禁**，只保留单 IP 并发连接上限（`RELAY_MAX_WS_PER_IP`）。封禁的真实目的只是「别反复做鉴权/别刷日志」，首帧拒绝已经足够。
+   - **`host.register` 先验证凭证、再看封禁**：凭证正确一律放行（同一 NAT 后面的合法主机不受别人连坐），只有「拿错凭证」才计入封禁并回 `RATE_LIMITED`；封禁期内不再每个请求打一行日志。
+   - **主机上行遇到准入类错误改为退避**：`HOST_UNAUTHORIZED` / `HOST_DEVICE_LIMIT` → 重试下限 **5 分钟**，中继回 `RATE_LIMITED` → 下限 **60 秒**（原来 `ws.on("open")` 会把 `retryCount` 清零，「TLS 连上、首帧被拒」的短循环让指数退避永远起不来）。收到 `relay.ok`（注册真成功）才清零，且**不停死**——改对凭证后下一轮自动接上。
+   验证方式：`npm run typecheck` + `npm test -- host-auth` + `npm test -- uplink`（新增 `relay-uplink-backoff`：6 秒窗口内只允许 1 次重试；`host-auth` 新增第 5 组：连刷错凭证触发封禁后，同 IP 的合法主机与设备仍能连上）。运维侧（ECS）：`journalctl -u mpi-relay -f` 里 `host … rejected (unauthorized)` 应降到每 80 秒最多 10 条（不再有 `upgrade rejected … blocked=true` 成串出现），`host … registered` 正常。
+
+
+
 ## v0.11.0（2026-10-18）
 
 1. **修：重启后首屏卡 15s（会话逐行解析是平方级）+ 缓存落盘**——`boot window-ready-to-show` 9.9s、`ipc-slow app:getProjects 16s`、`app:getTotalUsage 16s`，随后打开/新建会话排队 3～12s。定因二层：

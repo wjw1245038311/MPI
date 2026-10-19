@@ -477,6 +477,9 @@ function checkHostAuth(frame) {
  * 这里用最小的形态挡住（内存态、按 IP 计）：
  *   · 认证类失败（host.register 未授权、/authz/* 错码）→ 记一笔；
  *     60s 窗口内失败 ≥ `RELAY_AUTH_FAIL_LIMIT`（默认 10）→ 该 IP **封 60s**（不再走鉴权）；
+ *     ⚠️ 封禁只作用于**拿错凭证的 host.register** 与 `/authz/*`，**不拦 `/ws` upgrade**，
+ *     也不拦凭证正确的主机与设备——同 NAT 后面的合法端不该被一台配错凭证的机器连坐
+ *     （见 attachUpgrade / host.register 处的注释，2026-10-19）。
  *   · 单 IP 并发 WS 连接 > `RELAY_MAX_WS_PER_IP`（默认 20）→ 新连接直接 429；
  *   · 计时表定期清理（防 IP 海量变化把表撑爆）。
  *
@@ -1156,8 +1159,17 @@ function attachUpgrade(target) {
       return;
     }
     const ip = clientIp(req);
-    if (authBlocked(ip) || (wsConns.get(ip) || 0) >= MAX_WS_PER_IP) {
-      log(`upgrade rejected ip=${ip} blocked=${authBlocked(ip)} conns=${wsConns.get(ip) || 0}/${MAX_WS_PER_IP}`);
+    // ⚠️ 这里**只看并发额度，不看 authBlocked**（2026-10-19 修）。
+    //
+    // 事故：一个未授权的主机（新身份 + 没配 token）在同一个 NAT 后面每 ~2s 重试一次
+    // `host.register`，10 次失败 → 该 IP 被封 60s。而那 60s 里 `/ws` upgrade 也被拒（429），
+    // 于是**同一路由器后面的合法设备（PWA 浏览器）和这台主机自己的断线重连全都被连坐**：
+    // 实测该 IP 有 ~75% 的时间开不出任何连接（还有 `设备 → 主机` 的 hello 明明是豁免计数的，
+    // 却也在这层被拦掉）。封禁的真实目的只是「别反复做鉴权/别刷日志」，而首帧拒绝
+    // （`host.register` 里的 authBlocked 分支 → RATE_LIMITED + close）已经足够，且**只作用于
+    // host 角色**——设备侧不受影响。真正的资源保护由下面的 MAX_WS_PER_IP 负责。
+    if ((wsConns.get(ip) || 0) >= MAX_WS_PER_IP) {
+      log(`upgrade rejected ip=${ip} conns=${wsConns.get(ip) || 0}/${MAX_WS_PER_IP}`);
       try {
         socket.write("HTTP/1.1 429 Too Many Requests" + String.fromCharCode(13,10) + "Connection: close" + String.fromCharCode(13,10) + String.fromCharCode(13,10));
       } catch { /* socket 可能已经关了 */ }
@@ -1209,18 +1221,22 @@ wss.on("connection", (ws, req) => {
         const hostId = str(frame.hostId, 64);
         if (!hostId) return tryClose(ws, CLOSE_BAD_FIRST_FRAME, "BAD_FIRST_FRAME");
         // P1 准入：给了 token 列表就必须命中（开放模式直接放行）。
+        //
+        // ⚠️ 顺序很重要（2026-10-19）：**先验凭证，再看 IP 封禁**。
+        // 以前先看封禁，于是同一 NAT 后面只要有一台机器配错凭证把 IP 封住，
+        // 它旁边的**合法主机**也会被 RATE_LIMITED 挡在门外（连断线重连都起不来）。
+        // 现在凭证对就直接放行——封禁只拦「拿错凭证反复试」的那条路径（成本只是一次
+        // 字符串比较，同时日志降噪：封禁期内不再每个请求打一行，实测一台机器一天刷 320 条）。
         const ip = clientIp(req);
-        if (authBlocked(ip)) {
-          log(`host ${hostId} rejected (rate limited)`);
-          send(ws, { type: "relay.error", code: "RATE_LIMITED" });
-          return tryClose(ws, CLOSE_HOST_UNAUTHORIZED, "RATE_LIMITED");
-        }
         const auth = checkHostAuth(frame);
         if (!auth.ok) {
-          noteAuthFailure(ip, "host.register unauthorized");
-          log(`host ${hostId} rejected (unauthorized)`);
-          send(ws, { type: "relay.error", code: "HOST_UNAUTHORIZED" });
-          return tryClose(ws, CLOSE_HOST_UNAUTHORIZED, "HOST_UNAUTHORIZED");
+          const blocked = authBlocked(ip);
+          if (!blocked) {
+            noteAuthFailure(ip, "host.register unauthorized");
+            log(`host ${hostId} rejected (unauthorized)`);
+          }
+          send(ws, { type: "relay.error", code: blocked ? "RATE_LIMITED" : "HOST_UNAUTHORIZED" });
+          return tryClose(ws, CLOSE_HOST_UNAUTHORIZED, blocked ? "RATE_LIMITED" : "HOST_UNAUTHORIZED");
         }
         // 设备额度（一个码最多 N 台；同一 hostId 重连不占新名额）。仅当配了设备表文件时启用。
         if (auth.token) {

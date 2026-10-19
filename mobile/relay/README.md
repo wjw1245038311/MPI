@@ -68,6 +68,21 @@ relay → 端 的控制回复：`relay.ok` / `relay.error {code}` / `offline {wh
 心跳：relay 每 `RELAY_PING_MS` ping，连续 `RELAY_DEAD_MS/PING_MS` 次无 pong → terminate；
 socket close 时清路由并向对端发 `offline`。被替换的旧 socket 关闭**不**触发 offline。
 
+## 骚扰加固的作用域（2026-10-19 修正）
+
+`RELAY_AUTH_FAIL_LIMIT`（默认 10 次）/ `RELAY_AUTH_BLOCK_MS`（默认 60s）/ `RELAY_MAX_WS_PER_IP`（默认 20）：
+
+- **封禁只作用于「拿错凭证的 `host.register`」与 `/authz/*`**。凭证正确的主机、任何角色的
+  `/ws` upgrade、以及设备的 `hello` **都不受影响** —— 同一 NAT 后面只要有一台机器配错凭证，
+  以前会把这个 IP 上所有人的 ws 连接一起拦死（实测该 IP 约 75% 时间不可用：浏览器 PWA
+  升级被 429、主机断线重连也起不来），现已改成首帧拒绝。
+- 封禁期内重复的错凭证请求回 `RATE_LIMITED`（连接级错误），**不再每个请求打一行日志**（原来一台
+  机器一天能刷 320 条）。
+- 资源保护只看 `RELAY_MAX_WS_PER_IP`：超限的 upgrade 直接 429。
+- 主机侧配套退避（`src/main/remote/relay-uplink.ts`）：`HOST_UNAUTHORIZED` / `HOST_DEVICE_LIMIT`
+  重试下限 5 分钟、`RATE_LIMITED` 60 秒，`relay.ok` 才清零。旧构建（未带新退避）仍会每 ~2s 重试，
+  但已不会影响同一 IP 上的其它端。
+
 ## 测试
 
 ```bash

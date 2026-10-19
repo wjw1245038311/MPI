@@ -53,7 +53,22 @@ const CONNECTION_LEVEL_ERRORS = new Set([
   "REPLACED",
   "REVOKED",
   "PAYLOAD_TOO_LARGE",
+  // 中继把本机 IP 限速了（同一 NAT 后面有机器在刷错凭证）：它发完就断，属于连接级事件，
+  // UI 应当能看到「被限速」而不是显示一个无错的 connecting（2026-10-19）。
+  "RATE_LIMITED",
 ]);
+
+/**
+ * **永久性准入错误**：凭证不对 / 设备名额满。重试再快也不会变对，只会在中继上刷日志、
+ * 并把同一 NAT 后面的设备拖进限速（见 mobile/relay/index.mjs 的 attachUpgrade 注释）。
+ *
+ * 处理：退避下限抬到 [`PERMANENT_RETRY_MS`]（5 分钟），但仍**不停死** —— 用户改完 token
+ * 或腾出名额后，下一轮就能自动接上，不必重启进程。
+ */
+const PERMANENT_AUTH_ERRORS = new Set(["HOST_UNAUTHORIZED", "HOST_DEVICE_LIMIT"]);
+const PERMANENT_RETRY_MS = 5 * 60_000;
+/** 中继明确要求退避（IP 被限速）：等它那个 60s 窗口过去再试，别对着墙撞。 */
+const RATE_LIMITED_RETRY_MS = 60_000;
 
 export type RelayUplinkState = "disabled" | "connecting" | "connected" | "error";
 
@@ -136,6 +151,15 @@ export class RelayUplink implements RelayOutbound {
   /** In-memory mirror of the token file. */
   private tokens: Record<string, string> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * 重试延迟的**下限**（0 = 用普通指数退避）。
+   *
+   * 为什么需要：普通退避在 `ws.on("open")` 里把 retryCount 清零（连接真建起来了就重新计数），
+   * 而「TLS 连上了、首帧被中继拒绝」恰好也是 open → close 的短循环，于是永久性错误会变成
+   * **每 1~2 秒一次**的无限重试（2026-10-19 实测：一个没配 token 的主机这样刷了一整天）。
+   * 成功注册（收到 `relay.ok`）或手动重启上行时才清零。
+   */
+  private retryFloorMs = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatAlive = true;
 
@@ -147,6 +171,7 @@ export class RelayUplink implements RelayOutbound {
     if (this.stopped && !this.options.relayUrl) return;
     this.stopped = false;
     this.retryCount = 0;
+    this.retryFloorMs = 0;
     this.connect();
   }
 
@@ -359,9 +384,25 @@ export class RelayUplink implements RelayOutbound {
         // 出现「已连接 · DEVICE_OFFLINE」这种自相矛盾的状态（state 仍是 connected，lastError 却是脏的）。
         if (CONNECTION_LEVEL_ERRORS.has(code)) this.lastError = code;
         else appendDiagLog(`relay-error ${code}（设备/帧级，不计入连接状态）`);
+        // 准入类错误把退避下限抬上去：永久性错误 5 分钟、被限速 60s。
+        const floor = PERMANENT_AUTH_ERRORS.has(code)
+          ? PERMANENT_RETRY_MS
+          : code === "RATE_LIMITED"
+            ? RATE_LIMITED_RETRY_MS
+            : 0;
+        if (floor && floor > this.retryFloorMs) {
+          this.retryFloorMs = floor;
+          appendDiagLog(`relay uplink ${code} → 重试间隔下限提到 ${Math.round(floor / 1000)}s`);
+        }
         return;
       }
       if (CONTROL_TYPES.has(type)) {
+        // `relay.ok` = 中继**接受了注册**：这才是「这次连接是好的」的判据，退避预算在这里清零
+        // （不是在 socket open —— 那只证明 TLS 起来了，准入可能下一秒就被拒）。
+        if (type === "relay.ok") {
+          this.retryCount = 0;
+          this.retryFloorMs = 0;
+        }
         this.handleControl(msg);
         return;
       }
@@ -553,7 +594,8 @@ export class RelayUplink implements RelayOutbound {
 
   private scheduleRetry(): void {
     this.clearRetry();
-    const delay = Math.min(RETRY_BASE_MS * 2 ** this.retryCount, RETRY_MAX_MS);
+    // 指数退避 + **下限**：准入错误时这次至少要等 retryFloorMs（5 分钟 / 60 秒）。
+    const delay = Math.max(Math.min(RETRY_BASE_MS * 2 ** this.retryCount, RETRY_MAX_MS), this.retryFloorMs);
     this.retryCount += 1;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;

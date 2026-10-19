@@ -151,7 +151,60 @@ const hostRegister = (hostId, extra = {}) => ({ type: "host.register", hostId, b
 }
 
 
-// ---- 5. 授权码的设备额度：一个码最多 N 台（同一 hostId 重连不占新名额）+ /authz/check ----
+// ---- 5. 骚扰加固不能连坐：同 IP 的合法主机/设备在封禁期内照样能连 ----
+// 2026-10-19 真实事故：一台没配 token 的主机在同一 NAT 后面每 ~2s 重试，10 次失败 → IP 封 60s，
+// 而那 60s 里 `/ws` upgrade 也被拒（429）→ **同路由器后面的 PWA 浏览器和这台主机自己的
+// 断线重连全都被拦死**（实测该 IP 约 75% 时间开不出任何连接）。现在：
+//   · upgrade 不再看封禁（只看并发额度）；
+//   · host.register 先验证凭证，再决定要不要拦：凭证对就放行；
+//   · 封禁期内重复失败回 RATE_LIMITED（不再每请求一行日志）。
+{
+  const relay = startRelay({
+    RELAY_HOST_TOKENS: "good-token",
+    RELAY_AUTH_FAIL_LIMIT: "3",
+    RELAY_AUTH_BLOCK_MS: "5000",
+  });
+  const port = await relay.ready;
+  try {
+    // 连刷 4 次错凭证（测试里所有连接都来自 127.0.0.1 —— 正好模拟「同一路由器」）
+    const codes = [];
+    for (let i = 0; i < 4; i += 1) {
+      const bad = await register(port, hostRegister(`rogue-${i}`, { token: "wrong" }));
+      codes.push(bad.frames.find((f) => f.type === "relay.error")?.code);
+    }
+    assert.deepEqual(codes.slice(0, 3), ["HOST_UNAUTHORIZED", "HOST_UNAUTHORIZED", "HOST_UNAUTHORIZED"], `前 3 次应回 HOST_UNAUTHORIZED（实际 ${JSON.stringify(codes)}）`);
+    assert.equal(codes[3], "RATE_LIMITED", `达到阈值后的第 4 次应回 RATE_LIMITED（实际 ${JSON.stringify(codes)}）`);
+
+    // ① 合法主机（凭证正确）在封禁期内必须照样注册成功——否则主机一断线就再也回不来
+    const legit = await register(port, hostRegister("host-legit", { token: "good-token" }));
+    assert.ok(legit.frames.some((f) => f.type === "relay.ok" && f.role === "host"), `封禁期内合法主机也必须放行（实际 ${JSON.stringify(legit.frames)}）`);
+
+    // ② 设备（hello 首帧）也必须能升级——以前直接 429，连 open 都到不了
+    const deviceClose = await new Promise((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      let opened = false;
+      let closed = null;
+      const done = () => {
+        try { ws.close(); } catch { /* already closed */ }
+        resolve({ opened, closed });
+      };
+      ws.on("open", () => {
+        opened = true;
+        ws.send(JSON.stringify({ type: "hello", deviceId: "dev-x", deviceToken: "nope" }));
+      });
+      ws.on("close", (code) => { closed = code; done(); });
+      ws.on("error", () => { /* close follows */ });
+      setTimeout(done, 700);
+    });
+    assert.equal(deviceClose.opened, true, "封禁期内设备仍应能完成 WS upgrade（以前是 429）");
+    assert.equal(deviceClose.closed, 4001, "设备凭错 token 应走自己的 4001 AUTH_FAILED，而不是被 IP 封禁拦下");
+    console.log("ok 5 - 封禁不连坐：同 IP 的合法主机与设备照样能连（错凭证仍被 RATE_LIMITED 拦住）");
+  } finally {
+    await relay.stop();
+  }
+}
+
+// ---- 6. 授权码的设备额度：一个码最多 N 台（同一 hostId 重连不占新名额）+ /authz/check ----
 {
   const tokenFile = join(mkdtempSync(join(tmpdir(), "mpi-relay-authz-")), "codes.txt");
   const devicesFile = `${tokenFile}.devices.json`;
@@ -232,7 +285,7 @@ const hostRegister = (hostId, extra = {}) => ({ type: "host.register", hostId, b
     });
     assert.equal(wrongCode.status, 401, "错码激活要 401");
 
-    console.log("ok 5 - 一个码最多 3 台设备（hostId 区分，重连不占名额）+ /authz/check 自检");
+    console.log("ok 6 - 一个码最多 3 台设备（hostId 区分，重连不占名额）+ /authz/check 自检");
   } finally {
     await relay.stop();
     rmSync(dirname(tokenFile), { recursive: true, force: true });
@@ -240,7 +293,7 @@ const hostRegister = (hostId, extra = {}) => ({ type: "host.register", hostId, b
 }
 
 
-// ---- 6. 加固（2026-10-16 用户要求"全做"）：/healthz 收敛 + 按 IP 限速 + 单 IP 连接上限 ----
+// ---- 7. 加固（2026-10-16 用户要求"全做"）：/healthz 收敛 + 按 IP 限速 + 单 IP 连接上限 ----
 {
   const dir = mkdtempSync(join(tmpdir(), "mpi-relay-hardening-"));
   const tokenFile = join(dir, "codes.txt");
@@ -273,14 +326,14 @@ const hostRegister = (hostId, extra = {}) => ({ type: "host.register", hostId, b
     await sleep(2_200);
     const recovered = await fetch(`${base}/authz/check`, { headers: { authorization: "Bearer share-code" } });
     assert.equal(recovered.status, 200, "封禁到期后自动恢复（不用重启中继）");
-    console.log("ok 6 - 加固：/healthz 收敛 + 按 IP 限速（含自动解封）");
+    console.log("ok 7 - 加固：/healthz 收敛 + 按 IP 限速（含自动解封）");
   } finally {
     await relay.stop();
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-// ---- 7. 单 IP 并发 WS 连接上限 ----
+// ---- 8. 单 IP 并发 WS 连接上限 ----
 {
   const relay = startRelay({ RELAY_MAX_WS_PER_IP: "2" });
   try {
@@ -298,7 +351,7 @@ const hostRegister = (hostId, extra = {}) => ({ type: "host.register", hostId, b
     assert.ok(third?.error, "第 3 条连接应被拒（上限 2）");
     a.close();
     b.close();
-    console.log("ok 7 - 单 IP 并发 WS 连接上限（超限直接 429）");
+    console.log("ok 8 - 单 IP 并发 WS 连接上限（超限直接 429）");
   } finally {
     await relay.stop();
   }
