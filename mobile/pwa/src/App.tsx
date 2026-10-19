@@ -908,7 +908,9 @@ export default function App() {
    */
   const ensureConnected = () => {
     const client = clientRef.current;
-    if (!client || client.getState() === "open") return;
+    // ⚠ 判**真 socket**（isOpen）而不是 getState()：冻结/休眠后可能状态还停在 open、
+    // 而 socket 已经没了（无头 Chrome 实测过），那样这里会误判「已连着」→ 不重连、永远转圈。
+    if (!client || client.isOpen()) return;
     const record = pairings.find((item) => item.hostId === hostId) ?? pairings[0];
     if (!record) return;
     void (async () => {
@@ -1049,9 +1051,11 @@ export default function App() {
     : hostId
       ? connState === "open"
         ? `在线${activeRelayUrl ? ` · ${relayLabel(activeRelayUrl)}` : ""}`
-        : everOpenedRef.current
-          ? "重新连接中…"
-          : "连接中…"
+        : connErr === "REVOKED"
+          ? "设备已被桌面端撤销，需重新配对"
+          : everOpenedRef.current
+            ? "重新连接中…"
+            : "连接中…"
       : "";
 
   /**
@@ -1062,7 +1066,7 @@ export default function App() {
    * token 的这段窗口里，4001 是**暂时**的——客户端会一直按退避重试（回前台还会立即
    * 重试，见 RelayClient.reconnectNow）。这里只提供一条手动出口，不代表已经没救。
    */
-  const needsRepair = !!connErr && /AUTH_FAILED|4001/i.test(connErr);
+  const needsRepair = !!connErr && /AUTH_FAILED|4001|REVOKED|4002/i.test(connErr);
 
   return (
     /* thread-open：会话视图必须是**确定高度**（100dvh）且不整体滚动，
@@ -1170,6 +1174,9 @@ export default function App() {
             {connState === "closed" && connErr === "REPLACED" && (
               <p className="hint error-text">此设备已在另一个窗口/标签页连接——请关闭另一个，然后刷新本页。</p>
             )}
+            {connState === "closed" && connErr === "REVOKED" && (
+              <p className="hint error-text">此设备已被桌面端撤销（令牌已失效），不会再自动重连——请重新配对。</p>
+            )}
             {snap?.error && <p className="hint error-text">数据刷新失败：{snap.error}</p>}
             {needsRepair && (
               <div className="card">
@@ -1235,6 +1242,9 @@ export default function App() {
             {error && <p className="hint error-text">{error}</p>}
             {connState === "closed" && connErr === "REPLACED" && (
               <p className="hint error-text">此设备已在另一个窗口/标签页连接——请关闭另一个，然后刷新本页。</p>
+            )}
+            {connState === "closed" && connErr === "REVOKED" && (
+              <p className="hint error-text">此设备已被桌面端撤销（令牌已失效），不会再自动重连——请重新配对。</p>
             )}
             {snap?.error && <p className="hint error-text">数据刷新失败：{snap.error}</p>}
 

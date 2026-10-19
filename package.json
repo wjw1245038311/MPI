@@ -166,7 +166,8 @@
     "test:memoryregress": "node --experimental-strip-types scripts/test-memory-regress.mjs",
     "test:attachment-relay-upload": "node --experimental-transform-types scripts/test-attachment-relay-upload.mjs",
     "test:agent-rules": "node --experimental-strip-types scripts/test-agent-rules.mjs",
-    "test:handoff": "node scripts/test-handoff-session.mjs"
+    "test:handoff": "node scripts/test-handoff-session.mjs",
+    "test:pwa-relay-client-heal": "node --experimental-transform-types scripts/test-pwa-relay-client-heal.mjs"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.73.3",

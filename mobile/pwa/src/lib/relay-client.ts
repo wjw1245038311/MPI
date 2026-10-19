@@ -46,6 +46,15 @@ export class RelayClient {
   private lastError: string | null = null;
   private retryCount = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * 前台死连接看门狗（2026-10-19）。
+   *
+   * 浏览器/笔记本冻结或休眠过后，socket 可能已经断了，而 `close` 事件**不一定派发**
+   * （无头 Chrome 实测：冻结 120s 后 socket 已 closed，150s 内一个新连接都没建）。
+   * 以前完全靠 `close` 事件排重连，没有事件就永远躺着——用户看到的就是「掉线/转圈」。
+   * 这里每 5s 看一眼：前台、该连、没有 socket、也没在退避 → 直接重开一条。
+   */
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
   /** 页面是否在后台（在后台不排重连；见 setBackgrounded）。 */
   private backgrounded = false;
   /** When set, the client keeps itself alive (auto-reconnect + re-hello). */
@@ -103,6 +112,7 @@ export class RelayClient {
   connect(): void {
     if (this.state === "connecting" || this.state === "open") return;
     this.stayAlive = true;
+    this.startWatchdog();
     this.openSocket();
   }
 
@@ -135,6 +145,7 @@ export class RelayClient {
   close(code = 1000, reason = ""): void {
     this.stayAlive = false;
     this.clearReconnectTimer();
+    this.stopWatchdog();
     const ws = this.ws;
     this.ws = null;
     if (ws) {
@@ -334,6 +345,16 @@ export class RelayClient {
         this.setState("closed", "REPLACED");
         return;
       }
+      if (frame.type === "revoked") {
+        // **主机把本设备撤销了**（`device.revoke` → relay 回 `revoked` + close 4002）。
+        // 这时令牌已从主机与中继两侧删掉：继续重连只会每轮都收到 4001 AUTH_FAILED，
+        // 用户在界面上看到的就是「重新连接中…」无限转圈（2026-10-19 真机取证）。
+        // 停掉重连，把状态交给 UI 显示「此设备已被桌面端撤销，请重新配对」。
+        this.stayAlive = false;
+        this.clearReconnectTimer();
+        this.setState("closed", "REVOKED");
+        return;
+      }
       void this.dispatch(frame);
     };
 
@@ -353,6 +374,14 @@ export class RelayClient {
       // REPLACED（onmessage 里置的）更具体，不要覆盖它。
       const code = event?.code;
       const reason = event?.reason;
+      // 4002 = REVOKED（主机撤销了本设备）。令牌两边都没了，重连必被 4001 拒——直接停。
+      // 中继可能来不及发 `revoked` 帧就断开，所以要靠关闭码兜底。
+      if (code === 4002 && this.lastError !== "REPLACED") {
+        this.stayAlive = false;
+        this.clearReconnectTimer();
+        this.setState("closed", "REVOKED");
+        return;
+      }
       if (code !== undefined && code !== 1000 && this.lastError !== "REPLACED") {
         this.lastError = `closed ${code}${reason ? ` "${reason}"` : ""}`;
       }
@@ -418,6 +447,27 @@ export class RelayClient {
   private clearReconnectTimer(): void {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+  }
+
+  private startWatchdog(): void {
+    if (this.watchdogTimer) return;
+    this.watchdogTimer = setInterval(() => this.checkAlive(), 5_000);
+  }
+
+  private stopWatchdog(): void {
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+    this.watchdogTimer = null;
+  }
+
+  /** 看门狗本体：只处理「该连、前台、既没 socket 也没在退避」这个死局。 */
+  private checkAlive(): void {
+    if (!this.stayAlive || this.backgrounded) return;
+    const socket = this.ws;
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+    if (this.reconnectTimer) return; // close 事件已经排好了退避
+    this.retryCount = 0; // 自愈不背之前的退避惩罚
+    this.setState("connecting", this.lastError);
+    this.openSocket();
   }
 
   private setState(state: RelayClientState, lastError: string | null): void {

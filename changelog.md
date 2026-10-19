@@ -12,6 +12,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    - **主机上行遇到准入类错误改为退避**：`HOST_UNAUTHORIZED` / `HOST_DEVICE_LIMIT` → 重试下限 **5 分钟**，中继回 `RATE_LIMITED` → 下限 **60 秒**（原来 `ws.on("open")` 会把 `retryCount` 清零，「TLS 连上、首帧被拒」的短循环让指数退避永远起不来）。收到 `relay.ok`（注册真成功）才清零，且**不停死**——改对凭证后下一轮自动接上。
    验证方式：`npm run typecheck` + `npm test -- host-auth` + `npm test -- uplink`（新增 `relay-uplink-backoff`：6 秒窗口内只允许 1 次重试；`host-auth` 新增第 5 组：连刷错凭证触发封禁后，同 IP 的合法主机与设备仍能连上）。运维侧（ECS）：`journalctl -u mpi-relay -f` 里 `host … rejected (unauthorized)` 应降到每 80 秒最多 10 条（不再有 `upgrade rejected … blocked=true` 成串出现），`host … registered` 正常。
 
+2. **修：PWA「掉线/重连转圈」不再无限转 —— 被撤销就停、死 socket 自愈**——真机取证（2026-10-19，headless Chrome + 真配对码 + CDP）：① ECS 日志出现「`device-X revoked by host` 之后该设备每轮 `hello rejected (auth failed)`」（昨天 29 条）——设备被主机撤销后令牌两边都已删除，而客户端只特判了 `replaced`，于是一路重连一路被 4001 拒，界面卡在「重新连接中…」；② 页面冻结（休眠/后台）后 socket 已断但**不派发 close**，客户端无任何自愈：实测冻结 120s 解冻后 **150 秒内一个新连接都没建**。修法：
+   - `RelayClient` 增 `revoked` 帧与 close **4002** 处理：停下重连，`lastError=REVOKED`（4001 仍按退避重试——中继重启窗口里它是暂时的）；
+   - 新增前台**看门狗**（每 5s）：该连、前台、没有 socket、也没在退避 → 直接重开一条；
+   - App 的 `ensureConnected` 改用 `client.isOpen()`（真实 readyState）而不是 `getState()`，并把 REVOKED 显示成「设备已被桌面端撤销，需重新配对」+ 修复卡片。
+   验证方式：`npm run typecheck` + `npm test -- pwa`（新增 `pwa-relay-client-heal`：revoked/4002 各只建 1 条连接、死 socket 5s 后重开、4001 仍会重试）。应用内：手机/PWA 被桌面端「撤销设备」后，页面应显示「此设备已被桌面端撤销…请重新配对」而不是无限转圈；笔记本合盖再打开（或标签页长时间后台）回前台，连接应在 5 秒内自己恢复，不必刷新。
+
 
 
 ## v0.11.0（2026-10-18）

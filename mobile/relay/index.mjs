@@ -1233,7 +1233,9 @@ wss.on("connection", (ws, req) => {
           const blocked = authBlocked(ip);
           if (!blocked) {
             noteAuthFailure(ip, "host.register unauthorized");
-            log(`host ${hostId} rejected (unauthorized)`);
+            // 带上机器名（主机注册帧里的 `name` = os.hostname）与 IP：
+            // 一台配错凭证的机器反复被拒时，运维靠这两项能直接定位是哪台机器。
+            log(`host ${hostId} rejected (unauthorized) name=${str(frame.name, 64) || "-"} ip=${ip}`);
           }
           send(ws, { type: "relay.error", code: blocked ? "RATE_LIMITED" : "HOST_UNAUTHORIZED" });
           return tryClose(ws, CLOSE_HOST_UNAUTHORIZED, blocked ? "RATE_LIMITED" : "HOST_UNAUTHORIZED");
