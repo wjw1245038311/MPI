@@ -171,7 +171,22 @@ export function usePiEvents() {
           if (!t) return;
           const next: Record<string, unknown> = {};
           if (p.patch.permission && t.permission !== p.patch.permission) next.permission = p.patch.permission;
-          if (p.patch.model !== undefined) next.model = p.patch.model ?? undefined;
+          if (p.patch.model !== undefined) {
+            // 补丁里的 model 可能只有 {provider,id}（旧主机/agent 触发）。显示名优先取
+            // 补丁自带、其次沿用同模型的旧 name、最后从模型列表里查——否则 pill 退回裸 id。
+            const incoming = p.patch.model as { provider?: string; id?: string; name?: string } | null | undefined;
+            if (!incoming) {
+              next.model = undefined;
+            } else {
+              const prevModel = t.model as { provider?: string; id?: string; name?: string } | null | undefined;
+              const sameAsPrev = !!prevModel && prevModel.provider === incoming.provider && prevModel.id === incoming.id;
+              const fromList = (t.models || []).find(
+                (m) => m && m.id === incoming.id && (!incoming.provider || m.provider === incoming.provider),
+              );
+              const name = incoming.name || (sameAsPrev ? prevModel?.name : undefined) || fromList?.name;
+              next.model = { ...incoming, ...(name ? { name } : {}) };
+            }
+          }
           if (p.patch.taskMode !== undefined) next.taskMode = p.patch.taskMode ?? undefined;
           if (p.patch.thinkingLevel && t.thinking !== p.patch.thinkingLevel) next.thinking = p.patch.thinkingLevel;
           if (!Object.keys(next).length) return;

@@ -15,7 +15,8 @@ import type { RemoteModelOption } from "./remote/protocol";
 /** 一次配置变更的补丁：只带真正变化的字段。 */
 export interface ThreadConfigPatch {
   permission?: PermissionLevel;
-  model?: { provider: string; id: string } | null;
+  /** name 是可选的**显示名**（如 “DeepSeek V4.1 Flash”）——广播时补上，客户端 pill 才不会回落成裸 id。 */
+  model?: { provider: string; id: string; name?: string } | null;
   taskMode?: string | null;
   thinkingLevel?: string;
   /**

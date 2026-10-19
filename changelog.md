@@ -1908,3 +1908,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 ### 修复
 
 3. **压缩后上下文用量显示为 0**：改用 `compaction_end` 的 `estimatedTokensAfter` 估算值展示，直到下次回复拿到真实 token 数。
+
+5. **修：模型 pill 每回合退回裸 id（config_changed 覆盖丢 name）**——广播补丁里的 `model` 一直是 `{provider,id}`，而 `publishThreadContextUsage` **每回合结束都推一次**，渲染层直接覆盖 `thread.model`，显示名随即丢失 → pill 从「DeepSeek V4.1 Flash」变回 `deepseek-flash`。现在：`ThreadConfigPatch.model` 允许带 `name`，主机在两处广播前用 `modelWithName()` 补名；渲染层兜底——补丁没带 name 时沿用同模型的旧 name，或从会话的模型列表里查。
+   验证方式：`npm run typecheck` + `npm test -- thread-config`（新增第 5 组：name 透传 + 主机两处补名 + 渲染层兜底的源码契约）。应用内：切模型后聊一轮，pill 应保持「DeepSeek V4.1 Flash」不再退回 id。
+
+6. **修：安卓 choices 面板对写歪的围栏标签不认（桌面/PWA 正常）**——2026-10-19 真机：同一段回复在桌面与 PWA 出面板、安卓只显示灰底代码块。根因是安卓用 `code.lang != "choices"` 做**精确字符串比较**；桌面/PWA 一直用大小写不敏感、且容忍 `choices>` 这类尾随噪声的规则。现在安卓也有 `isChoicesLang()`（同一条正则），并补上「写歪标签（`choicesjson` 等）只有在正文严格合法时才升级」的疑似档，避免把普通 json 代码块误判成面板。
+   验证方式：`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest`（新增 `ChoiceLangToleranceTest` 5 项：`Choices`/`choices>` 升级、`choicesjson` 非合法正文保持代码块、正文合法则升级、未定稿不升级）。应用内：让模型用 `choices>` 或大写 `Choices` 写围栏，安卓也应出面板。

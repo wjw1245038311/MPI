@@ -214,3 +214,36 @@ console.log("thread-config sync tests passed");
 
   console.log("ok 6 - 会话级映射清理：孤儿键回收 + 上限兜底");
 }
+
+// ---- 5. 广播里的 model 必须带显示名（2026-10-19 回归） --------------------------
+//
+// 症状：pill 先显示 “DeepSeek V4.1 Flash”，一个回合结束后退回裸 id `deepseek-flash`。
+// 根因：publishThreadContextUsage 每回合推 {provider,id} 的 config_changed，
+// 渲染层直接用它覆盖 thread.model，name 就丢了。
+// 这里钉住「广播前补名」这一条（实现细节用源码断言，纯函数侧只保证 name 能透传）。
+{
+  assert.deepEqual(
+    buildConfigPatch({ model: { provider: "deepseek", id: "deepseek-flash", name: "DeepSeek V4.1 Flash" } }),
+    { model: { provider: "deepseek", id: "deepseek-flash", name: "DeepSeek V4.1 Flash" } },
+    "buildConfigPatch 必须原样透传 name（广播补名依赖它）",
+  );
+  const fs = await import("node:fs");
+  const { join, dirname } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const ipc = fs.readFileSync(join(root, "src/main/ipc.ts"), "utf8");
+  assert.match(
+    ipc,
+    /if \(built\.model\) built\.model = modelWithName\(built\.model\)/,
+    "publishThreadConfigChange 广播前必须给 model 补显示名",
+  );
+  assert.match(
+    ipc,
+    /model = modelWithName\(\{ provider: String\(st\.model\.provider/,
+    "publishThreadContextUsage 推送的模型也必须补显示名（它每回合都会覆盖 pill）",
+  );
+  const piEvents = fs.readFileSync(join(root, "src/renderer/src/lib/usePiEvents.ts"), "utf8");
+  assert.match(piEvents, /const name = incoming\.name \|\| \(sameAsPrev \? prevModel\?\.name : undefined\) \|\| fromList\?\.name/,
+    "渲染层收到无 name 的补丁时要沿用旧 name 或从模型列表补名");
+  console.log("[5] config_changed 广播模型名（主机 + 渲染层）");
+}

@@ -396,6 +396,22 @@ private fun parseChoiceBodyBoundary(body: String): ChoiceBlockData? {
 /** 行尾挂着 ≥3 个反引号的行（模型把闭合围栏粘在正文末尾时）；捕获反引号之前的正文。 */
 private val GLUED_CLOSE_RE = Regex("^(.*?)`{3,}\\s*$")
 
+/** 标准 choices info string（与桌面端 `CHOICES_INFO_RE` / PWA `CHOICES_LANG_RE` 同规则）。 */
+private val CHOICES_INFO_RE = Regex("^choices[^a-z0-9_-]*$", RegexOption.IGNORE_CASE)
+
+/** 以 choices 开头的写歪标签（`choicesjson` 等）：只有正文严格解析通过才升级。 */
+private val CHOICES_LIKE_RE = Regex("^choices", RegexOption.IGNORE_CASE)
+
+/**
+ * 代码段的 lang 是否应视为 choices 围栏（大小写不敏感，容忍 `choices>` 这类尾随噪声）。
+ *
+ * 2026-10-19 真机：**同一段回复桌面/PWA 出面板、安卓只显示代码块** —— 安卓这里原先是
+ * `code.lang != "choices"` 的精确比较，模型写成 `choices>` / `Choices` 就直接不认了。
+ */
+internal fun isChoicesLang(lang: String?): Boolean = CHOICES_INFO_RE.matches((lang ?: "").trim())
+
+private fun isChoicesLikeLang(lang: String?): Boolean = CHOICES_LIKE_RE.containsMatchIn((lang ?: "").trim())
+
 /**
  * 把 [parseSegments] 的输出转成可渲染段：合法的 choices 围栏升级成面板。
  *
@@ -410,13 +426,25 @@ internal fun withChoiceSegments(segments: List<Segment>, finalized: Boolean): Li
     val out = mutableListOf<Segment>()
     for (seg in segments) {
         val code = seg as? Segment.Code
-        if (code == null || code.lang != "choices") {
+        if (code == null) {
+            out += seg
+            continue
+        }
+        val exact = isChoicesLang(code.lang)
+        // 写歪的标签（`choicesjson` 等）：只有正文严格解析通过才升级——不吞正文。
+        val like = !exact && isChoicesLikeLang(code.lang)
+        if (!exact && !like) {
             out += seg
             continue
         }
 
         // 1) 已闭合：整体容错解析（严格 → 截第一个 JSON → 修复链）。
         if (code.closed) {
+            if (like) {
+                val strict = parseChoiceBodyBoundary(code.text)
+                out += if (strict != null) Segment.Choice(strict) else code
+                continue
+            }
             val r = parseChoiceBodyEx(code.text)
             out += if (r.data != null) {
                 Segment.Choice(r.data, r.repaired)
@@ -444,7 +472,11 @@ internal fun withChoiceSegments(segments: List<Segment>, finalized: Boolean): Li
         // 3) 漏写闭合围栏：整体当正文（剥掉可能的行尾反引号）。
         //    这里必须用严格边界判定（不开修复链）——否则自动补括号会把普通正文误当成面板。
         val data = parseChoiceBodyBoundary(code.text.replace(Regex("`{3,}\\s*$"), ""))
-        out += if (data != null) Segment.Choice(data) else code.copy(choiceWarn = true)
+        out += when {
+            data != null -> Segment.Choice(data)
+            like -> code
+            else -> code.copy(choiceWarn = true)
+        }
     }
     return out
 }

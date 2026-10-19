@@ -1902,6 +1902,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   ) => {
     const built = buildConfigPatch(patch);
     if (!built) return;
+    // 广播里补上模型显示名：客户端 pill 只认 name，缺了就显示裸 id（2026-10-19 复现：
+    // 每次回合结束 publishThreadContextUsage 推一次 {provider,id}，pill 就退回 id）。
+    if (built.model) built.model = modelWithName(built.model);
     // 模型选择要落盘：pi 进程重生后会回到全局默认模型（settings.json），
     // 不记这一层就会出现「明明选了 4.1，重开/切回来 pill 显示别的」。
     if (built.model !== undefined) {
@@ -1994,7 +1997,7 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
       try {
         const st: any = await bridges.get(localId)?.bridge.getState();
         if (st?.model && typeof st.model.id === "string") {
-          model = { provider: String(st.model.provider ?? ""), id: st.model.id };
+          model = modelWithName({ provider: String(st.model.provider ?? ""), id: st.model.id, ...(typeof st.model.name === "string" ? { name: st.model.name } : {}) });
         }
       } catch {
         /* 取不到保持 null，手机端维持原值 */
