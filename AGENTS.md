@@ -13,13 +13,24 @@ GitHub 只让 CI 异步出 Release 附件（不轮询、不等待），**且只�
 ## 常用命令
 
 ```bash
-npm run dev          # 开发（electron-vite；改了主进程 / preload 需重启）
+npm run dev          # 开发（electron-vite；改了主进程 / preload 需重启，见下节）
 npm run typecheck    # 两套 tsconfig 全量检查 —— 改完必跑
 npm run build        # 构建到 out/
 npm test             # 跑全部 L1 测试（scripts/run-all-tests.mjs）
 npm test -- zhiya    # 只跑名字含过滤词的测试
 npm run test:zhiya   # 等价的单套件入口，名字见 package.json 的 scripts
 ```
+
+### 改动生效（改完 `src/` 后必做）
+
+- **改了 `src/main/**`、preload、扩展源码或注册表文件 → 必须重启，`Ctrl+R` 不算。**
+  `npm run dev` 的 watcher 在本机实测**不一定**重建 `out/`，正确姿势是用脚本（构建 + 重启一起做）：
+  - `bash scripts/restart-dev.sh` —— 构建 → 结束旧实例 → detached 启动 → 校验
+  - `--dry-run` 只报告要动哪些进程；`--no-build` 只重启
+  - 只碰属于本仓的 `MPI Dev` 实例，不会误杀其它 Electron 应用
+- **要验证任何主机侧改动，先确认 dev 已经重启过** —— 否则测到的是旧行为（「提前播报」那类后台场景已经踩过一次）。
+- HMR 后界面状态异常（如看不到「思考中 · Ns」占位行）→ 先重启一次 dev 再排查，别读代码猜。
+- 细节、安全边界与「为什么不能只杀进程」见 `docs/ANDROID-SHELL.md` 的「主机侧改动怎么生效」一节。
 
 ### 测试范围（默认不全量）
 
@@ -62,3 +73,11 @@ npm run test:zhiya   # 等价的单套件入口，名字见 package.json 的 scr
 - **发版本机不传 GitHub、不等 CI**：`npm run release` / `scripts/dev-release.mjs` 默认走 `publish-release.mjs --local`——
   安装包以 `release/` 下的**本地产物**分发（中继镜像 + Seafile），GitHub Release 的附件由 CI 异步发布。
   只有需要本地上传 GitHub（`--force-upload`）或确实要等 CI 产物（`--wait-ci [分钟]`）时才显式加参数。
+
+### 打包时的两个坑（`npm run dist`）
+
+- **`PI_PACKAGE_DIR` 必须指向与 `package.json` 的 `piRuntimeVersion` 一致的 pi 包。**（当前是 `1.3.0`；改动版本时跟着改。）
+  `scripts/bundle-runtime.mjs` 会校验，不符直接抛 `PI_PACKAGE_DIR must contain Pi v<期望>; found v<实际>`——
+  别指向全局 npm 装的那份（版本常比期望新一档）。兜底查找顺序：`PI_PACKAGE_DIR` → 全局安装 → `<userData>/runtime/versions/<版本>/pi`。
+- **发行版在跑时没法起第二个实例做冒烟**：`src/main/index.ts` 有 `app.requestSingleInstanceLock()`，第二个实例会直接退出。冒烟前先彻底退出已运行的 MPI。
+
