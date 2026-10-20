@@ -116,6 +116,7 @@ import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
 // 附件下行（agent → 客户端）：扩展桥 + 收件箱 + 引用 mime 推断。
 import { ensureAttachFileExtension } from "./attach-file-extension";
+import { ensureImageRefExtension } from "./image-ref-extension";
 import { ensureAttachFileDirs, ingestAttachFileRequests } from "./attach-file-inbox";
 import { guessMimeType } from "./attach-file-core";
 import { ensureMemoryExtension, ensureMemoryCandidateInbox } from "./memory-extension";
@@ -649,6 +650,9 @@ function createHandle(
       // desktop shows a card, paired phones/PWA can download it). Loaded for every
       // thread — an agent that cannot offer "I'll send it to you" is the whole point.
       ensureAttachFileExtension(getConfigDir()),
+      // 图片引用 bridge：历史图片只在首次发送，之后换成引用（服务端按内容 hash 缓存）；
+      // 一条作图会话每轮上行 39 MB，换成引用后只剩几十 KB。服务端没有 /vision/refs 时自动退化为无操作。
+      ensureImageRefExtension(getConfigDir()),
       // Shell-environment bridge: tells the model which shell its commands run
       // in (paired with the --exclude-tools powershell passed to this spawn).
       ensureShellEnvExtension(getConfigDir()),
