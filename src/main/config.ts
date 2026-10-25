@@ -218,6 +218,9 @@ export interface AppConfig {
    * asks numbered plain-text questions and the user types answers. Injected into
    * every session's system prompt at spawn time (see append-prompt.ts). */
   qaMode?: "inline" | "manual";
+  /** 空闲会话回收阈值（分钟）：超过这么久没有任何活动的会话进程会被停掉以释放内存；
+   * 0 = 关闭。默认 120（见 main/ipc.ts 的 sweepIdleBridges）。 */
+  idleReclaimMinutes?: number;
   /** 知芽母版根目录（AgentSetting 仓）。母版是 git 真相源，`~/.pi/agent/zhiya/`
    * 只是它的单向同步副本。留空 = 首次启动自动探测
    * （<MyWorkspace>/Agent/AgentSetting，从 lastThreadCwd 向上找）并写回。
@@ -727,6 +730,10 @@ export function loadConfig(userDataDir: string): AppConfig {
         extAutoPickModel:
           typeof parsed.extAutoPickModel === "boolean" ? parsed.extAutoPickModel : undefined,
         qaMode: parsed.qaMode === "inline" || parsed.qaMode === "manual" ? parsed.qaMode : undefined,
+        idleReclaimMinutes:
+          typeof parsed.idleReclaimMinutes === "number" && parsed.idleReclaimMinutes >= 0
+            ? Math.min(1440, Math.floor(parsed.idleReclaimMinutes))
+            : undefined,
         zhiyaMasterDir: typeof parsed.zhiyaMasterDir === "string" ? parsed.zhiyaMasterDir : undefined,
         knowledgeDir: typeof parsed.knowledgeDir === "string" ? parsed.knowledgeDir : undefined,
         zhiyaDreamAuto: typeof parsed.zhiyaDreamAuto === "boolean" ? parsed.zhiyaDreamAuto : undefined,

@@ -192,13 +192,13 @@ export function ChoicePanel({
                 frozen ? (
                   <span className="cp-skip-done">{zh ? "已跳过" : "Skipped"}</span>
                 ) : (
-                  <button type="button" className="btn primary cp-skip-btn" onClick={() => undoSkip(qi)}>
+                  <button type="button" className="cp-skip-btn" onClick={() => undoSkip(qi)}>
                     {zh ? "取消跳过" : "Undo skip"}
                   </button>
                 )
               ) : (
                 !frozen && (
-                  <button type="button" className="btn primary cp-skip-btn" onClick={() => skipQuestion(qi)}>
+                  <button type="button" className="cp-skip-btn" onClick={() => skipQuestion(qi)}>
                     {zh ? "跳过" : "Skip"}
                   </button>
                 )
@@ -284,14 +284,14 @@ export function ChoicePanel({
       {/* 整组补充说明：与「其它」同款虚框；保存后仍以同款可见，点击可改。 */}
       {!frozen && noteOpen ? (
         <div className="cp-note-input">
-          <div className="cp-note-input-head">{zh ? "补充说明（整组题目的补充）" : "Note for the whole set"}</div>
+          <div className="cp-note-input-head">{zh ? "补充说明" : "Note"}</div>
           <input
             type="text"
             autoFocus
             className="cp-note-field"
             value={noteDraft}
             maxLength={CHOICE_NOTE_MAX}
-            placeholder={zh ? "补充一句（模型给的问题不够完善时用）…" : "Anything to add? (for incomplete questions)…"}
+            placeholder={zh ? "其它补充…" : "Anything else…"}
             onChange={(e) => setNoteDraft(e.target.value.slice(0, CHOICE_NOTE_MAX))}
             onKeyDown={(e) => {
               if (e.key === "Enter") saveNote();
@@ -306,7 +306,7 @@ export function ChoicePanel({
               {zh ? "取消" : "Cancel"}
             </button>
             <button type="button" className="btn primary" onClick={saveNote}>
-              {zh ? "保存补充" : "Save note"}
+              {zh ? "确认" : "OK"}
             </button>
           </div>
         </div>
@@ -321,7 +321,7 @@ export function ChoicePanel({
       ) : (
         !frozen && (
           <button type="button" className="cp-note-entry" onClick={openNote}>
-            {zh ? "补充说明（整组题目的补充）…" : "Add a note for the whole set…"}
+            {zh ? "补充说明…" : "Add a note…"}
           </button>
         )
       )}

@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -95,7 +96,10 @@ fun ChoicePanel(
         data.questions.forEachIndexed { qi, question ->
             val current = effective[qi]
 
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(
+                modifier = Modifier.alpha(if (current is ChoiceAnswer.Skip) 0.55f else 1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -107,25 +111,23 @@ fun ChoicePanel(
                         modifier = Modifier.weight(1f),
                     )
                     if (!frozen && current !is ChoiceAnswer.Skip) {
-                        Button(
+                        TextButton(
                             onClick = {
                                 onDraftChange(qi, ChoiceAnswer.Skip(current?.note))
                                 otherOpen = -1
                             },
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                            shape = RoundedCornerShape(50),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                         ) {
-                            Text(if (zh) "跳过" else "Skip", style = MaterialTheme.typography.labelMedium)
+                            Text(if (zh) "跳过" else "Skip", style = MaterialTheme.typography.labelSmall, color = MpiTheme.colors.textFaint)
                         }
                     }
                     if (current is ChoiceAnswer.Skip) {
                         if (!frozen) {
-                            Button(
+                            TextButton(
                                 onClick = { onDraftChange(qi, null) },
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                                shape = RoundedCornerShape(50),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                             ) {
-                                Text(if (zh) "取消跳过" else "Undo", style = MaterialTheme.typography.labelMedium)
+                                Text(if (zh) "取消跳过" else "Undo", style = MaterialTheme.typography.labelSmall, color = MpiTheme.colors.textFaint)
                             }
                         }
                         Text(
@@ -212,7 +214,7 @@ fun ChoicePanel(
                 value = noteDraft,
                 onValueChange = { noteDraft = it.take(CHOICE_NOTE_MAX) },
                 modifier = Modifier.fillMaxWidth().blockAncestorGestures(),
-                placeholder = { Text(if (zh) "补充一句（模型给的问题不够完善时用）…" else "Anything to add?", style = MaterialTheme.typography.bodySmall) },
+                placeholder = { Text(if (zh) "其它补充…" else "Anything else…", style = MaterialTheme.typography.bodySmall) },
                 singleLine = true,
                 shape = RoundedCornerShape(10.dp),
             )
@@ -224,7 +226,7 @@ fun ChoicePanel(
                         noteOpen = false
                     },
                     shape = RoundedCornerShape(10.dp),
-                ) { Text(if (zh) "保存补充" else "Save note") }
+                ) { Text(if (zh) "确认" else "Save note") }
             }
         }
         if (!frozen && !noteOpen) {
@@ -238,7 +240,7 @@ fun ChoicePanel(
             ) {
                 Text(
                     text = if (shownNote.isBlank()) {
-                        if (zh) "补充说明（整组题目的补充）…" else "Add a note for the whole set…"
+                        if (zh) "补充说明…" else "Add a note for the whole set…"
                     } else {
                         (if (zh) "补充：" else "Note: ") + shownNote
                     },

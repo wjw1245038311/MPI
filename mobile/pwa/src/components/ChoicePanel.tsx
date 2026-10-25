@@ -335,13 +335,13 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
       {/* 整组补充说明：与「其它」同款整行框；保存后仍以同款可见、点击可改。 */}
       {!frozen && noteOpen ? (
         <div className="cp-note-input">
-          <div className="cp-note-input-head">补充说明（整组题目的补充）</div>
+          <div className="cp-note-input-head">补充说明</div>
           <input
             type="text"
             autoFocus
             maxLength={CHOICE_NOTE_MAX}
             value={noteDraft}
-            placeholder="补充一句（模型给的问题不够完善时用）…"
+            placeholder="其它补充…"
             onChange={(e) => setNoteDraft(e.target.value.slice(0, CHOICE_NOTE_MAX))}
             onKeyDown={(e) => {
               if (e.key === "Enter") saveNote();
@@ -353,7 +353,7 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
           </div>
           <div className="cp-other-row">
             <button type="button" className="cp-btn" onClick={() => setNoteOpen(false)}>取消</button>
-            <button type="button" className="cp-btn primary" onClick={saveNote}>保存补充</button>
+            <button type="button" className="cp-btn primary" onClick={saveNote}>确认</button>
           </div>
         </div>
       ) : shownNote ? (
@@ -366,7 +366,7 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
       ) : (
         !frozen && (
           <button type="button" className="cp-opt cp-other-toggle cp-note-entry" onClick={openNote}>
-            补充说明（整组题目的补充）…
+            补充说明…
           </button>
         )
       )}

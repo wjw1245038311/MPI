@@ -7,6 +7,10 @@ export type Language = "en" | "zh";
  * dynamic labels are handled by the small patterns below.
  */
 const exact: Record<string, string> = {
+  "近期": "Recent",
+  "未命名会话": "Untitled",
+  "进程已回收以释放内存，点击打开会自动恢复": "Process released to free memory; opening restores it",
+  "已回收": "reclaimed",
   "设置": "Settings",
   "模型与提供商": "Models & providers",
   "会话存储位置": "Session storage location",

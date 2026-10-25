@@ -11562,10 +11562,23 @@ mark.hl {
 /* 「跳过」与「取消跳过」共用一个按钮：与「发送选择」同款深色胶囊，尺寸压到一行。 */
 .cp-skip-btn {
   flex: 0 0 auto;
-  padding: 3px 12px;
-  font-size: 12px;
+  padding: 2px 9px;
+  border: 1px solid transparent;
   border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
   line-height: 1.5;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+/* 主操作只保留「发送选择」；跳过是次级动作，默认几乎不可见，hover 才浮出来。 */
+.cp-skip-btn:hover {
+  border-color: var(--border);
+  background: #fff;
+  color: var(--text);
 }
 .cp-skip-done {
   flex: 0 0 auto;
@@ -11575,6 +11588,10 @@ mark.hl {
 }
 .cp-q.skipped .cp-q-title-text {
   color: var(--text-muted);
+}
+/* 跳过的题：选项区虚化，标题的「取消跳过」仍保持可读可点。 */
+.cp-q.skipped .cp-options {
+  opacity: 0.45;
 }
 /* 整组补充说明：与「其它」同款整行虚框；保存后仍以同款可见（左侧显示内容）。 */
 .cp-note-entry {
@@ -11652,4 +11669,101 @@ mark.hl {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
+}
+
+/* 流式生成 choices 时的弱化占位：不把围栏 JSON 逐字画出来（重试轮整条都是围栏）。 */
+.choice-streaming-note {
+  margin: 6px 0 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.choice-streaming-note::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.45;
+  animation: choice-streaming-pulse 1.1s ease-in-out infinite;
+}
+@keyframes choice-streaming-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.7; }
+}
+
+/* 会话列表：进程已被空闲回收的标记（2026-10-25） */
+.thread-reclaimed {
+  color: var(--text-faint);
+}
+
+/* 侧栏「近期」：跨项目最近 5 个会话，放在项目列表之上（2026-10-25） */
+.sb-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px 6px;
+}
+.sb-recent-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.sb-recent-item:hover {
+  background: var(--accent-soft);
+  border-color: var(--border);
+}
+.sb-recent-item.active {
+  background: var(--accent-soft);
+  border-color: var(--border);
+}
+.sb-recent-title {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb-recent-meta {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 侧栏分区（近期 / 项目）折叠头（2026-10-25） */
+.sb-section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.sb-section-toggle:hover {
+  color: var(--text);
+}
+.sb-section-toggle .caret {
+  display: inline-block;
+  width: 12px;
+  font-size: 10px;
+  color: var(--text-faint);
+  transition: transform 0.12s ease;
+}
+.sb-section-toggle .caret.open {
+  transform: rotate(90deg);
 }

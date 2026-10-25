@@ -308,6 +308,12 @@ interface BridgeHandle {
   setId: (n: string) => void;
   permission: PermissionLevel;
   gateModeFile: string;
+  /** 最近一次真正有活动的时间（spawn / 用户输入 / agent 事件 / 工具执行）。空闲回收用它判定。 */
+  lastActivityAt: number;
+  /** 回合是否正在跑（agent_start → true，agent_settled → false）。 */
+  busy: boolean;
+  /** 待响应的扩展 UI 对话桁数：有对话桁时不回收（否则用户回来点不到）。 */
+  pendingExtUi: number;
 }
 
 const bridges = new Map<string, BridgeHandle>();
@@ -634,6 +640,9 @@ function createHandle(
     },
     permission,
     gateModeFile,
+    lastActivityAt: Date.now(),
+    busy: false,
+    pendingExtUi: 0,
   };
   handle.bridge = new PiBridge({
     cwd,
@@ -709,6 +718,10 @@ function createHandle(
     gateModeFile,
     onEvent: (e) => {
       const event: any = e;
+      // 空闲回收信号：任何事件都算「有活动」；agent_start/settled 维护忙碌标记。
+      handle.lastActivityAt = Date.now();
+      if (event?.type === "agent_start") handle.busy = true;
+      else if (event?.type === "agent_settled") handle.busy = false;
       // 扩展注入的隐藏消息（display:false，如 choices 格式修正指令）只给模型看：
       // 不转发给渲染层/手机端，否则用户会看到一条本该隐藏的指令。
       if (
@@ -795,6 +808,7 @@ function createHandle(
       }
     },
     onExtUi: (r) => {
+      handle.pendingExtUi++;
       // "扩展自动选模": a dialog whose options are all provider/model strings is
       // answered with this thread's current model instead of popping up. No
       // match (or feature off) falls through to the normal UI path below.
@@ -1883,6 +1897,36 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     remotePublish?.(channel, payload);
   };
   sendToRenderer = send;
+
+  // ---- 空闲会话回收 --------------------------------------------------------
+  // 每个打开的会话都对应一个常驻 pi 子进程（约 100–300 MB）。以前只在关标签时才停，
+  // 挂机几天就会堆出 GB 级内存（minibox 2026-10-25 实测：10 个闲置 5 天的会话 ≈ 1.4 GB，
+  // 再加 MCP 子进程约 3.2 GB）。这里每分钟扫一次：非忙碌、没有等用户点的扩展对话框、
+  // 且超过阈值无任何活动 → 先 stopGraceful（会把工具结果落盘）再移除；会话文件不动，
+  // 用户下次点回这个会话时 thread:open 会重新 spawn。
+  const IDLE_RECLAIM_DEFAULT_MIN = 120;
+  const idleReclaimMinutes = (): number => {
+    const v = getConfig().idleReclaimMinutes;
+    return typeof v === "number" && v >= 0 ? v : IDLE_RECLAIM_DEFAULT_MIN;
+  };
+  const sweepIdleBridges = (): void => {
+    const minutes = idleReclaimMinutes();
+    if (minutes <= 0) return;
+    const cutoff = Date.now() - minutes * 60_000;
+    for (const [id, h] of bridges) {
+      if (h.busy || h.pendingExtUi > 0) continue;
+      if (h.lastActivityAt > cutoff) continue;
+      bridges.delete(id);
+      void h.bridge.stopGraceful().catch((e: unknown) => {
+        console.warn("[idle-reclaim] stop failed:", (e as Error)?.message || String(e));
+      });
+      send("pi:event", { threadId: id, event: { type: "thread_reclaimed" } });
+    }
+  };
+  const idleSweepTimer = setInterval(sweepIdleBridges, 60_000);
+  // Node 的 unref 让这个定时器不阻止进程退出（Electron 主进程里也保持安静）。
+  idleSweepTimer.unref?.();
+  app.once("before-quit", () => clearInterval(idleSweepTimer));
   systemNotifications = createSystemNotificationCenter(getWin);
   warmEnabled = true;
 
@@ -4059,6 +4103,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       const bridge = bridges.get(pending.localId);
       if (!bridge) throw new RemoteProtocolError("DISCONNECTED", "Thread is no longer connected");
       bridge.bridge.respondExtUi(requestId, payload);
+      if (bridge.pendingExtUi > 0) bridge.pendingExtUi--;
       remoteUiRequests.delete(requestId);
       // 手机端应答后 pi 会继续跑，但桌面端的卡片/弹窗只认本地点击（store.extuiQueue
       // 只在 respondExtUi / 关闭会话时清理）。这里显式告知 renderer 收起对应 UI，
@@ -6623,7 +6668,10 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
     "thread:extuiResponse",
     (_e, args: { threadId: string; id: string; payload: Record<string, unknown> }) => {
       const h = bridges.get(args.threadId);
-      if (h) h.bridge.respondExtUi(args.id, args.payload || {});
+      if (h) {
+        h.bridge.respondExtUi(args.id, args.payload || {});
+        if (h.pendingExtUi > 0) h.pendingExtUi--;
+      }
       // Agent-initiated permission switch: on approval perform the live
       // switch NOW — before the extension's next tool call hits the gate.
       const pendingSwitch = pendingModeSwitch.get(args.id);

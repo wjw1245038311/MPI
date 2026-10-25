@@ -383,13 +383,17 @@ function MessageBlocks({ text }: { text: string }) {
 
 /** 正文：按代码围栏切段；已定稿 assistant 消息里的合法 choices 围栏升级为交互面板，其余纯文本。 */
 function MessageText({ text, choiceCtx }: { text: string; choiceCtx?: ChoiceContext | null }) {
-  const segments = useMemo(() => parseSegments(text), [text]);
+  // 流式中的 choices 围栏不逐字渲染（重试轮整条都是围栏）：只留围栏前正文 + 一行提示。
+  const streamingChoiceAt = choiceCtx ? -1 : text.search(/`{3,}\s*choices/i);
+  const displayText = streamingChoiceAt >= 0 ? text.slice(0, streamingChoiceAt) : text;
+  const segments = useMemo(() => parseSegments(displayText), [displayText]);
   const items = useMemo(
     () => withChoiceSegments(segments, !!choiceCtx),
     [segments, choiceCtx],
   );
   return (
     <>
+      {streamingChoiceAt >= 0 && <div className="choice-streaming-note">正在生成选项…</div>}
       {items.map((item, i) => {
         if (item.kind === "code") {
           return (

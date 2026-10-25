@@ -2092,6 +2092,10 @@ function BlockView({
   // content key re-applies them once a streaming block finalizes.
   const blockText = block.type === "text" ? (agentMedia?.text ?? block.text) : "";
   const markRef = useSearchMark(block.type === "text" ? (searchQuery ?? null) : null, blockText);
+  // 流式中的 choices 围栏：不要逐字渲染 JSON（重试轮整条回复就是围栏，视觉上是一大段
+  // 代码）。只留围栏前的一小段正文 + 一行提示，等 finalized 后再变成可点面板。
+  const streamingChoiceAt =
+    block.type === "text" && streaming ? blockText.search(/`{3,}s*choices/i) : -1;
   // Inline multi-question choice blocks: split out ```choices fences once the
   // message has finalized (while streaming they render as inert code blocks).
   // Unconditional hook — guarded inside so non-text blocks cost one regex test.
@@ -2115,6 +2119,15 @@ function BlockView({
   }, [choiceSegments, threadId, messageKey]);
   if (block.type === "text") {
     const segments = choiceSegments;
+    if (streamingChoiceAt >= 0) {
+      const before = blockText.slice(0, streamingChoiceAt);
+      return (
+        <div ref={markRef}>
+          {before.trim() ? <Markdown text={before} noCache /> : null}
+          <div className="choice-streaming-note">{language === "zh" ? "正在生成选项…" : "Building options…"}</div>
+        </div>
+      );
+    }
     const fileCards =
       agentMedia && agentMedia.attachments.length > 0 ? <AgentFileCards attachments={agentMedia.attachments} language={language} /> : null;
     if (!segments || (segments.length === 1 && segments[0].kind === "md")) {

@@ -1528,7 +1528,21 @@ private fun AssistantMessageRow(
                                 onClearDrafts = onClearDrafts,
                             )
                         } else {
-                            MessageText(block.text)
+                            // 流式中的 choices 围栏不逐字渲染（重试轮整条都是围栏）：
+                            // 只留围栏前正文 + 一行「正在生成选项…」，定稿后再变面板。
+                            val fence = remember(block.text) {
+                                Regex("`{3,}\\s*choices", RegexOption.IGNORE_CASE).find(block.text)
+                            }
+                            if (fence != null) {
+                                MessageText(block.text.substring(0, fence.range.first))
+                                Text(
+                                    text = "正在生成选项…",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MpiTheme.colors.textFaint,
+                                )
+                            } else {
+                                MessageText(block.text)
+                            }
                         }
                     }
                 }

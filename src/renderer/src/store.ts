@@ -832,6 +832,7 @@ function threadFromResponse(res: any, fallback: ThreadState, pendingEditorText?:
     levels: fallback.levels || ["off"],
     commands: res.commands || [],
     connected: true,
+    reclaimed: false,
     isStreaming: !!res.isStreaming,
     messages: views,
     toolRuns,
@@ -860,6 +861,10 @@ function detectBricked(errMsg?: unknown): { kind: "whitespace" | "stale-compacti
 function reduceThread(t: ThreadState, event: any): ThreadState {
   if (!event || typeof event !== "object") return t;
   switch (event.type) {
+    case "thread_reclaimed": {
+      // 主进程因空闲把会话进程回收了（释放内存）：会话文件还在，点回来自动重启。
+      return { ...t, connected: false, reclaimed: true, isStreaming: false, streaming: null };
+    }
     case "choice_retry_start": {
       // 自动重试开始：记下「被重试的那条失败回答」的 key。渲染层据此收起那条
       // 「未渲染成面板」提示——重试成功后会出面板，留着会让用户以为还没修好。
@@ -2381,6 +2386,7 @@ export const useStore = create<PiStore>()((set, get) => {
             commands: res.commands || [],
             loading: false,
             connected: true,
+            reclaimed: false,
             isStreaming: !!res.isStreaming || optimistic.length > 0,
             messages: optimistic.length ? [...views, ...optimistic] : views,
             toolRuns,

@@ -126,7 +126,53 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   );
   const runningSet = useMemo(() => new Set(runningKey ? runningKey.split("\u0000") : []), [runningKey]);
 
-  // token-usage readout in the sidebar footer (today + all-time), always visible
+  // 进程被空闲回收的会话（内存已释放，点回来自动重启）。稳定字符串避免每 token 重渲染。
+  const reclaimedKey = useStore((s) =>
+    Object.keys(s.threads)
+      .filter((id) => s.threads[id].reclaimed)
+      .sort()
+      .join("\u0000")
+  );
+  const reclaimedSet = useMemo(() => new Set(reclaimedKey ? reclaimedKey.split("\u0000") : []), [reclaimedKey]);
+
+  // 「近期 / 项目」两个分区可折叠，状态存 localStorage（不动 store / 主进程）。
+  const [sections, setSections] = useState(() => {
+    try {
+      const raw = localStorage.getItem("mpi-sidebar-sections");
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === "object") {
+        return { recent: parsed.recent !== false, projects: parsed.projects !== false };
+      }
+    } catch {
+      /* 隐私模式 / 坏 JSON → 默认全展开 */
+    }
+    return { recent: true, projects: true };
+  });
+  const toggleSection = (key: "recent" | "projects") => {
+    setSections((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try {
+        localStorage.setItem("mpi-sidebar-sections", JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+  // 近期会话：跨项目最近 5 个（放在项目列表之上），解决「切项目再找会话」的来回。
+  const recentThreads = useMemo(() => {
+    const all = projects.flatMap((p) =>
+      p.threads.map((t) => ({
+        file: t.file,
+        cwd: p.cwd,
+        projectName: p.name,
+        title: t.title,
+        preview: t.preview,
+        updatedAt: t.updatedAt,
+      })),
+    );
+    return all.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
+  }, [projects]);  // token-usage readout in the sidebar footer (today + all-time), always visible
   const [usageData, setUsageData] = useState<any>(null);
   const [projectMenu, setProjectMenu] = useState<{ cwd: string; name: string; pinned: boolean; pinnedRank: number; pinnedCount: number; x: number; y: number } | null>(null);
   const [threadMenu, setThreadMenu] = useState<{ cwd: string; file: string; name: string; pinned: boolean; pinnedRank: number; pinnedCount: number; x: number; y: number } | null>(null);
@@ -502,14 +548,45 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
 
         {sidebarTab === "threads" ? (
           <>
+            {recentThreads.length > 0 && (
+              <>
+                <div className="sb-section-head">
+                  <button type="button" className="sb-section-toggle" onClick={() => toggleSection("recent")}>
+                    <span className={`caret ${sections.recent ? "open" : ""}`}>▸</span>
+                    <span>{language === "zh" ? "近期" : "Recent"}</span>
+                  </button>
+                </div>
+                {sections.recent && <div className="sb-recent">
+                  {recentThreads.map((t) => (
+                    <button
+                      key={t.cwd + "::" + t.file}
+                      type="button"
+                      className={`sb-recent-item ${activeThreadId === t.file ? "active" : ""}`}
+                      title={new Date(t.updatedAt).toLocaleString()}
+                      onClick={() => onThreadClick(t.cwd, t.file)}
+                    >
+                      <span className="sb-recent-title">
+                        {t.title || t.preview || (language === "zh" ? "未命名会话" : "Untitled")}
+                      </span>
+                      <span className="sb-recent-meta">
+                        {t.projectName} · {sessionTimeLabel(t.updatedAt, language === "zh", now)}
+                      </span>
+                    </button>
+                  ))}
+                </div>}
+              </>
+            )}
             <div className="sb-section-head">
-              <span>项目</span>
+              <button type="button" className="sb-section-toggle" onClick={() => toggleSection("projects")}>
+                <span className={`caret ${sections.projects ? "open" : ""}`}>▸</span>
+                <span>项目</span>
+              </button>
               <button onClick={openProjectFolder} title={language === "zh" ? "打开文件夹" : "Open folder"}>
                 <Plus size={14} />
               </button>
             </div>
-            {projects.length === 0 && <div className="ft-empty">尚无项目，点击 + 打开一个文件夹。</div>}
-            {projects.map((p) => {
+            {sections.projects && projects.length === 0 && <div className="ft-empty">尚无项目，点击 + 打开一个文件夹。</div>}
+            {sections.projects && projects.map((p) => {
               const open = !!expandedProjects[p.cwd];
               return (
                 <div className="project" key={p.cwd}>
@@ -690,7 +767,18 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                               {" · "}
                               <span className={`thread-time ${bucket === "today" ? "today" : ""}`} title={new Date(t.updatedAt).toLocaleString()}>
                                 {sessionTimeLabel(t.updatedAt, language === "zh", now)}
-                              </span>
+
+                              {reclaimedSet.has(t.file) && (
+                                <>
+                                  {" · "}
+                                  <span
+                                    className="thread-reclaimed"
+                                    title={language === "zh" ? "进程已回收以释放内存，点击打开会自动恢复" : "Process released to free memory; opening restores it"}
+                                  >
+                                    {language === "zh" ? "已回收" : "reclaimed"}
+                                  </span>
+                                </>
+                              )}                              </span>
                               </div>
                             </div>
                           </Fragment>
