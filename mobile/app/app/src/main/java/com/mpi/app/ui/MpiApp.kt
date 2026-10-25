@@ -275,6 +275,7 @@ fun MpiApp(container: AppContainer) {
                                 onSetThinking = viewModel::setThinking,
                                 onSetMode = viewModel::setMode,
                                 onCompact = viewModel::compactContext,
+                                onHandoff = viewModel::handoffToNewSession,
                             )
                         }
                     } else {

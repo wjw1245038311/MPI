@@ -182,6 +182,17 @@ class ThreadActions(
         timeoutMs = COMPACT_TIMEOUT_MS,
     )
 
+    /**
+     * 交接新对话：主机用当前会话的模型写交接文档 → 新开会话 → 首条提示词指向文档。
+     * 生成文档要调一次模型，超时与压缩同级（3 分钟）。返回 { threadId, docPath }。
+     */
+    suspend fun handoff(): JsonElement? = writeRequest(
+        "thread.handoff",
+        buildJsonObject {},
+        "handoff",
+        timeoutMs = COMPACT_TIMEOUT_MS,
+    )
+
     /** 回答审批卡。形状对齐桌面端 ExtUiModal：select→{value} / confirm→{confirmed} / input→{value} / cancel→{cancelled:true}。 */
     suspend fun respondUi(requestId: String, response: JsonObject): JsonElement? = writeRequest(
         "ui.respond",

@@ -1079,9 +1079,11 @@ export interface ThreadViewProps {
   /** 宽屏对话区宽度预设（工具条「列宽」面板）。 */
   columnPreset?: ColumnPreset;
   onColumnPreset?: (next: ColumnPreset) => void;
+  /** 交接后切到主机新开的会话。 */
+  onOpenThread?: (threadId: string) => void;
 }
 
-export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop, onEnsureSubscribed, columnPreset, onColumnPreset }: ThreadViewProps) {
+export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop, onEnsureSubscribed, columnPreset, onColumnPreset, onOpenThread }: ThreadViewProps) {
   const pendingUi = view.pendingUi;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1098,6 +1100,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const [sheet, setSheet] = useState<null | "permission" | "mode" | "model" | "ctx" | "width">(null);
   const [toast, setToast] = useState<string | null>(null);
   const [modelBusy, setModelBusy] = useState(false);
+  const [handoffBusy, setHandoffBusy] = useState(false);
 
   // T2 image attachments (max 3 — host's MAX_REMOTE_IMAGES) + T7 file attachments
   // (max 3 — host's MAX_REMOTE_FILES).
@@ -1781,6 +1784,20 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
    * 界面状态由 compaction_start/end 事件驱动，用量由主机随后推送的 context_usage
    * 刷新——所以这里不等请求返回就先让按钮转圈，失败时再兜底报错。
    */
+  const doHandoff = async () => {
+    if (!actions || handoffBusy) return;
+    setHandoffBusy(true);
+    try {
+      const res = await actions.handoff();
+      setToast("已生成交接文档，正在打开新会话");
+      if (res?.threadId && onOpenThread) onOpenThread(res.threadId);
+    } catch (error) {
+      setToast(`交接失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setHandoffBusy(false);
+    }
+  };
+
   const doCompact = async () => {
     if (!actions || view.compacting) return;
     setSendError(null);
@@ -1904,6 +1921,9 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
             列宽 · {COLUMN_PRESETS[columnPreset].chip}
           </button>
         )}
+        <button type="button" className="cfg-chip" onClick={() => void doHandoff()} disabled={handoffBusy} title="用当前会话的模型写交接文档，并开一个新会话">
+          {handoffBusy ? "交接中…" : "交接新对话"}
+        </button>
       </div>
 
       {/* 内容来自本地缓存时的提示（对齐原生 ThreadScreen「离线：显示本地缓存…」）：

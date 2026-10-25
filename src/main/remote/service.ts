@@ -33,6 +33,8 @@ export interface RemoteBackend {
    * shows a spinner from compaction_start/end events, and the refreshed
    * context usage arrives as a `context_usage` event. */
   compact(threadId: string, instructions?: string): Promise<unknown>;
+  /** 生成交接文档并新开会话（手机端「交接新对话」）；返回新会话 id 与文档路径。 */
+  handoff(threadId: string): Promise<{ threadId: string; docPath: string }>;
   /**
    * videos 特意写成**必填**（类型是 `X | undefined`，而不是可选参数 `videos?`）。
    *
@@ -342,6 +344,13 @@ export class RemoteService {
         this.assertWriter(threadId, context);
         const instructions = typeof payload.instructions === "string" ? payload.instructions.slice(0, 2_000) : undefined;
         return responseFor(request, { compacted: await this.backend.compact(threadId, instructions) });
+      }
+      case "thread.handoff": {
+        // 手机端「交接新对话」：主机生成交接文档 → 新开一个会话 → 首条提示词指向文档。
+        const threadId = this.requiredThread(request);
+        this.assertWriter(threadId, context);
+        appendDiagLog(`remote-req thread.handoff conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)}`);
+        return responseFor(request, await this.backend.handoff(threadId));
       }
       case "thread.subscribe": {
         const threadId = this.requiredThread(request);

@@ -242,6 +242,14 @@ export class ThreadActions {
   }
 
   /**
+   * 交接新对话：主机用当前会话的模型写交接文档 → 新开一个会话并发出「先读文档」。
+   * 生成文档要调一次模型，超时放宽到 3 分钟（与压缩同级）。
+   */
+  async handoff(): Promise<{ threadId: string; docPath: string }> {
+    return (await this.writeRequest("thread.handoff", {}, "handoff", 180_000)) as { threadId: string; docPath: string };
+  }
+
+  /**
    * Answer a ui.request (approval card). Response shapes mirror the desktop
    * ExtUiModal: select → {value}, confirm → {confirmed}, input → {value},
    * cancel → {cancelled:true}. Writer-gated on the host like every write.

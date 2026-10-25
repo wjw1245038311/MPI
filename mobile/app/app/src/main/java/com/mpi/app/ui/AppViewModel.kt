@@ -1602,6 +1602,25 @@ class AppViewModel(
     fun compactContext() = configAction { it.compact() }
 
     /**
+     * 交接新对话：主机生成交接文档并新开会话，成功后直接切过去（与桌面右上角按钮同语义）。
+     */
+    fun handoffToNewSession() {
+        val actions = threadActions ?: return
+        if (_ui.value.configBusy) return
+        _ui.update { it.copy(configBusy = true, configError = null) }
+        scope.launch {
+            try {
+                val res = actions.handoff()
+                val newId = (res as? JsonObject)?.get("threadId")?.jsonPrimitive?.contentOrNull
+                _ui.update { it.copy(configBusy = false) }
+                if (!newId.isNullOrBlank()) openThread(newId)
+            } catch (e: Exception) {
+                _ui.update { it.copy(configBusy = false, configError = e.message ?: "交接失败") }
+            }
+        }
+    }
+
+    /**
      * 会话级配置写操作的公共外壳：串行化、busy 标记、失败原因留给 UI。
      * 成功/失败都**不关 Sheet**——用户可能还要连改几项（权限→模型→思考档位），
      * 每设一项就收起一次反而要反复重开；关闭交给用户自己（下滑 / 返回手势）。

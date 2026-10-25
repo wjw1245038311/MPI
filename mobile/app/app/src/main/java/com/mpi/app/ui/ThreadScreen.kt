@@ -176,6 +176,7 @@ fun ThreadScreen(
     onOpenSearch: () -> Unit,
     /** 双击顶栏标题 → 快速重命名（与侧栏长按菜单同语义）。 */
     onRenameTitle: (String) -> Unit,
+    onHandoff: () -> Unit,
     /** 是否显示工具/终端调用行（本地设置，默认显示；开关在设置页「对话分栏」）。 */
     showToolCalls: Boolean,
     /** 是否显示思考过程块（本地设置，默认显示；设置页「对话分栏」同源）。 */
@@ -309,6 +310,7 @@ fun ThreadScreen(
             onOpenSettings = onOpenSettings,
             onOpenSearch = onOpenSearch,
             onRenameTitle = onRenameTitle,
+            onHandoff = onHandoff,
         )
 
         if (configError != null) {
@@ -1188,6 +1190,7 @@ private fun ThreadTopBar(
     onOpenSearch: () -> Unit,
     /** 双击标题 → 快速重命名（与侧栏长按菜单同语义）。 */
     onRenameTitle: (String) -> Unit,
+    onHandoff: () -> Unit,
 ) {
     var voiceMenuOpen by remember { mutableStateOf(false) }
     // 双击标题弹重命名框；draft 每次打开时刷新为当前标题，避免残留上次输入。
@@ -1197,6 +1200,9 @@ private fun ThreadTopBar(
         modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        TextButton(onClick = onHandoff) {
+            Text("交接", style = MaterialTheme.typography.labelMedium)
+        }
         IconButton(onClick = onBack) {
             Icon(IconArrowLeft, contentDescription = "返回", tint = MaterialTheme.colorScheme.onSurface)
         }

@@ -3994,6 +3994,23 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       // 压缩要读整个会话并调用 LLM，给手机端留足时间（与桌面按钮同一实现）。
       return handle.bridge.compact(instructions);
     },
+    handoff: async (threadId) => {
+      // 手机端「交接新对话」：与桌面右上角按钮同一套语义——生成文档 → 新开会话 →
+      // 首条提示词指向文档。权限沿用源会话；模型/思考等级由手机端随后自行调整。
+      const ref = await remoteThread(threadId);
+      if (!ref.sessionFile) throw new RemoteProtocolError("INVALID_REQUEST", "会话尚未落盘，无法交接");
+      const source = await threadService.get(threadId).catch(() => null);
+      const doc = await generateHandoffDoc(ref.cwd, ref.sessionFile);
+      if (!doc.ok || !doc.path) throw new Error(doc.error || "handoff doc failed");
+      const created = await threadService.create(ref.cwd, undefined, (source?.permission as any) || "sandbox");
+      const newId = created.id;
+      const zh = getConfig().language === "zh";
+      const kickoff = zh
+        ? `本会话从上一个会话交接而来。\n先读交接文档：${doc.path}\n然后从文档里的「未完成 / 下一步」接着做；有不清楚的地方先问我。`
+        : `This session continues from a previous one.\nRead the handoff document first: ${doc.path}\nThen pick up from its "Next steps" section; ask me if something is unclear.`;
+      await threadService.prompt(newId, kickoff, undefined, undefined, undefined, undefined);
+      return { threadId: newId, docPath: doc.path };
+    },
     fileTree: (projectId, relativePath) => filePreviewService.tree(projectId, relativePath),
     filePreview: (projectId, relativePath) => filePreviewService.preview(projectId, relativePath),
     issueAttachmentUrl: async (threadId, deviceId, input) => {
@@ -5958,10 +5975,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   // 右上角「交接新对话」：用**当前会话的模型**把旧会话写成一份交接文档，新会话的
   // 首条提示词只指向这份文件（细节按需读，不把整段上下文塞过去）。
   // 模型不可用 → 退化为最近几轮原文，交接不因模型失败而失败；落盘在 <cwd>/.mpi/handoff/。
-  ipcMain.handle("thread:handoffDoc", async (_e, args: { cwd?: unknown; sessionFile?: unknown }) => {
-    const cwd = typeof args?.cwd === "string" ? args.cwd : "";
-    const sessionFile = typeof args?.sessionFile === "string" ? args.sessionFile : "";
-    if (!cwd || !sessionFile) return { ok: false, error: "missing cwd/sessionFile" };
+  const generateHandoffDoc = async (cwd: string, sessionFile: string) => {
+    if (!cwd || !sessionFile) return { ok: false as const, error: "missing cwd/sessionFile" };
     const zh = getConfig().language === "zh";
     const projectName = cwd.split(/[\/]/).filter(Boolean).pop() || cwd;
     let messages: any[] = [];
@@ -5971,7 +5986,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       messages = hist?.messages || [];
       model = hist?.model || null;
     } catch (e) {
-      return { ok: false, error: "读取会话失败：" + ((e as Error)?.message || String(e)) };
+      return { ok: false as const, error: "读取会话失败：" + ((e as Error)?.message || String(e)) };
     }
     const picked = pickHandoffMessages(messages);
     // 待办面板里本项目的未完成项一并交给模型，整合进「未完成 / 下一步」。
@@ -6014,11 +6029,15 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     if (!doc) doc = buildFallbackDoc(projectName, picked, zh ? "zh" : "en", todoLines);
     try {
       const path = writeHandoffDoc(cwd, normalizeDoc(doc));
-      return { ok: true, path, usedModel, messages: picked.length };
+      return { ok: true as const, path, usedModel, messages: picked.length };
     } catch (e) {
-      return { ok: false, error: "写交接文档失败：" + ((e as Error)?.message || String(e)) };
+      return { ok: false as const, error: "写交接文档失败：" + ((e as Error)?.message || String(e)) };
     }
-  });
+  };
+
+  ipcMain.handle("thread:handoffDoc", async (_e, args: { cwd?: unknown; sessionFile?: unknown }) =>
+    generateHandoffDoc(typeof args?.cwd === "string" ? args.cwd : "", typeof args?.sessionFile === "string" ? args.sessionFile : ""),
+  );
 
   ipcMain.handle("thread:loadHistory", async (_e, args: { cwd: string; sessionFile: string }) => {
     const { cwd, sessionFile } = args;

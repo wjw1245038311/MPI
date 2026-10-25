@@ -1213,6 +1213,7 @@ export default function App() {
             onEnsureSubscribed={() => threadSessionRef.current?.ensureSubscribed() ?? Promise.resolve()}
             // 宽屏对话区宽度（工具条上的「列宽」面板）
             columnPreset={columnPreset}
+            onOpenThread={(id) => void openThread(id)}
             onColumnPreset={changeColumnPreset}
           />
         ) : view === "home" && hostId ? (

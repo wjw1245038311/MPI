@@ -27,6 +27,7 @@ export const REMOTE_REQUEST_TYPES = [
   "thread.setModel",
   "thread.setMode",
   "thread.compact",
+  "thread.handoff",
   "thread.subscribe",
   "thread.resync",
   "thread.prompt",
