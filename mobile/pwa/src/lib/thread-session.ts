@@ -78,12 +78,35 @@ export interface ThreadView {
   contextUsage: RemoteContextUsage | null;
   /** 压缩进行中（compaction_start…end）。手机端压缩按钮据此转圈。 */
   compacting: boolean;
+  /**
+   * 交接进度（主机推送的 handoff_progress）。一次交接要十几秒到一分钟，
+   * 没有这个字段时手机端只能「交接中…」干等，分不清是在等还是挂了。
+   * null = 没有进行中的交接。
+   */
+  handoff: HandoffProgress | null;
   /** 本地缓存的快照时间戳（毫秒）；null = 当前内容来自主机实时快照。
    *  对齐原生端 ThreadSession.cachedAt / isCached。 */
   cachedAt: number | null;
   /** S6.3: pending ui.request (approval card). Survives resync — the host keeps
    * the dialog open while the agent is paused, so a reconnect must re-show it. */
   pendingUi: RemoteUiRequest | null;
+}
+
+/** 主机推送的交接进度（`thread.handoff` 过程中的四个阶段）。 */
+export interface HandoffProgress {
+  /** doc=生成交接文档（最长的一步）、create=新建会话、config=继承配置、prompt=发首条提示词、
+   *  done=完成、error=失败 */
+  phase: "doc" | "create" | "config" | "prompt" | "done" | "error";
+  /** 主机开始交接的时刻（毫秒），客户端据此显示已用秒数（不受本地请求起始时间影响）。 */
+  startedAt: number;
+  /** 主机侧的阶段耗时（毫秒）。 */
+  elapsedMs: number;
+  /** 新会话 id（create 之后才有）。 */
+  threadId?: string;
+  /** 交接文档路径（create 之后才有）。 */
+  docPath?: string;
+  /** phase=error 时的原因。 */
+  message?: string;
 }
 
 export interface ThreadSessionOptions {
@@ -228,7 +251,7 @@ export class ThreadSession {
     threadId: string,
     options: ThreadSessionOptions = {},
   ) {
-    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], taskMode: null, availableModes: [], contextUsage: null, compacting: false, cachedAt: null, pendingUi: null };
+    this.view = { threadId, ready: false, summary: null, messages: [], streaming: null, running: false, errorBanner: null, model: null, availableModels: [], taskMode: null, availableModes: [], contextUsage: null, compacting: false, handoff: null, cachedAt: null, pendingUi: null };
     this.client = client;
     this.onSnapshot = options.onSnapshot;
     // threadId goes on the ENVELOPE (host's requiredThread reads it there); the
@@ -508,6 +531,9 @@ export class ThreadSession {
       // 快照到达即认为压缩不在进行中：真在压缩的话后续 compaction_end 会再纠正，
       // 而漏掉一个 end 事件会让按钮永远转圈。
       compacting: false,
+      // 交接进度中途 resync 不该把「正在交接…」抹掉：事件只在交接过程中存在，
+      // 抹掉就变成又一次黑箱等待。
+      handoff: this.view.handoff ?? null,
       cachedAt,
       pendingUi: this.view.pendingUi, // a pending approval survives the resync
     });
@@ -658,6 +684,21 @@ export class ThreadSession {
       case "compaction_start":
         this.patch({ compacting: true });
         break;
+      case "handoff_progress": {
+        const data = (payload.data || {}) as Partial<HandoffProgress>;
+        if (typeof data.phase !== "string") break;
+        this.patch({
+          handoff: {
+            phase: data.phase as HandoffProgress["phase"],
+            startedAt: typeof data.startedAt === "number" ? data.startedAt : Date.now(),
+            elapsedMs: typeof data.elapsedMs === "number" ? data.elapsedMs : 0,
+            ...(typeof data.threadId === "string" ? { threadId: data.threadId } : {}),
+            ...(typeof data.docPath === "string" ? { docPath: data.docPath } : {}),
+            ...(typeof data.message === "string" ? { message: data.message } : {}),
+          },
+        });
+        break;
+      }
       case "compaction_end":
         this.patch({ compacting: false });
         break;

@@ -239,6 +239,8 @@ fun ThreadScreen(
     onSetThinking: (String) -> Unit,
     onSetMode: (String) -> Unit,
     onCompact: () -> Unit,
+    /** 交接开始的本机时刻（null = 无进行中的交接）：见 AppUiState.handoffStartedAt。 */
+    handoffStartedAt: Long?,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -331,6 +333,16 @@ fun ThreadScreen(
                 )
                 TextButton(onClick = onDismissConfigError) { Text("知道了") }
             }
+        }
+
+        if (handoffStartedAt != null) {
+            // 交接要十几秒到一分钟（生成文档是整轮模型）：必须看得见“正在做什么 + 等了多久”，
+            // 否则用户分不清「在等」和「挂了」（2026-10-26 反馈）。
+            HandoffBanner(
+                phase = view.handoff?.phase,
+                startedAt = view.handoff?.startedAt ?: handoffStartedAt,
+                docPath = view.handoff?.docPath,
+            )
         }
 
         if (view.errorBanner != null) {
@@ -2780,4 +2792,73 @@ private fun decodeOriginalImage(context: Context, localUri: String?): android.gr
             )
         }
     }.getOrNull()
+}
+
+/**
+ * 交接阶段文案（纯函数，可单测）。null = 主机第一个进度事件还没到。
+ *
+ * 文案要说人话且带「这步大概在干什么」，因为用户判断「是不是挂了」的唯一依据
+ * 就是这行字 + 秒表（2026-10-26 反馈：交接期间完全不知道在等什么）。
+ */
+internal fun handoffPhaseLabel(phase: String?): String = when (phase) {
+    "doc" -> "正在生成交接文档（最慢的一步）"
+    "create" -> "正在新建会话"
+    "config" -> "正在继承模型 / 任务模式 / 权限"
+    "prompt" -> "正在发出首条提示词"
+    "done" -> "已完成，正在打开新会话"
+    "error" -> "交接失败"
+    null -> "正在通知主机…"
+    else -> "正在交接…"
+}
+
+/**
+ * 交接进度横幅（贴在顶栏下方）：阶段文案 + 已用秒数 + 转圈。
+ *
+ * 秒表按主机的 startedAt 算（不按本机点击时间），这样中继往返的 1–3 秒不会被算进去，
+ * 重连后也能接着数；主机没给 startedAt 时用本机时间兜底。
+ */
+@Composable
+private fun HandoffBanner(phase: String?, startedAt: Long, docPath: String?) {
+    var now by remember(startedAt) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(startedAt) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+    val elapsedSec = ((now - startedAt).coerceAtLeast(0) / 1000).toInt()
+    val fileName = docPath
+        ?.substringAfterLast('/')
+        ?.substringAfterLast('\\')
+        ?.takeIf { it.isNotEmpty() }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MpiTheme.colors.accentSoft)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(13.dp),
+            strokeWidth = 2.dp,
+            color = MpiTheme.colors.textDim,
+        )
+        Text(
+            text = handoffPhaseLabel(phase) +
+                if (fileName != null && phase != null && phase != "doc") " · $fileName" else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = MpiTheme.colors.textDim,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(start = 8.dp),
+        )
+        Text(
+            text = formatElapsed(elapsedSec),
+            style = MaterialTheme.typography.bodySmall,
+            color = MpiTheme.colors.textDim,
+            modifier = Modifier.padding(start = 8.dp),
+        )
+    }
 }

@@ -72,6 +72,26 @@ interface PickedVideo {
 const formatSize = (bytes: number): string =>
   bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)}MB` : `${Math.max(1, Math.round(bytes / 1024))}KB`;
 
+/** 交接阶段文案（主机 `handoff_progress`）。undefined = 还没收到第一个事件。 */
+function handoffPhaseLabel(phase?: string): string {
+  switch (phase) {
+    case "doc":
+      return "正在生成交接文档（要跑一整轮模型，最慢的一步）";
+    case "create":
+      return "正在新建会话";
+    case "config":
+      return "正在继承模型 / 任务模式 / 权限";
+    case "prompt":
+      return "正在发出首条提示词";
+    case "done":
+      return "已完成，正在打开新会话";
+    default:
+      return "正在通知主机…";
+  }
+}
+
+const baseName = (path: string): string => path.split(/[\\/]/).pop() || path;
+
 /** 缓存快照的「多久以前」（与 App.tsx 里会话列表的写法一致）。 */
 function relTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -1101,6 +1121,10 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const [toast, setToast] = useState<string | null>(null);
   const [modelBusy, setModelBusy] = useState(false);
   const [handoffBusy, setHandoffBusy] = useState(false);
+  /** 点击交接的本地时刻：主机第一个进度事件到之前（中继往返 1–3s）也要有反馈。 */
+  const [handoffStart, setHandoffStart] = useState<number | null>(null);
+  /** 交接横幅的秒表心跳（每 500ms 一刷，不必更密）。 */
+  const [handoffNow, setHandoffNow] = useState(0);
 
   // T2 image attachments (max 3 — host's MAX_REMOTE_IMAGES) + T7 file attachments
   // (max 3 — host's MAX_REMOTE_FILES).
@@ -1784,9 +1808,18 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
    * 界面状态由 compaction_start/end 事件驱动，用量由主机随后推送的 context_usage
    * 刷新——所以这里不等请求返回就先让按钮转圈，失败时再兜底报错。
    */
+  // 交接横幅的秒表：只在等待期间跑（500ms 一刷足够——每秒一帧没必要）。
+  useEffect(() => {
+    if (handoffStart === null) return;
+    setHandoffNow(Date.now());
+    const timer = setInterval(() => setHandoffNow(Date.now()), 500);
+    return () => clearInterval(timer);
+  }, [handoffStart]);
+
   const doHandoff = async () => {
     if (!actions || handoffBusy) return;
     setHandoffBusy(true);
+    setHandoffStart(Date.now());
     try {
       const res = await actions.handoff();
       setToast("已生成交接文档，正在打开新会话");
@@ -1795,6 +1828,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       setToast(`交接失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setHandoffBusy(false);
+      setHandoffStart(null);
     }
   };
 
@@ -1930,6 +1964,20 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
           切回来不再白屏，但要知道这眼看到的是旧内容。 */}
       {view.cachedAt !== null && (
         <p className="hint cached-hint">本地缓存（{relTime(view.cachedAt)}）· 正在获取最新内容…</p>
+      )}
+
+      {/* 交接进度：主机推 handoff_progress（doc→create→config→prompt）。
+          一次交接实测十几秒到一分钟，光把按钮改成「交接中…」等于让人干等
+          （2026-10-26 用户反馈：不知道等了多久、也不知道是不是挂了）。 */}
+      {handoffStart !== null && (
+        <div className="handoff-banner" role="status" aria-live="polite">
+          <span className="handoff-spin" aria-hidden="true" />
+          <span className="handoff-text">
+            {handoffPhaseLabel(view.handoff?.phase)}
+            {view.handoff?.docPath && view.handoff.phase !== "doc" ? ` · ${baseName(view.handoff.docPath)}` : ""}
+          </span>
+          <span className="handoff-elapsed">{formatElapsed(((handoffNow || Date.now()) - (view.handoff?.startedAt ?? handoffStart)) / 1000)}</span>
+        </div>
       )}
 
       {!view.ready ? (

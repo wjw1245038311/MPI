@@ -57,4 +57,47 @@ assert.match(menu, /if \(!text \|\| !sel\) return;/, "未选中文字时应直�
 const sidebar = readFileSync(new URL("../src/renderer/src/components/Sidebar.tsx", import.meta.url), "utf8");
 assert.ok(!/handoffToNewSession/.test(sidebar), "Sidebar 不该再挂交接入门（入口在对话区右键菜单）");
 
+// ⑧ 手机/远程那条路（主机侧 thread.handoff）必须继承**同一套四项、同一顺序**
+//    2026-10-26 事故：远程版模型没继承 → 新会话落到项目默认模型（指向不可达端点）
+//    → 手机上一整页 Connection error。这里直接从源码钉住，不靠人工记忆。
+const ipc = readFileSync(new URL("../src/main/ipc.ts", import.meta.url), "utf8");
+const handoffAt = ipc.indexOf("handoff: async (threadId) => {");
+assert.ok(handoffAt > 0, "ipc.ts 里找不到远程 handoff 实现");
+const remoteBody = ipc.slice(handoffAt, ipc.indexOf("fileTree: (projectId", handoffAt));
+const rat = (needle) => remoteBody.indexOf(needle);
+const [rTask, rModel, rThink, rPerm, rPrompt] = [
+  rat("remoteBackend.setMode"),
+  rat("remoteBackend.setModel"),
+  rat("remoteBackend.setThinking"),
+  rat("remoteBackend.setPermission"),
+  rat("threadService.prompt"),
+];
+assert.ok([rTask, rModel, rThink, rPerm, rPrompt].every((i) => i > 0), "远程交接的四项继承/首发缺项");
+assert.ok(
+  rTask < rModel && rModel < rThink && rThink < rPerm && rPerm < rPrompt,
+  `远程交接顺序错了（应 任务模式→模型→思考等级→权限→提示词）：${[rTask, rModel, rThink, rPerm, rPrompt].join(" → ")}`,
+);
+// create 的第一个参数是**远程项目 id**（HMAC 后的 opaque 串），不是 cwd：
+// 传 cwd 会得到 NOT_FOUND Project not found（2026-10-25 实测）。
+assert.match(remoteBody, /threadService\.create\(ref\.projectId/, "远程交接新建会话必须传 ref.projectId（传 ref.cwd 会 NOT_FOUND）");
+
+// ⑨ 过程要推 handoff_progress，否则手机端又是黑箱等待（用户 2026-10-26 反馈）
+for (const phase of ["doc", "create", "config", "prompt", "done", "error"]) {
+  assert.match(remoteBody, new RegExp(`phase\\(\\s*"${phase}"`), `远程交接缺少 ${phase} 阶段的进度推送`);
+}
+const pwaSession = readFileSync(new URL("../mobile/pwa/src/lib/thread-session.ts", import.meta.url), "utf8");
+assert.match(pwaSession, /case "handoff_progress"/, "PWA 未处理 handoff_progress 事件");
+const pwaView = readFileSync(new URL("../mobile/pwa/src/ThreadView.tsx", import.meta.url), "utf8");
+assert.match(pwaView, /handoff-banner/, "PWA 交接中缺少进度横幅");
+const kotlinSession = readFileSync(
+  new URL("../mobile/app/app/src/main/java/com/mpi/app/data/ThreadSession.kt", import.meta.url),
+  "utf8",
+);
+assert.match(kotlinSession, /"handoff_progress" ->/, "安卓未处理 handoff_progress 事件");
+const kotlinScreen = readFileSync(
+  new URL("../mobile/app/app/src/main/java/com/mpi/app/ui/ThreadScreen.kt", import.meta.url),
+  "utf8",
+);
+assert.match(kotlinScreen, /HandoffBanner\(/, "安卓交接中缺少进度横幅");
+
 console.log("handoff-session tests passed");

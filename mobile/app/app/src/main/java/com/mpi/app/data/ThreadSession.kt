@@ -56,6 +56,12 @@ data class ThreadView(
     val availableModes: List<TaskModeOption> = emptyList(),
     val contextUsage: ContextUsage? = null,
     val compacting: Boolean = false,
+    /**
+     * 交接进度（主机在 `thread.handoff` 过程中推的 `handoff_progress`）。
+     * 一次交接要十几秒到一分钟（生成文档是整轮模型），没有它只能「干等」。
+     * null = 没有进行中的交接。
+     */
+    val handoff: HandoffProgress? = null,
     /** 待处理的审批/询问卡；**重连后仍要显示**（主机在等回应，弹窗没关）。 */
     val pendingUi: UiRequest? = null,
     /**
@@ -72,6 +78,26 @@ data class ThreadView(
     val showingCached: Boolean
         get() = cachedAt != null
 }
+
+/**
+ * 主机推的交接进度（对应 PWA 的 `HandoffProgress`）。
+ *
+ * phase：doc（生成交接文档，最慢）→ create（新建会话）→ config（继承配置）→ prompt（发首条
+ * 提示词）→ done；出错时发 error（带到 message）。
+ */
+data class HandoffProgress(
+    val phase: String,
+    /** 主机开始交接的时刻（毫秒）：秒表按它算，不受本地请求起始时间影响。 */
+    val startedAt: Long,
+    /** 主机侧的阶段耗时（毫秒）。 */
+    val elapsedMs: Long = 0,
+    /** 新会话 id（create 之后才有）。 */
+    val threadId: String? = null,
+    /** 交接文档路径（create 之后才有）。 */
+    val docPath: String? = null,
+    /** phase=error 时的原因。 */
+    val message: String? = null,
+)
 
 /**
  * 单会话数据层（M2-1）：订阅快照 → 归约 `thread.event` 事件流 → 供 UI 渲染。
@@ -516,6 +542,8 @@ class ThreadSession(
 
             "compaction_end" -> patch { it.copy(compacting = false) }
 
+            "handoff_progress" -> handleHandoffProgress(data)
+
             "config_changed" -> handleConfigChanged(data)
 
             "ui.request" -> {
@@ -626,6 +654,28 @@ class ThreadSession(
                 model = model?.str("id")?.takeIf { it.isNotEmpty() }
                     ?.let { ModelRef(provider = model.str("provider").orEmpty(), id = it) }
                     ?: view.model,
+            )
+        }
+    }
+
+    /**
+     * 交接进度：主机每走一步推一帧，手机端据此显示「正在做什么 + 已等多少秒」。
+     * 缺 startedAt 时用本机时间兜底（否则秒表会从 0 重新开始）。
+     */
+    private fun handleHandoffProgress(data: JsonObject?) {
+        val phase = data?.str("phase")?.takeIf { it.isNotEmpty() } ?: return
+        patch { view ->
+            view.copy(
+                handoff = HandoffProgress(
+                    phase = phase,
+                    startedAt = data["startedAt"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+                        ?: view.handoff?.startedAt
+                        ?: System.currentTimeMillis(),
+                    elapsedMs = data["elapsedMs"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0,
+                    threadId = data.str("threadId"),
+                    docPath = data.str("docPath"),
+                    message = data.str("message"),
+                ),
             )
         }
     }

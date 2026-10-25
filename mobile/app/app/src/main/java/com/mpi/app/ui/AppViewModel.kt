@@ -148,6 +148,12 @@ data class AppUiState(
     val configBusy: Boolean = false,
     /** 会话配置写操作失败原因（Sheet 内与 chip 行下方都要显示）。 */
     val configError: String? = null,
+    /**
+     * 交接开始的本机时刻（null = 没有进行中的交接）。
+     * 主机第一个 handoff_progress 要一个中继往返才到，光等它的话点下去 1–3 秒无反应；
+     * 有了这个值，横幅与秒表可以立即出现。
+     */
+    val handoffStartedAt: Long? = null,
     /** 运行中发送 → 本地暂存为「待处理后续」（null = 无）；回合结束后自动投递。 */
     val pendingFollowUp: String? = null,
     /** 发送 / 停止失败文案（贴输入框显示，不静默失败）。 */
@@ -751,7 +757,7 @@ class AppViewModel(
         videoUploadJob?.cancel()
         videoUploadJob = null
         directAttachments = null
-        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, configSheetOpen = false, configBusy = false, configError = null, pendingFollowUp = null, sendError = null, attachments = emptyList(), attachmentBusy = false, attachmentError = null, videoUpload = null, recording = false, transcribing = false, voiceError = null) }
+        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, configSheetOpen = false, configBusy = false, configError = null, pendingFollowUp = null, sendError = null, attachments = emptyList(), attachmentBusy = false, attachmentError = null, videoUpload = null, recording = false, transcribing = false, voiceError = null, handoffStartedAt = null) }
     }
 
     /** 手动重新同步（错误横幅上的按钮）。 */
@@ -1607,15 +1613,15 @@ class AppViewModel(
     fun handoffToNewSession() {
         val actions = threadActions ?: return
         if (_ui.value.configBusy) return
-        _ui.update { it.copy(configBusy = true, configError = null) }
+        _ui.update { it.copy(configBusy = true, configError = null, handoffStartedAt = System.currentTimeMillis()) }
         scope.launch {
             try {
                 val res = actions.handoff()
                 val newId = (res as? JsonObject)?.get("threadId")?.jsonPrimitive?.contentOrNull
-                _ui.update { it.copy(configBusy = false) }
+                _ui.update { it.copy(configBusy = false, handoffStartedAt = null) }
                 if (!newId.isNullOrBlank()) openThread(newId)
             } catch (e: Exception) {
-                _ui.update { it.copy(configBusy = false, configError = e.message ?: "交接失败") }
+                _ui.update { it.copy(configBusy = false, handoffStartedAt = null, configError = e.message ?: "交接失败") }
             }
         }
     }

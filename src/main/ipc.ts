@@ -3995,21 +3995,78 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       return handle.bridge.compact(instructions);
     },
     handoff: async (threadId) => {
-      // 手机端「交接新对话」：与桌面右上角按钮同一套语义——生成文档 → 新开会话 →
-      // 首条提示词指向文档。权限沿用源会话；模型/思考等级由手机端随后自行调整。
+      // 手机端「交接新对话」：与桌面右上角按钮同一套语义——生成交接文档 → 新开会话 →
+      // 首条提示词指向文档。**配置继承顺序与桌面 store.handoffToNewSession 保持一致**：
+      // 任务模式 → 模型 → 思考等级 → 权限（任务模式会连带写 thinking 与权限，所以必须最先应用）。
+      //
+      // 过程用 `handoff_progress` 事件推给客户端：一次交接实测十几秒到一分钟（生成文档是
+      // 整轮 LLM），手机端毫无反馈时用户分不清「在等」和「挂了」（2026-10-26 用户反馈）。
       const ref = await remoteThread(threadId);
       if (!ref.sessionFile) throw new RemoteProtocolError("INVALID_REQUEST", "会话尚未落盘，无法交接");
-      const source = await threadService.get(threadId).catch(() => null);
-      const doc = await generateHandoffDoc(ref.cwd, ref.sessionFile);
-      if (!doc.ok || !doc.path) throw new Error(doc.error || "handoff doc failed");
-      const created = await threadService.create(ref.cwd, undefined, (source?.permission as any) || "sandbox");
-      const newId = created.id;
-      const zh = getConfig().language === "zh";
-      const kickoff = zh
-        ? `本会话从上一个会话交接而来。\n先读交接文档：${doc.path}\n然后从文档里的「未完成 / 下一步」接着做；有不清楚的地方先问我。`
-        : `This session continues from a previous one.\nRead the handoff document first: ${doc.path}\nThen pick up from its "Next steps" section; ask me if something is unclear.`;
-      await threadService.prompt(newId, kickoff, undefined, undefined, undefined, undefined);
-      return { threadId: newId, docPath: doc.path };
+      const startedAt = Date.now();
+      const phase = (name: string, extra: Record<string, unknown> = {}) => {
+        remoteEventHub.publish(threadId, {
+          kind: "handoff_progress",
+          data: { phase: name, startedAt, elapsedMs: Date.now() - startedAt, ...extra },
+        });
+        appendDiagLog(`handoff-progress thread=${threadId.slice(0, 12)} phase=${name} elapsed=${Date.now() - startedAt}ms`);
+      };
+      try {
+        const source = await threadService.get(threadId).catch(() => null);
+        phase("doc");
+        const doc = await generateHandoffDoc(ref.cwd, ref.sessionFile);
+        if (!doc.ok || !doc.path) throw new Error(doc.error || "handoff doc failed");
+        phase("create", { docPath: doc.path });
+        // 注意：create 的第一个参数是**远程项目 id**（opaque），不是 cwd 路径。
+        const created = await threadService.create(ref.projectId, undefined, (source?.permission as any) || "sandbox");
+        const newId = created.id;
+        phase("config", { threadId: newId });
+        // ① 任务模式最先：setMode 会连带写 thinking 与权限，放后面会把继承值覆盖掉。
+        const sourceMode = typeof source?.taskMode === "string" ? source.taskMode : "";
+        if (sourceMode) {
+          try {
+            await remoteBackend.setMode(newId, sourceMode);
+          } catch (e) {
+            console.warn("[handoff] inherit task mode failed:", (e as Error)?.message || String(e));
+          }
+        }
+        // ② 模型：不继承会落到项目默认模型，可能指向不可达端点（实测：一整页 Connection error）。
+        if (source?.model?.provider && source.model.id) {
+          try {
+            await remoteBackend.setModel(newId, source.model.provider, source.model.id);
+          } catch (e) {
+            console.warn("[handoff] inherit model failed:", (e as Error)?.message || String(e));
+          }
+        }
+        // ③ 思考等级（切模型的夹紧已由 setModel 内部复位，这里落回源会话本意）
+        if (source?.thinkingLevel) {
+          try {
+            await remoteBackend.setThinking(newId, source.thinkingLevel);
+          } catch (e) {
+            console.warn("[handoff] inherit thinking failed:", (e as Error)?.message || String(e));
+          }
+        }
+        // ④ 权限：create 已带，但任务模式可能覆盖过，最后再按源会话落一次。
+        if (source?.permission) {
+          try {
+            await remoteBackend.setPermission(newId, source.permission);
+          } catch (e) {
+            console.warn("[handoff] inherit permission failed:", (e as Error)?.message || String(e));
+          }
+        }
+        phase("prompt", { threadId: newId });
+        const zh = getConfig().language === "zh";
+        const kickoff = zh
+          ? `本会话从上一个会话交接而来。\n先读交接文档：${doc.path}\n然后从文档里的「未完成 / 下一步」接着做；有不清楚的地方先问我。`
+          : `This session continues from a previous one.\nRead the handoff document first: ${doc.path}\nThen pick up from its "Next steps" section; ask me if something is unclear.`;
+        await threadService.prompt(newId, kickoff, undefined, undefined, undefined, undefined);
+        phase("done", { threadId: newId, docPath: doc.path });
+        return { threadId: newId, docPath: doc.path };
+      } catch (e) {
+        // 失败也要让客户端收起「等待中」并看到原因，否则手机端会一直转圈。
+        phase("error", { message: (e as Error)?.message || String(e) });
+        throw e;
+      }
     },
     fileTree: (projectId, relativePath) => filePreviewService.tree(projectId, relativePath),
     filePreview: (projectId, relativePath) => filePreviewService.preview(projectId, relativePath),

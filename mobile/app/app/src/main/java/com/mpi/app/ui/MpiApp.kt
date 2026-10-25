@@ -276,6 +276,7 @@ fun MpiApp(container: AppContainer) {
                                 onSetMode = viewModel::setMode,
                                 onCompact = viewModel::compactContext,
                                 onHandoff = viewModel::handoffToNewSession,
+                                handoffStartedAt = state.handoffStartedAt,
                             )
                         }
                     } else {

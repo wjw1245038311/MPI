@@ -713,6 +713,24 @@ button:disabled { opacity: 0.5; cursor: default; }
 .icon-btn.mic.live { color: var(--err); background: rgba(247, 118, 142, 0.14); animation: voice-pulse 1.2s ease-in-out infinite; }
 @keyframes voice-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.9); } }
 .composer-error { margin: 6px 0 0; }
+/* 交接进度条（thread.handoff 过程中主机推 handoff_progress）：
+   带秒表 + 阶段文案——“在等”和“挂了”必须能分清。 */
+.handoff-banner {
+  flex: none; display: flex; align-items: center; gap: 8px; margin: 0 0 6px;
+  padding: 7px 10px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  font-size: 12.5px; color: var(--text);
+}
+.handoff-banner .handoff-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.handoff-banner .handoff-elapsed { flex: none; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.handoff-spin {
+  flex: none; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: handoff-spin 0.9s linear infinite;
+}
+@keyframes handoff-spin { to { transform: rotate(360deg); } }
 /* 新版本提示（见 lib/update-watch.ts）——放底部：顶部是标题与配置栏，不能被浮层压住 */
 .update-pill { position: fixed; bottom: calc(76px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 130; background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 7px 14px; font-size: 12.5px; box-shadow: var(--shadow-md); cursor: pointer; animation: voice-pulse 1.6s ease-in-out infinite; }
 
