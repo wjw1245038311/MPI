@@ -3,7 +3,8 @@ import { SidePanel } from "./SidePanel";
 import { ZhiyaTasksView } from "./ZhiyaTasksView";
 import { ZhiyaSettingsView } from "./ZhiyaSettingsView";
 import { MemoryPoolTab } from "./MemoryPoolTab";
-import { CheckSquare, Settings, Sparkle } from "./icons";
+import { ProjectMemoryTab } from "./ProjectMemoryTab";
+import { CheckSquare, Settings, Sparkle, Zap } from "./icons";
 
 /**
  * 知芽的右侧侧板：内容由 zhiyaModule 决定。
@@ -20,6 +21,13 @@ export function ZhiyaSidePanel() {
     return (
       <SidePanel title={zh ? "记忆池" : "Memory pool"} icon={<Sparkle size={15} />} onClose={close}>
         <MemoryPoolTab zh={zh} />
+      </SidePanel>
+    );
+  }
+  if (module === "projectMemory") {
+    return (
+      <SidePanel title={zh ? "项目记忆" : "Project memory"} icon={<Zap size={15} />} onClose={close}>
+        <ProjectMemoryTab zh={zh} />
       </SidePanel>
     );
   }

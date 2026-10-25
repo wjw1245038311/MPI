@@ -126,12 +126,17 @@ import { appendOpResult, approveProposal, rejectProposal, startDream, type OpRun
 import {
   archiveEntryFromPanel,
   archiveManyFromPanel,
+  buildProjectSnapshot,
   buildSnapshot,
   decideManyFromPanel,
   decideProposalFromPanel,
+  deleteProjectRuleFromPanel,
+  runProjectDigest,
+  updateProjectRule,
   type SnapshotQuery,
 } from "./memory-panel";
 import { listEntries, type PoolEntry } from "./zhiya/pool";
+import { embedText } from "./zhiya/zvec-index";
 import { aggregateTasks } from "./task-aggregate";
 import { noteIngest } from "./zhiya/consolidation";
 import { archiveDirFor } from "./memory-inbox";
@@ -5461,6 +5466,56 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     const cwd = (getConfig() as { lastThreadCwd?: string }).lastThreadCwd || undefined;
     const r = await startDream(opRunnerDeps(), dry === true, getConfig().zhiyaDreamLlmClassify === true, cwd);
     return r;
+  });
+
+  // ---- 项目记忆（L2）：挖簇 + 面板操作 ----------------------------------
+  // 数据层同样在 memory-panel.ts；embedding 在这里注入（embedText 会加载 zvec 索引依赖，
+  // 不能让数据层被动拖上它，否则单测得装原生模块）。
+  ipcMain.handle("memory:projectSnapshot", () => {
+    try {
+      return buildProjectSnapshot({ poolDir: memoryPoolDir() });
+    } catch (e) {
+      console.warn("[memory] 项目记忆快照失败：", (e as Error).message);
+      return null;
+    }
+  });
+
+  ipcMain.handle("memory:projectDigest", async () => {
+    try {
+      return await runProjectDigest(memoryPoolDir(), {
+        embed: async (texts) => {
+          // 小并发（4 路）：bge 服务是本地 llama-server，串行请求会白白多等一个来回。
+          const out = new Array<number[]>(texts.length);
+          let next = 0;
+          const worker = async () => {
+            while (next < texts.length) {
+              const i = next++;
+              out[i] = await embedText(texts[i]);
+            }
+          };
+          await Promise.all(Array.from({ length: Math.min(4, texts.length) }, worker));
+          return out;
+        },
+      });
+    } catch (e) {
+      return { ok: false, detail: (e as Error).message };
+    }
+  });
+
+  ipcMain.handle("memory:projectUpdate", (_e, id: unknown, patch: unknown) => {
+    try {
+      return updateProjectRule(memoryPoolDir(), String(id), (patch as Record<string, never>) ?? {});
+    } catch (e) {
+      return { ok: false, detail: (e as Error).message };
+    }
+  });
+
+  ipcMain.handle("memory:projectDelete", (_e, id: unknown) => {
+    try {
+      return deleteProjectRuleFromPanel(memoryPoolDir(), String(id));
+    } catch (e) {
+      return { ok: false, detail: (e as Error).message };
+    }
   });
 
   ipcMain.handle("memory:openArchive", async () => {

@@ -5,8 +5,22 @@
  * 放这里就能**不带 electron 单测**（ipc.ts 那层只做转发）。
  * 所有写操作都复用已验证的执行器（memory-promote / memory-ops），不另写一套。
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { knowledgeLessonsDir } from "./knowledge-dir";
+import {
+  deleteProjectRule,
+  digestProjectRules,
+  groupRulesForPanel,
+  isLessonEntry,
+  listProjectRules,
+  writeProjectRule,
+  PROJECT_MEMORY_DIR,
+  type DigestStats,
+  type ProjectGroupView,
+  type ProjectRule,
+  type RuleStatus,
+} from "./zhiya/project-memory";
 import { listEntries, type PoolEntry } from "./zhiya/pool";
 import { listProposals, pendingProposals, type ProposalList } from "./zhiya/proposals";
 import type { Proposal } from "./zhiya/triage";
@@ -417,4 +431,163 @@ export async function decideProposalFromPanel(
     index: deps.index,
   });
   return { ok: r.ok, detail: r.detail, files: r.files };
+}
+
+// ---------------------------------------------------------------------------
+// 项目记忆（L2）— 面板数据层
+// ---------------------------------------------------------------------------
+
+export interface ProjectMemoryStats {
+  /** 规则总数 / 待审 / 已批准 / 已停用。 */
+  total: number;
+  draft: number;
+  approved: number;
+  muted: number;
+  /** 项目分组数。 */
+  groups: number;
+  /** 池子里可当原料的教训候选条数（提示「还有多少没挖」）。 */
+  candidates: number;
+  /** 最近的挖簇结果（读 .digest.json；没跑过为 null）。 */
+  lastDigest: { at: string; rules: number; clusters: number; dropped: number; embedError?: string } | null;
+}
+
+export interface ProjectMemorySnapshot {
+  groups: ProjectGroupView[];
+  stats: ProjectMemoryStats;
+  broken: { path: string; reason: string }[];
+  poolDir: string;
+}
+
+/**
+ * 项目记忆快照：按项目聚合规则 + 统计。
+ * 不触发挖簇（挖簇要 embedding，12~20s，必须由面板显式点按钮触发）。
+ */
+export function buildProjectSnapshot(deps: { poolDir: string; limitGroups?: number }): ProjectMemorySnapshot {
+  const { entries } = listEntries(deps.poolDir);
+  const { rules, broken } = listProjectRules(deps.poolDir);
+  const groups = groupRulesForPanel(rules, entries).map((g) => ({
+    ...g,
+    // 落点文件此刻存在与否：面板要提示「将新建文件」还是「追加到已有文件」
+    targetExists: !!g.root && existsSync(join(g.root, g.targetRel)),
+  }));
+  const limited = deps.limitGroups ? groups.slice(0, deps.limitGroups) : groups;
+  const stat = (s: string) => rules.filter((r) => r.status === s).length;
+  return {
+    groups: limited,
+    stats: {
+      total: rules.length,
+      draft: stat("draft"),
+      approved: stat("approved"),
+      muted: stat("muted"),
+      groups: groups.length,
+      candidates: entries.filter((e) => e.status === "inbox" && isLessonEntry(e)).length,
+      lastDigest: readDigestMeta(deps.poolDir),
+    },
+    broken,
+    poolDir: deps.poolDir,
+  };
+}
+
+/** 挖簇元信息（`.digest.json`）：记录上次跑的时间与统计，面板用来显示「上次挖簇」。 */
+export interface DigestMeta {
+  at: string;
+  rules: number;
+  clusters: number;
+  dropped: number;
+  candidates: number;
+  embedError?: string;
+}
+
+export function digestMetaPath(poolDir: string): string {
+  return join(poolDir, PROJECT_MEMORY_DIR, ".digest.json");
+}
+
+export function writeDigestMeta(poolDir: string, meta: DigestMeta): void {
+  const p = digestMetaPath(poolDir);
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify(meta, null, 2), "utf8");
+}
+
+export function readDigestMeta(poolDir: string): DigestMeta | null {
+  try {
+    const raw = JSON.parse(readFileSync(digestMetaPath(poolDir), "utf8")) as DigestMeta;
+    return raw && typeof raw.at === "string" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 挖簇并落盘（面板「挖簇」按钮）。
+ *
+ * 三步都在这里：读 L1 → digestProjectRules → 只写有变化的文件。
+ * 已批准 / 人工编辑过的正文不会被覆盖（由 digestProjectRules 保证）。
+ */
+export async function runProjectDigest(
+  poolDir: string,
+  deps: {
+    embed?: (texts: string[]) => Promise<number[][]>;
+    now?: () => string;
+    persist?: boolean;
+    /** 透传给 digestProjectRules（面板用默认值；测试用小门槛）。 */
+    minEvidence?: number;
+    minCosine?: number;
+  } = {},
+): Promise<{ ok: boolean; detail: string; stats?: DigestStats; rules?: number }> {
+  const { entries } = listEntries(poolDir);
+  const { rules: existing } = listProjectRules(poolDir);
+  const { rules, stats } = await digestProjectRules(
+    { entries, existing, minEvidence: deps.minEvidence, minCosine: deps.minCosine },
+    { embed: deps.embed, now: deps.now },
+  );
+  if (deps.persist !== false) {
+    for (const r of rules) {
+      const p = writeProjectRule(poolDir, r);
+      r.path = p;
+    }
+    writeDigestMeta(poolDir, {
+      at: deps.now?.() ?? new Date().toISOString(),
+      rules: rules.length,
+      clusters: stats.clusters,
+      dropped: stats.droppedSmall,
+      candidates: stats.candidates,
+      embedError: stats.embedError,
+    });
+  }
+  return {
+    ok: true,
+    detail: `挖出 ${stats.clusters} 条（丢弃 ${stats.droppedSmall} 条证据不足），共 ${rules.length} 条规则`,
+    stats,
+    rules: rules.length,
+  };
+}
+
+/** 改一条规则的正文/标题/状态（面板编辑与批准走这里）。 */
+export function updateProjectRule(
+  poolDir: string,
+  id: string,
+  patch: { title?: string; body?: string; status?: RuleStatus; targetRel?: string; edited?: boolean },
+): { ok: boolean; detail: string; rule?: ProjectRule } {
+  const { rules } = listProjectRules(poolDir);
+  const r = rules.find((x) => x.id === id || x.id.endsWith(id));
+  if (!r) return { ok: false, detail: `找不到规则：${id}` };
+  if (patch.title !== undefined) r.title = patch.title.slice(0, 200);
+  if (patch.body !== undefined) r.body = patch.body.slice(0, 4000);
+  if (patch.targetRel !== undefined && patch.targetRel.trim()) r.targetRel = patch.targetRel.trim();
+  if (patch.status !== undefined) r.status = patch.status;
+  if (patch.edited !== undefined) r.edited = patch.edited;
+  else if (patch.title !== undefined || patch.body !== undefined) r.edited = true;
+  r.updatedAt = new Date().toISOString();
+  const p = writeProjectRule(poolDir, r);
+  return { ok: true, detail: `已保存：${r.title}`, rule: { ...r, path: p } };
+}
+
+/** 删一条规则（面板「丢弃」）。只允许删草稿与停用的。 */
+export function deleteProjectRuleFromPanel(poolDir: string, id: string): { ok: boolean; detail: string } {
+  const { rules } = listProjectRules(poolDir);
+  const r = rules.find((x) => x.id === id || x.id.endsWith(id));
+  if (!r) return { ok: false, detail: `找不到规则：${id}` };
+  if (r.status === "approved") return { ok: false, detail: "已批准的规则不能直接删，先停用" };
+  const done = deleteProjectRule(poolDir, r);
+  return done ? { ok: true, detail: `已丢弃：${r.title}` } : { ok: false, detail: "文件已不存在" };
 }

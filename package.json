@@ -147,6 +147,7 @@
     "test:ops": "node --experimental-strip-types scripts/test-memory-ops.mjs",
     "test:memorymodel": "node --experimental-strip-types scripts/test-memory-model.mjs",
     "test:memorypanel": "node --experimental-strip-types scripts/test-memory-panel.mjs",
+    "test:projectmemory": "node --experimental-strip-types scripts/test-project-memory.mjs",
     "backfill:lessons": "node --experimental-strip-types scripts/backfill-lesson-skeleton.mjs",
     "check:switch": "node --experimental-strip-types scripts/check-device-switch.mjs",
     "bench:panel-scale": "node --experimental-strip-types scripts/bench-panel-scale.mjs",

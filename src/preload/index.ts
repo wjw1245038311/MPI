@@ -165,6 +165,19 @@ const api = {
     dream: (dry?: boolean): Promise<{ detail: string }> => ipcRenderer.invoke("memory:dream", dry === true),
     /** 在文件管理器里打开归档目录。 */
     openArchive: (): Promise<{ ok: boolean; detail: string }> => ipcRenderer.invoke("memory:openArchive"),
+
+    // ---- 项目记忆（L2）------
+    /** 项目记忆快照：按项目聚合的规则 + 统计（不触发挖簇）。 */
+    projectSnapshot: (): Promise<any> => ipcRenderer.invoke("memory:projectSnapshot"),
+    /** 挖簇（要跑 embedding，12~20s）：把流水挖成规则草稿并落盘。 */
+    projectDigest: (): Promise<{ ok: boolean; detail: string; rules?: number }> => ipcRenderer.invoke("memory:projectDigest"),
+    /** 改标题/正文/状态（批准、停用都走这里）。 */
+    projectUpdate: (
+      id: string,
+      patch: { title?: string; body?: string; status?: "draft" | "approved" | "muted"; targetRel?: string },
+    ): Promise<{ ok: boolean; detail: string; rule?: unknown }> => ipcRenderer.invoke("memory:projectUpdate", id, patch),
+    /** 丢弃一条草稿。 */
+    projectDelete: (id: string): Promise<{ ok: boolean; detail: string }> => ipcRenderer.invoke("memory:projectDelete", id),
   },
   zhiya: {
     /** 当前任务聚合：HANDOFF + changelog（待办走既有 todo.list）。只读，不改文件。 */

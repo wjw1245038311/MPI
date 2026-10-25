@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import { useStore, type ZhiyaModule } from "../store";
-import { CheckSquare, Close, Files, Grid, Settings, Shield, Sparkle, Sprout } from "./icons";
+import { CheckSquare, Close, Files, Grid, Settings, Shield, Sparkle, Sprout, Zap } from "./icons";
 
 const ITEMS: { id: ZhiyaModule; zh: string; en: string; Icon: ComponentType<{ size?: number }> }[] = [
   { id: "persona", zh: "人物画像", en: "Persona", Icon: Sprout },
@@ -9,6 +9,7 @@ const ITEMS: { id: ZhiyaModule; zh: string; en: string; Icon: ComponentType<{ si
   { id: "kb", zh: "知识库", en: "Knowledge base", Icon: Files },
   { id: "tasks", zh: "当前任务", en: "Current tasks", Icon: CheckSquare },
   { id: "pool", zh: "记忆池", en: "Memory pool", Icon: Sparkle },
+  { id: "projectMemory", zh: "项目记忆", en: "Project memory", Icon: Zap },
 ];
 
 /**

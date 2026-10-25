@@ -1752,7 +1752,7 @@ function missingToolRemoveMessage(missing: "npm" | "git", zh: boolean): string {
 }
 
 /** 知芽的模块（二级菜单项）。md 类走右侧预览，任务/记忆池/设置走右侧侧板。 */
-export type ZhiyaModule = "persona" | "agreement" | "workspace" | "kb" | "tasks" | "pool" | "settings";
+export type ZhiyaModule = "persona" | "agreement" | "workspace" | "kb" | "tasks" | "pool" | "projectMemory" | "settings";
 
 /** 右侧槽的所有侧板 flag。 */
 type RightPanelFlag = "todoPanelOpen" | "automationOpen" | "pluginsOpen" | "appsOpen" | "messagingOpen" | "zhiyaPanelOpen";
@@ -3978,8 +3978,8 @@ export const useStore = create<PiStore>()((set, get) => {
   zhiyaPanelOpen: false,
   selectZhiyaModule: async (module) => {
     const zh = (get().config?.language || "en") === "zh";
-    // 任务 / 记忆池 / 设置：走右侧侧板。
-    if (module === "tasks" || module === "pool" || module === "settings") {
+    // 任务 / 记忆池 / 项目记忆 / 设置：走右侧侧板。
+    if (module === "tasks" || module === "pool" || module === "projectMemory" || module === "settings") {
       set({ zhiyaModule: module, ...onlyRightPanel("zhiyaPanelOpen") });
       return;
     }
