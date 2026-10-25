@@ -2082,6 +2082,9 @@ function BlockView({
   /** Stable "messageKey:index" key for cross-remount expand-state persistence. */
   expandKey?: string;
 }) {
+  // 这条消息是被自动重试（choices 格式修正）代替的那条：它自己的「未渲染成面板」
+  // 提示要收起来——重试成功后会出面板，两条提示同时出现等于告诉用户「还没修好」。
+  const choiceRetryFromKey = useStore((s) => (s.activeThreadId ? s.threads[s.activeThreadId]?.choiceRetryFromKey : undefined));
   // agent 递交的附件以引用信封的形式写在正文里：渲染前先剥成卡片，否则用户会看到
   // 一整行原始 XML（流式中途只写了一半的标签也会被裁掉）。
   const agentMedia = useMemo(() => (block.type === "text" ? parseAgentMediaRefs(block.text) : null), [block]);
@@ -2138,7 +2141,9 @@ function BlockView({
             // 显示，并按具体原因给一行提示（原文已入诊断日志）。
             <div key={`m${index}`}>
               <Markdown text={seg.text} />
-              <div className="choice-fence-warn">{choiceFenceWarnText(seg.reason, language)}</div>
+              {choiceRetryFromKey === messageKey ? null : (
+                <div className="choice-fence-warn">{choiceFenceWarnText(seg.reason, language)}</div>
+              )}
             </div>
           ) : (
             <Markdown key={`m${index}`} text={seg.text} />

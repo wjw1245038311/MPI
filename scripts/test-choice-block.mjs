@@ -298,7 +298,7 @@ for (const language of ["zh", "en"]) {
   ];
   const text = cb.buildChoiceReplyText(questions, answers, language);
   assert.ok(text.startsWith(language === "zh" ? "我的选择：" : "My choices:"));
-  const parsed = cb.parseChoiceReply(text, questions);
+  const parsed = cb.parseChoiceReply(text, questions).answers;
   assert.deepEqual(parsed, { 0: answers[0], 1: answers[1] });
 }
 
@@ -313,7 +313,77 @@ for (const language of ["zh", "en"]) {
   assert.equal(cb.parseChoiceReply(zh.replace("→ A", "→ B 和 C"), questions), null); // answer with extra text is rejected
   // en reply parses for zh UI and vice versa (header accepted in both languages).
   const en = cb.buildChoiceReplyText(questions, [{ kind: "option", label: "A" }], "en");
-  assert.deepEqual(cb.parseChoiceReply(en, questions), { 0: { kind: "option", label: "A" } });
+  assert.deepEqual(cb.parseChoiceReply(en, questions).answers, { 0: { kind: "option", label: "A" } });
+}
+
+// --- 跳过 / 补充说明（2026-10-25）------------------------------------------
+{
+  const qs = [
+    { title: "方案？", options: [{ label: "A" }, { label: "B" }] },
+    { title: "部署？", options: [{ label: "x" }, { label: "y" }] },
+    { title: "验收？", options: [{ label: "p" }, { label: "q" }] },
+  ];
+
+  for (const lang of ["zh", "en"]) {
+    // 选项带补充 + 跳过（省略行）+ 其它带补充
+    const t1 = cb.buildChoiceReplyText(
+      qs,
+      [
+        { kind: "option", label: "A", note: "要兼容旧配置" },
+        { kind: "skip" },
+        { kind: "other", text: "手拷", note: "先应急" },
+      ],
+      lang,
+    );
+    const lines = t1.split("\n");
+    assert.equal(lines.length, 3, "跳过的题不应输出行（header + 2 题）");
+    assert.ok(/补充|note/.test(lines[1]), "选项的补充说明要带在行尾");
+    assert.deepEqual(cb.parseChoiceReply(t1, qs).answers, {
+      0: { kind: "option", label: "A", note: "要兼容旧配置" },
+      1: { kind: "skip" },
+      2: { kind: "other", text: "手拷", note: "先应急" },
+    });
+
+    // 跳过 + 补充 → 无标题的「补充：…」行；未出现的题按跳过处理
+    const t2 = cb.buildChoiceReplyText(qs, [{ kind: "option", label: "B" }, { kind: "skip", note: "这题不适用" }, { kind: "skip" }], lang);
+    assert.ok(/^2\. → (补充|Note)/m.test(t2), "跳过 + 补充应输出不带标题的行");
+    assert.deepEqual(cb.parseChoiceReply(t2, qs).answers, {
+      0: { kind: "option", label: "B" },
+      1: { kind: "skip", note: "这题不适用" },
+      2: { kind: "skip" },
+    });
+
+    // 全部跳过：至少留一行占位，模型不会收到只有标题头的消息
+    const t3 = cb.buildChoiceReplyText(qs, [{ kind: "skip" }, { kind: "skip" }, { kind: "skip" }], lang);
+    assert.ok(t3.includes("全部跳过") || t3.includes("all skipped"));
+    assert.deepEqual(cb.parseChoiceReply(t3, qs).answers, {
+      0: { kind: "skip" },
+      1: { kind: "skip" },
+      2: { kind: "skip" },
+    });
+  }
+
+  // 手工编辑过的消息：带标题的「已跳过」也认
+  assert.deepEqual(cb.parseChoiceReply("我的选择：\n1. 方案？ → 已跳过\n2. 部署？ → x\n3. 验收？ → p", qs).answers, {
+    0: { kind: "skip" },
+    1: { kind: "option", label: "x" },
+    2: { kind: "option", label: "p" },
+  });
+  // 省略标题但不是补充 → 不是我们的格式（避免吞普通消息）
+  assert.equal(cb.parseChoiceReply("我的选择：\n1. → 随便写点什么", qs), null);
+
+  // 整组补充说明：写在最后一题之后，解析成 reply.note（不是任何一题的 note）
+  const t5 = cb.buildChoiceReplyText(qs, [{ kind: "option", label: "A" }, { kind: "skip" }, { kind: "skip" }], "zh", "这组问题还缺一个维度");
+  assert.ok(/^补充：这组问题还缺一个维度$/m.test(t5), "整组补充应单独一行");
+  const r5 = cb.parseChoiceReply(t5, qs);
+  assert.equal(r5.note, "这组问题还缺一个维度");
+  assert.deepEqual(r5.answers, { 0: { kind: "option", label: "A" }, 1: { kind: "skip" }, 2: { kind: "skip" } });
+
+  // 补充说明在回传侧截断到 200
+  const long = "x".repeat(500);
+  const t4 = cb.buildChoiceReplyText(qs, [{ kind: "option", label: "A", note: long }, { kind: "skip" }, { kind: "skip" }], "zh");
+  const p4 = cb.parseChoiceReply(t4, qs).answers;
+  assert.ok(p4[0].note.length <= cb.CHOICE_NOTE_MAX, "补充说明应截断到上限");
 }
 
 // --- panel state derivation ---------------------------------------------------

@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,6 +39,7 @@ internal fun isChoiceAnswered(answer: ChoiceAnswer?): Boolean = when (answer) {
     null -> false
     is ChoiceAnswer.Option -> answer.label.isNotBlank()
     is ChoiceAnswer.Other -> answer.text.isNotBlank()
+    is ChoiceAnswer.Skip -> true // 跳过也算处理过：不再拦「还有 N 题未选择」
 }
 
 /**
@@ -67,6 +69,9 @@ fun ChoicePanel(
 
     val otherText = remember(data) { mutableStateMapOf<Int, String>() }
     var otherOpen by remember(data) { mutableStateOf(-1) }
+    var panelNote by remember(data) { mutableStateOf("") }
+    var noteOpen by remember(data) { mutableStateOf(false) }
+    var noteDraft by remember(data) { mutableStateOf("") }
     var sending by remember(data) { mutableStateOf(false) }
     var showMissing by remember(data) { mutableStateOf(false) }
 
@@ -91,11 +96,45 @@ fun ChoicePanel(
             val current = effective[qi]
 
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = "${qi + 1}. ${question.title}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "${qi + 1}. ${question.title}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (!frozen && current !is ChoiceAnswer.Skip) {
+                        Button(
+                            onClick = {
+                                onDraftChange(qi, ChoiceAnswer.Skip(current?.note))
+                                otherOpen = -1
+                            },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            shape = RoundedCornerShape(50),
+                        ) {
+                            Text(if (zh) "跳过" else "Skip", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (current is ChoiceAnswer.Skip) {
+                        if (!frozen) {
+                            Button(
+                                onClick = { onDraftChange(qi, null) },
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                shape = RoundedCornerShape(50),
+                            ) {
+                                Text(if (zh) "取消跳过" else "Undo", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                        Text(
+                            text = if (zh) "已跳过" else "Skipped",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MpiTheme.colors.textFaint,
+                        )
+                    }
+                }
 
                 question.options.forEach { option ->
                     ChoiceOptionRow(
@@ -104,7 +143,8 @@ fun ChoicePanel(
                         selected = current is ChoiceAnswer.Option && current.label == option.label,
                         frozen = frozen,
                     ) {
-                        onDraftChange(qi, ChoiceAnswer.Option(option.label))
+                        // 换答案时保留已写的补充说明。
+                        onDraftChange(qi, ChoiceAnswer.Option(option.label, current?.note))
                         otherOpen = -1
                     }
                 }
@@ -129,7 +169,7 @@ fun ChoicePanel(
                         },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                     ) {
-                        Text(if (zh) "其它（输入自定义答案）…" else "Other (type your own)…", style = MaterialTheme.typography.labelSmall)
+                        Text(if (zh) "其它（输入自定义答案）…" else "Other (type your own)…", style = MaterialTheme.typography.bodySmall)
                     }
                 }
 
@@ -152,7 +192,7 @@ fun ChoicePanel(
                             onClick = {
                                 val text = otherText[qi].orEmpty().trim()
                                 if (text.isNotEmpty()) {
-                                    onDraftChange(qi, ChoiceAnswer.Other(text))
+                                    onDraftChange(qi, ChoiceAnswer.Other(text, current?.note))
                                     otherOpen = -1
                                 }
                             },
@@ -161,7 +201,58 @@ fun ChoicePanel(
                         ) { Text(if (zh) "确认" else "OK") }
                     }
                 }
+
             }
+        }
+
+        val shownNote = (state as? ChoicePanelState.Answered)?.note ?: panelNote
+
+        if (!frozen && noteOpen) {
+            OutlinedTextField(
+                value = noteDraft,
+                onValueChange = { noteDraft = it.take(CHOICE_NOTE_MAX) },
+                modifier = Modifier.fillMaxWidth().blockAncestorGestures(),
+                placeholder = { Text(if (zh) "补充一句（模型给的问题不够完善时用）…" else "Anything to add?", style = MaterialTheme.typography.bodySmall) },
+                singleLine = true,
+                shape = RoundedCornerShape(10.dp),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick = { noteOpen = false }) { Text(if (zh) "取消" else "Cancel") }
+                Button(
+                    onClick = {
+                        panelNote = noteDraft.trim().take(CHOICE_NOTE_MAX)
+                        noteOpen = false
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                ) { Text(if (zh) "保存补充" else "Save note") }
+            }
+        }
+        if (!frozen && !noteOpen) {
+            OutlinedButton(
+                onClick = {
+                    noteDraft = shownNote
+                    noteOpen = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+            ) {
+                Text(
+                    text = if (shownNote.isBlank()) {
+                        if (zh) "补充说明（整组题目的补充）…" else "Add a note for the whole set…"
+                    } else {
+                        (if (zh) "补充：" else "Note: ") + shownNote
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                )
+            }
+        }
+        if (frozen && shownNote.isNotBlank()) {
+            Text(
+                text = (if (zh) "补充：" else "Note: ") + shownNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = MpiTheme.colors.textFaint,
+            )
         }
 
         val missing = data.questions.indices.count { !isChoiceAnswered(effective[it]) }
@@ -192,7 +283,7 @@ fun ChoicePanel(
                     }
                     sending = true
                     val list = data.questions.indices.map { effective[it] }
-                    onSend(buildChoiceReplyText(data.questions, list, language))
+                    onSend(buildChoiceReplyText(data.questions, list, language, panelNote))
                     // 发出去了就不再是草稿（乐观回显后状态会变成 answered，草稿留着也无意义）
                     onClearDrafts()
                 },

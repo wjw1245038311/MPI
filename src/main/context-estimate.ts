@@ -250,6 +250,8 @@ export function earlierDisplayMessages(entries: unknown, leafId?: string | null)
     if (e.type === "message" && e.message) {
       out.push(e.message);
     } else if (e.type === "custom_message") {
+      // display:false 的是给模型的隐藏指令（如 choices 格式修正），不属于展示内容。
+      if ((e as any).display === false) continue;
       // pi createCustomMessage 形状
       out.push({
         role: "custom",

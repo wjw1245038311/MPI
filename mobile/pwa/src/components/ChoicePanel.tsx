@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   buildChoiceReplyText,
+  CHOICE_NOTE_MAX,
   deriveChoicePanelState,
   type ChoiceAnswer,
   type ChoiceBlockData,
@@ -61,7 +62,13 @@ function writeDrafts(threadId: string, map: DraftMap): void {
 
 function isAnswered(a?: ChoiceAnswer): boolean {
   if (!a) return false;
+  if (a.kind === "skip") return true; // 跳过也算处理过
   return a.kind === "option" ? !!a.label : !!a.text.trim();
+}
+
+/** 当前答案上的补充说明（没有答案时为空串）。 */
+function noteOf(a?: ChoiceAnswer): string {
+  return a && "note" in a ? (a.note ?? "") : "";
 }
 
 /** 面板内的勾选图标（无图标库，手写最小 SVG）。 */
@@ -108,6 +115,9 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
   // 本地 UI：细节展开 / 「其它」输入开合与内容 / 漏选提示 / 发送中。
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [otherOpen, setOtherOpen] = useState<Set<number>>(new Set());
+  const [panelNote, setPanelNote] = useState("");
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
   const [otherText, setOtherText] = useState<Record<number, string>>({});
   const [showMissing, setShowMissing] = useState(false);
   const [sending, setSending] = useState(false);
@@ -117,6 +127,8 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
   const answers: Partial<Record<number, ChoiceAnswer>> = state.kind === "answered" ? state.answers : draft;
   const answeredCount = data.questions.reduce((n, _q, i) => n + (isAnswered(answers[i]) ? 1 : 0), 0);
   const missingCount = data.questions.length - answeredCount;
+  /** 冻结后显示历史里的整组补充；提交前显示本地输入的。 */
+  const shownNote = state.kind === "answered" ? (state.note ?? "") : panelNote;
 
   const toggleDetail = (key: string) => {
     setExpanded((prev) => {
@@ -129,7 +141,32 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
 
   const selectOption = (qi: number, label: string) => {
     if (frozen) return;
-    setDraft((prev) => ({ ...prev, [qi]: { kind: "option", label } }));
+    // 换答案时保留已写的补充说明。
+    setDraft((prev) => {
+      const note = noteOf(prev[qi]);
+      return { ...prev, [qi]: note ? { kind: "option", label, note } : { kind: "option", label } };
+    });
+    setShowMissing(false);
+    setError(null);
+  };
+
+  /** 跳过此题：不回传给模型（整行省略）；同一个按钮再点一次即取消跳过。 */
+  const skipQuestion = (qi: number) => {
+    if (frozen) return;
+    setDraft((prev) => ({ ...prev, [qi]: { kind: "skip" } }));
+    closeOther(qi);
+    setShowMissing(false);
+    setError(null);
+  };
+
+  /** 取消跳过：清掉该题草稿，回到「未选」状态。 */
+  const undoSkip = (qi: number) => {
+    if (frozen) return;
+    setDraft((prev) => {
+      const next = { ...prev };
+      delete next[qi];
+      return next;
+    });
     setShowMissing(false);
     setError(null);
   };
@@ -139,6 +176,18 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
     const current = answers[qi];
     setOtherText((prev) => ({ ...prev, [qi]: current?.kind === "other" ? current.text : prev[qi] ?? "" }));
     setOtherOpen((prev) => new Set(prev).add(qi));
+  };
+
+  /** 打开整组补充说明：预填已写内容。 */
+  const openNote = () => {
+    if (frozen) return;
+    setNoteDraft(shownNote);
+    setNoteOpen(true);
+  };
+
+  const saveNote = () => {
+    setPanelNote(noteDraft.slice(0, CHOICE_NOTE_MAX).trim());
+    setNoteOpen(false);
   };
 
   const closeOther = (qi: number) => {
@@ -153,7 +202,10 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
     if (frozen) return;
     const text = (otherText[qi] ?? "").trim();
     if (!text) return;
-    setDraft((prev) => ({ ...prev, [qi]: { kind: "other", text } }));
+    setDraft((prev) => {
+      const note = noteOf(prev[qi]);
+      return { ...prev, [qi]: note ? { kind: "other", text, note } : { kind: "other", text } };
+    });
     closeOther(qi);
     setShowMissing(false);
     setError(null);
@@ -168,7 +220,7 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
     setSending(true);
     setError(null);
     try {
-      await onSend(buildChoiceReplyText(data.questions, data.questions.map((_q, i) => answers[i] ?? null), "zh"));
+      await onSend(buildChoiceReplyText(data.questions, data.questions.map((_q, i) => answers[i] ?? null), "zh", panelNote));
       // 发送成功才清草稿（失败保留，重发不丢选择）。状态随后由会话推导冻结：
       // 乐观回显的用户消息已能解析成组合回复 → answered。
       setDraft({});
@@ -198,7 +250,22 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
           <div key={qi} className="cp-q">
             <div className="cp-q-title">
               <span className="cp-q-num">{qi + 1}</span>
-              {q.title}
+              <span className="cp-q-title-text">{q.title}</span>
+              {a?.kind === "skip" ? (
+                frozen ? (
+                  <span className="cp-skip-done">已跳过</span>
+                ) : (
+                  <button type="button" className="cp-skip-btn" onClick={() => undoSkip(qi)}>
+                    取消跳过
+                  </button>
+                )
+              ) : (
+                !frozen && (
+                  <button type="button" className="cp-skip-btn" onClick={() => skipQuestion(qi)}>
+                    跳过
+                  </button>
+                )
+              )}
             </div>
 
             {q.options.map((opt) => {
@@ -260,9 +327,49 @@ export function ChoicePanel({ data, threadId, messageId, blockIndex, panelIndex,
                 <span className="cp-opt-label">其它：{a.text}</span>
               </div>
             )}
+
           </div>
         );
       })}
+
+      {/* 整组补充说明：与「其它」同款整行框；保存后仍以同款可见、点击可改。 */}
+      {!frozen && noteOpen ? (
+        <div className="cp-note-input">
+          <div className="cp-note-input-head">补充说明（整组题目的补充）</div>
+          <input
+            type="text"
+            autoFocus
+            maxLength={CHOICE_NOTE_MAX}
+            value={noteDraft}
+            placeholder="补充一句（模型给的问题不够完善时用）…"
+            onChange={(e) => setNoteDraft(e.target.value.slice(0, CHOICE_NOTE_MAX))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveNote();
+              else if (e.key === "Escape") setNoteOpen(false);
+            }}
+          />
+          <div className="cp-note-meta">
+            {noteDraft.length}/{CHOICE_NOTE_MAX}
+          </div>
+          <div className="cp-other-row">
+            <button type="button" className="cp-btn" onClick={() => setNoteOpen(false)}>取消</button>
+            <button type="button" className="cp-btn primary" onClick={saveNote}>保存补充</button>
+          </div>
+        </div>
+      ) : shownNote ? (
+        <div
+          className={`cp-opt cp-note-entry has-note ${!frozen ? "editable" : ""}`}
+          onClick={() => !frozen && openNote()}
+        >
+          <span className="cp-opt-label">补充：{shownNote}</span>
+        </div>
+      ) : (
+        !frozen && (
+          <button type="button" className="cp-opt cp-other-toggle cp-note-entry" onClick={openNote}>
+            补充说明（整组题目的补充）…
+          </button>
+        )
+      )}
 
       <div className="cp-foot">
         {showMissing && !frozen && missingCount > 0 ? (

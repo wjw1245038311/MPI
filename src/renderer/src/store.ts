@@ -730,6 +730,9 @@ function historyToView(
         errorMessage: m.errorMessage,
       });
     } else if (m.role === "custom") {
+      // display:false 的扩展消息（如 choices 格式修正指令）只进模型上下文，
+      // 不在界面留痕——重载历史时同样要过滤，否则刷新后又冒出来。
+      if (m.display === false) return;
       const text = textOfContent(m.content);
       if (!text) return;
       views.push({
@@ -857,6 +860,13 @@ function detectBricked(errMsg?: unknown): { kind: "whitespace" | "stale-compacti
 function reduceThread(t: ThreadState, event: any): ThreadState {
   if (!event || typeof event !== "object") return t;
   switch (event.type) {
+    case "choice_retry_start": {
+      // 自动重试开始：记下「被重试的那条失败回答」的 key。渲染层据此收起那条
+      // 「未渲染成面板」提示——重试成功后会出面板，留着会让用户以为还没修好。
+      const last = [...t.messages].reverse().find((m) => m.role === "assistant");
+      if (!last) return t;
+      return { ...t, choiceRetryFromKey: last.key };
+    }
     case "agent_start":
       // turnStartedAt 只在「本轮还没在等」时才取当前时刻：正常发送路径已在用户按下
       // 发送时就写过它，这里覆盖会让秒数从 agent_start 重新起算。自动续跑等未经
@@ -934,6 +944,8 @@ function reduceThread(t: ThreadState, event: any): ThreadState {
       }
       if (m.role === "custom") {
         // Extension command output (e.g. /mem0-status via pi.sendMessage).
+        // display:false 的是隐藏指令（choices 格式修正），用户不该看到。
+        if (m.display === false) return t;
         const text = textOfContent(m.content);
         if (!text) return t;
         const view: ViewMessage = {

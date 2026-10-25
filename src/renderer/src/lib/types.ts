@@ -461,6 +461,10 @@ export interface ThreadState {
   pendingEditorText?: string;
   /** Follow-up queued via Enter while streaming; delivered when the agent settles. */
   pendingFollowUp?: PendingFollowUp | null;
+  /** 自动重试（choices 格式修正）正在代替哪条 assistant 消息：那条原消息的
+   *  「未渲染成面板」降级提示要隐藏——重试成功后会出面板，留着提示会让用户
+   *  以为还没修好（用户要求：重试对用户无感）。 */
+  choiceRetryFromKey?: string | null;
 }
 
 export interface PreviewPayload {

@@ -821,7 +821,12 @@ button:disabled { opacity: 0.5; cursor: default; }
 .cp-status.done { color: var(--ok); }
 
 .cp-q { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 8px; }
-.cp-q-title { font-size: 14px; font-weight: 600; line-height: 1.4; display: flex; align-items: baseline; gap: 6px; }
+.cp-q-title { font-size: 14px; font-weight: 600; line-height: 1.4; display: flex; align-items: center; gap: 6px; }
+.cp-q-title-text { flex: 1; min-width: 0; }
+.cp-skip-btn { flex: 0 0 auto; padding: 4px 12px; border: none; border-radius: 999px; background: var(--send); color: var(--send-fg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.cp-skip-btn:active { opacity: 0.85; }
+.cp-skip-done { flex: 0 0 auto; color: var(--text-dim); font-size: 12px; font-weight: 500; }
+.cp-q.skipped .cp-q-title-text { color: var(--text-dim); text-decoration: line-through; }
 .cp-q-num { color: var(--accent); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 /* 选项行：整块可点（≥42px 触控目标）；「细节」按钮嵌在行内右侧。 */
@@ -1040,3 +1045,15 @@ button:disabled { opacity: 0.5; cursor: default; }
   }
   .drawer.drawer-secondary.open { transform: none; }
 }
+
+/* 整组补充说明（choices 面板，2026-10-25） */
+.cp-note-entry { justify-content: center; margin-top: 8px; border-style: dashed; border-color: var(--border-strong); background: transparent; color: var(--text-dim); font: inherit; font-size: 13px; min-height: 42px; }
+.cp-note-entry.has-note { justify-content: flex-start; border-style: solid; background: var(--surface); color: var(--text); }
+.cp-note-entry.editable { cursor: pointer; }
+.cp-note-input { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); }
+.cp-note-input-head { font-size: 12px; color: var(--text-dim); }
+.cp-note-input input { width: 100%; }
+.cp-note-meta { font-size: 11px; color: var(--text-dim); text-align: right; font-variant-numeric: tabular-nums; }
+.cp-note-btn { margin-right: auto; padding: 5px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text-dim); font: inherit; font-size: 13px; cursor: pointer; }
+.cp-note-btn:active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.cp-note-shown { margin-right: auto; padding: 4px 9px; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; background: var(--accent-soft); color: var(--text); font-size: 13px; word-break: break-word; }

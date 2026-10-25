@@ -53,8 +53,19 @@ export interface ChoiceClampInfo {
 /** choices 围栏正文解析失败的原因（精确降级提示用，对齐桌面端）。 */
 export type ChoiceFailure = "syntax" | "shape";
 
-/** 一题的一个答案：预设选项或「其它」自由文本。 */
-export type ChoiceAnswer = { kind: "option"; label: string } | { kind: "other"; text: string };
+/**
+ * 一题的一个答案（与桌面端同一契约）。
+ * - option：预设选项；other：自定义文本；skip：跳过这题。
+ * - note：可选「补充说明」（≤200 字），与答案并存。
+ *   跳过的题默认不回传给模型；只有写了补充才回传一行「2. → 补充：…」。
+ */
+export type ChoiceAnswer =
+  | { kind: "option"; label: string; note?: string }
+  | { kind: "other"; text: string; note?: string }
+  | { kind: "skip"; note?: string };
+
+/** 补充说明的长度上限（输入与回传双层截断）。 */
+export const CHOICE_NOTE_MAX = 200;
 
 const MAX_QUESTIONS = 6;
 const MIN_OPTIONS = 2;
@@ -487,72 +498,155 @@ function toPlainSegment(seg: TextSegment): ChoiceAwareSegment {
 const OTHER_PREFIX_ZH = "其它：";
 const OTHER_PREFIX_EN = "Other: ";
 
+// 跳过的题默认**整行省略**（用户 2026-10-25 要求：前题选项与后题无关时，「题目都
+// 不用给了」）；全部跳过时至少留一行 `（全部跳过）`，免得模型收到只有标题头的消息。
+// 「补充说明」是**整组题目**的补充（不是每题一个），写在最后一题之后：`补充：…`。
+
+/**
+ * 解析结果：逐题答案 + 整组的补充说明。
+ * 兼容旧格式：选项行尾的 `（补充：…）` 与「N. → 补充：…」仍会被解析成该题的 note。
+ */
+export interface ChoiceReply {
+  answers: Record<number, ChoiceAnswer>;
+  /** 整组题目的补充说明（最后一题之后的那一行）。 */
+  note?: string;
+}
+
 /** Build the combined user message sent when every question has an answer. */
 export function buildChoiceReplyText(
   questions: ChoiceBlockQuestion[],
   answers: (ChoiceAnswer | null)[],
   language: "zh" | "en",
+  panelNote?: string,
 ): string {
   const zh = language === "zh";
   const lines = [zh ? "我的选择：" : "My choices:"];
+  let emitted = 0;
   questions.forEach((q, i) => {
     const a = answers[i] ?? null;
+    const note = (a && "note" in a ? a.note : "")?.slice(0, CHOICE_NOTE_MAX).trim();
+    if (a?.kind === "skip") {
+      if (note) {
+        lines.push(`${i + 1}. → ${zh ? "补充：" : "Note: "}${note}`);
+        emitted++;
+      }
+      return;
+    }
     const ans = !a
-      ? zh ? "（未选）" : "(none)"
-      : a.kind === "option" ? a.label : `${zh ? OTHER_PREFIX_ZH : OTHER_PREFIX_EN}${a.text}`;
-    lines.push(`${i + 1}. ${q.title} → ${ans}`);
+      ? zh
+        ? "（未选）"
+        : "(none)"
+      : a.kind === "option"
+        ? a.label
+        : `${zh ? OTHER_PREFIX_ZH : OTHER_PREFIX_EN}${a.text}`;
+    const suffix = note ? (zh ? `（补充：${note}）` : ` (note: ${note})`) : "";
+    lines.push(`${i + 1}. ${q.title} → ${ans}${suffix}`);
+    emitted++;
   });
+  if (!emitted) lines.push(zh ? "（全部跳过）" : "(all skipped)");
+  const whole = (panelNote ?? "").slice(0, CHOICE_NOTE_MAX).trim();
+  if (whole) lines.push(`${zh ? "补充：" : "Note: "}${whole}`);
   return lines.join("\n");
 }
 
 const REPLY_HEADER_RE = /^(我的选择|My choices)\s*[:：]$/i;
-const REPLY_LINE_RE = /^(\d+)\s*[.、)]\s*(.+?)\s*(?:→|->)\s*(.+)$/;
+/** 标题允许为空：跳过 + 补充的行是 `2. → 补充：…`。 */
+const REPLY_LINE_RE = /^(\d+)\s*[.、)]\s*(.*?)\s*(?:→|->)\s*(.+)$/;
 const OTHER_ANSWER_RE = /^(其它|Other)\s*[:：]\s*(\S.*)$/i;
+const SKIP_ANSWER_RE = /^(已跳过|跳过|skipped)$/i;
+const ALL_SKIP_RE = /^(（全部跳过）|\(all skipped\))$/i;
+const NOTE_SUFFIX_ZH_RE = /（补充[：:]\s*([\s\S]*?)）\s*$/;
+const NOTE_SUFFIX_EN_RE = /\(note\s*[:：]\s*([\s\S]*?)\)\s*$/i;
+const NOTE_ONLY_RE = /^(补充|Note)\s*[:：]\s*([\s\S]*)$/i;
 
 function normTitle(t: string): string {
   return t.replace(/\s+/g, " ").trim();
 }
 
+/** 拆出答案尾部的补充说明；没有则原样返回。 */
+function splitAnswerNote(text: string): { main: string; note: string } {
+  const zh = NOTE_SUFFIX_ZH_RE.exec(text);
+  if (zh) return { main: text.slice(0, zh.index).trim(), note: zh[1].trim() };
+  const en = NOTE_SUFFIX_EN_RE.exec(text);
+  if (en) return { main: text.slice(0, en.index).trim(), note: en[1].trim() };
+  return { main: text.trim(), note: "" };
+}
+
+/** 整组补充那一行：没有题号（带题号的是 `2. → 补充：…`，走 REPLY_LINE_RE）。 */
+const PANEL_NOTE_RE = /^(补充|Note)\s*[:：]\s*(.+)$/i;
+
 /**
- * Parse a user message back into per-question answers when it matches the
- * combined-reply format AND lines up with `questions` (count + titles).
- * Returns null for anything else（调用方视为「面板被普通回复取代」）。
+ * Parse a user message back into per-question answers (+ 整组补充) when it
+ * matches the combined-reply format produced by buildChoiceReplyText。
+ *
+ * 没出现的题 = 「跳过」（build 侧省略了它们）。返回 null 表示这条消息不是我们
+ * 的组合回复（调用方按「面板被取代」处理）。
  */
-export function parseChoiceReply(rawText: unknown, questions: ChoiceBlockQuestion[]): Record<number, ChoiceAnswer> | null {
+export function parseChoiceReply(rawText: unknown, questions: ChoiceBlockQuestion[]): ChoiceReply | null {
   if (typeof rawText !== "string") return null;
   const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (!lines.length || !REPLY_HEADER_RE.test(lines[0])) return null;
 
   const out: Record<number, ChoiceAnswer> = {};
+  let panelNote = "";
   for (let k = 1; k < lines.length; k++) {
+    if (ALL_SKIP_RE.test(lines[k])) {
+      questions.forEach((_q, i) => {
+        out[i] = { kind: "skip" };
+      });
+      continue;
+    }
+    // 整组补充：单独一行 `补充：…`（没有题号）。
+    const whole = PANEL_NOTE_RE.exec(lines[k]);
+    if (whole) {
+      panelNote = whole[2].trim().slice(0, CHOICE_NOTE_MAX);
+      continue;
+    }
     const m = REPLY_LINE_RE.exec(lines[k]);
     if (!m) return null;
     const idx = Number(m[1]) - 1;
     const q = questions[idx];
-    if (!q || normTitle(m[2]) !== normTitle(q.title)) return null;
+    if (!q) return null;
+    const title = m[2].trim();
+    const { main, note } = splitAnswerNote(m[3].trim());
 
-    const answerText = m[3].trim();
-    const option = q.options.find((o) => o.label === answerText);
+    if (!title) {
+      // 省略标题：只接受 `2. → 补充：…`（跳过 + 一句原因，旧格式兼容）。
+      const only = NOTE_ONLY_RE.exec(main);
+      if (!only || !only[2].trim()) return null;
+      out[idx] = { kind: "skip", note: only[2].trim().slice(0, CHOICE_NOTE_MAX) };
+      continue;
+    }
+    if (normTitle(title) !== normTitle(q.title)) return null;
+
+    const option = q.options.find((o) => o.label === main);
     if (option) {
-      out[idx] = { kind: "option", label: option.label };
+      out[idx] = note ? { kind: "option", label: option.label, note } : { kind: "option", label: option.label };
       continue;
     }
-    const other = OTHER_ANSWER_RE.exec(answerText);
+    if (SKIP_ANSWER_RE.test(main)) {
+      out[idx] = note ? { kind: "skip", note } : { kind: "skip" };
+      continue;
+    }
+    const other = OTHER_ANSWER_RE.exec(main);
     if (other) {
-      out[idx] = { kind: "other", text: other[2].trim() };
+      out[idx] = note ? { kind: "other", text: other[2].trim(), note } : { kind: "other", text: other[2].trim() };
       continue;
     }
-    return null; // answer matches neither an option nor the 其它 format
+    return null; // answer matches neither an option nor a known format
   }
-  if (Object.keys(out).length !== questions.length) return null;
-  return out;
+  // 没出现的题 = 跳过（build 侧省略了它们）。
+  for (let i = 0; i < questions.length; i++) {
+    if (!(i in out)) out[i] = { kind: "skip" };
+  }
+  return panelNote ? { answers: out, note: panelNote } : { answers: out };
 }
 
 // ---- 面板状态推导（从会话记录，无额外存储） -----------------------------------
 
 export type ChoicePanelState =
   | { kind: "pending" }
-  | { kind: "answered"; answers: Record<number, ChoiceAnswer> }
+  | { kind: "answered"; answers: Record<number, ChoiceAnswer>; note?: string }
   /** A user message followed the block but is not our combined reply. */
   | { kind: "superseded" };
 
@@ -585,6 +679,8 @@ export function deriveChoicePanelState(
   if (idx === -1) return { kind: "pending" };
   const nextUser = messages.slice(idx + 1).find((m) => m.role === "user");
   if (!nextUser) return { kind: "pending" };
-  const answers = parseChoiceReply(messageTextOf(nextUser), data.questions);
-  return answers ? { kind: "answered", answers } : { kind: "superseded" };
+  const reply = parseChoiceReply(messageTextOf(nextUser), data.questions);
+  return reply
+    ? { kind: "answered", answers: reply.answers, ...(reply.note ? { note: reply.note } : {}) }
+    : { kind: "superseded" };
 }

@@ -26,6 +26,7 @@
     "src/main/mpi-taskmode-ext.ts",
     "src/main/mpi-shelenv-ext.ts",
     "src/main/mpi-memory-ext.ts",
+    "src/main/mpi-choice-retry-ext.ts",
     "src/main/mpi-image-ref-ext.ts",
     "src/main/messaging/channel-command-ext.ts"
   ]

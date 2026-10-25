@@ -180,8 +180,8 @@ class ChoiceLogicTest {
         assertTrue(reply.startsWith("我的选择："))
 
         val parsed = parseChoiceReply(reply, data.questions)
-        assertEquals(ChoiceAnswer.Option("A"), parsed?.get(0))
-        assertEquals(ChoiceAnswer.Other("先不跑"), parsed?.get(1))
+        assertEquals(ChoiceAnswer.Option("A"), parsed?.answers?.get(0))
+        assertEquals(ChoiceAnswer.Other("先不跑"), parsed?.answers?.get(1))
     }
 
     @Test
@@ -195,6 +195,67 @@ class ChoiceLogicTest {
         val data = parseChoiceBlockData(body)!!
         val wrong = "我的选择：\n1. 另一个问题 → A\n2. 要不要跑测试 → 要"
         assertNull(parseChoiceReply(wrong, data.questions))
+    }
+
+    @Test
+    fun `skipped questions are omitted but still parse back`() {
+        val data = parseChoiceBlockData(body)!!
+        val reply = buildChoiceReplyText(
+            data.questions,
+            listOf(ChoiceAnswer.Option("A"), ChoiceAnswer.Skip()),
+            "zh",
+        )
+        assertEquals("跳过的题不应输出行（header + 1 题）", 2, reply.lines().size)
+        val parsed = parseChoiceReply(reply, data.questions)!!.answers
+        assertEquals(ChoiceAnswer.Option("A"), parsed[0])
+        assertEquals(ChoiceAnswer.Skip(), parsed[1])
+    }
+
+    @Test
+    fun `skip with a note is sent without the question title`() {
+        val data = parseChoiceBlockData(body)!!
+        val reply = buildChoiceReplyText(
+            data.questions,
+            listOf(ChoiceAnswer.Option("A", "要兼容旧配置"), ChoiceAnswer.Skip("这题不适用")),
+            "zh",
+        )
+        assertTrue(reply.contains("（补充：要兼容旧配置）"))
+        assertTrue(Regex("^2\\. → 补充：这题不适用$", RegexOption.MULTILINE).containsMatchIn(reply))
+        val parsed = parseChoiceReply(reply, data.questions)!!.answers
+        assertEquals(ChoiceAnswer.Option("A", "要兼容旧配置"), parsed[0])
+        assertEquals(ChoiceAnswer.Skip("这题不适用"), parsed[1])
+    }
+
+    @Test
+    fun `all skipped leaves a placeholder line`() {
+        val data = parseChoiceBlockData(body)!!
+        val reply = buildChoiceReplyText(data.questions, listOf(ChoiceAnswer.Skip(), ChoiceAnswer.Skip()), "zh")
+        assertTrue(reply.contains("（全部跳过）"))
+        val parsed = parseChoiceReply(reply, data.questions)!!.answers
+        assertEquals(ChoiceAnswer.Skip(), parsed[0])
+        assertEquals(ChoiceAnswer.Skip(), parsed[1])
+    }
+
+    @Test
+    fun `whole-set note goes after the last question`() {
+        val data = parseChoiceBlockData(body)!!
+        val reply = buildChoiceReplyText(
+            data.questions,
+            listOf(ChoiceAnswer.Option("A"), ChoiceAnswer.Skip()),
+            "zh",
+            "这组问题还缺一个维度",
+        )
+        assertTrue(reply.lines().last() == "补充：这组问题还缺一个维度")
+        val parsed = parseChoiceReply(reply, data.questions)!!
+        assertEquals("这组问题还缺一个维度", parsed.note)
+        assertEquals(ChoiceAnswer.Option("A"), parsed.answers[0])
+        assertEquals(ChoiceAnswer.Skip(), parsed.answers[1])
+    }
+
+    @Test
+    fun `a title-less line that is not a note is rejected`() {
+        val data = parseChoiceBlockData(body)!!
+        assertNull(parseChoiceReply("我的选择：\n1. → 随便写点什么", data.questions))
     }
 
     // ---- 状态推导 ----
@@ -238,5 +299,6 @@ class ChoiceLogicTest {
         assertTrue(isChoiceAnswered(ChoiceAnswer.Other("x")))
         assertTrue(!isChoiceAnswered(ChoiceAnswer.Other("   ")))
         assertTrue(!isChoiceAnswered(null))
+        assertTrue(isChoiceAnswered(ChoiceAnswer.Skip()))
     }
 }

@@ -36,22 +36,36 @@ enum class ChoiceFailure { SYNTAX, SHAPE }
 
 data class ChoiceBlockData(val questions: List<ChoiceBlockQuestion>, val clamped: ChoiceClampInfo? = null)
 
-/** 一题的一个答案：预设选项或「其它」自由文本。 */
+/**
+ * 一题的一个答案（与桌面端/PWA 同一契约）。
+ * - [Option] 预设选项；[Other] 自定义文本；[Skip] 跳过这题。
+ * - note：可选「补充说明」（≤200 字），与答案并存。
+ *   跳过的题默认不回传给模型；写了补充才回传一行「2. → 补充：…」。
+ */
 sealed interface ChoiceAnswer {
-    data class Option(val label: String) : ChoiceAnswer
-    data class Other(val text: String) : ChoiceAnswer
+    val note: String?
+
+    data class Option(val label: String, override val note: String? = null) : ChoiceAnswer
+    data class Other(val text: String, override val note: String? = null) : ChoiceAnswer
+    data class Skip(override val note: String? = null) : ChoiceAnswer
 }
+
+/** 补充说明的长度上限（输入与回传双层截断）。 */
+const val CHOICE_NOTE_MAX = 200
 
 sealed interface ChoicePanelState {
     /** 还没回答（该 assistant 消息之后没有 user 消息）。 */
     data object Pending : ChoicePanelState
 
-    /** 已被本条组合回复回答。 */
-    data class Answered(val answers: Map<Int, ChoiceAnswer>) : ChoicePanelState
+    /** 已被本条组合回复回答（note = 整组补充说明）。 */
+    data class Answered(val answers: Map<Int, ChoiceAnswer>, val note: String? = null) : ChoicePanelState
 
     /** 后面跟了一条 user 消息，但不是我们的组合回复格式（面板作废）。 */
     data object Superseded : ChoicePanelState
 }
+
+/** 解析结果：逐题答案 + 整组的补充说明。 */
+data class ChoiceReply(val answers: Map<Int, ChoiceAnswer>, val note: String? = null)
 
 private const val MAX_QUESTIONS = 6
 private const val MIN_OPTIONS = 2
@@ -482,62 +496,127 @@ internal fun withChoiceSegments(segments: List<Segment>, finalized: Boolean): Li
 }
 
 // ---- 回复构造 + 解析（与桌面端同一契约） -------------------------------------
+// 跳过的题默认整行省略（前题选项与后题无关时，「题目都不用给了」）；写了补充说明
+// 才回传一行 `2. → 补充：…`（不带标题）。全部跳过时留一行 `（全部跳过）`。
 
 /** 全部题目都有答案时发出的组合消息。 */
 fun buildChoiceReplyText(
     questions: List<ChoiceBlockQuestion>,
     answers: List<ChoiceAnswer?>,
     language: String,
+    panelNote: String? = null,
 ): String {
     val zh = language == "zh"
     val lines = mutableListOf(if (zh) "我的选择：" else "My choices:")
+    var emitted = 0
     questions.forEachIndexed { index, question ->
         val answer = answers.getOrNull(index)
+        val note = answer?.note?.take(CHOICE_NOTE_MAX)?.trim().orEmpty()
+        if (answer is ChoiceAnswer.Skip) {
+            if (note.isNotEmpty()) {
+                lines += "${index + 1}. → " + (if (zh) "补充：" else "Note: ") + note
+                emitted++
+            }
+            return@forEachIndexed
+        }
         val text = when {
             answer == null -> if (zh) "（未选）" else "(none)"
             answer is ChoiceAnswer.Option -> answer.label
             answer is ChoiceAnswer.Other -> (if (zh) OTHER_PREFIX_ZH else OTHER_PREFIX_EN) + answer.text
             else -> ""
         }
-        lines += "${index + 1}. ${question.title} → $text"
+        val suffix = if (note.isEmpty()) "" else if (zh) "（补充：$note）" else " (note: $note)"
+        lines += "${index + 1}. ${question.title} → $text$suffix"
+        emitted++
     }
+    if (emitted == 0) lines += if (zh) "（全部跳过）" else "(all skipped)"
+    // 整组补充：写在最后一题之后（不是每题一个）。
+    val whole = panelNote?.take(CHOICE_NOTE_MAX)?.trim().orEmpty()
+    if (whole.isNotEmpty()) lines += (if (zh) "补充：$whole" else "Note: $whole")
     return lines.joinToString("\n")
 }
 
 private val REPLY_HEADER_RE = Regex("^(我的选择|My choices)\\s*[:：]$", RegexOption.IGNORE_CASE)
-private val REPLY_LINE_RE = Regex("^(\\d+)\\s*[.、)]\\s*(.+?)\\s*(?:→|->)\\s*(.+)$")
+/** 标题允许为空：跳过 + 补充的行是 `2. → 补充：…`。 */
+private val REPLY_LINE_RE = Regex("^(\\d+)\\s*[.、)]\\s*(.*?)\\s*(?:→|->)\\s*(.+)$")
 private val OTHER_ANSWER_RE = Regex("^(其它|Other)\\s*[:：]\\s*(\\S.*)$", RegexOption.IGNORE_CASE)
+private val SKIP_ANSWER_RE = Regex("^(已跳过|跳过|skipped)$", RegexOption.IGNORE_CASE)
+private val ALL_SKIP_RE = Regex("^(（全部跳过）|\\(all skipped\\))$")
+private val NOTE_SUFFIX_ZH_RE = Regex("（补充[：:]\\s*([\\s\\S]*?)）\\s*$")
+private val NOTE_SUFFIX_EN_RE = Regex("\\(note\\s*[:：]\\s*([\\s\\S]*?)\\)\\s*$", RegexOption.IGNORE_CASE)
+private val NOTE_ONLY_RE = Regex("^(补充|Note)\\s*[:：]\\s*([\\s\\S]*)$", RegexOption.IGNORE_CASE)
+/** 整组补充那一行：没有题号。 */
+private val PANEL_NOTE_RE = Regex("^(补充|Note)\\s*[:：]\\s*(.+)$", RegexOption.IGNORE_CASE)
+
+/** 拆出答案尾部的补充说明；没有则原样返回。 */
+private fun splitAnswerNote(text: String): Pair<String, String> {
+    NOTE_SUFFIX_ZH_RE.find(text)?.let { m ->
+        return text.substring(0, m.range.first).trim() to m.groupValues[1].trim()
+    }
+    NOTE_SUFFIX_EN_RE.find(text)?.let { m ->
+        return text.substring(0, m.range.first).trim() to m.groupValues[1].trim()
+    }
+    return text.trim() to ""
+}
 
 /**
- * 把一条 user 消息解析回逐题答案——仅当它匹配组合回复格式**且**逐行与
+ * 把一条 user 消息解析回逐题答案——仅当它匹配组合回复格式且逐行与
  * [questions] 的题号 / 标题对得上；否则返回 null（调用方视为「面板被取代」）。
+ * 没出现的题 = 「跳过」（build 侧省略了它们）。
  */
-fun parseChoiceReply(rawText: String?, questions: List<ChoiceBlockQuestion>): Map<Int, ChoiceAnswer>? {
+fun parseChoiceReply(rawText: String?, questions: List<ChoiceBlockQuestion>): ChoiceReply? {
     if (rawText == null) return null
     val lines = rawText.split(Regex("\\r?\\n")).map { it.trim() }.filter { it.isNotEmpty() }
     if (lines.isEmpty() || !REPLY_HEADER_RE.matches(lines[0])) return null
 
     val out = mutableMapOf<Int, ChoiceAnswer>()
+    var panelNote: String? = null
     for (k in 1 until lines.size) {
+        if (ALL_SKIP_RE.matches(lines[k])) {
+            questions.indices.forEach { out[it] = ChoiceAnswer.Skip() }
+            continue
+        }
+        // 整组补充：没有题号的一行（带题号的走下面的 REPLY_LINE_RE）。
+        val whole = PANEL_NOTE_RE.matchEntire(lines[k])
+        if (whole != null) {
+            panelNote = whole.groupValues[2].trim().take(CHOICE_NOTE_MAX).ifEmpty { null }
+            continue
+        }
         val m = REPLY_LINE_RE.matchEntire(lines[k]) ?: return null
         val idx = m.groupValues[1].toIntOrNull()?.minus(1) ?: return null
         val question = questions.getOrNull(idx) ?: return null
-        if (normalizeSpace(m.groupValues[2]) != normalizeSpace(question.title)) return null
+        val title = m.groupValues[2].trim()
+        val (main, note) = splitAnswerNote(m.groupValues[3].trim())
+        val noteOrNull = note.ifEmpty { null }
 
-        val answerText = m.groupValues[3].trim()
-        val option = question.options.firstOrNull { it.label == answerText }
-        if (option != null) {
-            out[idx] = ChoiceAnswer.Option(option.label)
+        if (title.isEmpty()) {
+            // 省略标题：只接受 `2. → 补充：…`（跳过 + 一句原因）。
+            val only = NOTE_ONLY_RE.matchEntire(main) ?: return null
+            val reason = only.groupValues[2].trim()
+            if (reason.isEmpty()) return null
+            out[idx] = ChoiceAnswer.Skip(reason.take(CHOICE_NOTE_MAX))
             continue
         }
-        val other = OTHER_ANSWER_RE.matchEntire(answerText)
+        if (normalizeSpace(title) != normalizeSpace(question.title)) return null
+
+        val option = question.options.firstOrNull { it.label == main }
+        if (option != null) {
+            out[idx] = ChoiceAnswer.Option(option.label, noteOrNull)
+            continue
+        }
+        if (SKIP_ANSWER_RE.matches(main)) {
+            out[idx] = ChoiceAnswer.Skip(noteOrNull)
+            continue
+        }
+        val other = OTHER_ANSWER_RE.matchEntire(main)
         if (other != null) {
-            out[idx] = ChoiceAnswer.Other(other.groupValues[2].trim())
+            out[idx] = ChoiceAnswer.Other(other.groupValues[2].trim(), noteOrNull)
             continue
         }
         return null
     }
-    return if (out.size == questions.size) out else null
+    for (i in questions.indices) if (i !in out) out[i] = ChoiceAnswer.Skip()
+    return ChoiceReply(out, panelNote)
 }
 
 // ---- 面板状态推导（从会话记录，无额外存储） -----------------------------------
@@ -557,6 +636,6 @@ fun deriveChoicePanelState(
     val idx = messages.indexOfFirst { it.id == messageId }
     if (idx < 0) return ChoicePanelState.Pending
     val nextUser = messages.drop(idx + 1).firstOrNull { it.role == "user" } ?: return ChoicePanelState.Pending
-    val answers = parseChoiceReply(transcriptText(nextUser), data.questions)
-    return if (answers != null) ChoicePanelState.Answered(answers) else ChoicePanelState.Superseded
+    val reply = parseChoiceReply(transcriptText(nextUser), data.questions)
+    return if (reply != null) ChoicePanelState.Answered(reply.answers, reply.note) else ChoicePanelState.Superseded
 }

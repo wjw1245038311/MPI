@@ -196,8 +196,8 @@ const QUESTIONS = [
 
   const parsed = parseChoiceReply(reply, QUESTIONS);
   assert.ok(parsed, "组合回复可解析回答案");
-  assert.deepEqual(parsed[0], { kind: "option", label: "方案甲（推荐）" });
-  assert.deepEqual(parsed[1], { kind: "other", text: "先不加，后面补" });
+  assert.deepEqual(parsed.answers[0], { kind: "option", label: "方案甲（推荐）" });
+  assert.deepEqual(parsed.answers[1], { kind: "other", text: "先不加，后面补" });
 
   // en header 也认（桌面端英文模式发的回复在手机上同样能推导状态）
   const en = buildChoiceReplyText(QUESTIONS, [{ kind: "option", label: "方案乙" }, null], "en");
@@ -206,8 +206,43 @@ const QUESTIONS = [
 
   // 普通用户消息 → null（面板将被推导为 superseded）
   assert.equal(parseChoiceReply("好的，用方案甲吧", QUESTIONS), null);
-  // 部分回答 / 标题不符 → null
-  assert.equal(parseChoiceReply("我的选择：\n1. 用什么方案？ → 方案甲（推荐）", QUESTIONS), null, "缺题不算");
+  // 缺题 = 跳过（2026-10-25 契约：跳过的题默认不写进回传消息）
+  assert.deepEqual(
+    parseChoiceReply("我的选择：\n1. 用什么方案？ → 方案甲（推荐）", QUESTIONS).answers,
+    { 0: { kind: "option", label: "方案甲（推荐）" }, 1: { kind: "skip" } },
+    "缺题按跳过处理",
+  );
+
+  // 跳过 / 补充说明（与桌面端同一契约）
+  const withNotes = buildChoiceReplyText(
+    QUESTIONS,
+    [
+      { kind: "option", label: "方案乙", note: "要兼容旧配置" },
+      { kind: "skip", note: "这题暂不适用" },
+    ],
+    "zh",
+  );
+  assert.ok(withNotes.includes("（补充：要兼容旧配置）"), "选项的补充要跟在行尾");
+  assert.ok(/^2\. → 补充：这题暂不适用$/m.test(withNotes), "跳过 + 补充输出无标题行");
+  assert.deepEqual(parseChoiceReply(withNotes, QUESTIONS).answers, {
+    0: { kind: "option", label: "方案乙", note: "要兼容旧配置" },
+    1: { kind: "skip", note: "这题暂不适用" },
+  });
+
+  // 全跳过：留占位行，不回成空消息
+  const allSkip = buildChoiceReplyText(QUESTIONS, [{ kind: "skip" }, { kind: "skip" }], "zh");
+  assert.ok(allSkip.includes("（全部跳过）"));
+  assert.deepEqual(parseChoiceReply(allSkip, QUESTIONS).answers, { 0: { kind: "skip" }, 1: { kind: "skip" } });
+
+  // 整组补充：写在最后一题之后，解析成 reply.note
+  const whole = buildChoiceReplyText(QUESTIONS, [{ kind: "option", label: "方案乙" }, { kind: "skip" }], "zh", "这组问题还缺一个维度");
+  assert.ok(/^补充：这组问题还缺一个维度$/m.test(whole), "整组补充应单独一行");
+  const wholeParsed = parseChoiceReply(whole, QUESTIONS);
+  assert.equal(wholeParsed.note, "这组问题还缺一个维度");
+  assert.deepEqual(wholeParsed.answers, { 0: { kind: "option", label: "方案乙" }, 1: { kind: "skip" } });
+
+  // 标题为空但不是补充 → 不是我们的格式
+  assert.equal(parseChoiceReply("我的选择：\n1. → 随便写点什么", QUESTIONS), null);
   assert.equal(parseChoiceReply("我的选择：\n1. 别的题？ → 方案乙\n2. 要不要加测试？ → 要", QUESTIONS), null, "标题不符不算");
 
   console.log("ok 5 - build/parseChoiceReply: 契约往返 + 拒绝普通回复");

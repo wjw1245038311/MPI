@@ -104,6 +104,7 @@ import { PiBridge, isAppManagedRuntime, resetPiRuntime, resolvePiRuntime, runtim
 import { reorderPinned } from "./pinned-order";
 import { createGateModeFile, ensureGateExtension, removeGateModeFile, writeGateMode } from "./permission-gate";
 import { ensureChoiceExtension } from "./choice-extension";
+import { ensureChoiceRetryExtension } from "./choice-retry-extension";
 import { ensureSmartCompactExtension } from "./compaction-extension";
 import {
   isModeSwitchTitle,
@@ -666,6 +667,9 @@ function createHandle(
       // Interactive threads only — automation spawns its own list without it, so
       // unattended runs never block on a dialog nobody can click.
       ensureChoiceExtension(getConfigDir()),
+      // choices 格式自动重试 bridge：一轮结束后检查 choices 围栏，写坏了就注入一条
+      // display:false 的修正指令并触发一轮重试（用户不可见）。弱模型实测 8/9 救回。
+      ensureChoiceRetryExtension(getConfigDir()),
       // Smart-compaction bridge: takes over HOW pi summarizes context when it
       // compacts (CJK-aware estimation, chunked small-model summarization,
       // verbatim user-message carry-over). Falls back to pi's built-in
@@ -705,6 +709,26 @@ function createHandle(
     gateModeFile,
     onEvent: (e) => {
       const event: any = e;
+      // 扩展注入的隐藏消息（display:false，如 choices 格式修正指令）只给模型看：
+      // 不转发给渲染层/手机端，否则用户会看到一条本该隐藏的指令。
+      if (
+        (event?.type === "message_start" || event?.type === "message_end") &&
+        event.message?.role === "custom" &&
+        event.message.display === false
+      ) {
+        // 自动重试轮（choices 格式修正）不算用户回合：否则宿主会在重试结束时
+        // 再发一条系统通知，内容是面板的原始 JSON。这里把「本回合」标记清掉，
+        // 重试轮 settled 时 shouldNotify=false；上一轮的通知早已发过，不受影响。
+        if (event.message.customType === "mpi-choice-retry") {
+          turnStarted = false;
+          completedReply = null;
+          promptForNotification = "";
+          // 只发一个语义事件：渲染层据此把「未渲染成面板」的降级提示收起来
+          // （重试成功后会出面板，留着提示会让用户以为还没修好）。
+          if (event.type === "message_start") send("pi:event", { threadId: id, event: { type: "choice_retry_start" } });
+        }
+        return;
+      }
       if (event?.type === "agent_start") {
         turnStarted = true;
         completedReply = null;

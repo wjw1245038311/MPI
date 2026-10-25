@@ -11553,3 +11553,103 @@ mark.hl {
 }
 .zhiya-task-ver { margin-top: 8px; }
 .zhiya-task-ver-name { font-size: 11.5px; font-weight: 650; color: var(--text-dim); }
+
+/* 跳过 / 整组补充说明（choices 面板，2026-10-25） */
+.cp-q-title-text {
+  flex: 1;
+  min-width: 0;
+}
+/* 「跳过」与「取消跳过」共用一个按钮：与「发送选择」同款深色胶囊，尺寸压到一行。 */
+.cp-skip-btn {
+  flex: 0 0 auto;
+  padding: 3px 12px;
+  font-size: 12px;
+  border-radius: 999px;
+  line-height: 1.5;
+}
+.cp-skip-done {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.cp-q.skipped .cp-q-title-text {
+  color: var(--text-muted);
+}
+/* 整组补充说明：与「其它」同款整行虚框；保存后仍以同款可见（左侧显示内容）。 */
+.cp-note-entry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.cp-note-entry:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.cp-note-entry.has-note {
+  justify-content: flex-start;
+  color: var(--text);
+  background: #fff;
+}
+.cp-note-entry.has-note:hover {
+  border-color: var(--accent);
+  background: #fff;
+}
+.cp-note-entry-label {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.cp-note-input {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: #fff;
+}
+.cp-note-input-head {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.cp-note-field {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+}
+.cp-note-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.cp-note-meta {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-align: right;
+}
+.cp-note-meta span {
+  font-variant-numeric: tabular-nums;
+}
+.cp-note-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
