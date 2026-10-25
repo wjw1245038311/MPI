@@ -1329,6 +1329,8 @@ interface PiStore {
    * （它们不落在会话文件里）。
    */
   handoffToNewSession: (cwd: string, sessionFile: string | null, prompt?: string) => Promise<void>;
+  /** 按规则交接：先生成交接文档（当前会话的模型写），再把新会话指向它。 */
+  handoffWithDoc: (cwd: string, sessionFile: string | null) => Promise<void>;
   renameThread: (id: string, name: string) => Promise<void>;
 
   setSidebarTab: (t: "threads" | "files") => void;
@@ -3134,6 +3136,35 @@ export const useStore = create<PiStore>()((set, get) => {
     );
   },
 
+  /** 交接（带文档）：用当前会话的模型写一份交接文档，新会话首条提示词只指向它。
+   *  模型不可用时主进程会退化为最近几轮原文；文档落在 <cwd>/.mpi/handoff/。 */
+  handoffWithDoc: async (cwd, sessionFile) => {
+    const zh = get().config?.language === "zh";
+    if (!sessionFile) {
+      get().pushToast("warning", zh ? "当前会话还没有落盘，先用「原地新建会话」" : "This session has no file yet — use new-session-in-place");
+      return;
+    }
+    let res: any = null;
+    try {
+      res = await window.pi.thread.handoffDoc({ cwd, sessionFile });
+    } catch (e: any) {
+      get().pushToast("error", e?.message || (zh ? "生成交接文档失败" : "Handoff document failed"));
+      return;
+    }
+    if (!res?.ok || !res.path) {
+      get().pushToast("error", res?.error || (zh ? "生成交接文档失败" : "Handoff document failed"));
+      return;
+    }
+    const kickoff = zh
+      ? `本会话从上一个会话交接而来。
+先读交接文档：${res.path}
+然后从文档里的「未完成 / 下一步」接着做；有不清楚的地方先问我。`
+      : `This session continues from a previous one.
+Read the handoff document first: ${res.path}
+Then pick up from its "Next steps" section; ask me if something is unclear.`;
+    get().pushToast("info", zh ? `交接文档：${res.path}` : `Handoff doc: ${res.path}`);
+    await get().handoffToNewSession(cwd, sessionFile, kickoff);
+  },
   cloneThread: async (id) => {
     const liveId = await get().ensureConnected(id);
     if (!liveId) return;

@@ -21,7 +21,7 @@ import type { ChoiceClampInfo, ChoiceFailure } from "../lib/choice-block";
 import { logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRepaired } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
 import { chatAttachmentUrl, parseAgentMediaRefs } from "../lib/chat-attachments";
-import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Refresh, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
+import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
 import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
@@ -44,6 +44,10 @@ export function Chat() {
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const togglePreview = useStore((s) => s.togglePreview);
   const newSessionInThread = useStore((s) => s.newSessionInThread);
+  const handoffWithDoc = useStore((s) => s.handoffWithDoc);
+  // 「交接新对话」按钮：长按 600ms = 原地新建会话（旧语义保底）；右键同样走原地新建。
+  const holdTimerRef = useRef<number | null>(null);
+  const holdFiredRef = useRef(false);
   const setThreadPinned = useStore((s) => s.setThreadPinned);
   const renameThread = useStore((s) => s.renameThread);
   const switchThreadFolder = useStore((s) => s.switchThreadFolder);
@@ -882,8 +886,53 @@ export function Chat() {
         <button className="iconbtn" title="切换工作文件夹" onClick={() => switchThreadFolder(activeThreadId)}>
           <Folder size={15} />
         </button>
-        <button className="iconbtn" title="新建会话" onClick={() => newSessionInThread(activeThreadId)}>
-          <Refresh size={15} />
+        <button
+          className="iconbtn"
+          title={
+            language === "zh"
+              ? "交接新对话（点击；长按或右键＝原地新建会话）"
+              : "Hand off to a new session (click; long-press or right-click = new session in place)"
+          }
+          onClick={() => {
+            // 长按已经触发过「原地新建」，这次 click 要吞掉。
+            if (holdFiredRef.current) {
+              holdFiredRef.current = false;
+              return;
+            }
+            if (!activeThreadId) return;
+            if (!thread?.sessionFile) {
+              void newSessionInThread(activeThreadId);
+              return;
+            }
+            void handoffWithDoc(thread.cwd, thread.sessionFile);
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            if (activeThreadId) void newSessionInThread(activeThreadId);
+          }}
+          onPointerDown={() => {
+            holdFiredRef.current = false;
+            if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+            holdTimerRef.current = window.setTimeout(() => {
+              holdTimerRef.current = null;
+              holdFiredRef.current = true;
+              if (activeThreadId) void newSessionInThread(activeThreadId);
+            }, 600);
+          }}
+          onPointerUp={() => {
+            if (holdTimerRef.current) {
+              clearTimeout(holdTimerRef.current);
+              holdTimerRef.current = null;
+            }
+          }}
+          onPointerLeave={() => {
+            if (holdTimerRef.current) {
+              clearTimeout(holdTimerRef.current);
+              holdTimerRef.current = null;
+            }
+          }}
+        >
+          <Branch size={15} />
         </button>
         {activeThreadId && (
           <button

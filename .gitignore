@@ -85,3 +85,6 @@ examples/apps/private/*
 # 手机端投递的附件落地区（<会话 cwd>/mpi-inbox/）：运行期产物，不入库
 # 本仓的会话 cwd 就是仓库根，所以手机发来的文件会直接落在仓库里（2026-10-14 发现一个 22MB PDF）
 /mpi-inbox/
+
+# 会话交接文档（handoff doc，本项目本地生成，不入库）
+.mpi/

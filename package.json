@@ -93,6 +93,7 @@
     "test:choice": "node --experimental-strip-types scripts/test-choice.mjs",
     "test:choice-block": "node --experimental-strip-types scripts/test-choice-block.mjs",
     "test:choiceretry": "node --experimental-strip-types scripts/test-choice-retry.mjs",
+    "test:handoffdoc": "node --experimental-strip-types scripts/test-handoff-doc.mjs",
     "test:taskmodes": "node --experimental-strip-types scripts/test-task-modes.mjs",
     "test:wechat": "node --experimental-strip-types scripts/test-wechat.mjs",
     "test:searchtrash": "node --experimental-strip-types scripts/test-search-trash.mjs",

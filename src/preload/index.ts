@@ -441,6 +441,9 @@ const api = {
   thread: {
     open: (args: { cwd: string; sessionFile?: string; name?: string; permission?: PermissionLevel }) => ipcRenderer.invoke("thread:open", args),
     loadHistory: (args: { cwd: string; sessionFile: string }) => ipcRenderer.invoke("thread:loadHistory", args),
+    /** 生成会话交接文档（用当前会话的模型；失败会退化为最近几轮原文）。 */
+    handoffDoc: (args: { cwd: string; sessionFile: string }): Promise<{ ok: boolean; path?: string; usedModel?: boolean; messages?: number; error?: string }> =>
+      ipcRenderer.invoke("thread:handoffDoc", args),
     close: (threadId: string) => ipcRenderer.invoke("thread:close", threadId),
     delete: (args: { file: string; title?: string; cwd?: string }) => ipcRenderer.invoke("thread:delete", args),
     prompt: (args: { threadId: string; text: string; images?: unknown[]; attachments?: PromptAttachment[] }) =>

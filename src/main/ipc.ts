@@ -123,6 +123,15 @@ import { guessMimeType } from "./attach-file-core";
 import { ensureMemoryExtension, ensureMemoryCandidateInbox } from "./memory-extension";
 import { startMemoryInboxWatcher } from "./memory-inbox";
 import { getMemoryIndex, memoryPoolDir, scheduleMemoryMaintenance } from "./memory-service";
+import { resolveMemoryModelFrom } from "./memory-model";
+import {
+  buildFallbackDoc,
+  buildHandoffPrompt,
+  buildTranscript,
+  normalizeDoc,
+  pickHandoffMessages,
+  writeHandoffDoc,
+} from "./handoff-doc";
 import { appendOpResult, approveProposal, rejectProposal, startDream, type OpRunnerDeps } from "./memory-ops";
 import {
   archiveEntryFromPanel,
@@ -5945,6 +5954,72 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
    * return disk data with connected:false and the renderer connects lazily/in
    * the background via thread:open.
    */
+  // ---- 会话交接文档 ----------------------------------------------------------
+  // 右上角「交接新对话」：用**当前会话的模型**把旧会话写成一份交接文档，新会话的
+  // 首条提示词只指向这份文件（细节按需读，不把整段上下文塞过去）。
+  // 模型不可用 → 退化为最近几轮原文，交接不因模型失败而失败；落盘在 <cwd>/.mpi/handoff/。
+  ipcMain.handle("thread:handoffDoc", async (_e, args: { cwd?: unknown; sessionFile?: unknown }) => {
+    const cwd = typeof args?.cwd === "string" ? args.cwd : "";
+    const sessionFile = typeof args?.sessionFile === "string" ? args.sessionFile : "";
+    if (!cwd || !sessionFile) return { ok: false, error: "missing cwd/sessionFile" };
+    const zh = getConfig().language === "zh";
+    const projectName = cwd.split(/[\/]/).filter(Boolean).pop() || cwd;
+    let messages: any[] = [];
+    let model: { provider: string; id: string } | null = null;
+    try {
+      const hist = await readThreadHistory(sessionFile);
+      messages = hist?.messages || [];
+      model = hist?.model || null;
+    } catch (e) {
+      return { ok: false, error: "读取会话失败：" + ((e as Error)?.message || String(e)) };
+    }
+    const picked = pickHandoffMessages(messages);
+    // 待办面板里本项目的未完成项一并交给模型，整合进「未完成 / 下一步」。
+    const todoLines = listTodos()
+      .filter((t) => !t.done && (!t.cwd || t.cwd === cwd))
+      .slice(0, 20)
+      .map((t) => `- ${t.title}${t.dueDate ? `（截止 ${t.dueDate}）` : ""}`);
+    let doc = "";
+    let usedModel = false;
+    if (model?.provider && model?.id) {
+      try {
+        const ref = resolveMemoryModelFrom(model.provider, model.id, readModelsFile().providers, "model");
+        if (ref.url && ref.model) {
+          const res = await fetch(ref.url, {
+            method: "POST",
+            headers: { "content-type": "application/json", ...(ref.key ? { authorization: `Bearer ${ref.key}` } : {}) },
+            body: JSON.stringify({
+              model: ref.model,
+              messages: [{ role: "user", content: buildHandoffPrompt(projectName, buildTranscript(picked), zh ? "zh" : "en", todoLines) }],
+              temperature: 0.2,
+              max_tokens: 1600,
+            }),
+            signal: AbortSignal.timeout(120_000),
+          });
+          if (res.ok) {
+            const j = (await res.json()) as any;
+            const text = String(j?.choices?.[0]?.message?.content || "").trim();
+            if (text) {
+              doc = text;
+              usedModel = true;
+            }
+          } else {
+            console.warn("[handoff] model HTTP", res.status);
+          }
+        }
+      } catch (e) {
+        console.warn("[handoff] model failed:", (e as Error)?.message || String(e));
+      }
+    }
+    if (!doc) doc = buildFallbackDoc(projectName, picked, zh ? "zh" : "en", todoLines);
+    try {
+      const path = writeHandoffDoc(cwd, normalizeDoc(doc));
+      return { ok: true, path, usedModel, messages: picked.length };
+    } catch (e) {
+      return { ok: false, error: "写交接文档失败：" + ((e as Error)?.message || String(e)) };
+    }
+  });
+
   ipcMain.handle("thread:loadHistory", async (_e, args: { cwd: string; sessionFile: string }) => {
     const { cwd, sessionFile } = args;
     const permission = resolvePermission(sessionFile, undefined);
