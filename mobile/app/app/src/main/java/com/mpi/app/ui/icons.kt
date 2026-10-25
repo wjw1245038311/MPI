@@ -367,6 +367,20 @@ val IconSettings: ImageVector by lazy {
 }
 
 /** 搜索（实心放大镜：镜片环 + 手柄）。 */
+
+/** 交接（分支）：三个节点 + 折线，与桌面端 icons.tsx 的 Branch 同一形状。 */
+val IconHandoff: ImageVector by lazy {
+    strokeIcon("Handoff") {
+        circlePath(6f, 6f, 2.4f)
+        circlePath(6f, 18f, 2.4f)
+        circlePath(18f, 8f, 2.4f)
+        moveTo(6f, 8.4f)
+        lineTo(6f, 15.6f)
+        moveTo(8.4f, 7.2f)
+        curveTo(14.4f, 7.2f, 16f, 8.2f, 16f, 13.6f)
+    }
+}
+
 val IconSearch: ImageVector by lazy {
     fillIcon("Search", PathFillType.EvenOdd) {
         circlePath(11f, 11f, 5.6f)

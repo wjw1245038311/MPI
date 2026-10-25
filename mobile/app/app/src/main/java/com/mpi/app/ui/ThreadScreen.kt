@@ -1200,9 +1200,6 @@ private fun ThreadTopBar(
         modifier = Modifier.fillMaxWidth().padding(start = 2.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = onHandoff) {
-            Text("交接", style = MaterialTheme.typography.labelMedium)
-        }
         IconButton(onClick = onBack) {
             Icon(IconArrowLeft, contentDescription = "返回", tint = MaterialTheme.colorScheme.onSurface)
         }
@@ -1277,6 +1274,14 @@ private fun ThreadTopBar(
             CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
         }
         // 搜索与设置（截图那种右侧图标组）；工具行开关已移到设置页「对话分栏」
+        IconButton(onClick = onHandoff) {
+            Icon(
+                IconHandoff,
+                contentDescription = "交接新对话",
+                tint = MpiTheme.colors.textDim,
+                modifier = Modifier.size(19.dp),
+            )
+        }
         IconButton(onClick = onOpenSearch) {
             Icon(
                 IconSearch,
