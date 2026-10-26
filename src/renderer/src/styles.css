@@ -2592,6 +2592,21 @@ body.sidebar-resizing * {
   opacity: 0.4;
   cursor: default;
 }
+/* 「交接新对话」在途：按钮置灰并缓慢闪烁（桌面端不弹进度横幅，靠这个告诉用户
+   “别急着再点”，2026-10-26 连点事故）*/
+.chat-head .iconbtn.busy:disabled {
+  opacity: 0.6;
+  animation: handoff-busy-pulse 1.4s ease-in-out infinite;
+}
+@keyframes handoff-busy-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
 
 .composer-confirmation-region {
   flex: 0 0 auto;

@@ -1215,6 +1215,11 @@ interface PiStore {
   /** 👍/👎 feedback for assistant replies, keyed by stable pi session entry id
    * (ULID). Sidecar data — never enters the model context or any prompt. */
   feedback: Record<string, { rating: 1 | -1; note?: string; at: number }>;
+  /** 「交接新对话」在途（点击时刻；null = 空闲）。交接一次只允许跑一个：
+   * 途中再点必须被忽略——实测（2026-10-26）第二下点击会落到「会话还没落盘 →
+   * 原地新建」那一支，而原地新建会让主进程先 abort 掉正在跑的那一轮，
+   * 于是刚交接出来的新会话首轮被掐断。 */
+  handoffPending: number | null;
 
   // files / preview (browser-style tabs)
   fileTree: Record<string, FileTreeEntry>;
@@ -1836,6 +1841,7 @@ export const useStore = create<PiStore>()((set, get) => {
   tuiDirty: {},
   drafts: {},
   feedback: {},
+  handoffPending: null,
   fileTree: {},
   previewTabs: [],
   activePreviewId: null,
@@ -3150,27 +3156,39 @@ export const useStore = create<PiStore>()((set, get) => {
       get().pushToast("warning", zh ? "当前会话还没有落盘，先用「原地新建会话」" : "This session has no file yet — use new-session-in-place");
       return;
     }
-    let res: any = null;
+    // 串行化：交接里那轮写文档本身就是「在源会话里跑一轮」，连点两下会排队第二个
+    // 写文档回合；更糟的是新会话建好之后那一下会走「空会话 → 原地新建」，
+    // 而原地新建会 abort 正在跑的首轮（2026-10-26 实测）。这里直接忽略重复点击。
+    if (get().handoffPending) {
+      get().pushToast("info", zh ? "交接正在进行中，这次点击已忽略。" : "A handoff is already running — this click was ignored.");
+      return;
+    }
+    set({ handoffPending: Date.now() });
     try {
-      res = await window.pi.thread.handoffDoc({ cwd, sessionFile });
-    } catch (e: any) {
-      get().pushToast("error", e?.message || (zh ? "生成交接文档失败" : "Handoff document failed"));
-      return;
-    }
-    if (!res?.ok || !res.path) {
-      get().pushToast("error", res?.error || (zh ? "生成交接文档失败" : "Handoff document failed"));
-      return;
-    }
-    const kickoff = zh
-      ? `本会话从上一个会话交接而来。
+      let res: any = null;
+      try {
+        res = await window.pi.thread.handoffDoc({ cwd, sessionFile });
+      } catch (e: any) {
+        get().pushToast("error", e?.message || (zh ? "生成交接文档失败" : "Handoff document failed"));
+        return;
+      }
+      if (!res?.ok || !res.path) {
+        get().pushToast("error", res?.error || (zh ? "生成交接文档失败" : "Handoff document failed"));
+        return;
+      }
+      const kickoff = zh
+        ? `本会话从上一个会话交接而来。
 先读交接文档：${res.path}
 然后从文档里的「未完成 / 下一步」接着做；有不清楚的地方先问我。`
-      : `This session continues from a previous one.
+        : `This session continues from a previous one.
 Read the handoff document first: ${res.path}
 Then pick up from its "Next steps" section; ask me if something is unclear.`;
-    get().pushToast("info", zh ? `交接文档：${res.path}` : `Handoff doc: ${res.path}`);
-    // 新会话用交接文档自己的标题当会话名（用户 2026-10-26：文档标题写得好，直接用它，保持连续性）。
-    await get().handoffToNewSession(cwd, sessionFile, kickoff, typeof res.title === "string" ? res.title : undefined);
+      get().pushToast("info", zh ? `交接文档：${res.path}` : `Handoff doc: ${res.path}`);
+      // 新会话用交接文档自己的标题当会话名（用户 2026-10-26：文档标题写得好，直接用它，保持连续性）。
+      await get().handoffToNewSession(cwd, sessionFile, kickoff, typeof res.title === "string" ? res.title : undefined);
+    } finally {
+      set({ handoffPending: null });
+    }
   },
   cloneThread: async (id) => {
     const liveId = await get().ensureConnected(id);

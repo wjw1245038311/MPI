@@ -45,6 +45,31 @@ export function Chat() {
   const togglePreview = useStore((s) => s.togglePreview);
   const newSessionInThread = useStore((s) => s.newSessionInThread);
   const handoffWithDoc = useStore((s) => s.handoffWithDoc);
+  /** 交接在途（点击时刻）：按钮置灰，避免连点破坏正在跑的交接。 */
+  const handoffPending = useStore((s) => s.handoffPending);
+  const askConfirm = useStore((s) => s.askConfirm);
+  /**
+   * 原地新建会话：主进程会先 abort 当前正在跑的那一轮（pi 的 newSession 会 teardown
+   * 当前 session）。所以回合在跑时先问一句——2026-10-26 实测：交接刚建出的新会话，
+   * 首轮就是这样被下一句「原地新建」掐断的（会话 jsonl 里留下 `This operation was aborted`）。
+   */
+  const newSessionInPlace = (threadId: string) => {
+    const live = useStore.getState().threads[threadId];
+    if (!live?.isStreaming) {
+      void newSessionInThread(threadId);
+      return;
+    }
+    const zhNow = useStore.getState().config?.language === "zh";
+    askConfirm({
+      title: zhNow ? "当前回合还在跑，仍要原地新建？" : "A turn is still running — start a new session anyway?",
+      body: zhNow
+        ? "原地新建会中断正在进行的这一轮（已跑出的内容仍保留在会话文件里）。"
+        : "Starting a new session in place interrupts the running turn (whatever it already produced stays in the session file).",
+      confirmLabel: zhNow ? "中断并新建" : "Interrupt and start",
+      danger: true,
+      onConfirm: () => void newSessionInThread(threadId),
+    });
+  };
   // 「交接新对话」按钮：长按 600ms = 原地新建会话（旧语义保底）；右键同样走原地新建。
   const holdTimerRef = useRef<number | null>(null);
   const holdFiredRef = useRef(false);
@@ -887,11 +912,16 @@ export function Chat() {
           <Folder size={15} />
         </button>
         <button
-          className="iconbtn"
+          className={`iconbtn ${handoffPending ? "busy" : ""}`}
+          disabled={!!handoffPending}
           title={
-            language === "zh"
-              ? "交接新对话（点击；长按或右键＝原地新建会话）"
-              : "Hand off to a new session (click; long-press or right-click = new session in place)"
+            handoffPending
+              ? language === "zh"
+                ? "交接进行中…（完成后会自动打开新会话）"
+                : "Handoff in progress… (the new session opens automatically)"
+              : language === "zh"
+                ? "交接新对话（点击；长按或右键＝原地新建会话）"
+                : "Hand off to a new session (click; long-press or right-click = new session in place)"
           }
           onClick={() => {
             // 长按已经触发过「原地新建」，这次 click 要吞掉。
@@ -901,22 +931,23 @@ export function Chat() {
             }
             if (!activeThreadId) return;
             if (!thread?.sessionFile) {
-              void newSessionInThread(activeThreadId);
+              newSessionInPlace(activeThreadId);
               return;
             }
             void handoffWithDoc(thread.cwd, thread.sessionFile);
           }}
           onContextMenu={(event) => {
             event.preventDefault();
-            if (activeThreadId) void newSessionInThread(activeThreadId);
+            if (activeThreadId) newSessionInPlace(activeThreadId);
           }}
           onPointerDown={() => {
+            if (handoffPending) return;
             holdFiredRef.current = false;
             if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
             holdTimerRef.current = window.setTimeout(() => {
               holdTimerRef.current = null;
               holdFiredRef.current = true;
-              if (activeThreadId) void newSessionInThread(activeThreadId);
+              if (activeThreadId) newSessionInPlace(activeThreadId);
             }, 600);
           }}
           onPointerUp={() => {

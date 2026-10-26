@@ -114,4 +114,25 @@ assert.match(ipc, /setSessionName\(name\)/, "createFn 没把 name 落到 pi（�
 assert.match(ipc, /handoffDocTitle\(readFileSync\(path, "utf8"\), handoffFallbackTitle\(path, language\)\)/,
   "文档标题应取自文档 H1，缺 H1 时回落时间戳");
 
+// ⑪ 交接在途守卫（2026-10-26 事故：交接途中再点一下，把刚交接出来的新会话首轮 abort 掉）
+//    病灶一：桌面按钮没有在途标记，第二下会重新发一轮「写文档」。
+assert.match(store, /handoffPending: number \| null/, "store 缺少 handoffPending 在途标记");
+const withDocAt = store.indexOf("handoffWithDoc: async (cwd, sessionFile) =>");
+assert.ok(withDocAt > 0, "store 里找不到 handoffWithDoc 实现");
+const withDocBody = store.slice(withDocAt, withDocAt + 3000);
+assert.match(withDocBody, /if \(get\(\)\.handoffPending\)/, "handoffWithDoc 入口没拦「已在交接中」的重复点击");
+assert.match(withDocBody, /set\(\{ handoffPending: Date\.now\(\) \}\)/, "handoffWithDoc 没置在途标记");
+assert.match(withDocBody, /\} finally \{\s*set\(\{ handoffPending: null \}\);/, "handoffWithDoc 没在 finally 里清在途标记（失败后会永久置灰）");
+//    病灶二：新会话建好但还没落盘时，按钮会落到「空会话 → 原地新建」那一支，
+//    而原地新建会让主进程先 abort 正在跑的那一轮。跑着的时候必须先确认。
+const chatUi = readFileSync(new URL("../src/renderer/src/components/Chat.tsx", import.meta.url), "utf8");
+assert.match(chatUi, /disabled=\{!!handoffPending\}/, "交接按钮没按在途标记禁用");
+assert.match(chatUi, /if \(!thread\?\.sessionFile\) \{\s*newSessionInPlace\(activeThreadId\);/, "空会话分支没走带确认的原地新建");
+assert.match(
+  chatUi,
+  /const newSessionInPlace = \(threadId: string\) => \{[\s\S]{0,900}?if \(!live\?\.isStreaming\) \{[\s\S]{0,400}?askConfirm\(/,
+  "newSessionInPlace 没在回合进行中先确认（原地新建会 abort 当前轮）",
+);
+assert.ok(!/onClick=\{\(\) => \{[\s\S]{0,600}?void newSessionInThread\(activeThreadId\);/.test(chatUi), "交接按钮不该再直接调 newSessionInThread（绕过了确认）");
+
 console.log("handoff-session tests passed");
