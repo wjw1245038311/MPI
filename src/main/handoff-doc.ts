@@ -57,17 +57,19 @@ export function buildHandoffDocInstruction(docPath: string, language: "zh" | "en
       "",
       "Requirements:",
       "1. Facts only, drawn from this session. Never speculate; write \"unknown\" when unsure.",
-      "2. Fixed Markdown structure, exactly these five `##` headings in this order:",
+      "2. Start with one `#` heading naming what this handoff is about (specific, one line). It becomes the",
+      "   new session's title——do not write a bare \"Handoff document\".",
+      "3. Fixed Markdown structure, exactly these five `##` headings in this order:",
       ...HANDOFF_DOC_SECTIONS_EN.map((s) => `   ## ${s}`),
-      "3. \"Next steps\": carry over what is still open from this session. If the todo panel has open",
+      "4. \"Next steps\": carry over what is still open from this session. If the todo panel has open",
       "   items that clearly belong to this session (use the todo list tool when available), fold them in;",
       "   unrelated project todos must stay out.",
-      "4. Never include API keys, tokens, passwords or authorization codes. No long code dumps —",
+      "5. Never include API keys, tokens, passwords or authorization codes. No long code dumps —",
       "   conclusions and file paths are enough.",
-      `5. At most 800 words.`,
-      "6. Use the write tool to save it at this exact path (overwrite if it exists):",
+      `6. At most 800 words.`,
+      "7. Use the write tool to save it at this exact path (overwrite if it exists):",
       `   ${docPath}`,
-      `7. Do NOT paste the document into the chat. When done, reply with a single line:`,
+      `8. Do NOT paste the document into the chat. When done, reply with a single line:`,
       `   done: ${docPath}`,
     ].join("\n");
   }
@@ -76,17 +78,51 @@ export function buildHandoffDocInstruction(docPath: string, language: "zh" | "en
     "",
     "要求：",
     "1. 只写本会话里确实发生过的事实，不推测；不确定的写「未知」。",
-    "2. 结构固定，五个二级标题，顺序如下：",
+    "2. 第一行用 `#` 一级标题一句话概括这次交接在做什么（具体一点）。",
+    "   它会直接成为新会话的会话名，所以别只写「交接文档」。",
+    "3. 结构固定，五个二级标题，顺序如下：",
     ...HANDOFF_DOC_SECTIONS_ZH.map((s) => `   ## ${s}`),
-    "3. 「未完成 / 下一步」：把本会话里还没做完的事写清楚；待办面板里**明显属于本会话**的未完成项",
+    "4. 「未完成 / 下一步」：把本会话里还没做完的事写清楚；待办面板里**明显属于本会话**的未完成项",
     "   （有 todo 查询工具时查一下）一并整合进来，与本会话无关的项目待办不要带。",
-    "4. 绝对不要写入密钥、令牌、密码、授权码；不要贴大段代码，给结论和文件路径即可。",
-    "5. 篇幅不超过 800 字。",
-    "6. 用 write 工具写到下面这个确切路径（已存在就覆盖）：",
+    "5. 绝对不要写入密钥、令牌、密码、授权码；不要贴大段代码，给结论和文件路径即可。",
+    "6. 篇幅不超过 800 字。",
+    "7. 用 write 工具写到下面这个确切路径（已存在就覆盖）：",
     `   ${docPath}`,
-    "7. 不要把文档正文贴进对话。写完只回一行：",
+    "8. 不要把文档正文贴进对话。写完只回一行：",
     `   已写入：${docPath}`,
   ].join("\n");
+}
+
+/**
+ * 从交接文档里取标题（第一个 `# ` 一级标题），用作**新会话的会话名**。
+ *
+ * 用户 2026-10-26：交接文档的标题通常写得很好，直接拿它当会话名最方便，也自带连续性
+ * （链式交接时一眼看出上一段做了什么）。所以不自己造标题，只做两件事：
+ *   ① 去掉泛标题（「交接文档」「交接文档（项目 X）」——这类没信息量，不如回落到兜底值）；
+ *   ② 截断到侧栏能显示的尺度。
+ * 文档没写 H1、或只写了泛标题时用 `fallback`（调用方给时间戳一类）。
+ */
+export function handoffDocTitle(text: string, fallback: string, maxChars = 60): string {
+  const h1 = /^#\s+(.+)$/m.exec(String(text || ""))?.[1] || "";
+  // 去掉 markdown 强调符号与结尾标点；标题只要纯文字。
+  let title = h1
+    .replace(/\*\*|__|`/g, "")
+    .replace(/\s+#+\s*$/, "")
+    .replace(/[。；;\s]+$/, "")
+    .trim();
+  // 泛标题（含只写了项目名的情况）不算：对「这条会话在干什么」零信息。
+  const generic = /^(?:交接文档|交接|handoff(?:\s+document)?)(?:\s*[（(].*[）)])?$/i;
+  if (generic.test(title)) title = "";
+  const value = (title || fallback || "").replace(/\s+/g, " ").trim();
+  return value.length > maxChars ? `${value.slice(0, maxChars - 1)}…` : value;
+}
+
+/** 文档里没有像样的一级标题时的兜底会话名（取文件名里的时间戳）。 */
+export function handoffFallbackTitle(docPath: string, language: "zh" | "en" = "zh"): string {
+  const m = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(String(docPath || ""));
+  if (!m) return language === "en" ? "Handoff" : "交接";
+  const [, y, mo, d, h, mi] = m;
+  return language === "en" ? `Handoff ${y}-${mo}-${d} ${h}:${mi}` : `交接 ${y}-${mo}-${d} ${h}:${mi}`;
 }
 
 /**

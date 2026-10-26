@@ -127,6 +127,8 @@ import {
   HANDOFF_TURN_TIMEOUT_MS,
   buildHandoffDocInstruction,
   handoffDocPath,
+  handoffDocTitle,
+  handoffFallbackTitle,
   inspectHandoffDoc,
 } from "./handoff-doc";
 import { appendOpResult, approveProposal, rejectProposal, startDream, type OpRunnerDeps } from "./memory-ops";
@@ -3625,6 +3627,11 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         remoteLocalToId.delete(previousLocalId);
         remoteLocalToId.set(state.sessionFile, id);
         bridge.setId(state.sessionFile);
+        // 会话名要显式落到 pi 里：`name` 参数以前只留在 draft 上（等于被忽略），
+        // 于是新会话的标题全靠 pi 从首条消息推导——交接场景下那必然重名。
+        if (name) {
+          await bridge.bridge.setSessionName(name).catch(() => undefined);
+        }
         const perms = getConfig().threadPermissions;
         if (perms[state.sessionFile] !== permission) {
           updateConfig({ threadPermissions: { ...perms, [state.sessionFile]: permission } });
@@ -4017,9 +4024,12 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         const docBridge = await ensureRemoteBridge(ref);
         const doc = await generateHandoffDocInSession(docBridge, ref.cwd, ref.sessionFile, zh ? "zh" : "en");
         if (!doc.ok) throw new Error(doc.error || "handoff doc failed");
-        phase("create", { docPath: doc.path });
+        phase("create", { docPath: doc.path, title: doc.title });
         // 注意：create 的第一个参数是**远程项目 id**（opaque），不是 cwd 路径。
-        const created = await threadService.create(ref.projectId, undefined, (source?.permission as any) || "sandbox");
+        // 第二个参数是会话名：用交接文档的一级标题——不传的话 pi 会拿首条消息推导标题，
+        // 而交接的首条消息每次都是同一句「本会话从上一个会话交接而来」，于是所有交接
+        // 会话的标题长得一模一样（用户 2026-10-26 反馈）。
+        const created = await threadService.create(ref.projectId, doc.title, (source?.permission as any) || "sandbox");
         const newId = created.id;
         phase("config", { threadId: newId });
         // ① 任务模式最先：setMode 会连带写 thinking 与权限，放后面会把继承值覆盖掉。
@@ -6062,6 +6072,18 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   };
 
   /**
+   * 新会话的会话名 = 交接文档自己的一级标题（用户 2026-10-26：文档标题写得好，直接用它，
+   * 链式交接时也自带连续性）。文档没 H1 或只写了泛标题时回落到时间戳。
+   */
+  const docTitleOf = (path: string, language: "zh" | "en"): string => {
+    try {
+      return handoffDocTitle(readFileSync(path, "utf8"), handoffFallbackTitle(path, language));
+    } catch {
+      return handoffFallbackTitle(path, language);
+    }
+  };
+
+  /**
    * 在源会话里跑一轮写交接文档（唯一路径，见 handoff-doc.ts 头注释）。
    * 这一轮在对话里**可见**（用户 2026-10-26 选定）：能看见它读了什么、写了什么。
    */
@@ -6070,7 +6092,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     cwd: string,
     sessionFile: string,
     language: "zh" | "en",
-  ): Promise<{ ok: true; path: string } | { ok: false; error: string }> => {
+  ): Promise<{ ok: true; path: string; title: string } | { ok: false; error: string }> => {
     if (!cwd || !sessionFile) return { ok: false, error: "missing cwd/sessionFile" };
     const zh = language === "zh";
     // 只读模式写不了文件：直接说清楚后果，不要让 agent 撞上审批卡然后干等。
@@ -6102,12 +6124,12 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         await delayMs(1200);
         if (readUsableHandoffDoc(docPath, zh ? "zh" : "en")) {
           appendDiagLog(`handoff-doc ok chars=${statSync(docPath).size} ms=${Date.now() - startedAt}`);
-          return { ok: true, path: docPath };
+          return { ok: true, path: docPath, title: docTitleOf(docPath, zh ? "zh" : "en") };
         }
         const fallback = findFreshHandoffDoc(cwd, startedAt, zh ? "zh" : "en");
         if (fallback) {
           appendDiagLog(`handoff-doc ok (agent-picked path) ms=${Date.now() - startedAt}`);
-          return { ok: true, path: fallback };
+          return { ok: true, path: fallback, title: docTitleOf(fallback, zh ? "zh" : "en") };
         }
         appendDiagLog(`handoff-doc missing after turn ms=${Date.now() - startedAt}`);
         return {

@@ -1328,7 +1328,7 @@ interface PiStore {
    * （与 readThreadHistory 同源），但**权限与任务模式只在会话已打开时继承**
    * （它们不落在会话文件里）。
    */
-  handoffToNewSession: (cwd: string, sessionFile: string | null, prompt?: string) => Promise<void>;
+  handoffToNewSession: (cwd: string, sessionFile: string | null, prompt?: string, name?: string) => Promise<void>;
   /** 按规则交接：先生成交接文档（当前会话的模型写），再把新会话指向它。 */
   handoffWithDoc: (cwd: string, sessionFile: string | null) => Promise<void>;
   renameThread: (id: string, name: string) => Promise<void>;
@@ -3077,7 +3077,7 @@ export const useStore = create<PiStore>()((set, get) => {
   // Native pi clone semantics: duplicate the whole current active branch into a new session.
   // 交接语义（用户 2026-10-13 定稿）：选中的文字就是新会话的提示词，且**直接开跑**，
   // 不需要用户在新会话里再按一次发送。
-  handoffToNewSession: async (cwd, sessionFile, prompt) => {
+  handoffToNewSession: async (cwd, sessionFile, prompt, name) => {
     const zh = get().config?.language === "zh";
     const live = sessionFile ? get().threads[sessionFile] : null;
     // 继承源：优先活会话状态（字段最全），否则从磁盘会话文件读（只有 model / thinking）。
@@ -3098,6 +3098,12 @@ export const useStore = create<PiStore>()((set, get) => {
     if (!liveId) return;
     // 顺序有讲究：任务模式会连带写 thinking + 权限，所以先应用它，再逐项覆盖。
     const inherited: string[] = [];
+    // 会话名：用交接文档的一级标题（见 handoffWithDoc）。不设的话 pi 会拿首条消息推导标题，
+    // 而交接的首条消息每次都一样 → 所有交接会话重名（用户 2026-10-26 反馈）。
+    if (name) {
+      await get().renameThread(liveId, name).catch(() => undefined);
+      inherited.push(zh ? "标题" : "title");
+    }
     if (inherit.taskMode) {
       await get().applyTaskMode(liveId, inherit.taskMode).catch(() => {});
       inherited.push(zh ? "任务模式" : "task mode");
@@ -3163,7 +3169,8 @@ export const useStore = create<PiStore>()((set, get) => {
 Read the handoff document first: ${res.path}
 Then pick up from its "Next steps" section; ask me if something is unclear.`;
     get().pushToast("info", zh ? `交接文档：${res.path}` : `Handoff doc: ${res.path}`);
-    await get().handoffToNewSession(cwd, sessionFile, kickoff);
+    // 新会话用交接文档自己的标题当会话名（用户 2026-10-26：文档标题写得好，直接用它，保持连续性）。
+    await get().handoffToNewSession(cwd, sessionFile, kickoff, typeof res.title === "string" ? res.title : undefined);
   },
   cloneThread: async (id) => {
     const liveId = await get().ensureConnected(id);

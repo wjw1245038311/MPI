@@ -23,10 +23,14 @@ const {
   HANDOFF_DOC_MIN_CHARS,
   HANDOFF_TURN_TIMEOUT_MS,
   buildHandoffDocInstruction,
+  handoffDocTitle,
+  handoffFallbackTitle,
   handoffDocPath,
   inspectHandoffDoc,
   isHandoffDocPath,
 } = await import("../src/main/handoff-doc.ts");
+
+const NL = String.fromCharCode(10);
 
 let n = 0;
 const ok = (msg) => {
@@ -129,14 +133,47 @@ const ok = (msg) => {
   ok("路径守卫只认 <cwd>/.mpi/handoff/");
 }
 
-// ---- [8] 超时必须早于客户端超时 --------------------------------------------
+// ---- [8] 会话名 = 文档的一级标题 -------------------------------------------
+{
+  // 用户 2026-10-26：交接文档标题通常写得很好，直接拿来当新会话会话名，链式交接也自带连续性。
+  assert.equal(handoffDocTitle("# 修手机端交接的配置继承" + NL + NL + "## 目标" + NL + "…", "交接 2026-10-26 07:54"), "修手机端交接的配置继承");
+  // 泛标题没有信息量 → 回落到兜底值
+  assert.equal(handoffDocTitle("# 交接文档" + NL + "## 目标", "交接 2026-10-26 07:54"), "交接 2026-10-26 07:54");
+  assert.equal(handoffDocTitle("# 交接文档（项目 MPI）", "交接 2026-10-26 07:54"), "交接 2026-10-26 07:54");
+  assert.equal(handoffDocTitle("# Handoff" + NL + "## Goal", "Handoff 2026-10-26 07:54"), "Handoff 2026-10-26 07:54");
+  // 没有 H1（例如只有二级标题）→ 兜底
+  assert.equal(handoffDocTitle("## 目标" + NL + "正文", "交接 1"), "交接 1");
+  // markdown 强调符号与结尾标点要去掉
+  assert.equal(handoffDocTitle("# **发版 v0.12.2**。", "x"), "发版 v0.12.2");
+  // 过长要截断（侧栏放不下）
+  const long = handoffDocTitle(`# ${"长".repeat(120)}`, "x");
+  assert.ok(long.length <= 60 && long.endsWith("…"), `应截断到 60 字以内：${long.length}`);
+  // 兜底名取文件名时间戳
+  assert.equal(handoffFallbackTitle("E:/p/.mpi/handoff/20261026-075421.md"), "交接 2026-10-26 07:54");
+  ok("会话名取文档一级标题（泛标题/缺 H1 回落时间戳，过长截断）");
+}
+
+// ---- [9] 指令要求写一级标题 ------------------------------------------------
+{
+  for (const lang of ["zh", "en"]) {
+    const instruction = buildHandoffDocInstruction("/p/.mpi/handoff/a.md", lang);
+    assert.ok(
+      lang === "zh" ? instruction.includes("一级标题") : /`#` heading/i.test(instruction),
+      "指令必须要求写一级标题——它就是新会话的会话名",
+    );
+    assert.ok(lang === "zh" ? instruction.includes("会话名") : /session's title/i.test(instruction), "指令要说明标题的去向");
+  }
+  ok("指令要求用一级标题概括（并说明它就是会话名）");
+}
+
+// ---- [10] 超时必须早于客户端超时 -------------------------------------------
 {
   // PWA 与安卓对 thread.handoff 的请求超时都是 180s；主机更早收手才能把它变成一条正常错误。
   assert.ok(HANDOFF_TURN_TIMEOUT_MS < 180_000, `主机超时 ${HANDOFF_TURN_TIMEOUT_MS}ms 必须小于客户端的 180s`);
   ok(`主机超时 ${Math.round(HANDOFF_TURN_TIMEOUT_MS / 1000)}s < 客户端 180s`);
 }
 
-// ---- [9] 反漂移：主进程里不许再有旁路 HTTP 摘要 ----------------------------
+// ---- [11] 反漂移：主进程里不许再有旁路 HTTP 摘要 ---------------------------
 {
   const ipc = readFileSync(new URL("../src/main/ipc.ts", import.meta.url), "utf8");
   for (const banned of ["buildHandoffPrompt", "buildFallbackDoc", "pickHandoffMessages", "buildTranscript"]) {

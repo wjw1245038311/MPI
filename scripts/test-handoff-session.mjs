@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 const store = readFileSync(new URL("../src/renderer/src/store.ts", import.meta.url), "utf8");
 const menu = readFileSync(new URL("../src/renderer/src/components/MessageQuoteMenu.tsx", import.meta.url), "utf8");
 
-const anchor = store.indexOf("handoffToNewSession: async (cwd, sessionFile, prompt) =>");
+const anchor = store.indexOf("handoffToNewSession: async (cwd, sessionFile, prompt, name) =>");
 assert.ok(anchor > 0, "store 里找不到 handoffToNewSession 实现（签名应带 prompt 参数）");
 const body = store.slice(anchor, anchor + 5000);
 
@@ -42,7 +42,7 @@ assert.ok(iTask < iModel && iModel < iThink && iThink < iPerm, `继承顺序错�
 // ④ 选中文字 = 新会话的第一条提示词，且**在继承之后**发出（否则第一轮会跑在旧模型/旧权限上）
 const iSend = at("sendPrompt(liveId");
 assert.ok(iSend > iPerm, `提示词必须在继承全部就位之后再发：权限(${iPerm}) → sendPrompt(${iSend})`);
-assert.match(store, /handoffToNewSession: \(cwd: string, sessionFile: string \| null, prompt\?: string\)/, "store 类型声明未带上 prompt 参数");
+assert.match(store, /handoffToNewSession: \(cwd: string, sessionFile: string \| null, prompt\?: string, name\?: string\)/, "store 类型声明未带上 prompt / name 参数");
 
 // ⑤ 入口在**对话区域右键菜单**里，并且把选中的文字传给交接
 assert.match(menu, /handoffToNewSession\(t\.cwd, t\.sessionFile, quote\.text\)/, "菜单未把选中文字作为提示词传给 handoffToNewSession");
@@ -99,5 +99,19 @@ const kotlinScreen = readFileSync(
   "utf8",
 );
 assert.match(kotlinScreen, /HandoffBanner\(/, "安卓交接中缺少进度横幅");
+
+// ⑩ 新会话的标题 = 交接文档的一级标题（三端都要接上，否则又会退化成一模一样的标题）
+//    桌面：host 回 { title } → store 透传给 handoffToNewSession → renameThread
+assert.match(store, /handoffToNewSession: \(cwd: string, sessionFile: string \| null, prompt\?: string, name\?: string\)/,
+  "handoffToNewSession 类型声明缺少 name 参数（交接文档标题）");
+assert.match(store, /handoffToNewSession\(cwd, sessionFile, kickoff, typeof res\.title === "string"/,
+  "handoffWithDoc 没把文档标题传给 handoffToNewSession");
+assert.match(store, /if \(name\) \{\s*await get\(\)\.renameThread\(liveId, name\)/,
+  "handoffToNewSession 没把 name 落到新会话（renameThread）");
+//    主机/手机：远程 create 传 doc.title，且 createFn 真的把 name 写进 pi
+assert.match(remoteBody, /threadService\.create\(ref\.projectId, doc\.title/, "远程交接没把文档标题作为会话名传给 create");
+assert.match(ipc, /setSessionName\(name\)/, "createFn 没把 name 落到 pi（只存在 draft 上等于被忽略）");
+assert.match(ipc, /handoffDocTitle\(readFileSync\(path, "utf8"\), handoffFallbackTitle\(path, language\)\)/,
+  "文档标题应取自文档 H1，缺 H1 时回落时间戳");
 
 console.log("handoff-session tests passed");
