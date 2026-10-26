@@ -16,10 +16,21 @@
  *   - 那一轮**在对话里可见**（用户 2026-10-26 选定）：能看见它读了什么、写了什么；
  *   - 失败就**明说失败**，不再有「看起来成功、其实是原文堆砌」的产物。
  *
- * 主进程只负责：算好落盘路径 → 发指令 → 等这一轮结束 → 校验文件像不像一份交接文档。
+ * 主进程只负责：发指令 → 等这一轮结束 → **找回文档** → 校验它像不像一份交接文档。
+ *
+ * ## 文件写到哪（2026-10-26 二次定稿）
+ *
+ * 指令里**不再指定绝对路径**——用户原话：「指令里带路径这件事」太复杂，他手打时从不指定，
+ * 生成的内容也不差。现在让模型自己放到项目里合适的位置（`docs/HANDOFF-<日期>.md` 之类），
+ * 主进程按四级兜底把文件找回来，顺序见 `src/main/ipc.ts` 的 `resolveHandoffDocPath`：
+ *   ① 回执里的路径（`已写入：<路径>`，见 parseHandoffDocPath）
+ *   ② `<cwd>/.mpi/handoff/` 里这一轮新出的
+ *   ③ 项目内文件名含 handoff / 交接 的新 md（findNamedHandoffDocs）
+ *   ④ 都没有 = 明确报失败
+ * 代价是多一次可能失败的机会（模型漏写回执且不按命名习惯写），换来指令里没有路径噪音。
  */
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readdirSync, statSync, type Dirent } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 /** 交接文档的建议小节（顺序即举例；2026-10-26 起**不再强制**——内容少的会话不必凑五段）。
  *  桌面/手机同一份；校验只看「不是空壳」，见 inspectHandoffDoc。 */
@@ -36,7 +47,9 @@ export const HANDOFF_DOC_MIN_CHARS = 60;
  */
 export const HANDOFF_TURN_TIMEOUT_MS = 150_000;
 
-/** `<cwd>/.mpi/handoff/YYYYMMDD-HHmmss.md`（路径由主进程决定，agent 只管往里写）。 */
+/** 主进程算的**建议**落盘路径 `<cwd>/.mpi/handoff/YYYYMMDD-HHmmss.md`。
+ *  2026-10-26 起默认指令不再使用它（位置由模型自选）；只有自定义模板里写了 `{{path}}`
+ *  才用它，另外它也是找回文档时的第二级兜底。 */
 export function handoffDocPath(cwd: string, at: Date = new Date()): string {
   const dir = join(cwd, ".mpi", "handoff");
   mkdirSync(dir, { recursive: true });
@@ -45,18 +58,19 @@ export function handoffDocPath(cwd: string, at: Date = new Date()): string {
   return join(dir, name);
 }
 
-/** 自定义模板里的落盘路径占位符（设置 → 对话设置 → 交接文档指令）。 */
+/** 自定义模板里的落盘路径占位符（设置 → 对话设置 → 交接文档指令）。
+ *  写了它就替换成主进程算好的固定路径（想要固定落点的人用）；不写就走「模型自选 + 回执」。 */
 export const HANDOFF_PROMPT_PATH_TOKEN = "{{path}}";
 
 /**
- * 给源会话的指令：写一份交接文档到指定路径。
+ * 给源会话的指令：写一份交接文档。
  *
- * 刻意做到「自包含」，但只保留**改动前后都不变**的硬要求：路径、write 落盘、不回贴正文、
- * 禁凭证。其他一律交给 session 自己判断——用户 2026-10-26：「有些会话要交接的内容很少，
- * 不用这么复杂的结构」。（之前那版 8 条编号 + 五段强制，篇幅约 700 字，还逼着小会话凑段落。）
+ * 只保留**必要**的硬要求：事实/未知、H1（当会话名）、禁凭证、回执。其他一律交给 session
+ * 自己判断——用户 2026-10-26：「有些会话要交接的内容很少，不用这么复杂的结构」。
+ * **路径不在指令里**（用户二次定稿）：模型自己选位置，用回执告诉主进程（见文件头注释）。
  *
- * `custom` = 用户自己的指令模板（Settings → 对话配置 → 交接文档指令）；空/未写就用内置默认。
- * 模板里的 `{{path}}` 会被替成真正的落盘路径；没写占位符就往末尾自动补上「写到哪 / 怎么回」。
+ * `custom` = 用户自己的指令模板（Settings → 对话配置 → 交接文档指令）；空白 = 内置默认。
+ * 模板里若写 `{{path}}`，会替换成主进程算好的固定路径；没写回执要求时自动补一行。
  */
 export function buildHandoffDocInstruction(
   docPath: string,
@@ -64,47 +78,114 @@ export function buildHandoffDocInstruction(
   custom?: string,
 ): string {
   const tpl = String(custom || "").trim();
-  if (tpl) return fillHandoffTemplate(tpl, docPath, language);
-  return fillHandoffTemplate(builtinHandoffTemplate(language), docPath, language);
+  if (!tpl) return builtinHandoffTemplate(language);
+  return fillHandoffTemplate(tpl, docPath, language);
 }
 
-/** 内置默认模板（用 `{{path}}` 占位）：设置面板做占位提示与「恢复默认」，也供测试比对。
+/** 内置默认模板（已带回执要求，可直接发给模型）：设置面板的「恢复默认」与测试都以它为准。
  *
- * 2026-10-26 用户定稿：只留**必要**三行——事实与未知、H1（当会话名）、禁凭证 + 落盘。
- * 字数上限 / 分节建议 / 不贴代码 / 不回贴正文这些**风格要求全删**（用户：「这几句可以不要」）。
+ * 2026-10-26 用户定稿：事实与未知、H1（当会话名）、禁凭证 + 位置、回执。
+ * 字数上限 / 分节建议 / 不贴代码这些**风格要求全删**（用户：「这几句可以不要」）。
  */
 export function builtinHandoffTemplate(language: "zh" | "en" = "zh"): string {
   if (language === "en") {
     return [
-      "Write the handoff document for THIS session (a new session will take over). Facts only, no speculation; write \"unknown\" when unsure.",
+      'Write the handoff document for THIS session (a new session will take over). Facts only, no speculation; write "unknown" when unsure.',
       "First line: one `#` heading summarizing this handoff (it becomes the new session's title).",
-      `Never include API keys, tokens, passwords or authorization codes. Use the write tool to save it at ${HANDOFF_PROMPT_PATH_TOKEN} (overwrite if it exists).`,
+      "Never include API keys, tokens, passwords or authorization codes. Use the write tool to save it somewhere sensible in the project (e.g. docs/HANDOFF-<date>.md).",
+      `When done, reply with one line only: ${RECEIPT_HINT_EN} — do not paste the document.`,
     ].join("\n");
   }
   return [
     "把本会话写成交接文档（随后由新会话接着做）。只写事实、不推测；不确定的写「未知」。",
-    `第一行用一个 \`#\` 一级标题概括这次交接（它会成为新会话的会话名）。`,
-    `不要写密钥、令牌、密码、授权码。用 write 工具写到 ${HANDOFF_PROMPT_PATH_TOKEN}（已存在就覆盖）。`,
+    "第一行用一个 `#` 一级标题概括这次交接（它会成为新会话的会话名）。",
+    "不要写密钥、令牌、密码、授权码。用 write 工具写到项目里合适的位置（如 docs/HANDOFF-<日期>.md）。",
+    `写完只回一行：${RECEIPT_HINT_ZH}，不要贴正文。`,
   ].join("\n");
 }
 
+/** 回执行里路径部分的写法（parseHandoffDocPath 认这个前缀）。 */
+const RECEIPT_HINT_ZH = "已写入：<相对项目根的路径>";
+const RECEIPT_HINT_EN = "done: <path relative to the project root>";
+
+/** 回执行的正则：`已写入：xxx` / `done: xxx`（行内最后一个匹配为准）。 */
+const RECEIPT_RE = /(?:已写入|done)\s*[:：]\s*(.+)$/i;
+
 /**
- * 把模板填成真指令：替换 `{{path}}`；模板没写占位符时，把「写到哪 / 怎么回」补在末尾
- * （否则 agent 拿不到落盘路径，交接会直接失败）。
+ * 把自定义模板填成真指令：替换 `{{path}}`；模板没要求回执时补一行回执要求
+ * （否则主进程只能靠扫目录找文件，交接成功率明显下降）。
  */
 export function fillHandoffTemplate(tpl: string, docPath: string, language: "zh" | "en" = "zh"): string {
   const text = String(tpl || "").trim();
-  if (text.includes(HANDOFF_PROMPT_PATH_TOKEN)) {
-    return text.split(HANDOFF_PROMPT_PATH_TOKEN).join(docPath);
+  const filled = text.includes(HANDOFF_PROMPT_PATH_TOKEN) ? text.split(HANDOFF_PROMPT_PATH_TOKEN).join(docPath) : text;
+  if (/(?:已写入|done)\s*[:：]/i.test(filled)) return filled; // 用户自己写了回执要求
+  return `${filled}\n${language === "en" ? `When done, reply with one line only: ${RECEIPT_HINT_EN} — do not paste the document.` : `写完只回一行：${RECEIPT_HINT_ZH}，不要贴正文。`}`;
+}
+
+/**
+ * 从模型这一轮的回复里取回执路径（纯函数，可单测）。
+ *
+ * 规则：取**最后一个** `已写入：…` / `done: …` 行 → 去掉包裹的反引号/引号/句末标点 →
+ * 相对路径按 cwd 解析 → **必须在 cwd 内**（写到 cwd 外面一律不认，避免抓错文件）。
+ * 不像路径的（如「已写入：完成」）返回 null。
+ */
+export function parseHandoffDocPath(replyText: string, cwd: string): string | null {
+  if (!replyText || !cwd) return null;
+  let raw = "";
+  for (const line of String(replyText).split(/\r?\n/)) {
+    const m = RECEIPT_RE.exec(line.trim());
+    if (m) raw = m[1];
   }
-  const tail =
-    language === "en"
-      ? [
-          "Use the write tool to save it at this exact path (overwrite if it exists), then reply with one line only",
-          `(done: ${docPath}). Do NOT paste the document into the chat.`,
-        ]
-      : ["用 write 工具写到这个路径（已存在就覆盖），写完只回一行「已写入：<路径>」，不要把文档正文贴进对话：", `  ${docPath}`];
-  return `${text}\n${tail.join("\n")}`;
+  const cleaned = raw.replace(/^[`'"“”‘’\s]+/, "").replace(/[`'"“”‘’\s。，,；;]+$/, "").trim();
+  if (!cleaned) return null;
+  // 必须是「像路径」的东西：带目录分隔符，或以文档扩展名结尾。
+  if (!/[\\/]/.test(cleaned) && !/\.(?:md|markdown|txt)$/i.test(cleaned)) return null;
+  const abs = isAbsolute(cleaned) ? resolve(cleaned) : resolve(cwd, cleaned);
+  const rel = relative(resolve(cwd), abs);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
+  return abs;
+}
+
+/** 扫目录时跳过的重目录（node_modules 这种深进去纯浪费时间）。 */
+const HANDOFF_SCAN_SKIP = new Set([
+  "node_modules", "out", "dist", "release", "tempfile", "build", ".next", "coverage", "venv", ".venv",
+]);
+
+/**
+ * 项目内「按命名习惯写的交接文档」：文件名含 handoff / 交接 的 md，且是这一轮之后写/改的。
+ * 按 mtime 从新到旧返回（调用方逐个校验）。深度默认 2 层（`docs/`、`docs/sub/`），
+ * 跳过重目录与所有隐藏目录（`.git`、`.mpi` 等——`.mpi/handoff` 有专门的兜底）。
+ */
+export function findNamedHandoffDocs(cwd: string, sinceMs: number, maxDepth = 2): string[] {
+  if (!cwd) return [];
+  const found: { path: string; mtimeMs: number }[] = [];
+  const walk = (dir: string, depth: number): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const name = entry.name;
+      const full = join(dir, name);
+      if (entry.isDirectory()) {
+        if (depth >= maxDepth) continue;
+        if (name.startsWith(".") || HANDOFF_SCAN_SKIP.has(name.toLowerCase())) continue;
+        walk(full, depth + 1);
+        continue;
+      }
+      if (!entry.isFile() || !/\.(?:md|markdown)$/i.test(name) || !/handoff|交接/i.test(name)) continue;
+      try {
+        const st = statSync(full);
+        if (st.mtimeMs >= sinceMs - 2000) found.push({ path: full, mtimeMs: st.mtimeMs });
+      } catch {
+        /* 读不到 stat 就跳过 */
+      }
+    }
+  };
+  walk(cwd, 0);
+  return found.sort((a, b) => b.mtimeMs - a.mtimeMs).map((entry) => entry.path);
 }
 
 /**
@@ -140,13 +221,14 @@ export function handoffFallbackTitle(docPath: string, language: "zh" | "en" = "z
 }
 
 /**
- * 校验一条新会话的首条提示词里引用的路径——交接文档必须落在本项目内。
- * （路径由主进程算，但客户端/旧文档可能传回任意字符串。）
+ * 路径守卫：交接文档必须落在**本项目内**（2026-10-26 起不再限定 `.mpi/handoff/`——
+ * 位置由模型自选，`docs/HANDOFF-<日期>.md` 也算）。给客户端/旧文档传来的任意字符串做校验用。
  */
 export function isHandoffDocPath(cwd: string, candidate: string): boolean {
   if (!cwd || !candidate) return false;
-  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-  return norm(candidate).startsWith(`${norm(cwd)}/.mpi/handoff/`);
+  const abs = isAbsolute(candidate) ? resolve(candidate) : resolve(cwd, candidate);
+  const rel = relative(resolve(cwd), abs);
+  return !!rel && !rel.startsWith("..") && !isAbsolute(rel) && /\.(?:md|markdown)$/i.test(abs);
 }
 
 /**

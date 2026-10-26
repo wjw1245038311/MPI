@@ -2469,8 +2469,8 @@ export function Settings() {
                   label={language === "zh" ? "交接文档指令" : "Handoff prompt"}
                   hint={
                     language === "zh"
-                      ? "点「交接新对话」时发给当前会话的指令。留空 = 内置默认；{{path}} 会替换成文档落盘路径（没写占位符会自动补在末尾）。"
-                      : "Instruction sent to the current session by “Handoff”. Empty = built-in default; {{path}} becomes the document path (appended automatically if missing)."
+                      ? "点「交接新对话」时发给当前会话的指令。留空 = 内置默认；默认不指定路径（模型自己放到 docs/ 之类的位置并回报）。写 {{path}} = 固定到主进程算的路径。"
+                      : "Instruction sent to the current session by “Handoff”. Empty = built-in default; by default no path is given (the model picks a spot and reports it). Use {{path}} to pin the path."
                   }
                 >
                   <div className="set-json-wrap">
@@ -2481,8 +2481,8 @@ export function Settings() {
                       value={handoffDraft}
                       placeholder={
                         language === "zh"
-                          ? "留空 = 内置默认（只写事实；第一行 # 标题作为新会话名；{{path}} 处填落盘路径）"
-                          : "Empty = built-in default (facts only; the `#` first line becomes the new session title; {{path}} = file path)"
+                          ? "留空 = 内置默认（只写事实；第一行 # 标题作为新会话名；写完回报「已写入：<路径>」）"
+                          : "Empty = built-in default (facts only; the `#` first line becomes the new session title; reply with done: <path>)"
                       }
                       onChange={(e) => setHandoffDraft(e.target.value)}
                     />

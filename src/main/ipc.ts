@@ -126,10 +126,12 @@ import { getMemoryIndex, memoryPoolDir, scheduleMemoryMaintenance } from "./memo
 import {
   HANDOFF_TURN_TIMEOUT_MS,
   buildHandoffDocInstruction,
+  findNamedHandoffDocs,
   handoffDocPath,
   handoffDocTitle,
   handoffFallbackTitle,
   inspectHandoffDoc,
+  parseHandoffDocPath,
 } from "./handoff-doc";
 import { appendOpResult, approveProposal, rejectProposal, startDream, type OpRunnerDeps } from "./memory-ops";
 import {
@@ -6105,7 +6107,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       };
     }
     const docPath = handoffDocPath(cwd);
-    const instruction = buildHandoffDocInstruction(docPath, zh ? "zh" : "en", getConfig().handoffPrompt);
+    const instruction = buildHandoffDocInstruction(docPath, language, getConfig().handoffPrompt);
     const startedAt = Date.now();
     try {
       // 正在跑回合就排队（followUp），不抢断当前轮；否则直接 prompt。
@@ -6114,7 +6116,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     } catch (e) {
       return { ok: false, error: (zh ? "发送交接指令失败：" : "Failed to send the handoff instruction: ") + ((e as Error)?.message || String(e)) };
     }
-    appendDiagLog(`handoff-doc turn started cwd=${cwd.slice(-24)} doc=${docPath.split(/[\/]/).pop()}`);
+    appendDiagLog(`handoff-doc turn started cwd=${cwd.slice(-24)} ms=${startedAt}`);
     // 等 agent_start 到达：不然“还没开始”会被误判成“已经结束”。
     await delayMs(1200);
     const deadline = startedAt + HANDOFF_TURN_TIMEOUT_MS;
@@ -6122,21 +6124,17 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       if (!handle.bridge.hasActiveRun) {
         // 这一轮结束了：给落盘/flush 留一小段时间再判定。
         await delayMs(1200);
-        if (readUsableHandoffDoc(docPath, zh ? "zh" : "en")) {
-          appendDiagLog(`handoff-doc ok chars=${statSync(docPath).size} ms=${Date.now() - startedAt}`);
-          return { ok: true, path: docPath, title: docTitleOf(docPath, zh ? "zh" : "en") };
-        }
-        const fallback = findFreshHandoffDoc(cwd, startedAt, zh ? "zh" : "en");
-        if (fallback) {
-          appendDiagLog(`handoff-doc ok (agent-picked path) ms=${Date.now() - startedAt}`);
-          return { ok: true, path: fallback, title: docTitleOf(fallback, zh ? "zh" : "en") };
+        const found = await resolveHandoffDocPath(handle, cwd, language, startedAt, docPath);
+        if (found) {
+          appendDiagLog(`handoff-doc ok chars=${statSync(found).size} ms=${Date.now() - startedAt}`);
+          return { ok: true, path: found, title: docTitleOf(found, language) };
         }
         appendDiagLog(`handoff-doc missing after turn ms=${Date.now() - startedAt}`);
         return {
           ok: false,
           error: zh
-            ? `这一轮没写出可用的交接文档（期望：${docPath}）。原因见源会话里这一轮的报错。`
-            : `That turn did not produce a usable handoff document (expected: ${docPath}). Check the source session for the error.`,
+            ? "这一轮没写出可用的交接文档：回执里没给出路径，项目里也没找到这一轮新写的 HANDOFF 文档。原因见源会话里这一轮的报错。"
+            : "That turn did not produce a usable handoff document: no path in the receipt and no freshly written HANDOFF document in the project. Check the source session for that turn's error.",
         };
       }
       await delayMs(700);
@@ -6164,6 +6162,62 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       }
     } catch {
       /* 目录不存在就是没有 */
+    }
+    return null;
+  };
+
+  /** 这一轮最后几条 assistant 回复的正文（用来取「已写入：<路径>」回执）。
+   *  取 3 条是宽容：模型常先说一句「我先扫一眼」再写文件再回执，回执不一定在最后一条
+   *  单文本消息里（工具调用轮次不产生文本）。 */
+  const lastAssistantText = async (handle: BridgeHandle): Promise<string> => {
+    try {
+      const raw: any = await handle.bridge.getMessages();
+      const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.messages) ? raw.messages : [];
+      const texts: string[] = [];
+      for (let i = list.length - 1; i >= 0 && texts.length < 3; i--) {
+        const msg = list[i];
+        if (!msg || msg.role !== "assistant") continue;
+        const content = msg.content;
+        const text =
+          typeof content === "string"
+            ? content
+            : Array.isArray(content)
+              ? content.map((b: any) => (b && b.type === "text" ? b.text : "")).filter(Boolean).join("\n")
+              : "";
+        if (text.trim()) texts.push(text);
+      }
+      return texts.reverse().join("\n"); // 新的在后：解析时「最后一个匹配」才是最新的回执
+    } catch {
+      return "";
+    }
+  };
+
+  /**
+   * 找回这一轮写出的交接文档（四级兜底，2026-10-26 用户定稿：指令里不带路径）。
+   *   ① 回执里的路径（模型自选位置）② 主进程给的建议路径（自定义模板用了 {{path}}）
+   *   ③ `.mpi/handoff/` 里新出的 ④ 项目内名字含 handoff/交接 的新 md。
+   * 各级都要过 inspectHandoffDoc 校验，命中即返回。
+   */
+  const resolveHandoffDocPath = async (
+    handle: BridgeHandle,
+    cwd: string,
+    language: "zh" | "en",
+    startedAt: number,
+    hintPath: string,
+  ): Promise<string | null> => {
+    const receipt = parseHandoffDocPath(await lastAssistantText(handle), cwd);
+    if (receipt && readUsableHandoffDoc(receipt, language)) {
+      appendDiagLog(`handoff-doc ok (receipt) path=${receipt.slice(-40)}`);
+      return receipt;
+    }
+    if (hintPath && readUsableHandoffDoc(hintPath, language)) return hintPath;
+    const fresh = findFreshHandoffDoc(cwd, startedAt, language);
+    if (fresh) return fresh;
+    for (const candidate of findNamedHandoffDocs(cwd, startedAt)) {
+      if (readUsableHandoffDoc(candidate, language)) {
+        appendDiagLog(`handoff-doc ok (scan) path=${candidate.slice(-40)}`);
+        return candidate;
+      }
     }
     return null;
   };

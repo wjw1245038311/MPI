@@ -3,22 +3,22 @@
  *
  * 2026-10-26 改了生成方式：**唯一路径 = 在源会话里跑一轮**，由会话自己把本会话写成文档。
  * 旧做法（旁路 HTTP 摘要 + 静默退化成「最近原文 + 整项目待办」）实测产出的三份文档全是
- * 退化版，看起来像「越界读取」。这里钉住三件事：
- *   ① 指令自包含（五段结构 / 指定路径 / 禁凭证 / 别把正文贴进对话）；
- *   ② 文档校验能挡住「看着成功其实是空壳」；
- *   ③ 主进程里**不再有**旁路 HTTP 摘要那条老路（防止有人「顺手加回来」）。
+ * 退化版，看起来像「越界读取」。这里钉四件事：
+ *   ① 指令极短、**不带绝对路径**（模型自己选位置，用回执告知）；
+ *   ② 回执解析与目录兜底能把文档找回来（parseHandoffDocPath / findNamedHandoffDocs）；
+ *   ③ 文档校验能挡住「看着成功其实是空壳」；
+ *   ④ 主进程里**不再有**旁路 HTTP 摘要那条老路（防止有人「顺手加回来」）。
  *
  * 运行：npm run test:handoffdoc
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { register } from "node:module";
 
 register(new URL("./ts-ext-loader.mjs", import.meta.url));
 const {
-  HANDOFF_DOC_SECTIONS_EN,
   HANDOFF_DOC_SECTIONS_ZH,
   HANDOFF_DOC_MIN_CHARS,
   HANDOFF_TURN_TIMEOUT_MS,
@@ -26,11 +26,13 @@ const {
   buildHandoffDocInstruction,
   builtinHandoffTemplate,
   fillHandoffTemplate,
+  findNamedHandoffDocs,
   handoffDocTitle,
   handoffFallbackTitle,
   handoffDocPath,
   inspectHandoffDoc,
   isHandoffDocPath,
+  parseHandoffDocPath,
 } = await import("../src/main/handoff-doc.ts");
 
 const NL = String.fromCharCode(10);
@@ -41,15 +43,18 @@ const ok = (msg) => {
   console.log(`  ✅ ${msg}`);
 };
 
-// ---- [1] 指令：极简 + 指定路径（不再提任何小节） -----------------------
+// ---- [1] 指令：极简 + 不指定路径（模型自己选位置，用回执告知） -------------
 {
   for (const lang of ["zh", "en"]) {
     const path = lang === "zh" ? "E:/proj/.mpi/handoff/a.md" : "/p/.mpi/handoff/a.md";
     const instruction = buildHandoffDocInstruction(path, lang);
-    assert.ok(instruction.includes(path), `${lang} 指令必须带上确切落盘路径`);
-    assert.ok(/\bwrite\b|write 工具/.test(instruction), `${lang} 指令必须要求用 write 工具落盘`);
-    assert.equal(instruction.split("\n").length, 3, `${lang} 指令应为 3 行（实际 ${instruction.split("\n").length} 行）`);
-    ok(`${lang} 指令：3 行（${instruction.length} 字符）+ 路径 + 用 write 落盘`);
+    // 2026-10-26 二次定稿：用户「觉得复杂的是指令里带路径这件事」，所以默认不再给绝对路径。
+    assert.ok(!instruction.includes(path), `${lang} 指令不该再带绝对落盘路径`);
+    assert.ok(!/\.mpi[\\/]handoff/.test(instruction), `${lang} 指令不该再硬编码 .mpi/handoff`);
+    assert.ok(/已写入|done\s*:/i.test(instruction), `${lang} 指令必须要求回执（主进程靠它找文件）`);
+    assert.ok(/docs\/HANDOFF|sensible/i.test(instruction), `${lang} 指令应给出位置建议（不强制具体路径）`);
+    assert.equal(instruction.split("\n").length, 4, `${lang} 指令应为 4 行（实际 ${instruction.split("\n").length} 行）`);
+    ok(`${lang} 指令：4 行（${instruction.length} 字符）、无绝对路径、带回执`);
   }
 }
 
@@ -59,7 +64,7 @@ const ok = (msg) => {
     const instruction = buildHandoffDocInstruction("/p/.mpi/handoff/a.md", lang);
     assert.ok(/密钥|tokens?/i.test(instruction), "必须明确禁止带凭证");
     // 2026-10-26 用户：字数上限 / 不回贴正文都是风格要求，已从默认指令里删掉
-    assert.ok(instruction.length < 400, "指令要极短——它会被写进会话上下文");
+    assert.ok(instruction.length < 520, `指令要极短——它会被写进会话上下文（实际 ${instruction.length}）`);
     assert.ok(!/800/.test(instruction), "默认指令不该再带字数上限");
     ok(`${lang} 指令（${instruction.length} 字符）：禁凭证 + 极短`);
   }
@@ -68,31 +73,59 @@ const ok = (msg) => {
 // ---- [2.5] 自定义指令模板（Settings → 对话配置 → 交接文档指令）------------
 {
   const path = "E:/proj/.mpi/handoff/a.md";
-  // 内置默认模板：用占位符写成，里面不该出现具体路径
+  // 内置默认模板：不再用 {{path}}（路径由模型选）
   for (const lang of ["zh", "en"]) {
     const tpl = builtinHandoffTemplate(lang);
-    assert.ok(tpl.includes(HANDOFF_PROMPT_PATH_TOKEN), `${lang} 内置模板必须用 {{path}} 占位`);
-    const filled = buildHandoffDocInstruction(path, lang);
-    assert.ok(!filled.includes(HANDOFF_PROMPT_PATH_TOKEN), `${lang} 输出里不能残留占位符`);
-    assert.ok(filled.includes(path), `${lang} 输出必须带真实路径`);
+    assert.ok(!tpl.includes(HANDOFF_PROMPT_PATH_TOKEN), `${lang} 内置模板不该再用 {{path}} 占位`);
+    assert.equal(tpl, buildHandoffDocInstruction(path, lang), `${lang} 内置模板应当就是最终指令（不再二次拼接）`);
   }
-  // 自定义模板：{{path}} 替换
+  // 自定义模板写了 {{path}}：仍然替换成固定路径（想要固定落点的人用）
   const custom = `只写事实。\n写到这里：${HANDOFF_PROMPT_PATH_TOKEN}`;
   const out = buildHandoffDocInstruction(path, "zh", custom);
   assert.ok(out.startsWith("只写事实。"), "自定义模板应原样生效");
   assert.ok(out.includes(path) && !out.includes(HANDOFF_PROMPT_PATH_TOKEN), "自定义模板里的占位符应被替换");
-  // 自定义模板忘了写占位符：自动补上落盘路径与回执要求（否则交接必失败）
+  assert.ok(out.includes("已写入"), "没有回执要求时要自动补一行（否则主进程只能靠扫目录）");
+  // 自定义模板既没占位符也没回执：只补回执，不抢着塞路径
   const noToken = buildHandoffDocInstruction(path, "zh", "随便写两句");
-  assert.ok(noToken.includes("随便写两句"), "模板正文应保留");
-  assert.ok(noToken.includes(path), "没写占位符时必须自动补路径");
-  assert.ok(/write/.test(noToken) && noToken.includes("已写入"), "没写占位符时要补 write + 回执要求");
+  assert.ok(noToken.startsWith("随便写两句"), "模板正文应保留");
+  assert.ok(noToken.includes("已写入"), "缺回执要求时要自动补");
+  assert.ok(!noToken.includes(path), "模板没要固定路径时不应擅自塞路径", noToken);
+  // 自己写了回执要求：不重复追加
+  const withReceipt = buildHandoffDocInstruction(path, "zh", "写吧\n写完回：已写入：<路径>");
+  assert.equal(withReceipt.split("已写入").length - 1, 1, "已有回执要求时不该再追加一行");
   // 空白自定义 = 内置默认
   assert.equal(
     buildHandoffDocInstruction(path, "zh", "   "),
     buildHandoffDocInstruction(path, "zh"),
     "空白模板应回落内置默认",
   );
-  ok("自定义交接指令：占位符替换 / 缺占位符自动补路径 / 空白回落内置默认");
+  ok("自定义交接指令：{{path}} 仍可固定路径 / 缺回执自动补 / 空白回落内置默认");
+}
+
+// ---- [2.7] 回执解析：主进程靠它找到模型自选的落盘位置 ----------------------
+{
+  const cwd = "E:/proj";
+  const norm = (p) => (p ? p.replace(/\\/g, "/") : p);
+  assert.equal(norm(parseHandoffDocPath("已写入：docs/HANDOFF-2026-10-26.md", cwd)), "E:/proj/docs/HANDOFF-2026-10-26.md");
+  // 反引号 / 引号 / 句末标点都要吃掉
+  assert.equal(norm(parseHandoffDocPath("写完了。\n已写入：`docs/HANDOFF-2026-10-26.md`。", cwd)), "E:/proj/docs/HANDOFF-2026-10-26.md");
+  // 英文回执
+  assert.equal(norm(parseHandoffDocPath("done: docs/handoff-en.md", cwd)), "E:/proj/docs/handoff-en.md");
+  // cwd 内的绝对路径可以
+  assert.equal(norm(parseHandoffDocPath("已写入：E:/proj/docs/a.md", cwd)), "E:/proj/docs/a.md");
+  // cwd 外的一律不认（避免抓错文件）
+  assert.equal(parseHandoffDocPath("已写入：E:/other/a.md", cwd), null, "项目外的路径必须拒收");
+  assert.equal(parseHandoffDocPath("已写入：../outside.md", cwd), null, "跳出项目的相对路径必须拒收");
+  // 不像路径的东西不算回执
+  assert.equal(parseHandoffDocPath("已写入：完成", cwd), null);
+  assert.equal(parseHandoffDocPath("没有回执", cwd), null);
+  // 多次回执以最后一次为准（模型可能先试错再落地）
+  assert.equal(
+    norm(parseHandoffDocPath("已写入：docs/a.md\n已写入：docs/b.md", cwd)),
+    "E:/proj/docs/b.md",
+    "应取最后一个回执",
+  );
+  ok("回执解析：相对/绝对可用、项目外拒收、非路径忽略、多次取最后");
 }
 
 // ---- [3] 文档校验：合格 ----------------------------------------------------
@@ -158,9 +191,33 @@ const ok = (msg) => {
 {
   assert.equal(isHandoffDocPath("E:\\proj", "E:\\proj\\.mpi\\handoff\\a.md"), true);
   assert.equal(isHandoffDocPath("/p", "/p/.mpi/handoff/a.md"), true);
-  assert.equal(isHandoffDocPath("/p", "/q/.mpi/handoff/a.md"), false, "项目外不算");
-  assert.equal(isHandoffDocPath("/p", "/p/docs/handoff/a.md"), false, "不是 .mpi/handoff 也不算");
-  ok("路径守卫只认 <cwd>/.mpi/handoff/");
+  // 2026-10-26：位置由模型自选，docs/ 下也算
+  assert.equal(isHandoffDocPath("/p", "/p/docs/HANDOFF-2026-10-26.md"), true, "项目内的 docs/ 也算");
+  assert.equal(isHandoffDocPath("/p", "/q/docs/HANDOFF-2026-10-26.md"), false, "项目外不算");
+  assert.equal(isHandoffDocPath("/p", "/p/docs/a.txt"), false, "非 markdown 不算");
+  ok("路径守卫：项目内的 md 都算（不再限定 .mpi/handoff/）");
+}
+
+// ---- [7.5] 目录兜底：项目内按习惯命名的交接文档 --------------------------
+{
+  const dir = mkdtempSync(join(tmpdir(), "mpi-handoff-scan-"));
+  try {
+    mkdirSync(join(dir, "docs", "sub"), { recursive: true });
+    mkdirSync(join(dir, "node_modules", "pkg"), { recursive: true });
+    mkdirSync(join(dir, ".git"), { recursive: true });
+    writeFileSync(join(dir, "docs", "HANDOFF-2026-10-26.md"), "# 交接\n正文");
+    writeFileSync(join(dir, "docs", "sub", "交接-2026-10-25.md"), "# 交接\n正文");
+    writeFileSync(join(dir, "docs", "notes.md"), "# 笔记\n正文");
+    writeFileSync(join(dir, "node_modules", "pkg", "HANDOFF-x.md"), "# 依赖里的");
+    writeFileSync(join(dir, ".git", "handoff.md"), "# 隐藏目录里的");
+    const hits = findNamedHandoffDocs(dir, 0).map((p) => p.replace(/\\/g, "/").replace(dir.replace(/\\/g, "/"), ""));
+    assert.deepEqual(hits.sort(), ["/docs/HANDOFF-2026-10-26.md", "/docs/sub/交接-2026-10-25.md"].sort(), `扫描结果不对：${hits}`);
+    // since 卡时间：未来的时间点应该什么都抓不到
+    assert.deepEqual(findNamedHandoffDocs(dir, Date.now() + 600_000), [], "只认这一轮之后写的文件");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  ok("目录兜底：只认 handoff/交接 命名、跳 node_modules 与隐藏目录、按时间过滤");
 }
 
 // ---- [8] 会话名 = 文档的一级标题 -------------------------------------------
@@ -195,7 +252,6 @@ const ok = (msg) => {
   }
   ok("指令要求用一级标题概括（并说明它就是会话名）");
 }
-
 // ---- [10] 超时必须早于客户端超时 -------------------------------------------
 {
   // PWA 与安卓对 thread.handoff 的请求超时都是 180s；主机更早收手才能把它变成一条正常错误。
