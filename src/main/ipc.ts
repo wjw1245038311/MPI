@@ -123,14 +123,11 @@ import { guessMimeType } from "./attach-file-core";
 import { ensureMemoryExtension, ensureMemoryCandidateInbox } from "./memory-extension";
 import { startMemoryInboxWatcher } from "./memory-inbox";
 import { getMemoryIndex, memoryPoolDir, scheduleMemoryMaintenance } from "./memory-service";
-import { resolveMemoryModelFrom } from "./memory-model";
 import {
-  buildFallbackDoc,
-  buildHandoffPrompt,
-  buildTranscript,
-  normalizeDoc,
-  pickHandoffMessages,
-  writeHandoffDoc,
+  HANDOFF_TURN_TIMEOUT_MS,
+  buildHandoffDocInstruction,
+  handoffDocPath,
+  inspectHandoffDoc,
 } from "./handoff-doc";
 import { appendOpResult, approveProposal, rejectProposal, startDream, type OpRunnerDeps } from "./memory-ops";
 import {
@@ -4013,9 +4010,13 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       };
       try {
         const source = await threadService.get(threadId).catch(() => null);
+        const zh = getConfig().language === "zh";
         phase("doc");
-        const doc = await generateHandoffDoc(ref.cwd, ref.sessionFile);
-        if (!doc.ok || !doc.path) throw new Error(doc.error || "handoff doc failed");
+        // 文档由**源会话自己**写（会话内一轮，对话里可见）：它有最完整的上下文，
+        // 还能自己读文件/查待办，而不是把截断的纯文本片段丢给一个旁路 HTTP 调用。
+        const docBridge = await ensureRemoteBridge(ref);
+        const doc = await generateHandoffDocInSession(docBridge, ref.cwd, ref.sessionFile, zh ? "zh" : "en");
+        if (!doc.ok) throw new Error(doc.error || "handoff doc failed");
         phase("create", { docPath: doc.path });
         // 注意：create 的第一个参数是**远程项目 id**（opaque），不是 cwd 路径。
         const created = await threadService.create(ref.projectId, undefined, (source?.permission as any) || "sandbox");
@@ -4055,7 +4056,6 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           }
         }
         phase("prompt", { threadId: newId });
-        const zh = getConfig().language === "zh";
         const kickoff = zh
           ? `本会话从上一个会话交接而来。\n先读交接文档：${doc.path}\n然后从文档里的「未完成 / 下一步」接着做；有不清楚的地方先问我。`
           : `This session continues from a previous one.\nRead the handoff document first: ${doc.path}\nThen pick up from its "Next steps" section; ask me if something is unclear.`;
@@ -6029,72 +6029,132 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
    * the background via thread:open.
    */
   // ---- 会话交接文档 ----------------------------------------------------------
-  // 右上角「交接新对话」：用**当前会话的模型**把旧会话写成一份交接文档，新会话的
-  // 首条提示词只指向这份文件（细节按需读，不把整段上下文塞过去）。
-  // 模型不可用 → 退化为最近几轮原文，交接不因模型失败而失败；落盘在 <cwd>/.mpi/handoff/。
-  const generateHandoffDoc = async (cwd: string, sessionFile: string) => {
-    if (!cwd || !sessionFile) return { ok: false as const, error: "missing cwd/sessionFile" };
-    const zh = getConfig().language === "zh";
-    const projectName = cwd.split(/[\/]/).filter(Boolean).pop() || cwd;
-    let messages: any[] = [];
-    let model: { provider: string; id: string } | null = null;
+  // 右上角「交接新对话」：把源会话写成一份交接文档，新会话的首条提示词只指向这份文件。
+  //
+  // **2026-10-26 定稿：唯一路径 = 在源会话里跑一轮**（用户：模拟手动过程——该会话才有最完整的内容）。
+  //   旧做法是旁路 HTTP 摘要：只喂最后 40 条纯文本（30k 字预算）、无工具、读不了文件，
+  //   失败还**静默退化**成「最近几轮原文 + 整个项目待办」——实测那三份文档全是这种产物，
+  //   看上去像「越界读取」。现在失败就明说，不再有「看着成功」的退化产物。
+  const readUsableHandoffDoc = (path: string, language: "zh" | "en") => {
     try {
-      const hist = await readThreadHistory(sessionFile);
-      messages = hist?.messages || [];
-      model = hist?.model || null;
-    } catch (e) {
-      return { ok: false as const, error: "读取会话失败：" + ((e as Error)?.message || String(e)) };
-    }
-    const picked = pickHandoffMessages(messages);
-    // 待办面板里本项目的未完成项一并交给模型，整合进「未完成 / 下一步」。
-    const todoLines = listTodos()
-      .filter((t) => !t.done && (!t.cwd || t.cwd === cwd))
-      .slice(0, 20)
-      .map((t) => `- ${t.title}${t.dueDate ? `（截止 ${t.dueDate}）` : ""}`);
-    let doc = "";
-    let usedModel = false;
-    if (model?.provider && model?.id) {
-      try {
-        const ref = resolveMemoryModelFrom(model.provider, model.id, readModelsFile().providers, "model");
-        if (ref.url && ref.model) {
-          const res = await fetch(ref.url, {
-            method: "POST",
-            headers: { "content-type": "application/json", ...(ref.key ? { authorization: `Bearer ${ref.key}` } : {}) },
-            body: JSON.stringify({
-              model: ref.model,
-              messages: [{ role: "user", content: buildHandoffPrompt(projectName, buildTranscript(picked), zh ? "zh" : "en", todoLines) }],
-              temperature: 0.2,
-              max_tokens: 1600,
-            }),
-            signal: AbortSignal.timeout(120_000),
-          });
-          if (res.ok) {
-            const j = (await res.json()) as any;
-            const text = String(j?.choices?.[0]?.message?.content || "").trim();
-            if (text) {
-              doc = text;
-              usedModel = true;
-            }
-          } else {
-            console.warn("[handoff] model HTTP", res.status);
-          }
-        }
-      } catch (e) {
-        console.warn("[handoff] model failed:", (e as Error)?.message || String(e));
-      }
-    }
-    if (!doc) doc = buildFallbackDoc(projectName, picked, zh ? "zh" : "en", todoLines);
-    try {
-      const path = writeHandoffDoc(cwd, normalizeDoc(doc));
-      return { ok: true as const, path, usedModel, messages: picked.length };
-    } catch (e) {
-      return { ok: false as const, error: "写交接文档失败：" + ((e as Error)?.message || String(e)) };
+      const info = inspectHandoffDoc(readFileSync(path, "utf8"), language);
+      return info.ok ? info : null;
+    } catch {
+      return null;
     }
   };
 
-  ipcMain.handle("thread:handoffDoc", async (_e, args: { cwd?: unknown; sessionFile?: unknown }) =>
-    generateHandoffDoc(typeof args?.cwd === "string" ? args.cwd : "", typeof args?.sessionFile === "string" ? args.sessionFile : ""),
-  );
+  /**
+   * 交接这一轮要在**源会话里**跑，所以即使它已被「空闲回收」也要能把桥拉起来。
+   */
+  const ensureHandoffBridge = async (cwd: string, sessionFile: string): Promise<BridgeHandle> => {
+    const existing = bridges.get(sessionFile);
+    if (existing) {
+      await existing.bridge.start(); // 已跑着就是 no-op
+      return existing;
+    }
+    const permission = resolvePermission(sessionFile, undefined);
+    const handle = createHandle(cwd, sessionFile, undefined, permission, send);
+    bridges.set(handle.getId(), handle);
+    await handle.bridge.start();
+    await Promise.race([handle.bridge.getState().catch(() => undefined), delayMs(8000)]);
+    return handle;
+  };
+
+  /**
+   * 在源会话里跑一轮写交接文档（唯一路径，见 handoff-doc.ts 头注释）。
+   * 这一轮在对话里**可见**（用户 2026-10-26 选定）：能看见它读了什么、写了什么。
+   */
+  const generateHandoffDocInSession = async (
+    handle: BridgeHandle,
+    cwd: string,
+    sessionFile: string,
+    language: "zh" | "en",
+  ): Promise<{ ok: true; path: string } | { ok: false; error: string }> => {
+    if (!cwd || !sessionFile) return { ok: false, error: "missing cwd/sessionFile" };
+    const zh = language === "zh";
+    // 只读模式写不了文件：直接说清楚后果，不要让 agent 撞上审批卡然后干等。
+    if (handle.permission === "readonly") {
+      return {
+        ok: false,
+        error: zh
+          ? "当前会话是只读模式，交接需要写交接文档。切到「沙盒」或更高权限后再试。"
+          : "This session is read-only, so the handoff document cannot be written. Switch to sandbox or higher and retry.",
+      };
+    }
+    const docPath = handoffDocPath(cwd);
+    const instruction = buildHandoffDocInstruction(docPath, zh ? "zh" : "en");
+    const startedAt = Date.now();
+    try {
+      // 正在跑回合就排队（followUp），不抢断当前轮；否则直接 prompt。
+      if (handle.bridge.hasActiveRun) await handle.bridge.followUp(instruction);
+      else await handle.bridge.prompt(instruction);
+    } catch (e) {
+      return { ok: false, error: (zh ? "发送交接指令失败：" : "Failed to send the handoff instruction: ") + ((e as Error)?.message || String(e)) };
+    }
+    appendDiagLog(`handoff-doc turn started cwd=${cwd.slice(-24)} doc=${docPath.split(/[\/]/).pop()}`);
+    // 等 agent_start 到达：不然“还没开始”会被误判成“已经结束”。
+    await delayMs(1200);
+    const deadline = startedAt + HANDOFF_TURN_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (!handle.bridge.hasActiveRun) {
+        // 这一轮结束了：给落盘/flush 留一小段时间再判定。
+        await delayMs(1200);
+        if (readUsableHandoffDoc(docPath, zh ? "zh" : "en")) {
+          appendDiagLog(`handoff-doc ok chars=${statSync(docPath).size} ms=${Date.now() - startedAt}`);
+          return { ok: true, path: docPath };
+        }
+        const fallback = findFreshHandoffDoc(cwd, startedAt, zh ? "zh" : "en");
+        if (fallback) {
+          appendDiagLog(`handoff-doc ok (agent-picked path) ms=${Date.now() - startedAt}`);
+          return { ok: true, path: fallback };
+        }
+        appendDiagLog(`handoff-doc missing after turn ms=${Date.now() - startedAt}`);
+        return {
+          ok: false,
+          error: zh
+            ? `这一轮没写出可用的交接文档（期望：${docPath}）。原因见源会话里这一轮的报错。`
+            : `That turn did not produce a usable handoff document (expected: ${docPath}). Check the source session for the error.`,
+        };
+      }
+      await delayMs(700);
+    }
+    appendDiagLog(`handoff-doc timeout ms=${Date.now() - startedAt}`);
+    return {
+      ok: false,
+      error: zh
+        ? `等交接文档超时（${Math.round(HANDOFF_TURN_TIMEOUT_MS / 1000)}s）。源会话可能还在写，可以稍后再试。`
+        : `Timed out waiting for the handoff document (${Math.round(HANDOFF_TURN_TIMEOUT_MS / 1000)}s). The source session may still be writing; try again later.`,
+    };
+  };
+
+  /** agent 自己选了另一个文件名时的宽容落点：取这次交接之后新出的、通过校验的最新一份。 */
+  const findFreshHandoffDoc = (cwd: string, since: number, language: "zh" | "en"): string | null => {
+    const dir = join(cwd, ".mpi", "handoff");
+    try {
+      const fresh = readdirSync(dir)
+        .filter((name) => name.endsWith(".md"))
+        .map((name) => ({ name, path: join(dir, name), st: statSync(join(dir, name)) }))
+        .filter((entry) => entry.st.mtimeMs >= since - 2000)
+        .sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
+      for (const entry of fresh) {
+        if (readUsableHandoffDoc(entry.path, language)) return entry.path;
+      }
+    } catch {
+      /* 目录不存在就是没有 */
+    }
+    return null;
+  };
+
+  ipcMain.handle("thread:handoffDoc", async (_e, args: { cwd?: unknown; sessionFile?: unknown }) => {
+    const cwd = typeof args?.cwd === "string" ? args.cwd : "";
+    const sessionFile = typeof args?.sessionFile === "string" ? args.sessionFile : "";
+    if (!cwd || !sessionFile) return { ok: false as const, error: "missing cwd/sessionFile" };
+    // 交接要在**源会话里跑一轮**（见 handoff-doc.ts 头注释），所以先把它的桥弄起来。
+    const handle = await ensureHandoffBridge(cwd, sessionFile);
+    const zh = getConfig().language === "zh";
+    return generateHandoffDocInSession(handle, cwd, sessionFile, zh ? "zh" : "en");
+  });
 
   ipcMain.handle("thread:loadHistory", async (_e, args: { cwd: string; sessionFile: string }) => {
     const { cwd, sessionFile } = args;
