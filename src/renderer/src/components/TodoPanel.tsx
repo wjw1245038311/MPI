@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useStore } from "../store";
 import { SidePanel } from "./SidePanel";
 import type { ProjectSummary, TodoItem } from "../lib/types";
+import { baseName } from "../lib/path-name";
 import { parseQuickAdd } from "../lib/quick-add-date";
 import {
   dueLabel,
@@ -24,13 +25,6 @@ const SECTION_LABELS: Record<TodoSectionId, string> = {
   nodate: "无日期",
   done: "已完成",
 };
-
-// String.fromCharCode(92) is a backslash; avoids literal-escape pitfalls in tooling.
-const BACKSLASH = String.fromCharCode(92);
-function baseName(p: string): string {
-  const parts = p.replace(new RegExp(BACKSLASH, "g"), "/").split("/").filter(Boolean);
-  return parts[parts.length - 1] || p;
-}
 
 const MAX_ATTACHMENTS = 10;
 

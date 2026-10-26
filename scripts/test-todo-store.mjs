@@ -128,4 +128,16 @@ assert.ok(!existsSync(join(dir, "todo-attachments", oldAtt.file)), "old-dir file
 updateConfig({ todoAttachmentDir: "" }); // back to default
 store.flushTodos();
 
+// --- 回归：待办面板的路径取名（曾因非法正则整窗白屏） ------------------
+// 现场：TodoPanel 里写过 new RegExp(String.fromCharCode(92), "g")——单个反斜杠
+// 作为 RegExp 源码非法，抛 SyntaxError；一旦「全部项目」视图遇到不在项目列表
+// 里的 cwd（或空标题会话）就会调到它 → React 整树卸载 → 点待办白屏。
+const { baseName } = await import("../src/renderer/src/lib/path-name.ts");
+assert.equal(baseName("E:\\MyWorkspace\\Project\\MPI"), "MPI", "Windows 路径取末段");
+assert.equal(baseName("E:\\MyWorkspace\\tempfile\\Feish"), "Feish", "Windows 路径（项目列表里没有的 cwd）");
+assert.equal(baseName("/home/u/proj/"), "proj", "POSIX 路径尾斜杠不产生空段");
+assert.equal(baseName("C:\\"), "C:", "盘根回落到盘符");
+assert.equal(baseName(""), "", "空串原样返回");
+assert.doesNotThrow(() => baseName("a" + String.fromCharCode(92) + "b"), "不得抛异常（旧实现的失败点）");
+
 console.log("todo store tests passed");

@@ -1,4 +1,5 @@
 import type { ToolRun, ViewMessage } from "./types";
+import { baseName } from "./path-name";
 
 export interface FileArtifact {
   path: string;
@@ -75,10 +76,6 @@ export function resolveArtifactPath(rawPath: string, cwd: string): string {
   return normalizeSegments(`${cwd.replace(/\\/g, "/")}/${raw}`);
 }
 
-function basename(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() || path;
-}
-
 function extension(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot).toLowerCase() : "";
@@ -137,7 +134,7 @@ export function collectFileArtifacts(
 
   const addArtifact = (rawPath: string, action: FileArtifact["action"]) => {
     const path = resolveArtifactPath(rawPath, cwd);
-    const name = basename(path);
+    const name = baseName(path);
     const key = path.toLowerCase();
     const next: FileArtifact = {
       path,
