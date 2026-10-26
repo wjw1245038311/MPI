@@ -67,6 +67,10 @@ export function ChoicePanel({
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [showMissing, setShowMissing] = useState(false);
+  /** 提交在途标记：与 PWA / 安卓同一约定。
+   * frozen 要等新 user 消息回灌才变真，这段空窗里按钮仍可点——
+   * 双击 / 连点就会把同一份选择发两次（2026-10-26 真机实测）。 */
+  const [sending, setSending] = useState(false);
   const sectionRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   // Effective answers: the transcript-derived ones once frozen, drafts while pending.
@@ -136,7 +140,7 @@ export function ChoicePanel({
   };
 
   const submit = async () => {
-    if (frozen) return;
+    if (frozen || sending) return;
     if (missingCount > 0) {
       // 漏选提示：highlight the unanswered questions and jump to the first one.
       setShowMissing(true);
@@ -153,8 +157,13 @@ export function ChoicePanel({
     // Keep the draft until the send succeeds so a failed send loses nothing.
     // followUp: if the agent is still working (rare — it normally waits for
     // this answer), queue instead of steering/interrupting its current turn.
-    const result = await sendPrompt(threadId, text, undefined, undefined, "followUp");
-    if (result !== null) clearChoiceDraft(panelKey);
+    setSending(true);
+    try {
+      const result = await sendPrompt(threadId, text, undefined, undefined, "followUp");
+      if (result !== null) clearChoiceDraft(panelKey);
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -335,8 +344,8 @@ export function ChoicePanel({
           </div>
         )}
         {!frozen && (
-          <button className="btn primary cp-submit" onClick={() => void submit()}>
-            <Send size={13} /> {zh ? "发送选择" : "Send choices"}
+          <button className="btn primary cp-submit" disabled={sending} onClick={() => void submit()}>
+            <Send size={13} /> {sending ? (zh ? "发送中…" : "Sending…") : zh ? "发送选择" : "Send choices"}
           </button>
         )}
       </div>

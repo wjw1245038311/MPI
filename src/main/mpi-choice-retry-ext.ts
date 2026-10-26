@@ -15,8 +15,11 @@
  *
  * ⚠️ 本文件以 `?raw` 源码写进 userData 后被 pi 加载，**必须自包含**：
  *    不能 import 本仓模块（import 路径在 userData 下不存在）。
- *    判定逻辑与 src/renderer/src/lib/choice-block.ts 是两套实现——那边是完整容错，
- *    这里是保守子集，改契约时两边都要看。
+ *    判定逻辑与 src/renderer/src/lib/choice-block.ts 是**两份实现**，但**判据必须一致**：
+ *    渲染端有 JSON 修复链（裸引号 / 缺括号 / 裸 label 对），这里的 parseChoicesBody
+ *    拷贝了同一套修复链——否则「判非法 → 重试」与「仍能渲染 → 面板」会同时发生，
+ *    一次输出就多出两个面板（2026-10-26 thinkbook16p 会话实证）。
+ *    改这套修复链时两处必须同步（test-choice-retry 有 parity 断言）。
  *
  * 失败策略：全程 fail-open——判定抛错、注入失败，都只写 stderr 一行，绝不影响对话。
  */
@@ -102,13 +105,7 @@ function closeReFor(len: number): RegExp {
 }
 
 /** 结构校验：数组、每题有 title、2-6 个选项、选项是字符串或 {label}。 */
-export function isValidChoicesBody(body: string): boolean {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(body);
-  } catch {
-    return false;
-  }
+function shapeOk(raw: unknown): boolean {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > 6) return false;
   for (const q of raw as any[]) {
     if (!q || typeof q !== "object") return false;
@@ -127,6 +124,248 @@ export function isValidChoicesBody(body: string): boolean {
   return true;
 }
 
+// ---------------- JSON 修复链（与渲染端 choice-block.ts 同一套）----------------
+// ⚠️ 本文件自包含（写进 userData 后 import 不到本仓模块），所以这里是**拷贝**。
+// 为什么必须有：判定「要不要重试」的标准必须与「能不能渲染成面板」一致。
+// 之前这里只做严格 JSON.parse，而渲染端有修复链 → 同一块被判非法（触发重试）
+// 却照样渲染成面板 → 一次输出出现**两个面板**（2026-10-26 thinkbook16p 会话实证）。
+// 改动此处必须同步 src/renderer/src/lib/choice-block.ts，test-choice-retry 有 parity 断言。
+
+/** 截出正文里第一个括号配对的 JSON 值（跳过字符串内的括号与转义）。 */
+function sliceFirstJson(text: string): string | null {
+  const start = text.search(/[[{]/);
+  if (start < 0) return null;
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '\"') inStr = false;
+      continue;
+    }
+    if (ch === '\"') inStr = true;
+    else if (ch === "[") stack.push("]");
+    else if (ch === "{") stack.push("}");
+    else if (ch === "]" || ch === "}") {
+      if (stack.pop() !== ch) return null;
+      if (!stack.length) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/** 字符串内裸露的英文双引号（未转义）→ 补转义。 */
+function escapeStrayQuotes(src: string): string {
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) {
+        out += ch;
+        esc = false;
+        continue;
+      }
+      if (ch === "\\") {
+        out += ch;
+        esc = true;
+        continue;
+      }
+      if (ch === '\"') {
+        let j = i + 1;
+        while (j < src.length && /\s/.test(src[j])) j++;
+        const nxt = src[j];
+        if (nxt === undefined || nxt === "," || nxt === ":" || nxt === "}" || nxt === "]") {
+          out += ch;
+          inStr = false;
+          continue;
+        }
+        out += '\\"';
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '\"') inStr = true;
+    out += ch;
+  }
+  return out;
+}
+
+/** 结尾括号补齐（模型把 JSON 写短了），顺便收尾未闭合的字符串。 */
+function closeOpenBrackets(src: string): string {
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '\"') inStr = false;
+      continue;
+    }
+    if (ch === '\"') inStr = true;
+    else if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  let out = src;
+  if (inStr) out += '\"';
+  while (stack.length) out += stack.pop();
+  return out;
+}
+
+/** 结尾多余逗号（严格 JSON 不允许）。 */
+function dropTrailingCommas(src: string): string {
+  return src.replace(/,(\s*[}\]])/g, "$1");
+}
+
+/** 读一个 JSON 字符串键：返回 key 或 null（key 后须跟 `:`）。 */
+function peekKey(src: string, i: number): string | null {
+  if (src[i] !== '\"') return null;
+  let j = i + 1;
+  let esc = false;
+  let key = "";
+  for (; j < src.length; j++) {
+    const c = src[j];
+    if (esc) {
+      key += c;
+      esc = false;
+      continue;
+    }
+    if (c === "\\") {
+      esc = true;
+      continue;
+    }
+    if (c === '\"') break;
+    key += c;
+  }
+  if (j >= src.length) return null;
+  let k = j + 1;
+  while (k < src.length && /\s/.test(src[k])) k++;
+  return src[k] === ":" ? key : null;
+}
+
+/** 裸 `"label":…` 对（options 里丢了 `{}` 包裹）→ 自动补 `{}`。 */
+function wrapBareLabelPairs(src: string): string {
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  const stack: string[] = [];
+  let wrapDepth = -1;
+  let prevSig = "";
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      out += ch;
+      if (esc) {
+        esc = false;
+        continue;
+      }
+      if (ch === "\\") {
+        esc = true;
+        continue;
+      }
+      if (ch === '\"') {
+        inStr = false;
+        prevSig = '\"';
+      }
+      continue;
+    }
+    if (ch === '\"') {
+      const elementPos = stack.length > 0 && stack[stack.length - 1] === "]" && (prevSig === "[" || prevSig === ",");
+      if (elementPos && wrapDepth < 0 && peekKey(src, i) === "label") {
+        out += "{";
+        wrapDepth = stack.length;
+      }
+      inStr = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "[") {
+      stack.push("]");
+      out += ch;
+      prevSig = "[";
+      continue;
+    }
+    if (ch === "{") {
+      stack.push("}");
+      out += ch;
+      prevSig = "{";
+      continue;
+    }
+    if (ch === "]" || ch === "}") {
+      if (wrapDepth === stack.length) {
+        out += "}";
+        wrapDepth = -1;
+      }
+      stack.pop();
+      out += ch;
+      prevSig = ch;
+      continue;
+    }
+    if (ch === ",") {
+      if (wrapDepth >= 0 && wrapDepth === stack.length && peekKey(src, i + 1) === "label") {
+        out += "},{";
+        prevSig = "{";
+        continue;
+      }
+      out += ch;
+      prevSig = ",";
+      continue;
+    }
+    if (!/\s/.test(ch)) prevSig = ch;
+    out += ch;
+  }
+  if (wrapDepth >= 0) out += "}";
+  return out;
+}
+
+/** 三段修复的组合（与渲染端同序：先转义引号，再补包裹，最后补括号/去尾逗号）。 */
+function repairChain(src: string): string {
+  return dropTrailingCommas(closeOpenBrackets(wrapBareLabelPairs(escapeStrayQuotes(src))));
+}
+
+/** 修复候选（改动越小越先试；全部由调用方做 JSON.parse + 结构校验）。 */
+function repairCandidates(body: string): string[] {
+  const trimmed = body.trim();
+  const sliced = sliceFirstJson(trimmed);
+  const out = [sliced ?? "", repairChain(trimmed)];
+  if (sliced) out.push(repairChain(sliced));
+  return out.filter((c) => c.length > 0);
+}
+
+/**
+ * 解析围栏正文：严格 parse → 修复链。返回 repaired=true 说明是靠修复链救回来的。
+ * `error` 只在两种路径都失败时给出（用于把位置回给模型，省一次重试）。
+ */
+export function parseChoicesBody(body: string): { ok: boolean; repaired?: boolean; error?: string } {
+  let firstError: string | undefined;
+  try {
+    if (shapeOk(JSON.parse(body))) return { ok: true };
+  } catch (e) {
+    firstError = (e as Error)?.message || String(e);
+  }
+  for (const candidate of repairCandidates(body)) {
+    try {
+      if (shapeOk(JSON.parse(candidate))) return { ok: true, repaired: true };
+    } catch {
+      // 换下一个候选
+    }
+  }
+  return { ok: false, ...(firstError ? { error: firstError } : {}) };
+}
+
+/** 结构校验 + 修复链：能不能在 MPI 里渲染成面板（与渲染端同判据）。 */
+export function isValidChoicesBody(body: string): boolean {
+  return parseChoicesBody(body).ok;
+}
+
 /**
  * 从一段 assistant 文本里抽出所有 choices 围栏候选。
  * 返回 { fenced: 是否有 choices 围栏标记, validBlocks: 合法块数, broken: 是否出现了解析失败块, missingShape: 形态错 }
@@ -136,12 +375,15 @@ export function inspectChoices(text: string): {
   validBlocks: number;
   broken: boolean;
   missingShape: boolean;
+  /** 第一个坏块的严格 JSON 解析报错（含位置）—— 回给模型，省一次它自己找位置的重试。 */
+  error?: string;
 } {
   const lines = String(text || "").split(/\r?\n/);
   let fenced = false;
   let validBlocks = 0;
   let broken = false;
   let missingShape = false;
+  let firstError: string | undefined;
   let openLen: number | null = null;
   let body: string[] = [];
 
@@ -149,8 +391,12 @@ export function inspectChoices(text: string): {
     if (openLen === null) return;
     // 与渲染层容错对齐：模型常把闭合反引号粘在 JSON 末尾，解析前先剥掉。
     const raw = body.join("\n").trim().replace(/`{3,}\s*$/, "").trim();
-    if (isValidChoicesBody(raw)) validBlocks++;
-    else broken = true;
+    const verdict = parseChoicesBody(raw);
+    if (verdict.ok) validBlocks++;
+    else {
+      broken = true;
+      if (!firstError && verdict.error) firstError = verdict.error;
+    }
     openLen = null;
     body = [];
   };
@@ -187,7 +433,7 @@ export function inspectChoices(text: string): {
   }
   // 开到文末没闭合：同样当坏块（MPI 只在正文能严格解析时才接受粘行闭合）
   if (openLen !== null) finish();
-  return { fenced, validBlocks, broken, missingShape };
+  return { fenced, validBlocks, broken, missingShape, ...(firstError ? { error: firstError } : {}) };
 }
 
 /**
@@ -200,16 +446,28 @@ export function detectFailure(text: string): Failure | null {
   if (!info.fenced && !info.missingShape) return null;
   if (info.validBlocks > 0) return null;
   if (info.broken) {
-    // 能进到这里说明没有合法块，坏块的具体原因对重试提示有区分价值：
-    // 先按「正文是否以 [ 开头」粗分，模型自己的报错细节意义不大。
+    // 能进到这里说明没有合法块（修复链也救不回来），坏块的具体原因对重试提示有区分价值：
+    // 先按「正文是否以 [ 开头」粗分，再把严格解析的报错位置一并回给模型。
     const looksJsonArray = /\[\s*\{/.test(String(text || ""));
+    const where = info.error ? `；严格 JSON 在${positionOf(info.error)}报错：${trimError(info.error)}` : "";
     return {
-      reason: looksJsonArray
+      reason: (looksJsonArray
         ? "围栏正文不是合法 JSON 或选项字段不对（常见：中文串里裸英文双引号；选项用 title 而不是 label）"
-        : "围栏正文不是合法 JSON 数组",
+        : "围栏正文不是合法 JSON 数组") + where,
     };
   }
   return { reason: "没有识别到合法的 choices 围栏（开围栏必须单独一行 ```choices，不能写成 ```json，也不能把 choices 写在围栏外面）" };
+}
+
+/** 从 V8 / JSC 的 JSON 报错里抽「位置」描述，没找到就空串。 */
+function positionOf(err: string): string {
+  const m = /(at position \d+|line \d+ column \d+|unexpected token)/i.exec(err);
+  return m ? ` ${m[1]}` : "";
+}
+
+/** 报错文本限长：提示词里只要位置和一句原因，长堆栈没意义。 */
+function trimError(err: string): string {
+  return err.replace(/\s+/g, " ").slice(0, 160);
 }
 
 /** 修正指令：只给「为什么不过 + 要什么形态」，与实测 89% 修好的提示词一致。 */

@@ -54,17 +54,17 @@ const fence = (body, info = "choices") => "```" + info + "\n" + body + "\n```";
   ok("结构校验：label/title、单选项、空数组、超 6 题");
 }
 
-// ---- [3] 语法坏块：中文串里裸英文双引号 ------------------------------------
+// ---- [3] 裸英文双引号：修复链能救回 → 不重试（改于 2026-10-26） ----------------
+// 旧行为：严格 JSON 判坏 → 重试；但渲染端本来就能修复它 → 重试后再出一份面板
+// = 同一问题两个可点面板。现在两头用同一判据：**能渲染就不重试**。
 {
   const text = fence('[{"title":"用哪个？","options":["方案 "甲" 好","方案乙"]}]');
   const info = inspectChoices(text);
   assert.equal(info.fenced, true);
-  assert.equal(info.validBlocks, 0);
-  assert.equal(info.broken, true);
-  const fail = detectFailure(text);
-  assert.ok(fail, "裸引号应触发重试");
-  assert.match(fail.reason, /JSON|label/, "失败原因要能指导模型改哪里");
-  ok("syntax 坏块（裸引号）：触发重试且原因可用");
+  assert.equal(info.validBlocks, 1, "修复链应能把裸引号救回来");
+  assert.equal(info.broken, false);
+  assert.equal(detectFailure(text), null, "能渲染的块不能触发重试（否则面板会出两份）");
+  ok("裸引号块：修复链救回 → 不重试（防重复面板）");
 }
 
 // ---- [4] 形态错一：choices 单独一行 + 下一行 ```json -----------------------
@@ -183,6 +183,42 @@ const fence = (body, info = "choices") => "```" + info + "\n" + body + "\n```";
   const sm3 = { getEntries: () => [user, { type: "custom_message", id: "x", customType: "other" }, plainAssistant], appendContextEdit: () => calls.push(["OTHER"]) };
   assert.equal(clearUsedRetryInstructions(sm3), 0);
   ok("上下文清理：未使用的保留、其它 custom 消息不动");
+}
+
+// ---- [11] 修复链 parity：判「要不要重试」必须与「能不能渲染」一致 --------------
+// 旧行为：这里只做严格 JSON.parse，渲染端却有修复链 → 同一块被判非法（触发重试）
+// 却照样画成面板 → 一次输出出两个可点面板（2026-10-26 thinkbook16p 会话实证）。
+{
+  const rb = await import("../src/renderer/src/lib/choice-block.ts");
+  const rendersAsPanel = (body) => rb.splitChoiceSegments(fence(body)).some((s) => s.kind === "choice");
+  const corpus = [
+    // 本次事故的坏法：detail 里的裸英文双引号包中文
+    '[{"title":"区域 ID 的稳定策略","options":[{"label":"锚点派生","detail":"把"平台本来就有真标高"这件事错过"},{"label":"编号固定"}]}]',
+    // 尾逗号
+    '[{"title":"题","options":["甲","乙",]},]',
+    // 少了结尾括号
+    '[{"title":"题","options":["甲","乙"]}',
+    // options 里丢了 {} 的裸 label 对
+    '[{"title":"题","options":["label":"甲","detail":"说明","label":"乙","detail":"说明2"]}]',
+    // 正常块
+    '[{"title":"题","options":["甲","乙"]}]',
+  ];
+  for (const body of corpus) {
+    const panel = rendersAsPanel(body);
+    const info = inspectChoices(fence(body));
+    assert.equal(info.validBlocks > 0, panel, "判定与渲染的结论必须一致：" + body.slice(0, 40));
+    assert.equal(panel, true, "这些块都应能渲染：" + body.slice(0, 40));
+    assert.equal(detectFailure(fence(body)), null, "能渲染的块绝不能触发重试：" + body.slice(0, 40));
+  }
+  ok("修复链 parity：能渲染 ⇔ 不重试（裸引号 / 尾逗号 / 缺括号 / 裸 label）");
+
+  // 真救不回来的块：两边都判非法，且报错位置要进提示词
+  const broken = '[{"title":"题" "options":["甲","乙"]}]';
+  assert.equal(rendersAsPanel(broken), false, "缺逗号的块渲染端也不该出面板");
+  const fail = detectFailure(fence(broken));
+  assert.ok(fail, "真坏块仍要触发重试");
+  assert.match(fail.reason, /position|line \d+|unexpected/i, "重试原因应带上解析错误位置");
+  ok("真坏块：仍重试，且原因带 JSON 错误位置");
 }
 
 console.log(`

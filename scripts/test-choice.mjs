@@ -200,4 +200,16 @@ try {
   rmSync(root, { recursive: true, force: true });
 }
 
+// --- 反漂移：三端「发送选择」都必须有在途守卫 -----------------------------
+// frozen 要等新 user 消息回灌才变真，这段空窗里按钮仍可点 —— 双击/连点=
+// 同一份选择发两次（2026-10-26 真机实测：桌面端漏了这个守卫，PWA/安卓有）。
+{
+  const { readFileSync } = await import("node:fs");
+  const desktop = readFileSync(new URL("../src/renderer/src/components/ChoicePanel.tsx", import.meta.url), "utf8");
+  const pwa = readFileSync(new URL("../mobile/pwa/src/components/ChoicePanel.tsx", import.meta.url), "utf8");
+  assert.match(desktop, /if \(frozen \|\| sending\) return;/, "桌面端 submit 必须拦在途重复提交");
+  assert.match(desktop, /setSending\(true\)/, "桌面端必须有 sending 状态");
+  assert.match(pwa, /if \(frozen \|\| sending\) return;/, "PWA submit 必须拦在途重复提交");
+}
+
 console.log("choice tests passed");
