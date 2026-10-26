@@ -218,6 +218,10 @@ export interface AppConfig {
    * asks numbered plain-text questions and the user types answers. Injected into
    * every session's system prompt at spawn time (see append-prompt.ts). */
   qaMode?: "inline" | "manual";
+  /** 交接文档指令模板（Settings → Conversation）。空/未设 = 用内置默认
+   *  （见 handoff-doc.ts 的 builtinHandoffTemplate）。`{{path}}` 会被替成落盘路径；
+   *  没写占位符时自动在末尾补「写到哪 / 怎么回」。 */
+  handoffPrompt?: string;
   /** 空闲会话回收阈值（分钟）：超过这么久没有任何活动的会话进程会被停掉以释放内存；
    * 0 = 关闭。默认 120（见 main/ipc.ts 的 sweepIdleBridges）。 */
   idleReclaimMinutes?: number;
@@ -730,6 +734,7 @@ export function loadConfig(userDataDir: string): AppConfig {
         extAutoPickModel:
           typeof parsed.extAutoPickModel === "boolean" ? parsed.extAutoPickModel : undefined,
         qaMode: parsed.qaMode === "inline" || parsed.qaMode === "manual" ? parsed.qaMode : undefined,
+        handoffPrompt: typeof parsed.handoffPrompt === "string" ? parsed.handoffPrompt : undefined,
         idleReclaimMinutes:
           typeof parsed.idleReclaimMinutes === "number" && parsed.idleReclaimMinutes >= 0
             ? Math.min(1440, Math.floor(parsed.idleReclaimMinutes))
@@ -1009,6 +1014,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   // machine. Each machine re-detects or re-sets them on first launch.
   if (typeof p.extAutoPickModel === "boolean") out.extAutoPickModel = p.extAutoPickModel;
   if (p.qaMode === "inline" || p.qaMode === "manual") out.qaMode = p.qaMode;
+  if (typeof p.handoffPrompt === "string") out.handoffPrompt = p.handoffPrompt;
   if (typeof p.lastThreadCwd === "string" && p.lastThreadCwd) out.lastThreadCwd = p.lastThreadCwd;
 
   if (Array.isArray(p.automationTasks)) {

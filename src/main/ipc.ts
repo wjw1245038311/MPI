@@ -6105,7 +6105,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       };
     }
     const docPath = handoffDocPath(cwd);
-    const instruction = buildHandoffDocInstruction(docPath, zh ? "zh" : "en");
+    const instruction = buildHandoffDocInstruction(docPath, zh ? "zh" : "en", getConfig().handoffPrompt);
     const startedAt = Date.now();
     try {
       // 正在跑回合就排队（followUp），不抢断当前轮；否则直接 prompt。

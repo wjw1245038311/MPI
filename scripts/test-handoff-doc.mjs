@@ -22,7 +22,10 @@ const {
   HANDOFF_DOC_SECTIONS_ZH,
   HANDOFF_DOC_MIN_CHARS,
   HANDOFF_TURN_TIMEOUT_MS,
+  HANDOFF_PROMPT_PATH_TOKEN,
   buildHandoffDocInstruction,
+  builtinHandoffTemplate,
+  fillHandoffTemplate,
   handoffDocTitle,
   handoffFallbackTitle,
   handoffDocPath,
@@ -38,20 +41,15 @@ const ok = (msg) => {
   console.log(`  ✅ ${msg}`);
 };
 
-// ---- [1] 指令：五段结构 + 指定路径 -----------------------------------------
+// ---- [1] 指令：极简 + 指定路径（不再提任何小节） -----------------------
 {
-  for (const [lang, sections] of [
-    ["zh", HANDOFF_DOC_SECTIONS_ZH],
-    ["en", HANDOFF_DOC_SECTIONS_EN],
-  ]) {
+  for (const lang of ["zh", "en"]) {
     const path = lang === "zh" ? "E:/proj/.mpi/handoff/a.md" : "/p/.mpi/handoff/a.md";
     const instruction = buildHandoffDocInstruction(path, lang);
-    for (const section of sections) {
-      assert.ok(instruction.includes(`## ${section}`), `${lang} 指令缺少小节：${section}`);
-    }
     assert.ok(instruction.includes(path), `${lang} 指令必须带上确切落盘路径`);
     assert.ok(/\bwrite\b|write 工具/.test(instruction), `${lang} 指令必须要求用 write 工具落盘`);
-    ok(`${lang} 指令：五段结构 + 路径 + 用 write 落盘`);
+    assert.equal(instruction.split("\n").length, 3, `${lang} 指令应为 3 行（实际 ${instruction.split("\n").length} 行）`);
+    ok(`${lang} 指令：3 行（${instruction.length} 字符）+ 路径 + 用 write 落盘`);
   }
 }
 
@@ -60,12 +58,41 @@ const ok = (msg) => {
   for (const lang of ["zh", "en"]) {
     const instruction = buildHandoffDocInstruction("/p/.mpi/handoff/a.md", lang);
     assert.ok(/密钥|tokens?/i.test(instruction), "必须明确禁止带凭证");
-    assert.ok(/800/.test(instruction), "必须有字数上限");
-    // 正文必须留在文件里，否则会话内那一轮会把整篇文档贴进对话（用户要的是可读的过程，不是一屏文档）
-    assert.ok(lang === "zh" ? instruction.includes("不要把文档正文贴进对话") : /Do NOT paste/i.test(instruction));
-    assert.ok(instruction.length < 2000, "指令要短——它会被写进会话上下文");
-    ok(`${lang} 指令：禁凭证 + 800 字上限 + 正文不贴对话`);
+    // 2026-10-26 用户：字数上限 / 不回贴正文都是风格要求，已从默认指令里删掉
+    assert.ok(instruction.length < 400, "指令要极短——它会被写进会话上下文");
+    assert.ok(!/800/.test(instruction), "默认指令不该再带字数上限");
+    ok(`${lang} 指令（${instruction.length} 字符）：禁凭证 + 极短`);
   }
+}
+
+// ---- [2.5] 自定义指令模板（Settings → 对话配置 → 交接文档指令）------------
+{
+  const path = "E:/proj/.mpi/handoff/a.md";
+  // 内置默认模板：用占位符写成，里面不该出现具体路径
+  for (const lang of ["zh", "en"]) {
+    const tpl = builtinHandoffTemplate(lang);
+    assert.ok(tpl.includes(HANDOFF_PROMPT_PATH_TOKEN), `${lang} 内置模板必须用 {{path}} 占位`);
+    const filled = buildHandoffDocInstruction(path, lang);
+    assert.ok(!filled.includes(HANDOFF_PROMPT_PATH_TOKEN), `${lang} 输出里不能残留占位符`);
+    assert.ok(filled.includes(path), `${lang} 输出必须带真实路径`);
+  }
+  // 自定义模板：{{path}} 替换
+  const custom = `只写事实。\n写到这里：${HANDOFF_PROMPT_PATH_TOKEN}`;
+  const out = buildHandoffDocInstruction(path, "zh", custom);
+  assert.ok(out.startsWith("只写事实。"), "自定义模板应原样生效");
+  assert.ok(out.includes(path) && !out.includes(HANDOFF_PROMPT_PATH_TOKEN), "自定义模板里的占位符应被替换");
+  // 自定义模板忘了写占位符：自动补上落盘路径与回执要求（否则交接必失败）
+  const noToken = buildHandoffDocInstruction(path, "zh", "随便写两句");
+  assert.ok(noToken.includes("随便写两句"), "模板正文应保留");
+  assert.ok(noToken.includes(path), "没写占位符时必须自动补路径");
+  assert.ok(/write/.test(noToken) && noToken.includes("已写入"), "没写占位符时要补 write + 回执要求");
+  // 空白自定义 = 内置默认
+  assert.equal(
+    buildHandoffDocInstruction(path, "zh", "   "),
+    buildHandoffDocInstruction(path, "zh"),
+    "空白模板应回落内置默认",
+  );
+  ok("自定义交接指令：占位符替换 / 缺占位符自动补路径 / 空白回落内置默认");
 }
 
 // ---- [3] 文档校验：合格 ----------------------------------------------------
@@ -90,25 +117,28 @@ const ok = (msg) => {
   ok("五段齐全且够长 → 判为合格");
 }
 
-// ---- [4] 文档校验：空壳 / 缺段 / 太短 --------------------------------------
+// ---- [4] 文档校验：空壳 / 太短（结构不再强制） ----------------------------
 {
   // 「已写入：…」这种一句回复绝不能被当成文档（旧实现最怕的情况）
   assert.equal(inspectHandoffDoc("已写入：E:/p/.mpi/handoff/a.md", "zh").ok, false);
-  // 只有一两段、其余全缺
-  const partial = `# 交接\n\n## 目标\n${"内容".repeat(100)}`;
-  assert.equal(inspectHandoffDoc(partial, "zh").ok, false);
-  // 段都在但太短
+  // 只有两行、信息极少的短篇也不算（低于字数下限）
+  const stub = `# 修个样式\n改了一行 CSS。`;
+  assert.equal(inspectHandoffDoc(stub, "zh").ok, false, "太短的空壳应判失败");
+  // 缺段但内容够：2026-10-26 起不再因为「没凑满五段」而判失败
+  const partial = `# 改了一处样式\n只改了抽屉宽度，其余未动。${"补一句。".repeat(20)}`;
+  assert.equal(inspectHandoffDoc(partial, "zh").ok, true, "内容够就不该因缺段被判失败");
+  // 五段各一句、长度已过下限：只看长度，结构不再是门槛
   const tooShort = HANDOFF_DOC_SECTIONS_ZH.map((s) => `## ${s}\n一句话`).join("\n");
-  assert.ok(tooShort.length < HANDOFF_DOC_MIN_CHARS + 40, "构造的样本应接近下限");
-  assert.equal(inspectHandoffDoc(tooShort, "zh").ok, false, "长度不到下限应判失败");
-  ok("空壳 / 缺段 / 过短 → 判为不合格");
+  assert.ok(tooShort.length >= HANDOFF_DOC_MIN_CHARS, "五段各一句应已超过下限");
+  ok("回执 / 过短 → 不合格；缺段但够长 → 合格");
 }
 
-// ---- [5] 文档校验：小节标题必须独占一行 ------------------------------------
+// ---- [5] 文档校验：回执行不计入字数 ------------------------------------
 {
-  const doc = `# 交接\n\n见下文的 ## 目标是假的标题\n${"填充".repeat(200)}`;
-  assert.equal(inspectHandoffDoc(doc, "zh").ok, false, "正文里提到的 ## 目标 不能算小节");
-  ok("正文里顺带提到的「## 目标」不算小节标题");
+  const doc = `# 交接\n## 目标\n只干了很少的事。\n已写入：E:/p/.mpi/handoff/a.md`;
+  const info = inspectHandoffDoc(doc, "zh");
+  assert.ok(info.chars < doc.trim().length, "回执行不应计入字数");
+  ok("「已写入：<路径>」行不计入正文长度");
 }
 
 // ---- [6] 落盘路径 ----------------------------------------------------------

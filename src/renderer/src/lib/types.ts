@@ -598,6 +598,9 @@ export interface AppConfig {
    * questions render as a clickable inline panel in the chat; "manual": numbered
    * plain-text questions answered by typing. Absent = inline. */
   qaMode?: "inline" | "manual";
+  /** 交接文档指令模板（Settings → Conversation）。空/未设 = 内置默认；
+   *  `{{path}}` 替成落盘路径，没写占位符时自动补在末尾。 */
+  handoffPrompt?: string;
   /** 知芽母版根目录（如 Obsidian vault 里的 Zhiya-assets/）：git 真相源，
    * `~/.pi/agent/zhiya/` 是它的单向同步副本。留空 = 首次启动自动探测并写回；
    * 探测不到时只用本机副本。 */

@@ -6342,6 +6342,27 @@ textarea.modal-input {
   transition: border-color 0.15s, box-shadow 0.15s;
   user-select: text;
 }
+/* 交接文档指令模板（Settings → 对话配置）。与 set-json 同尺寸，但用正文字体 */
+.set-prompt {
+  width: 100%;
+  min-height: 104px;
+  font-family: var(--font);
+  font-size: 12.5px;
+  line-height: 1.6;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  resize: vertical;
+  background: #fff;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  user-select: text;
+}
+.set-prompt:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .set-json.err {
   border-color: #c0392b;
   background: #fdf3f1;

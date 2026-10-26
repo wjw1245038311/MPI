@@ -21,12 +21,13 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-/** 交接文档的固定小节（顺序即要求）。桌面/手机同一份。 */
+/** 交接文档的建议小节（顺序即举例；2026-10-26 起**不再强制**——内容少的会话不必凑五段）。
+ *  桌面/手机同一份；校验只看「不是空壳」，见 inspectHandoffDoc。 */
 export const HANDOFF_DOC_SECTIONS_ZH = ["目标", "已完成", "关键决定", "未完成 / 下一步", "注意事项"] as const;
 export const HANDOFF_DOC_SECTIONS_EN = ["Goal", "Done", "Key decisions", "Next steps", "Cautions"] as const;
 
 /** 文档至少这么多字才算「写成了」——低于这个数多半是模型只说了一句「已写入」。 */
-export const HANDOFF_DOC_MIN_CHARS = 120;
+export const HANDOFF_DOC_MIN_CHARS = 60;
 
 /**
  * 等这一轮写完的上限。客户端（PWA / 安卓）对 `thread.handoff` 的请求超时是 180s，
@@ -44,53 +45,66 @@ export function handoffDocPath(cwd: string, at: Date = new Date()): string {
   return join(dir, name);
 }
 
+/** 自定义模板里的落盘路径占位符（设置 → 对话设置 → 交接文档指令）。 */
+export const HANDOFF_PROMPT_PATH_TOKEN = "{{path}}";
+
 /**
  * 给源会话的指令：写一份交接文档到指定路径。
  *
- * 刻意做到「自包含」：用户可能开着只读/自定义任务模式，也不一定装了待办扩展，
- * 所以指令里不假设任何工具一定可用（待办查不到就跳过），但路径与结构是硬要求。
+ * 刻意做到「自包含」，但只保留**改动前后都不变**的硬要求：路径、write 落盘、不回贴正文、
+ * 禁凭证。其他一律交给 session 自己判断——用户 2026-10-26：「有些会话要交接的内容很少，
+ * 不用这么复杂的结构」。（之前那版 8 条编号 + 五段强制，篇幅约 700 字，还逼着小会话凑段落。）
+ *
+ * `custom` = 用户自己的指令模板（Settings → 对话配置 → 交接文档指令）；空/未写就用内置默认。
+ * 模板里的 `{{path}}` 会被替成真正的落盘路径；没写占位符就往末尾自动补上「写到哪 / 怎么回」。
  */
-export function buildHandoffDocInstruction(docPath: string, language: "zh" | "en" = "zh"): string {
+export function buildHandoffDocInstruction(
+  docPath: string,
+  language: "zh" | "en" = "zh",
+  custom?: string,
+): string {
+  const tpl = String(custom || "").trim();
+  if (tpl) return fillHandoffTemplate(tpl, docPath, language);
+  return fillHandoffTemplate(builtinHandoffTemplate(language), docPath, language);
+}
+
+/** 内置默认模板（用 `{{path}}` 占位）：设置面板做占位提示与「恢复默认」，也供测试比对。
+ *
+ * 2026-10-26 用户定稿：只留**必要**三行——事实与未知、H1（当会话名）、禁凭证 + 落盘。
+ * 字数上限 / 分节建议 / 不贴代码 / 不回贴正文这些**风格要求全删**（用户：「这几句可以不要」）。
+ */
+export function builtinHandoffTemplate(language: "zh" | "en" = "zh"): string {
   if (language === "en") {
     return [
-      "Write the handoff document for THIS session — a new session will take over from it.",
-      "",
-      "Requirements:",
-      "1. Facts only, drawn from this session. Never speculate; write \"unknown\" when unsure.",
-      "2. Start with one `#` heading naming what this handoff is about (specific, one line). It becomes the",
-      "   new session's title——do not write a bare \"Handoff document\".",
-      "3. Fixed Markdown structure, exactly these five `##` headings in this order:",
-      ...HANDOFF_DOC_SECTIONS_EN.map((s) => `   ## ${s}`),
-      "4. \"Next steps\": carry over what is still open from this session. If the todo panel has open",
-      "   items that clearly belong to this session (use the todo list tool when available), fold them in;",
-      "   unrelated project todos must stay out.",
-      "5. Never include API keys, tokens, passwords or authorization codes. No long code dumps —",
-      "   conclusions and file paths are enough.",
-      `6. At most 800 words.`,
-      "7. Use the write tool to save it at this exact path (overwrite if it exists):",
-      `   ${docPath}`,
-      `8. Do NOT paste the document into the chat. When done, reply with a single line:`,
-      `   done: ${docPath}`,
+      "Write the handoff document for THIS session (a new session will take over). Facts only, no speculation; write \"unknown\" when unsure.",
+      "First line: one `#` heading summarizing this handoff (it becomes the new session's title).",
+      `Never include API keys, tokens, passwords or authorization codes. Use the write tool to save it at ${HANDOFF_PROMPT_PATH_TOKEN} (overwrite if it exists).`,
     ].join("\n");
   }
   return [
-    "把**本会话**写成交接文档——随后会有一个新会话接着做。",
-    "",
-    "要求：",
-    "1. 只写本会话里确实发生过的事实，不推测；不确定的写「未知」。",
-    "2. 第一行用 `#` 一级标题一句话概括这次交接在做什么（具体一点）。",
-    "   它会直接成为新会话的会话名，所以别只写「交接文档」。",
-    "3. 结构固定，五个二级标题，顺序如下：",
-    ...HANDOFF_DOC_SECTIONS_ZH.map((s) => `   ## ${s}`),
-    "4. 「未完成 / 下一步」：把本会话里还没做完的事写清楚；待办面板里**明显属于本会话**的未完成项",
-    "   （有 todo 查询工具时查一下）一并整合进来，与本会话无关的项目待办不要带。",
-    "5. 绝对不要写入密钥、令牌、密码、授权码；不要贴大段代码，给结论和文件路径即可。",
-    "6. 篇幅不超过 800 字。",
-    "7. 用 write 工具写到下面这个确切路径（已存在就覆盖）：",
-    `   ${docPath}`,
-    "8. 不要把文档正文贴进对话。写完只回一行：",
-    `   已写入：${docPath}`,
+    "把本会话写成交接文档（随后由新会话接着做）。只写事实、不推测；不确定的写「未知」。",
+    `第一行用一个 \`#\` 一级标题概括这次交接（它会成为新会话的会话名）。`,
+    `不要写密钥、令牌、密码、授权码。用 write 工具写到 ${HANDOFF_PROMPT_PATH_TOKEN}（已存在就覆盖）。`,
   ].join("\n");
+}
+
+/**
+ * 把模板填成真指令：替换 `{{path}}`；模板没写占位符时，把「写到哪 / 怎么回」补在末尾
+ * （否则 agent 拿不到落盘路径，交接会直接失败）。
+ */
+export function fillHandoffTemplate(tpl: string, docPath: string, language: "zh" | "en" = "zh"): string {
+  const text = String(tpl || "").trim();
+  if (text.includes(HANDOFF_PROMPT_PATH_TOKEN)) {
+    return text.split(HANDOFF_PROMPT_PATH_TOKEN).join(docPath);
+  }
+  const tail =
+    language === "en"
+      ? [
+          "Use the write tool to save it at this exact path (overwrite if it exists), then reply with one line only",
+          `(done: ${docPath}). Do NOT paste the document into the chat.`,
+        ]
+      : ["用 write 工具写到这个路径（已存在就覆盖），写完只回一行「已写入：<路径>」，不要把文档正文贴进对话：", `  ${docPath}`];
+  return `${text}\n${tail.join("\n")}`;
 }
 
 /**
@@ -136,8 +150,11 @@ export function isHandoffDocPath(cwd: string, candidate: string): boolean {
 }
 
 /**
- * 校验 agent 写出来的文档像不像一份交接文档（纯函数，可单测）：
- * 五个小节标题至少出现 3 个、正文长度够、不是只有一句「已写入」。
+ * 校验 agent 写出来的文档像不像一份交接文档（纯函数，可单测）。
+ *
+ * **只拦「空壳」**：扣掉「已写入：<路径>」这类回执行之后，正文长度得够。
+ * 不再要求固定小节结构——2026-10-26 用户：内容少的会话不必凑五段。`missing` 仍返回，
+ * 只作诊断信息（哪些建议小节没写），不影响 ok。
  */
 export function inspectHandoffDoc(text: string, language: "zh" | "en" = "zh"): {
   ok: boolean;
@@ -147,8 +164,13 @@ export function inspectHandoffDoc(text: string, language: "zh" | "en" = "zh"): {
   const body = String(text || "");
   const sections = language === "en" ? HANDOFF_DOC_SECTIONS_EN : HANDOFF_DOC_SECTIONS_ZH;
   const missing = sections.filter((name) => !new RegExp(`^#{1,3}\\s*${escapeRe(name)}\\s*$`, "m").test(body));
-  const chars = body.trim().length;
-  return { ok: chars >= HANDOFF_DOC_MIN_CHARS && missing.length <= sections.length - 3, missing: [...missing], chars };
+  // 回执行不算内容：模型只写了一句「已写入：…」时不能被当成文档。
+  const stripped = body
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:已写入|done)\s*[:：]/i.test(line))
+    .join("\n");
+  const chars = stripped.trim().length;
+  return { ok: chars >= HANDOFF_DOC_MIN_CHARS, missing: [...missing], chars };
 }
 
 function escapeRe(value: string): string {

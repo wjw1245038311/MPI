@@ -1330,6 +1330,8 @@ export function Settings() {
   const [initialThinking, setInitialThinking] = useState("{}");
   // ---- Q&A style (config.qaMode; "inline" is the default) -------------------
   const [qaDraft, setQaDraft] = useState<"inline" | "manual">("inline");
+  // ---- 交接文档指令模板（config.handoffPrompt；空 = 内置默认）-----------------
+  const [handoffDraft, setHandoffDraft] = useState("");
   // ---- smart-compaction summary model (saved immediately; the extension re-reads
   // config.json on every compaction, so no restart is needed) -----------------
   const [scProvider, setScProvider] = useState("");
@@ -1692,6 +1694,7 @@ export function Settings() {
     setVoiceDraft(seededVoice);
     setInitialVoice(canonVoice(seededVoice));
     setQaDraft(config?.qaMode || "inline");
+    setHandoffDraft(config?.handoffPrompt || "");
     (async () => {
       try {
         const [models, think, d, p] = await Promise.all([
@@ -1744,6 +1747,10 @@ export function Settings() {
   const sysDirty = useMemo(() => initialSys !== "" && JSON.stringify(sysDraft) !== initialSys, [sysDraft, initialSys]);
   const voiceDirty = useMemo(() => canonVoice(voiceDraft) !== initialVoice, [voiceDraft, initialVoice]);
   const qaDirty = useMemo(() => qaDraft !== (config?.qaMode || "inline"), [qaDraft, config]);
+  const handoffDirty = useMemo(
+    () => handoffDraft.trim() !== (config?.handoffPrompt || "").trim(),
+    [handoffDraft, config],
+  );
   // Re-sync the voice draft when main's persisted voice config changes behind us —
   // e.g. an app-store enable writes sttBaseUrl/sttModel while Settings is open.
   // Skipped while the user has unsaved voice edits so their draft stays intact;
@@ -1757,7 +1764,7 @@ export function Settings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persistedVoiceSig]);
   function attemptClose() {
-    if (modelDirty || thinkDirty || permDirty || dataDirty || sysDirty || voiceDirty || qaDirty) {
+    if (modelDirty || thinkDirty || permDirty || dataDirty || sysDirty || voiceDirty || qaDirty || handoffDirty) {
       // 有未保存改动先问一句（应用内确认框，不用原生 confirm）
       useStore.getState().askConfirm({
         title: language === "zh" ? "放弃未保存的更改？" : "Discard unsaved changes?",
@@ -1971,9 +1978,12 @@ export function Settings() {
       const res = await window.pi.settings.saveThinking(thinkingPatch(thinking));
       setThinking(res);
       setInitialThinking(JSON.stringify(res));
-      if (qaDirty) {
-        // config.json; main rebuilds the warm bridge so new sessions pick it up.
-        const cfg = await window.pi.app.setConfig({ qaMode: qaDraft });
+      if (qaDirty || handoffDirty) {
+        // config.json；交接指令由主进程在点「交接新对话」时现读，改完不用重启。
+        const cfg = await window.pi.app.setConfig({
+          ...(qaDirty ? { qaMode: qaDraft } : {}),
+          ...(handoffDirty ? { handoffPrompt: handoffDraft.trim() } : {}),
+        });
         useStore.setState({ config: cfg });
       }
       await flushVoice();
@@ -2454,6 +2464,34 @@ export function Settings() {
                     <option value="inline">{language === "zh" ? "内联快速选择（推荐）" : "Inline quick choice (recommended)"}</option>
                     <option value="manual">{language === "zh" ? "手动回答" : "Manual answers"}</option>
                   </select>
+                </Field>
+                <Field
+                  label={language === "zh" ? "交接文档指令" : "Handoff prompt"}
+                  hint={
+                    language === "zh"
+                      ? "点「交接新对话」时发给当前会话的指令。留空 = 内置默认；{{path}} 会替换成文档落盘路径（没写占位符会自动补在末尾）。"
+                      : "Instruction sent to the current session by “Handoff”. Empty = built-in default; {{path}} becomes the document path (appended automatically if missing)."
+                  }
+                >
+                  <div className="set-json-wrap">
+                    <textarea
+                      className="set-prompt"
+                      rows={5}
+                      spellCheck={false}
+                      value={handoffDraft}
+                      placeholder={
+                        language === "zh"
+                          ? "留空 = 内置默认（只写事实；第一行 # 标题作为新会话名；{{path}} 处填落盘路径）"
+                          : "Empty = built-in default (facts only; the `#` first line becomes the new session title; {{path}} = file path)"
+                      }
+                      onChange={(e) => setHandoffDraft(e.target.value)}
+                    />
+                    {handoffDraft.trim() !== "" && (
+                      <button className="set-btn ghost" style={{ marginTop: 6 }} onClick={() => setHandoffDraft("")}>
+                        {language === "zh" ? "恢复默认" : "Reset to default"}
+                      </button>
+                    )}
+                  </div>
                 </Field>
                 <Field label="默认思考深度" hint="新建会话的初始思考等级；模型需 reasoning=true 才生效">
                   <select className="set-select" value={thinking.defaultThinkingLevel || "off"} onChange={(e) => setThinking((t) => ({ ...t, defaultThinkingLevel: e.target.value }))}>
