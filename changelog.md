@@ -11,6 +11,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 2. **改：半透明覆盖层统一为 `--overlay-1…8`（浅色黑透明 / 深色白透明）**——原来 128 种 rgba / 219 次出现里，大部分是 hover/选中底与深色覆盖（`rgba(0,0,0,.02…0.9)` / `rgba(255,255,255,.02…0.92)`）。现在收敛为 8 档：浅色 `.02/.045/.06/.085/.15/.26/.52/.9`，深色 `.04/.07/.10/.14/.20/.30/.55/.92`；共替换 **87 处**（浅色规则 66 处 + 深色覆盖 21 处；`.modal-backdrop` 等遮罩保持原样）。rgba 唯一值 128 → **113**，出现次数 219 → **146**。深色下的 hover 底从「黑透明几乎不可见」变成白透明提亮。
    验证方式：`npm run typecheck` + `npm run build`；`grep -c "var(--overlay-" src/renderer/src/styles.css` = 87。应用内：暗色下侧栏项/按钮 hover、菜单项 hover、消息操作条底色的反馈比之前明显；亮色下几乎无变化。
 
+3. **改：圆角收敛为 6 档（4/8/10/12/16/999）**——原来 16 种单值（8px×71、7px×37、10px×34、6px×32、5px×23、9px×25、11px×7、13/14px 各 2…）。现在统一走 `--radius-xs 4` / `--radius-sm 8` / `--radius-md 10` / `--radius 12` / `--radius-xl 16` / `--radius-pill 999`，共替换 **304 处**（300 单值 + 4 复合）；`50%`（圆形）与 `2px`（几何胶囊）保留字面量。相邻档 1–2px 归并（6/7→8、9→10、5→4、11→12、13/14→12），观感变化很小。
+   验证方式：`npm run typecheck` + `npm run build`；`grep -E "border-radius: [0-9]+px" src/renderer/src/styles.css` 应只剩 4 处 `2px`。应用内：按钮/卡片/输入框圆角基本无感；重点看面板（10px 保持）、消息气泡（复合圆角保持右上切角）、圆形头像/圆点（50% 未动）。
+
 ## v0.13.4（2026-10-27）
 1. **修：v0.13.3 的 choices 去重会静默丢题（同一条回复里多个不同问题只留最后一个）**——v0.13.3 为了压掉「模型重写块」造成的双面板，做了无条件的「同消息只渲染最后一块」；thinkbook16p 真机反馈：一条回复里出现 **3 个内容不同的问题块 + 1 个空残块**，结果 2 道题被丢弃（`choice-fence-duplicate dropped:2`），截图里只剩一个面板。现在判重改为**内容签名**（题目 + 每题选项 label，忽略 detail 与空白差异）：签名相同才折叠（模型重写），内容不同的块全部保留。三端同步（桌面 `choiceSignature` / PWA / 安卓）。
    验证方式：`npm run typecheck` + `npm test -- choice`（`test-choice-block` / `test-pwa-choice` 新增「不同内容多块都渲染 / 同内容折叠 / 空块丢弃」）+ `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest --tests 'com.mpi.app.ChoiceLangToleranceTest'`（9 项）。应用内：让模型一条回复里问 3 组不同问题 → 应看到 3 个面板（v0.13.3 只有 1 个）。
