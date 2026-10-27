@@ -146,6 +146,31 @@ export function logChoiceFenceInTool(detail: {
   });
 }
 
+/** 一条消息的 choices 渲染汇总（验收口径）：识别块数 / 渲染面板数 / 降级代码块数 /
+ *  内容重复被折叠数 / 空块丢弃数。单块级日志看不出「这一条到底渲染了几个面板」，
+ *  排障时需要这一行（2026-10-27 thinkbook16p 两次报障都卡在这里）。 */
+export function logChoiceFenceRender(detail: {
+  threadId: string;
+  messageKey: string;
+  blocks: number;
+  panels: number;
+  codes: number;
+  dropped: number;
+  empty: number;
+}): void {
+  const key = `render:${detail.threadId}:${detail.messageKey}:${detail.blocks}:${detail.panels}:${detail.codes}:${detail.dropped}:${detail.empty}`;
+  if (!rememberChoiceFence(key)) return;
+  send("choice-fence-render", {
+    thread: detail.threadId,
+    message: detail.messageKey,
+    blocks: detail.blocks,
+    panels: detail.panels,
+    codes: detail.codes,
+    dropped: detail.dropped,
+    empty: detail.empty,
+  });
+}
+
 /** 同一条消息里的重复选项块被折叠了（只渲染最后一块）：模型偶尔先写草稿块再重写一遍，
  *  两块的题目往往相同、措辞略有差异（2026-10-27 thinkbook16p 实证：单次回复 2 个块，
  *  第一块开围栏还是畸形的 ```choices>）。记一行便于统计重复输出的真实频率——若降不下

@@ -452,6 +452,10 @@ internal fun withChoiceSegments(segments: List<Segment>, finalized: Boolean): Li
             continue
         }
 
+        // 正文空白的 choices 围栏（如 ```choices> 后面没内容）：静默丢弃，
+        // 不出空代码块 / 不给「格式不合法」警告（与桌面端/PWA 同一规则，2026-10-27 实证）。
+        if (code.text.isBlank()) continue
+
         // 1) 已闭合：整体容错解析（严格 → 截第一个 JSON → 修复链）。
         if (code.closed) {
             if (like) {
@@ -493,22 +497,40 @@ internal fun withChoiceSegments(segments: List<Segment>, finalized: Boolean): Li
         }
     }
 
-    // 同一条回复里的多个合法块 → 只渲染最后一块（与桌面端/PWA 同一规则）。
-    // 2026-10-27 thinkbook16p 实证：模型先写一个草稿块（开围栏是畸形的 ```choices>），
-    // 又在同一次回复里重写成正式块，两份都被渲染成面板。
-    val panelCount = out.count { it is Segment.Choice }
-    if (panelCount > 1) {
-        val collapsed = mutableSetOf<Int>()
-        var left = panelCount
-        out.forEachIndexed { index, seg ->
-            if (seg !is Segment.Choice) return@forEachIndexed
-            left--
-            if (left == 0) out[index] = seg.copy(dropped = panelCount - 1) else collapsed += index
+    // 同一条回复里的多个块：只折叠**内容等价**的（模型重写），内容不同的全部保留
+    // ——一条回复里问多组不同的问题是合法的，不能静默丢题（与桌面端/PWA 同一规则）。
+    val choiceAt = out.indices.filter { out[it] is Segment.Choice }
+    if (choiceAt.size > 1) {
+        val lastBySign = mutableMapOf<String, Int>()
+        val countBySign = mutableMapOf<String, Int>()
+        for (k in choiceAt) {
+            val seg = out[k] as Segment.Choice
+            val sign = choiceSignature(seg.data)
+            lastBySign[sign] = k
+            countBySign[sign] = (countBySign[sign] ?: 0) + 1
         }
-        return out.filterIndexed { index, _ -> index !in collapsed }
+        val collapsed = mutableSetOf<Int>()
+        for (k in choiceAt) {
+            val seg = out[k] as Segment.Choice
+            val sign = choiceSignature(seg.data)
+            if (lastBySign[sign] != k) {
+                collapsed += k
+                continue
+            }
+            val dupes = (countBySign[sign] ?: 1) - 1
+            if (dupes > 0) out[k] = seg.copy(dropped = dupes)
+        }
+        if (collapsed.isNotEmpty()) return out.filterIndexed { index, _ -> index !in collapsed }
     }
     return out
 }
+
+/** 判重签名：题目 + 每题选项 label（忽略 detail 与空白差异），与桌面端/PWA 同一规则。 */
+internal fun choiceSignature(data: ChoiceBlockData): String =
+    data.questions.joinToString(";") { q ->
+        q.title.replace(Regex("\\s+"), "") + "|" +
+            q.options.joinToString(",") { o -> o.label.replace(Regex("\\s+"), "") }
+    }
 
 // ---- 回复构造 + 解析（与桌面端同一契约） -------------------------------------
 // 跳过的题默认整行省略（前题选项与后题无关时，「题目都不用给了」）；写了补充说明

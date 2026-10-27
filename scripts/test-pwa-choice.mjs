@@ -182,19 +182,29 @@ const FENCE_BODY = '[{"title":"用什么方案？","options":["方案甲（推�
 }
 
 {
-  // 同一条消息里多个合法块（2026-10-27：模型先写草稿块、又重写正式块）→ 只渲染最后一块。
-  const draft = JSON.stringify([{ title: "下一步怎么走", options: ["现在开始", "先看方案"] }]);
-  const final = JSON.stringify([{ title: "下一步怎么走", options: ["现在开始", "先看方案再定"] }]);
-  const items = withChoiceSegments(
-    parseSegments(`正文\n\`\`\`choices>\n${draft}\n\`\`\`\n\`\`\`choices\n${final}\n\`\`\``),
+  // 内容相同的多个块（模型重写）→ 只渲染最后一个。
+  const same = JSON.stringify([{ title: "下一步怎么走", options: ["现在开始", "先看方案"] }]);
+  const sameItems = withChoiceSegments(
+    parseSegments(`正文\n\`\`\`choices>\n${same}\n\`\`\`\n\`\`\`choices\n${same}\n\`\`\``),
     true,
   );
-  const panels = items.filter((i) => i.kind === "choice");
-  assert.equal(panels.length, 1, "只保留最后一个面板");
-  assert.equal(panels[0].dropped, 1, "记录被折叠的块数");
-  assert.deepEqual(panels[0].data.questions[0].options.map((o) => o.label), ["现在开始", "先看方案再定"], "保留的是最后一块");
+  const samePanels = sameItems.filter((i) => i.kind === "choice");
+  assert.equal(samePanels.length, 1, "同签名的重复块只保留一个面板");
+  assert.equal(samePanels[0].dropped, 1, "记录被折叠的块数");
 
-  console.log("ok 4c - withChoiceSegments: 同一条消息多个块只渲染最后一个");
+  // 内容不同的多个块 → 全部保留（不能静默丢题）。
+  const a = JSON.stringify([{ title: "第一条做哪个桶", options: ["A", "B"] }]);
+  const b = JSON.stringify([{ title: "落位走哪条路线", options: ["甲", "乙"] }]);
+  const diffItems = withChoiceSegments(parseSegments(`\`\`\`choices\n${a}\n\`\`\`\n\`\`\`choices\n${b}\n\`\`\``), true);
+  const diffPanels = diffItems.filter((i) => i.kind === "choice");
+  assert.equal(diffPanels.length, 2, "不同问题都渲染");
+  assert.deepEqual(diffPanels.map((p) => p.data.questions[0].title), ["第一条做哪个桶", "落位走哪条路线"]);
+
+  // 空正文的 choices 围栏 → 静默丢弃，不出代码块 / 警告。
+  const emptyItems = withChoiceSegments(parseSegments("\`\`\`choices>\n\n\`\`\`"), true);
+  assert.equal(emptyItems.length, 0, "空块不产生任何段");
+
+  console.log("ok 4c - withChoiceSegments: 同内容折叠 / 不同内容全保留 / 空块丢弃");
 }
 
 // ---- 3. buildChoiceReplyText + parseChoiceReply --------------------------------

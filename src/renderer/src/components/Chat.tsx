@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type WheelEvent as ReactWheelEvent } from "react";
+import { createPortal } from "react-dom";
 import { getDisplayThreadTitle, getEarlierViews, normalizeThreadFile, useStore } from "../store";
 import { getTtsState, speakMessage, stopTts, subscribeTts } from "../lib/tts";
 import { parseSkillBlock } from "../lib/skill-block";
@@ -17,8 +18,8 @@ import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
 import { splitChoiceSegments } from "../lib/choice-block";
-import type { ChoiceClampInfo, ChoiceFailure } from "../lib/choice-block";
-import { logChoiceFenceDuplicate, logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRepaired } from "../lib/diag-watch";
+import type { ChoiceClampInfo, ChoiceFailure, ChoiceSplitStats } from "../lib/choice-block";
+import { logChoiceFenceDuplicate, logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRender, logChoiceFenceRepaired } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
 import { chatAttachmentUrl, parseAgentMediaRefs } from "../lib/chat-attachments";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
@@ -1304,6 +1305,22 @@ function userMessagePreview(group: MsgGroup, language: string): string {
   return chars.length > 20 ? `${chars.slice(0, 20).join("")}…` : text;
 }
 
+/** 悬停 tooltip 用的完整文本（不做 20 字截断，保留原换行）。
+ *  面板行本身只有一行预览（Qwen 风格的紧凑列表），长消息内容靠这个 tooltip 看全。 */
+function userMessageFullText(group: MsgGroup, language: string): string {
+  const first = group.items[0];
+  const text = (first?.text || "").replace(/\r\n?/g, "\n").trim();
+  if (text) return text;
+  const images = first?.images?.length ?? 0;
+  const files = first?.attachments?.length ?? 0;
+  if (images || files) {
+    return language === "zh"
+      ? `（图片消息：${images} 张${files ? ` · 附件 ${files} 个` : ""}）`
+      : `(image message: ${images}${files ? ` · ${files} attachment(s)` : ""})`;
+  }
+  return language === "zh" ? "（空消息）" : "(empty message)";
+}
+
 /** 左侧用户消息导航（参考 Qwen 网页版）：圆点常驻；悬停展开列出全部节点的面板
  *  （而非单条 tooltip）；视口中心附近的消息为「选中」——其圆点颜色加深、
  *  面板行高亮。点击圆点或面板行跳转。 */
@@ -1322,6 +1339,10 @@ function UserMessageNav({
   const railRef = useRef<HTMLDivElement>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const hideTimer = useRef<number | null>(null);
+  /** 面板行的悬停详情 tooltip（fixed 坐标，portal 到 body——面板自己有 overflow，
+   *  放在里面会被裁掉）。 */
+  const [tip, setTip] = useState<{ key: string; top: number; left: number; width: number; maxHeight: number } | null>(null);
+  const tipTimer = useRef<number | null>(null);
   // 「选中」节点：视口中心线（偏上）之下最近的用户消息组。
   const [activeKey, setActiveKey] = useState<string | null>(null);
 
@@ -1383,11 +1404,38 @@ function UserMessageNav({
     }, 160);
   };
 
+  // ---- 面板行的完整文本 tooltip ------------------------------------------
+  // 行内只有 20 字预览；悬停时在旁边弹一张卡片显示完整输入（可滚动）。
+  // 用 fixed + portal 是因为面板自己 overflow-y: auto，放在里面会被裁掉。
+  const cancelTipClose = () => {
+    if (tipTimer.current) {
+      window.clearTimeout(tipTimer.current);
+      tipTimer.current = null;
+    }
+  };
+  const scheduleTipClose = () => {
+    cancelTipClose();
+    tipTimer.current = window.setTimeout(() => {
+      tipTimer.current = null;
+      setTip(null);
+    }, 120);
+  };
+  const openTip = (group: MsgGroup, el: HTMLElement) => {
+    cancelTipClose();
+    const rect = el.getBoundingClientRect();
+    // 宽 440（窄窗口收缩）；优先放行右侧，右边不够就夹到视口内。
+    const width = Math.min(440, Math.max(240, window.innerWidth - 24));
+    const left = Math.min(rect.right + 12, window.innerWidth - width - 12);
+    const top = Math.max(12, Math.min(rect.top, window.innerHeight - 140));
+    setTip({ key: group.key, top, left, width, maxHeight: Math.max(120, window.innerHeight - top - 16) });
+  };
+
   if (groups.length < USER_MESSAGE_NAV_MIN_ITEMS) return null;
 
   const zh = language === "zh";
 
   return (
+    <>
     <nav
       ref={navRef}
       className="user-message-nav"
@@ -1423,20 +1471,64 @@ function UserMessageNav({
           {groups.map((group) => {
             const preview = userMessagePreview(group, language);
             return (
-              <button
+              <div
                 key={group.key}
-                type="button"
-                className={`user-message-nav-item${group.key === activeKey ? " active" : ""}`}
-                onClick={() => onJump(group.key)}
+                className="user-message-nav-row"
+                onMouseEnter={(event) => openTip(group, event.currentTarget)}
+                onMouseLeave={scheduleTipClose}
+                onFocus={(event) => openTip(group, event.currentTarget)}
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) scheduleTipClose();
+                }}
               >
-                <span className="user-message-nav-item-text">{preview}</span>
-                <span className="user-message-nav-item-dash" aria-hidden="true" />
-              </button>
+                <button
+                  type="button"
+                  className={`user-message-nav-item${group.key === activeKey ? " active" : ""}`}
+                  onClick={() => onJump(group.key)}
+                >
+                  <span className="user-message-nav-item-text">{preview}</span>
+                  <span className="user-message-nav-item-dash" aria-hidden="true" />
+                </button>
+              </div>
             );
           })}
         </div>
       )}
     </nav>
+    {/* 行悬停详情：完整输入文本。portal 到 body，避开面板自己的 overflow。 */}
+    {tip && (() => {
+      const tipIndex = groups.findIndex((group) => group.key === tip.key);
+      const group = tipIndex >= 0 ? groups[tipIndex] : null;
+      if (!group) return null;
+      const first = group.items[0];
+      const images = first?.images?.length ?? 0;
+      const files = first?.attachments?.length ?? 0;
+      return createPortal(
+        <div
+          className="user-message-nav-tip"
+          role="tooltip"
+          style={{ top: tip.top, left: tip.left, width: tip.width, maxHeight: tip.maxHeight }}
+          onMouseEnter={() => {
+            cancelTipClose();
+            showPanel();
+          }}
+          onMouseLeave={() => {
+            scheduleTipClose();
+            scheduleHide();
+          }}
+        >
+          <div className="user-message-nav-tip-meta">
+            <span>{zh ? `第 ${tipIndex + 1} 条` : `#${tipIndex + 1}`}</span>
+            {first?.timestamp ? <span>{formatClock(first.timestamp)}</span> : null}
+            {images ? <span>🖼 {images}</span> : null}
+            {files ? <span>📎 {files}</span> : null}
+          </div>
+          <div className="user-message-nav-tip-text">{userMessageFullText(group, language)}</div>
+        </div>,
+        document.body,
+      );
+    })()}
+    </>
   );
 }
 
@@ -2179,25 +2271,42 @@ function BlockView({
   // Inline multi-question choice blocks: split out ```choices fences once the
   // message has finalized (while streaming they render as inert code blocks).
   // Unconditional hook — guarded inside so non-text blocks cost one regex test.
-  const choiceSegments = useMemo(
-    () => (block.type === "text" && !streaming ? splitChoiceSegments(blockText) : null),
-    [block.type, blockText, streaming],
-  );
-  // 解析结果入诊断日志（去重；只记失败与「修复救回」两种，正常解析不记）。
+  // 解析结果 + 附带统计（空块丢弃数）一起算，供渲染与诊断共用。
+  const choiceRender = useMemo(() => {
+    if (block.type !== "text" || streaming) return null;
+    const stats: ChoiceSplitStats = {};
+    const segments = splitChoiceSegments(blockText, stats);
+    return { segments, emptyChoices: stats.emptyChoices ?? 0 };
+  }, [block.type, blockText, streaming]);
+  const choiceSegments = choiceRender?.segments ?? null;
+  // 解析结果入诊断日志（去重；单块级只记异常，另记一条整消息汇总）。
   // 必须在下面的条件 return 之前——hooks 顺序不能变。
   useEffect(() => {
-    if (!choiceSegments) return;
-    choiceSegments.forEach((seg, index) => {
+    if (!choiceRender) return;
+    const segments = choiceRender.segments;
+    const panels = segments.filter((s) => s.kind === "choice").length;
+    const codes = segments.filter((s) => s.kind === "code").length;
+    const dropped = segments.reduce((n, s) => n + (s.kind === "choice" ? (s.dropped ?? 0) : 0), 0);
+    logChoiceFenceRender({
+      threadId,
+      messageKey,
+      blocks: panels + codes + choiceRender.emptyChoices,
+      panels,
+      codes,
+      dropped,
+      empty: choiceRender.emptyChoices,
+    });
+    segments.forEach((seg, index) => {
       if (seg.kind === "code") {
         logChoiceFenceFailure({ threadId, messageKey, index, reason: seg.reason, raw: seg.raw ?? seg.text });
       } else if (seg.kind === "choice") {
-        // 修复链救回 / info string 写歪但已升级 / 前面的重复块被折叠：各自记一行。
+        // 修复链救回 / info string 写歪但已升级 / 内容重复被折叠：各自记一行。
         if (seg.repaired) logChoiceFenceRepaired({ threadId, messageKey, index, raw: seg.raw ?? "" });
         if (seg.info) logChoiceFenceInfoString({ threadId, messageKey, index, info: seg.info, raw: seg.raw ?? "" });
         if (seg.dropped) logChoiceFenceDuplicate({ threadId, messageKey, index, dropped: seg.dropped, raw: seg.raw ?? "" });
       }
     });
-  }, [choiceSegments, threadId, messageKey]);
+  }, [choiceRender, threadId, messageKey]);
   if (block.type === "text") {
     const segments = choiceSegments;
     if (streamingChoiceAt >= 0) {

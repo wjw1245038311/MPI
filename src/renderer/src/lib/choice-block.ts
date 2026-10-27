@@ -99,8 +99,8 @@ export type ChoiceSegment =
       /** 开围栏的 info string 不是标准 `choices`（`choices>` / `Choices` / `choicesjson`），
        *  靠容错判定才升级成面板——诊断日志据此统计模型的真实笔误形态。 */
       info?: string;
-      /** 同一消息里前面还有 N 个被折叠的重复块（只渲染最后一块，见 splitChoiceSegments
-       *  末尾的注释）。>0 时渲染层记一行诊断，便于统计模型重复输出的频率。 */
+      /** 同一消息里与它**内容等价**的重复块被折叠的数量（签名相同才折叠，见
+       *  choiceSignature）。>0 时渲染层记一行诊断。 */
       dropped?: number }
   /** A ```choices fence whose body is not valid JSON — rendered as a plain code block
    * (Chat.tsx 会在其下方给一行「未渲染成面板」提示；reason/raw 供文案与诊断日志). */
@@ -486,8 +486,10 @@ function readChoiceFence(
  * fences so a choices example QUOTED inside another fence is never activated.
  * Sloppily closed fences are tolerated by readChoiceFence; a fence with no usable
  * close is left as plain text unless its body parses as valid choices JSON.
+ *
+ * `stats` 可选：调用方传一个对象就能拿到「空块被丢弃了几个」这类计数（诊断用）。
  */
-export function splitChoiceSegments(text: string): ChoiceSegment[] {
+export function splitChoiceSegments(text: string, stats?: ChoiceSplitStats): ChoiceSegment[] {
   if (!/```\s*choices/i.test(text)) return [{ kind: "md", text }];
 
   const lines = text.split(/\r?\n/);
@@ -539,6 +541,13 @@ export function splitChoiceSegments(text: string): ChoiceSegment[] {
       i++;
       continue;
     }
+    // 正文空白的 choices 围栏（```choices> 后面没内容）：静默丢弃。
+    // 2026-10-27 实证：空残块曾被渲染成空代码块 + 「格式不合法」提示，纯噪音。
+    if (!read.body.trim()) {
+      if (stats) stats.emptyChoices = (stats.emptyChoices ?? 0) + 1;
+      i = read.end + 1;
+      continue;
+    }
     flushMd();
     const data = like ? likeData : read.data;
     // info string 不是标准 choices → 带出去入诊断日志（面板本身照常渲染）。
@@ -558,25 +567,38 @@ export function splitChoiceSegments(text: string): ChoiceSegment[] {
   }
   flushMd();
 
-  // 同一条回复里的多个合法块 → 只渲染最后一块。
-  // 2026-10-27 thinkbook16p 实证：模型先写了一个草稿块（开围栏是畸形的 ```choices>），
-  // 又在同一次回复里重写成正式块（措辞略有不同），两份都被渲染成面板，用户看到两组。
-  // 协议上一条回复只需要一个块（一组最多 6 题），多出来的视为重复：折叠前面的
-  // （换成空 md 段后删除），在保留块上带 dropped 计数供诊断统计。
-  // 只数 choice 段——坏块（code）不算重复，仍按代码块 + 提示显示。
-  const panelCount = segments.filter((s) => s.kind === "choice").length;
-  if (panelCount > 1) {
-    let left = panelCount;
-    for (let k = 0; k < segments.length; k++) {
+  // 同一条回复里的多个块：只折叠**内容等价**的（模型先写草稿再重写），内容不同的
+  // 全部保留——一条回复里问多组不同的问题是合法的，不能静默丢题。
+  // 2026-10-27 实证（正反两面）：模型在同一次回复里先写草稿块再重写，两个块都被渲染；
+  // 但同一批里也有 3 个**不同**问题 + 1 个空残块的消息，旧「只留最后一个」把两道题丢了。
+  // 折叠判定用 choiceSignature（题目 + 选项 label，忽略 detail 与空白）。
+  const choiceAt: number[] = [];
+  segments.forEach((seg, k) => {
+    if (seg.kind === "choice") choiceAt.push(k);
+  });
+  if (choiceAt.length > 1) {
+    const lastBySign = new Map<string, number>();
+    const countBySign = new Map<string, number>();
+    for (const k of choiceAt) {
       const seg = segments[k];
       if (seg.kind !== "choice") continue;
-      left--;
-      segments[k] = left === 0 ? { ...seg, dropped: panelCount - 1 } : { kind: "md", text: "" };
+      const sign = choiceSignature(seg.data);
+      lastBySign.set(sign, k);
+      countBySign.set(sign, (countBySign.get(sign) ?? 0) + 1);
     }
-    for (let k = segments.length - 1; k >= 0; k--) {
+    const drop = new Set<number>();
+    for (const k of choiceAt) {
       const seg = segments[k];
-      if (seg.kind === "md" && !seg.text) segments.splice(k, 1);
+      if (seg.kind !== "choice") continue;
+      const sign = choiceSignature(seg.data);
+      if (lastBySign.get(sign) !== k) {
+        drop.add(k);
+        continue;
+      }
+      const dupes = (countBySign.get(sign) ?? 1) - 1;
+      if (dupes > 0) segments[k] = { ...seg, dropped: dupes };
     }
+    for (let k = segments.length - 1; k >= 0; k--) if (drop.has(k)) segments.splice(k, 1);
   }
 
   // Marker present but no fence matched (e.g. inside a longer word) — return
@@ -591,6 +613,20 @@ export function splitChoiceSegments(text: string): ChoiceSegment[] {
  * titles + option labels (details are collapsed by default → not counted). */
 export function choiceBlockVisibleText(data: ChoiceBlockData): string {
   return data.questions.map((q) => [q.title, ...q.options.map((o) => o.label)].join("\n")).join("\n");
+}
+
+/** splitChoiceSegments 的附带统计（诊断用）。 */
+export interface ChoiceSplitStats {
+  /** 正文为空白、被静默丢弃的 choices 围栏数。 */
+  emptyChoices?: number;
+}
+
+/** 判重签名：题目 + 每题选项 label（忽略 detail 与空白差异）。
+ *  两个块签名相同 = 内容等价（模型重写），只渲染最后一个；不同则全部保留。 */
+export function choiceSignature(data: ChoiceBlockData): string {
+  return data.questions
+    .map((q) => `${q.title.replace(/\s+/g, "")}|${q.options.map((o) => o.label.replace(/\s+/g, "")).join(",")}`)
+    .join(";");
 }
 
 /** Replace every VALID choices fence in `text` with its visible equivalent;

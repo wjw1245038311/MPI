@@ -56,22 +56,48 @@ class ChoiceLangToleranceTest {
     }
 
     @Test
-    fun `同一条消息多个合法块只保留最后一个`() {
-        val draft = """[{"title":"下一步怎么走","options":["现在开始","先看方案"]}]"""
-        val final = """[{"title":"下一步怎么走","options":["现在开始","先看方案再定"]}]"""
+    fun `同一条消息里内容相同的块只保留最后一个`() {
+        val same = """[{"title":"下一步怎么走","options":["现在开始","先看方案"]}]"""
         val out = withChoiceSegments(
             listOf(
                 Segment.Body("正文"),
-                Segment.Code(draft, lang = "choices>", closed = true),
-                Segment.Code(final, lang = "choices", closed = true),
+                Segment.Code(same, lang = "choices>", closed = true),
+                Segment.Code(same, lang = "choices", closed = true),
             ),
             finalized = true,
         )
         val panels = out.filterIsInstance<Segment.Choice>()
-        // 2026-10-27 thinkbook16p：模型先写草稿块、又重写正式块 → 旧行为渲染两个面板。
-        assertTrue("只保留最后一个面板", panels.size == 1)
+        assertTrue("同签名的重复块只保留一个面板", panels.size == 1)
         assertTrue("被折叠的块数记在 dropped 上", panels.single().dropped == 1)
-        assertTrue("保留的是最后一块", panels.single().data.questions.single().options[1].label == "先看方案再定")
+    }
+
+    @Test
+    fun `内容不同的多个块全部保留`() {
+        val a = """[{"title":"第一条做哪个桶","options":["A","B"]}]"""
+        val b = """[{"title":"落位走哪条路线","options":["甲","乙"]}]"""
+        val out = withChoiceSegments(
+            listOf(
+                Segment.Code(a, lang = "choices", closed = true),
+                Segment.Code(b, lang = "choices", closed = true),
+            ),
+            finalized = true,
+        )
+        val panels = out.filterIsInstance<Segment.Choice>()
+        assertTrue("不同问题都渲染（不得静默丢题）", panels.size == 2)
+        assertTrue("不同内容不标 dropped", panels.all { it.dropped == 0 })
+    }
+
+    @Test
+    fun `正文空白的 choices 围栏静默丢弃`() {
+        val out = withChoiceSegments(
+            listOf(
+                Segment.Code("   \n", lang = "choices>", closed = true),
+                Segment.Code(body, lang = "choices", closed = true),
+            ),
+            finalized = true,
+        )
+        assertTrue("空块不能降级成代码块或警告", out.none { it is Segment.Code })
+        assertTrue("正常块不受影响", out.single() is Segment.Choice)
     }
 
     @Test

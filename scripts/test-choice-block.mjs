@@ -86,19 +86,39 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   assert.equal(other[0].kind, "md");
 }
 
-// 同一条消息里多个合法块 → 只渲染最后一块（2026-10-27 thinkbook16p 实证）。
+// 同一条消息里内容**完全相同**的多个块（模型重写）→ 只渲染最后一个。
 {
-  const draft = JSON.stringify([{ title: "下一步怎么走", options: ["现在开始", "先看方案"] }]);
-  const final = JSON.stringify([{ title: "下一步怎么走", options: ["现在开始", "先看方案再定"] }]);
-  const segs = cb.splitChoiceSegments(`正文\n\`\`\`choices>\n${draft}\n\`\`\`\n\`\`\`choices\n${final}\n\`\`\``);
+  const body = JSON.stringify([{ title: "下一步怎么走", options: ["现在开始", "先看方案"] }]);
+  const segs = cb.splitChoiceSegments(`正文\n\`\`\`choices>\n${body}\n\`\`\`\n\`\`\`choices\n${body}\n\`\`\``);
   const panels = segs.filter((s) => s.kind === "choice");
-  assert.equal(panels.length, 1, "只保留最后一个面板");
+  assert.equal(panels.length, 1, "同签名的重复块只保留一个面板");
   assert.equal(panels[0].dropped, 1, "被折叠的块数记在 dropped 上");
+}
+
+// 内容**不同**的多个块必须全部保留（2026-10-27 第二封报障：一条回复里 3 个不同问题，
+// 旧实现「只留最后一个」静默丢了两道题）。
+{
+  const one = JSON.stringify([{ title: "第一条做哪个桶", options: ["A", "B"] }]);
+  const two = JSON.stringify([{ title: "落位走哪条路线", options: ["甲", "乙"] }]);
+  const three = JSON.stringify([{ title: "规格参数怎么取", options: ["读属性", "查表"] }]);
+  const text = `前言\n\`\`\`choices\n${one}\n\`\`\`\n\`\`\`choices\n${two}\n\`\`\`\n\`\`\`choices\n${three}\n\`\`\``;
+  const panels = cb.splitChoiceSegments(text).filter((s) => s.kind === "choice");
+  assert.equal(panels.length, 3, "三个不同的问题都要渲染");
   assert.deepEqual(
-    panels[0].data.questions[0].options.map((o) => o.label),
-    ["现在开始", "先看方案再定"],
-    "保留的是最后一块",
+    panels.map((s) => s.data.questions[0].title),
+    ["第一条做哪个桶", "落位走哪条路线", "规格参数怎么取"],
   );
+  assert.ok(panels.every((s) => s.dropped === undefined), "不同内容不标 dropped");
+}
+
+// 空正文的 choices 围栏 → 静默丢弃：不出空代码块、不出警告，只计入统计。
+{
+  const ok = fence(JSON.stringify([{ title: "q", options: ["a", "b"] }]));
+  const stats = {};
+  const segs = cb.splitChoiceSegments(`${ok}\n\`\`\`choices>\n\n\`\`\``, stats);
+  assert.equal(segs.filter((s) => s.kind === "code").length, 0, "空块不能降级成代码块");
+  assert.equal(segs.filter((s) => s.kind === "choice").length, 1, "正常块不受影响");
+  assert.equal(stats.emptyChoices, 1, "空块计入统计");
 }
 
 // 多块里夹着坏块：坏块不算重复，仍按代码块显示。
@@ -223,15 +243,16 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   assert.equal(segs[0].text, text);
 }
 
-// Multiple fences in one message → 只渲染最后一块（2026-10-27 thinkbook16p：模型先写草稿块再重写，
-// 旧行为逐块渲染，用户看到两组面板）。前面块的正文保留，面板折叠。
+// Multiple fences in one message with DIFFERENT questions → 全部保留（不再无条件折叠）。
 {
   const mk = (t) => fence(JSON.stringify([{ title: t, options: ["a", "b"] }]));
   const text = `${mk("Q1")}\n中\n${mk("Q2")}`;
   const segs = cb.splitChoiceSegments(text);
-  assert.deepEqual(segs.map((s) => s.kind), ["md", "choice"], "前一块被折叠，只留最后一块");
-  assert.equal(segs[1].data.questions[0].title, "Q2", "保留的是最后一块");
-  assert.equal(segs[1].dropped, 1, "被折叠的块数记在 dropped 上");
+  assert.deepEqual(segs.map((s) => s.kind), ["choice", "md", "choice"], "不同问题都渲染");
+  assert.equal(segs[0].data.questions[0].title, "Q1");
+  assert.equal(segs[2].data.questions[0].title, "Q2");
+  assert.equal(segs[0].dropped, undefined);
+  assert.equal(segs[2].dropped, undefined);
 }
 
 // Validation limits —— 超限不再整块判非法，改成「截断渲染 + clamped 计数」。

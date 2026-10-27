@@ -4,6 +4,14 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## v0.13.4（2026-10-27）
+1. **修：v0.13.3 的 choices 去重会静默丢题（同一条回复里多个不同问题只留最后一个）**——v0.13.3 为了压掉「模型重写块」造成的双面板，做了无条件的「同消息只渲染最后一块」；thinkbook16p 真机反馈：一条回复里出现 **3 个内容不同的问题块 + 1 个空残块**，结果 2 道题被丢弃（`choice-fence-duplicate dropped:2`），截图里只剩一个面板。现在判重改为**内容签名**（题目 + 每题选项 label，忽略 detail 与空白差异）：签名相同才折叠（模型重写），内容不同的块全部保留。三端同步（桌面 `choiceSignature` / PWA / 安卓）。
+   验证方式：`npm run typecheck` + `npm test -- choice`（`test-choice-block` / `test-pwa-choice` 新增「不同内容多块都渲染 / 同内容折叠 / 空块丢弃」）+ `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest --tests 'com.mpi.app.ChoiceLangToleranceTest'`（9 项）。应用内：让模型一条回复里问 3 组不同问题 → 应看到 3 个面板（v0.13.3 只有 1 个）。
+2. **修：正文为空的 choices 围栏不再渲染成空代码块 + 「格式不合法」警告**——` ```choices> ` 后面没有正文时，旧逻辑按坏块降级；现在静默丢弃（只计数，不占界面）。同时新增 `choice-fence-render` 诊断：一条消息一行，记录「识别块数 / 渲染面板数 / 降级代码块数 / 内容重复折叠数 / 空块丢弃数」，补上此前「日志看不出渲染了几个面板」的缺口。
+   验证方式：`npm test -- choice`（空块用例：不产生 code/警告、`stats.emptyChoices=1`）。应用内：让模型在正常面板后再吐一个空的 ` ```choices> ` → 界面上只有面板，没有空代码块与警告；诊断日志出现 `choice-fence-render`。
+3. **新增：左侧消息导航的面板行悬停显示完整输入文本**——每行原来只有 20 字单行预览，长消息看不到内容。现在悬停（或键盘 Tab 到）某一行，会在行旁边弹一张卡片：顶部「第 N 条 · 时间 · 图片/附件数」，正文是**完整输入**（保留换行，超长可滚动），卡片可移入继续读，移出 120ms 后消失。实现用 `createPortal` + `fixed` 定位——面板自身 `overflow: auto`，内部绝对定位会被裁掉。另新增 `docs/DESIGN.md`（桌面端 UI 规范：token 表 / 组件 / 布局 / Do-Don't + 硬编码值收敛清单）。
+   验证方式：`npm run typecheck` + `npm run build`。应用内：悬停左侧圆点展开的面板任意一行 → 右侧出现完整文本卡片；选一行长消息，卡片内可滚动读完整；暗色主题同样成立。
+
 ## v0.13.3（2026-10-27）
 1. **新增：本机凭据库 P1a（设置 → 凭据）**——密码 / 令牌 / 私钥口令只存本机，用系统加密（`safeStorage` → Windows DPAPI）落盘，**值永不进对话、日志、快照、中继**；列表接口只下发名称 / 类型 / 使用级别 / 作用域 / 用途说明。支持新增、改名、改「远程使用级别」（直接用 / 需确认 / 仅本机）、项目作用域、遮蔽显示（15 秒自动隐藏）与复制，每次显示/复制都写一条审计（只含动作与名称）。**本机加密不可用时拒绝保存**（`CRED_ENCRYPTION_UNAVAILABLE`），绝不退化为明文。设计见 `docs/CREDENTIALS-VAULT.md`；引用展开、远程分级放行、Windows Hello 闸门是后续阶段（P1b/P1c/P2）。
    验证方式：`npm run typecheck` + `npm test -- credentials`（新增 `logic-credentials`：磁盘与审计里都搜不到明文、重名/非法名/空值/非法类型/非法级别/作用域缺 root 各自返回稳定错误码、update 不传 value 保留原值、reveal 统计使用次数、加密不可用时拒绝写入且不改写文件、删除后不可再取）+ `npm test -- test-registry`。应用内：**重启 dev**（改了主进程）→ 设置 → 凭据 → 新增一条 → 列表里只看到名称与标签，点「显示」出明文且 15 秒后自动收起 → 到应用配置目录确认 `credentials.json` 里只有 `enc:` 密文、`credentials-audit.jsonl` 里没有明文。

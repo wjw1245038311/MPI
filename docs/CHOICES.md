@@ -35,7 +35,8 @@
 
 - 开围栏的 info string 容错：`choices` / `Choices` / `choices>` 都认；`choicesjson` 这类**疑似档**只有在正文严格合法时才升级为面板。
 - 闭合反引号可以粘在 JSON 行尾，或干脆漏写——仅当正文能解析成合法 choices 时才接受。
-- **同一条消息里的多个合法块 → 只渲染最后一块**（前面的折叠，桌面端记一行 `choice-fence-duplicate` 诊断）。三端同一规则（桌面 `splitChoiceSegments` / PWA `withChoiceSegments` / 安卓 `ChoiceLogic.withChoiceSegments`）。原因：模型偶尔先写一个草稿块（开围栏写成 ` ```choices> `，措辞粗糙）再重写正式块，两份都会被容错规则识别，旧行为就渲染成两组面板（2026-10-27 thinkbook16p 实证）。坏块（降级成代码块的）不算重复，仍照常显示 + 提示。
+- **同一条消息里的多个块：只折叠内容等价的**（签名 = 题目 + 每题选项 label，忽略 `detail` 与空白差异；桌面 `choiceSignature()` / PWA / 安卓各自一份，规则一致）。签名相同 = 模型先写草稿块再重写，只渲染最后一个并记 `dropped`；**内容不同则全部渲染**——一条回复里问多组不同的问题是合法的，不能静默丢题（2026-10-27 真机实证：3 个不同问题 + 1 个空块，旧的「只留最后一块」丢了两道题）。坏块（降级成代码块的）不参与折叠，仍照常显示 + 提示。桌面端每条消息另记一行 `choice-fence-render`（识别块数 / 渲染面板数 / 降级数 / 折叠数 / 空块数）。
+- **正文空白的 choices 围栏静默丢弃**（如 ` ```choices> ` 后面没有任何内容）：不出空代码块、不出「格式不合法」警告，只在 `choice-fence-render` 里计入 `empty`。
 - 系统提示里的对应说明：`src/main/choice-logic.ts` 的 `qaModeInstruction()`（中文/英文各一份，改文案两处都要动）。格式段用**语言无关骨架**（open / body / close / limit / quote 五行符号）——模型思考用哪种语言不受提示词控制，格式约束只讲形状更不容易被长上下文淡化。
 
 ## 3. 用户侧：回传格式（契约核心）

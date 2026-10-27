@@ -455,6 +455,9 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
 
     // 1) 已闭合：整体容错解析（严格 → 截第一个 JSON → 修复链）。
     if (seg.closed !== false) {
+      // 正文空白的 choices 围栏（如 ```choices> 后面没内容）：静默丢弃，
+      // 不出空代码块 / 不给「格式不合法」警告（与桌面端同一规则，2026-10-27 实证）。
+      if (!seg.text.trim()) continue;
       const r = parseChoiceBodyEx(seg.text);
       out.push(
         r.data
@@ -487,23 +490,44 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
     );
   }
 
-  // 同一条回复里的多个合法块 → 只渲染最后一块（与桌面端 splitChoiceSegments 同一规则）。
-  // 2026-10-27 thinkbook16p 实证：模型先写一个草稿块（开围栏是畸形的 ```choices>），
-  // 又在同一次回复里重写成正式块，两份都被渲染成面板。
-  const panelCount = out.filter((s) => s.kind === "choice").length;
-  if (panelCount > 1) {
-    const collapsed = new Set<number>();
-    let left = panelCount;
-    for (let k = 0; k < out.length; k++) {
+  // 同一条回复里的多个块：只折叠**内容等价**的（模型重写），内容不同的全部保留
+  // ——一条回复里问多组不同的问题是合法的，不能静默丢题（与桌面端 choiceSignature 同规则）。
+  const choiceAt: number[] = [];
+  out.forEach((seg, k) => {
+    if (seg.kind === "choice") choiceAt.push(k);
+  });
+  if (choiceAt.length > 1) {
+    const lastBySign = new Map<string, number>();
+    const countBySign = new Map<string, number>();
+    for (const k of choiceAt) {
       const seg = out[k];
       if (seg.kind !== "choice") continue;
-      left--;
-      if (left === 0) out[k] = { ...seg, dropped: panelCount - 1 };
-      else collapsed.add(k);
+      const sign = choiceSignature(seg.data);
+      lastBySign.set(sign, k);
+      countBySign.set(sign, (countBySign.get(sign) ?? 0) + 1);
     }
-    return out.filter((_, k) => !collapsed.has(k));
+    const collapsed = new Set<number>();
+    for (const k of choiceAt) {
+      const seg = out[k];
+      if (seg.kind !== "choice") continue;
+      const sign = choiceSignature(seg.data);
+      if (lastBySign.get(sign) !== k) {
+        collapsed.add(k);
+        continue;
+      }
+      const dupes = (countBySign.get(sign) ?? 1) - 1;
+      if (dupes > 0) out[k] = { ...seg, dropped: dupes };
+    }
+    if (collapsed.size) return out.filter((_, k) => !collapsed.has(k));
   }
   return out;
+}
+
+/** 判重签名：题目 + 每题选项 label（忽略 detail 与空白差异），与桌面端同一规则。 */
+export function choiceSignature(data: ChoiceBlockData): string {
+  return data.questions
+    .map((q) => `${q.title.replace(/\s+/g, "")}|${q.options.map((o) => o.label.replace(/\s+/g, "")).join(",")}`)
+    .join(";");
 }
 
 function toPlainSegment(seg: TextSegment): ChoiceAwareSegment {
