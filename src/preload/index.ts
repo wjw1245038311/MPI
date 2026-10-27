@@ -3,6 +3,11 @@ import type {
   AppStoreEntry,
   AppVoiceTestResult,
   ComposerDraft,
+  CredentialInput,
+  CredentialKind,
+  CredentialPatch,
+  CredentialResult,
+  CredentialSummary,
   LogicRunResult,
   McpMarketDetail,
   McpMarketPage,
@@ -144,6 +149,19 @@ const api = {
         hasToken?: boolean;
       }>,
     editAction: (action: "copy" | "cut" | "paste" | "delete" | "selectAll") => ipcRenderer.invoke("app:editAction", action),
+  },
+  /** 凭据库（P1a）。值只存放在主进程；列表永不含值，reveal 仅用于「显示/复制」。 */
+  credentials: {
+    list: (): Promise<CredentialResult<CredentialSummary[]>> => ipcRenderer.invoke("credentials:list"),
+    create: (input: CredentialInput): Promise<CredentialResult<CredentialSummary>> =>
+      ipcRenderer.invoke("credentials:create", input),
+    update: (id: string, patch: CredentialPatch): Promise<CredentialResult<CredentialSummary>> =>
+      ipcRenderer.invoke("credentials:update", id, patch),
+    remove: (id: string): Promise<CredentialResult<boolean>> => ipcRenderer.invoke("credentials:delete", id),
+    reveal: (id: string): Promise<CredentialResult<{ name: string; kind: CredentialKind; value: string }>> =>
+      ipcRenderer.invoke("credentials:reveal", id),
+    paths: (): Promise<CredentialResult<{ vault: string; audit: string }>> =>
+      ipcRenderer.invoke("credentials:paths"),
   },
   memory: {
     /** 记忆池面板快照：条目 + 提案 + 统计（过滤在 renderer 侧本地做）。 */

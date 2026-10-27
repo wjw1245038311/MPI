@@ -39,6 +39,8 @@
 
 落 `userData/credentials.json`（**不进工程目录**），值用 `safeStorage`（Windows=DPAPI）加密，复用 `src/main/remote/identity.ts` 已有的 `enc:` 前缀 + `isEncryptionAvailable()` 兜底写法。
 
+> **已定（P1a，2026-10-27）**：放在应用配置目录根，与 `feedback.json` 同级（不另建 `security/` 子目录）；由 `credentials-store.ts` 的 `credentialsFilePath()` / `credentialsAuditPath()` 统一给出路径。
+
 ```jsonc
 {
   "version": 1,
@@ -177,5 +179,5 @@
 
 1. `silent` 级凭据是否允许**未配对**的远程来源使用（当前建议：不允许）。
 2. 30 分钟授权窗口是否对所有 `confirm` 凭据统一。
-3. `credentials.json` 与审计文件放在 `userData` 还是 `userData/security/` 子目录（后者更便于用户整体备份/删除）。
+3. ~~`credentials.json` 与审计文件放在 `userData` 还是 `userData/security/` 子目录~~ → **已定：应用配置目录根**（P1a 已按此实现）。
 4. §5.1 的 origin 改造是否单独排一个版本（建议：是）。

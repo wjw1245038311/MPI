@@ -11803,3 +11803,148 @@ mark.hl {
 .sb-section-toggle .caret.open {
   transform: rotate(90deg);
 }
+
+/* --- 凭据面板（设置 → 凭据，docs/CREDENTIALS-VAULT.md） --------------- */
+.cred-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.cred-head {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.cred-head h3 {
+  margin: 0 0 4px;
+}
+.cred-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cred-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+}
+.cred-row.revealing {
+  border-color: var(--accent);
+}
+.cred-main {
+  min-width: 0;
+  flex: 1;
+}
+.cred-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cred-name code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+.cred-pill {
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: inherit;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+.cred-pill.level-silent {
+  border-color: var(--ctx-hi);
+  color: var(--ctx-hi);
+  opacity: 1;
+}
+.cred-pill.level-confirm {
+  border-color: var(--ctx-mid);
+  color: var(--ctx-mid);
+  opacity: 1;
+}
+.cred-pill.level-local-only {
+  border-color: var(--ctx-warn);
+  color: var(--ctx-warn);
+  opacity: 1;
+}
+.cred-meta {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--preview-text-dim);
+}
+.cred-dot {
+  opacity: 0.5;
+}
+.cred-plain {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cred-plain code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  border: 1px solid var(--accent-soft);
+  word-break: break-all;
+}
+.cred-plain-note {
+  font-size: 11.5px;
+  color: var(--preview-text-dim);
+}
+.cred-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.cred-actions .set-btn-sm.danger {
+  border-color: var(--ctx-warn);
+  color: var(--ctx-warn);
+}
+.cred-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 10px 0 14px;
+}
+.cred-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+}
+.cred-grid label > span {
+  color: var(--preview-text-dim);
+}
+.cred-grid label > small {
+  font-size: 11.5px;
+  color: var(--preview-text-dim);
+  opacity: 0.8;
+}
+.cred-grid .cred-span {
+  grid-column: 1 / -1;
+}
+.cred-form-actions {
+  display: flex;
+  gap: 8px;
+}

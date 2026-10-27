@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { unlink } from "node:fs/promises";
 import { homedir, hostname, networkInterfaces } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, safeStorage, shell } from "electron";
 import WebSocket from "ws";
 import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
@@ -62,6 +62,18 @@ import { mimeForName } from "./todo-attachment-protocol";
 import type { ComposerDraft } from "../renderer/src/lib/types";
 import { listDir } from "./fs-service";
 import { getFeedback, setFeedback, deleteFeedback } from "./feedback-store";
+import {
+  configureCredentialCipher,
+  createCredential,
+  credentialsAuditPath,
+  credentialsFilePath,
+  deleteCredential,
+  listCredentials,
+  revealCredential,
+  updateCredential,
+  type CredentialInput,
+  type CredentialPatch,
+} from "./credentials-store";
 import { listObservedTools, recordToolCall } from "./observed-tools";
 import { createHtmlPreviewUrl } from "./html-preview-protocol";
 import {
@@ -5810,6 +5822,43 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     if (typeof entryId === "string" && entryId) deleteFeedback(entryId);
     return true;
   });
+
+  // ---- credentials vault ---------------------------------------------------
+  // 值只在本进程内解密；渲染层只有在「显示/复制」时才拿到明文（闸门见
+  // docs/CREDENTIALS-VAULT.md §5，P1a 尚未接入）。加密不可用时 fail-closed。
+  configureCredentialCipher({
+    available: () => {
+      try {
+        return safeStorage.isEncryptionAvailable();
+      } catch {
+        return false;
+      }
+    },
+    encrypt: (plain: string) => `enc:${safeStorage.encryptString(plain).toString("base64")}`,
+    decrypt: (blob: string) =>
+      safeStorage.decryptString(Buffer.from(blob.replace(/^enc:/, ""), "base64")),
+  });
+  /** 把凭据库的 CredentialError 变成可读的失败结果，而不是抛出难看的 IPC 错误。 */
+  const credResult = <T,>(fn: () => T) => {
+    try {
+      return { ok: true as const, data: fn() };
+    } catch (e) {
+      const code = (e as { code?: string })?.code || "CRED_ERROR";
+      return { ok: false as const, code, message: (e as Error)?.message || code };
+    }
+  };
+  ipcMain.handle("credentials:list", () => credResult(() => listCredentials()));
+  ipcMain.handle("credentials:create", (_e, input: CredentialInput) =>
+    credResult(() => createCredential(input)),
+  );
+  ipcMain.handle("credentials:update", (_e, id: string, patch: CredentialPatch) =>
+    credResult(() => updateCredential(id, patch)),
+  );
+  ipcMain.handle("credentials:delete", (_e, id: string) => credResult(() => deleteCredential(id)));
+  ipcMain.handle("credentials:reveal", (_e, id: string) => credResult(() => revealCredential(id)));
+  ipcMain.handle("credentials:paths", () =>
+    credResult(() => ({ vault: credentialsFilePath(), audit: credentialsAuditPath() })),
+  );
   ipcMain.handle("app:fileExists", (_e, absPath: string) => {
     try {
       return !!absPath && statSync(absPath).isFile();

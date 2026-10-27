@@ -1,6 +1,52 @@
 /** Shared renderer-side types. Pi message shapes are kept loose (`any`) because
  *  the renderer intentionally has no dependency on the pi packages. */
 
+// ---------------------------------------------------------------------------
+// 凭据库（docs/CREDENTIALS-VAULT.md）。主进程 src/main/credentials-store.ts
+// 直接复用这些类型，避免两端各写一份而漂移。
+// ---------------------------------------------------------------------------
+
+export type CredentialKind = "password" | "token" | "passphrase" | "ssh-key";
+/** 远程会话的使用策略：silent = 直接可用；confirm = 需一次意图确认；local-only = 远程一律拒绝。 */
+export type CredentialLevel = "silent" | "confirm" | "local-only";
+export type CredentialScope = { type: "global" } | { type: "project"; root: string };
+
+/** 列表里给渲染层的视图：**永远不含值**。 */
+export interface CredentialSummary {
+  id: string;
+  name: string;
+  kind: CredentialKind;
+  level: CredentialLevel;
+  scope: CredentialScope;
+  hint?: string;
+  createdAt: number;
+  lastUsedAt?: number;
+  useCount: number;
+}
+
+export interface CredentialInput {
+  name: string;
+  kind: CredentialKind;
+  level: CredentialLevel;
+  scope?: CredentialScope;
+  hint?: string;
+  value: string;
+}
+
+export interface CredentialPatch {
+  name?: string;
+  kind?: CredentialKind;
+  level?: CredentialLevel;
+  scope?: CredentialScope;
+  hint?: string | null;
+  value?: string;
+}
+
+/** IPC 结果包封：失败携带稳定错误码，避免渲染层去解析错误文案。 */
+export type CredentialResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; code: string; message: string };
+
 export interface ThreadSummary {
   file: string;
   id: string;

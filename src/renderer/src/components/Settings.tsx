@@ -13,6 +13,7 @@ import { EDGE_VOICES, defaultEdgeVoice } from "../lib/edge-voices";
 import { Archive, Check, ChevronRight, Close, Edit, Plus, Refresh, Folder, Search, Trash } from "./icons";
 import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
 import { ServerPanel } from "./ServerPanel";
+import { CredentialsPanel } from "./CredentialsPanel";
 import appIconUrl from "../../../../resources/icon.png";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
@@ -951,7 +952,7 @@ function ProviderCard({
  * Main panel
  * ------------------------------------------------------------------ */
 
-type Tab = "conversation" | "models" | "permissions" | "server" | "data" | "appearance" | "system";
+type Tab = "conversation" | "models" | "permissions" | "credentials" | "server" | "data" | "appearance" | "system";
 
 /** Mirror of main's DataMigrationStatus (preload inlines the same shape). */
 interface DataMigrationStatus {
@@ -2349,6 +2350,7 @@ export function Settings() {
               ["conversation", language === "zh" ? "对话设置" : "Conversation"],
               ["models", "模型与提供商"],
               ["permissions", language === "zh" ? "权限与安全" : "Permissions & security"],
+              ["credentials", language === "zh" ? "凭据" : "Credentials"],
               ["server", language === "zh" ? "服务器" : "Server"],
               ["data", language === "zh" ? "数据管理" : "Data management"],
               ["appearance", language === "zh" ? "外观" : "Appearance"],
@@ -2391,6 +2393,10 @@ export function Settings() {
                     ? language === "zh"
                       ? "权限与安全"
                       : "Permissions & security"
+                    : tab === "credentials"
+                      ? language === "zh"
+                        ? "凭据"
+                        : "Credentials"
                     : tab === "server"
                       ? language === "zh"
                         ? "服务器"
@@ -2728,6 +2734,8 @@ export function Settings() {
                 </Field>
               </div>
             )}
+
+            {tab === "credentials" && <CredentialsPanel />}
 
             {tab === "permissions" && (
               <div className="set-card">
