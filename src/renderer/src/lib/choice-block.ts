@@ -98,7 +98,10 @@ export type ChoiceSegment =
   | { kind: "choice"; data: ChoiceBlockData; repaired?: boolean; raw?: string;
       /** 开围栏的 info string 不是标准 `choices`（`choices>` / `Choices` / `choicesjson`），
        *  靠容错判定才升级成面板——诊断日志据此统计模型的真实笔误形态。 */
-      info?: string }
+      info?: string;
+      /** 同一消息里前面还有 N 个被折叠的重复块（只渲染最后一块，见 splitChoiceSegments
+       *  末尾的注释）。>0 时渲染层记一行诊断，便于统计模型重复输出的频率。 */
+      dropped?: number }
   /** A ```choices fence whose body is not valid JSON — rendered as a plain code block
    * (Chat.tsx 会在其下方给一行「未渲染成面板」提示；reason/raw 供文案与诊断日志). */
   | { kind: "code"; text: string; reason?: ChoiceFailure; raw?: string };
@@ -554,6 +557,27 @@ export function splitChoiceSegments(text: string): ChoiceSegment[] {
     i = read.end + 1;
   }
   flushMd();
+
+  // 同一条回复里的多个合法块 → 只渲染最后一块。
+  // 2026-10-27 thinkbook16p 实证：模型先写了一个草稿块（开围栏是畸形的 ```choices>），
+  // 又在同一次回复里重写成正式块（措辞略有不同），两份都被渲染成面板，用户看到两组。
+  // 协议上一条回复只需要一个块（一组最多 6 题），多出来的视为重复：折叠前面的
+  // （换成空 md 段后删除），在保留块上带 dropped 计数供诊断统计。
+  // 只数 choice 段——坏块（code）不算重复，仍按代码块 + 提示显示。
+  const panelCount = segments.filter((s) => s.kind === "choice").length;
+  if (panelCount > 1) {
+    let left = panelCount;
+    for (let k = 0; k < segments.length; k++) {
+      const seg = segments[k];
+      if (seg.kind !== "choice") continue;
+      left--;
+      segments[k] = left === 0 ? { ...seg, dropped: panelCount - 1 } : { kind: "md", text: "" };
+    }
+    for (let k = segments.length - 1; k >= 0; k--) {
+      const seg = segments[k];
+      if (seg.kind === "md" && !seg.text) segments.splice(k, 1);
+    }
+  }
 
   // Marker present but no fence matched (e.g. inside a longer word) — return
   // the original text untouched.

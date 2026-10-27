@@ -18,7 +18,7 @@ import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
 import { splitChoiceSegments } from "../lib/choice-block";
 import type { ChoiceClampInfo, ChoiceFailure } from "../lib/choice-block";
-import { logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRepaired } from "../lib/diag-watch";
+import { logChoiceFenceDuplicate, logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRepaired } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
 import { chatAttachmentUrl, parseAgentMediaRefs } from "../lib/chat-attachments";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
@@ -2191,9 +2191,10 @@ function BlockView({
       if (seg.kind === "code") {
         logChoiceFenceFailure({ threadId, messageKey, index, reason: seg.reason, raw: seg.raw ?? seg.text });
       } else if (seg.kind === "choice") {
-        // 修复链救回 / info string 写歪但已升级：两者可能同时发生，各自记一行。
+        // 修复链救回 / info string 写歪但已升级 / 前面的重复块被折叠：各自记一行。
         if (seg.repaired) logChoiceFenceRepaired({ threadId, messageKey, index, raw: seg.raw ?? "" });
         if (seg.info) logChoiceFenceInfoString({ threadId, messageKey, index, info: seg.info, raw: seg.raw ?? "" });
+        if (seg.dropped) logChoiceFenceDuplicate({ threadId, messageKey, index, dropped: seg.dropped, raw: seg.raw ?? "" });
       }
     });
   }, [choiceSegments, threadId, messageKey]);

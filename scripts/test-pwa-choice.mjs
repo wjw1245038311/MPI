@@ -181,6 +181,22 @@ const FENCE_BODY = '[{"title":"用什么方案？","options":["方案甲（推�
   console.log("ok 4b - withChoiceSegments: info string 笔误容错（choices> / Choices / choicesjson）");
 }
 
+{
+  // 同一条消息里多个合法块（2026-10-27：模型先写草稿块、又重写正式块）→ 只渲染最后一块。
+  const draft = JSON.stringify([{ title: "下一步怎么走", options: ["现在开始", "先看方案"] }]);
+  const final = JSON.stringify([{ title: "下一步怎么走", options: ["现在开始", "先看方案再定"] }]);
+  const items = withChoiceSegments(
+    parseSegments(`正文\n\`\`\`choices>\n${draft}\n\`\`\`\n\`\`\`choices\n${final}\n\`\`\``),
+    true,
+  );
+  const panels = items.filter((i) => i.kind === "choice");
+  assert.equal(panels.length, 1, "只保留最后一个面板");
+  assert.equal(panels[0].dropped, 1, "记录被折叠的块数");
+  assert.deepEqual(panels[0].data.questions[0].options.map((o) => o.label), ["现在开始", "先看方案再定"], "保留的是最后一块");
+
+  console.log("ok 4c - withChoiceSegments: 同一条消息多个块只渲染最后一个");
+}
+
 // ---- 3. buildChoiceReplyText + parseChoiceReply --------------------------------
 const QUESTIONS = [
   { title: "用什么方案？", options: [{ label: "方案甲（推荐）" }, { label: "方案乙" }] },

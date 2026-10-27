@@ -52,6 +52,13 @@ assert.ok(logic.qaModeInstruction("manual", "en").includes("Do NOT emit"));
 // kills the panel — the renderer falls back to a plain code block)
 assert.ok(logic.qaModeInstruction("inline", "zh").includes("独占一行"));
 assert.ok(logic.qaModeInstruction("inline", "en").includes("own line"));
+// 2026-10-27：模型在同一条回复里写两个 choices 块（先草稿后重写），两份都渲染成面板。
+// 提示词现在把「只写一个块 / 不要草稿块」写成硬约束，防止口径回退。
+assert.ok(logic.qaModeInstruction("inline", "zh").includes("一条回复最多一个块"));
+assert.ok(logic.qaModeInstruction("inline", "zh").includes("草稿块"));
+assert.ok(logic.qaModeInstruction("inline", "zh").includes("```choices>"));
+assert.ok(logic.qaModeInstruction("inline", "en").includes("at most ONE block per reply"));
+assert.ok(logic.qaModeInstruction("inline", "en").includes("draft block"));
 
 // --- real extension source against stubs (same pattern as channel-ext) ------
 const root = mkdtempSync(join(tmpdir(), "mpi-choice-ext-"));

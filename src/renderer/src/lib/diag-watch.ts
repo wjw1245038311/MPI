@@ -146,6 +146,28 @@ export function logChoiceFenceInTool(detail: {
   });
 }
 
+/** 同一条消息里的重复选项块被折叠了（只渲染最后一块）：模型偶尔先写草稿块再重写一遍，
+ *  两块的题目往往相同、措辞略有差异（2026-10-27 thinkbook16p 实证：单次回复 2 个块，
+ *  第一块开围栏还是畸形的 ```choices>）。记一行便于统计重复输出的真实频率——若降不下
+ *  来，说明得在提示词之外另想办法。 */
+export function logChoiceFenceDuplicate(detail: {
+  threadId: string;
+  messageKey: string;
+  index: number;
+  dropped: number;
+  raw: string;
+}): void {
+  const key = `dup:${choiceFenceKey(detail.threadId, detail.messageKey, detail.index, detail.raw)}`;
+  if (!rememberChoiceFence(key)) return;
+  send("choice-fence-duplicate", {
+    thread: detail.threadId,
+    message: detail.messageKey,
+    index: detail.index,
+    dropped: detail.dropped,
+    len: detail.raw.length,
+  });
+}
+
 /** 开围栏的 info string 不是标准 `choices`（`choices>` / `Choices` / `choicesjson`）但已按
  *  面板渲染。以前这种形态会静默降级成代码块（既无面板也无提示），现在记一行笔误形态，
  *  便于以后判断容错规则该放宽还是该收紧。 */

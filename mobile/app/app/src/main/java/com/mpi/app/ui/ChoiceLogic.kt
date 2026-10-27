@@ -492,6 +492,21 @@ internal fun withChoiceSegments(segments: List<Segment>, finalized: Boolean): Li
             else -> code.copy(choiceWarn = true)
         }
     }
+
+    // 同一条回复里的多个合法块 → 只渲染最后一块（与桌面端/PWA 同一规则）。
+    // 2026-10-27 thinkbook16p 实证：模型先写一个草稿块（开围栏是畸形的 ```choices>），
+    // 又在同一次回复里重写成正式块，两份都被渲染成面板。
+    val panelCount = out.count { it is Segment.Choice }
+    if (panelCount > 1) {
+        val collapsed = mutableSetOf<Int>()
+        var left = panelCount
+        out.forEachIndexed { index, seg ->
+            if (seg !is Segment.Choice) return@forEachIndexed
+            left--
+            if (left == 0) out[index] = seg.copy(dropped = panelCount - 1) else collapsed += index
+        }
+        return out.filterIndexed { index, _ -> index !in collapsed }
+    }
     return out
 }
 

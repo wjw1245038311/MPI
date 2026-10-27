@@ -266,8 +266,13 @@ internal sealed interface Segment {
     /** 普通正文（可能含行内代码）。 */
     data class Body(val text: String) : Segment
 
-    /** 合法的 choices 围栏 → 交互面板（批 3）。repaired = 数据是修复链救回来的。 */
-    data class Choice(val data: ChoiceBlockData, val repaired: Boolean = false) : Segment
+    /** 合法的 choices 围栏 → 交互面板（批 3）。repaired = 数据是修复链救回来的。
+     *  dropped = 同一消息里前面被折叠的重复块数（只渲染最后一块，与桌面端/PWA 同一规则）。 */
+    data class Choice(
+        val data: ChoiceBlockData,
+        val repaired: Boolean = false,
+        val dropped: Int = 0,
+    ) : Segment
 }
 
 /** choices 降级提示：按具体原因说清是模型哪里写坏了（对齐桌面端/PWA）。 */

@@ -54,4 +54,36 @@ class ChoiceLangToleranceTest {
         val out = withChoiceSegments(listOf(Segment.Code(body, lang = "choices", closed = true)), finalized = false)
         assertTrue(out.single() is Segment.Code)
     }
+
+    @Test
+    fun `同一条消息多个合法块只保留最后一个`() {
+        val draft = """[{"title":"下一步怎么走","options":["现在开始","先看方案"]}]"""
+        val final = """[{"title":"下一步怎么走","options":["现在开始","先看方案再定"]}]"""
+        val out = withChoiceSegments(
+            listOf(
+                Segment.Body("正文"),
+                Segment.Code(draft, lang = "choices>", closed = true),
+                Segment.Code(final, lang = "choices", closed = true),
+            ),
+            finalized = true,
+        )
+        val panels = out.filterIsInstance<Segment.Choice>()
+        // 2026-10-27 thinkbook16p：模型先写草稿块、又重写正式块 → 旧行为渲染两个面板。
+        assertTrue("只保留最后一个面板", panels.size == 1)
+        assertTrue("被折叠的块数记在 dropped 上", panels.single().dropped == 1)
+        assertTrue("保留的是最后一块", panels.single().data.questions.single().options[1].label == "先看方案再定")
+    }
+
+    @Test
+    fun `坏块不参与重复折叠`() {
+        val out = withChoiceSegments(
+            listOf(
+                Segment.Code("{oops", lang = "choices", closed = true),
+                Segment.Code(body, lang = "choices", closed = true),
+            ),
+            finalized = true,
+        )
+        assertTrue("坏块仍按代码块显示", out.count { it is Segment.Code } == 1)
+        assertTrue("合法块只有一个就无需折叠", out.filterIsInstance<Segment.Choice>().single().dropped == 0)
+    }
 }

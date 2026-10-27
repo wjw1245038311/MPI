@@ -416,8 +416,9 @@ export type ChoiceAwareSegment =
   /** choiceWarn：choices 围栏解析失败，按代码块显示并附一行提示（对齐桌面端）。
    * failReason/raw 供具体原因文案与上层诊断（可选，与桌面端同形）。 */
   | { kind: "code"; text: string; lang?: string; closed?: boolean; choiceWarn?: boolean; failReason?: ChoiceFailure }
-  /** repaired：这份数据是靠修复链救回来的（对齐桌面端，便于以后统计）。 */
-  | { kind: "choice"; data: ChoiceBlockData; repaired?: boolean };
+  /** repaired：这份数据是靠修复链救回来的（对齐桌面端，便于以后统计）。
+   *  dropped：同一消息里前面还有 N 个重复块被折叠（只渲染最后一块，与桌面端同一规则）。 */
+  | { kind: "choice"; data: ChoiceBlockData; repaired?: boolean; dropped?: number };
 
 /**
  * 把 parseSegments 的输出转成可渲染段：合法的 choices 围栏升级为面板。
@@ -484,6 +485,23 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
     out.push(
       data ? { kind: "choice", data } : { kind: "code", text: seg.text, lang: seg.lang, closed: false, choiceWarn: true },
     );
+  }
+
+  // 同一条回复里的多个合法块 → 只渲染最后一块（与桌面端 splitChoiceSegments 同一规则）。
+  // 2026-10-27 thinkbook16p 实证：模型先写一个草稿块（开围栏是畸形的 ```choices>），
+  // 又在同一次回复里重写成正式块，两份都被渲染成面板。
+  const panelCount = out.filter((s) => s.kind === "choice").length;
+  if (panelCount > 1) {
+    const collapsed = new Set<number>();
+    let left = panelCount;
+    for (let k = 0; k < out.length; k++) {
+      const seg = out[k];
+      if (seg.kind !== "choice") continue;
+      left--;
+      if (left === 0) out[k] = { ...seg, dropped: panelCount - 1 };
+      else collapsed.add(k);
+    }
+    return out.filter((_, k) => !collapsed.has(k));
   }
   return out;
 }

@@ -86,6 +86,30 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   assert.equal(other[0].kind, "md");
 }
 
+// 同一条消息里多个合法块 → 只渲染最后一块（2026-10-27 thinkbook16p 实证）。
+{
+  const draft = JSON.stringify([{ title: "下一步怎么走", options: ["现在开始", "先看方案"] }]);
+  const final = JSON.stringify([{ title: "下一步怎么走", options: ["现在开始", "先看方案再定"] }]);
+  const segs = cb.splitChoiceSegments(`正文\n\`\`\`choices>\n${draft}\n\`\`\`\n\`\`\`choices\n${final}\n\`\`\``);
+  const panels = segs.filter((s) => s.kind === "choice");
+  assert.equal(panels.length, 1, "只保留最后一个面板");
+  assert.equal(panels[0].dropped, 1, "被折叠的块数记在 dropped 上");
+  assert.deepEqual(
+    panels[0].data.questions[0].options.map((o) => o.label),
+    ["现在开始", "先看方案再定"],
+    "保留的是最后一块",
+  );
+}
+
+// 多块里夹着坏块：坏块不算重复，仍按代码块显示。
+{
+  const ok = fence(JSON.stringify([{ title: "q", options: ["a", "b"] }]));
+  const segs = cb.splitChoiceSegments("```choices\n{oops\n```\n" + ok);
+  assert.equal(segs.filter((s) => s.kind === "choice").length, 1);
+  assert.equal(segs.filter((s) => s.kind === "code").length, 1, "坏块仍按代码块显示");
+  assert.equal(segs.find((s) => s.kind === "choice").dropped, undefined, "只有一个合法块时不标 dropped");
+}
+
 // A choices example QUOTED inside another code fence must not activate.
 {
   const inner = fence(JSON.stringify([{ title: "q", options: ["a", "b"] }]));
@@ -199,12 +223,15 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   assert.equal(segs[0].text, text);
 }
 
-// Multiple fences in one message.
+// Multiple fences in one message → 只渲染最后一块（2026-10-27 thinkbook16p：模型先写草稿块再重写，
+// 旧行为逐块渲染，用户看到两组面板）。前面块的正文保留，面板折叠。
 {
   const mk = (t) => fence(JSON.stringify([{ title: t, options: ["a", "b"] }]));
   const text = `${mk("Q1")}\n中\n${mk("Q2")}`;
   const segs = cb.splitChoiceSegments(text);
-  assert.deepEqual(segs.map((s) => s.kind), ["choice", "md", "choice"]);
+  assert.deepEqual(segs.map((s) => s.kind), ["md", "choice"], "前一块被折叠，只留最后一块");
+  assert.equal(segs[1].data.questions[0].title, "Q2", "保留的是最后一块");
+  assert.equal(segs[1].dropped, 1, "被折叠的块数记在 dropped 上");
 }
 
 // Validation limits —— 超限不再整块判非法，改成「截断渲染 + clamped 计数」。

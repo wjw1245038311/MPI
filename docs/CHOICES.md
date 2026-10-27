@@ -35,7 +35,8 @@
 
 - 开围栏的 info string 容错：`choices` / `Choices` / `choices>` 都认；`choicesjson` 这类**疑似档**只有在正文严格合法时才升级为面板。
 - 闭合反引号可以粘在 JSON 行尾，或干脆漏写——仅当正文能解析成合法 choices 时才接受。
-- 系统提示里的对应说明：`src/main/choice-logic.ts` 的 `qaModeInstruction()`（中文/英文各一份，改文案两处都要动）。
+- **同一条消息里的多个合法块 → 只渲染最后一块**（前面的折叠，桌面端记一行 `choice-fence-duplicate` 诊断）。三端同一规则（桌面 `splitChoiceSegments` / PWA `withChoiceSegments` / 安卓 `ChoiceLogic.withChoiceSegments`）。原因：模型偶尔先写一个草稿块（开围栏写成 ` ```choices> `，措辞粗糙）再重写正式块，两份都会被容错规则识别，旧行为就渲染成两组面板（2026-10-27 thinkbook16p 实证）。坏块（降级成代码块的）不算重复，仍照常显示 + 提示。
+- 系统提示里的对应说明：`src/main/choice-logic.ts` 的 `qaModeInstruction()`（中文/英文各一份，改文案两处都要动）。格式段用**语言无关骨架**（open / body / close / limit / quote 五行符号）——模型思考用哪种语言不受提示词控制，格式约束只讲形状更不容易被长上下文淡化。
 
 ## 3. 用户侧：回传格式（契约核心）
 
