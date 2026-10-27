@@ -102,7 +102,7 @@
 | 顶栏 | 42px |
 | 间距 | 高频值 2 / 4 / 6 / 8 / 10 / 12px；页面级容器常见 14–18px |
 | 圆角 | 已收敛为 6 档：`--radius-xs 4` / `--radius-sm 8` / `--radius-md 10` / `--radius 12` / `--radius-xl 16` / `--radius-pill 999`；`50%`（圆形）与 `2px`（几何胶囊）保留字面量，复合圆角用变量拼 |
-| 阴影 | 只用 `--shadow-sm` / `--shadow-md` / `none` |
+| 阴影 | 只用 `--shadow-sm` / `--shadow-md` / `--shadow-lg` / `--ring-accent` / `none` |
 
 `overflow: auto` 的容器（面板、列表、预览）内不要放 `position: absolute` 的浮层；浮层用 `fixed` + `createPortal(document.body)`。注意：祖先有 `transform` / `backdrop-filter` 时，`fixed` 会以该祖先为包含块——这是必须 portal 到 body 的第二个理由。
 
@@ -112,8 +112,10 @@
 |---|---|---|
 | `--shadow-sm` | `0 1px 2px rgba(20,22,18,.06)` | `0 1px 2px rgba(0,0,0,.24)` |
 | `--shadow-md` | `0 1px 2px rgba(20,22,18,.06), 0 10px 30px rgba(20,22,18,.08)` | `0 1px 2px rgba(0,0,0,.28), 0 14px 36px rgba(0,0,0,.32)` |
+| `--shadow-lg` | `0 24px 70px rgba(0,0,0,.32)` | `0 18px 60px rgba(0,0,0,.45)` |
+| `--ring-accent` | `0 0 0 3px var(--accent-soft)` | 同（跟随 `--accent-soft`） |
 
-层级用「面板底色 + 1px 边框 + shadow-md」表达，不靠加粗边框。彩色阴影只允许用于焦点环（`0 0 0 2px var(--accent-soft)`）。
+层级用「面板底色 + 1px 边框 + shadow-md」表达，不靠加粗边框。大型弹层用 `--shadow-lg`；焦点环统一用 `--ring-accent`（3px），不要再写 2px 版本。
 
 ## 7. Do / Don't
 
@@ -163,7 +165,7 @@
 | rgba（剩余） | **113 种**，出现 146 次；剩下的是阴影（`.32`×5）、品牌色半透明（`rgba(79,91,77,.18)` 等）与少量单行规则 | 阴影走 `--shadow-*`；品牌色半透明按语义单独 token 化 | P2 |
 | **圆角** | ✅ 已收敛：6 档 `4/8/10/12/16/999`（替换 304 处：300 单值 + 4 复合），另保留 `50%`（29 处圆形）与 `2px`（4 处几何胶囊）；相邻档 1–2px 归并（6/7→8、9→10、5→4、11→12、13/14→12） | 新代码只用这 6 档 + `50%`；不要再写 7/9/11px | **已完成** |
 | **字号** | ✅ 已收敛：7 档 `10/11/12/13/14/16/22`（归并 196 处）；半像素档与 15/17/18/19/20/24/25 就近归并；保留 8px×1（图标徽标）、2 处 `clamp()`、1 处 `em` | 新代码只在这 7 档里选 | **已完成** |
-| 阴影 | `--shadow-sm/md` 各用 15 次，另有 8 种自定义 | 只保留 sm/md + 焦点环；一次性值归入 md | P2 |
+| **阴影/焦点环** | ✅ 主体收敛：新增 `--shadow-lg`（大弹层，7 处）与 `--ring-accent`（焦点环，12 处 + 2 处复合）；`--shadow-sm/md` 各 15 处。**剩余约 18 种中档自定义阴影**（`0 4px 16px`、`0 5px 18px` 等，共约 21 处）待下一批归并 | 新代码只用 sm/md/lg + ring-accent | P2（主体完成） |
 | 深色覆盖 | 组件级 `:root[data-theme="dark"] .x` 规则很分散 | 新组件必须成对；未来可评估 `color-mix` 减少覆盖条数 | 持续 |
 
 > 扫描方法：对 `styles.css` 做正则统计（`#[0-9a-f]{3,8}`、`rgba?\(`、`border-radius:`、`box-shadow:`、`font-size:`、`@media`）。
@@ -173,7 +175,7 @@
 
 | 项 | 值 |
 |---|---|
-| CSS 规模 | 12,000+ 行，60 个唯一变量名（含各主题/preset 覆盖） |
+| CSS 规模 | 12,000+ 行，62 个唯一变量名（含各主题/preset 覆盖） |
 | 主题 | 浅色默认 / `data-theme="dark"`；`color-scheme: dark` |
 | 强调色预设 | 7 组（default / green / red / blue / white / lightgray / darkgray），每组浅+深 |
 | 唯一断点 | `@media (max-width: 760px)`（仅 skills-hub） |

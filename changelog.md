@@ -17,6 +17,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 4. **改：字号收敛为 7 档（10/11/12/13/14/16/22）**——原来 22 种 px 字号（12×97、12.5×77、11×66、13×65、11.5×42、10.5×41…）。归并 **196 处**：9/9.5→10、10.5→11、11.5/12.5→12、13.5→13、14.5/15→14、17/18→16、19/20/24/25→22。半像素档（10.5/11.5/12.5/13.5）合计 169 处，都是 ±0.5px 微调。保留：8px×1（`.msg-artifact-icon` 图标徽标）、2 处 `clamp()` 响应式字号、1 处 `0.88em`。
    验证方式：`npm run typecheck` + `npm run build`；`grep -oE "font-size: [0-9.]+px" src/renderer/src/styles.css | sort -u` 应只剩 7 档 + 8px。应用内：列表/正文/标签文字整体有轻微变化（±0.5px），重点看侧栏列表项、消息元信息、设置页标签；排版不应出现换行/截断异常。
 
+5. **改：焦点环与大弹层阴影收敛（`--ring-accent` / `--shadow-lg`）**——焦点环原来 2px/3px 两种写法（`0 0 0 2px/3px var(--accent-soft)`，12 处）统一为 `--ring-accent`（3px）；大型弹层 4 种一次性阴影（`0 24px 70px .32`、`0 18px 60px .4`、`0 20px 60px .3`、`0 16px 42px .18`，共 7 处）统一为 `--shadow-lg`（浅/深两套）。剩余约 18 种中档自定义阴影（`0 4px 16px`、`0 5px 18px` 等）留到下一批。
+   验证方式：`npm run typecheck` + `npm run build`；`grep -c "var(--ring-accent)|var(--shadow-lg)" src/renderer/src/styles.css` 应 ≥ 19。应用内：设置页输入框/按钮的焦点环略粗 1px（2→3px）；弹出层（模型选择、技能菜单）阴影统一，深色下更沉。
+
 ## v0.13.4（2026-10-27）
 1. **修：v0.13.3 的 choices 去重会静默丢题（同一条回复里多个不同问题只留最后一个）**——v0.13.3 为了压掉「模型重写块」造成的双面板，做了无条件的「同消息只渲染最后一块」；thinkbook16p 真机反馈：一条回复里出现 **3 个内容不同的问题块 + 1 个空残块**，结果 2 道题被丢弃（`choice-fence-duplicate dropped:2`），截图里只剩一个面板。现在判重改为**内容签名**（题目 + 每题选项 label，忽略 detail 与空白差异）：签名相同才折叠（模型重写），内容不同的块全部保留。三端同步（桌面 `choiceSignature` / PWA / 安卓）。
    验证方式：`npm run typecheck` + `npm test -- choice`（`test-choice-block` / `test-pwa-choice` 新增「不同内容多块都渲染 / 同内容折叠 / 空块丢弃」）+ `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest --tests 'com.mpi.app.ChoiceLangToleranceTest'`（9 项）。应用内：让模型一条回复里问 3 组不同问题 → 应看到 3 个面板（v0.13.3 只有 1 个）。

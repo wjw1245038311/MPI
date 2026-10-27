@@ -34,6 +34,8 @@
   --preview-grid: #e7e7e1;
   --shadow-sm: 0 1px 2px rgba(20, 22, 18, 0.06);
   --shadow-md: 0 1px 2px rgba(20, 22, 18, 0.06), 0 10px 30px rgba(20, 22, 18, 0.08);
+  --shadow-lg: 0 24px 70px rgba(0, 0, 0, 0.32);
+  --ring-accent: 0 0 0 3px var(--accent-soft);
   --radius: 12px;
   --radius-sm: 8px;
   --radius-xs: 4px;
@@ -823,7 +825,7 @@ body.sidebar-resizing * {
   background: #fff;
   color: var(--text);
   font-family: var(--font);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 .chat-head .spacer {
   flex: 1;
@@ -859,7 +861,7 @@ body.sidebar-resizing * {
 }
 .chat-search-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 .chat-search-count {
   min-width: 44px;
@@ -1218,7 +1220,7 @@ body.sidebar-resizing * {
   }
   24%,
   68% {
-    box-shadow: 0 0 0 3px var(--accent-soft), 0 6px 18px rgba(38, 92, 52, .14);
+    box-shadow: var(--ring-accent), 0 6px 18px rgba(38, 92, 52, .14);
   }
 }
 .msg-user-text {
@@ -1340,7 +1342,7 @@ body.sidebar-resizing * {
 }
 .msg-user-img-button:hover .msg-user-img {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 /* ---- 视频附件（飞书式：气泡里只有一个视频框，点一下直接全屏；见 chat-attachment-protocol.ts）---- */
 /* 渲染在用户消息的附件区（.msg-user-files 是 grid）——justify-self 防止被拉到整列宽。 */
@@ -1464,7 +1466,7 @@ body.sidebar-resizing * {
 .msg-user-file:hover:not(:disabled) {
   border-color: var(--accent);
   background: rgba(255, 255, 255, .72);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 .msg-user-file:focus-visible {
   outline: 2px solid var(--accent);
@@ -1546,7 +1548,7 @@ body.sidebar-resizing * {
   max-height: 90vh;
   object-fit: contain;
   border-radius: var(--radius-sm);
-  box-shadow: 0 18px 60px rgba(0,0,0,.4);
+  box-shadow: var(--shadow-lg);
   cursor: default;
 }
 .image-lightbox-close {
@@ -2415,7 +2417,7 @@ body.sidebar-resizing * {
 /* A file is being dragged over the composer (sidebar file tree or OS files). */
 .composer-wrap.drop-target .composer {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-md);
+  box-shadow: var(--ring-accent), var(--shadow-md);
 }
 /* ---------- Preview tab bar (browser-style tabs) ---------- */
 .preview-tabs {
@@ -2909,7 +2911,7 @@ body.sidebar-resizing * {
 .cp-other-field:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 .cp-other-input .extui-card-actions {
   margin-top: 0;
@@ -3133,7 +3135,7 @@ body.sidebar-resizing * {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: #fff;
-  box-shadow: 0 16px 42px rgba(25, 28, 23, .18);
+  box-shadow: var(--shadow-lg);
 }
 .slash-menu-head {
   padding: 9px 11px 7px;
@@ -3886,7 +3888,7 @@ body.sidebar-resizing * {
 }
 .command-search:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 .command-search input {
   width: 100%;
@@ -5349,7 +5351,7 @@ textarea.modal-input {
 }
 .archive-search-box:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 .archive-search-input {
   flex: 1;
@@ -5729,7 +5731,7 @@ textarea.modal-input {
   display: flex;
   background: var(--bg);
   border-radius: var(--radius-xl);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
   animation: set-pop 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -6049,7 +6051,7 @@ textarea.modal-input {
 .set-select:focus,
 .set-json:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 .set-select {
   appearance: none;
@@ -6423,7 +6425,7 @@ textarea.modal-input {
 }
 .set-prompt:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 .set-json.err {
   border-color: var(--danger);
@@ -7253,7 +7255,7 @@ textarea.modal-input {
   background: #fff;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -7542,7 +7544,7 @@ mark.hl {
   flex-direction: column;
   background: var(--bg);
   border-radius: var(--radius-xl);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
   animation: set-pop 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -7893,7 +7895,7 @@ mark.hl {
 }
 .plugins-search:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 .plugins-search input {
   width: 100%;
@@ -9406,6 +9408,7 @@ mark.hl {
   --preview-grid: #405057;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
   --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.28), 0 14px 36px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 18px 60px rgba(0, 0, 0, 0.45);
   --danger: #f2726a;
   --danger-strong: #c0392b;
   --danger-strong-hover: #d8493c;
@@ -9681,7 +9684,7 @@ mark.hl {
 :root[data-theme="dark"] .msg-user-file:hover:not(:disabled) {
   border-color: var(--accent);
   background: #294738;
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 :root[data-theme="dark"] .msg-user-file-icon {
   background: #2d4d3b;
@@ -11328,7 +11331,7 @@ mark.hl {
   flex-direction: column;
   background: var(--bg);
   border-radius: var(--radius-xl);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
   animation: set-pop 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -11586,7 +11589,7 @@ mark.hl {
   width: min(420px, 90vw);
   background: var(--bg);
   border-radius: var(--radius);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-lg);
   padding: 16px 18px;
 }
 .confirm-title { font-size: 13.5px; font-weight: 650; color: var(--text); }
@@ -11775,7 +11778,7 @@ mark.hl {
 .cp-note-field:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  box-shadow: var(--ring-accent);
 }
 .cp-note-meta {
   font-size: 11px;
