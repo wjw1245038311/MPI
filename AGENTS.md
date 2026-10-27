@@ -10,6 +10,10 @@ GitHub 只让 CI 异步出 Release 附件（不轮询、不等待），**且只�
 发版走 `node scripts/dev-release.mjs`，默认就是 `publish-release.mjs --local`——**不要改成 `--wait-ci`**。
 完整规则、分发路径与工具清单：**`docs/RELEASE.md`**（发版前先读它）。
 
+## UI 改动（`src/renderer/**`）
+
+先读 **`docs/DESIGN.md`**（桌面端 UI 规范：token / 组件 / 布局 / Do-Don't）。硬要求：颜色只用变量（错误/危险用 `--danger*` 家族），新样式同时给暗色（`:root[data-theme="dark"]`），浮层不要塞进 `overflow: auto` 容器（用 portal + fixed）。
+
 ## 常用命令
 
 ```bash

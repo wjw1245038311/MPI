@@ -4,6 +4,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## Unreleased
+1. **改：错误/危险色统一收敛为 `--danger` 家族（浅深各一套，共 9 个变量）**——原来 `#c0392b`（18 次）、`#b23a2c`（17 次）、`#9a3d32`、`#a84439`、`#fdf3f1`、`#fbe9e7` 与 4 种半透明红散落在 60 多处；现在统一走 `--danger`（文字/边框/小圆点）、`--danger-strong(-hover)`（白字按钮/横幅底）、`--danger-pale(-strong)`（浅底）、`--danger-soft(-hover)` / `--danger-ring` / `--danger-border`。**浅色下取值保持不变**（`--danger` = `#c0392b`、`--danger-strong` = `#b23a2c`），深色下错误色改为更亮的 `#f2726a` / `#c0392b`，暗底可读性提升。同时 `docs/DESIGN.md` 补上 token 表与收敛清单，`AGENTS.md` 增加「改 UI 先读 DESIGN.md」。
+   验证方式：`npm run typecheck` + `npm run build`；`grep -c "#c0392b\|#b23a2c" src/renderer/src/styles.css` 应只剩 4 处变量定义。应用内：亮色下错误提示/删除按钮观感不变；切到暗色，工具错误、搜索无结果、到期提醒等红色明显变亮（不再发暗）。
+
 ## v0.13.4（2026-10-27）
 1. **修：v0.13.3 的 choices 去重会静默丢题（同一条回复里多个不同问题只留最后一个）**——v0.13.3 为了压掉「模型重写块」造成的双面板，做了无条件的「同消息只渲染最后一块」；thinkbook16p 真机反馈：一条回复里出现 **3 个内容不同的问题块 + 1 个空残块**，结果 2 道题被丢弃（`choice-fence-duplicate dropped:2`），截图里只剩一个面板。现在判重改为**内容签名**（题目 + 每题选项 label，忽略 detail 与空白差异）：签名相同才折叠（模型重写），内容不同的块全部保留。三端同步（桌面 `choiceSignature` / PWA / 安卓）。
    验证方式：`npm run typecheck` + `npm test -- choice`（`test-choice-block` / `test-pwa-choice` 新增「不同内容多块都渲染 / 同内容折叠 / 空块丢弃」）+ `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest --tests 'com.mpi.app.ChoiceLangToleranceTest'`（9 项）。应用内：让模型一条回复里问 3 组不同问题 → 应看到 3 个面板（v0.13.3 只有 1 个）。
