@@ -42,6 +42,9 @@
   --radius-md: 10px;
   --radius-xl: 16px;
   --radius-pill: 999px;
+  --hairline: rgba(103, 111, 100, 0.2);
+  --scrim: rgba(20, 22, 18, 0.42);
+  --scrim-soft: rgba(20, 22, 18, 0.35);
   /* 危险/错误语义（docs/DESIGN.md §2.3）：新代码不要写裸红色。 */
   --danger: #c0392b;
   --danger-strong: #b23a2c;
@@ -927,7 +930,7 @@ body.sidebar-resizing * {
   display: flex;
   align-items: center;
   padding: 7px 5px;
-  border: 1px solid rgba(103, 111, 100, .2);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 252, .84);
   box-shadow: 0 4px 16px rgba(38, 44, 36, .1);
@@ -5046,7 +5049,7 @@ body.preview-resizing * {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(20, 22, 18, 0.35);
+  background: var(--scrim-soft);
   display: grid;
   place-items: center;
   z-index: 100;
@@ -5716,7 +5719,7 @@ textarea.modal-input {
 .settings-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(20, 22, 18, 0.42);
+  background: var(--scrim);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
   display: grid;
@@ -9426,6 +9429,9 @@ mark.hl {
   --overlay-6: rgba(255, 255, 255, 0.30);
   --overlay-7: rgba(255, 255, 255, 0.55);
   --overlay-8: rgba(255, 255, 255, 0.92);
+  --hairline: rgba(170, 194, 174, 0.22);
+  --scrim: rgba(0, 0, 0, 0.58);
+  --scrim-soft: rgba(0, 0, 0, 0.58);
 }
 
 :root[data-theme="dark"] *::-webkit-scrollbar-thumb {
@@ -9435,7 +9441,7 @@ mark.hl {
   background: var(--overlay-6);
 }
 :root[data-theme="dark"] .user-message-nav {
-  border-color: rgba(170, 194, 174, .22);
+  border-color: var(--hairline);
   background: rgba(31, 38, 32, .9);
   box-shadow: 0 5px 18px rgba(0, 0, 0, .28);
 }
@@ -9448,7 +9454,7 @@ mark.hl {
   background: #fff;
 }
 :root[data-theme="dark"] .user-message-nav-panel {
-  border-color: rgba(170, 194, 174, .22);
+  border-color: var(--hairline);
   background: rgba(31, 38, 32, .96);
   box-shadow: 0 8px 28px rgba(0, 0, 0, .4);
 }
@@ -9459,7 +9465,7 @@ mark.hl {
   background: rgba(177, 207, 183, .4);
 }
 :root[data-theme="dark"] .user-message-nav-tip {
-  border-color: rgba(170, 194, 174, .22);
+  border-color: var(--hairline);
   background: rgba(31, 38, 32, .98);
   box-shadow: 0 10px 32px rgba(0, 0, 0, .45);
 }
@@ -9983,7 +9989,7 @@ mark.hl {
 :root[data-theme="dark"] .settings-backdrop,
 :root[data-theme="dark"] .search-backdrop,
 :root[data-theme="dark"] .modal-backdrop {
-  background: rgba(0, 0, 0, 0.58);
+  background: var(--scrim);
 }
 :root[data-theme="dark"] .skills-hub-card,
 :root[data-theme="dark"] .skills-hub-detail {
@@ -11581,7 +11587,7 @@ mark.hl {
 /* 全局确认框（components/ConfirmDialog.tsx）——以前叫 .mempool-confirm-*，只服务记忆池 */
 .confirm-layer {
   position: fixed; inset: 0; z-index: 220;
-  background: rgba(20, 22, 18, 0.42);
+  background: var(--scrim);
   display: grid; place-items: center;
   -webkit-app-region: no-drag;
 }

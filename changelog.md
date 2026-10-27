@@ -20,6 +20,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 5. **改：焦点环与大弹层阴影收敛（`--ring-accent` / `--shadow-lg`）**——焦点环原来 2px/3px 两种写法（`0 0 0 2px/3px var(--accent-soft)`，12 处）统一为 `--ring-accent`（3px）；大型弹层 4 种一次性阴影（`0 24px 70px .32`、`0 18px 60px .4`、`0 20px 60px .3`、`0 16px 42px .18`，共 7 处）统一为 `--shadow-lg`（浅/深两套）。剩余约 18 种中档自定义阴影（`0 4px 16px`、`0 5px 18px` 等）留到下一批。
    验证方式：`npm run typecheck` + `npm run build`；`grep -c "var(--ring-accent)|var(--shadow-lg)" src/renderer/src/styles.css` 应 ≥ 19。应用内：设置页输入框/按钮的焦点环略粗 1px（2→3px）；弹出层（模型选择、技能菜单）阴影统一，深色下更沉。
 
+6. **改：细边框与遮罩收敛（`--hairline` / `--scrim(-soft)`），品牌色半透明到此收尾**——导航面板的 1px 细边框原来浅色写 `rgba(103,111,100,.2)`、深色写 `rgba(170,194,174,.22)`（3 处）；弹层遮罩写 `rgba(20,22,18,.42/.35)` 与深色 `rgba(0,0,0,.58)`。现在统一为 `--hairline`（浅/深各一套）与 `--scrim` / `--scrim-soft`。品牌/状态色半透明**不再继续收敛**：剩下的 30+ 种都是一次性语义（自定义状态环、深色导航圆点细节），继续 token 化会新增比消除更多的变量。
+   验证方式：`npm run typecheck` + `npm run build`；`grep -c "var(--hairline)|var(--scrim" src/renderer/src/styles.css` = 8。应用内：左侧导航圆点条/面板边框浅深色应与之前一致；设置遮罩、确认弹层、模态遮罩观感不变（深色下仍是 58% 黑）。
+
 ## v0.13.4（2026-10-27）
 1. **修：v0.13.3 的 choices 去重会静默丢题（同一条回复里多个不同问题只留最后一个）**——v0.13.3 为了压掉「模型重写块」造成的双面板，做了无条件的「同消息只渲染最后一块」；thinkbook16p 真机反馈：一条回复里出现 **3 个内容不同的问题块 + 1 个空残块**，结果 2 道题被丢弃（`choice-fence-duplicate dropped:2`），截图里只剩一个面板。现在判重改为**内容签名**（题目 + 每题选项 label，忽略 detail 与空白差异）：签名相同才折叠（模型重写），内容不同的块全部保留。三端同步（桌面 `choiceSignature` / PWA / 安卓）。
    验证方式：`npm run typecheck` + `npm test -- choice`（`test-choice-block` / `test-pwa-choice` 新增「不同内容多块都渲染 / 同内容折叠 / 空块丢弃」）+ `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest --tests 'com.mpi.app.ChoiceLangToleranceTest'`（9 项）。应用内：让模型一条回复里问 3 组不同问题 → 应看到 3 个面板（v0.13.3 只有 1 个）。
