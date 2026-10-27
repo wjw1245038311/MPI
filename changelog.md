@@ -14,6 +14,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 3. **改：圆角收敛为 6 档（4/8/10/12/16/999）**——原来 16 种单值（8px×71、7px×37、10px×34、6px×32、5px×23、9px×25、11px×7、13/14px 各 2…）。现在统一走 `--radius-xs 4` / `--radius-sm 8` / `--radius-md 10` / `--radius 12` / `--radius-xl 16` / `--radius-pill 999`，共替换 **304 处**（300 单值 + 4 复合）；`50%`（圆形）与 `2px`（几何胶囊）保留字面量。相邻档 1–2px 归并（6/7→8、9→10、5→4、11→12、13/14→12），观感变化很小。
    验证方式：`npm run typecheck` + `npm run build`；`grep -E "border-radius: [0-9]+px" src/renderer/src/styles.css` 应只剩 4 处 `2px`。应用内：按钮/卡片/输入框圆角基本无感；重点看面板（10px 保持）、消息气泡（复合圆角保持右上切角）、圆形头像/圆点（50% 未动）。
 
+4. **改：字号收敛为 7 档（10/11/12/13/14/16/22）**——原来 22 种 px 字号（12×97、12.5×77、11×66、13×65、11.5×42、10.5×41…）。归并 **196 处**：9/9.5→10、10.5→11、11.5/12.5→12、13.5→13、14.5/15→14、17/18→16、19/20/24/25→22。半像素档（10.5/11.5/12.5/13.5）合计 169 处，都是 ±0.5px 微调。保留：8px×1（`.msg-artifact-icon` 图标徽标）、2 处 `clamp()` 响应式字号、1 处 `0.88em`。
+   验证方式：`npm run typecheck` + `npm run build`；`grep -oE "font-size: [0-9.]+px" src/renderer/src/styles.css | sort -u` 应只剩 7 档 + 8px。应用内：列表/正文/标签文字整体有轻微变化（±0.5px），重点看侧栏列表项、消息元信息、设置页标签；排版不应出现换行/截断异常。
+
 ## v0.13.4（2026-10-27）
 1. **修：v0.13.3 的 choices 去重会静默丢题（同一条回复里多个不同问题只留最后一个）**——v0.13.3 为了压掉「模型重写块」造成的双面板，做了无条件的「同消息只渲染最后一块」；thinkbook16p 真机反馈：一条回复里出现 **3 个内容不同的问题块 + 1 个空残块**，结果 2 道题被丢弃（`choice-fence-duplicate dropped:2`），截图里只剩一个面板。现在判重改为**内容签名**（题目 + 每题选项 label，忽略 detail 与空白差异）：签名相同才折叠（模型重写），内容不同的块全部保留。三端同步（桌面 `choiceSignature` / PWA / 安卓）。
    验证方式：`npm run typecheck` + `npm test -- choice`（`test-choice-block` / `test-pwa-choice` 新增「不同内容多块都渲染 / 同内容折叠 / 空块丢弃」）+ `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest --tests 'com.mpi.app.ChoiceLangToleranceTest'`（9 项）。应用内：让模型一条回复里问 3 组不同问题 → 应看到 3 个面板（v0.13.3 只有 1 个）。
