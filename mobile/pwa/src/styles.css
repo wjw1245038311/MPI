@@ -342,7 +342,31 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .drawer-secondary {
   z-index: 42;
+  width: min(300px, 82vw);
   box-shadow: var(--shadow-md);
+}
+.drawer-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* 设备抽屉的显式关闭入口：之前只能点背后的窄条或按返回键，真机上容易“收不回去”。 */
+.drawer-close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.drawer-close:hover {
+  background: var(--control-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 .drawer-head-wrap {
   display: flex;

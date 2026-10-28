@@ -32,6 +32,9 @@ import { currentBundleName, isUpdateAvailable } from "./lib/update-watch";
 /** ?dbg=1 in the URL turns on the on-screen diagnostics overlay (real-device debugging). */
 const DBG_ENABLED = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("dbg");
 
+/** 上次手动选中的主机：刷新/重开页面后优先进它，而不是按 lastSeenAt 猜（多设备时后者会被后台重连刷乱）。 */
+const LAST_HOST_KEY = "mpi-last-host";
+
 /**
  * 降级看门狗：某条通道连上超时（毫秒）就换下一条（S4 缺口补齐）。
  * 8s 比单条去探测宽松——ECS/CF 走公网首连本来就慢，误判会比不降级更糟。
@@ -220,6 +223,8 @@ export default function App() {
   const currentPairing = pairings.find((item) => item.hostId === hostId) ?? null;
   /** 飞书式层级：一级抽屉（项目/会话）、二级抽屉（设备）。 */
   const [drawer, setDrawer] = useState<"none" | "projects" | "devices">("none");
+  /** 手动刷新中（只由点击驱动；不用 snap.loading —— 流式/轮询会让图标一直转）。 */
+  const [refreshing, setRefreshing] = useState(false);
   /** 宽屏下侧栏常驻，不再算「关闭」——仅供 aria-hidden 用，不影响布局。 */
   const isWide = useIsWide();
   const drawerRef = useRef(drawer);
@@ -457,10 +462,16 @@ export default function App() {
         const pairings = await storeRef.current.listPairings();
         if (cancelled) return;
         setPairings(pairings);
-        // 多设备：优先重连最近用过的那台（旧记录没有 lastSeenAt 时回退到 pairedAt）。
-        const target = [...pairings]
-          .filter((p) => p.deviceToken)
-          .sort((a, b) => (b.lastSeenAt ?? b.pairedAt) - (a.lastSeenAt ?? a.pairedAt))[0];
+        // 多设备：优先上次**手动选中**的那台；没记录时回退到最近用过的（旧记录没有 lastSeenAt 时用 pairedAt）。
+        let lastHostId: string | null = null;
+        try {
+          lastHostId = localStorage.getItem(LAST_HOST_KEY);
+        } catch { /* storage unavailable */ }
+        const target =
+          pairings.find((p) => p.hostId === lastHostId && p.deviceToken) ??
+          [...pairings]
+            .filter((p) => p.deviceToken)
+            .sort((a, b) => (b.lastSeenAt ?? b.pairedAt) - (a.lastSeenAt ?? a.pairedAt))[0];
         if (!target) return;
         startSession(target, device.seedB64url, device.name);
       } catch { /* storage unavailable */ }
@@ -554,6 +565,10 @@ export default function App() {
     // 记下“最近用过的设备”，下次自动重连优先它（多设备时不再永远连第一台）。
     const touched: PairingRecord = { ...record, lastSeenAt: Date.now() };
     void storeRef.current.savePairing(touched);
+    // 记住「用户选的那台」：刷新后不再按 lastSeenAt 重新猜。
+    try {
+      localStorage.setItem(LAST_HOST_KEY, record.hostId);
+    } catch { /* storage unavailable */ }
     setPairings((prev) => (prev.some((item) => item.hostId === touched.hostId) ? prev.map((item) => (item.hostId === touched.hostId ? touched : item)) : [...prev, touched]));
     if (!record.deviceToken) return;
     // S4 缺口补齐：首选连不上就按顺序换下一条（逐条看门狗），
@@ -977,12 +992,32 @@ export default function App() {
       if (!client) return;
       const hidden = document.visibilityState === "hidden";
       client.setBackgrounded(hidden); // 后台：不排重连（浏览器本来也会冻结）
-      if (!hidden) ensureConnected(); // 回前台：没连着就整条重来（顺带择优）
+      if (!hidden) {
+        ensureConnected(); // 回前台：没连着就整条重来（顺带择优）
+        // 后台冻结期间可能丢事件：回到前台主动拉一次当前会话的最新快照，
+        // 不然对话会停在旧内容上（用户得手动刷新）。
+        if (threadSessionRef.current) void threadSessionRef.current.resync().catch(() => {});
+      }
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pairings, hostId]);
+
+  /** 手动刷新：对话打开时拉当前会话（resync），否则只拉列表。
+   *  不用 snap.loading 驱动图标 —— 轮询/流式不该让刷新按钮一直转。 */
+  const refreshNow = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const jobs: Promise<unknown>[] = [];
+      if (threadSessionRef.current) jobs.push(threadSessionRef.current.resync());
+      jobs.push(sessionRef.current?.refresh() ?? Promise.resolve());
+      await Promise.allSettled(jobs);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   /** 多设备切换：关掉当前会话与连接，再按选中的 pairing 重连（复用 startSession）。 */
   const switchHost = (record: PairingRecord) => {
@@ -1004,6 +1039,9 @@ export default function App() {
     setPairings(await storeRef.current.listPairings());
     // 撤销这台的配对：它在本机留下的快照缓存也该一并清掉（对齐原生 ThreadCache.deleteHost）。
     void snapshotCache.persistent.deleteHost(target);
+    try {
+      if (localStorage.getItem(LAST_HOST_KEY) === target) localStorage.removeItem(LAST_HOST_KEY);
+    } catch { /* storage unavailable */ }
     if (target === hostId) disconnect();
   };
 
@@ -1055,12 +1093,22 @@ export default function App() {
   /** 关掉所有抽屉：单步 back()（go(-2) 多步跳转在安卓 WebView 不可靠，见 openDrawer 注释），popstate 收口 none。 */
   const closeAllDrawers = () => {
     if (drawer === "none") return;
-    window.history.back();
+    if (window.history.state?.drawer) window.history.back();
+    else {
+      setDrawer("none");
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
   };
 
   const closeDrawer = () => {
     if (drawer === "none") return;
-    window.history.back(); // 统一在 popstate 里收口，避免两条路径状态不一致
+    // 统一在 popstate 里收口；但如果当前历史条目不是我们 push 的（刷新后 URL 还带着
+    // #devices、栈里没有抽屉条目），back() 会离开页面或看似没反应——直接本地收口。
+    if (window.history.state?.drawer) window.history.back();
+    else {
+      setDrawer("none");
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
   };
 
   useEffect(() => {
@@ -1079,7 +1127,12 @@ export default function App() {
     const hooks = window as unknown as { __mpiBack?: () => string };
     hooks.__mpiBack = () => {
       if (drawerRef.current !== "none") {
-        window.history.back();
+        // 同 closeDrawer：历史条目不是我们 push 的就本地收口（刷新后 URL 带 hash 的情况）。
+        if (window.history.state?.drawer) window.history.back();
+        else {
+          setDrawer("none");
+          window.history.replaceState(null, "", window.location.pathname + window.location.search);
+        }
         return "handled";
       }
       // 会话打开时，系统返回键 = 退出会话回列表（没有箭头按钮后这是主要返回路径）。
@@ -1295,11 +1348,11 @@ export default function App() {
           {view === "home" && hostId && (
             <button
               type="button"
-              className={`drawer-refresh${snap?.loading ? " spinning" : ""}`}
-              aria-label="刷新会话列表"
+              className={`drawer-refresh${refreshing ? " spinning" : ""}`}
+              aria-label="刷新当前内容"
               title="刷新"
-              disabled={!!snap?.loading}
-              onClick={() => void sessionRef.current?.refresh()}
+              disabled={refreshing}
+              onClick={() => void refreshNow()}
             >
               <Refresh size={16} />
             </button>
@@ -1456,7 +1509,12 @@ export default function App() {
       <aside className={`drawer drawer-secondary${drawer === "devices" ? " open" : ""}`} aria-hidden={drawer !== "devices"}>
         <div className="drawer-head plain">
           <span className="drawer-head-title">设备</span>
-          <span className="hint">{pairings.length} 台</span>
+          <span className="drawer-head-actions">
+            <span className="hint">{pairings.length} 台</span>
+            <button type="button" className="drawer-close" aria-label="关闭设备列表" title="关闭" onClick={closeDrawer}>
+              <Close size={16} />
+            </button>
+          </span>
         </div>
         {pairings.length > 0 ? (
           <div className="device-list">
