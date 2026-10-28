@@ -476,12 +476,19 @@ export class ThreadSession {
   }
 
   /**
-   * 本地已有的最后一条「主机也认识」的消息 id（乐观回显 pending 不算）——
-   * 增量快照的锚点：主机在窗口里找得到就只回锚点及其之后。
+   * 本地已有的最后一条**主机也认识、且一定能找到**的消息 id（增量快照锚点）。
+   *
+   * **只取用户消息**（`user-<ts>`）：这类消息主机与客户端 1:1，id 必定对得上。
+   * 不能拿 assistant / 流式消息当锚点：
+   *  · 主机把一轮里连续的 assistant 条目**折叠成一个回合**，id 取第一条的时间戳；
+   *  · 客户端是**每条 message_end 一个气泡**（id 各自的时间戳）。
+   * 于是工具回合里客户端最后一条（`assistant-<后面的 ts>`）在主机快照里根本不存在
+   * → findIndex = -1 → 又回全量（这就是“每次重下整段历史”的直接成因）。
+   *
+   * 用最后一个用户消息当锚点，代价只是“把当前这一轮重发一次”（几 KB），远优于全量。
    */
   private lastKnownMessageId(): string | undefined {
-    const local = this.view.messages.filter((m) => !m.pending && isHostMessageId(m.id));
-    return local.length ? local[local.length - 1].id : undefined;
+    return pickAnchorId(this.view.messages);
   }
 
   /**
@@ -960,8 +967,27 @@ export function mergeIncremental<T extends { id: string; pending?: boolean }>(cu
 }
 
 /**
+ * 增量快照的锚点：**最后一条用户消息**的 id（`user-<ts>`）。
+ *
+ * 为什么不是“最后一条消息”：主机把一轮里连续的 assistant 条目折叠成一个回合（id 取第一
+ * 条的时间戳），而客户端是每条 message_end 一个气泡——工具回合里最后那个气泡的 id 在
+ * 主机快照里不存在，拿它当锚点必然 miss，于是又回全量（现场 618KB～1.6MB/次）。
+ */
+export function pickAnchorId(messages: Array<{ id: string; pending?: boolean }>): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.pending || !message.id.startsWith("user-") || !isHostMessageId(message.id)) continue;
+    return message.id;
+  }
+  return undefined;
+}
+
+/**
  * 主机发的消息 id 形如 `user-<ts>` / `assistant-<ts>` / `tool-<callId>`（见 ipc.ts 的
  * remoteMessageId）。本地合成的不算：`local-N`、`a-N`、`u-N-M`。
+ *
+ * ⚠️ 能当**增量锚点**的只有 `user-<ts>`（与主机 1:1）；assistant 在主机侧被折叠成一个
+ * 回合（id = 第一条的时间戳），后续气泡的 id 在快照里根本不存在。
  */
 export function isHostMessageId(id: string): boolean {
   if (!id) return false;

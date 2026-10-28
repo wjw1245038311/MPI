@@ -19,7 +19,16 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    - **PWA + 安卓**：① 事件里长出来的消息改用同一规则命名（`user-<ts>`、`assistant-<ts>`；手机端发消息的乐观回显在「转正」时把 id 改成 `user-<ts>`）；② 锚点只取主机那种 id（`isHostMessageId` 过滤 `local-*` / `a-*` / `u-*`）；③ `mergeIncremental` 改成「锚点之后一律以主机为准」——合成的流式消息不会留下重复气泡，但未确认的乐观回显保留；④ PWA 补上「回合进行中不清 streaming」（与安卓对齐）。
    效果：打开会话 = 本地缓存秒开 + 只拉尾巴（几十字节～几 KB），不再每次搬整段历史。升级后每个会话**第一次**打开仍会全量一次（旧缓存里是位置型 id），之后恢复正常。
    验证方式：`npm run typecheck`；`npm test -- remote`（新增 `test-remote-message-id`：稳定键不随位置漂移、空白 id 回退、只有主机 id 能当锚点、事件 id 与快照 id 一致时 `applyIncrementalSnapshot` 真的命中）；`npm test -- pwa`（`pwa-thread` 新增：合成 id 在增量后被主机版替掉、锚点过滤）；手机端 `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（`IncrementalSnapshotTest` 新增两条）。全量 `npm test` 160 passed。PWA 已重新构建并部署到 ECS（`node scripts/deploy-pwa.mjs`，远端引用 `assets/index-BL3H7MyG.js`）。
-   **已发：安卓 v0.5.151**（同一命令自增版本重建）——清单 `version=0.5.151`、`sha256=EE656E41…B0C3`，dex 已含 `isHostMessageId`，ECS 端哈希一致。手机「检测更新」即可拿到本项（增量锚点）修复。应用内：**重启 dev** → 桌面 diag 出现 `remote-snapshot incremental=hit`；手机/网页反复开关会话，响应应只剩几百字节级增量，不再每次都卡一下等整段历史。
+   **已发：安卓 v0.5.151 / v0.5.152**（同一命令自增版本重建）——v0.5.151 `sha256=EE656E41…B0C3`；
+   v0.5.152 `sha256=4265AD01…DDE0`（含锚点取「最后一条用户消息」的修正，见下条），PWA 重新部署（`assets/index-DaXLW0il.js`）。
+
+3. **修：增量锚点仍会 miss —— 锚点改取「最后一条用户消息」**——重启后真机验证发现：主机把一轮里连续的
+   assistant 条目**折叠成一个回合**（id 取第一条的时间戳），而客户端是**每条 message_end 一个气泡**
+   （id 各自的时间戳）。于是工具回合里客户端最后那条 `assistant-<后面的 ts>` 在主机快照里根本不存在，
+   `findIndex` 仍然 -1 → 又回全量。现在两端 `lastKnownMessageId()` 只取最后一条用户消息（`user-<ts>`，
+   主机与客户端 1:1），代价只是「当前这一轮重发一次」（几 KB）。
+   验证方式：`npm test -- pwa-thread`（新增 `pickAnchorId` 断言：最后一轮里只取 `user-*`、待发占位不影响）+
+   安卓 `IncrementalSnapshotTest`（新增同名用例）；真机看 diag 的 `remote-snapshot incremental=hit … sent=N/M`。应用内：**重启 dev** → 桌面 diag 出现 `remote-snapshot incremental=hit`；手机/网页反复开关会话，响应应只剩几百字节级增量，不再每次都卡一下等整段历史。
 
 ## v0.13.5（2026-10-28）
 1. **改：错误/危险色统一收敛为 `--danger` 家族（浅深各一套，共 9 个变量）**——原来 `#c0392b`（18 次）、`#b23a2c`（17 次）、`#9a3d32`、`#a84439`、`#fdf3f1`、`#fbe9e7` 与 4 种半透明红散落在 60 多处；现在统一走 `--danger`（文字/边框/小圆点）、`--danger-strong(-hover)`（白字按钮/横幅底）、`--danger-pale(-strong)`（浅底）、`--danger-soft(-hover)` / `--danger-ring` / `--danger-border`。**浅色下取值保持不变**（`--danger` = `#c0392b`、`--danger-strong` = `#b23a2c`），深色下错误色改为更亮的 `#f2726a` / `#c0392b`，暗底可读性提升。同时 `docs/DESIGN.md` 补上 token 表与收敛清单，`AGENTS.md` 增加「改 UI 先读 DESIGN.md」。

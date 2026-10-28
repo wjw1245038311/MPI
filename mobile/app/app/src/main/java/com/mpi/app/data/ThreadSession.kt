@@ -1050,12 +1050,12 @@ class ThreadSession(
     /**
      * 本地已有的最后一条「主机也认识」的消息 id（增量快照锚点）。
      *
-     * 本地合成的 id（`local-N` 回显、`a-N` 流式、`u-N-M` 事件补的用户消息）在主机快照里
-     * 根本不存在。以前把这些拿去当锚点 → 主机 `findIndex` 永远 -1 → **每次打开/重连都回
-     * 整段历史**（PWA 侧实测 311KB～1.6MB/次）。
+     * **只能取用户消息**（`user-<ts>`）：主机把一轮里连续的 assistant 条目**折叠成一个回合**
+     * （id 取第一条的时间戳），面客户端是**每条 message_end 一个气泡**（id 各自的时间戳）。
+     * 拿最后一个气泡当锚点 → 工具回合里那个 id 在快照里不存在 → findIndex=-1 → 又回全量。
+     * 用最后一个用户消息作锚，代价只是把当前这轮重发一次（几 KB），远优于全量。
      */
-    private fun lastKnownMessageId(): String? =
-        _view.value.messages.lastOrNull { !it.pending && isHostMessageId(it.id) }?.id?.takeIf { it.isNotEmpty() }
+    private fun lastKnownMessageId(): String? = pickAnchorId(_view.value.messages)
 
     /** content 里是否有图片块（事件通道只留标记、不带 data）。 */
     /**
@@ -1173,8 +1173,23 @@ internal fun mergeIncremental(
 }
 
 /**
+ * 增量快照的锚点：**最后一条用户消息**的 id（`user-<ts>`）。
+ *
+ * 为什么不是「最后一条消息」：主机把一轮里连续的 assistant 条目折叠成一个回合（id 取第一条
+ * 的时间戳），而客户端是每条 message_end 一个气泡——工具回合里最后那个气泡的 id 在主机快照
+ * 里不存在，拿它当锚点必然 miss，于是又回全量（现场 618KB～1.6MB/次）。
+ */
+internal fun pickAnchorId(messages: List<ThreadMessage>): String? =
+    messages.asReversed()
+        .firstOrNull { !it.pending && it.id.startsWith("user-") && isHostMessageId(it.id) }
+        ?.id?.takeIf { it.isNotEmpty() }
+
+/**
  * 主机发的消息 id 形如 `user-<ts>` / `assistant-<ts>` / `tool-<callId>`（见主机 ipc.ts
  * 的 remoteMessageId）。本地合成的不算：`local-N`、`a-N`、`u-N-M`。
+ *
+ * ⚠ 能当**增量锚点**的只有 `user-<ts>`（与主机 1:1）；assistant 会被主机折叠成单回合，
+ * 后续气泡的 id 在快照里不存在。
  */
 internal fun isHostMessageId(id: String): Boolean {
     if (id.isEmpty()) return false

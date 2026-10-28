@@ -65,7 +65,7 @@ async function main() {
     const { createDeviceIdentity, randomSeedB64url } = await import("../mobile/pwa/src/lib/device-identity.ts");
     const { parsePairingLink, runPairing, attachAutoReauth } = await import("../mobile/pwa/src/lib/pairing.ts");
     const { RelayClient } = await import("../mobile/pwa/src/lib/relay-client.ts");
-    const { ThreadSession, mergeIncremental, isHostMessageId } = await import("../mobile/pwa/src/lib/thread-session.ts");
+    const { ThreadSession, mergeIncremental, isHostMessageId, pickAnchorId } = await import("../mobile/pwa/src/lib/thread-session.ts");
     const { shouldShowThinkingIndicator } = await import("../mobile/pwa/src/lib/thinking-indicator.ts");
     const { SnapshotCache } = await import("../mobile/pwa/src/lib/snapshot-cache.ts");
     const { makeEnvelope, responseFor } = await import("../mobile/shared/protocol.ts");
@@ -380,6 +380,21 @@ async function main() {
       assert.equal(isHostMessageId("a-17"), false);
       assert.equal(isHostMessageId("local-1"), false);
       assert.equal(isHostMessageId("u-17-3"), false);
+
+      // 锚点只取「最后一条用户消息」：主机把 assistant 折叠成一个回合，后续气泡的
+      // id 在快照里不存在，拿它当锚点必然 miss（就是每次重下整段历史的原因）。
+      const turn = [
+        m("user-100", "问"),
+        m("assistant-110", "答一"),
+        m("assistant-120", "答二"), // 工具回合里的第二个气泡（主机快照里没有这个 id）
+      ];
+      assert.equal(pickAnchorId(turn), "user-100", "锚点应是最后一个用户消息");
+      assert.equal(pickAnchorId([m("local-1", "刚发的", true)]), undefined, "只有待发占位时没有锚点");
+      assert.equal(
+        pickAnchorId([m("user-100", "问"), m("assistant-110", "答"), m("local-2", "刚发的", true)]),
+        "user-100",
+        "待发占位不影响锚点",
+      );
     }
     const historyIds = view.messages.filter((m) => m.id === "m1" || m.id === "m2").map((m) => m.id);
     assert.deepEqual(historyIds, ["m1", "m2"], "重连后的快照历史不重复（无重连丢流尾巴的重复）");

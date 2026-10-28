@@ -1,6 +1,7 @@
 package com.mpi.app
 
 import com.mpi.app.data.isHostMessageId
+import com.mpi.app.data.pickAnchorId
 import com.mpi.app.data.mergeIncremental
 import com.mpi.app.protocol.BlockType
 import com.mpi.app.protocol.MessageBlock
@@ -70,5 +71,24 @@ class IncrementalSnapshotTest {
         assertEquals(false, isHostMessageId("a-17"))
         assertEquals(false, isHostMessageId("u-17-3"))
         assertEquals(false, isHostMessageId(""))
+    }
+
+    @Test
+    fun `the anchor is the last user message never the assistant bubbles`() {
+        // 主机把一轮里连续的 assistant 条目折叠成一个回合（id 取第一条时间戳），
+        // 客户端却是每条 message_end 一个气泡。拿最后一个气泡当锚点 → 主机 findIndex=-1
+        // → 回全量（现场每次 618KB～1.6MB）。
+        val turn = listOf(
+            message("user-100", "问"),
+            message("assistant-110", "答一"),
+            message("assistant-120", "答二"),
+        )
+        assertEquals("user-100", pickAnchorId(turn))
+        assertEquals(null, pickAnchorId(listOf(message("local-1", "刚发的", pending = true))))
+        assertEquals(
+            "user-100",
+            pickAnchorId(turn + message("local-2", "刚发的", pending = true)),
+        )
+        assertEquals(null, pickAnchorId(emptyList()))
     }
 }
