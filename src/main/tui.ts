@@ -105,7 +105,6 @@ export function registerTuiIpc(
           for (const skill of getAdditionalSkillPaths(cwd)) shellArgs.push("--skill", skill);
         }
 
-        console.log(`[tui] spawn kind=${kind} cmd=${shellCmd} args=${shellArgs.join(" ")} cwd=${cwd}`);
         const pty = spawn(shellCmd, shellArgs, {
           name: "xterm-256color",
           cols: 80,
@@ -142,14 +141,6 @@ export function registerTuiIpc(
         });
 
         sessions.set(threadId, sess);
-        console.log(`[tui] spawned kind=${kind} key=${threadId} pid=${pty.pid}`);
-        // 首包诊断：shell 起来后应立刻吐提示符；没有就是 PTY/参数问题。
-        let firstDataLogged = false;
-        pty.onData(() => {
-          if (firstDataLogged) return;
-          firstDataLogged = true;
-          console.log(`[tui] first data kind=${kind} key=${threadId}`);
-        });
         // The renderer keeps `gen` so a late "orphan cleanup" stop from an
         // already-unmounted effect can only kill the PTY it actually started.
         return { ok: true, gen };
@@ -163,8 +154,8 @@ export function registerTuiIpc(
   ipcMain.handle("tui:write", (_e, args: { threadId: string; data: string }) => {
     const sess = sessions.get(args.threadId);
     if (!sess) {
-      // 键盘输入打到不存在的 PTY 上：说明 start 没成功或 key 不一致，值得一条日志。
-      console.log(`[tui] write dropped (no session) key=${args.threadId} bytes=${args.data?.length ?? 0}`);
+      // 键盘输入打到不存在的 PTY 上：start 未成功或 key 不一致，留一条 warn 便于排查。
+      console.warn(`[tui] write dropped (no session) key=${args.threadId} bytes=${args.data?.length ?? 0}`);
       return;
     }
     sess.pty.write(args.data);

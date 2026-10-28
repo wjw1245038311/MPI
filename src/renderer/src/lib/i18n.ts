@@ -394,6 +394,21 @@ const exact: Record<string, string> = {
   "请先下载应用更新": "Download the app update first",
   "更新服务没有返回版本信息": "The update service did not return version information",
   "更新服务没有返回 Windows 安装包": "The update service did not return a Windows installer",
+  // 会话列表 / 批量操作 / 右键菜单（2026-10-28）
+  "全选": "Select all",
+  "退出批量操作": "Exit batch mode",
+  "批量操作": "Batch",
+  "进入多选模式，批量归档或删除会话": "Multi-select to archive or delete in bulk",
+  "克隆": "Clone",
+  "导出": "Export",
+  "置顶": "Pin",
+  "取消置顶": "Unpin",
+  "置顶：": "Pin: ",
+  "取消置顶：": "Unpin: ",
+  "归档：": "Archive: ",
+  "在文件夹中打开": "Reveal in folder",
+  "还没有会话，点左上角 + 新建。": "No sessions yet — hit + to start one.",
+  " · 已回收": " · reclaimed",
 };
 
 const prefixes: Array<[string, string]> = [
@@ -533,6 +548,19 @@ const englishExact: Record<string, string> = {
   "Model request failed.": "模型请求失败。",
   "The model process exited without producing a response.": "模型进程退出时没有返回响应。",
   "The model did not start responding within 120 seconds.": "模型在 120 秒内没有开始响应。",
+  "Select all": "全选",
+  "Exit batch mode": "退出批量操作",
+  "Batch": "批量操作",
+  "Multi-select to archive or delete in bulk": "进入多选模式，批量归档或删除会话",
+  "Export": "导出",
+  "Pin": "置顶",
+  "Unpin": "取消置顶",
+  "Pin: ": "置顶：",
+  "Unpin: ": "取消置顶：",
+  "Archive: ": "归档：",
+  "Reveal in folder": "在文件夹中打开",
+  "No sessions yet — hit + to start one.": "还没有会话，点左上角 + 新建。",
+  " · reclaimed": " · 已回收",
 };
 
 const englishPrefixes: Array<[string, string]> = [

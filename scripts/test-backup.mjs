@@ -109,7 +109,7 @@ try {
   assert.deepEqual([summary.total, summary.newCount, summary.existingCount], [3, 3, 0]);
 
   let r = await backup.importSessionZip(zipPath, "skip", freshRoot);
-  assert.deepEqual(r, { imported: 3, skipped: 0, overwritten: 0 });
+  assert.deepEqual(r, { imported: 3, skipped: 0, overwritten: 0, attachments: 0 });
   assert.ok(existsSync(join(freshRoot, "proj-a", "s1.jsonl")));
   assert.equal(readFileSync(join(freshRoot, "proj-a", "s2.jsonl"), "utf8"), '{"type":"message"}\n{"type":"message"}\n');
 
@@ -117,12 +117,12 @@ try {
   summary = await backup.inspectSessionBackup(zipPath, freshRoot);
   assert.deepEqual([summary.total, summary.newCount, summary.existingCount], [3, 0, 3]);
   r = await backup.importSessionZip(zipPath, "skip", freshRoot);
-  assert.deepEqual(r, { imported: 0, skipped: 3, overwritten: 0 });
+  assert.deepEqual(r, { imported: 0, skipped: 3, overwritten: 0, attachments: 0 });
 
   // Local edit + overwrite policy restores the backup copy.
   writeFileSync(join(freshRoot, "proj-a", "s1.jsonl"), '{"type":"session","id":"LOCAL"}\n');
   r = await backup.importSessionZip(zipPath, "overwrite", freshRoot);
-  assert.deepEqual(r, { imported: 0, skipped: 0, overwritten: 3 });
+  assert.deepEqual(r, { imported: 0, skipped: 0, overwritten: 3, attachments: 0 });
   assert.equal(readFileSync(join(freshRoot, "proj-a", "s1.jsonl"), "utf8"), '{"type":"session","id":"a"}\n');
 
   // Traversal guard unit checks (raw entry names as they appear in a zip).
@@ -143,7 +143,7 @@ try {
   summary = await backup.inspectSessionBackup(join(tmp, "evil.zip"), evilRoot);
   assert.equal(summary.total, 2, "absolute entry refused; normalized + plain entries kept");
   r = await backup.importSessionZip(join(tmp, "evil.zip"), "overwrite", evilRoot);
-  assert.deepEqual(r, { imported: 2, skipped: 0, overwritten: 0 });
+  assert.deepEqual(r, { imported: 2, skipped: 0, overwritten: 0, attachments: 0 });
   assert.ok(!existsSync(join(tmp, "abs.jsonl")), "/abs must not escape the sessions root");
   assert.ok(existsSync(join(evilRoot, "evil.jsonl")), "normalized entry stays inside the root");
 

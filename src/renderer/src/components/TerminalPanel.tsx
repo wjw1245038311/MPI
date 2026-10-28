@@ -75,21 +75,16 @@ export function TerminalPanel({ cwd, threadId }: { cwd: string; threadId: string
     // 首帧延迟到 renderer 初始化之后（xterm 的 CharSizeService 要等一帧 + 字体就绪），
     // 否则 fit() 会在内部渲染服务还没建立时抛 dimensions 错误。
     const firstFitTimer = window.setTimeout(() => {
-      if (disposed) return;
-      const ok = safeFit();
-      console.log("[term] first fit", ok, host.clientWidth, host.clientHeight);
+      if (!disposed) safeFit();
     }, 180);
 
     setStatus("starting");
     setErrMsg("");
 
-    let dataSeen = 0;
     const unsubData = window.pi.tui.onData((p) => {
       if (p.threadId !== ptyId || disposed) return;
       try {
         term.write(p.data);
-        if (dataSeen < 3) console.log("[term] data bytes", p.data.length);
-        dataSeen += 1;
       } catch (e: any) {
         console.error("[term] write failed:", e?.message || String(e));
       }
@@ -101,13 +96,7 @@ export function TerminalPanel({ cwd, threadId }: { cwd: string; threadId: string
       setErrMsg(zh ? "shell 已退出，点「重开」新建一个" : "Shell exited — hit Reopen for a new one");
     });
     // 键盘输入写进本终端的 PTY（之前漏了这个前缀，敲键会写到一个不存在的会话上）
-    let keysSeen = 0;
-    const dataSub = term.onData((data) => {
-      // 只记前几次按键：用来确认「键盘 → PTY」这条路通，之后不再刷日志。
-      if (keysSeen < 3) console.log("[term] key input bytes", data.length);
-      keysSeen += 1;
-      window.pi.tui.write(ptyId, data);
-    });
+    const dataSub = term.onData((data) => window.pi.tui.write(ptyId, data));
 
     let resizeTimer: number | null = null;
     const ro = new ResizeObserver(() => {
@@ -131,7 +120,6 @@ export function TerminalPanel({ cwd, threadId }: { cwd: string; threadId: string
         if (res?.ok && res.gen !== undefined) void window.pi.tui.stop(ptyId, res.gen);
         return;
       }
-      console.log("[term] start result", JSON.stringify(res));
       if (!res?.ok) {
         setErrMsg(res?.error || "unknown error");
         setStatus("error");
