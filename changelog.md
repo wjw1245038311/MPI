@@ -12,6 +12,8 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    - **取证**：新增 diag 行 `remote-pub-miss`（每线程 50 条一条汇总）、`remote-events replay` / `replay-miss` / `snapshot-skipped`，`remote-req subscribe|resync` 都带上 `since=`——下次再出现，看这几行就能区分「断线丢了」「补发覆盖不了」还是「客户端判缺口」。
    验证方式：`npm run typecheck`；`npm test -- remote`（`remote-seq` 新增：无人订阅推进序号 / 补发不重复 / 追平 0 条 / 缺中间一段回退快照 / 端到端补发跳过快照）；`npm test -- pwa` + `npm test -- messaging`；手机端 `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（新增 `ThreadSyncReplayTest`：同步期间不再触发第二次 resync、`replayed` 响应保住流式文本）。应用内：**重启 dev** → 手机看一个正在跑的会话，亮屏状态下关/开飞行模式十几秒（或锁屏再解锁），恢复后应看到对话**从断开处接着长**，而不是先闪成旧内容再等快照；桌面 diag 里应出现 `remote-events replay … n=…`，不再成串 `remote-req resync`。
 
+   **已发：安卓 v0.5.150**（`MPI_PUBLIC_DOWNLOAD_BASE=http://47.97.28.110:10445/download node scripts/dev-publish-android.mjs`）——APK 已推到 ECS `/var/www/mpi-mobile/download/`，清单 `version=0.5.150`、`size=32262203`、`sha256=C7698A6E…70E60`，RANGE 请求 206 已验证。手机「检测更新」即可升到这个包（客户端侧的缓冲区/保留流式已包含）；主机侧的补发需重启 dev 才生效。
+
 ## v0.13.5（2026-10-28）
 1. **改：错误/危险色统一收敛为 `--danger` 家族（浅深各一套，共 9 个变量）**——原来 `#c0392b`（18 次）、`#b23a2c`（17 次）、`#9a3d32`、`#a84439`、`#fdf3f1`、`#fbe9e7` 与 4 种半透明红散落在 60 多处；现在统一走 `--danger`（文字/边框/小圆点）、`--danger-strong(-hover)`（白字按钮/横幅底）、`--danger-pale(-strong)`（浅底）、`--danger-soft(-hover)` / `--danger-ring` / `--danger-border`。**浅色下取值保持不变**（`--danger` = `#c0392b`、`--danger-strong` = `#b23a2c`），深色下错误色改为更亮的 `#f2726a` / `#c0392b`，暗底可读性提升。同时 `docs/DESIGN.md` 补上 token 表与收敛清单，`AGENTS.md` 增加「改 UI 先读 DESIGN.md」。
    验证方式：`npm run typecheck` + `npm run build`；`grep -c "#c0392b\|#b23a2c" src/renderer/src/styles.css` 应只剩 4 处变量定义。应用内：亮色下错误提示/删除按钮观感不变；切到暗色，工具错误、搜索无结果、到期提醒等红色明显变亮（不再发暗）。
