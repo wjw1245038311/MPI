@@ -31,7 +31,7 @@ const bootMark = (stage: string) => appendDiagLog(`boot ${stage} ${Math.round(pe
 import { stopMemoryEndpoint } from "./memory-endpoint";
 import { disposeMemoryIndex } from "./memory-service";
 import { ensureBackfilled as backfillObservedTools } from "./observed-tools";
-import { activateAutostartApps, killAllManagedProcesses } from "./app-store";
+import { activateAutostartApps, deactivateAllServices, killAllManagedProcesses } from "./app-store";
 import { migrateToBuiltinMcp, normalizeMcpDisabledFlags } from "./plugins";
 import { startDevReleaseProgressTail } from "./dev-release-progress";
 import { stopAutomations, stopScheduler } from "./automation";
@@ -438,7 +438,14 @@ app.on("before-quit", (e) => {
   const hardStop = setTimeout(() => app.quit(), 8000);
   stopMessaging(); // Feishu channel — drop the long connection before bridges die
   stopWeChatMessaging(); // WeChat (iLink) channel — abort the long-poll
-  Promise.all([stopAllBridges(), stopAutomations()])
+  // 应用商店的服务也要在退出前收掉（见 docs/APP-PLUGIN-DESIGN.md §5）：
+  // 否则服务自己的资源（如 HTTP 监听、定时器）会留到进程结束，models.json 里的
+  // provider 也会指向一个已经没人监听的端口。给 4s 上限，绝不让某个应用拖住退出。
+  const appsStopped = Promise.race([
+    deactivateAllServices(),
+    new Promise((resolve) => setTimeout(resolve, 4000)),
+  ]);
+  Promise.all([stopAllBridges(), stopAutomations(), appsStopped])
     .catch(() => undefined)
     .finally(() => {
       clearTimeout(hardStop);

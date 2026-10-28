@@ -33,6 +33,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    验证方式：`npm run typecheck` + `npm run check:ext`（11 个扩展）+ `npm test -- secret-broker`（新增 `logic-secret-broker`：confirm 桌面放行 / local-only 远程拒绝 / 无凭据 / 空命令 / 输出脱敏 / 幂等 / 超时夹到 10 分钟 / 坏文件清理 / 回执清扫 / 审计无明文）+ `npm test -- credentials` + `npm test -- registry`。应用内：**重启 dev** → 建一条「仅本机」和一条「远程需确认」凭据 → 新建会话让 agent 用 `mpi_secret_run` 执行 `echo $MPI_SECRET_VALUE` → 桌面应弹卡片、点同意后返回凭据值（且对话里不会出现明文，只有子进程看到）…若模型自己 echo 了，回执里已是 `***`；随后从手机让它用「仅本机」凭据执行 → 应被拒绝并说明原因（审计里落一条 deny）。
 
 
+7. **修：退出 MPI 时不会停用应用商店的服务（与文档不一致）**——`docs/APP-PLUGIN-DESIGN.md` §5 写的是「MPI 退出 → 统一 deactivate + kill 托管子进程」，但 `before-quit` 里只有 `killAllManagedProcesses()`，没有任何服务的 `deactivate()`。后果：服务自己的资源（如 workbuddy-connect 的 HTTP 监听）会留到进程结束，`models.json` 里的 provider 指向一个已关闭的端口（下次启动重写才恢复）。新增 `app-store.deactivateAllServices()`：遍历 enabled 的应用调 `deactivate()`，**不改 enabled、不回滚 config**，失败只记日志；`index.ts` 的退出流程在 `Promise.all` 里等它（4s 上限，不阻塞退出）。
+   验证方式：`npm run typecheck` + `npm test -- app-store`（新增断言：退出后 status=stopped、enabled 仍为 true、config 不回滚、托管子进程被杀）。应用内：启用一个带服务端的应用 → 退出 MPI → 日志出现 `[host] <id> stopped`，再次启动后服务重新 ready。
+
 ## v0.13.4（2026-10-27）
 1. **修：v0.13.3 的 choices 去重会静默丢题（同一条回复里多个不同问题只留最后一个）**——v0.13.3 为了压掉「模型重写块」造成的双面板，做了无条件的「同消息只渲染最后一块」；thinkbook16p 真机反馈：一条回复里出现 **3 个内容不同的问题块 + 1 个空残块**，结果 2 道题被丢弃（`choice-fence-duplicate dropped:2`），截图里只剩一个面板。现在判重改为**内容签名**（题目 + 每题选项 label，忽略 detail 与空白差异）：签名相同才折叠（模型重写），内容不同的块全部保留。三端同步（桌面 `choiceSignature` / PWA / 安卓）。
    验证方式：`npm run typecheck` + `npm test -- choice`（`test-choice-block` / `test-pwa-choice` 新增「不同内容多块都渲染 / 同内容折叠 / 空块丢弃」）+ `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest --tests 'com.mpi.app.ChoiceLangToleranceTest'`（9 项）。应用内：让模型一条回复里问 3 组不同问题 → 应看到 3 个面板（v0.13.3 只有 1 个）。

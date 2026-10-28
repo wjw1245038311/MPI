@@ -439,6 +439,31 @@ export function killAllManagedProcesses(): void {
   }
 }
 
+/**
+ * Stop every enabled app's service on MPI quit **without** changing enabled or
+ * rolling back config — unlike {@link setAppEnabled}(false), which is a user
+ * action. Before this existed, quitting left each service's own resources alive
+ * (e.g. an app's HTTP server kept its port) and left providers pointing at it,
+ * although `docs/APP-PLUGIN-DESIGN.md` §5 promised "MPI 退出 → 统一 deactivate".
+ *
+ * Errors are contained: one misbehaving service must never block quitting.
+ */
+export async function deactivateAllServices(): Promise<void> {
+  const reg = readRegistry();
+  for (const [id, entry] of Object.entries(reg.apps || {})) {
+    if (!entry?.enabled) continue;
+    const manifest = loadManifest(id);
+    if (!manifest?.service) continue;
+    try {
+      await deactivateService(runtimeHooks(id, manifest));
+    } catch (e) {
+      console.warn(`[app-store] deactivate on quit failed for ${id}:`, e);
+    }
+  }
+  // 兜底：模块没杀干净的托管子进程在这里统一收尾。
+  killAllManagedProcesses();
+}
+
 /** Rolling log lines for an installed app (empty when none). */
 export function getAppLogs(id: string): string[] {
   return readAppLog(appsDir(), id);

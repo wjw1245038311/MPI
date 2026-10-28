@@ -353,6 +353,17 @@ try {
   assert.equal(store.listApps().find((a) => a.id === "plugin-demo").status.state, "ready");
   ok("service: autostart re-activates enabled services without rewriting config");
 
+  // 退出 MPI：deactivate 所有服务，但**不**改 enabled、**不**回滚 config
+  // （应用商店的“停用”是用户动作；退出只是收尾）。
+  const beforeVoice = { ...(getConfig().voice || {}) };
+  await store.deactivateAllServices();
+  const afterQuit = store.listApps().find((a) => a.id === "plugin-demo");
+  assert.equal(afterQuit.enabled, true, "quit must not disable the app");
+  assert.equal(afterQuit.status.state, "stopped", "quit stops the service");
+  assert.ok(killed.includes(9999), "quit kills managed child processes");
+  assert.equal(getConfig().voice?.sttBaseUrl, beforeVoice.sttBaseUrl, "quit must not roll back config");
+  ok("quit: deactivateAllServices stops services without disabling or rolling back");
+
   const rr = await store.restartAppService("plugin-demo");
   assert.equal(rr.enabled, true);
   assert.equal(rr.status.state, "ready");
