@@ -64,6 +64,20 @@
   --overlay-6: rgba(0, 0, 0, 0.26);
   --overlay-7: rgba(0, 0, 0, 0.52);
   --overlay-8: rgba(0, 0, 0, 0.9);
+  /* 置顶会话圆印上的 10 组「墨色」：只用于首字颜色，不作底色 ——
+     圆印本体是描边 + 侧栏底色，所以没有色块的重量。
+     按位置固定分配（第 1 个永远色 1），不按标题散列 —— 散列会随标题自动更新而变色。 */
+  --tone-fg: #ffffff;
+  --tone-1: #3c7a5c; /* 墨绿 */
+  --tone-2: #3d5f80; /* 黛蓝 */
+  --tone-3: #61527e; /* 绛紫 */
+  --tone-4: #96653c; /* 赭石 */
+  --tone-5: #765345; /* 栗棕 */
+  --tone-6: #4a565f; /* 松烟 */
+  --tone-7: #8a4350; /* 绛红 */
+  --tone-8: #386b70; /* 黛青 */
+  --tone-9: #67703e; /* 橄榄 */
+  --tone-10: #6a4437; /* 紫檀 */
   --sidebar-w: 286px;
   --preview-w: 420px;
   --titlebar-h: 42px;
@@ -323,6 +337,15 @@ body.sidebar-resizing * {
   background: var(--overlay-3);
   color: var(--text);
 }
+.sb-section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sb-section-count {
+  color: var(--text-faint);
+  font-weight: 500;
+}
 
 .project {
   margin-bottom: 4px;
@@ -362,8 +385,8 @@ body.sidebar-resizing * {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  color: #111111;
-  opacity: .9;
+  /* 置顶标记用图钉，颜色比项目名淡一档：置顶多了也不会堆一排名黑图标。 */
+  color: var(--text-dim);
 }
 .thread-pin {
   margin-right: 1px;
@@ -514,6 +537,7 @@ body.sidebar-resizing * {
 }
 /* Always-visible pin toggle (unlike archive/delete, which stay hidden until hover).
    Filled accent star when pinned; faint outline star otherwise. */
+/* 星标按钮：默认收起（常驻一堆 ☆ 是列表变乱的主因之一）；已置顶的行始终显示，承载状态。 */
 .thread-pin-btn {
   display: grid;
   place-items: center;
@@ -526,8 +550,15 @@ body.sidebar-resizing * {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-faint);
+  opacity: 0;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.thread:hover .thread-pin-btn,
+.thread:focus-within .thread-pin-btn,
+.thread.active .thread-pin-btn,
+.thread-pin-btn.on {
+  opacity: 1;
 }
 .thread-pin-btn:hover {
   background: var(--overlay-4);
@@ -3237,26 +3268,30 @@ body.sidebar-resizing * {
   transform: rotate(-90deg);
   transition: transform .15s ease;
 }
+/* 会话/项目右键菜单（参考 WorkBuddy 的会话菜单）：图标 + 语义分组 + 危险项隔离。
+   尺寸：宽度 216px，行高约 30px（padding 8 + 13px 字号），组间 .pcm-sep 分隔。 */
 .project-context-menu {
   position: fixed;
   z-index: 120;
-  width: 210px;
-  padding: 6px;
+  width: 216px;
+  padding: 5px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--surface);
   box-shadow: var(--shadow-md);
   -webkit-app-region: no-drag;
 }
 .project-context-name {
   overflow: hidden;
-  padding: 5px 8px 7px;
+  padding: 5px 9px 6px;
   color: var(--text-dim);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .project-context-menu button {
+  display: flex;
+  align-items: center;
   width: 100%;
   padding: 8px 9px;
   border: 0;
@@ -3264,13 +3299,43 @@ body.sidebar-resizing * {
   background: transparent;
   color: var(--text);
   text-align: left;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.2;
+}
+/* 图标 + 文字一行：图标弱化，hover 时回到正文色。 */
+.pcm-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.pcm-label svg {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+/* 菜单项里的「已置顶」态（图钉变强调色）。 */
+.pcm-label .pin-on {
+  color: var(--accent);
+}
+.project-context-menu button:hover .pcm-label svg,
+.project-context-menu button:focus-visible .pcm-label svg {
+  color: var(--text);
+}
+/* 分组线：不跨满宽，两侧留出内边距，视觉上像一段细分隔。 */
+.pcm-sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
 }
 .project-context-menu button:hover {
-  background: #f1f1ed;
+  background: var(--overlay-3);
 }
 .project-context-menu button.danger {
   color: var(--danger);
+}
+.project-context-menu button.danger .pcm-label svg {
+  color: inherit;
 }
 .project-context-menu button.danger:hover {
   background: var(--danger-pale-strong);
@@ -9429,6 +9494,17 @@ mark.hl {
   --overlay-6: rgba(255, 255, 255, 0.30);
   --overlay-7: rgba(255, 255, 255, 0.55);
   --overlay-8: rgba(255, 255, 255, 0.92);
+  --tone-fg: #ffffff;
+  --tone-1: #4f9a77; /* 墨绿 */
+  --tone-2: #50799e; /* 黛蓝 */
+  --tone-3: #7a6b9c; /* 绛紫 */
+  --tone-4: #b07d4e; /* 赭石 */
+  --tone-5: #916b56; /* 栗棕 */
+  --tone-6: #7d8d97; /* 松烟 */
+  --tone-7: #a65a68; /* 绛红 */
+  --tone-8: #4a878d; /* 黛青 */
+  --tone-9: #828c52; /* 橄榄 */
+  --tone-10: #a2725f; /* 紫檀 */
   --hairline: rgba(170, 194, 174, 0.22);
   --scrim: rgba(0, 0, 0, 0.58);
   --scrim-soft: rgba(0, 0, 0, 0.58);
@@ -11827,75 +11903,228 @@ mark.hl {
   color: var(--text-faint);
 }
 
-/* 侧栏「近期」：跨项目最近 5 个会话，放在项目列表之上（2026-10-25） */
-.sb-recent {
+/* 会话 tab 顶部的「置顶会话」圆形印章（2026-10-29）：
+   36px 起 → 侧栏默认宽度一行 6 个；不填色、双环描边（外环加深），首字用墨色区分。
+   和侧栏的线框图标同一语汇，不做色块头像墙。 */
+.sb-pinwall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+  gap: 8px 6px;
+  padding: 2px 0 10px;
+}
+.pinwall-tile {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 0 8px 6px;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
-.sb-recent-item {
+.pinwall-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  /* 外框：1.5px 中灰（--text-faint）。--border-strong 太淡看不见、--text-dim 偏重，
+     取中间这一档。 */
+  border: 1.5px solid var(--text-faint);
+  background: transparent;
+  color: var(--tone-1);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+}
+/* 内环：inset 3px 处的 1px 细环，压到 45% 不透明度，形成「双环印章」但比外环轻。 */
+.pinwall-mark::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 1px solid var(--text-dim);
+  opacity: 0.45;
+  pointer-events: none;
+}
+/* 10 组墨色只用在首字上（按位置固定分配，不跟标题散列绑定）。 */
+.tone-0 .pinwall-mark { color: var(--tone-1); }
+.tone-1 .pinwall-mark { color: var(--tone-2); }
+.tone-2 .pinwall-mark { color: var(--tone-3); }
+.tone-3 .pinwall-mark { color: var(--tone-4); }
+.tone-4 .pinwall-mark { color: var(--tone-5); }
+.tone-5 .pinwall-mark { color: var(--tone-6); }
+.tone-6 .pinwall-mark { color: var(--tone-7); }
+.tone-7 .pinwall-mark { color: var(--tone-8); }
+.tone-8 .pinwall-mark { color: var(--tone-9); }
+.tone-9 .pinwall-mark { color: var(--tone-10); }
+/* 当前正在看的置顶会话：淡绿底 + 墨绿描边 + 外一圈强调色。 */
+.pinwall-tile.active .pinwall-mark {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--accent);
+}
+.pinwall-tile:hover .pinwall-mark {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.pinwall-tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-md);
+}
+.pinwall-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.pinwall-tile:hover .pinwall-name,
+.pinwall-tile:focus-visible .pinwall-name {
+  color: var(--text);
+}
+/* 宫格悬停信息卡：会话全名 / 项目名 / 条数 · 时间。fixed + portal 到 body，不接收鼠标。 */
+.pinwall-tip {
+  position: fixed;
+  z-index: 1002;
+  width: 240px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+.pinwall-tip-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.pinwall-tip-path {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-faint);
+  word-break: break-all;
+}
+.pinwall-tip-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* 侧栏「会话」tab：跨项目全量会话列表（2026-10-29，替代旧的「近期」5 条）。
+   主次靠字号/颜色分层：标题 13px 正文色 > 副行 11px 淡色（项目名 + 首条消息预览）；
+   时间右对齐并 tabular-nums，扫视时成一列。 */
+.sb-sessions {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  width: 100%;
-  padding: 5px 8px;
+  padding: 0 0 10px;
+}
+.srow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 9px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: none;
-  text-align: left;
+  background: transparent;
   cursor: pointer;
+  text-align: left;
+  width: 100%;
 }
-.sb-recent-item:hover {
+.srow:hover {
+  background: var(--overlay-3);
+}
+/* 当前会话：左侧 2px 竖条 + 浅底，比只有底色更容易一眼认出来（不易点错行）。 */
+.srow.active {
   background: var(--accent-soft);
-  border-color: var(--border);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
-.sb-recent-item.active {
-  background: var(--accent-soft);
-  border-color: var(--border);
+.srow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
-.sb-recent-title {
-  font-size: 12px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sb-recent-meta {
-  font-size: 11px;
-  color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 侧栏分区（近期 / 项目）折叠头（2026-10-25） */
-.sb-section-toggle {
-  display: inline-flex;
+.srow-main {
+  display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-  cursor: pointer;
+  min-width: 0;
 }
-.sb-section-toggle:hover {
+.srow-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
   color: var(--text);
 }
-.sb-section-toggle .caret {
-  display: inline-block;
-  width: 12px;
-  font-size: 10px;
+.srow-time {
+  flex: 0 0 auto;
+  font-size: 11px;
   color: var(--text-faint);
-  transition: transform 0.12s ease;
+  font-variant-numeric: tabular-nums;
 }
-.sb-section-toggle .caret.open {
-  transform: rotate(90deg);
+.srow-time.today {
+  color: var(--accent);
+  font-weight: 600;
 }
+.srow-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+/* 行内操作：默认收起（只有 hover / 键盘聚焦才出现），时间让位，宽度不跳动。 */
+.srow-actions {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+.srow:hover .srow-actions,
+.srow:focus-within .srow-actions {
+  display: flex;
+}
+.srow:hover .srow-time,
+.srow:focus-within .srow-time {
+  display: none;
+}
+.srow-actions button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.srow-actions button:hover {
+  background: var(--overlay-4);
+  color: var(--text);
+}
+.srow-actions button.on {
+  color: var(--accent);
+}
+.srow-actions button.danger:hover {
+  background: var(--danger-pale-strong);
+  color: var(--danger);
+}
+
+/* （已移除：旧「近期 / 项目」分区折叠头 .sb-section-toggle —— 2026-10-29 改为 tab，无折叠头） */
 
 /* --- 凭据面板（设置 → 凭据，docs/CREDENTIALS-VAULT.md） ---------------
  * 颜色/圆角/字号全部走 token：边界用 --hairline，危险用 --danger 家族，

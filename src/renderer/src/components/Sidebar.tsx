@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, Fragment } from "react";
+import { createPortal } from "react-dom";
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { localizeAutomationThreadTitle, remapLastActiveThread, useStore } from "../store";
 import { formatTokens } from "../lib/format";
@@ -7,7 +8,7 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { MPI_FILE_MIME, MPI_SESSION_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
-import { AppStore, Plus, Folder, Archive, Trash, Star, ChevronRight, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Smartphone, Sprout, Sidebar as SidebarIcon } from "./icons";
+import { AppStore, Plus, Folder, Archive, Trash, Pin, ChevronRight, ChevronUp, ChevronDown, Copy, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Smartphone, Sprout, Sidebar as SidebarIcon } from "./icons";
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
 
@@ -16,6 +17,12 @@ function leadingPinned<T extends { pinned?: boolean }>(list: T[]): number {
   let n = 0;
   while (n < list.length && list[n].pinned) n++;
   return n;
+}
+
+/** 圆形印章里的首字：中文取首字，拉丁字母转大写。 */
+function firstGlyph(text: string): string {
+  const first = Array.from(text.trim())[0] || "?";
+  return /[a-z]/.test(first) ? first.toUpperCase() : first;
 }
 
 /** 会话列表按自然日分段：返回该行之前应插入的组标题（不需插标题时返回 null）。
@@ -135,44 +142,37 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   );
   const reclaimedSet = useMemo(() => new Set(reclaimedKey ? reclaimedKey.split("\u0000") : []), [reclaimedKey]);
 
-  // 「近期 / 项目」两个分区可折叠，状态存 localStorage（不动 store / 主进程）。
-  const [sections, setSections] = useState(() => {
-    try {
-      const raw = localStorage.getItem("mpi-sidebar-sections");
-      const parsed = raw ? JSON.parse(raw) : null;
-      if (parsed && typeof parsed === "object") {
-        return { recent: parsed.recent !== false, projects: parsed.projects !== false };
-      }
-    } catch {
-      /* 隐私模式 / 坏 JSON → 默认全展开 */
-    }
-    return { recent: true, projects: true };
-  });
-  const toggleSection = (key: "recent" | "projects") => {
-    setSections((prev) => {
-      const next = { ...prev, [key]: !prev[key] };
-      try {
-        localStorage.setItem("mpi-sidebar-sections", JSON.stringify(next));
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  };
-  // 近期会话：跨项目最近 5 个（放在项目列表之上），解决「切项目再找会话」的来回。
-  const recentThreads = useMemo(() => {
-    const all = projects.flatMap((p) =>
-      p.threads.map((t) => ({
-        file: t.file,
-        cwd: p.cwd,
-        projectName: p.name,
-        title: t.title,
-        preview: t.preview,
-        updatedAt: t.updatedAt,
-      })),
+  // 「会话 / 项目」由 tab 切换（不再在同一个列表里叠两个分区：同一个会话只出现一次）。
+  // 置顶会话的全局顺序来自 config.pinnedThreads（与 main 侧 reorderPinned 的下标语义一致）。
+  const pinnedThreadOrder = useStore((s) => s.config?.pinnedThreads);
+  // 「会话」tab 顶部宫格的悬停信息卡（自制 tooltip：portal + fixed，不用原生 title）。
+  const [tileTip, setTileTip] = useState<{ file: string; x: number; y: number } | null>(null);
+  // 「会话」tab 的两段：置顶会话进顶部宫格（不再重复出现在下方列表），其余按 updatedAt 降序。
+  const { pinnedRows, restThreads } = useMemo(() => {
+    const order = new Map((pinnedThreadOrder || []).map((file, index) => [file.toLowerCase(), index]));
+    const pinnedCount = pinnedThreadOrder?.length || 0;
+    const rows = projects.flatMap((p) =>
+      p.threads.map((t) => {
+        const rank = order.get(t.file.toLowerCase());
+        return {
+          file: t.file,
+          cwd: p.cwd,
+          projectName: p.name,
+          title: t.title,
+          preview: t.preview,
+          messageCount: t.messageCount,
+          updatedAt: t.updatedAt,
+          pinned: rank !== undefined,
+          pinnedRank: rank ?? -1,
+          pinnedCount,
+        };
+      }),
     );
-    return all.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
-  }, [projects]);  // token-usage readout in the sidebar footer (today + all-time), always visible
+    const pinnedRows = rows.filter((r) => r.pinned).sort((a, b) => a.pinnedRank - b.pinnedRank);
+    const rest = rows.filter((r) => !r.pinned).sort((a, b) => b.updatedAt - a.updatedAt);
+    return { pinnedRows, restThreads: rest };
+  }, [projects, pinnedThreadOrder]);
+  // token-usage readout in the sidebar footer (today + all-time), always visible
   const [usageData, setUsageData] = useState<any>(null);
   const [projectMenu, setProjectMenu] = useState<{ cwd: string; name: string; pinned: boolean; pinnedRank: number; pinnedCount: number; x: number; y: number } | null>(null);
   const [threadMenu, setThreadMenu] = useState<{ cwd: string; file: string; name: string; pinned: boolean; pinnedRank: number; pinnedCount: number; x: number; y: number } | null>(null);
@@ -186,6 +186,30 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const resizeRef = useRef<{ startX: number; startWidth: number; width: number } | null>(null);
   useOutsideClose(projectMenuRef, !!projectMenu, () => setProjectMenu(null));
   useOutsideClose(threadMenuRef, !!threadMenu, () => setThreadMenu(null));
+
+  // 菜单高度随内容变化（分组分隔线 / 可选的上移下移），开右键时的估算夹取会溢出，
+  // 所以渲染后按真实尺寸再夹一次（DESIGN.md：浮层坐标必须夹在视口内）。
+  useEffect(() => {
+    if (threadMenu) {
+      const rect = threadMenuRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const maxX = Math.max(8, window.innerWidth - rect.width - 8);
+      const maxY = Math.max(8, window.innerHeight - rect.height - 8);
+      if (threadMenu.x > maxX || threadMenu.y > maxY) {
+        setThreadMenu({ ...threadMenu, x: Math.min(threadMenu.x, maxX), y: Math.min(threadMenu.y, maxY) });
+      }
+      return;
+    }
+    if (projectMenu) {
+      const rect = projectMenuRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const maxX = Math.max(8, window.innerWidth - rect.width - 8);
+      const maxY = Math.max(8, window.innerHeight - rect.height - 8);
+      if (projectMenu.x > maxX || projectMenu.y > maxY) {
+        setProjectMenu({ ...projectMenu, x: Math.min(projectMenu.x, maxX), y: Math.min(projectMenu.y, maxY) });
+      }
+    }
+  }, [threadMenu, projectMenu]);
 
   useEffect(() => {
     if (!deleteConfirm) return;
@@ -433,6 +457,9 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const dropClass = (kind: "project" | "thread", id: string) =>
     dropTarget?.kind === kind && dropTarget.id === id ? `drop-${dropTarget.pos}` : "";
 
+  // 宫格悬停卡：按 file 回查当前行数据（悬停期间列表刷新也能拿到最新的标题/时间）。
+  const tileTipRow = tileTip ? pinnedRows.find((r) => r.file === tileTip.file) : undefined;
+
   return (
     <aside className="sidebar" style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
       <div
@@ -539,54 +566,188 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
 
         <div className="sb-tabs">
           <button className={`sb-tab ${sidebarTab === "threads" ? "active" : ""}`} onClick={() => setSidebarTab("threads")}>
-            会话
+            {language === "zh" ? "会话" : "Sessions"}
+          </button>
+          <button className={`sb-tab ${sidebarTab === "projects" ? "active" : ""}`} onClick={() => setSidebarTab("projects")}>
+            {language === "zh" ? "项目" : "Projects"}
           </button>
           <button className={`sb-tab ${sidebarTab === "files" ? "active" : ""}`} onClick={() => setSidebarTab("files")}>
-            文件
+            {language === "zh" ? "文件" : "Files"}
           </button>
         </div>
 
         {sidebarTab === "threads" ? (
           <>
-            {recentThreads.length > 0 && (
-              <>
-                <div className="sb-section-head">
-                  <button type="button" className="sb-section-toggle" onClick={() => toggleSection("recent")}>
-                    <span className={`caret ${sections.recent ? "open" : ""}`}>▸</span>
-                    <span>{language === "zh" ? "近期" : "Recent"}</span>
-                  </button>
-                </div>
-                {sections.recent && <div className="sb-recent">
-                  {recentThreads.map((t) => (
+            {/* 置顶项目宫格（飞书头像墙式）：一行 4–5 个，悬停出信息卡，点击直达该项目最近的会话。 */}
+            {/* 置顶会话圆形印章（不填色 + 双环描边）：一行 6 个，悬停出信息卡，
+                点击直达该会话。置顶会话只在这里出现一次，下方列表不再重复。 */}
+            {pinnedRows.length > 0 && (
+              <div className="sb-pinwall">
+                {pinnedRows.map((t, index) => {
+                  const title =
+                    localizeAutomationThreadTitle(t.title, language) || (language === "zh" ? "未命名会话" : "Untitled");
+                  return (
                     <button
                       key={t.cwd + "::" + t.file}
                       type="button"
-                      className={`sb-recent-item ${activeThreadId === t.file ? "active" : ""}`}
-                      title={new Date(t.updatedAt).toLocaleString()}
+                      // 颜色按下标固定分配（第 1 块永远色 1），不再跟标题散列绑定 ——
+                      // 否则会话标题自动更新一次，颜色就跟着变。
+                      className={`pinwall-tile tone-${index % 10} ${activeThreadId === t.file ? "active" : ""}`}
+                      aria-label={`${title} · ${t.projectName}`}
                       onClick={() => onThreadClick(t.cwd, t.file)}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setProjectMenu(null);
+                        setTileTip(null);
+                        setThreadMenu({
+                          cwd: t.cwd,
+                          file: t.file,
+                          name: title,
+                          pinned: true,
+                          pinnedRank: t.pinnedRank,
+                          pinnedCount: t.pinnedCount,
+                          x: Math.min(event.clientX, window.innerWidth - 232),
+                          y: Math.min(event.clientY, window.innerHeight - 300),
+                        });
+                      }}
+                      onMouseEnter={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        setTileTip({ file: t.file, x: rect.left, y: rect.bottom + 6 });
+                      }}
+                      onMouseLeave={() => setTileTip(null)}
+                      onFocus={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        setTileTip({ file: t.file, x: rect.left, y: rect.bottom + 6 });
+                      }}
+                      onBlur={() => setTileTip(null)}
                     >
-                      <span className="sb-recent-title">
-                        {t.title || t.preview || (language === "zh" ? "未命名会话" : "Untitled")}
-                      </span>
-                      <span className="sb-recent-meta">
-                        {t.projectName} · {sessionTimeLabel(t.updatedAt, language === "zh", now)}
-                      </span>
+                      <span className="pinwall-mark">{firstGlyph(title)}</span>
+                      <span className="pinwall-name">{title}</span>
                     </button>
-                  ))}
-                </div>}
-              </>
+                  );
+                })}
+              </div>
             )}
+            {/* 会话 tab：跨项目全量列表（置顶会话已在上面宫格，不再重复）；按自然日分段。 */}
+            <div className="sb-sessions">
+            {restThreads.length === 0 && pinnedRows.length === 0 && (
+              <div className="ft-empty">
+                {language === "zh" ? "还没有会话，点左上角 + 新建。" : "No sessions yet — hit + to start one."}
+              </div>
+            )}
+            {restThreads.map((t, index) => {
+              const groupLabel = recentGroupLabel(restThreads, index, now, language === "zh");
+              const running = runningSet.has(t.file);
+              const reclaimed = reclaimedSet.has(t.file);
+              const bucket = dayBucket(t.updatedAt, now);
+              const title = localizeAutomationThreadTitle(t.title, language) || (language === "zh" ? "未命名会话" : "Untitled");
+              return (
+                <Fragment key={t.cwd + "::" + t.file}>
+                  {groupLabel && <div className="thread-group">{groupLabel}</div>}
+                  <div
+                    className={`srow ${activeThreadId === t.file ? "active" : ""}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onThreadClick(t.cwd, t.file)}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onThreadClick(t.cwd, t.file);
+                      }
+                    }}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setProjectMenu(null);
+                      setThreadMenu({
+                        cwd: t.cwd,
+                        file: t.file,
+                        name: title,
+                        pinned: t.pinned,
+                        pinnedRank: t.pinnedRank,
+                        pinnedCount: t.pinnedCount,
+                        x: Math.min(event.clientX, window.innerWidth - 232),
+                        y: Math.min(event.clientY, window.innerHeight - 300),
+                      });
+                    }}
+                    title={`${title}\n${t.projectName} · ${new Date(t.updatedAt).toLocaleString()}`}
+                  >
+                    <div className="srow-main">
+                      {running && <span className="thread-running" />}
+                      {t.pinned && (
+                        <span className="thread-pin" title={language === "zh" ? "已置顶会话" : "Pinned session"}>
+                          <Pin size={11} />
+                        </span>
+                      )}
+                      <span className="srow-title">{title}</span>
+                      <span className={`srow-time ${bucket === "today" ? "today" : ""}`}>
+                        {sessionTimeLabel(t.updatedAt, language === "zh", now)}
+                      </span>
+                      <span className="srow-actions">
+                        <button
+                          type="button"
+                          className={t.pinned ? "on" : ""}
+                          title={t.pinned ? (language === "zh" ? "取消置顶" : "Unpin") : language === "zh" ? "置顶" : "Pin"}
+                          aria-label={t.pinned ? (language === "zh" ? "取消置顶：" : "Unpin: ") + title : (language === "zh" ? "置顶：" : "Pin: ") + title}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void setThreadPinned(t.file, !t.pinned);
+                          }}
+                        >
+                          <Pin size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          title={language === "zh" ? "归档" : "Archive"}
+                          aria-label={(language === "zh" ? "归档：" : "Archive: ") + title}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void archiveThread(t.cwd, t.file, title);
+                          }}
+                        >
+                          <Archive size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          title={language === "zh" ? "删除" : "Delete"}
+                          aria-label={(language === "zh" ? "删除：" : "Delete: ") + title}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openDeleteConfirmation(t.cwd, t.file, title);
+                          }}
+                        >
+                          <Trash size={13} />
+                        </button>
+                      </span>
+                    </div>
+                    {/* 副行：项目名 + 首条消息预览 —— 同名会话（「接收邮件」× N）靠这行区分。 */}
+                    <div className="srow-sub">
+                      {t.projectName}
+                      {t.preview ? ` · ${t.preview}` : ""}
+                      {reclaimed && (language === "zh" ? " · 已回收" : " · reclaimed")}
+                    </div>
+                  </div>
+                </Fragment>
+              );
+            })}
+          </div>
+          </>
+        ) : sidebarTab === "projects" ? (
+          <>
             <div className="sb-section-head">
-              <button type="button" className="sb-section-toggle" onClick={() => toggleSection("projects")}>
-                <span className={`caret ${sections.projects ? "open" : ""}`}>▸</span>
-                <span>项目</span>
-              </button>
+              <span className="sb-section-label">
+                {language === "zh" ? "项目" : "Projects"}
+                <span className="sb-section-count">{projects.length}</span>
+              </span>
               <button onClick={openProjectFolder} title={language === "zh" ? "打开文件夹" : "Open folder"}>
                 <Plus size={14} />
               </button>
             </div>
-            {sections.projects && projects.length === 0 && <div className="ft-empty">尚无项目，点击 + 打开一个文件夹。</div>}
-            {sections.projects && projects.map((p) => {
+            {projects.length === 0 && <div className="ft-empty">尚无项目，点击 + 打开一个文件夹。</div>}
+            {projects.map((p) => {
               const open = !!expandedProjects[p.cwd];
               return (
                 <div className="project" key={p.cwd}>
@@ -605,8 +766,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                         pinned: !!p.pinned,
                         pinnedRank: idx < P ? idx : -1,
                         pinnedCount: P,
-                        x: Math.min(event.clientX, window.innerWidth - 190),
-                        y: Math.min(event.clientY, window.innerHeight - 70),
+                        x: Math.min(event.clientX, window.innerWidth - 232),
+                        y: Math.min(event.clientY, window.innerHeight - 240),
                       });
                     }}
                     {...dndHandlers("project", projects.map((x) => ({ id: x.cwd, pinned: x.pinned })), p.cwd)}
@@ -617,7 +778,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                     <Folder size={15} />
                     {p.pinned && (
                       <span className="pin-indicator" title={language === "zh" ? "已置顶项目" : "Pinned project"}>
-                        <Star size={12} />
+                        <Pin size={12} />
                       </span>
                     )}
                     <span className="pname" title={p.cwd}>
@@ -634,18 +795,6 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                     >
                       <Plus size={13} />
                     </button>
-                    {p.pinned && (
-                      <button
-                        className="pact"
-                        title={language === "zh" ? "取消置顶项目" : "Unpin project"}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          unpinProject(p.cwd);
-                        }}
-                      >
-                        ×
-                      </button>
-                    )}
                   </div>
                   {open && (
                     <div className="thread-list">
@@ -668,17 +817,20 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                                 event.preventDefault();
                                 event.stopPropagation();
                                 setProjectMenu(null);
-                                const P = leadingPinned(p.threads);
-                                const idx = p.threads.findIndex((x) => x.file === t.file);
+                                // 用 config.pinnedThreads 的全局下标（main 侧 reorderPinned 就是这个下标语义），
+                                // 与「会话」tab 的上移/下移保持一致。
+                                const globalRank = (pinnedThreadOrder || []).findIndex(
+                                  (f) => f.toLowerCase() === t.file.toLowerCase(),
+                                );
                                 setThreadMenu({
                                   cwd: p.cwd,
                                   file: t.file,
                                   name: title,
-                                  pinned: !!t.pinned,
-                                  pinnedRank: idx < P ? idx : -1,
-                                  pinnedCount: P,
-                                  x: Math.min(event.clientX, window.innerWidth - 190),
-                                  y: Math.min(event.clientY, window.innerHeight - 70),
+                                  pinned: globalRank >= 0,
+                                  pinnedRank: globalRank,
+                                  pinnedCount: pinnedThreadOrder?.length || 0,
+                                  x: Math.min(event.clientX, window.innerWidth - 232),
+                                  y: Math.min(event.clientY, window.innerHeight - 300),
                                 });
                               }}
                               {...dndHandlers(
@@ -704,7 +856,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                               {running && <span className="thread-running" />}
                               {t.pinned && (
                                 <span className="thread-pin" title={language === "zh" ? "已置顶会话" : "Pinned session"}>
-                                  <Star size={11} />
+                                  <Pin size={11} />
                                 </span>
                               )}
                               <span className="tt-text">{title}</span>
@@ -734,7 +886,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                                   void setThreadPinned(t.file, !t.pinned);
                                 }}
                               >
-                                <Star size={13} fill={t.pinned ? "currentColor" : "none"} />
+                                <Pin size={13} />
                               </button>
                               <button
                                 type="button"
@@ -834,6 +986,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
           role="menu"
         >
           <div className="project-context-name" title={projectMenu.cwd}>{projectMenu.name}</div>
+          {/* 菜单按语义分组（参考 WorkBuddy）：排序 → 置顶 → 位置/路径 → 归档，组间细分隔线。 */}
           {projectMenu.pinnedRank > 0 && (
             <button
               role="menuitem"
@@ -843,7 +996,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                 void movePinned("project", item.cwd, item.pinnedRank - 1);
               }}
             >
-              上移
+              <span className="pcm-label"><ChevronUp size={13} />{language === "zh" ? "上移" : "Move up"}</span>
             </button>
           )}
           {projectMenu.pinnedRank >= 0 && projectMenu.pinnedRank < projectMenu.pinnedCount - 1 && (
@@ -855,22 +1008,9 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                 void movePinned("project", item.cwd, item.pinnedRank + 1);
               }}
             >
-              下移
+              <span className="pcm-label"><ChevronDown size={13} />{language === "zh" ? "下移" : "Move down"}</span>
             </button>
           )}
-          <button
-            role="menuitem"
-            onClick={() => void openProjectInExplorer(projectMenu.cwd)}
-          >
-            {language === "zh" ? "在资源管理器中打开" : "Open in File Explorer"}
-          </button>
-          <button
-            role="menuitem"
-            title={language === "zh" ? "项目文件夹被移动后，把会话与配置指向新位置" : "Re-point sessions and settings after the project folder moved"}
-            onClick={() => void remapProjectPath(projectMenu.cwd)}
-          >
-            {language === "zh" ? "更新项目路径…" : "Update project path…"}
-          </button>
           <button
             role="menuitem"
             onClick={() => {
@@ -879,14 +1019,32 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               void setProjectPinned(item.cwd, !item.pinned);
             }}
           >
-            {projectMenu.pinned
-              ? language === "zh"
-                ? "取消置顶项目"
-                : "Unpin project"
-              : language === "zh"
-                ? "置顶项目"
-                : "Pin project"}
+            <span className="pcm-label">
+              <Pin size={13} className={projectMenu.pinned ? "pin-on" : undefined} />
+              {projectMenu.pinned
+                ? language === "zh"
+                  ? "取消置顶项目"
+                  : "Unpin project"
+                : language === "zh"
+                  ? "置顶项目"
+                  : "Pin project"}
+            </span>
           </button>
+          <div className="pcm-sep" role="separator" />
+          <button
+            role="menuitem"
+            onClick={() => void openProjectInExplorer(projectMenu.cwd)}
+          >
+            <span className="pcm-label"><Folder size={13} />{language === "zh" ? "在资源管理器中打开" : "Open in File Explorer"}</span>
+          </button>
+          <button
+            role="menuitem"
+            title={language === "zh" ? "项目文件夹被移动后，把会话与配置指向新位置" : "Re-point sessions and settings after the project folder moved"}
+            onClick={() => void remapProjectPath(projectMenu.cwd)}
+          >
+            <span className="pcm-label"><Edit size={13} />{language === "zh" ? "更新项目路径…" : "Update project path…"}</span>
+          </button>
+          <div className="pcm-sep" role="separator" />
           <button
             role="menuitem"
             onClick={() => {
@@ -895,7 +1053,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               archiveProject(cwd);
             }}
           >
-            归档项目
+            <span className="pcm-label"><Archive size={13} />{language === "zh" ? "归档项目" : "Archive project"}</span>
           </button>
         </div>
       )}
@@ -907,6 +1065,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
           role="menu"
         >
           <div className="project-context-name" title={threadMenu.file}>{threadMenu.name}</div>
+          {/* 分组（参考 WorkBuddy 的会话右键菜单）：排序/置顶 → 会话操作 → 位置 → 危险项单独一组。 */}
           {threadMenu.pinnedRank > 0 && (
             <button
               role="menuitem"
@@ -916,7 +1075,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                 void movePinned("thread", item.file, item.pinnedRank - 1);
               }}
             >
-              上移
+              <span className="pcm-label"><ChevronUp size={13} />{language === "zh" ? "上移" : "Move up"}</span>
             </button>
           )}
           {threadMenu.pinnedRank >= 0 && threadMenu.pinnedRank < threadMenu.pinnedCount - 1 && (
@@ -928,7 +1087,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                 void movePinned("thread", item.file, item.pinnedRank + 1);
               }}
             >
-              下移
+              <span className="pcm-label"><ChevronDown size={13} />{language === "zh" ? "下移" : "Move down"}</span>
             </button>
           )}
           <button
@@ -939,14 +1098,18 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               void setThreadPinned(item.file, !item.pinned);
             }}
           >
-            {threadMenu.pinned
-              ? language === "zh"
-                ? "取消置顶会话"
-                : "Unpin session"
-              : language === "zh"
-                ? "置顶会话"
-              : "Pin session"}
+            <span className="pcm-label">
+              <Pin size={13} className={threadMenu.pinned ? "pin-on" : undefined} />
+              {threadMenu.pinned
+                ? language === "zh"
+                  ? "取消置顶会话"
+                  : "Unpin session"
+                : language === "zh"
+                  ? "置顶会话"
+                  : "Pin session"}
+            </span>
           </button>
+          <div className="pcm-sep" role="separator" />
           <button
             role="menuitem"
             title={language === "zh" ? "把当前会话完整复制成一个新会话" : "Duplicate the whole session into a new one"}
@@ -960,17 +1123,67 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               });
             }}
           >
-            {language === "zh" ? "克隆会话" : "Clone session"}
+            <span className="pcm-label"><Copy size={13} />{language === "zh" ? "克隆会话" : "Clone session"}</span>
           </button>
+          <button
+            role="menuitem"
+            title={
+              language === "zh"
+                ? "移出会话列表（不删文件，可在 设置 › 归档与回收 恢复）"
+                : "Hide from the session list (file kept; restore in Settings › Archive & trash)"
+            }
+            onClick={() => {
+              const item = threadMenu;
+              setThreadMenu(null);
+              void archiveThread(item.cwd, item.file, item.name);
+            }}
+          >
+            <span className="pcm-label"><Archive size={13} />{language === "zh" ? "归档会话" : "Archive session"}</span>
+          </button>
+          <div className="pcm-sep" role="separator" />
+          <button
+            role="menuitem"
+            title={threadMenu.cwd}
+            onClick={() => {
+              const cwd = threadMenu.cwd;
+              setThreadMenu(null);
+              void openProjectInExplorer(cwd);
+            }}
+          >
+            <span className="pcm-label"><Folder size={13} />{language === "zh" ? "在文件夹中打开" : "Reveal in folder"}</span>
+          </button>
+          <div className="pcm-sep" role="separator" />
           <button
             className="danger"
             role="menuitem"
             onClick={() => openDeleteConfirmation(threadMenu.cwd, threadMenu.file, threadMenu.name)}
           >
-            {language === "zh" ? "删除" : "Delete"}
+            <span className="pcm-label"><Trash size={13} />{language === "zh" ? "删除会话" : "Delete session"}</span>
           </button>
         </div>
       )}
+      {tileTip && tileTipRow &&
+        createPortal(
+          <div
+            className="pinwall-tip"
+            style={{
+              left: Math.max(8, Math.min(tileTip.x, window.innerWidth - 256)),
+              top: Math.min(tileTip.y, window.innerHeight - 100),
+            }}
+            role="tooltip"
+          >
+            <div className="pinwall-tip-name">
+              {localizeAutomationThreadTitle(tileTipRow.title, language) ||
+                (language === "zh" ? "未命名会话" : "Untitled")}
+            </div>
+            <div className="pinwall-tip-path">{tileTipRow.projectName}</div>
+            <div className="pinwall-tip-meta">
+              {language === "zh" ? `${tileTipRow.messageCount} 条` : `${tileTipRow.messageCount} msgs`}
+              {` · ${sessionTimeLabel(tileTipRow.updatedAt, language === "zh", now)}`}
+            </div>
+          </div>,
+          document.body,
+        )}
       {deleteConfirm && (
         <div className="modal-backdrop thread-delete-backdrop" onMouseDown={() => setDeleteConfirm(null)}>
           <div

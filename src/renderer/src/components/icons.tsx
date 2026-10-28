@@ -54,6 +54,15 @@ export const Star = (p: P) => (
     <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z" />
   </svg>
 );
+/** 置顶（图钉）。帽 + 收窄的钉身 + 长针，11–13px 下仍可辨识。
+ *  比星标「轻」：多个置顶并排时不抢视线（用户 2026-10-29 要求照飞书的置顶图标样式）。 */
+export const Pin = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M7 4h10" />
+    <path d="M9.5 4v5l-2 4h9l-2-4V4" />
+    <path d="M12 13v7" />
+  </svg>
+);
 export const Check = (p: P) => (
   <svg {...base(p)}>
     <path d="m5 12 4 4L19 6" />

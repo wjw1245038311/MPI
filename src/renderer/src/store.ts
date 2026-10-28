@@ -1192,7 +1192,7 @@ interface PiStore {
   previewOpen: boolean;
   /** Preview occupies the chat workspace while preserving the mounted chat state. */
   previewExpanded: boolean;
-  sidebarTab: "threads" | "files";
+  sidebarTab: "threads" | "projects" | "files";
 
   // projects / threads
   activeProjectCwd: string | null;
@@ -1338,7 +1338,7 @@ interface PiStore {
   handoffWithDoc: (cwd: string, sessionFile: string | null) => Promise<void>;
   renameThread: (id: string, name: string) => Promise<void>;
 
-  setSidebarTab: (t: "threads" | "files") => void;
+  setSidebarTab: (t: "threads" | "projects" | "files") => void;
   toggleSidebar: () => void;
   togglePreview: () => void;
   togglePreviewExpanded: () => void;

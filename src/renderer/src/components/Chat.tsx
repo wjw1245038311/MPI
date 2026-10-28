@@ -22,7 +22,7 @@ import type { ChoiceClampInfo, ChoiceFailure, ChoiceSplitStats } from "../lib/ch
 import { logChoiceFenceDuplicate, logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRender, logChoiceFenceRepaired } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
 import { chatAttachmentUrl, parseAgentMediaRefs } from "../lib/chat-attachments";
-import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Star, Terminal, Stop, Volume } from "./icons";
+import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Pin, Terminal, Stop, Volume } from "./icons";
 import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
 import nobitaAvatarUrl from "../../../../resources/nobita.jpg";
@@ -903,7 +903,7 @@ export function Chat() {
             title={isPinned ? "取消置顶会话" : "置顶会话"}
             onClick={() => activeSummary && void setThreadPinned(activeSummary.file, !isPinned)}
           >
-            <Star size={14} />
+            <Pin size={14} />
           </button>
         )}
         <button className="iconbtn" title="重命名" onClick={startRename}>
