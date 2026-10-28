@@ -71,6 +71,7 @@ import {
   listCredentials,
   revealCredential,
   secretEnvForScope,
+  auditCredentialInjection,
   updateCredential,
   type CredentialInput,
   type CredentialPatch,
@@ -127,6 +128,7 @@ import {
 import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
 import { ensureCredentialsExtension } from "./credentials-extension";
+import { notePromptSource } from "./prompt-source";
 import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
 // 附件下行（agent → 客户端）：扩展桥 + 收件箱 + 引用 mime 推断。
@@ -728,10 +730,22 @@ function createHandle(
     attachFilePaths: { ...ensureAttachFileDirs(getConfigDir()), configFile: join(getConfigDir(), "config.json") },
     memoryInboxDir: ensureMemoryCandidateInbox(getConfigDir()),
     memoryProject: cwd.split(/[\\/]/).filter(Boolean).pop(),
-    // 凭据注入（P1b）：只含 silent 级且作用域匹配当前项目根；值只进子进程 env。
+    // 凭据注入（P1b/P1c）：只含 silent 级且作用域匹配当前项目根；值只进子进程 env。
+    // 不可用的凭据只把「名字 + 原因」交给扩展，让模型能说清为什么用不了。
     ...(() => {
       const sec = secretEnvForScope(cwd);
-      return Object.keys(sec.env).length > 0 ? { secretEnv: sec.env, secretMeta: sec.meta } : {};
+      auditCredentialInjection({
+        threadId: id,
+        root: cwd,
+        injected: sec.meta.map((m) => m.name),
+        blocked: sec.blocked,
+      });
+      const hasInjected = Object.keys(sec.env).length > 0;
+      if (!hasInjected && sec.blocked.length === 0) return {};
+      return {
+        ...(hasInjected ? { secretEnv: sec.env, secretMeta: sec.meta } : {}),
+        ...(sec.blocked.length > 0 ? { secretBlocked: sec.blocked } : {}),
+      };
     })(),
     memoryPoolDir: memoryPoolDir(),
     memoryEndpointFile: memoryEndpointPath(getConfigDir()),
@@ -3678,7 +3692,9 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         throw error;
       }
     },
-    async (threadId, text, images, files, videos, media) => {
+    async (threadId, text, images, files, videos, media, source) => {
+      // 来源只用于审计与后续的确认卡片（src/main/prompt-source.ts），不影响投递。
+      notePromptSource(threadId, source);
       // 手机端「点发送卡五六秒」的取证点：建桥（冷启动 pi）与真正投递分两段计时。
       const t0 = Date.now();
       const ref = await remoteThread(threadId);
@@ -3988,7 +4004,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       );
       return remoteSnapshot(threadId, { live: true });
     },
-    prompt: (threadId, text, images, files, videos, media) => threadService.prompt(threadId, text, images, files, videos, media),
+    prompt: (threadId, text, images, files, videos, media, source) => threadService.prompt(threadId, text, images, files, videos, media, source),
     steer: (threadId, text, images, files, videos, media) => threadService.steer(threadId, text, images, files, videos, media),
     followUp: (threadId, text, images, files, videos, media) => threadService.followUp(threadId, text, images, files, videos, media),
     abort: (threadId) => threadService.abort(threadId),
@@ -4093,7 +4109,9 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         const kickoff = zh
           ? `本会话从上一个会话交接而来。\n先读交接文档：${doc.path}\n然后从文档里的「未完成 / 下一步」接着做；有不清楚的地方先问我。`
           : `This session continues from a previous one.\nRead the handoff document first: ${doc.path}\nThen pick up from its "Next steps" section; ask me if something is unclear.`;
-        await threadService.prompt(newId, kickoff, undefined, undefined, undefined, undefined);
+        // 第 7 个参数是 prompt 来源（src/main/prompt-source.ts）。交接的启动方在
+        // 这里没有传到，先显式传 undefined（P2 接确认卡片时改成从调用方带下来）。
+        await threadService.prompt(newId, kickoff, undefined, undefined, undefined, undefined, undefined);
         phase("done", { threadId: newId, docPath: doc.path });
         return { threadId: newId, docPath: doc.path };
       } catch (e) {
@@ -6784,6 +6802,7 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
   };
 
   ipcMain.handle("thread:prompt", async (_e, args: { threadId: string; text: string; images?: unknown[]; attachments?: Attachment[] }) => {
+    notePromptSource(args.threadId, { kind: "desktop" });
     const h = bridges.get(args.threadId);
     if (!h) throw new Error("Thread not open: " + args.threadId);
     const { text, images } = processAttachments(args.attachments, args.text || "");

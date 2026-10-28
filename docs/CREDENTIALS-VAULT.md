@@ -144,8 +144,11 @@
 | `confirm` | ⚠ 需一次**意图确认**（手机端卡片） | 生产机密码、重启服务 |
 | `local-only` | ❌ 一律拒绝并写审计 | root 密码、云控制台主账号 |
 
-**来源判定**：`desktop` / `remote:<deviceId>` / 未知。
-> ⚠ 现状：`backend.prompt(threadId, text, images, files, videos, media)` **没有来源参数**（`src/main/ipc.ts:3969`、`src/main/remote/service.ts:46`）。必须新增 `source` 形参，并按 2026-09-28 的教训声明为**必填但可为 undefined**（`source: PromptSource | undefined`），让漏传在编译期爆掉。
+**来源判定**：`desktop` / `remote:<deviceId>` / `channel:<name>`（`src/main/prompt-source.ts`）。
+> ✅ 已做（P1c）：`RemoteBackend.prompt` / `ThreadService.prompt` 新增 `source: PromptSource | undefined`（**必填**），远程端传 `{ kind: "remote", deviceId }`、聊天通道传 `{ kind: "channel" }`、桌面 IPC handler 记 `{ kind: "desktop" }`；每次记录线程最近一次来源（`notePromptSource`），供 P2 与审计用。
+> 加上必填参数后立刻拓出交接路径的一处漏传（`threadService.prompt(newId, kickoff, undefined×5)`）——正是这次改造想要的效果。
+
+**注入侧的现状（P1b/P1c）**：只有 `silent` 级会进进程环境，所以矩阵在 env 方案下是**自洽**的——`confirm` / `local-only` 根本不在环境里，远程自然用不了；它们要等 P2 的 broker 工具才能「可用但有条件」。未注入的凭据会以「名字 + 原因」（`level-confirm` / `level-local-only` / `scope`）写进系统提示，让模型能直接告诉用户为什么用不了；每次 spawn 写一条 `action: "inject"` 审计。
 
 **P2 手机确认卡片**：复用现有 `mpi_ask_choice` / 权限卡片通道（E2E 已加密），卡片文案要**诚实定位**为「确认这是你要执行的操作」，不写成「身份验证」；每次确认授权该凭据 30 分钟免重复；确认/拒绝都写审计。
 
@@ -165,7 +168,7 @@
 |---|---|---|---|
 | **P1a** | vault（DPAPI）+ 设置页凭据面板（增/删/改/遮蔽显示、等级、作用域）+ 审计文件 | 重启后凭据仍在；`credentials.json` 里无明文；`strings` 搜不到原值 | `typecheck` + 新增 `test:credentials` |
 | **P1b** | ✅ 已做：env 注入（**仅 silent 级**）+ 凭据扩展把变量名与禁令写进系统提示 | 会话里 `echo $MPI_SECRET_X` 能拿到值，而 transcript / `mpi-diag.log` / 快照里搜不到值 | `npm test -- credentials`（env 映射 / 作用域 / 提示块均含断言）+ `npm run check:ext` |
-| **P1c** | 远程矩阵：`source` 必填贯通 + `silent/confirm/local-only` 判定 + 审计 | 手机发起的会话用 `local-only` 凭据被拒且留下审计；`silent` 可用 | `npm test -- remote` + `test:pwa` |
+| **P1c** | ✅ 已做：`source` 贯通（必填）+ 被排除凭据的名字与原因回显 + spawn 注入审计 | agent 能说出「哪条凭据为何用不了」；`credentials-audit.jsonl` 有 `inject` 记录且无明文 | `npm test -- credentials`（blocked 三原因 / 审计行 / 来源标签）+ `npm test -- remote` + `npm test -- pwa` + `npm run check:ext` |
 | **P2** | 手机端确认卡片（`confirm` 级）+ 30 分钟授权窗口 | 手机上点确认后命令才执行；拒绝则中止 | `test:pwa` + `test:remote` |
 | **P3（可选）** | 设备绑定断言（手机生物识别签名，主机只验签不下发明文） | 需先解决 PWA 的 https/域名 或安卓原生 BiometricPrompt | — |
 | **独立前置** | §5.1 origin 改造 → WebAuthn 闸门 | dev(localhost:5173) 先验通天体验，再改打包态 | 大改：`typecheck` + 全量 `npm test` + 真机冒烟 |

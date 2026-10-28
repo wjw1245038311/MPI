@@ -1,3 +1,4 @@
+import { type PromptSource } from "../prompt-source";
 import {
   errorFor,
   makeEnvelope,
@@ -43,7 +44,8 @@ export interface RemoteBackend {
    * 症状极其难查：客户端发了 285KB 帧、主机日志记着 `videos=1`，但落盘/引用全都没有。
    * 改成必填后，同一类漏传会直接**编译失败**。
    */
-  prompt(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined): Promise<unknown>;
+  /**  必填但可为 undefined（见 src/main/prompt-source.ts 的说明）。 */
+  prompt(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined, source: PromptSource | undefined): Promise<unknown>;
   steer(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined): Promise<unknown>;
   followUp(threadId: string, text: string, images: RemoteImageInput[] | undefined, files: RemoteFileInput[] | undefined, videos: RemoteVideoInput[] | undefined, media: RemoteMediaInput[] | undefined): Promise<unknown>;
   abort(threadId: string): Promise<unknown>;
@@ -406,7 +408,7 @@ export class RemoteService {
         }
         const text = rawText;
         const result = request.type === "thread.prompt"
-          ? await this.backend.prompt(threadId, text, images, files, videos, media)
+          ? await this.backend.prompt(threadId, text, images, files, videos, media, { kind: "remote", deviceId: context.deviceId })
           : request.type === "thread.steer"
             ? await this.backend.steer(threadId, text, images, files, videos, media)
             : await this.backend.followUp(threadId, text, images, files, videos, media);

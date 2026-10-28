@@ -27,6 +27,8 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    验证方式：`npm run typecheck` + `npm run check:ext`（11 个扩展）+ `npm test -- credentials`（新增断言：变量名映射、项目作用域只对匹配项目生效且 Windows 大小写/斜杠不敏感、confirm/local-only 不注入、元信息与提示块均不含值）+ `npm test -- registry`。应用内：**重启 dev** → 设置 → 凭据新增一条级别为「远程直接用」的凭据 → **新建会话**（旧会话的 env 已固定）→ 让 agent 跑 `echo ${MPI_SECRET_X:+已注入}`，它应知道该变量存在且能使用，而对话/日志里看不到值；把级别改成「仅本机」后新建会话，agent 应被告知该凭据当前不可用。
 8. **改：凭据面板配色/字号按新版设计规范收敛**——面板边界改用 `--hairline`、危险项改用 `--danger` 家族（不再借用 `--ctx-warn`）、字号回到 7 档、圆角只用 4/8/999，与新收敛的 token 体系一致。
    验证方式：`npm run typecheck` + `npm run build`。应用内：设置 → 凭据，浅色/深色下看列表边框与「仅本机」标签颜色是否跟其它面板一致。
+9. **新增：凭据不可用的原因也告诉模型 + spawn 注入审计 + prompt 来源贯通（P1c）**——以前没被注入的凭据对模型来说等于「不存在」，它只会回一句「没有这个凭据」，用户分不清是级别挡住了还是作用域不对。现在把「名字 + 原因」（远程需确认 / 仅本机 / 属于其它项目）一并交给扩展写进系统提示；每次 spawn 会话的 pi 进程时向 `credentials-audit.jsonl` 写一条 `inject` 记录（注入了哪些、挡了哪些及原因，**不含值**）；prompt 链路新增必填但可为 undefined 的 `source`（`desktop` / `remote:<deviceId>` / `channel`）作为 P2 确认卡片的地基，并按「必填参数」的方式声明，让漏传在编译期就爆掉（实测立即拓出交接路径的一处漏传，已修）。
+   验证方式：`npm run typecheck` + `npm run check:ext` + `npm test -- credentials`（新增：blocked 三个原因码、提示块含名字不含值、审计行含 threadId/注入项/挡住的原因、prompt 来源标签与 undefined 不覆盖旧记录）+ `npm test -- remote`（9 个）+ `npm test -- pwa`（20 个）。应用内：**重启 dev** → 建三条凭据（远程直接用 / 远程需确认 / 仅本机）→ 新建会话让 agent 跑 `echo ${MPI_SECRET_X:+ok}` → 它应说出哪条能用、哪条被挡及原因；然后看配置目录的 `credentials-audit.jsonl`，应有本次 spawn 的 `action:"inject"` 记录且里面搜不到任何明文。
 
 
 ## v0.13.4（2026-10-27）

@@ -5,7 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import { ensureRuntimePackage, getActiveRuntimeRoot, getRuntimePackageManifest, runtimePathsForRoot } from "./runtime-package";
 import type { ShellInfoPayload } from "./shell-bootstrap";
 import { memoryModelEnv } from "./memory-model-runtime";
-import type { SecretEnvMeta } from "../shared/credentials";
+import type { SecretBlocked, SecretEnvMeta } from "../shared/credentials";
 
 /**
  * PiBridge
@@ -359,6 +359,8 @@ export interface PiBridgeOptions {
   secretEnv?: Record<string, string>;
   /** 与 secretEnv 配套的元信息（变量名 + 引用名 + 用途，**不含值**），序列化后交给扩展渲染提示词。 */
   secretMeta?: SecretEnvMeta[];
+  /** 本会话**没注入**的凭据（名字 + 原因，不含值）：让模型能说清「为什么用不了」。 */
+  secretBlocked?: SecretBlocked[];
   onEvent: (event: unknown) => void;
   onExtUi: (request: ExtUiRequest) => void;
   onExit: (info: { code: number | null; signal: NodeJS.Signals | null; stderr: string; expected?: boolean }) => void;
@@ -449,6 +451,10 @@ export class PiBridge {
       // 值只进子进程环境；meta 只含名称与用途，扩展据此告诉模型有哪些可用。
       Object.assign(env, this.opts.secretEnv);
       env.MPI_SECRET_META = JSON.stringify(this.opts.secretMeta ?? []);
+    }
+    if (this.opts.secretBlocked && this.opts.secretBlocked.length > 0) {
+      // 不可用的凭据也要告诉模型（只给名字与原因），否则它只会说「没有这个凭据」。
+      env.MPI_SECRET_BLOCKED = JSON.stringify(this.opts.secretBlocked);
     }
 
     this.proc = spawn(rt.node, [rt.cli, ...args], {

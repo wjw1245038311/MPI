@@ -21,6 +21,7 @@
  */
 
 const META_ENV = "MPI_SECRET_META";
+const BLOCKED_ENV = "MPI_SECRET_BLOCKED";
 const CONFIG_FILE = process.env.MPI_CHOICE_CONFIG || "";
 const MARKER = "<credentials>";
 
@@ -28,6 +29,13 @@ interface SecretMeta {
   env: string;
   name: string;
   hint?: string;
+}
+
+/** 与 src/shared/credentials.ts 的 SecretBlocked 同构（本文件自包含，不能 import）。 */
+interface SecretBlocked {
+  name: string;
+  hint?: string;
+  reason: "level-confirm" | "level-local-only" | "scope";
 }
 
 function language(): "zh" | "en" {
@@ -57,34 +65,61 @@ function readMeta(): SecretMeta[] {
   }
 }
 
-function buildBlock(meta: SecretMeta[], zh: boolean): string {
+function readBlocked(): SecretBlocked[] {
+  const raw = process.env[BLOCKED_ENV];
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (b: unknown): b is SecretBlocked => !!b && typeof b === "object" && typeof (b as SecretBlocked).name === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function blockedReason(b: SecretBlocked, zh: boolean): string {
+  if (b.reason === "level-confirm") return zh ? "标记为「远程需确认」，当前会话不能用" : "marked remote-confirm, unavailable here";
+  if (b.reason === "level-local-only") return zh ? "标记为「仅本机」，远程会话不能使用" : "marked local-only, refused for remote sessions";
+  return zh ? "属于其它项目，当前项目不可用" : "belongs to another project, unavailable here";
+}
+
+function buildBlock(meta: SecretMeta[], blocked: SecretBlocked[], zh: boolean): string {
   const lines = meta.map((m) => `- $${m.env}${m.hint ? ` — ${m.hint}` : ""}`);
+  const unavailable = blocked.map((b) => `- ${b.name}${b.hint ? `（${b.hint}）` : ""} —— ${blockedReason(b, zh)}`);
   if (zh) {
     return [
       MARKER,
-      "本机凭据库已把下列凭据注入为环境变量（**值不在对话里，也不要尝试查看**）：",
-      ...lines,
+      meta.length
+        ? "本机凭据库已把下列凭据注入为环境变量（**值不在对话里，也不要尝试查看**）："
+        : "本会话**没有**被注入任何凭据，不要假设密码可用，也不要向用户索要明文。",
+      ...(meta.length ? lines : []),
+      ...(blocked.length ? ["", "以下凭据存在但当前会话不可用（告诉用户原因，不要尝试，也不要索要明文）：", ...unavailable] : []),
       "",
       "用法与禁令：",
       "- 需要密码/令牌时，直接在命令里引用 `$变量名`（例如 `SSHPASS=$MPI_SECRET_X sshpass -e ssh user@host`）。",
       "- 绝不 `echo` / `printf` / `cat` / 写文件 / 写日志 把这些变量的值暴露出来；不要 `set -x`。",
       "- 不要向用户索要明文密码；用户手动添加或修改凭据在「设置 → 凭据」。",
       "- 变量名拼错会得到空值——失败时报告「该凭据未注入」，不要猜。",
-      "- 若某凭据不在上面列表里，说明它被标记为「仅本机」或「远程需确认」，当前会话不能用。",
       "</credentials>",
     ].join("\n");
   }
   return [
     MARKER,
-    "The local credential vault injected these credentials as environment variables (values are **not** in the conversation and must not be inspected):",
-    ...lines,
+    meta.length
+      ? "The local credential vault injected these credentials as environment variables (values are **not** in the conversation and must not be inspected):"
+      : "**No** credentials were injected into this session; do not assume a password is available and never ask the user for plaintext.",
+    ...(meta.length ? lines : []),
+    ...(blocked.length
+      ? ["", "These credentials exist but are unavailable here (tell the user why; do not attempt, do not ask for plaintext):", ...unavailable]
+      : []),
     "",
     "Rules:",
     "- Reference `$VAR` directly in commands (e.g. `SSHPASS=$MPI_SECRET_X sshpass -e ssh user@host`).",
     "- Never `echo` / `printf` / write to files or logs to reveal these values; never `set -x`.",
     "- Never ask the user for a plaintext password; they add or edit credentials in Settings → Credentials.",
     "- A misspelled variable yields an empty value — report that the credential is not injected instead of guessing.",
-    "- A credential missing from this list is either local-only or requires confirmation, so it is unavailable in this session.",
     "</credentials>",
   ].join("\n");
 }
@@ -93,10 +128,11 @@ export default function credentialsBridge(pi: any) {
   pi.on("before_agent_start", (event: any) => {
     try {
       const meta = readMeta();
-      if (meta.length === 0) return; // 没有注入 → 不碰提示词
+      const blocked = readBlocked();
+      if (meta.length === 0 && blocked.length === 0) return; // 没东西可说 → 不碰提示词
       const prompt = String(event?.systemPrompt || "");
       if (prompt.includes(MARKER)) return; // 已经加过
-      return { systemPrompt: `${prompt}\n\n${buildBlock(meta, language() === "zh")}` };
+      return { systemPrompt: `${prompt}\n\n${buildBlock(meta, blocked, language() === "zh")}` };
     } catch {
       // 提示词注入永远不能打断 agent 主循环
       return;

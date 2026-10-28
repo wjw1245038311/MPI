@@ -10,7 +10,7 @@ import type {
   CredentialScope,
   CredentialSummary,
 } from "../renderer/src/lib/types";
-import { scopeMatches, secretEnvName, type SecretEnvMeta } from "../shared/credentials";
+import { scopeMatches, secretEnvName, type SecretBlocked, type SecretEnvMeta } from "../shared/credentials";
 
 export type {
   CredentialInput,
@@ -333,20 +333,55 @@ export function __resetCredentialsCache(): void {
 export function secretEnvForScope(root: string | undefined): {
   env: Record<string, string>;
   meta: SecretEnvMeta[];
+  blocked: SecretBlocked[];
 } {
   const env: Record<string, string> = {};
   const meta: SecretEnvMeta[] = [];
-  if (!cipher || !cipher.available()) return { env, meta };
+  const blocked: SecretBlocked[] = [];
+  if (!cipher || !cipher.available()) return { env, meta, blocked };
   for (const rec of load()) {
-    if (rec.level !== "silent") continue;
-    if (!scopeMatches(rec.scope, root)) continue;
+    const hint = rec.hint ? { hint: rec.hint } : {};
+    if (!scopeMatches(rec.scope, root)) {
+      blocked.push({ name: rec.name, ...hint, reason: "scope" });
+      continue;
+    }
+    if (rec.level !== "silent") {
+      blocked.push({ name: rec.name, ...hint, reason: rec.level === "confirm" ? "level-confirm" : "level-local-only" });
+      continue;
+    }
     const name = secretEnvName(rec.name);
     try {
       env[name] = cipher.decrypt(rec.valueEnc);
     } catch {
       continue; // 单条解密失败不影响其它凭据；不输出原因（避免日志里蹦出密文片段）
     }
-    meta.push({ env: name, name: rec.name, ...(rec.hint ? { hint: rec.hint } : {}) });
+    meta.push({ env: name, name: rec.name, ...hint });
   }
-  return { env, meta };
+  return { env, meta, blocked };
+}
+
+/**
+ * 记录一次「凭据注入」决策（只记名字与原因，不含任何值）。
+ * 每次 spawn 一个会话的 pi 进程时写一条，便于回溯「这个会话当时能用哪些凭据」。
+ */
+export function auditCredentialInjection(args: {
+  threadId?: string;
+  root?: string;
+  injected: string[];
+  blocked: SecretBlocked[];
+}): void {
+  try {
+    const line = JSON.stringify({
+      ts: Date.now(),
+      action: "inject",
+      ...(args.threadId ? { threadId: args.threadId } : {}),
+      ...(args.root ? { root: args.root } : {}),
+      injected: args.injected,
+      blocked: args.blocked.map((b) => ({ name: b.name, reason: b.reason })),
+    });
+    mkdirSync(getConfigDir(), { recursive: true });
+    appendFileSync(credentialsAuditPath(), `${line}\n`, "utf8");
+  } catch {
+    /* 审计失败不阻塞 */
+  }
 }
