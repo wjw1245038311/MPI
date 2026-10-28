@@ -12043,3 +12043,8 @@ mark.hl {
   display: flex;
   gap: 8px;
 }
+
+/* 凭据面板：注入时机提示（改动需新建会话才生效） */
+.cred-note {
+  margin: 0 0 10px;
+}

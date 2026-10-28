@@ -284,6 +284,14 @@ export function CredentialsPanel() {
         ) : null}
 
         {items.length > 0 && (
+          <p className="set-hint cred-note">
+            {zh
+              ? "变量在会话启动时注入：新增或改级别后，已打开的会话不会自动生效，新建一个会话（或在会话菜单里重开会话）才拿得到。"
+              : "Variables are injected when a session starts: after adding or changing a level, sessions already open will not pick it up — create a new session (or reopen it) to get it."}
+          </p>
+        )}
+
+        {items.length > 0 && (
           <div className="cred-list">
             {items.map((item) => (
               <div className={`cred-row${revealed?.id === item.id ? " revealing" : ""}`} key={item.id}>
