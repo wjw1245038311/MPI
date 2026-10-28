@@ -386,7 +386,15 @@ private fun inlineStyled(
 ): AnnotatedString = buildAnnotatedString {
     for (token in splitInline(text)) {
         when {
-            token.code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBg)) {
+            token.code -> withStyle(
+                SpanStyle(
+                    fontFamily = FontFamily.Monospace,
+                    // 选中高亮画在 SpanStyle 背景**之下**：不透明背景会把整段高亮盖掉
+                    // （2026-10-28 真机：路径/代码类的行内代码看起来「没被选中」）。
+                    // 用半透明背景，未选中时仍是灰底，选中时绿色能透出来。
+                    background = codeBg.copy(alpha = 0.55f),
+                ),
+            ) {
                 append(token.text)
             }
 
