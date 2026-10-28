@@ -150,7 +150,18 @@
 
 **注入侧的现状（P1b/P1c）**：只有 `silent` 级会进进程环境，所以矩阵在 env 方案下是**自洽**的——`confirm` / `local-only` 根本不在环境里，远程自然用不了；它们要等 P2 的 broker 工具才能「可用但有条件」。未注入的凭据会以「名字 + 原因」（`level-confirm` / `level-local-only` / `scope`）写进系统提示，让模型能直接告诉用户为什么用不了；每次 spawn 写一条 `action: "inject"` 审计。
 
-**P2 手机确认卡片**：复用现有 `mpi_ask_choice` / 权限卡片通道（E2E 已加密），卡片文案要**诚实定位**为「确认这是你要执行的操作」，不写成「身份验证」；每次确认授权该凭据 30 分钟免重复；确认/拒绝都写审计。
+**P2 已落地（2026-10-27）：`mpi_secret_run` 中介**
+
+| 环节 | 做法 |
+|---|---|
+| 确认 | 扩展先调 `ctx.ui.select` → 走**现有 ui.request 通道**（桌面弹窗 / 手机全屏卡），协议不用改；拒绝则什么都不执行 |
+| 投递 | 扩展把 `{id, name, command, threadId, timeoutMs}` 写成 `<userData>/secret-inbox/<id>.json`（与 attach-file 同一套模式） |
+| 决策 | 主进程 `secret-broker` 判：凭据不存在 → `NO_CREDENTIAL`；`local-only` 且来源非 desktop → `DENIED_LOCAL_ONLY`；其余放行（确认已在卡片那步完成） |
+| 执行 | 用系统 shell 跑一条命令，值只进**该子进程**的 `MPI_SECRET_VALUE`；超时夹到 10 分钟 |
+| 回填 | 输出（stdout/stderr）里出现的凭据值替换成 `***` 并标 `redacted`，回执写 `<userData>/secret-outbox/<id>.json` |
+| 审计 | `action: "exec" | "deny"`，只含凭据名、原因、命令摘要（前 40 字 + 长度），不含值 |
+
+效果：`silent` 级走环境变量（无需确认）、`confirm` / `local-only` 走中介（每次一张卡），两条路都不让值进入对话/快照/日志。**未做**：30 分钟免重复授权（当前每次都要确认），等真实使用反馈再决定要不要加。
 
 **远程被拒时的用户体验**：不静默失败 —— agent 要回一句「该凭据标记为仅本机可用，远程无法使用」，并给出改等级或换密钥认证的建议。
 
@@ -169,7 +180,7 @@
 | **P1a** | vault（DPAPI）+ 设置页凭据面板（增/删/改/遮蔽显示、等级、作用域）+ 审计文件 | 重启后凭据仍在；`credentials.json` 里无明文；`strings` 搜不到原值 | `typecheck` + 新增 `test:credentials` |
 | **P1b** | ✅ 已做：env 注入（**仅 silent 级**）+ 凭据扩展把变量名与禁令写进系统提示 | 会话里 `echo $MPI_SECRET_X` 能拿到值，而 transcript / `mpi-diag.log` / 快照里搜不到值 | `npm test -- credentials`（env 映射 / 作用域 / 提示块均含断言）+ `npm run check:ext` |
 | **P1c** | ✅ 已做：`source` 贯通（必填）+ 被排除凭据的名字与原因回显 + spawn 注入审计 | agent 能说出「哪条凭据为何用不了」；`credentials-audit.jsonl` 有 `inject` 记录且无明文 | `npm test -- credentials`（blocked 三原因 / 审计行 / 来源标签）+ `npm test -- remote` + `npm test -- pwa` + `npm run check:ext` |
-| **P2** | 手机端确认卡片（`confirm` 级）+ 30 分钟授权窗口 | 手机上点确认后命令才执行；拒绝则中止 | `test:pwa` + `test:remote` |
+| **P2** | ✅ 已做：`mpi_secret_run` 中介（确认卡片复用 ui.request + 主进程执行 + 输出脱敏 + 审计） | 手机用 local-only 凭据被拒并留审计；桌面 confirm 级点同意后能执行 | `npm test -- secret-broker`（12 项）+ `npm test -- credentials` + `check:ext` |
 | **P3（可选）** | 设备绑定断言（手机生物识别签名，主机只验签不下发明文） | 需先解决 PWA 的 https/域名 或安卓原生 BiometricPrompt | — |
 | **独立前置** | §5.1 origin 改造 → WebAuthn 闸门 | dev(localhost:5173) 先验通天体验，再改打包态 | 大改：`typecheck` + 全量 `npm test` + 真机冒烟 |
 

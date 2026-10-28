@@ -361,6 +361,8 @@ export interface PiBridgeOptions {
   secretMeta?: SecretEnvMeta[];
   /** 本会话**没注入**的凭据（名字 + 原因，不含值）：让模型能说清「为什么用不了」。 */
   secretBlocked?: SecretBlocked[];
+  /** 秘密执行中介（P2）：收件箱/回执箱 + 本会话 id，供 `mpi_secret_run` 工具使用。 */
+  secretBroker?: { inboxDir: string; outboxDir: string; threadId: string };
   onEvent: (event: unknown) => void;
   onExtUi: (request: ExtUiRequest) => void;
   onExit: (info: { code: number | null; signal: NodeJS.Signals | null; stderr: string; expected?: boolean }) => void;
@@ -455,6 +457,12 @@ export class PiBridge {
     if (this.opts.secretBlocked && this.opts.secretBlocked.length > 0) {
       // 不可用的凭据也要告诉模型（只给名字与原因），否则它只会说「没有这个凭据」。
       env.MPI_SECRET_BLOCKED = JSON.stringify(this.opts.secretBlocked);
+    }
+    if (this.opts.secretBroker) {
+      // 中介路径（扩展的 mpi_secret_run 用）；注意这里只有目录，没有值。
+      env.MPI_SECRET_INBOX_DIR = this.opts.secretBroker.inboxDir;
+      env.MPI_SECRET_OUTBOX_DIR = this.opts.secretBroker.outboxDir;
+      env.MPI_SECRET_THREAD_ID = this.opts.secretBroker.threadId;
     }
 
     this.proc = spawn(rt.node, [rt.cli, ...args], {

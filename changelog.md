@@ -29,6 +29,8 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    验证方式：`npm run typecheck` + `npm run build`。应用内：设置 → 凭据，浅色/深色下看列表边框与「仅本机」标签颜色是否跟其它面板一致。
 9. **新增：凭据不可用的原因也告诉模型 + spawn 注入审计 + prompt 来源贯通（P1c）**——以前没被注入的凭据对模型来说等于「不存在」，它只会回一句「没有这个凭据」，用户分不清是级别挡住了还是作用域不对。现在把「名字 + 原因」（远程需确认 / 仅本机 / 属于其它项目）一并交给扩展写进系统提示；每次 spawn 会话的 pi 进程时向 `credentials-audit.jsonl` 写一条 `inject` 记录（注入了哪些、挡了哪些及原因，**不含值**）；prompt 链路新增必填但可为 undefined 的 `source`（`desktop` / `remote:<deviceId>` / `channel`）作为 P2 确认卡片的地基，并按「必填参数」的方式声明，让漏传在编译期就爆掉（实测立即拓出交接路径的一处漏传，已修）。
    验证方式：`npm run typecheck` + `npm run check:ext` + `npm test -- credentials`（新增：blocked 三个原因码、提示块含名字不含值、审计行含 threadId/注入项/挡住的原因、prompt 来源标签与 undefined 不覆盖旧记录）+ `npm test -- remote`（9 个）+ `npm test -- pwa`（20 个）。应用内：**重启 dev** → 建三条凭据（远程直接用 / 远程需确认 / 仅本机）→ 新建会话让 agent 跑 `echo ${MPI_SECRET_X:+ok}` → 它应说出哪条能用、哪条被挡及原因；然后看配置目录的 `credentials-audit.jsonl`，应有本次 spawn 的 `action:"inject"` 记录且里面搜不到任何明文。
+10. **新增：`mpi_secret_run` —— 「远程需确认 / 仅本机」级凭据也能用，值仍然不出主机（P2）**——这类凭据不注入会话环境（P1b 只注入「远程直接用」级），所以新增一条中介通道：扩展先弹一次**现有审批卡片**（桌面弹窗 / 手机全屏卡，复用 `ui.request`，协议不用改），用户点「同意执行」后把 `{凭据名, 命令}` 丢进收件箱；主进程判策略（凭据级别 × prompt 来源）、解密、带 `MPI_SECRET_VALUE` 执行一条命令，再把输出写回回执（**输出里若出现凭据值会被替换成 `***`**）。值只在这一次执行里出现在主进程内存与子进程环境，不进 pi 进程环境、不进对话、不进快照、不进日志；审计只记凭据名 + 原因 + 命令摘要。
+   验证方式：`npm run typecheck` + `npm run check:ext`（11 个扩展）+ `npm test -- secret-broker`（新增 `logic-secret-broker`：confirm 桌面放行 / local-only 远程拒绝 / 无凭据 / 空命令 / 输出脱敏 / 幂等 / 超时夹到 10 分钟 / 坏文件清理 / 回执清扫 / 审计无明文）+ `npm test -- credentials` + `npm test -- registry`。应用内：**重启 dev** → 建一条「仅本机」和一条「远程需确认」凭据 → 新建会话让 agent 用 `mpi_secret_run` 执行 `echo $MPI_SECRET_VALUE` → 桌面应弹卡片、点同意后返回凭据值（且对话里不会出现明文，只有子进程看到）…若模型自己 echo 了，回执里已是 `***`；随后从手机让它用「仅本机」凭据执行 → 应被拒绝并说明原因（审计里落一条 deny）。
 
 
 ## v0.13.4（2026-10-27）

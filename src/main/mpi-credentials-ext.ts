@@ -20,8 +20,17 @@
  * 本文件为准，那边的版本供主进程/测试使用；改动时两处同步）。
  */
 
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+
 const META_ENV = "MPI_SECRET_META";
 const BLOCKED_ENV = "MPI_SECRET_BLOCKED";
+const INBOX_ENV = "MPI_SECRET_INBOX_DIR";
+const OUTBOX_ENV = "MPI_SECRET_OUTBOX_DIR";
+const THREAD_ENV = "MPI_SECRET_THREAD_ID";
 const CONFIG_FILE = process.env.MPI_CHOICE_CONFIG || "";
 const MARKER = "<credentials>";
 
@@ -41,9 +50,7 @@ interface SecretBlocked {
 function language(): "zh" | "en" {
   if (!CONFIG_FILE) return "en";
   try {
-    // 动态取，避免在没有 config 文件的环境（如单元测试）里抛错。
-    const fs = require("node:fs") as typeof import("node:fs");
-    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    const config = JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
     return config?.language === "zh" ? "zh" : "en";
   } catch {
     return "en";
@@ -137,5 +144,183 @@ export default function credentialsBridge(pi: any) {
       // 提示词注入永远不能打断 agent 主循环
       return;
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // mpi_secret_run：用「远程需确认 / 仅本机」级凭据执行一条命令（P2）
+  //
+  // 值不注入 pi 环境（P1b 只注入 silent 级），所以这类凭据只能走主进程的中介：
+  // 本工具先弹一次审批卡片（ctx.ui.select → 桌面与手机都显示，复用现有 ui.request），
+  // 批准后把 { 凭据名, 命令 } 丢进收件箱，主进程判策略、解密、带 MPI_SECRET_VALUE
+  // 执行，再把输出写回回执箱。值不进对话、不进日志、不进快照。
+  // -------------------------------------------------------------------------
+  const INBOX = process.env[INBOX_ENV] || "";
+  const OUTBOX = process.env[OUTBOX_ENV] || "";
+  const THREAD = process.env[THREAD_ENV] || "";
+
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  async function waitForReceipt(id: string, timeoutMs: number): Promise<any | null> {
+    const file = join(OUTBOX, `${id}.json`);
+    const deadline = Date.now() + timeoutMs + 8_000;
+    while (Date.now() < deadline) {
+      try {
+        if (existsSync(file)) {
+          const parsed = JSON.parse(readFileSync(file, "utf8"));
+          try {
+            rmSync(file, { force: true });
+          } catch {
+            /* 主进程的清扫会收走 */
+          }
+          return parsed;
+        }
+      } catch {
+        /* 半写文件，再轮询 */
+      }
+      await sleep(120);
+    }
+    return null;
+  }
+
+  const RunParams = Type.Object({
+    credential: Type.String({ description: "Credential reference name as shown in Settings → Credentials (e.g. \"aliyun-prod-root\")." }),
+    command: Type.String({
+      description:
+        "Shell command to run. The credential value is exposed to it as the environment variable $MPI_SECRET_VALUE; never echo that variable.",
+    }),
+    timeoutSec: Type.Optional(Type.Number({ description: "Timeout in seconds (default 60, max 600)." })),
+  });
+
+  pi.registerTool({
+    name: "mpi_secret_run",
+    label: "Run With Secret",
+    description:
+      "Run ONE shell command with a saved credential, without the value ever entering the conversation. " +
+      "The value is passed to the command as the environment variable MPI_SECRET_VALUE (never echo it). " +
+      "The user first sees an approval card (desktop and phone); if they decline, nothing runs. " +
+      "Use this for credentials marked 'remote needs confirmation' or 'local only'. Credentials marked 'remote OK' are already " +
+      "injected as environment variables — reference those as $MPI_SECRET_<NAME> with the normal bash tool instead.",
+    parameters: RunParams,
+    executionMode: "sequential",
+
+    async execute(_toolCallId: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
+      const zh = language() === "zh";
+      const credential = String(params?.credential || "").trim();
+      const command = String(params?.command || "").trim();
+      if (!INBOX || !OUTBOX) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: zh
+                ? "凭据执行中介未配置（缺 MPI_SECRET_INBOX_DIR / MPI_SECRET_OUTBOX_DIR），无法执行。请让用户重启 MPI。"
+                : "Secret broker is not configured (missing MPI_SECRET_INBOX_DIR / MPI_SECRET_OUTBOX_DIR). Ask the user to restart MPI.",
+            },
+          ],
+        };
+      }
+      if (!credential || !command) {
+        return {
+          content: [{ type: "text", text: zh ? "mpi_secret_run 需要 credential 与 command 两个参数。" : "mpi_secret_run needs both credential and command." }],
+        };
+      }
+      if (!ctx?.hasUI) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: zh
+                ? "当前没有可交互界面，无法为这次执行取得确认。请用文字告知用户：需要「远程需确认 / 仅本机」级别的凭据时，请在桌面上手动添加为「远程直接用」，或直接提供替代方案。"
+                : "No interactive UI is available, so this run cannot be confirmed. Tell the user in plain text: for confirm/local-only credentials they must either re-level the credential to 'remote OK' or provide an alternative.",
+            },
+          ],
+        };
+      }
+
+      // 审批卡片：复用现有 ui.request 通道（桌面弹窗 / 手机全屏卡片）。
+      const approve = zh ? "同意执行" : "Approve & run";
+      const deny = zh ? "拒绝" : "Deny";
+      const preview = command.replace(/\s+/g, " ").slice(0, 160);
+      const title = zh
+        ? `使用凭据「${credential}」执行命令 —— ${preview}`
+        : `Run with credential "${credential}" — ${preview}`;
+      let choice: string | null = null;
+      try {
+        choice = await ctx.ui.select(title, [approve, deny]);
+      } catch {
+        choice = null;
+      }
+      if (choice !== approve) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: zh
+                ? `用户未同意（或关闭了确认框），命令没有执行。不要重试，也不要改用其它方式拿到密码；用文字问用户是否要继续。`
+                : "The user did not approve (or closed the dialog), so nothing ran. Do not retry and do not look for another way to get the secret; ask the user in plain text.",
+            },
+          ],
+        };
+      }
+
+      const timeoutSec = Math.min(Math.max(Number(params?.timeoutSec) || 60, 1), 600);
+      const timeoutMs = timeoutSec * 1000;
+      const id = randomUUID();
+      try {
+        mkdirSync(INBOX, { recursive: true });
+        const target = join(INBOX, `${id}.json`);
+        const tmp = `${target}.${process.pid}.tmp`;
+        writeFileSync(
+          tmp,
+          JSON.stringify({ id, name: credential, command, threadId: THREAD, timeoutMs }),
+        );
+        const { renameSync } = await import("node:fs");
+        renameSync(tmp, target);
+      } catch (e) {
+        return {
+          content: [
+            { type: "text", text: zh ? `投递执行请求失败：${(e as Error).message}` : `Could not submit the run request: ${(e as Error).message}` },
+          ],
+        };
+      }
+
+      const receipt = await waitForReceipt(id, timeoutMs);
+      if (!receipt) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: zh
+                ? `等待主机执行超时（${timeoutSec}s）。命令可能仍在跑或被中断；不要重复投递同一请求，先问用户。`
+                : `Timed out after ${timeoutSec}s waiting for the host. The command may still be running; do not resubmit, ask the user first.`,
+            },
+          ],
+        };
+      }
+      if (!receipt.ok && receipt.error) {
+        const reasons: Record<string, string> = {
+          NO_CREDENTIAL: zh ? "没有这个凭据（名字拼错，或已被删除）" : "no such credential (typo or deleted)",
+          DENIED_LOCAL_ONLY: zh ? "该凭据标记为「仅本机」，远程会话不能使用" : "that credential is local-only and refused for remote sessions",
+          EMPTY_COMMAND: zh ? "命令为空" : "empty command",
+        };
+        const why = reasons[String(receipt.error)] || String(receipt.error);
+        return {
+          content: [{ type: "text", text: zh ? `执行被拒绝：${why}` : `Run refused: ${why}` }],
+        };
+      }
+      const body = [
+        `exitCode: ${receipt.exitCode ?? "null"}`,
+        receipt.stdout ? `--- stdout ---\n${receipt.stdout}` : "",
+        receipt.stderr ? `--- stderr ---\n${receipt.stderr}` : "",
+        receipt.redacted
+          ? zh
+            ? "（输出里出现过凭据值，已替换成 ***；不要尝试绕过这一点去复读它。）"
+            : "(The credential value appeared in the output and was replaced with ***; do not try to recover it.)"
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      return { content: [{ type: "text", text: body }] };
+    },
   });
 }

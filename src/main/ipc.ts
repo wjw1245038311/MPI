@@ -72,10 +72,13 @@ import {
   revealCredential,
   secretEnvForScope,
   auditCredentialInjection,
+  auditCredentialUse,
+  credentialForUse,
   updateCredential,
   type CredentialInput,
   type CredentialPatch,
 } from "./credentials-store";
+import { ensureSecretBrokerDirs, ingestSecretRequests, sweepSecretReceipts } from "./secret-broker";
 import { listObservedTools, recordToolCall } from "./observed-tools";
 import { createHtmlPreviewUrl } from "./html-preview-protocol";
 import {
@@ -128,7 +131,7 @@ import {
 import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
 import { ensureCredentialsExtension } from "./credentials-extension";
-import { notePromptSource } from "./prompt-source";
+import { notePromptSource, lastPromptSource } from "./prompt-source";
 import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
 // 附件下行（agent → 客户端）：扩展桥 + 收件箱 + 引用 mime 推断。
@@ -730,6 +733,8 @@ function createHandle(
     attachFilePaths: { ...ensureAttachFileDirs(getConfigDir()), configFile: join(getConfigDir(), "config.json") },
     memoryInboxDir: ensureMemoryCandidateInbox(getConfigDir()),
     memoryProject: cwd.split(/[\\/]/).filter(Boolean).pop(),
+    // 秘密执行中介（P2）：扩展只拿到目录，值永不出主进程。
+    secretBroker: { ...ensureSecretBrokerDirs(getConfigDir()), threadId: id },
     // 凭据注入（P1b/P1c）：只含 silent 级且作用域匹配当前项目根；值只进子进程 env。
     // 不可用的凭据只把「名字 + 原因」交给扩展，让模型能说清为什么用不了。
     ...(() => {
@@ -5288,6 +5293,62 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     }
   }, 2000);
   todoInboxPoll.unref?.();
+
+  // ---- 秘密执行中介（P2） --------------------------------------------------
+  // 扩展的 mpi_secret_run 把 { 凭据名, 命令 } 丢进收件箱；主进程判策略、解密、执行、
+  // 写回执。值只在这次执行里出现，不进 pi 环境 / 对话 / 快照 / 日志。
+  const secretBrokerDirs = ensureSecretBrokerDirs(getConfigDir());
+  /** 线程 id 可能是 session 文件路径（提升后），两种键都试一下。 */
+  const findBridgeHandle = (threadId: string | undefined) => {
+    if (!threadId) return undefined;
+    const direct = bridges.get(threadId);
+    if (direct) return direct;
+    for (const handle of bridges.values()) {
+      try {
+        if (handle.getId() === threadId) return handle;
+      } catch {
+        /* ignore */
+      }
+    }
+    return undefined;
+  };
+  let secretIngestBusy = false;
+  const ingestSecrets = () => {
+    if (secretIngestBusy) return; // 执行会阻塞，并发摄取会抢同一份队列
+    secretIngestBusy = true;
+    void ingestSecretRequests({
+      ...secretBrokerDirs,
+      resolveContext: (req) => {
+        const handle = findBridgeHandle(req.threadId);
+        const cwd = handle?.bridge?.cwd;
+        return {
+          cwd: typeof cwd === "string" && cwd ? cwd : process.cwd(),
+          source: req.threadId ? lastPromptSource(req.threadId) : undefined,
+        };
+      },
+      lookup: (name) => credentialForUse(name),
+      audit: (entry) => auditCredentialUse(entry),
+    })
+      .catch((e) => appendDiagLog(`secret-broker ingest failed: ${(e as Error)?.message || String(e)}`))
+      .finally(() => {
+        secretIngestBusy = false;
+      });
+  };
+  try {
+    watch(secretBrokerDirs.inboxDir, () => ingestSecrets());
+  } catch {
+    /* 下面的轮询兼作兜底 */
+  }
+  const secretInboxPoll = setInterval(ingestSecrets, 1000);
+  secretInboxPoll.unref?.();
+  const secretReceiptSweep = setInterval(() => {
+    try {
+      sweepSecretReceipts(secretBrokerDirs.outboxDir);
+    } catch {
+      /* ignore */
+    }
+  }, 10 * 60 * 1000);
+  secretReceiptSweep.unref?.();
 
   // 附件下行：agent 的 mpi_attach_file 把请求丢进 inbox，主进程在这里入库（对象库的唯一
   // 写入者）并回写引用文本。watch + 轮询双保险，与待办收件箱同一套；处理完即删请求文件。

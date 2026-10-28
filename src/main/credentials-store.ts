@@ -317,6 +317,38 @@ export function revealCredential(id: string): { name: string; kind: CredentialKi
   return { name: rec.name, kind: rec.kind, value };
 }
 
+/**
+ * broker 用：按**引用名**取级别与解密后的值（只给主进程内部的 secret-broker 调）。
+ * 找不到 / 解密失败返回 null（不输出原因，避免日志里出现密文片段）。
+ * 会顺手累计使用次数与最后使用时间（与「显示明文」同一条口径）。
+ */
+export function credentialForUse(name: string): {
+  name: string;
+  level: CredentialLevel;
+  value: string;
+} | null {
+  if (!cipher || !cipher.available()) return null;
+  const records = load();
+  const idx = records.findIndex((r) => r.name === String(name || ""));
+  if (idx < 0) return null;
+  const rec = records[idx];
+  let value: string;
+  try {
+    value = cipher.decrypt(rec.valueEnc);
+  } catch {
+    return null;
+  }
+  const next: CredentialRecord = { ...rec, lastUsedAt: Date.now(), useCount: (rec.useCount || 0) + 1 };
+  const copy = [...records];
+  copy[idx] = next;
+  try {
+    persist(copy);
+  } catch {
+    /* 统计写失败不该让一次真实使用失败 */
+  }
+  return { name: rec.name, level: rec.level, value };
+}
+
 /** 测试用：丢弃内存缓存（不删文件）。 */
 export function __resetCredentialsCache(): void {
   cache = null;
@@ -379,6 +411,25 @@ export function auditCredentialInjection(args: {
       injected: args.injected,
       blocked: args.blocked.map((b) => ({ name: b.name, reason: b.reason })),
     });
+    mkdirSync(getConfigDir(), { recursive: true });
+    appendFileSync(credentialsAuditPath(), `${line}\n`, "utf8");
+  } catch {
+    /* 审计失败不阻塞 */
+  }
+}
+
+/**
+ * broker 审计（P2）：一次 mpi_secret_run 的执行/拒绝。只记凭据名、原因与命令摘要，不含值。
+ */
+export function auditCredentialUse(entry: {
+  action: "exec" | "deny";
+  name?: string;
+  reason?: string;
+  commandDigest?: string;
+  threadId?: string;
+}): void {
+  try {
+    const line = JSON.stringify({ ts: Date.now(), ...entry });
     mkdirSync(getConfigDir(), { recursive: true });
     appendFileSync(credentialsAuditPath(), `${line}\n`, "utf8");
   } catch {
