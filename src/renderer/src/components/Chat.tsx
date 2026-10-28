@@ -102,22 +102,14 @@ export function Chat() {
   // the finalized messages of this thread and step through them.
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState("");
-  // The query that actually drives the search. It follows the input with a
-  // short delay so typing only triggers a full-transcript scan once per pause,
-  // not on every keystroke; clearing applies immediately.
-  const [debouncedChatQuery, setDebouncedChatQuery] = useState("");
+  // 真正驱动搜索的查询词：**只在提交时（Enter）更新**，输入过程中不扫全文。
+  // 之前是按 200ms 延迟边打边搜：每敲一个字整篇重扫 + 高亮重排，长会话里还会跟着跳位置，
+  // 打字过程被搜索打断，等于没法正常输入。现在输入框只是草稿，回车才生效。
+  const [submittedChatQuery, setSubmittedChatQuery] = useState("");
   const [chatSearchIdx, setChatSearchIdx] = useState(0);
   const chatSearchInputRef = useRef<HTMLInputElement>(null);
   const searchFlashElRef = useRef<HTMLElement | null>(null);
   const searchFlashTimerRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (chatSearchQuery === debouncedChatQuery) return;
-    const t = window.setTimeout(
-      () => setDebouncedChatQuery(chatSearchQuery),
-      chatSearchQuery.trim() ? 200 : 0,
-    );
-    return () => window.clearTimeout(t);
-  }, [chatSearchQuery, debouncedChatQuery]);
   // True while the viewport sits within the near-bottom band (half viewport)
   // of the transcript end. Drives the floating "jump to latest" button.
   const [atBottom, setAtBottom] = useState(true);
@@ -136,6 +128,7 @@ export function Chat() {
   const language = useStore((s) => s.config?.language || "en");
   // Pi TUI mode: the whole dialog becomes an interactive pi terminal.
   const tuiMode = useStore((s) => !!s.tuiThreads[activeThreadId ?? ""]);
+  const terminalOpen = useStore((s) => s.terminalOpen);
   const tuiPrevThreadRef = useRef(activeThreadId);
   useEffect(() => {
     const prev = tuiPrevThreadRef.current;
@@ -578,6 +571,19 @@ export function Chat() {
     setChatSearchIdx(0);
   }, [activeThreadId]);
 
+  // 搜索面板打开时 Esc 全局生效：焦点常会在点消息/滚动后离开输入框，
+  // 原先只有输入框内的 keydown 能关，实际用起来像"Esc 没反应"。
+  useEffect(() => {
+    if (!chatSearchOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setChatSearchOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [chatSearchOpen]);
+
   // The terminal view has no message anchors; never keep the bar open there.
   useEffect(() => {
     if (tuiMode) setChatSearchOpen(false);
@@ -594,7 +600,10 @@ export function Chat() {
       if (st.tuiThreads[st.activeThreadId ?? ""]) return;
       e.preventDefault();
       setChatSearchOpen(true);
-      requestAnimationFrame(() => chatSearchInputRef.current?.focus());
+      requestAnimationFrame(() => {
+        chatSearchInputRef.current?.focus();
+        chatSearchInputRef.current?.select();
+      });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -677,25 +686,42 @@ export function Chat() {
     if (hasCompaction && activeThreadId) void useStore.getState().loadEarlierMessages(activeThreadId);
   }, [activeThreadId, hasCompaction]);
 
-  // In-conversation search state, derived from the finalized messages only
-  // and driven by the debounced query (see above).
-  const searchOccurrences = useMemo(
-    () => findMessageOccurrences(thread.messages, debouncedChatQuery),
-    [thread.messages, debouncedChatQuery],
+  // 搜索语料 = 「更早的对话」（压缩前的历史，后台已懒加载）+ 活跃消息。
+  // 旧版只扫 thread.messages：压缩过的长会话搜旧内容一律「无匹配」——这是最影响可用性的一处。
+  const earlierViewsForSearch = useMemo(() => {
+    if (!activeThreadId || earlierCount === undefined) return null;
+    return getEarlierViews(activeThreadId)?.views ?? null;
+  }, [activeThreadId, earlierCount]);
+  const searchCorpus = useMemo(
+    () => (earlierViewsForSearch ? [...earlierViewsForSearch, ...thread.messages] : thread.messages),
+    [earlierViewsForSearch, thread.messages],
   );
-  const clampedSearchIdx = Math.min(chatSearchIdx, Math.max(0, searchOccurrences.length - 1));
+  const searchOccurrences = useMemo(
+    () => findMessageOccurrences(searchCorpus, submittedChatQuery),
+    [searchCorpus, submittedChatQuery],
+  );
+  // 导航粒度 = 消息（去重保序）。旧版按 unit 计数：同一条长回复里每处命中算一条，
+  // 但滚动只能定位到消息，于是「下一个」按下去计数在走、画面不动 —— 用户感知就是搜索坏了。
+  const searchHitKeys = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const occurrence of searchOccurrences) {
+      if (seen.has(occurrence.messageKey)) continue;
+      seen.add(occurrence.messageKey);
+      out.push(occurrence.messageKey);
+    }
+    return out;
+  }, [searchOccurrences]);
+  const clampedSearchIdx = Math.min(chatSearchIdx, Math.max(0, searchHitKeys.length - 1));
   // Comma-joined signature (stable string) so MessageGroup's memo comparator
   // can compare it cheaply; rebuilt only when the match set actually changes.
-  const searchHitSig = useMemo(
-    () => [...new Set(searchOccurrences.map((o) => o.messageKey))].join(","),
-    [searchOccurrences],
-  );
-  const searchingDim = chatSearchOpen && !tuiMode && searchOccurrences.length > 0;
+  const searchHitSig = useMemo(() => searchHitKeys.join(","), [searchHitKeys]);
+  const searchActive = chatSearchOpen && !tuiMode && searchHitKeys.length > 0;
   // Lowercased query passed to every message for inline <mark> highlighting
   // (browser find-in-page style); null when there is nothing to highlight.
   const searchMarkQuery = useMemo(
-    () => (searchingDim ? debouncedChatQuery.trim().toLowerCase() : null),
-    [searchingDim, debouncedChatQuery],
+    () => (searchActive ? submittedChatQuery : null),
+    [searchActive, submittedChatQuery],
   );
 
   const jumpToUserMessage = (key: string) => {
@@ -782,24 +808,46 @@ export function Chat() {
   };
 
   const stepChatSearch = (dir: 1 | -1) => {
-    if (searchOccurrences.length === 0) return;
+    if (searchHitKeys.length === 0) return;
     setChatSearchIdx((i) => {
-      const cur = Math.min(i, searchOccurrences.length - 1);
-      return (cur + dir + searchOccurrences.length) % searchOccurrences.length;
+      const cur = Math.min(i, searchHitKeys.length - 1);
+      return (cur + dir + searchHitKeys.length) % searchHitKeys.length;
     });
   };
 
   // Keep the current occurrence visible: on open/first keystroke jump to the
   // first match; afterwards follow Enter / arrow navigation.
   useEffect(() => {
-    if (!chatSearchOpen || tuiMode || searchOccurrences.length === 0) return;
-    scrollToMessageKey(searchOccurrences[clampedSearchIdx].messageKey);
+    if (!chatSearchOpen || tuiMode || searchHitKeys.length === 0) return;
+    const key = searchHitKeys[Math.min(chatSearchIdx, searchHitKeys.length - 1)];
+    // 命中在「更早的对话」段里（key 前缀 e-）：折叠时 DOM 不存在，先展开再等两帧定位，
+    // 和左侧导航跳转用的是同一套 earlierExpanded 机制。
+    if (key.startsWith("e-") && activeThreadId && !useStore.getState().earlierExpanded[activeThreadId]) {
+      useStore.getState().setEarlierExpanded(activeThreadId, true);
+      requestAnimationFrame(() => requestAnimationFrame(() => scrollToMessageKey(key)));
+      return;
+    }
+    scrollToMessageKey(key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatSearchIdx, debouncedChatQuery, chatSearchOpen]);
+  }, [chatSearchIdx, submittedChatQuery, chatSearchOpen]);
+
+  // 提交新关键词后从第一个命中开始（光标位置随查询一起重置）。
+  useEffect(() => {
+    setChatSearchIdx(0);
+  }, [submittedChatQuery]);
 
   const onChatSearchInputKey = (e: React.KeyboardEvent) => {
+    // 中文/日文输入法组字阶段的 Enter/方向键不归我们管（否则拼音按回车会误跳命中）。
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter") {
       e.preventDefault();
+      const next = chatSearchQuery.trim().toLowerCase();
+      if (next !== submittedChatQuery) {
+        // 提交新查询：立刻按新词搜索一次，并从头开始。
+        setSubmittedChatQuery(next);
+        setChatSearchIdx(0);
+        return;
+      }
       stepChatSearch(e.shiftKey ? -1 : 1);
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -832,8 +880,8 @@ export function Chat() {
   // Shared search props for every MessageGroup (all primitives, so the memo
   // comparator stays cheap).
   const groupSearchProps = {
-    searchHitKeys: searchingDim ? searchHitSig : null,
-    searchCurrentKey: searchingDim && searchOccurrences.length > 0 ? searchOccurrences[clampedSearchIdx].messageKey : null,
+    searchHitKeys: searchActive ? searchHitSig : null,
+    searchCurrentKey: searchActive ? searchHitKeys[clampedSearchIdx] ?? null : null,
     searchMarkQuery,
   };
 
@@ -858,15 +906,34 @@ export function Chat() {
             />
           ) : (
             <>
-              <div key={`${activeThreadId}:${title}`} className="chat-head-title" title={title} onDoubleClick={startRename}>
+              <div
+                key={`${activeThreadId}:${title}`}
+                className="chat-head-title"
+                title={language === "zh" ? `${title}
+双击重命名` : `${title}
+Double-click to rename`}
+                onDoubleClick={startRename}
+              >
                 {title}
               </div>
               {thread.cwd && (
                 <button
                   className="chat-head-folder"
-                  title={`在文件管理器中打开：${thread.cwd}`}
+                  title={
+                    language === "zh"
+                      ? `打开文件夹：${thread.cwd}
+右键：切换工作文件夹`
+                      : `Open folder: ${thread.cwd}
+Right-click: switch working folder`
+                  }
                   onClick={() => {
                     window.pi.settings.openPath(thread.cwd).catch(() => {});
+                  }}
+                  onContextMenu={(event) => {
+                    // 标题下方这行是文件夹的入口：左键打开目录，右键换会话的工作目录
+                    // （原来右排那两个「重命名 / 切换工作文件夹」按钮就是重复入口，已删）。
+                    event.preventDefault();
+                    if (activeThreadId) void switchThreadFolder(activeThreadId);
                   }}
                 >
                   <Folder size={11} />
@@ -891,7 +958,10 @@ export function Chat() {
               setChatSearchOpen(false);
             } else {
               setChatSearchOpen(true);
-              requestAnimationFrame(() => chatSearchInputRef.current?.focus());
+              requestAnimationFrame(() => {
+                chatSearchInputRef.current?.focus();
+                chatSearchInputRef.current?.select();
+              });
             }
           }}
         >
@@ -906,12 +976,6 @@ export function Chat() {
             <Pin size={14} />
           </button>
         )}
-        <button className="iconbtn" title="重命名" onClick={startRename}>
-          <Edit size={14} />
-        </button>
-        <button className="iconbtn" title="切换工作文件夹" onClick={() => switchThreadFolder(activeThreadId)}>
-          <Folder size={15} />
-        </button>
         <button
           className={`iconbtn ${handoffPending ? "busy" : ""}`}
           disabled={!!handoffPending}
@@ -968,22 +1032,9 @@ export function Chat() {
         </button>
         {activeThreadId && (
           <button
-            className={`iconbtn ${tuiMode ? "on" : ""}`}
-            disabled={!thread.sessionFile}
-            title={
-              !thread.sessionFile
-                ? language === "zh"
-                  ? "会话尚未建立，暂不可用"
-                  : "Session not established yet"
-                : tuiMode
-                  ? language === "zh"
-                    ? "切换到 Pi GUI（自定义界面）"
-                    : "Switch to Pi GUI (custom interface)"
-                  : language === "zh"
-                    ? "切换到 Pi TUI 终端（交互式 pi）"
-                    : "Switch to Pi TUI terminal (interactive pi)"
-            }
-            onClick={() => useStore.getState().toggleTui(activeThreadId)}
+            className={`iconbtn ${terminalOpen ? "on" : ""}`}
+            title={language === "zh" ? "终端（右侧面板；跟当前会话目录）" : "Terminal (right panel, follows the session folder)"}
+            onClick={() => useStore.getState().toggleTerminal()}
           >
             <Terminal size={16} />
           </button>
@@ -1002,31 +1053,43 @@ export function Chat() {
             ref={chatSearchInputRef}
             className="chat-search-input"
             value={chatSearchQuery}
-            onChange={(e) => setChatSearchQuery(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setChatSearchQuery(value);
+              // 清空即撤销搜索（不必等回车），回到无高亮的正常阅读态。
+              if (!value.trim()) {
+                setSubmittedChatQuery("");
+                setChatSearchIdx(0);
+              }
+            }}
             onKeyDown={onChatSearchInputKey}
             placeholder="搜索本会话…"
             aria-label="会话内消息搜索"
             spellCheck={false}
           />
-          {searchOccurrences.length > 0 ? (
+          {chatSearchQuery.trim() && chatSearchQuery.trim().toLowerCase() !== submittedChatQuery ? (
+            <span className="chat-search-count none">{language === "zh" ? "回车搜索" : "Enter to search"}</span>
+          ) : searchHitKeys.length > 0 ? (
             <span className="chat-search-count">
-              {clampedSearchIdx + 1}/{searchOccurrences.length}
+              {clampedSearchIdx + 1}/{searchHitKeys.length}
             </span>
           ) : chatSearchQuery.trim() ? (
-            <span className="chat-search-count none">无匹配</span>
+            <span className="chat-search-count none">
+              {language === "zh" ? "无匹配（含更早对话）" : "No match (incl. earlier)"}
+            </span>
           ) : null}
           <button
             className="iconbtn"
-            title="上一个匹配（Shift+Enter）"
-            disabled={searchOccurrences.length === 0}
+            title={language === "zh" ? "上一个匹配（Shift+Enter）" : "Previous match (Shift+Enter)"}
+            disabled={searchHitKeys.length === 0}
             onClick={() => stepChatSearch(-1)}
           >
             <ChevronUp size={14} />
           </button>
           <button
             className="iconbtn"
-            title="下一个匹配（Enter）"
-            disabled={searchOccurrences.length === 0}
+            title={language === "zh" ? "下一个匹配（Enter）" : "Next match (Enter)"}
+            disabled={searchHitKeys.length === 0}
             onClick={() => stepChatSearch(1)}
           >
             <ChevronDown size={14} />
@@ -1044,11 +1107,18 @@ export function Chat() {
           <div className="chat-stage">
             <div className="chat-scroll" ref={scrollRef} onScroll={handleUserScroll} onWheel={handleWheel}>
           <div
-            className={`messages${searchingDim ? " searching" : ""}${restoring ? " no-cv" : ""}`}
+            className={`messages${restoring ? " no-cv" : ""}`}
           >
             {headGroups.map((g) =>
               g.role === "compaction" ? (
-                <CompactionDivider key={g.key} group={g} threadId={activeThreadId} language={language} onPreviewImage={setPreviewImage} />
+                <CompactionDivider
+                  key={g.key}
+                  group={g}
+                  threadId={activeThreadId}
+                  language={language}
+                  onPreviewImage={setPreviewImage}
+                  {...groupSearchProps}
+                />
               ) : (
                 <MessageGroup
                   key={g.key}
@@ -1184,11 +1254,18 @@ function CompactionDivider({
   threadId,
   language,
   onPreviewImage,
+  searchHitKeys,
+  searchCurrentKey,
+  searchMarkQuery,
 }: {
   group: MsgGroup;
   threadId: string;
   language: "en" | "zh";
   onPreviewImage: (src: string) => void;
+  /** 搜索态透传给「更早的对话」段 —— 否则命中在压缩前历史里时既不高亮也不显示为当前项。 */
+  searchHitKeys?: string | null;
+  searchCurrentKey?: string | null;
+  searchMarkQuery?: string | null;
 }) {
   const [summaryOpen, setSummaryOpen] = useState(false);
   // undefined = 尚未加载；0 = 已加载但为空。
@@ -1239,6 +1316,9 @@ function CompactionDivider({
                     toolRuns={earlier.toolRuns}
                     locked
                     onPreviewImage={onPreviewImage}
+                    searchHitKeys={searchHitKeys}
+                    searchCurrentKey={searchCurrentKey}
+                    searchMarkQuery={searchMarkQuery}
                   />
                 ),
               )}

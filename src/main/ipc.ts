@@ -184,7 +184,7 @@ import {
 } from "./preview-window";
 import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readEarlierMessages, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, setScanLogger, type ThreadHistory, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
-import { defaultExportPath, exportSessionZip } from "./session-export";
+import { batchExportBaseName, defaultExportPath, exportSessionBundle } from "./session-export";
 import { emptyTrash, listTrash, moveToTrash, purgeFromTrash, restoreFromTrash } from "./trash-store";
 import {
   getAdditionalSkillPaths,
@@ -5130,35 +5130,48 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   });
 
   /**
-   * 单会话导出：右键菜单「导出会话」→ **可再导入**的会话包（zip）。
-   * 包内 = 原始 <项目目录>/<会话>.jsonl（逐字节原样，图片 base64 自带）+ attachments/<引用名>
-   * + manifest.json。附件按引用名同名落地，导入后会话里的 <file …/> 卡片自动能取到字节。
+   * 会话导出：右键「导出」（单会话）与批量「导出」（多会话）共用一套打包逻辑。
+   * 包内 = <项目目录>/<会话>.jsonl（逐字节原样，图片 base64 自带）+ attachments/<引用名>
+   * + manifest.json；导入端一次全收，附件按引用名同名落地即可。
    */
-  ipcMain.handle("app:exportThread", async (_e, args: { file?: string; title?: string; cwd?: string }) => {
+  const exportSessionsToZip = async (
+    items: { file: string; title?: string; cwd?: string }[],
+  ): Promise<null | { ok: boolean; path?: string; sessions?: number; attachments?: number; skipped?: number; error?: string }> => {
     const w = getWin();
     const language = getConfig().language;
-    const file = typeof args?.file === "string" ? args.file : "";
-    if (!file || !existsSync(file)) {
-      return { ok: false, error: language === "zh" ? "缺少会话文件（或已被删除）。" : "Missing session file." };
+    const files = items.filter((it) => it && typeof it.file === "string" && it.file && existsSync(it.file));
+    if (!files.length) {
+      return { ok: false, error: language === "zh" ? "没有可导出的会话文件。" : "No session files to export." };
     }
-    let history: ThreadHistory | null = null;
-    try {
-      history = await readThreadHistory(file);
-    } catch {
-      /* 读不到也照导出：jsonl 本体才是真相源，元信息只是给文件名用 */
+    // 单会话沿用会话名做文件名；批量用固定前缀 + 数量。
+    let defaultPath: string;
+    if (files.length === 1) {
+      const only = files[0];
+      let guessed = typeof only.title === "string" && only.title.trim() ? only.title.trim() : "";
+      if (!guessed) {
+        try {
+          guessed = (await readThreadHistory(only.file))?.sessionName || "";
+        } catch {
+          /* 读不到就用文件名 */
+        }
+      }
+      if (!guessed) guessed = basename(only.file).replace(/\.jsonl$/i, "");
+      defaultPath = defaultExportPath(app.getPath("documents"), guessed, only.file);
+    } else {
+      defaultPath = join(app.getPath("documents"), `${batchExportBaseName(files.length)}.zip`);
     }
-    const rawTitle =
-      (typeof args?.title === "string" && args.title.trim()) || history?.sessionName || basename(file).replace(/\.jsonl$/i, "");
     const res = await dialog.showSaveDialog(w!, {
       title: language === "zh" ? "导出会话" : "Export session",
-      defaultPath: defaultExportPath(app.getPath("documents"), rawTitle, file),
+      defaultPath,
       filters: [{ name: language === "zh" ? "会话包 / ZIP" : "Session package / ZIP", extensions: ["zip"] }],
     });
     if (res.canceled || !res.filePath) return null;
-    const result = await exportSessionZip(res.filePath, {
-      file,
-      title: rawTitle,
-      cwd: args?.cwd ?? history?.cwd ?? null,
+    const result = await exportSessionBundle(res.filePath, {
+      sessions: files.map((it) => ({
+        file: it.file,
+        title: it.title?.trim() || basename(it.file).replace(/\.jsonl$/i, ""),
+        cwd: it.cwd ?? null,
+      })),
       appVersion: app.getVersion(),
       attachments: {
         pathFor: (name) => resolveChatAttachment(name),
@@ -5166,13 +5179,41 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           const key = isContentKey(name) ? name : aliasFor(name);
           if (!key) return null;
           const meta = objectMeta(key);
-          return { key, ...(meta?.mime ? { mime: meta.mime } : {}), ...(meta?.label ? { label: meta.label } : {}), ...(meta?.size ? { size: meta.size } : {}) };
+          return {
+            key,
+            ...(meta?.mime ? { mime: meta.mime } : {}),
+            ...(meta?.label ? { label: meta.label } : {}),
+            ...(meta?.size ? { size: meta.size } : {}),
+          };
         },
       },
     });
     if (!result.ok) return { ok: false, error: result.error };
-    return { ok: true, path: res.filePath, attachments: result.attachments, skipped: result.skipped };
-  });
+    return {
+      ok: true,
+      path: res.filePath,
+      sessions: result.sessions,
+      attachments: result.attachments,
+      skipped: result.skipped,
+    };
+  };
+
+  ipcMain.handle("app:exportThread", async (_e, args: { file?: string; title?: string; cwd?: string }) =>
+    exportSessionsToZip(args && typeof args.file === "string" ? [args as { file: string; title?: string; cwd?: string }] : []),
+  );
+
+  /** 批量导出：一个 zip 收下所有选中会话（附件合并去重）。 */
+  ipcMain.handle(
+    "app:exportThreads",
+    async (_e, args: { items?: { file?: string; title?: string; cwd?: string }[] }) => {
+      const list = Array.isArray(args?.items) ? args.items : [];
+      return exportSessionsToZip(
+        list
+          .filter((it) => it && typeof it.file === "string")
+          .map((it) => ({ file: it.file as string, title: it.title, cwd: it.cwd })),
+      );
+    },
+  );
 
   ipcMain.handle("backup:pickSessionImport", async () => {
     const w = getWin();

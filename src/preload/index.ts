@@ -71,6 +71,9 @@ const api = {
     /** 单会话导出为 Markdown（主进程弹保存框；取消返回 null）。 */
     exportThread: (args: { file: string; title?: string; cwd?: string }) =>
       ipcRenderer.invoke("app:exportThread", args),
+    /** 批量导出：一个 zip 收下多个会话（附件合并去重）。 */
+    exportThreads: (args: { items: { file: string; title?: string; cwd?: string }[] }) =>
+      ipcRenderer.invoke("app:exportThreads", args),
     revealFileInExplorer: (absPath: string) => ipcRenderer.invoke("app:revealFileInExplorer", absPath),
     openPreviewWindow: (absPath: string, opts?: { atCursor?: boolean }) =>
       ipcRenderer.invoke("app:openPreviewWindow", absPath, opts),
@@ -581,7 +584,7 @@ const api = {
     restart: (id: string): Promise<AppStoreEntry> => ipcRenderer.invoke("apps:restart", id),
   },
   tui: {
-    start: (args: { threadId: string; cwd: string; sessionFile?: string | null }) =>
+    start: (args: { threadId: string; cwd: string; sessionFile?: string | null; kind?: "pi" | "shell" }) =>
       ipcRenderer.invoke("tui:start", args) as Promise<{ ok: boolean; error?: string; gen?: number }>,
     write: (threadId: string, data: string) => ipcRenderer.invoke("tui:write", { threadId, data }),
     resize: (threadId: string, cols: number, rows: number) =>

@@ -1440,6 +1440,11 @@ interface PiStore {
   todos: TodoItem[];
   openTodoPanel: () => void;
   closeTodoPanel: () => void;
+  /** 右侧槽的集成终端（跟当前会话 cwd；与预览/待办等互斥）。 */
+  terminalOpen: boolean;
+  openTerminal: () => void;
+  closeTerminal: () => void;
+  toggleTerminal: () => void;
   loadTodos: () => Promise<void>;
   addTodo: (args: { cwd?: string; title?: string; note?: string; dueDate?: string | null; dueTime?: string | null }) => Promise<TodoItem | null>;
   updateTodo: (
@@ -1779,7 +1784,7 @@ function missingToolRemoveMessage(missing: "npm" | "git", zh: boolean): string {
 export type ZhiyaModule = "persona" | "agreement" | "workspace" | "kb" | "tasks" | "pool" | "projectMemory" | "settings";
 
 /** 右侧槽的所有侧板 flag。 */
-type RightPanelFlag = "todoPanelOpen" | "automationOpen" | "pluginsOpen" | "appsOpen" | "messagingOpen" | "zhiyaPanelOpen";
+type RightPanelFlag = "todoPanelOpen" | "automationOpen" | "pluginsOpen" | "appsOpen" | "messagingOpen" | "zhiyaPanelOpen" | "terminalOpen";
 
 /** 右侧槽互斥：保留 keep，其余关闭；并复位展开态。 */
 function onlyRightPanel(keep: RightPanelFlag | null) {
@@ -1790,6 +1795,7 @@ function onlyRightPanel(keep: RightPanelFlag | null) {
     appsOpen: keep === "appsOpen",
     messagingOpen: keep === "messagingOpen",
     zhiyaPanelOpen: keep === "zhiyaPanelOpen",
+    terminalOpen: keep === "terminalOpen",
     sidePanelExpanded: false,
   };
 }
@@ -3237,7 +3243,7 @@ Then pick up from its "Next steps" section; ask me if something is unclear.`;
   togglePreview: () =>
     set((s) => {
       // 右侧槽互斥：任一侧板占着槽时，切换预览 = 把槽让回预览。
-      if (s.todoPanelOpen || s.automationOpen || s.pluginsOpen || s.appsOpen || s.messagingOpen || s.zhiyaPanelOpen) {
+      if (s.todoPanelOpen || s.automationOpen || s.pluginsOpen || s.appsOpen || s.messagingOpen || s.zhiyaPanelOpen || s.terminalOpen) {
         return {
           todoPanelOpen: false,
           automationOpen: false,
@@ -3245,6 +3251,7 @@ Then pick up from its "Next steps" section; ask me if something is unclear.`;
           appsOpen: false,
           messagingOpen: false,
           zhiyaPanelOpen: false,
+          terminalOpen: false,
           sidePanelExpanded: false,
           previewOpen: true,
         };
@@ -3876,6 +3883,16 @@ Then pick up from its "Next steps" section; ask me if something is unclear.`;
 
   // ---- todos (待办任务) ----
   todoPanelOpen: false,
+  terminalOpen: false,
+  openTerminal: () => {
+    // 右侧槽互斥：终端独占右栏，预览也要让位（预览与侧板在布局上互斥）。
+    set({ ...onlyRightPanel("terminalOpen"), previewOpen: false, previewExpanded: false });
+  },
+  closeTerminal: () => set({ terminalOpen: false }),
+  toggleTerminal: () => {
+    if (get().terminalOpen) get().closeTerminal();
+    else get().openTerminal();
+  },
   todos: [],
   openTodoPanel: () => {
     // 右侧槽互斥（同上）。

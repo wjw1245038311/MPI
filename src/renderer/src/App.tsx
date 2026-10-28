@@ -8,6 +8,7 @@ import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
 import { Chat } from "./components/Chat";
 import { Preview } from "./components/Preview";
+import { TerminalPanel } from "./components/TerminalPanel";
 import { Toasts } from "./components/Toasts";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ExtUiModal } from "./components/ExtUiModal";
@@ -38,8 +39,11 @@ export default function App() {
   const appsOpen = useStore((s) => s.appsOpen);
   const messagingOpen = useStore((s) => s.messagingOpen);
   const zhiyaPanelOpen = useStore((s) => s.zhiyaPanelOpen);
+  const terminalOpen = useStore((s) => s.terminalOpen);
+  const terminalCwd = useStore((s) => (s.activeThreadId ? s.threads[s.activeThreadId]?.cwd : undefined));
   const sidePanelExpanded = useStore((s) => s.sidePanelExpanded);
-  const sidePanelOpen = todoPanelOpen || automationOpen || pluginsOpen || appsOpen || messagingOpen || zhiyaPanelOpen;
+  const sidePanelOpen =
+    todoPanelOpen || automationOpen || pluginsOpen || appsOpen || messagingOpen || zhiyaPanelOpen || terminalOpen;
   const projects = useStore((s) => s.projects);
   const runtime = useStore((s) => s.runtime);
   const theme = useStore((s) => s.config?.theme || "light");
@@ -194,6 +198,10 @@ export default function App() {
         {appsOpen && <AppStorePanel />}
         {messagingOpen && <MessagingPanel />}
         {zhiyaPanelOpen && <ZhiyaSidePanel />}
+        {/* 终端：跟当前会话的 cwd 走（切会话 = 换目录 = 重开 shell）。 */}
+        {terminalOpen && terminalCwd && activeThreadId && (
+          <TerminalPanel cwd={terminalCwd} threadId={activeThreadId} />
+        )}
         {previewOpen && !sidePanelOpen && <Preview />}
       </div>
       <Toasts />

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, Fragment } from "react";
 import { createPortal } from "react-dom";
-import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { localizeAutomationThreadTitle, remapLastActiveThread, useStore } from "../store";
 import { formatTokens } from "../lib/format";
 import { bucketLabel, dayBucket, sessionTimeLabel } from "../lib/relative-time";
@@ -8,7 +8,7 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { MPI_FILE_MIME, MPI_SESSION_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
-import { AppStore, Plus, Folder, Archive, Trash, Check, Pin, ChevronRight, ChevronUp, ChevronDown, Copy, Download, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Smartphone, Sprout, Sidebar as SidebarIcon } from "./icons";
+import { AppStore, Plus, Folder, Archive, Trash, Check, Close, Minus, Pin, ChevronRight, ChevronUp, ChevronDown, Copy, Download, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Smartphone, Sprout, Sidebar as SidebarIcon } from "./icons";
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
 
@@ -180,6 +180,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   // 批量操作（会话列表多选）：只作用于下方时间列表，置顶圆印不参与。
   const [batchMode, setBatchMode] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(() => new Set());
+  // Shift 范围选择的范围锚点（上一次普通点击的行下标）。
+  const [batchAnchor, setBatchAnchor] = useState<number | null>(null);
   // 批量删除必须二次确认（归档可逆，不拦）。
   const [batchConfirm, setBatchConfirm] = useState<{
     action: "delete";
@@ -394,6 +396,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const exitBatch = () => {
     setBatchMode(false);
     setSelectedFiles(new Set());
+    setBatchAnchor(null);
   };
 
   const toggleSelected = (file: string) =>
@@ -404,14 +407,69 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
       return next;
     });
 
-  const selectAllListed = () => setSelectedFiles(new Set(restThreads.map((t) => t.file)));
+  /**
+   * 批量模式下点一行：
+   * - Shift + 点击（已有锚点）→ 选中「锚点 ↔ 当前行」整段（替换选区，和资源管理器一致，anchor 不动，
+   *   所以可以接着 Shift 点更远的一行扩大范围）；
+   * - 普通点击 → 切换该行并把它设为新锚点。
+   * 非批量模式仍是打开会话。
+   */
+  const handleRowClick = (event: { shiftKey: boolean }, index: number, cwd: string, file: string) => {
+    if (!batchMode) {
+      onThreadClick(cwd, file);
+      return;
+    }
+    if (event.shiftKey && batchAnchor != null) {
+      const from = Math.min(batchAnchor, index);
+      const to = Math.max(batchAnchor, index);
+      setSelectedFiles(new Set(restThreads.slice(from, to + 1).map((row) => row.file)));
+      return;
+    }
+    setBatchAnchor(index);
+    toggleSelected(file);
+  };
 
-  /** 批量归档（可逆，直接执行）／批量删除（先弹确认）。 */
-  const runBatch = async (action: "archive" | "delete") => {
+  const allListedSelected = restThreads.length > 0 && restThreads.every((t) => selectedFiles.has(t.file));
+  /** 勾选框 / 「全选」：已全选则清空，否则全选（列表里没有项时不动作）。 */
+  const toggleSelectAll = () => {
+    if (!restThreads.length) return;
+    setSelectedFiles(allListedSelected ? new Set() : new Set(restThreads.map((t) => t.file)));
+    setBatchAnchor(null);
+  };
+
+  /** 批量归档（可逆，直接执行）／批量删除（先弹确认）／批量导出（合成一个包）。 */
+  const runBatch = async (action: "archive" | "delete" | "export") => {
     const items = batchItems();
     if (!items.length) return;
     if (action === "delete") {
       setBatchConfirm({ action, items });
+      return;
+    }
+    if (action === "export") {
+      try {
+        const res = await window.pi.app.exportThreads({
+          items: items.map((it) => ({ file: it.file, title: it.title, cwd: it.cwd })),
+        });
+        if (!res) return; // 用户取消保存框
+        const zh = language === "zh";
+        if (!res.ok) {
+          useStore.getState().pushToast("error", zh ? `导出失败：${res.error}` : `Export failed: ${res.error}`);
+          return;
+        }
+        const parts = [
+          zh ? `${res.sessions ?? items.length} 个会话` : `${res.sessions ?? items.length} sessions`,
+          res.attachments ? (zh ? `${res.attachments} 个附件` : `${res.attachments} attachments`) : "",
+          res.skipped ? (zh ? `${res.skipped} 个附件跳过` : `${res.skipped} skipped`) : "",
+        ].filter(Boolean);
+        useStore
+          .getState()
+          .pushToast("success", zh ? `已导出会话包（${parts.join("，")}）：${res.path}` : `Exported (${parts.join(", ")}): ${res.path}`);
+        exitBatch();
+      } catch (error: any) {
+        useStore
+          .getState()
+          .pushToast("error", language === "zh" ? `导出失败：${error?.message || error}` : `Export failed: ${error?.message || error}`);
+      }
       return;
     }
     for (const it of items) await archiveThread(it.cwd, it.file, it.title);
@@ -715,29 +773,49 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
             {/* 批量操作条：多选模式下固定在列表上方，已选计数 + 全选 + 归档/删除 + 退出。 */}
             {batchMode && (
               <div className="sb-batch-bar">
-                <span className="sb-batch-count">
-                  {language === "zh" ? `已选 ${selectedFiles.size}` : `${selectedFiles.size} selected`}
-                </span>
+                {/* 第一行：勾选框 + 全选 + 已选计数，右侧 × 退出 */}
+                <div className="sb-batch-head">
+                  <button
+                    type="button"
+                    className={`sb-batch-check${allListedSelected ? " on" : ""}`}
+                    onClick={toggleSelectAll}
+                    aria-label={language === "zh" ? (allListedSelected ? "取消全选" : "全选") : allListedSelected ? "Deselect all" : "Select all"}
+                    disabled={restThreads.length === 0}
+                  >
+                    {allListedSelected ? <Check size={13} /> : selectedFiles.size > 0 ? <Minus size={13} /> : null}
+                  </button>
+                  <button type="button" className="sb-batch-all" onClick={toggleSelectAll} disabled={restThreads.length === 0}>
+                    {language === "zh" ? "全选" : "Select all"}
+                  </button>
+                  <span className="sb-batch-count">({selectedFiles.size})</span>
+                  <button
+                    type="button"
+                    className="sb-batch-close"
+                    onClick={exitBatch}
+                    title={language === "zh" ? "退出批量操作" : "Exit batch mode"}
+                    aria-label={language === "zh" ? "退出批量操作" : "Exit batch mode"}
+                  >
+                    <Close size={14} />
+                  </button>
+                </div>
+                {/* 第二行：两个等宽大按钮（删除在前，归档在后），未选中时禁用 */}
                 <div className="sb-batch-actions">
-                  <button type="button" onClick={selectAllListed}>
-                    {language === "zh" ? "全选" : "All"}
-                  </button>
-                  <button type="button" onClick={() => setSelectedFiles(new Set())} disabled={selectedFiles.size === 0}>
-                    {language === "zh" ? "清空" : "None"}
-                  </button>
-                  <button type="button" onClick={() => void runBatch("archive")} disabled={selectedFiles.size === 0}>
-                    {language === "zh" ? "归档" : "Archive"}
-                  </button>
                   <button
                     type="button"
                     className="danger"
                     onClick={() => void runBatch("delete")}
                     disabled={selectedFiles.size === 0}
                   >
+                    <Trash size={14} />
                     {language === "zh" ? "删除" : "Delete"}
                   </button>
-                  <button type="button" onClick={exitBatch}>
-                    {language === "zh" ? "退出" : "Done"}
+                  <button type="button" onClick={() => void runBatch("archive")} disabled={selectedFiles.size === 0}>
+                    <Archive size={14} />
+                    {language === "zh" ? "归档" : "Archive"}
+                  </button>
+                  <button type="button" onClick={() => void runBatch("export")} disabled={selectedFiles.size === 0}>
+                    <Download size={14} />
+                    {language === "zh" ? "导出" : "Export"}
                   </button>
                 </div>
               </div>
@@ -769,13 +847,12 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                       event.dataTransfer.effectAllowed = "copy";
                       event.dataTransfer.setData(MPI_SESSION_MIME, JSON.stringify({ file: t.file, title }));
                     }}
-                    onClick={() => (batchMode ? toggleSelected(t.file) : onThreadClick(t.cwd, t.file))}
+                    onClick={(event: ReactMouseEvent) => handleRowClick(event, index, t.cwd, t.file)}
                     onKeyDown={(event) => {
                       if (event.target !== event.currentTarget) return;
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        if (batchMode) toggleSelected(t.file);
-                        else onThreadClick(t.cwd, t.file);
+                        handleRowClick(event, index, t.cwd, t.file);
                       }
                     }}
                     onContextMenu={(event) => {
@@ -1249,6 +1326,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               setThreadMenu(null);
               setBatchMode(true);
               setSelectedFiles(new Set());
+              setBatchAnchor(null);
             }}
           >
             <span className="pcm-label"><CheckSquare size={13} />{language === "zh" ? "批量操作" : "Batch"}</span>

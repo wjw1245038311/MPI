@@ -6,7 +6,7 @@ import { register } from "node:module";
 
 // 源文件用打包器风格的无扩展名 import，这里给 node 补上解析。
 register(new URL("./ts-ext-loader.mjs", import.meta.url));
-const { collectAttachmentNames, exportFileName, projectDirNameFor, exportSessionZip } = await import(
+const { collectAttachmentNames, exportFileName, projectDirNameFor, exportSessionZip, exportSessionBundle } = await import(
   "../src/main/session-export.ts"
 );
 const { importSessionZip } = await import("../src/main/backup.ts");
@@ -119,6 +119,43 @@ try {
   const plainResult = await importSessionZip(plainPath, "skip", importRoot, { storeAttachment: () => true });
   assert.equal(plainResult.imported, 1);
   assert.equal(plainResult.attachments, 0);
+  // ---- 批量导出：两个会话合成一个包，共享附件只打一次，导入端一次全收 ----
+  const proj2 = join(root, "sessions", "--E--ws-Other--");
+  mkdirSync(proj2, { recursive: true });
+  const session2 = join(proj2, "2026-10-29T09-00-00-000Z_def.jsonl");
+  writeFileSync(session2, readFileSync(sessionFile));
+  const batchZip = join(root, "batch.zip");
+  const batch = await exportSessionBundle(batchZip, {
+    sessions: [
+      { file: sessionFile, title: "会话 A", cwd: "E:\ws\Proj" },
+      { file: session2, title: "会话 B", cwd: "E:\ws\Other" },
+    ],
+    appVersion: "0.0.0-test",
+    attachments: {
+      pathFor: (name) => (name === "a.mp4" ? attachFile : null),
+      metaFor: () => ({ mime: "video/mp4", label: "演示视频.mp4" }),
+    },
+  });
+  assert.equal(batch.ok, true, "批量导出应成功");
+  assert.equal(batch.sessions, 2);
+  assert.equal(batch.attachments, 1, "两个会话引用同一附件时只打包一次");
+
+  const bz = await new JSZip().loadAsync(readFileSync(batchZip));
+  const bnames = Object.keys(bz.files).sort();
+  assert.ok(bnames.includes("--E--ws-Proj--/2026-10-29T08-00-00-000Z_abc.jsonl"));
+  assert.ok(bnames.includes("--E--ws-Other--/2026-10-29T09-00-00-000Z_def.jsonl"), "不同项目的会话落在各自目录");
+  // 注意：JSZip 的 files 里还有目录条目（`attachments/` 结尾带斜杠），只数真正的文件。
+  assert.equal(bnames.filter((n) => n.startsWith("attachments/") && !n.endsWith("/")).length, 1);
+  const bman = JSON.parse(await bz.file("manifest.json").async("string"));
+  assert.equal(bman.kind, "session-export");
+  assert.equal(bman.sessions.length, 2, "manifest 里列出全部会话");
+
+  const ImportedBatch = await importSessionZip(batchZip, "skip", join(root, "imported2"), {
+    storeAttachment: () => true,
+  });
+  assert.equal(ImportedBatch.imported, 2, "导入端一次收下两个会话");
+  assert.equal(ImportedBatch.attachments, 1);
+
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

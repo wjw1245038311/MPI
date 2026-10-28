@@ -2,6 +2,9 @@ import { spawn, type IPty } from "node-pty";
 import type { IpcMain } from "electron";
 import { resolvePiRuntime } from "./pi-bridge";
 import { getConfig } from "./config";
+import { getAgentDir } from "./session-store";
+import { getShellState } from "./shell-bootstrap";
+import { join } from "node:path";
 import { getAdditionalSkillPaths } from "./plugins";
 
 /**
@@ -74,20 +77,36 @@ export function registerTuiIpc(
 ): void {
   ipcMain.handle(
     "tui:start",
-    async (_e, args: { threadId: string; cwd: string; sessionFile?: string | null }) => {
+    async (
+      _e,
+      args: { threadId: string; cwd: string; sessionFile?: string | null; kind?: "pi" | "shell" },
+    ) => {
       const { threadId, cwd } = args;
+      const kind = args.kind === "shell" ? "shell" : "pi";
       // Re-entering TUI mode restarts the terminal fresh; conversation state
       // lives in the session file, so nothing is lost.
       killTui(threadId);
       const gen = nextGeneration(threadId);
       try {
-        const rt = await resolvePiRuntime(getConfig().piCliPath);
-        const argv: string[] = [rt.cli];
-        if (args.sessionFile) argv.push("--session", args.sessionFile);
-        // Same skill inventory as RPC mode so both modes see the same skills.
-        for (const skill of getAdditionalSkillPaths(cwd)) argv.push("--skill", skill);
+        // kind="shell"：右侧槽的集成终端 —— 跑用户自己的 Git Bash，用于手敲命令、输密码等
+        // 需要真交互的场合（pi 的 TUI 入口已从 UI 移除，但这条 PTY 管道两边共用）。
+        let shellCmd: string;
+        let shellArgs: string[];
+        if (kind === "shell") {
+          const shell = getShellState(join(getAgentDir(), "settings.json")).shell;
+          shellCmd = shell.path;
+          shellArgs = ["-i", "-l"];
+        } else {
+          const rt = await resolvePiRuntime(getConfig().piCliPath);
+          shellCmd = rt.node;
+          shellArgs = [rt.cli];
+          if (args.sessionFile) shellArgs.push("--session", args.sessionFile);
+          // Same skill inventory as RPC mode so both modes see the same skills.
+          for (const skill of getAdditionalSkillPaths(cwd)) shellArgs.push("--skill", skill);
+        }
 
-        const pty = spawn(rt.node, argv, {
+        console.log(`[tui] spawn kind=${kind} cmd=${shellCmd} args=${shellArgs.join(" ")} cwd=${cwd}`);
+        const pty = spawn(shellCmd, shellArgs, {
           name: "xterm-256color",
           cols: 80,
           rows: 24,
@@ -123,17 +142,32 @@ export function registerTuiIpc(
         });
 
         sessions.set(threadId, sess);
+        console.log(`[tui] spawned kind=${kind} key=${threadId} pid=${pty.pid}`);
+        // 首包诊断：shell 起来后应立刻吐提示符；没有就是 PTY/参数问题。
+        let firstDataLogged = false;
+        pty.onData(() => {
+          if (firstDataLogged) return;
+          firstDataLogged = true;
+          console.log(`[tui] first data kind=${kind} key=${threadId}`);
+        });
         // The renderer keeps `gen` so a late "orphan cleanup" stop from an
         // already-unmounted effect can only kill the PTY it actually started.
         return { ok: true, gen };
       } catch (e: any) {
+        console.error(`[tui] spawn failed kind=${kind} key=${threadId}:`, e?.message || String(e));
         return { ok: false, error: e?.message || String(e) };
       }
     },
   );
 
   ipcMain.handle("tui:write", (_e, args: { threadId: string; data: string }) => {
-    sessions.get(args.threadId)?.pty.write(args.data);
+    const sess = sessions.get(args.threadId);
+    if (!sess) {
+      // 键盘输入打到不存在的 PTY 上：说明 start 没成功或 key 不一致，值得一条日志。
+      console.log(`[tui] write dropped (no session) key=${args.threadId} bytes=${args.data?.length ?? 0}`);
+      return;
+    }
+    sess.pty.write(args.data);
   });
 
   ipcMain.handle("tui:resize", (_e, args: { threadId: string; cols: number; rows: number }) => {

@@ -74,11 +74,16 @@ export interface AttachmentSource {
   metaFor(name: string): { key?: string | null; size?: number; mime?: string; label?: string } | null;
 }
 
-export interface SessionExportOptions {
+export interface SessionExportItem {
   /** session .jsonl 的绝对路径。 */
   file: string;
   title: string;
   cwd?: string | null;
+}
+
+export interface SessionExportOptions {
+  /** 一个或多个会话（批量导出就是多个，打包进同一个 zip，导入端一次全收）。 */
+  sessions: SessionExportItem[];
   appVersion?: string;
   attachments: AttachmentSource;
 }
@@ -100,6 +105,8 @@ export interface SessionExportManifest {
   title: string;
   cwd?: string | null;
   sessionFile?: string;
+  /** 包内会话清单（批量导出时多于一项）。 */
+  sessions?: { file: string; title: string; cwd?: string | null }[];
   attachments: SessionExportAttachment[];
 }
 
@@ -110,30 +117,46 @@ export function projectDirNameFor(file: string): string {
 }
 
 /**
- * 生成会话包 zip。返回写入的附件数量（0 = 会话里没有外部附件）。
+ * 生成会话包 zip（单会话 / 批量共用）。返回会话数、附件数与被跳过的附件数。
  * 单个附件缺失/超限只跳过该附件，不让整包失败（会话本体仍可导入）。
  */
-export async function exportSessionZip(
+export async function exportSessionBundle(
   outPath: string,
   opts: SessionExportOptions,
   limits: { maxAttachmentBytes?: number } = {},
-): Promise<{ ok: true; attachments: number; skipped: number } | { ok: false; error: string }> {
+): Promise<{ ok: true; sessions: number; attachments: number; skipped: number } | { ok: false; error: string }> {
   const maxBytes = limits.maxAttachmentBytes ?? 1024 * 1024 * 1024;
-  let jsonl: Buffer;
-  try {
-    jsonl = readFileSync(opts.file);
-  } catch (e: any) {
-    return { ok: false, error: e?.message || String(e) };
-  }
+  const items = (opts.sessions || []).filter((it) => it && it.file);
+  if (!items.length) return { ok: false, error: "no session files" };
   try {
     const mod = await import("jszip");
     const JSZip = (mod as any).default ?? mod;
     const zip = new JSZip();
-    zip.file(`${projectDirNameFor(opts.file)}/${basename(opts.file)}`, jsonl);
+
+    let sessionCount = 0;
+    const attachmentNames: string[] = [];
+    const seenAttachment = new Set<string>();
+    for (const item of items) {
+      let jsonl: Buffer;
+      try {
+        jsonl = readFileSync(item.file);
+      } catch {
+        continue; // 文件没了就跳过这一条，其余照常打包
+      }
+      // 同一目录下的会话文件名唯一；不同项目落在各自的项目目录里。
+      zip.file(`${projectDirNameFor(item.file)}/${basename(item.file)}`, jsonl);
+      sessionCount += 1;
+      for (const name of collectAttachmentNames(jsonl.toString("utf8"))) {
+        if (seenAttachment.has(name)) continue; // 批量时同附件只打包一次
+        seenAttachment.add(name);
+        attachmentNames.push(name);
+      }
+    }
+    if (sessionCount === 0) return { ok: false, error: "no readable session files" };
 
     const records: SessionExportAttachment[] = [];
     let skipped = 0;
-    for (const name of collectAttachmentNames(jsonl.toString("utf8"))) {
+    for (const name of attachmentNames) {
       const abs = opts.attachments.pathFor(name);
       if (!abs || !existsSync(abs)) {
         skipped += 1;
@@ -159,30 +182,53 @@ export async function exportSessionZip(
       }
     }
 
+    const single = items.length === 1 ? items[0] : null;
     const manifest: SessionExportManifest = {
       app: "MPI",
       kind: "session-export",
       version: 1,
       exportedAt: new Date().toISOString(),
       ...(opts.appVersion ? { appVersion: opts.appVersion } : {}),
-      title: opts.title,
-      cwd: opts.cwd ?? null,
-      sessionFile: basename(opts.file),
+      title: single ? single.title : `${sessionCount} sessions`,
+      cwd: single ? (single.cwd ?? null) : null,
+      ...(single ? { sessionFile: basename(single.file) } : {}),
+      sessions: items.map((it) => ({ file: basename(it.file), title: it.title, cwd: it.cwd ?? null })),
       attachments: records,
     };
     zip.file("manifest.json", JSON.stringify(manifest, null, 2));
     const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
     const { writeFileSync } = await import("node:fs");
     writeFileSync(outPath, buf);
-    return { ok: true, attachments: records.length, skipped };
+    return { ok: true, sessions: sessionCount, attachments: records.length, skipped };
   } catch (e: any) {
     return { ok: false, error: e?.message || String(e) };
   }
 }
 
+/** 单会话导出的便捷入口（右键「导出」用）。 */
+export async function exportSessionZip(
+  outPath: string,
+  opts: { file: string; title: string; cwd?: string | null; appVersion?: string; attachments: AttachmentSource },
+  limits: { maxAttachmentBytes?: number } = {},
+) {
+  const result = await exportSessionBundle(
+    outPath,
+    { sessions: [{ file: opts.file, title: opts.title, cwd: opts.cwd }], appVersion: opts.appVersion, attachments: opts.attachments },
+    limits,
+  );
+  return result.ok
+    ? ({ ok: true as const, attachments: result.attachments, skipped: result.skipped })
+    : result;
+}
+
 /** 导出包的默认文件名（不含扩展名）。 */
 export function exportBaseName(title: string, file: string): string {
   return exportFileName(title) || basename(file).replace(/\.jsonl$/i, "") || "session";
+}
+
+/** 批量导出用的文件名：`批量导出-N个会话`。 */
+export function batchExportBaseName(count: number): string {
+  return `MPI-sessions-${count}`;
 }
 
 /** 保存框的默认路径（文档目录）。给 IPC 层用，单独抽出来便于测试。 */
