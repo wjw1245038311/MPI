@@ -184,6 +184,7 @@ import {
 } from "./preview-window";
 import { getAgentDir, getSessionsDir, getTotalUsage, type ProjectSummary, readEarlierMessages, readSessionCompactions, readThreadHistory, scanProjects, searchThreads, searchTrashThreads, setScanLogger, type ThreadHistory, type ThreadSearchHit } from "./session-store";
 import { repairSessionFile } from "./session-repair";
+import { defaultExportPath, exportSessionZip } from "./session-export";
 import { emptyTrash, listTrash, moveToTrash, purgeFromTrash, restoreFromTrash } from "./trash-store";
 import {
   getAdditionalSkillPaths,
@@ -253,7 +254,7 @@ import { redactRemotePaths } from "./remote/path-redact";
 import { fillVideoPosters } from "./remote/video-poster";
 import { uploadAttachmentChunk } from "./remote/attachment-relay-upload";
 import { storeObject } from "./chat-attachment-store";
-import { ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, agentImageFor, findVideoPoster, hasObject, isContentKey, isVideoFile, materializeIntoWorkspace, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, stageChatVideoBytes, storeThumbnail, storeVideoPoster } from "./chat-attachment-store";
+import { aliasFor, ATTACHMENT_FETCH_CHUNK_BYTES, SHA256_RE, adoptChatVideo, agentImageFor, findVideoPoster, hasObject, isContentKey, isVideoFile, materializeIntoWorkspace, objectMeta, readAttachmentSlice, reserveVideoName, resolveChatAttachment, setAlias, stageChatVideoBytes, storeThumbnail, storeVideoPoster } from "./chat-attachment-store";
 import {
   LAN_RELAY_BIND_HOST,
   LAN_RELAY_PORT,
@@ -5128,6 +5129,51 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     }
   });
 
+  /**
+   * 单会话导出：右键菜单「导出会话」→ **可再导入**的会话包（zip）。
+   * 包内 = 原始 <项目目录>/<会话>.jsonl（逐字节原样，图片 base64 自带）+ attachments/<引用名>
+   * + manifest.json。附件按引用名同名落地，导入后会话里的 <file …/> 卡片自动能取到字节。
+   */
+  ipcMain.handle("app:exportThread", async (_e, args: { file?: string; title?: string; cwd?: string }) => {
+    const w = getWin();
+    const language = getConfig().language;
+    const file = typeof args?.file === "string" ? args.file : "";
+    if (!file || !existsSync(file)) {
+      return { ok: false, error: language === "zh" ? "缺少会话文件（或已被删除）。" : "Missing session file." };
+    }
+    let history: ThreadHistory | null = null;
+    try {
+      history = await readThreadHistory(file);
+    } catch {
+      /* 读不到也照导出：jsonl 本体才是真相源，元信息只是给文件名用 */
+    }
+    const rawTitle =
+      (typeof args?.title === "string" && args.title.trim()) || history?.sessionName || basename(file).replace(/\.jsonl$/i, "");
+    const res = await dialog.showSaveDialog(w!, {
+      title: language === "zh" ? "导出会话" : "Export session",
+      defaultPath: defaultExportPath(app.getPath("documents"), rawTitle, file),
+      filters: [{ name: language === "zh" ? "会话包 / ZIP" : "Session package / ZIP", extensions: ["zip"] }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    const result = await exportSessionZip(res.filePath, {
+      file,
+      title: rawTitle,
+      cwd: args?.cwd ?? history?.cwd ?? null,
+      appVersion: app.getVersion(),
+      attachments: {
+        pathFor: (name) => resolveChatAttachment(name),
+        metaFor: (name) => {
+          const key = isContentKey(name) ? name : aliasFor(name);
+          if (!key) return null;
+          const meta = objectMeta(key);
+          return { key, ...(meta?.mime ? { mime: meta.mime } : {}), ...(meta?.label ? { label: meta.label } : {}), ...(meta?.size ? { size: meta.size } : {}) };
+        },
+      },
+    });
+    if (!result.ok) return { ok: false, error: result.error };
+    return { ok: true, path: res.filePath, attachments: result.attachments, skipped: result.skipped };
+  });
+
   ipcMain.handle("backup:pickSessionImport", async () => {
     const w = getWin();
     const language = getConfig().language;
@@ -5155,7 +5201,21 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       return { ok: false, error: language === "zh" ? "缺少备份文件路径。" : "Missing backup file path." };
     }
     try {
-      const result = await importSessionZip(args.path, args.policy === "overwrite" ? "overwrite" : "skip");
+      const result = await importSessionZip(
+        args.path,
+        args.policy === "overwrite" ? "overwrite" : "skip",
+        undefined,
+        {
+          // 包内附件 → 本机附件库；引用名与内容 key 不同时补一条别名，保证会话里的
+          // <file … name="X" /> 仍能解析到字节（X 可能是老名字，也可能是内容 hash）。
+          storeAttachment: ({ name, bytes, label, mime }) => {
+            const stored = storeObject({ bytes, ...(label ? { label } : {}), ...(mime ? { mime } : {}) });
+            if (!stored) return false;
+            if (stored.name !== name) setAlias(name, stored.name);
+            return true;
+          },
+        },
+      );
       invalidateRemoteProjects();
       send("pi:projects-changed", {});
       return { ok: true, ...result };

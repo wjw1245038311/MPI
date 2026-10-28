@@ -496,8 +496,7 @@ body.sidebar-resizing * {
   white-space: nowrap;
   min-width: 0;
 }
-.thread-archive-btn,
-.thread-delete-btn {
+.thread-archive-btn {
   display: grid;
   place-items: center;
   flex: 0 0 22px;
@@ -515,22 +514,14 @@ body.sidebar-resizing * {
 }
 .thread:hover .thread-archive-btn,
 .thread:focus-within .thread-archive-btn,
-.thread.active .thread-archive-btn,
-.thread:hover .thread-delete-btn,
-.thread:focus-within .thread-delete-btn,
-.thread.active .thread-delete-btn {
+.thread.active .thread-archive-btn {
   opacity: 1;
 }
 .thread-archive-btn:hover {
   background: var(--overlay-4);
   color: var(--text);
 }
-.thread-delete-btn:hover {
-  background: var(--danger-pale-strong);
-  color: var(--danger);
-}
-.thread-archive-btn:focus-visible,
-.thread-delete-btn:focus-visible {
+.thread-archive-btn:focus-visible {
   opacity: 1;
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -10049,7 +10040,6 @@ mark.hl {
   color: #fff;
 }
 :root[data-theme="dark"] .btn.danger:hover,
-:root[data-theme="dark"] .thread-delete-btn:hover,
 :root[data-theme="dark"] .project-context-menu button.danger:hover {
   background: #71352f;
   border-color: #71352f;
@@ -12020,6 +12010,88 @@ mark.hl {
   color: var(--text-dim);
 }
 
+/* 批量操作条（会话列表多选模式）：细边框 + 紧凑按钮，和侧栏语汇一致。 */
+.sb-batch-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--overlay-1);
+}
+.sb-batch-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.sb-batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sb-batch-actions button {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.sb-batch-actions button:hover:not(:disabled) {
+  background: var(--overlay-3);
+  border-color: var(--text-faint);
+}
+.sb-batch-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.sb-batch-actions button.danger {
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+.sb-batch-actions button.danger:hover:not(:disabled) {
+  background: var(--danger-pale-strong);
+  border-color: var(--danger);
+}
+.sb-batch-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* 行内勾选框：批量模式下出现在最左侧，选中填墨绿。 */
+.srow-check {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: var(--radius-xs);
+  color: var(--tone-fg);
+}
+.srow-check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* 批量模式下：行内 hover 操作让位（点行是选中，不是打开），选中行给淡绿底。 */
+.srow.batch .srow-actions {
+  display: none;
+}
+.srow.batch:hover .srow-time {
+  display: inline;
+}
+.srow.selected {
+  background: var(--accent-soft);
+  border-color: var(--border);
+}
+.srow.selected .srow-title {
+  color: var(--text);
+}
+
 /* 侧栏「会话」tab：跨项目全量会话列表（2026-10-29，替代旧的「近期」5 条）。
    主次靠字号/颜色分层：标题 13px 正文色 > 副行 11px 淡色（项目名 + 首条消息预览）；
    时间右对齐并 tabular-nums，扫视时成一列。 */
@@ -12118,10 +12190,6 @@ mark.hl {
 }
 .srow-actions button.on {
   color: var(--accent);
-}
-.srow-actions button.danger:hover {
-  background: var(--danger-pale-strong);
-  color: var(--danger);
 }
 
 /* （已移除：旧「近期 / 项目」分区折叠头 .sb-section-toggle —— 2026-10-29 改为 tab，无折叠头） */

@@ -68,6 +68,9 @@ const api = {
     remapProjectPath: (oldCwd: string, newCwd: string) =>
       ipcRenderer.invoke("app:remapProjectPath", oldCwd, newCwd),
     openFolderInExplorer: (absPath: string) => ipcRenderer.invoke("app:openFolderInExplorer", absPath),
+    /** 单会话导出为 Markdown（主进程弹保存框；取消返回 null）。 */
+    exportThread: (args: { file: string; title?: string; cwd?: string }) =>
+      ipcRenderer.invoke("app:exportThread", args),
     revealFileInExplorer: (absPath: string) => ipcRenderer.invoke("app:revealFileInExplorer", absPath),
     openPreviewWindow: (absPath: string, opts?: { atCursor?: boolean }) =>
       ipcRenderer.invoke("app:openPreviewWindow", absPath, opts),
@@ -528,8 +531,15 @@ const api = {
     importSessions: (args: {
       path: string;
       policy: "skip" | "overwrite";
-    }): Promise<{ ok: boolean; imported?: number; skipped?: number; overwritten?: number; error?: string }> =>
-      ipcRenderer.invoke("backup:importSessions", args),
+    }): Promise<{
+      ok: boolean;
+      imported?: number;
+      skipped?: number;
+      overwritten?: number;
+      /** 「导出会话包」里落地到本机附件库的数量（纯备份包为 0/缺省）。 */
+      attachments?: number;
+      error?: string;
+    }> => ipcRenderer.invoke("backup:importSessions", args),
   },
   voice: {
     /** Transcribe a base64 WAV recording (16 kHz mono) with the configured STT

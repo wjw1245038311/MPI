@@ -1652,16 +1652,16 @@ export function Settings() {
       pushToast(
         "info",
         language === "zh"
-          ? (r.imported
-              ? `已导入 ${r.imported} 个会话${r.skipped ? `，跳过 ${r.skipped} 个已存在` : ""}${r.overwritten ? `，覆盖 ${r.overwritten} 个` : ""}。`
+          ? `${r.imported
+              ? `已导入 ${r.imported} 个会话${r.skipped ? `，跳过 ${r.skipped} 个已存在` : ""}${r.overwritten ? `，覆盖 ${r.overwritten} 个` : ""}`
               : r.overwritten
-                ? `已按备份恢复（覆盖）${r.overwritten} 个会话。`
-                : `没有可导入的会话（${r.skipped ?? 0} 个已存在）。`)
-          : (r.imported
-              ? `Imported ${r.imported} session${r.imported === 1 ? "" : "s"}${r.skipped ? `, skipped ${r.skipped} existing` : ""}${r.overwritten ? `, overwrote ${r.overwritten}` : ""}.`
+                ? `已按备份恢复（覆盖）${r.overwritten} 个会话`
+                : `没有可导入的会话（${r.skipped ?? 0} 个已存在）`}${r.attachments ? `，含 ${r.attachments} 个附件` : ""}。`
+          : `${r.imported
+              ? `Imported ${r.imported} session${r.imported === 1 ? "" : "s"}${r.skipped ? `, skipped ${r.skipped} existing` : ""}${r.overwritten ? `, overwrote ${r.overwritten}` : ""}`
               : r.overwritten
-                ? `Restored (overwrote) ${r.overwritten} session${r.overwritten === 1 ? "" : "s"} from the backup.`
-                : `Nothing to import (${r.skipped ?? 0} already present).`),
+                ? `Restored (overwrote) ${r.overwritten} session${r.overwritten === 1 ? "" : "s"} from the backup`
+                : `Nothing to import (${r.skipped ?? 0} already present)`}${r.attachments ? `, ${r.attachments} attachment${r.attachments === 1 ? "" : "s"}` : ""}.`,
       );
     } catch (e: any) {
       pushToast("error", (language === "zh" ? "导入失败：" : "Import failed: ") + (e?.message || e));

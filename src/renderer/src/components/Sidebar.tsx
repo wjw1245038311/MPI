@@ -8,7 +8,7 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { MPI_FILE_MIME, MPI_SESSION_MIME } from "../lib/file-drag";
 import { useOutsideClose } from "../lib/useOutsideClose";
 import type { FileNode } from "../lib/types";
-import { AppStore, Plus, Folder, Archive, Trash, Pin, ChevronRight, ChevronUp, ChevronDown, Copy, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Smartphone, Sprout, Sidebar as SidebarIcon } from "./icons";
+import { AppStore, Plus, Folder, Archive, Trash, Check, Pin, ChevronRight, ChevronUp, ChevronDown, Copy, Download, Edit, Clock, CheckSquare, Plug, MessageSquare, Search, Smartphone, Sprout, Sidebar as SidebarIcon } from "./icons";
 
 const treeKey = (cwd: string, rel?: string) => `${cwd}::${rel || ""}`;
 
@@ -177,6 +177,14 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const [projectMenu, setProjectMenu] = useState<{ cwd: string; name: string; pinned: boolean; pinnedRank: number; pinnedCount: number; x: number; y: number } | null>(null);
   const [threadMenu, setThreadMenu] = useState<{ cwd: string; file: string; name: string; pinned: boolean; pinnedRank: number; pinnedCount: number; x: number; y: number } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ cwd: string; file: string; name: string } | null>(null);
+  // 批量操作（会话列表多选）：只作用于下方时间列表，置顶圆印不参与。
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(() => new Set());
+  // 批量删除必须二次确认（归档可逆，不拦）。
+  const [batchConfirm, setBatchConfirm] = useState<{
+    action: "delete";
+    items: { cwd: string; file: string; title: string }[];
+  } | null>(null);
   // Pinned-zone drag & drop state (projects and threads share the same rules).
   const [dragItem, setDragItem] = useState<{ kind: "project" | "thread"; id: string } | null>(null);
   const [dropTarget, setDropTarget] = useState<{ kind: "project" | "thread"; id: string; pos: "before" | "after" } | null>(null);
@@ -350,6 +358,81 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
         language === "zh" ? `打开项目文件夹失败：${detail}` : `Could not open project folder: ${detail}`,
       );
     }
+  };
+
+  /** 导出单个会话为 Markdown：主进程弹保存框、写文件，这里只负责 toast 反馈。 */
+  const exportSession = async (title: string, cwd: string, file: string) => {
+    try {
+      const res = await window.pi.app.exportThread({ file, title, cwd });
+      if (!res) return; // 用户在保存框点了取消
+      const zh = language === "zh";
+      if (res.ok) {
+        const extra = res.attachments ? (zh ? `（含 ${res.attachments} 个附件` : ` (${res.attachments} attachment(s)`) : "";
+        const tail = extra ? (res.skipped ? (zh ? `，${res.skipped} 个跳过）` : `, ${res.skipped} skipped)`) : (zh ? "）" : ")")) : "";
+        useStore.getState().pushToast("success", zh ? `已导出会话包：${res.path}${extra}${tail}` : `Session pack exported: ${res.path}${extra}${tail}`);
+      } else {
+        useStore.getState().pushToast("error", zh ? `导出失败：${res.error}` : `Export failed: ${res.error}`);
+      }
+    } catch (error: any) {
+      useStore.getState().pushToast(
+        "error",
+        language === "zh" ? `导出失败：${error?.message || error}` : `Export failed: ${error?.message || error}`,
+      );
+    }
+  };
+
+  // ---- 批量操作 ---------------------------------------------------------
+  const batchItems = (): { cwd: string; file: string; title: string }[] =>
+    restThreads
+      .filter((t) => selectedFiles.has(t.file))
+      .map((t) => ({
+        cwd: t.cwd,
+        file: t.file,
+        title: localizeAutomationThreadTitle(t.title, language) || (language === "zh" ? "未命名会话" : "Untitled"),
+      }));
+
+  const exitBatch = () => {
+    setBatchMode(false);
+    setSelectedFiles(new Set());
+  };
+
+  const toggleSelected = (file: string) =>
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(file)) next.delete(file);
+      else next.add(file);
+      return next;
+    });
+
+  const selectAllListed = () => setSelectedFiles(new Set(restThreads.map((t) => t.file)));
+
+  /** 批量归档（可逆，直接执行）／批量删除（先弹确认）。 */
+  const runBatch = async (action: "archive" | "delete") => {
+    const items = batchItems();
+    if (!items.length) return;
+    if (action === "delete") {
+      setBatchConfirm({ action, items });
+      return;
+    }
+    for (const it of items) await archiveThread(it.cwd, it.file, it.title);
+    useStore
+      .getState()
+      .pushToast("success", language === "zh" ? `已归档 ${items.length} 个会话。` : `Archived ${items.length} sessions.`);
+    exitBatch();
+  };
+
+  const confirmBatchDelete = async () => {
+    const pending = batchConfirm;
+    setBatchConfirm(null);
+    if (!pending) return;
+    for (const it of pending.items) await deleteThread(it.cwd, it.file, it.title);
+    useStore
+      .getState()
+      .pushToast(
+        trashEnabled ? "info" : "success",
+        language === "zh" ? `已删除 ${pending.items.length} 个会话。` : `Deleted ${pending.items.length} sessions.`,
+      );
+    exitBatch();
   };
 
   // The user moved a project folder outside of MPI; pick the new location and
@@ -565,13 +648,13 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
         </div>
 
         <div className="sb-tabs">
-          <button className={`sb-tab ${sidebarTab === "threads" ? "active" : ""}`} onClick={() => setSidebarTab("threads")}>
+          <button className={`sb-tab ${sidebarTab === "threads" ? "active" : ""}`} onClick={() => { setSidebarTab("threads"); exitBatch(); }}>
             {language === "zh" ? "会话" : "Sessions"}
           </button>
-          <button className={`sb-tab ${sidebarTab === "projects" ? "active" : ""}`} onClick={() => setSidebarTab("projects")}>
+          <button className={`sb-tab ${sidebarTab === "projects" ? "active" : ""}`} onClick={() => { setSidebarTab("projects"); exitBatch(); }}>
             {language === "zh" ? "项目" : "Projects"}
           </button>
-          <button className={`sb-tab ${sidebarTab === "files" ? "active" : ""}`} onClick={() => setSidebarTab("files")}>
+          <button className={`sb-tab ${sidebarTab === "files" ? "active" : ""}`} onClick={() => { setSidebarTab("files"); exitBatch(); }}>
             {language === "zh" ? "文件" : "Files"}
           </button>
         </div>
@@ -629,8 +712,38 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                 })}
               </div>
             )}
+            {/* 批量操作条：多选模式下固定在列表上方，已选计数 + 全选 + 归档/删除 + 退出。 */}
+            {batchMode && (
+              <div className="sb-batch-bar">
+                <span className="sb-batch-count">
+                  {language === "zh" ? `已选 ${selectedFiles.size}` : `${selectedFiles.size} selected`}
+                </span>
+                <div className="sb-batch-actions">
+                  <button type="button" onClick={selectAllListed}>
+                    {language === "zh" ? "全选" : "All"}
+                  </button>
+                  <button type="button" onClick={() => setSelectedFiles(new Set())} disabled={selectedFiles.size === 0}>
+                    {language === "zh" ? "清空" : "None"}
+                  </button>
+                  <button type="button" onClick={() => void runBatch("archive")} disabled={selectedFiles.size === 0}>
+                    {language === "zh" ? "归档" : "Archive"}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => void runBatch("delete")}
+                    disabled={selectedFiles.size === 0}
+                  >
+                    {language === "zh" ? "删除" : "Delete"}
+                  </button>
+                  <button type="button" onClick={exitBatch}>
+                    {language === "zh" ? "退出" : "Done"}
+                  </button>
+                </div>
+              </div>
+            )}
             {/* 会话 tab：跨项目全量列表（置顶会话已在上面宫格，不再重复）；按自然日分段。 */}
-            <div className="sb-sessions">
+            <div className={`sb-sessions${batchMode ? " batch" : ""}`}>
             {restThreads.length === 0 && pinnedRows.length === 0 && (
               <div className="ft-empty">
                 {language === "zh" ? "还没有会话，点左上角 + 新建。" : "No sessions yet — hit + to start one."}
@@ -646,15 +759,23 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                 <Fragment key={t.cwd + "::" + t.file}>
                   {groupLabel && <div className="thread-group">{groupLabel}</div>}
                   <div
-                    className={`srow ${activeThreadId === t.file ? "active" : ""}`}
+                    className={`srow ${activeThreadId === t.file ? "active" : ""} ${batchMode ? "batch" : ""} ${selectedFiles.has(t.file) ? "selected" : ""}`}
                     role="button"
                     tabIndex={0}
-                    onClick={() => onThreadClick(t.cwd, t.file)}
+                    // 拖到输入框 = 引用这个会话（和项目树里的行同一套 MIME；批量模式下禁用，避免误拖）
+                    draggable={!batchMode}
+                    onDragStart={(event) => {
+                      if (batchMode) return;
+                      event.dataTransfer.effectAllowed = "copy";
+                      event.dataTransfer.setData(MPI_SESSION_MIME, JSON.stringify({ file: t.file, title }));
+                    }}
+                    onClick={() => (batchMode ? toggleSelected(t.file) : onThreadClick(t.cwd, t.file))}
                     onKeyDown={(event) => {
                       if (event.target !== event.currentTarget) return;
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        onThreadClick(t.cwd, t.file);
+                        if (batchMode) toggleSelected(t.file);
+                        else onThreadClick(t.cwd, t.file);
                       }
                     }}
                     onContextMenu={(event) => {
@@ -675,6 +796,11 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                     title={`${title}\n${t.projectName} · ${new Date(t.updatedAt).toLocaleString()}`}
                   >
                     <div className="srow-main">
+                      {batchMode && (
+                        <span className={`srow-check${selectedFiles.has(t.file) ? " on" : ""}`} aria-hidden>
+                          {selectedFiles.has(t.file) ? <Check size={11} /> : null}
+                        </span>
+                      )}
                       {running && <span className="thread-running" />}
                       {t.pinned && (
                         <span className="thread-pin" title={language === "zh" ? "已置顶会话" : "Pinned session"}>
@@ -707,19 +833,7 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                             void archiveThread(t.cwd, t.file, title);
                           }}
                         >
-                          <Archive size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          className="danger"
-                          title={language === "zh" ? "删除" : "Delete"}
-                          aria-label={(language === "zh" ? "删除：" : "Delete: ") + title}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openDeleteConfirmation(t.cwd, t.file, title);
-                          }}
-                        >
-                          <Trash size={13} />
+                          <Check size={13} />
                         </button>
                       </span>
                     </div>
@@ -891,26 +1005,14 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
                               <button
                                 type="button"
                                 className="thread-archive-btn"
-                                title="归档"
-                                aria-label={`归档：${title}`}
+                                title={language === "zh" ? "归档" : "Archive"}
+                                aria-label={`${language === "zh" ? "归档" : "Archive"}：${title}`}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   void archiveThread(p.cwd, t.file, title);
                                 }}
                               >
-                                <Archive size={13} />
-                              </button>
-                              <button
-                                type="button"
-                                className="thread-delete-btn"
-                                title={language === "zh" ? "删除" : "Delete"}
-                                aria-label={`${language === "zh" ? "删除" : "Delete"}：${title}`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  openDeleteConfirmation(p.cwd, t.file, title);
-                                }}
-                              >
-                                <Trash size={13} />
+                                <Check size={13} />
                               </button>
                             </div>
                             {t.preview && t.preview !== t.title && <div className="thread-preview">{t.preview}</div>}
@@ -1064,8 +1166,8 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
           style={{ left: threadMenu.x, top: threadMenu.y }}
           role="menu"
         >
-          <div className="project-context-name" title={threadMenu.file}>{threadMenu.name}</div>
-          {/* 分组（参考 WorkBuddy 的会话右键菜单）：排序/置顶 → 会话操作 → 位置 → 危险项单独一组。 */}
+          {/* 不再显示会话标题行：菜单是紧贴右键位置弹出的，标题属于上下文冗余。 */}
+          {/* 分组：排序/置顶 → 会话操作（克隆/导出/归档）→ 位置 → 危险项单独一组。 */}
           {threadMenu.pinnedRank > 0 && (
             <button
               role="menuitem"
@@ -1102,11 +1204,11 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               <Pin size={13} className={threadMenu.pinned ? "pin-on" : undefined} />
               {threadMenu.pinned
                 ? language === "zh"
-                  ? "取消置顶会话"
-                  : "Unpin session"
+                  ? "取消置顶"
+                  : "Unpin"
                 : language === "zh"
-                  ? "置顶会话"
-                  : "Pin session"}
+                  ? "置顶"
+                  : "Pin"}
             </span>
           </button>
           <div className="pcm-sep" role="separator" />
@@ -1123,22 +1225,33 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               });
             }}
           >
-            <span className="pcm-label"><Copy size={13} />{language === "zh" ? "克隆会话" : "Clone session"}</span>
+            <span className="pcm-label"><Copy size={13} />{language === "zh" ? "克隆" : "Clone"}</span>
           </button>
           <button
             role="menuitem"
             title={
               language === "zh"
-                ? "移出会话列表（不删文件，可在 设置 › 归档与回收 恢复）"
-                : "Hide from the session list (file kept; restore in Settings › Archive & trash)"
+                ? "导出为会话包（ZIP：原始 JSONL + 会话用到的附件），可在另一台机器的「设置 › 数据管理 › 导入会话」直接导入"
+                : "Export a session package (ZIP: raw JSONL + attachments) that imports directly on another machine"
             }
             onClick={() => {
               const item = threadMenu;
               setThreadMenu(null);
-              void archiveThread(item.cwd, item.file, item.name);
+              void exportSession(item.name, item.cwd, item.file);
             }}
           >
-            <span className="pcm-label"><Archive size={13} />{language === "zh" ? "归档会话" : "Archive session"}</span>
+            <span className="pcm-label"><Download size={13} />{language === "zh" ? "导出" : "Export"}</span>
+          </button>
+          <button
+            role="menuitem"
+            title={language === "zh" ? "进入多选模式，批量归档或删除会话" : "Multi-select to archive or delete in bulk"}
+            onClick={() => {
+              setThreadMenu(null);
+              setBatchMode(true);
+              setSelectedFiles(new Set());
+            }}
+          >
+            <span className="pcm-label"><CheckSquare size={13} />{language === "zh" ? "批量操作" : "Batch"}</span>
           </button>
           <div className="pcm-sep" role="separator" />
           <button
@@ -1154,11 +1267,26 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
           </button>
           <div className="pcm-sep" role="separator" />
           <button
+            role="menuitem"
+            title={
+              language === "zh"
+                ? "移出会话列表（不删文件，可在 设置 › 归档与回收 恢复）"
+                : "Hide from the session list (file kept; restore in Settings › Archive & trash)"
+            }
+            onClick={() => {
+              const item = threadMenu;
+              setThreadMenu(null);
+              void archiveThread(item.cwd, item.file, item.name);
+            }}
+          >
+            <span className="pcm-label"><Archive size={13} />{language === "zh" ? "归档" : "Archive"}</span>
+          </button>
+          <button
             className="danger"
             role="menuitem"
             onClick={() => openDeleteConfirmation(threadMenu.cwd, threadMenu.file, threadMenu.name)}
           >
-            <span className="pcm-label"><Trash size={13} />{language === "zh" ? "删除会话" : "Delete session"}</span>
+            <span className="pcm-label"><Trash size={13} />{language === "zh" ? "删除" : "Delete"}</span>
           </button>
         </div>
       )}
@@ -1184,6 +1312,39 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
           </div>,
           document.body,
         )}
+      {batchConfirm && (
+        <div className="modal-backdrop thread-delete-backdrop" onMouseDown={() => setBatchConfirm(null)}>
+          <div
+            className="modal thread-delete-confirm"
+            onMouseDown={(event) => event.stopPropagation()}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="batch-delete-title"
+          >
+            <div className="modal-title" id="batch-delete-title">
+              {language === "zh" ? `批量删除 ${batchConfirm.items.length} 个会话？` : `Delete ${batchConfirm.items.length} sessions?`}
+            </div>
+            <div className="modal-msg">
+              {trashEnabled
+                ? language === "zh"
+                  ? "这些会话将被移入回收站，可在设置「数据管理」中恢复或永久删除。"
+                  : "They will move to the trash. Restore or purge them from Settings → Data management."
+                : language === "zh"
+                  ? "这些会话及其完整记录将被永久删除，删除后无法恢复。"
+                  : "These sessions and their full history will be permanently deleted. This cannot be undone."}
+            </div>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setBatchConfirm(null)}>
+                {language === "zh" ? "取消" : "Cancel"}
+              </button>
+              <button className="btn danger" onClick={() => void confirmBatchDelete()}>
+                <Trash size={13} />
+                {language === "zh" ? `删除 ${batchConfirm.items.length} 个` : `Delete ${batchConfirm.items.length}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {deleteConfirm && (
         <div className="modal-backdrop thread-delete-backdrop" onMouseDown={() => setDeleteConfirm(null)}>
           <div

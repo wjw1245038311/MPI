@@ -21,7 +21,7 @@ export const BACKUP_FORMAT_VERSION = 1;
 
 interface BackupManifest {
   app: "MPI";
-  kind: "config" | "sessions";
+  kind: "config" | "sessions" | "session-export";
   version: number;
   exportedAt: string;
   appVersion?: string;
@@ -141,8 +141,17 @@ interface ZipSessionFile {
   data: Buffer;
 }
 
-/** Read a session backup zip and return its .jsonl entries with safe relative paths. */
-async function readZipSessions(path: string): Promise<{ manifest: Record<string, unknown> | null; files: ZipSessionFile[] }> {
+interface ZipAttachmentFile {
+  /** 引用名（会话 jsonl 里 `name="…"` 用的那个；包内路径为 `attachments/<name>`）。 */
+  name: string;
+  data: Buffer;
+}
+
+/** Read a session backup zip and return its .jsonl entries with safe relative paths.
+ *  `attachments/` 下的条目一并读出（「导出会话」包才有；纯备份包为空数组）。 */
+async function readZipSessions(
+  path: string,
+): Promise<{ manifest: Record<string, unknown> | null; files: ZipSessionFile[]; attachments: ZipAttachmentFile[] }> {
   const JSZip = await loadZip();
   let zip: any;
   try {
@@ -161,14 +170,23 @@ async function readZipSessions(path: string): Promise<{ manifest: Record<string,
     }
   }
   const files: ZipSessionFile[] = [];
+  const attachments: ZipAttachmentFile[] = [];
   for (const [name, entry] of Object.entries(zip.files) as Array<[string, any]>) {
     if (entry.dir) continue;
-    if (!name.toLowerCase().endsWith(".jsonl")) continue;
-    const relPath = safeRelPath(name);
-    if (!relPath) continue; // absolute / traversal — refuse silently
-    files.push({ relPath, data: await entry.async("nodebuffer") });
+    if (name.toLowerCase().endsWith(".jsonl")) {
+      const relPath = safeRelPath(name);
+      if (!relPath) continue; // absolute / traversal — refuse silently
+      files.push({ relPath, data: await entry.async("nodebuffer") });
+      continue;
+    }
+    if (name.startsWith("attachments/")) {
+      const refName = name.slice("attachments/".length);
+      // 引用名就是附件库里的文件名：拒绝任何路径成分，只接受纯文件名。
+      if (!refName || refName.includes("/") || refName.includes("\\") || refName === "." || refName === "..") continue;
+      attachments.push({ name: refName, data: await entry.async("nodebuffer") });
+    }
   }
-  return { manifest, files };
+  return { manifest, files, attachments };
 }
 
 /** Export the selected session dirs into a zip at outPath. Returns file count. */
@@ -238,6 +256,14 @@ export interface SessionImportResult {
   imported: number;
   skipped: number;
   overwritten: number;
+  /** 「导出会话」包里成功落地的附件数（纯备份包恒为 0）。 */
+  attachments: number;
+}
+
+/** 附件落地钩子：由 callers（IPC 层）注入真实实现，backup.ts 本身保持不依赖 Electron。
+ *  返回 false 表示这一条失败（包内其它文件照常导入）。 */
+export interface ImportAttachmentHook {
+  storeAttachment(args: { name: string; bytes: Buffer; label?: string; mime?: string }): boolean;
 }
 
 /**
@@ -249,9 +275,10 @@ export async function importSessionZip(
   path: string,
   policy: "skip" | "overwrite",
   sessionsRoot?: string,
+  attachmentHook?: ImportAttachmentHook,
 ): Promise<SessionImportResult> {
   const root = resolve(sessionsRoot || getSessionsDir());
-  const { files } = await readZipSessions(path);
+  const { manifest: manifestRecord, files, attachments } = await readZipSessions(path);
   mkdirSync(root, { recursive: true });
   let imported = 0;
   let skipped = 0;
@@ -269,5 +296,25 @@ export async function importSessionZip(
     if (exists) overwritten++;
     else imported++;
   }
-  return { imported, skipped, overwritten };
+
+  // 附件：按 manifest 里的 mime/label 落地到本机附件库（同名即可被会话引用到）。
+  let attachmentCount = 0;
+  if (attachmentHook && attachments.length) {
+    const metaByName = new Map(
+      ((manifestRecord?.attachments as any[]) ?? [])
+        .filter((a) => a && typeof a.name === "string")
+        .map((a) => [a.name as string, a as { name: string; mime?: string; label?: string }]),
+    );
+    for (const a of attachments) {
+      const meta = metaByName.get(a.name) ?? { name: a.name };
+      try {
+        if (attachmentHook.storeAttachment({ name: a.name, bytes: a.data, label: meta.label, mime: meta.mime })) {
+          attachmentCount++;
+        }
+      } catch {
+        /* 单条失败不影响整体导入 */
+      }
+    }
+  }
+  return { imported, skipped, overwritten, attachments: attachmentCount };
 }
