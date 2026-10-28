@@ -23,6 +23,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 6. **改：细边框与遮罩收敛（`--hairline` / `--scrim(-soft)`），品牌色半透明到此收尾**——导航面板的 1px 细边框原来浅色写 `rgba(103,111,100,.2)`、深色写 `rgba(170,194,174,.22)`（3 处）；弹层遮罩写 `rgba(20,22,18,.42/.35)` 与深色 `rgba(0,0,0,.58)`。现在统一为 `--hairline`（浅/深各一套）与 `--scrim` / `--scrim-soft`。品牌/状态色半透明**不再继续收敛**：剩下的 30+ 种都是一次性语义（自定义状态环、深色导航圆点细节），继续 token 化会新增比消除更多的变量。
    验证方式：`npm run typecheck` + `npm run build`；`grep -c "var(--hairline)|var(--scrim" src/renderer/src/styles.css` = 8。应用内：左侧导航圆点条/面板边框浅深色应与之前一致；设置遮罩、确认弹层、模态遮罩观感不变（深色下仍是 58% 黑）。
 
+7. **新增：凭据注入 P1b（只有「远程直接用」级进环境变量）**——主进程在启动每个会话的 pi 进程时，把 `silent` 级且作用域匹配当前项目根的凭据解密后写进该进程环境（`MPI_SECRET_<名字>`），并把「变量名 + 引用名 + 用途」写成 `MPI_SECRET_META` 交给新加的 `mpi-credentials-ext` 扩展，由它把这批变量名与使用禁令（不许 echo / 写文件 / `set -x`，不许向用户索要明文）追加到系统提示。`confirm` / `local-only` 级**不注入**——它们需要逐次策略判断，留到后续 broker 工具（见 `docs/CREDENTIALS-VAULT.md` §7）。
+   验证方式：`npm run typecheck` + `npm run check:ext`（11 个扩展）+ `npm test -- credentials`（新增断言：变量名映射、项目作用域只对匹配项目生效且 Windows 大小写/斜杠不敏感、confirm/local-only 不注入、元信息与提示块均不含值）+ `npm test -- registry`。应用内：**重启 dev** → 设置 → 凭据新增一条级别为「远程直接用」的凭据 → **新建会话**（旧会话的 env 已固定）→ 让 agent 跑 `echo ${MPI_SECRET_X:+已注入}`，它应知道该变量存在且能使用，而对话/日志里看不到值；把级别改成「仅本机」后新建会话，agent 应被告知该凭据当前不可用。
+8. **改：凭据面板配色/字号按新版设计规范收敛**——面板边界改用 `--hairline`、危险项改用 `--danger` 家族（不再借用 `--ctx-warn`）、字号回到 7 档、圆角只用 4/8/999，与新收敛的 token 体系一致。
+   验证方式：`npm run typecheck` + `npm run build`。应用内：设置 → 凭据，浅色/深色下看列表边框与「仅本机」标签颜色是否跟其它面板一致。
+
+
 ## v0.13.4（2026-10-27）
 1. **修：v0.13.3 的 choices 去重会静默丢题（同一条回复里多个不同问题只留最后一个）**——v0.13.3 为了压掉「模型重写块」造成的双面板，做了无条件的「同消息只渲染最后一块」；thinkbook16p 真机反馈：一条回复里出现 **3 个内容不同的问题块 + 1 个空残块**，结果 2 道题被丢弃（`choice-fence-duplicate dropped:2`），截图里只剩一个面板。现在判重改为**内容签名**（题目 + 每题选项 label，忽略 detail 与空白差异）：签名相同才折叠（模型重写），内容不同的块全部保留。三端同步（桌面 `choiceSignature` / PWA / 安卓）。
    验证方式：`npm run typecheck` + `npm test -- choice`（`test-choice-block` / `test-pwa-choice` 新增「不同内容多块都渲染 / 同内容折叠 / 空块丢弃」）+ `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest --tests 'com.mpi.app.ChoiceLangToleranceTest'`（9 项）。应用内：让模型一条回复里问 3 组不同问题 → 应看到 3 个面板（v0.13.3 只有 1 个）。

@@ -70,6 +70,7 @@ import {
   deleteCredential,
   listCredentials,
   revealCredential,
+  secretEnvForScope,
   updateCredential,
   type CredentialInput,
   type CredentialPatch,
@@ -125,6 +126,7 @@ import {
 } from "./choice-logic.ts";
 import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
+import { ensureCredentialsExtension } from "./credentials-extension";
 import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
 // 附件下行（agent → 客户端）：扩展桥 + 收件箱 + 引用 mime 推断。
@@ -693,6 +695,9 @@ function createHandle(
       // Shell-environment bridge: tells the model which shell its commands run
       // in (paired with the --exclude-tools powershell passed to this spawn).
       ensureShellEnvExtension(getConfigDir()),
+      // 凭据注入 bridge：把「有哪些凭据可用、如何引用、禁止打印」写进系统提示。
+      // 值本身由 pi-bridge 注入进程环境（只含 silent 级，见 CREDENTIALS-VAULT.md §4.2）。
+      ensureCredentialsExtension(getConfigDir()),
       // Mode-switch bridge: mpi_request_mode_switch lets the agent ask to leave
       // an enforced read-only task mode (research/review) with one approval card.
       // Interactive threads only — automation spawns its own list without it, so
@@ -723,6 +728,11 @@ function createHandle(
     attachFilePaths: { ...ensureAttachFileDirs(getConfigDir()), configFile: join(getConfigDir(), "config.json") },
     memoryInboxDir: ensureMemoryCandidateInbox(getConfigDir()),
     memoryProject: cwd.split(/[\\/]/).filter(Boolean).pop(),
+    // 凭据注入（P1b）：只含 silent 级且作用域匹配当前项目根；值只进子进程 env。
+    ...(() => {
+      const sec = secretEnvForScope(cwd);
+      return Object.keys(sec.env).length > 0 ? { secretEnv: sec.env, secretMeta: sec.meta } : {};
+    })(),
     memoryPoolDir: memoryPoolDir(),
     memoryEndpointFile: memoryEndpointPath(getConfigDir()),
     choiceConfigFile: join(getConfigDir(), "config.json"),

@@ -5,6 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import { ensureRuntimePackage, getActiveRuntimeRoot, getRuntimePackageManifest, runtimePathsForRoot } from "./runtime-package";
 import type { ShellInfoPayload } from "./shell-bootstrap";
 import { memoryModelEnv } from "./memory-model-runtime";
+import type { SecretEnvMeta } from "../shared/credentials";
 
 /**
  * PiBridge
@@ -351,6 +352,13 @@ export interface PiBridgeOptions {
    * task-mode extension as MPI_TASKMODE_DIR; it reads its own thread's file on
    * every turn and injects instructions/spec into the system prompt. */
   taskModeStateDir?: string;
+  /**
+   * 凭据注入（P1b，见 docs/CREDENTIALS-VAULT.md §4.2）：只含 `silent` 级凭据的值。
+   * **值只能进 env，不得进日志/事件/快照** —— 主进程侧只记录 meta。
+   */
+  secretEnv?: Record<string, string>;
+  /** 与 secretEnv 配套的元信息（变量名 + 引用名 + 用途，**不含值**），序列化后交给扩展渲染提示词。 */
+  secretMeta?: SecretEnvMeta[];
   onEvent: (event: unknown) => void;
   onExtUi: (request: ExtUiRequest) => void;
   onExit: (info: { code: number | null; signal: NodeJS.Signals | null; stderr: string; expected?: boolean }) => void;
@@ -437,6 +445,11 @@ export class PiBridge {
     if (this.opts.choiceConfigFile) env.MPI_CHOICE_CONFIG = this.opts.choiceConfigFile;
     if (this.opts.smartCompactConfigFile) env.MPI_SMART_COMPACT_CONFIG = this.opts.smartCompactConfigFile;
     if (this.opts.taskModeStateDir) env.MPI_TASKMODE_DIR = this.opts.taskModeStateDir;
+    if (this.opts.secretEnv && Object.keys(this.opts.secretEnv).length > 0) {
+      // 值只进子进程环境；meta 只含名称与用途，扩展据此告诉模型有哪些可用。
+      Object.assign(env, this.opts.secretEnv);
+      env.MPI_SECRET_META = JSON.stringify(this.opts.secretMeta ?? []);
+    }
 
     this.proc = spawn(rt.node, [rt.cli, ...args], {
       cwd: this.opts.cwd,

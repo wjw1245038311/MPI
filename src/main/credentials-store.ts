@@ -10,6 +10,7 @@ import type {
   CredentialScope,
   CredentialSummary,
 } from "../renderer/src/lib/types";
+import { scopeMatches, secretEnvName, type SecretEnvMeta } from "../shared/credentials";
 
 export type {
   CredentialInput,
@@ -319,4 +320,33 @@ export function revealCredential(id: string): { name: string; kind: CredentialKi
 /** 测试用：丢弃内存缓存（不删文件）。 */
 export function __resetCredentialsCache(): void {
   cache = null;
+}
+
+/**
+ * 为某个项目根目录构建「可注入进程环境的凭据」（P1b）。
+ *
+ * - 只含 `level === "silent"`：`confirm` / `local-only` 需要逐次策略判断，
+ *   只能走后续的 broker 工具（docs/CREDENTIALS-VAULT.md §7）；提前注入等于绕过策略。
+ * - 作用域限定：`global` 全适用，`project` 只在根目录匹配时适用。
+ * - 返回值里带明文值，**调用方只能把它交给 spawn 的 env，不得记录**。
+ */
+export function secretEnvForScope(root: string | undefined): {
+  env: Record<string, string>;
+  meta: SecretEnvMeta[];
+} {
+  const env: Record<string, string> = {};
+  const meta: SecretEnvMeta[] = [];
+  if (!cipher || !cipher.available()) return { env, meta };
+  for (const rec of load()) {
+    if (rec.level !== "silent") continue;
+    if (!scopeMatches(rec.scope, root)) continue;
+    const name = secretEnvName(rec.name);
+    try {
+      env[name] = cipher.decrypt(rec.valueEnc);
+    } catch {
+      continue; // 单条解密失败不影响其它凭据；不输出原因（避免日志里蹦出密文片段）
+    }
+    meta.push({ env: name, name: rec.name, ...(rec.hint ? { hint: rec.hint } : {}) });
+  }
+  return { env, meta };
 }

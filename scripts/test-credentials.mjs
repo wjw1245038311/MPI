@@ -115,6 +115,42 @@ try {
   expectCode(() => store.revealCredential(created.id), "CRED_NOT_FOUND", "删除后 reveal");
   expectCode(() => store.deleteCredential(created.id), "CRED_NOT_FOUND", "重复删除");
 
+  // -----------------------------------------------------------------------
+  // P1b：silent 级凭据 → 环境变量注入（confirm / local-only 绝不能提前注入）
+  // -----------------------------------------------------------------------
+  const shared = await import("../src/shared/credentials.ts");
+  assert.equal(shared.secretEnvName("aliyun-prod-root"), "MPI_SECRET_ALIYUN_PROD_ROOT", "变量名映射");
+  assert.equal(shared.secretEnvName("a.b_c"), "MPI_SECRET_A_B_C", "非字母数字统一成下划线");
+
+  const projectRoot = "E:/MyWorkspace/Project/MPI";
+  store.createCredential({ name: "silent-global", kind: "token", level: "silent", hint: "只读查询", value: "g-123" });
+  store.createCredential({ name: "silent-project", kind: "password", level: "silent", value: "p-456", scope: { type: "project", root: projectRoot } });
+  store.createCredential({ name: "confirm-one", kind: "password", level: "confirm", value: "c-789" });
+  store.createCredential({ name: "local-one", kind: "password", level: "local-only", value: "l-000" });
+
+  const forProject = store.secretEnvForScope(projectRoot);
+  assert.equal(forProject.env.MPI_SECRET_SILENT_GLOBAL, "g-123", "全局 silent 注入");
+  assert.equal(forProject.env.MPI_SECRET_SILENT_PROJECT, "p-456", "项目 silent 注入（根匹配）");
+  assert.equal("MPI_SECRET_CONFIRM_ONE" in forProject.env, false, "confirm 级不得提前注入");
+  assert.equal("MPI_SECRET_LOCAL_ONE" in forProject.env, false, "local-only 不得提前注入");
+
+  // 作用域：别的项目根只拿到全局那份（Windows 大小写/斜杠不敏感）
+  const otherProject = store.secretEnvForScope("e:\\Other\\Project");
+  assert.equal("MPI_SECRET_SILENT_GLOBAL" in otherProject.env, true, "全局仍适用");
+  assert.equal("MPI_SECRET_SILENT_PROJECT" in otherProject.env, false, "项目作用域不跨项目");
+  assert.equal("MPI_SECRET_SILENT_GLOBAL" in store.secretEnvForScope(`${projectRoot}\\`).env, true, "尾斜杠不影响匹配");
+
+  // meta 不含值，提示块也不含值
+  assert.equal(JSON.stringify(forProject.meta).includes("g-123"), false, "meta 不含值");
+  assert.equal(forProject.meta.find((m) => m.env === "MPI_SECRET_SILENT_GLOBAL")?.hint, "只读查询");
+  for (const lang of [true, false]) {
+    const block = shared.buildSecretEnvBlock(forProject.meta, lang);
+    assert.ok(block.includes("MPI_SECRET_SILENT_GLOBAL"), "提示块列出变量名");
+    assert.equal(block.includes("g-123"), false, "提示块不含值");
+    assert.equal(block.includes("p-456"), false, "提示块不含值（项目凭据）");
+  }
+  assert.equal(shared.buildSecretEnvBlock([], true), "", "没有凭据时不加块");
+
   console.log("credentials-store: all assertions passed");
 } finally {
   rmSync(dataDir, { recursive: true, force: true });

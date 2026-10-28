@@ -83,7 +83,7 @@
 
 > **已查**：pi 的 `tool_call` hook（`src/main/permission-gate-ext.ts:939` 在用）只能 `{ block: true, reason }`，**没有改写入参的契约**（`pi/dist/core/agent-session.js` 的 `_beforeToolCall` 只把返回值当拦截用）。所以「改参数」这条路不通，展开只能落在执行环境侧。
 
-三条可选路径，P1 用 A：
+三条可选路径。**实现状态（2026-10-27）**：P1b 已按 A 落地，但**只注入 `silent` 级**——`confirm` / `local-only` 需要逐次策略判断，提前注入等于绕过策略，它们留给 P2/P3 的 broker 工具：
 
 | | 做法 | 优点 | 代价 | 
 |---|---|---|---|
@@ -92,6 +92,11 @@
 | **C 文件注入（按需）** | 写临时 0600 文件（`sshpass -f` / `PGPASSFILE` / `--defaults-extra-file`），用完即删 | 适配 `sshpass`、`mysql`、`psql` 这类只认文件的工具 | 落盘窗口期有风险，需明确清理与崩溃兜底 |
 
 具体做 A 时：
+
+- 只注入 `level === "silent"` 且作用域匹配当前项目根的凭据（`secretEnvForScope()`）；
+- 变量名规则 `MPI_SECRET_<NAME 大写、非字母数字转下划线>`（`src/shared/credentials.ts`，扩展端是拷贝：它要自包含）；
+- 元信息 `MPI_SECRET_META` 只含「变量名 + 引用名 + 用途」，扩展据此写系统提示；
+- **注意**：改凭据后已打开的会话不会自动拿到新变量（env 在 spawn 时固定）——新建会话或重启该会话才生效，UI 需在保存后提示这一点。
 
 - 只解密**本会话首次引用到的**凭据（惰性），并在切换会话/结束时清理；
 - 展开后立即把值从 `process.env` 移除（子进程已继承）——**未验证**能否干净移除并保证子进程已复制，需要小实验；
@@ -159,7 +164,7 @@
 | 阶段 | 内容 | 验收 | 要跑的测试 |
 |---|---|---|---|
 | **P1a** | vault（DPAPI）+ 设置页凭据面板（增/删/改/遮蔽显示、等级、作用域）+ 审计文件 | 重启后凭据仍在；`credentials.json` 里无明文；`strings` 搜不到原值 | `typecheck` + 新增 `test:credentials` |
-| **P1b** | 引用 + 展开 A（env 注入）+ `mpi_request_secret` 模态 | agent 用 `{{secret:x}}` 跑通一条真实命令；transcript/`mpi-diag.log`/快照里都搜不到值 | 同上 + `npm test -- remote` |
+| **P1b** | ✅ 已做：env 注入（**仅 silent 级**）+ 凭据扩展把变量名与禁令写进系统提示 | 会话里 `echo $MPI_SECRET_X` 能拿到值，而 transcript / `mpi-diag.log` / 快照里搜不到值 | `npm test -- credentials`（env 映射 / 作用域 / 提示块均含断言）+ `npm run check:ext` |
 | **P1c** | 远程矩阵：`source` 必填贯通 + `silent/confirm/local-only` 判定 + 审计 | 手机发起的会话用 `local-only` 凭据被拒且留下审计；`silent` 可用 | `npm test -- remote` + `test:pwa` |
 | **P2** | 手机端确认卡片（`confirm` 级）+ 30 分钟授权窗口 | 手机上点确认后命令才执行；拒绝则中止 | `test:pwa` + `test:remote` |
 | **P3（可选）** | 设备绑定断言（手机生物识别签名，主机只验签不下发明文） | 需先解决 PWA 的 https/域名 或安卓原生 BiometricPrompt | — |

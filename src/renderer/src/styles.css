@@ -11897,7 +11897,9 @@ mark.hl {
   transform: rotate(90deg);
 }
 
-/* --- 凭据面板（设置 → 凭据，docs/CREDENTIALS-VAULT.md） --------------- */
+/* --- 凭据面板（设置 → 凭据，docs/CREDENTIALS-VAULT.md） ---------------
+ * 颜色/圆角/字号全部走 token：边界用 --hairline，危险用 --danger 家族，
+ * 字号只用 7 档（11/12/13/14），圆角只用 4/8/999。深色由变量自带，无需另写。 */
 .cred-panel {
   display: flex;
   flex-direction: column;
@@ -11924,9 +11926,9 @@ mark.hl {
   align-items: flex-start;
   justify-content: space-between;
   padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--control);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-muted);
 }
 .cred-row.revealing {
   border-color: var(--accent);
@@ -11946,21 +11948,21 @@ mark.hl {
   font-size: 12px;
   background: var(--code-bg);
   padding: 2px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: 4px;
 }
 .cred-pill {
   font-size: 11px;
   line-height: 1;
   padding: 4px 7px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--border);
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
   color: inherit;
   opacity: 0.85;
   white-space: nowrap;
 }
 .cred-pill.level-silent {
-  border-color: var(--ctx-hi);
-  color: var(--ctx-hi);
+  border-color: var(--accent);
+  color: var(--accent);
   opacity: 1;
 }
 .cred-pill.level-confirm {
@@ -11969,8 +11971,8 @@ mark.hl {
   opacity: 1;
 }
 .cred-pill.level-local-only {
-  border-color: var(--ctx-warn);
-  color: var(--ctx-warn);
+  border-color: var(--danger);
+  color: var(--danger);
   opacity: 1;
 }
 .cred-meta {
@@ -11979,7 +11981,7 @@ mark.hl {
   gap: 6px;
   flex-wrap: wrap;
   font-size: 12px;
-  color: var(--preview-text-dim);
+  color: var(--text-faint);
 }
 .cred-dot {
   opacity: 0.5;
@@ -11995,14 +11997,14 @@ mark.hl {
   font-family: var(--mono);
   font-size: 12px;
   padding: 4px 8px;
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   background: var(--code-bg);
   border: 1px solid var(--accent-soft);
   word-break: break-all;
 }
 .cred-plain-note {
-  font-size: 12px;
-  color: var(--preview-text-dim);
+  font-size: 11px;
+  color: var(--text-faint);
 }
 .cred-actions {
   display: flex;
@@ -12011,8 +12013,8 @@ mark.hl {
   flex-shrink: 0;
 }
 .cred-actions .set-btn-sm.danger {
-  border-color: var(--ctx-warn);
-  color: var(--ctx-warn);
+  border-color: var(--danger-border);
+  color: var(--danger);
 }
 .cred-grid {
   display: grid;
@@ -12027,11 +12029,11 @@ mark.hl {
   font-size: 12px;
 }
 .cred-grid label > span {
-  color: var(--preview-text-dim);
+  color: var(--text-faint);
 }
 .cred-grid label > small {
-  font-size: 12px;
-  color: var(--preview-text-dim);
+  font-size: 11px;
+  color: var(--text-faint);
   opacity: 0.8;
 }
 .cred-grid .cred-span {
