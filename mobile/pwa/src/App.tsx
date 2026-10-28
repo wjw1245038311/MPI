@@ -1282,15 +1282,29 @@ export default function App() {
       {drawer !== "none" && <div className="drawer-backdrop" onClick={closeDrawer} />}
 
       <aside className={`drawer${drawer !== "none" ? " open" : ""}`} aria-hidden={drawer === "none" && !isWide}>
-        <button type="button" className="drawer-head" onClick={() => openDrawer("devices")}>
-          <span className="app-logo small" aria-hidden="true">M</span>
-          <span className="drawer-head-main">
-            <span className="drawer-head-title">
-              {currentPairing ? deviceLabel(currentPairing) : hostId ? `主机 ${shortId(hostId)}` : "未连接"}
+        <div className="drawer-head-wrap">
+          <button type="button" className="drawer-head" onClick={() => openDrawer("devices")}>
+            <span className="app-logo small" aria-hidden="true">M</span>
+            <span className="drawer-head-main">
+              <span className="drawer-head-title">
+                {currentPairing ? deviceLabel(currentPairing) : hostId ? `主机 ${shortId(hostId)}` : "未连接"}
+              </span>
+              <span className="hint hint-with-icon">{pairings.length} 台设备 · 点此切换 <ChevronRight size={13} /></span>
             </span>
-            <span className="hint hint-with-icon">{pairings.length} 台设备 · 点此切换 <ChevronRight size={13} /></span>
-          </span>
-        </button>
+          </button>
+          {view === "home" && hostId && (
+            <button
+              type="button"
+              className={`drawer-refresh${snap?.loading ? " spinning" : ""}`}
+              aria-label="刷新会话列表"
+              title="刷新"
+              disabled={!!snap?.loading}
+              onClick={() => void sessionRef.current?.refresh()}
+            >
+              <Refresh size={16} />
+            </button>
+          )}
+        </div>
 
         {view === "home" && hostId ? (
           <>

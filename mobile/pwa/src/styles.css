@@ -344,18 +344,52 @@ button:disabled { opacity: 0.5; cursor: default; }
   z-index: 42;
   box-shadow: var(--shadow-md);
 }
+.drawer-head-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+}
 .drawer-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 4px 4px 12px;
   background: none;
   border: none;
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+/* 会话列表刷新（放在设备卡右侧）：转圈用 --loading 状态（snap.loading）驱动。 */
+.drawer-refresh {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.drawer-refresh:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.drawer-refresh:disabled {
+  opacity: .6;
+  cursor: default;
+}
+.drawer-refresh.spinning svg {
+  animation: spin .9s linear infinite;
 }
 .drawer-head.plain {
   cursor: default;
