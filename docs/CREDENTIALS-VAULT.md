@@ -2,6 +2,7 @@
 
 > 状态：方案（未实现） · 2026-10-27
 > 关联：`docs/OPTIMIZATION-BACKLOG.md`、`docs/MOBILE-DESIGN.md`（远程 E2E）、`docs/SECURITY-AUDIT-2026-10-19-RELAY-MITM.md`
+> **测试方案：`docs/CREDENTIALS-TESTING.md`**（边界表 + L1 覆盖 + L3 手测清单 + 准出标准）
 > 本文只写「怎么落地」，取舍理由在对话记录里；**密码不离开主机**是硬约束，任何阶段都不放宽。
 
 ## 1. 目标与非目标
