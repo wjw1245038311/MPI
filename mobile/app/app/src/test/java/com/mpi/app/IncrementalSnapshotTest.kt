@@ -1,5 +1,6 @@
 package com.mpi.app
 
+import com.mpi.app.data.isHostMessageId
 import com.mpi.app.data.mergeIncremental
 import com.mpi.app.protocol.BlockType
 import com.mpi.app.protocol.MessageBlock
@@ -45,6 +46,29 @@ class IncrementalSnapshotTest {
     fun `local optimistic placeholders survive the merge`() {
         val local = listOf(message("m1", "一"), message("local-1", "刚发的", pending = true))
         val merged = mergeIncremental(local, listOf(message("m1", "一"), message("m2", "二")))
-        assertEquals(listOf("m1", "local-1", "m2"), ids(merged))
+        // 未确认的占位不丢，而且排在最末（它就是最近一条还没被主机确认的消息）。
+        assertEquals(listOf("m1", "m2", "local-1"), ids(merged))
+    }
+
+    @Test
+    fun `synthetic ids after the anchor are replaced by the host copy`() {
+        // 事件里长出来的流式消息（`a-17`）/ 事件补的用户消息（`u-5-1`）id 是本地合成的，
+        // 主机快照里没有；增量回来之后必须被同位置的主机版替掉，不能留重复气泡。
+        val local = listOf(message("user-100", "问"), message("a-17", "答了一半"))
+        val merged = mergeIncremental(local, listOf(message("user-100", "问"), message("assistant-200", "答完了")))
+        assertEquals(listOf("user-100", "assistant-200"), ids(merged))
+    }
+
+    @Test
+    fun `only host ids can be used as the incremental anchor`() {
+        // 主机发的：可当锚点
+        assertEquals(true, isHostMessageId("user-1793157932657"))
+        assertEquals(true, isHostMessageId("assistant-1793157933159"))
+        assertEquals(true, isHostMessageId("tool-call_abc"))
+        // 本地合成的：拿去问 haveMessageId 必然 miss（本次修的 bug）
+        assertEquals(false, isHostMessageId("local-1"))
+        assertEquals(false, isHostMessageId("a-17"))
+        assertEquals(false, isHostMessageId("u-17-3"))
+        assertEquals(false, isHostMessageId(""))
     }
 }

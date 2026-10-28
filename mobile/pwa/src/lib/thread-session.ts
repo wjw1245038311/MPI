@@ -480,7 +480,7 @@ export class ThreadSession {
    * 增量快照的锚点：主机在窗口里找得到就只回锚点及其之后。
    */
   private lastKnownMessageId(): string | undefined {
-    const local = this.view.messages.filter((m) => !m.pending);
+    const local = this.view.messages.filter((m) => !m.pending && isHostMessageId(m.id));
     return local.length ? local[local.length - 1].id : undefined;
   }
 
@@ -520,7 +520,9 @@ export class ThreadSession {
       messages: snapshot.incremental
         ? mergeIncremental(this.view.messages, snapshot.messages.map(mapRemoteMessage))
         : snapshot.messages.map(mapRemoteMessage),
-      streaming: null,
+      // 回合进行中**留住**正在长的流式气泡：快照是磁盘历史，不含这半条；
+      // 清掉就是「桌面写了一大段、手机端停在上一条」（与原生端同一取舍）。
+      streaming: snapshot.state === "running" ? this.view.streaming : null,
       running: snapshot.state === "running",
       errorBanner: null,
       model: snapshot.model ?? null,
@@ -570,6 +572,9 @@ export class ThreadSession {
           const text = stripImageDimensionNotes(rawText).trim();
           const compareText = stripImageHints(rawText).trim();
           const media = mediaPartsOfContent(m.content);
+          // 与主机快照同名（`role-<timestamp>`）：这样下一轮增量快照的锚点才能对上。
+          const eventTs = typeof m.timestamp === "number" && Number.isFinite(m.timestamp) ? m.timestamp : null;
+          const hostId = eventTs !== null ? `user-${eventTs}` : null;
           if (text || media.length) {
             // 本地乐观回显先转正（否则同一条消息会上屏两次）。
             // 文本两侧都 trim：主机会把附件的 <file …/> 引用追加在文本末尾（并在下发时剥掉），
@@ -582,7 +587,12 @@ export class ThreadSession {
                 // （否则回显永远挂着 pending，主机那条又追加一个 → 两个气泡）。
                 [...this.view.messages].reverse().find((message) => message.pending && message.role === "user");
             if (echo) {
-              this.patch({ messages: this.view.messages.map((message) => (message.id === echo.id ? { ...message, pending: false } : message)) });
+              // 转正的同时把 id 换成主机那串（锚点靠它），否则本地这条永远是“主机不认识”的 id。
+              this.patch({
+                messages: this.view.messages.map((message) =>
+                  message.id === echo.id ? { ...message, pending: false, ...(hostId ? { id: hostId } : {}) } : message,
+                ),
+              });
             } else {
               // 媒体块只带“有这么个东西”的信息（主机事件通道不带本体）——字节要靠快照，
               // 所以下面统一补一次快照；占位块先让用户看到“这里有个视频”。
@@ -590,7 +600,7 @@ export class ThreadSession {
                 ...media.map((part) => ({ type: part.type, name: part.name, mimeType: part.mimeType, omitted: true } as ViewBlock)),
                 ...(text ? [{ type: "text" as const, text }] : []),
               ];
-              this.pushMessage({ id: `u-${seq}-${this.view.messages.length}`, role: "user", blocks });
+              this.pushMessage({ id: hostId ?? `u-${seq}-${this.view.messages.length}`, role: "user", blocks });
             }
             // 本体在事件里（视频/图片）→ 补一次全量快照。防抖：in-flight 时不重复发。
             if (media.length && !this.mediaBackfillInFlight) {
@@ -629,7 +639,15 @@ export class ThreadSession {
       case "message_end": {
         const m = ev.message;
         if (m?.role === "assistant" && this.view.streaming) {
-          const finalMessage: ViewMessage = { ...this.view.streaming, stopReason: m.stopReason, errorMessage: m.errorMessage };
+          // 与主机快照同名（`assistant-<timestamp>`）：主机把连续 assistant 条目折叠成一个
+          // 回合，id 取的是第一条的时间戳；客户端这里用的就是它，下一次增量快照能对上。
+          const eventTs = typeof m.timestamp === "number" && Number.isFinite(m.timestamp) ? m.timestamp : null;
+          const finalMessage: ViewMessage = {
+            ...this.view.streaming,
+            ...(eventTs !== null ? { id: `assistant-${eventTs}` } : {}),
+            stopReason: m.stopReason,
+            errorMessage: m.errorMessage,
+          };
           this.pushMessage(finalMessage);
           this.patch({
             streaming: null,
@@ -922,10 +940,31 @@ function upsertToolBlock(blocks: ViewBlock[], id: string, patch: Partial<ViewBlo
  * - 新 id 追加；
  * - 本地乐观占位（pending，主机不认识）保持原样。
  */
-export function mergeIncremental<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+export function mergeIncremental<T extends { id: string; pending?: boolean }>(current: T[], incoming: T[]): T[] {
   if (!incoming.length) return current;
-  const byId = new Map(incoming.map((m) => [m.id, m] as const));
-  const merged = current.map((m) => byId.get(m.id) ?? m);
-  const known = new Set(current.map((m) => m.id));
-  return [...merged, ...incoming.filter((m) => !known.has(m.id))];
+  // 增量快照 = 「从锚点那条（含）开始往后」。所以：
+  //  · 锚点之前的本地消息原样保留（主机没重发）；
+  //  · 锚点之后一律以主机这份为准——事件里长出来的合成 id 消息（`a-N` / `u-N-M`）
+  //    会被同 id 的主机版覆盖，或直接丢掉，不会留下重复气泡；
+  //  · **未确认的乐观回显（pending）不能丢**：快照可能产生于它之前。
+  const anchorIndex = current.findIndex((m) => m.id === incoming[0].id);
+  const head = anchorIndex >= 0 ? current.slice(0, anchorIndex) : current;
+  const pendingTail = anchorIndex >= 0 ? current.slice(anchorIndex).filter((m) => m.pending) : [];
+  const incomingById = new Map(incoming.map((m) => [m.id, m] as const));
+  const merged = head.map((m) => incomingById.get(m.id) ?? m);
+  const seen = new Set(merged.map((m) => m.id));
+  const known = new Set(head.map((m) => m.id));
+  const tail = incoming.filter((m) => !known.has(m.id) && !seen.has(m.id));
+  for (const item of tail) seen.add(item.id);
+  return [...merged, ...tail, ...pendingTail.filter((m) => !seen.has(m.id))];
+}
+
+/**
+ * 主机发的消息 id 形如 `user-<ts>` / `assistant-<ts>` / `tool-<callId>`（见 ipc.ts 的
+ * remoteMessageId）。本地合成的不算：`local-N`、`a-N`、`u-N-M`。
+ */
+export function isHostMessageId(id: string): boolean {
+  if (!id) return false;
+  if (id.startsWith("local-") || id.startsWith("a-") || id.startsWith("u-")) return false;
+  return /^(user|assistant|system|tool)-/.test(id);
 }

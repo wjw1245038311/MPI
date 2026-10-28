@@ -14,6 +14,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
    **已发：安卓 v0.5.150**（`MPI_PUBLIC_DOWNLOAD_BASE=http://47.97.28.110:10445/download node scripts/dev-publish-android.mjs`）——APK 已推到 ECS `/var/www/mpi-mobile/download/`，清单 `version=0.5.150`、`size=32262203`、`sha256=C7698A6E…70E60`，RANGE 请求 206 已验证。手机「检测更新」即可升到这个包（客户端侧的缓冲区/保留流式已包含）；主机侧的补发需重启 dev 才生效。
 
+2. **修：增量快照的锚点永远对不上 → 每次打开会话都重下整段历史（PWA 表现像“每次全量刷新”）**——根因是**两端消息 id 不是同一套**：主机快照用位置型 `assistant-<index>` / `user-<index>`（pi 的消息条目根本没有 id），而客户端把**本地合成的 id** 当成 `haveMessageId` 锚点（乐观回显 `local-N`、流式 `a-N`、事件里补的用户消息 `u-N-M`）。主机 `findIndex` 永远 -1 → 回整段（现场实测 311KB～1.6MB/次，且每次重连都来一次）。后端与两端一起改：
+   - **主机**：消息 id 换成稳定键 `role-<timestamp>`（pi 消息没有 id、但有 `timestamp`；同一角色同一毫秒重复可忽略），回退顺序 `显式 id → role-<timestamp> → role-<位置>`；抽成 `src/main/remote/message-id.ts` 的纯函数并加单测。快照/增量日志新增 `remote-snapshot incremental=hit|miss anchor=… sent=A/B`，锚点是否命中一眼可判。
+   - **PWA + 安卓**：① 事件里长出来的消息改用同一规则命名（`user-<ts>`、`assistant-<ts>`；手机端发消息的乐观回显在「转正」时把 id 改成 `user-<ts>`）；② 锚点只取主机那种 id（`isHostMessageId` 过滤 `local-*` / `a-*` / `u-*`）；③ `mergeIncremental` 改成「锚点之后一律以主机为准」——合成的流式消息不会留下重复气泡，但未确认的乐观回显保留；④ PWA 补上「回合进行中不清 streaming」（与安卓对齐）。
+   效果：打开会话 = 本地缓存秒开 + 只拉尾巴（几十字节～几 KB），不再每次搬整段历史。升级后每个会话**第一次**打开仍会全量一次（旧缓存里是位置型 id），之后恢复正常。
+   验证方式：`npm run typecheck`；`npm test -- remote`（新增 `test-remote-message-id`：稳定键不随位置漂移、空白 id 回退、只有主机 id 能当锚点、事件 id 与快照 id 一致时 `applyIncrementalSnapshot` 真的命中）；`npm test -- pwa`（`pwa-thread` 新增：合成 id 在增量后被主机版替掉、锚点过滤）；手机端 `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（`IncrementalSnapshotTest` 新增两条）。全量 `npm test` 160 passed。PWA 已重新构建并部署到 ECS（`node scripts/deploy-pwa.mjs`，远端引用 `assets/index-BL3H7MyG.js`）。应用内：**重启 dev** → 桌面 diag 出现 `remote-snapshot incremental=hit`；手机/网页反复开关会话，响应应只剩几百字节级增量，不再每次都卡一下等整段历史。
+
 ## v0.13.5（2026-10-28）
 1. **改：错误/危险色统一收敛为 `--danger` 家族（浅深各一套，共 9 个变量）**——原来 `#c0392b`（18 次）、`#b23a2c`（17 次）、`#9a3d32`、`#a84439`、`#fdf3f1`、`#fbe9e7` 与 4 种半透明红散落在 60 多处；现在统一走 `--danger`（文字/边框/小圆点）、`--danger-strong(-hover)`（白字按钮/横幅底）、`--danger-pale(-strong)`（浅底）、`--danger-soft(-hover)` / `--danger-ring` / `--danger-border`。**浅色下取值保持不变**（`--danger` = `#c0392b`、`--danger-strong` = `#b23a2c`），深色下错误色改为更亮的 `#f2726a` / `#c0392b`，暗底可读性提升。同时 `docs/DESIGN.md` 补上 token 表与收敛清单，`AGENTS.md` 增加「改 UI 先读 DESIGN.md」。
    验证方式：`npm run typecheck` + `npm run build`；`grep -c "#c0392b\|#b23a2c" src/renderer/src/styles.css` 应只剩 4 处变量定义。应用内：亮色下错误提示/删除按钮观感不变；切到暗色，工具错误、搜索无结果、到期提醒等红色明显变亮（不再发暗）。

@@ -665,6 +665,8 @@ class ThreadSession(
         val message = event?.get("message") as? JsonObject ?: return
         val role = message.str("role").orEmpty()
         if (role == "user") {
+            // 与主机快照同名（`role-<timestamp>`）：下一轮增量快照的锚点才能对上。
+            val hostId = message.str("timestamp")?.toLongOrNull()?.let { "user-$it" }
             // 剥掉 pi 的图片注解：它只在图片被缩放/转换过时出现（大图必中），而下面
             // 「乐观回显转正」是按文本相等对账的——不剥就永远失配，同一条消息会上屏两次。
             // 显示用 dimension（`[Image omitted: …]` 保留，那是给用户看的原因说明），
@@ -696,7 +698,7 @@ class ThreadSession(
                 patch { view ->
                     view.copy(
                         messages = view.messages.map {
-                            if (it.id == echo.id) it.copy(pending = false) else it
+                            if (it.id == echo.id) it.copy(pending = false, id = hostId ?: it.id) else it
                         },
                     )
                 }
@@ -704,7 +706,7 @@ class ThreadSession(
                 patch { view ->
                     view.copy(
                         messages = view.messages + ThreadMessage(
-                            id = "u-$seq-${view.messages.size}",
+                            id = hostId ?: "u-$seq-${view.messages.size}",
                             role = "user",
                             blocks = listOf(MessageBlock(type = BlockType.Text, text = text)),
                         ),
@@ -723,9 +725,12 @@ class ThreadSession(
         val streaming = _view.value.streaming ?: return
         val stopReason = message.str("stopReason")
         val errorMessage = message.str("errorMessage")
+        // 与主机快照同名（`assistant-<timestamp>`）：主机把连续 assistant 条目折成一个回合，
+        // id 取第一条的时间戳——就是这条 message_end 的时间戳。
+        val hostId = message.str("timestamp")?.toLongOrNull()?.let { "assistant-$it" }
         patch { view ->
             view.copy(
-                messages = view.messages + streaming.copy(stopReason = stopReason, errorMessage = errorMessage),
+                messages = view.messages + streaming.copy(id = hostId ?: streaming.id, stopReason = stopReason, errorMessage = errorMessage),
                 streaming = null,
                 errorBanner = if (stopReason == "error") {
                     errorMessage?.takeIf { it.isNotEmpty() } ?: "本轮以错误结束"
@@ -1042,9 +1047,15 @@ class ThreadSession(
             if (!full) lastSeq?.let { put("sinceSeq", it) }
         }
 
-    /** 本地已有的最后一条「主机也认识」的消息 id（乐观回显 pending 不算）。 */
+    /**
+     * 本地已有的最后一条「主机也认识」的消息 id（增量快照锚点）。
+     *
+     * 本地合成的 id（`local-N` 回显、`a-N` 流式、`u-N-M` 事件补的用户消息）在主机快照里
+     * 根本不存在。以前把这些拿去当锚点 → 主机 `findIndex` 永远 -1 → **每次打开/重连都回
+     * 整段历史**（PWA 侧实测 311KB～1.6MB/次）。
+     */
     private fun lastKnownMessageId(): String? =
-        _view.value.messages.lastOrNull { !it.pending }?.id?.takeIf { it.isNotEmpty() }
+        _view.value.messages.lastOrNull { !it.pending && isHostMessageId(it.id) }?.id?.takeIf { it.isNotEmpty() }
 
     /** content 里是否有图片块（事件通道只留标记、不带 data）。 */
     /**
@@ -1146,8 +1157,27 @@ internal fun mergeIncremental(
     incoming: List<ThreadMessage>,
 ): List<ThreadMessage> {
     if (incoming.isEmpty()) return current
+    // 增量快照 = 「从锚点那条（含）开始往后」，所以锚点之后一律以主机这份为准：
+    // 事件里长出来的合成 id 消息会在这里被同 id 的主机版覆盖，剩下的丢弃，不留重复气泡；
+    // 但**未确认的乐观回显（pending）不能丢**（快照可能产生于它之前）。
+    val anchorIndex = current.indexOfFirst { it.id == incoming.first().id }
+    val head = if (anchorIndex >= 0) current.take(anchorIndex) else current
+    val pendingTail = if (anchorIndex >= 0) current.drop(anchorIndex).filter { it.pending } else emptyList()
     val byId = incoming.associateBy { it.id }
-    val merged = current.map { byId[it.id] ?: it }
-    val known = current.mapTo(HashSet()) { it.id }
-    return merged + incoming.filterNot { it.id in known }
+    val merged = head.map { byId[it.id] ?: it }
+    val seen = merged.mapTo(HashSet()) { it.id }
+    val known = head.mapTo(HashSet()) { it.id }
+    val tail = incoming.filterNot { it.id in known || it.id in seen }
+    tail.forEach { seen += it.id }
+    return merged + tail + pendingTail.filterNot { it.id in seen }
+}
+
+/**
+ * 主机发的消息 id 形如 `user-<ts>` / `assistant-<ts>` / `tool-<callId>`（见主机 ipc.ts
+ * 的 remoteMessageId）。本地合成的不算：`local-N`、`a-N`、`u-N-M`。
+ */
+internal fun isHostMessageId(id: String): Boolean {
+    if (id.isEmpty()) return false
+    if (id.startsWith("local-") || id.startsWith("a-") || id.startsWith("u-")) return false
+    return Regex("^(user|assistant|system|tool)-").containsMatchIn(id)
 }

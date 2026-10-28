@@ -9,6 +9,7 @@ import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-up
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { appendDiagLog } from "./diag-log";
+import { remoteMessageId } from "./remote/message-id";
 import { MAX_REMOTE_RAW_MESSAGES, applyIncrementalSnapshot, prepareRemoteHistory, remoteMessageSize, settleToolsOutsideRunningTurn } from "./remote/history-limit";
 import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
 import { listTests, readScenarioHistory, readScenarioResult, runLogicTest, runScenarioCase } from "./test-runner";
@@ -2725,7 +2726,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       const artifacts = artifactsByMessage.get(index);
       if (!assistantRound) {
         assistantRound = {
-          id: String(message?.id || `assistant-${index}`),
+          id: remoteMessageId(message, "assistant", index),
           role: "assistant",
           text,
           blocks: blocks.length ? blocks : undefined,
@@ -2764,7 +2765,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           if (assistantRound) {
             unmatchedToolOutputs.push(result);
           } else if (result) {
-            output.push({ id: String(message?.id || `tool-${index}`), role: "tool", text: result });
+            output.push({ id: remoteMessageId(message, "tool", index), role: "tool", text: result });
           }
         }
         return;
@@ -2826,7 +2827,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         });
       const allBlocks = [...blocks, ...mediaBlocks];
       output.push({
-        id: String(message?.id || `${role}-${index}`),
+        id: remoteMessageId(message, role, index),
         role,
         text: mediaText.slice(0, 12_000) || undefined,
         blocks: allBlocks.length ? allBlocks : undefined,
@@ -3842,11 +3843,19 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     }),
     listProjects: () => projectService.list(),
     listThreads: (projectId) => projectService.listThreads(projectId),
-    // 唯一给手机的入口：带锚点就只回新增（增量快照），否则全量。
-    // 放在这里而不是 remoteSnapshot 内部：内部还有几个只给桌面/内部用的调用点（setModel 等），
-    // 它们不该受影响。
-    getThread: async (threadId, options) =>
-      applyIncrementalSnapshot(await remoteSnapshot(threadId, options), options?.haveMessageId),
+    getThread: async (threadId, options) => {
+      const snapshot = await remoteSnapshot(threadId, options);
+      const result = applyIncrementalSnapshot(snapshot, options?.haveMessageId);
+      // 取证：增量到底命中没。锚点对不上是「每次打开都重下全量」的真凶，而它从
+      // bytes 日志看不出来（那一行是裁剪前发的，跟增量无关）。
+      if (options?.haveMessageId) {
+        appendDiagLog(
+          `remote-snapshot incremental=${result.incremental ? "hit" : "miss"} thread=${threadId.slice(0, 12)} ` +
+            `anchor=${options.haveMessageId.slice(0, 28)} sent=${result.messages.length}/${snapshot.messages.length}`,
+        );
+      }
+      return result;
+    },
     createThread: (projectId, name, permission) => threadService.create(projectId, name, permission),
     setPermission: async (threadId, permission) => {
       const ref = await remoteThread(threadId);

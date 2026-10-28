@@ -65,7 +65,7 @@ async function main() {
     const { createDeviceIdentity, randomSeedB64url } = await import("../mobile/pwa/src/lib/device-identity.ts");
     const { parsePairingLink, runPairing, attachAutoReauth } = await import("../mobile/pwa/src/lib/pairing.ts");
     const { RelayClient } = await import("../mobile/pwa/src/lib/relay-client.ts");
-    const { ThreadSession, mergeIncremental } = await import("../mobile/pwa/src/lib/thread-session.ts");
+    const { ThreadSession, mergeIncremental, isHostMessageId } = await import("../mobile/pwa/src/lib/thread-session.ts");
     const { shouldShowThinkingIndicator } = await import("../mobile/pwa/src/lib/thinking-indicator.ts");
     const { SnapshotCache } = await import("../mobile/pwa/src/lib/snapshot-cache.ts");
     const { makeEnvelope, responseFor } = await import("../mobile/shared/protocol.ts");
@@ -364,9 +364,22 @@ async function main() {
       const m = (id, text, pending = false) => ({ id, role: "assistant", pending, blocks: [{ type: "text", text }] });
       const local = [m("m1", "一"), m("m2", "写了一半"), m("local", "刚发的", true)];
       const merged = mergeIncremental(local, [m("m2", "写完了"), m("m3", "三")]);
-      assert.deepEqual(merged.map((x) => x.id), ["m1", "m2", "local", "m3"], "追加新消息、保留本地乐观占位");
+      // 锚点之后以主机为准（事件里合成的 `a-N` / `u-N-M` 会被替掉、不留重复），
+      // 未确认的乐观占位留到最后。
+      assert.deepEqual(merged.map((x) => x.id), ["m1", "m2", "m3", "local"], "追加新消息、保留本地乐观占位");
       assert.equal(merged[1].blocks[0].text, "写完了", "同 id 以主机新副本为准");
       assert.equal(mergeIncremental(local, []), local, "空增量不动本地");
+
+      // 合成的流式消息在锚点之后 → 被主机版替掉（不再留重复气泡）
+      const withStream = [m("user-100", "问"), m("a-17", "答了一半")];
+      const healed = mergeIncremental(withStream, [m("user-100", "问"), m("assistant-200", "答完了")]);
+      assert.deepEqual(healed.map((x) => x.id), ["user-100", "assistant-200"], "合成 id 不该活到增量之后");
+
+      // 锚点必须用主机那种 id（本次修的“每次全量”根源）
+      assert.equal(isHostMessageId("assistant-1793157933159"), true);
+      assert.equal(isHostMessageId("a-17"), false);
+      assert.equal(isHostMessageId("local-1"), false);
+      assert.equal(isHostMessageId("u-17-3"), false);
     }
     const historyIds = view.messages.filter((m) => m.id === "m1" || m.id === "m2").map((m) => m.id);
     assert.deepEqual(historyIds, ["m1", "m2"], "重连后的快照历史不重复（无重连丢流尾巴的重复）");
