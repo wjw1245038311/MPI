@@ -22,8 +22,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonObject
@@ -134,6 +136,29 @@ class ThreadSession(
     private val deltaBuffer = mutableListOf<Pair<BlockType, String>>()
     private var flushJob: Job? = null
     private var expectNext: Int? = null
+
+    /**
+     * 本地已处理到的最后一条事件序号（null = 没有可信基线）。
+     *
+     * 带在 `thread.subscribe` / `thread.resync` 的 `sinceSeq` 里：主机能把断线期间
+     * 的事件按序补发回来，就**不用回 1.6MB 的全量快照**，也不用把正在流式的内容换掉。
+     */
+    private var lastSeq: Int? = null
+
+    /**
+     * 正在等 subscribe / resync 的**响应**：这段时间收到的帧先缓冲，响应落地后按序重放。
+     *
+     * ⚠️ 不能用 `ready` 代替：缓存预热会把 ready 置 true，但那时订阅响应还没到；
+     * 而且快照帧大、解析慢，小的事件帧会先到——不缓冲就会被当成「缺号」触发下一次
+     * resync，快照又大又慢，于是形成自激循环（2026-10-28 真机：5 秒内 5 次重同步，
+     * 每次 1.6MB，手机上就是「一直停在旧内容」）。PWA 早就有这层缓冲，安卓缺。
+     */
+    @Volatile
+    private var awaitingSync = false
+
+    /** 进行中的重同步（缺口可能连着来好几条帧，只跑一次）。 */
+    private var resyncJob: Job? = null
+
     private val respondedUiIds = mutableSetOf<String>()
     private var closing = false
 
@@ -189,20 +214,23 @@ class ThreadSession(
             )
             // 缓存里的 seq 基线已经过时，实时事件到达时重新建立期望值
             expectNext = null
+            lastSeq = null
         }
     }
 
     /** 订阅并取快照。重复调用是安全的（用于重连后重新同步）。 */
     suspend fun subscribe() {
         syncLock.withLock {
+            awaitingSync = true
             val payload = try {
                 requestWhenReady("thread.subscribe", threadIdPayload(), threadId, SNAPSHOT_TIMEOUT_MS)
             } catch (e: Exception) {
+                finishSync()
                 _view.value = _view.value.copy(ready = true, errorBanner = friendlyError(e))
                 throw e
             }
             subscribed = true
-            applySnapshot(payload)
+            applySyncResponse(payload)
         }
     }
 
@@ -263,6 +291,7 @@ class ThreadSession(
      */
     private suspend fun ensureSubscribedLocked(full: Boolean = false): JsonElement? {
         if (subscribed) return null
+        awaitingSync = true
         val payload = requestWhenReady("thread.subscribe", threadIdPayload(full), threadId, SNAPSHOT_TIMEOUT_MS)
         subscribed = true
         return payload
@@ -275,8 +304,10 @@ class ThreadSession(
     suspend fun ensureSubscribed() {
         syncLock.withLock {
             try {
-                ensureSubscribedLocked()?.let { applySnapshot(it) }
+                awaitingSync = true
+                ensureSubscribedLocked()?.let { applySyncResponse(it) } ?: finishSync()
             } catch (e: Exception) {
+                finishSync()
                 onProblem("订阅恢复失败：${e.message ?: "未知错误"}")
             }
         }
@@ -294,13 +325,16 @@ class ThreadSession(
     suspend fun resync(full: Boolean = false) {
         syncLock.withLock {
             try {
-                ensureSubscribedLocked(full)?.let { fresh ->
-                    applySnapshot(fresh)
+                awaitingSync = true
+                val fresh = ensureSubscribedLocked(full)
+                if (fresh != null) {
+                    applySyncResponse(fresh)
                     return@withLock
                 }
                 val payload = requestWhenReady("thread.resync", threadIdPayload(full), threadId, SNAPSHOT_TIMEOUT_MS)
-                applySnapshot(payload)
+                applySyncResponse(payload)
             } catch (e: Exception) {
+                finishSync()
                 _view.value = _view.value.copy(errorBanner = e.message ?: "同步失败")
                 throw e
             }
@@ -410,8 +444,10 @@ class ThreadSession(
         val payload = envelope.payload as? JsonObject ?: return
 
         synchronized(lock) {
-            // 快照之前的事件先缓冲（主机先注册监听再取快照，所以不丢不乱）
-            if (!_view.value.ready) {
+            // 快照/补发响应到达之前的事件先缓冲：主机先注册监听再取快照（或补发），
+            // 所以这些帧不丢不乱。等同步的**不只是** ready 之前——快照传输期间也会
+            // 进来帧，不缓冲就会被当成「缺号」再触发一次 resync（自激循环）。
+            if (awaitingSync || !_view.value.ready) {
                 pendingEvents += seq to payload
                 return
             }
@@ -422,7 +458,7 @@ class ThreadSession(
                     // 缺了一段 —— 立即重新同步，绝不带着缺口继续渲染。
                     // 同时上报：静默 resync 会把「丢帧」这类问题掩盖掉。
                     onProblem("事件流有缺口（期望 $expected，收到 $seq），已重新同步")
-                    scope.launch { runCatching { resync() } }
+                    scheduleResync()
                     return
                 }
             }
@@ -430,12 +466,66 @@ class ThreadSession(
         applyEvent(payload, seq)
     }
 
-    private fun applySnapshot(payload: JsonElement?) {
-        val snapshot = ThreadModels.decodeSnapshot(payload)
+    /**
+     * 触发一次重同步（同一时刻只跑一个）。
+     *
+     * 开跑之前先置 `awaitingSync`：快照传输/解析期间到达的帧会被缓冲，而不是
+     * 按旧基线再判一次缺口——否则每多一条增量就多一次 resync，5 秒内能抖出 5 次。
+     */
+    private fun scheduleResync() {
+        synchronized(lock) {
+            if (resyncJob?.isActive == true) return
+            awaitingSync = true
+            resyncJob = scope.launch { runCatching { resync() } }
+        }
+    }
+
+    /**
+     * 处理 subscribe / resync 的响应。
+     *
+     * 两种形状：
+     *  · `{ replayed: true, snapshot: null }` —— 主机已经把断线期间的事件按序补发回来了，
+     *    **不动视图**（保住正在流式的那半条，也不搬 1.6MB 的磁盘历史）；
+     *  · 其余 —— 跟以前一样当快照应用。
+     */
+    private fun applySyncResponse(payload: JsonElement?) {
+        val obj = payload as? JsonObject
+        val replayed = obj?.get("replayed")?.jsonPrimitive?.booleanOrNull == true
+        val snapshotElement = obj?.get("snapshot")
+        if (replayed && (snapshotElement == null || snapshotElement is JsonNull)) {
+            // 补发的事件已经在 await 期间进了 pendingEvents，这里只需按序落地
+            subscribed = true
+            flushBuffered()
+            return
+        }
+        applySnapshot(payload)
+    }
+
+    /** 关闭「等同步」态并把缓冲帧按抵达顺序应用（不猜基线：applyEvent 会逐条推 expectNext）。 */
+    private fun flushBuffered() {
         val buffered: List<Pair<Int, JsonObject>>
         synchronized(lock) {
+            awaitingSync = false
             buffered = pendingEvents.toList()
             pendingEvents.clear()
+        }
+        for ((seq, event) in buffered) {
+            // 主机补发的事件里可能已经包含过这些帧（缺口帧本身也在缓冲里）：
+            // 已经落在基线之前的丢掉，否则会重复上屏一段。
+            val expected = synchronized(lock) { expectNext }
+            if (seq > 0 && expected != null && seq < expected) continue
+            applyEvent(event, seq)
+        }
+    }
+
+    /** 同步失败：退出等同步态，把已收到的帧尽量落地（下一轮重同步会再对齐）。 */
+    private fun finishSync() {
+        if (_view.value.ready) flushBuffered() else synchronized(lock) { awaitingSync = false }
+    }
+
+    private fun applySnapshot(payload: JsonElement?) {
+        val snapshot = ThreadModels.decodeSnapshot(payload)
+        synchronized(lock) {
             _view.value = _view.value.copy(
                 ready = true,
                 summary = snapshot.summary,
@@ -446,7 +536,13 @@ class ThreadSession(
                 } else {
                     snapshot.messages
                 },
-                streaming = null,
+                // 回合进行中**留住**正在长的流式气泡：快照是磁盘历史，不含这半条；
+                // 清掉的话用户看到的就是「桌面写了一大段、手机停在上一条」。
+                streaming = if (snapshot.summary.state == RemoteThreadState.Running) {
+                    _view.value.streaming
+                } else {
+                    null
+                },
                 running = snapshot.summary.state == RemoteThreadState.Running,
                 errorBanner = null,
                 model = snapshot.model,
@@ -466,6 +562,8 @@ class ThreadSession(
             )
             // 重新定位 seq 基线；第一条实时事件会重新建立期望值
             expectNext = null
+            lastSeq = null
+            awaitingSync = false
         }
         // 拿到的实时快照写缓存（下一次打开就能秒开）。
         // 增量也要写：打开会话时因为先 prime 了缓存，subscribe 必带 haveMessageId →
@@ -473,7 +571,7 @@ class ThreadSession(
         // 重开 App 又变回旧的」（2026-09-26 真机：模型名刷新后正确、重开又成裸 id）。
         // 合并细节交给缓存层（按锚点拼接 messages）。
         payload?.let { runCatching { onSnapshot(it, snapshot.incremental) } }
-        for ((seq, event) in buffered) applyEvent(event, seq)
+        flushBuffered()
     }
 
     private fun applyEvent(payload: JsonObject, seq: Int) {
@@ -556,7 +654,11 @@ class ThreadSession(
             else -> Unit // 其它 kind 本版忽略
         }
 
-        if (seq > 0) synchronized(lock) { expectNext = seq + 1 }
+        if (seq > 0) synchronized(lock) {
+            expectNext = seq + 1
+            // 记下基线：下一次重订阅带 sinceSeq 让主机补发，而不是重传快照
+            lastSeq = seq
+        }
     }
 
     private fun handleMessageStart(event: JsonObject?, seq: Int) {
@@ -935,6 +1037,9 @@ class ThreadSession(
             // 主机在窗口里找得到就只回锚点及其之后（通常几十字节），找不到就回全量。
             // full=true 时故意不带锚点——强制全量，把事件通道省略的图片块补回来。
             if (!full) lastKnownMessageId()?.let { put("haveMessageId", it) }
+            // 断线补发基线：主机能补回断线期间的事件时就不回快照（也就不会把正在
+            // 流式的内容换掉）。设了“刚应用过快照/刚预热缓存”的场合 lastSeq 已置 null。
+            if (!full) lastSeq?.let { put("sinceSeq", it) }
         }
 
     /** 本地已有的最后一条「主机也认识」的消息 id（乐观回显 pending 不算）。 */

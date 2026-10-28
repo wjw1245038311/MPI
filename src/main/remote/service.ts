@@ -17,6 +17,7 @@ import {
 } from "./protocol";
 import { appendDiagLog } from "../diag-log";
 import { redactRemotePaths } from "./path-redact";
+import type { RemoteSubscription } from "./services";
 
 export interface RemoteBackend {
   listProjects(): Promise<unknown>;
@@ -120,7 +121,12 @@ export interface RemoteBackend {
   storePushSubscription(deviceId: string, subscription: RemotePushSubscription): Promise<unknown>;
   /** Transcribe a phone voice memo (base64 WAV) via the local STT endpoint. */
   sttTranscribe(audioB64: string, sampleRate: number): Promise<{ text: string }>;
-  subscribeThread(threadId: string, listener: (event: RemoteThreadEventPayload, seq: number) => void): () => void;
+  subscribeThread(
+    threadId: string,
+    listener: (event: RemoteThreadEventPayload, seq: number) => void,
+    /** 客户端已处理到的序号；带上看能否直接补发断线期间的事件（见 RemoteEventHub.subscribe）。 */
+    sinceSeq?: number,
+  ): RemoteSubscription;
   /** 后台预热会话（手机打开会话时调用）：让主机在后台建立/复用 pi 桥，
    * 就绪后由主机推送 context_usage。**绝不能 await**——冷启动桥可能超过手机端
    * 请求超时（subscribe 注释里记过这个坑）。 */
@@ -279,17 +285,35 @@ export class RemoteService {
             haveMessageId: this.optionalString(payload, "haveMessageId"),
           }),
         });
-      case "thread.resync":
+      case "thread.resync": {
+        const threadId = this.requiredThread(request);
+        const sinceSeq = this.optionalSeq(payload, "sinceSeq");
         appendDiagLog(
-          `remote-req resync conn=${context.connectionId.slice(0, 24)} thread=${this.requiredThread(request).slice(0, 12)}`,
+          `remote-req resync conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)} since=${sinceSeq ?? "-"}`,
         );
+        if (sinceSeq !== undefined) {
+          // 重注册订阅（旧监听退订）：能补发就不拉快照，而且**保住客户端的流式内容**。
+          const sub = this.attachThreadSubscription(request, context, threadId, sinceSeq);
+          if (sub.covered) {
+            appendDiagLog(
+              `remote-events snapshot-skipped conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)} replayed=${sub.replayed} reason=resync`,
+            );
+            return responseFor(request, {
+              snapshot: null,
+              replayed: true,
+              replayFrom: sinceSeq + 1,
+              replayTo: sinceSeq + sub.replayed,
+            });
+          }
+        }
         return responseFor(request, {
-          snapshot: await this.backend.getThread(this.requiredThread(request), {
+          snapshot: await this.backend.getThread(threadId, {
             live: true,
             // 客户端本地已有到哪条：有就只回新增（增量快照，见 history-limit.ts）
             haveMessageId: this.optionalString(payload, "haveMessageId"),
           }),
         });
+      }
       case "thread.create":
         return responseFor(request, {
           snapshot: await this.backend.createThread(
@@ -356,18 +380,27 @@ export class RemoteService {
       }
       case "thread.subscribe": {
         const threadId = this.requiredThread(request);
+        const sinceSeq = this.optionalSeq(payload, "sinceSeq");
         // 取证：手机订阅/重订阅时刻（它与 remote-conn open/closed 一起能定位事件丢失窗口）
-        appendDiagLog(`remote-req subscribe conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)}`);
-        const existing = this.subscriptions.get(context.connectionId) || new Map<string, () => void>();
-        existing.get(threadId)?.();
-        const unsubscribe = this.backend.subscribeThread(threadId, (event, seq) => {
-          // seq 由 RemoteEventHub 按线程统一分配（每个事件一次，对所有订阅者
-          // 相同值）——绝不能在这里自己递增，否则多设备同时看一个会话时，
-          // 各自的序号会交错，客户端把每个事件都当成缺号，疯狂 resync。
-          context.send(makeEnvelope("thread.event", request.sessionId, event, { threadId, seq }));
-        });
-        existing.set(threadId, unsubscribe);
-        this.subscriptions.set(context.connectionId, existing);
+        appendDiagLog(
+          `remote-req subscribe conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)} since=${sinceSeq ?? "-"}`,
+        );
+        const sub = this.attachThreadSubscription(request, context, threadId, sinceSeq);
+        if (sinceSeq !== undefined && sub.covered) {
+          // 断线期间的事件已经按序补发完：**不传快照**。
+          // 为什么要跳过：快照是磁盘历史（不含正在流式输出的那半条），客户端一旦应用
+          // 就会把正在显示的内容整体换掉（applySnapshot 会清 streaming）——那正是
+          // 「桌面写了一大段、手机停在旧内容」的直接成因；而且现场会话的快照动辄 1.6MB。
+          appendDiagLog(
+            `remote-events snapshot-skipped conn=${context.connectionId.slice(0, 24)} thread=${threadId.slice(0, 12)} replayed=${sub.replayed}`,
+          );
+          return responseFor(request, {
+            snapshot: null,
+            replayed: true,
+            replayFrom: sinceSeq + 1,
+            replayTo: sinceSeq + sub.replayed,
+          });
+        }
         // Opening a thread is deliberately history-first. Starting a cold Pi
         // bridge here can take several seconds and can exceed the mobile
         // request timeout. A later resync uses the live bridge when needed.
@@ -548,6 +581,46 @@ export class RemoteService {
   private optionalString(payload: Record<string, unknown>, key: string): string | undefined {
     const value = payload[key];
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  }
+
+  /** 非负整数（看不清/超范围一律当作没给——宁可回快照，也不要拿脏基线去补发）。 */
+  private optionalSeq(payload: Record<string, unknown>, key: string): number | undefined {
+    const value = payload[key];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+    return Math.floor(value);
+  }
+
+  /**
+   * 注册（或重注册）某条线程的事件订阅，客户端带了 `sinceSeq` 时顺带补发断线期间的事件。
+   *
+   * seq 由 RemoteEventHub 按线程统一分配（每个事件一次，对所有订阅者相同值）——
+   * **不能在这里自己递增**，否则多设备同时看一个会话时各自序号会交错，客户端会把
+   * 每个事件都当成缺号、疯狂 resync（见 test-remote-seq.mjs 的历史事故）。
+   */
+  private attachThreadSubscription(
+    request: RemoteEnvelope,
+    context: RemoteClientContext,
+    threadId: string,
+    sinceSeq: number | undefined,
+  ): RemoteSubscription {
+    const existing = this.subscriptions.get(context.connectionId) || new Map<string, () => void>();
+    existing.get(threadId)?.();
+    const handle = this.backend.subscribeThread(
+      threadId,
+      (event, seq) => {
+        context.send(makeEnvelope("thread.event", request.sessionId, event, { threadId, seq }));
+      },
+      sinceSeq,
+    );
+    // 兼容旧的「返回退订函数」实现（测试里的假 backend 很多还是那种形状）。
+    const legacy = typeof handle === "function";
+    const unsubscribe = legacy ? (handle as unknown as () => void) : handle.unsubscribe;
+    const result: RemoteSubscription = legacy
+      ? { unsubscribe, covered: false, replayed: 0 }
+      : handle;
+    existing.set(threadId, unsubscribe);
+    this.subscriptions.set(context.connectionId, existing);
+    return result;
   }
 
   private optionalPermission(payload: Record<string, unknown>, key: string): RemotePermission | undefined {

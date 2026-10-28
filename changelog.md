@@ -4,6 +4,14 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## Unreleased
+
+1. **修：手机端「对话不刷新」——断线期间的事件不再被丢弃，重连只补增量、不重置视图**——现场（2026-10-28）：桌面已写出一大段，手机停在旧内容；主机 diag 显示同一条健康连接 4.4 秒内 5 次 `thread.resync`、每次回 1.6MB 全量快照，而另一些时段是 `subs=0`（手机根本没订阅，主机把事件直接丢了）。三层一起改：
+   - **主机**：`RemoteEventHub` 不再「无人订阅就丢」——序号照常推进，最近 2000 条事件按线程进环形缓冲（1.5MB/线程、最多 16 条线程）；`thread.subscribe` / `thread.resync` 可带 `sinceSeq`，缓冲能覆盖就同步补发 `sinceSeq+1…当前` 并回 `{replayed:true, snapshot:null}`（**不再回快照**），覆盖不了才回退全量快照。`sinceSeq > 当前`（主机重启/序号清零）一律当补不齐处理，避免客户端基线永远超前、后续事件全被当重复丢掉。
+   - **手机端**：同步期间到达的帧先进缓冲、`resync` 单飞（以前快照传输期间到达的增量会按旧基线再判一次缺口 → 再拉一次 1.6MB → 自激循环）；`replayed` 响应只落地缓冲、**不动视图**；回合进行中重同步**保留**正在流式的气泡（以前 `applySnapshot` 一律清 `streaming`，手机上就是「少了一段字」）。
+   - **取证**：新增 diag 行 `remote-pub-miss`（每线程 50 条一条汇总）、`remote-events replay` / `replay-miss` / `snapshot-skipped`，`remote-req subscribe|resync` 都带上 `since=`——下次再出现，看这几行就能区分「断线丢了」「补发覆盖不了」还是「客户端判缺口」。
+   验证方式：`npm run typecheck`；`npm test -- remote`（`remote-seq` 新增：无人订阅推进序号 / 补发不重复 / 追平 0 条 / 缺中间一段回退快照 / 端到端补发跳过快照）；`npm test -- pwa` + `npm test -- messaging`；手机端 `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（新增 `ThreadSyncReplayTest`：同步期间不再触发第二次 resync、`replayed` 响应保住流式文本）。应用内：**重启 dev** → 手机看一个正在跑的会话，亮屏状态下关/开飞行模式十几秒（或锁屏再解锁），恢复后应看到对话**从断开处接着长**，而不是先闪成旧内容再等快照；桌面 diag 里应出现 `remote-events replay … n=…`，不再成串 `remote-req resync`。
+
 ## v0.13.5（2026-10-28）
 1. **改：错误/危险色统一收敛为 `--danger` 家族（浅深各一套，共 9 个变量）**——原来 `#c0392b`（18 次）、`#b23a2c`（17 次）、`#9a3d32`、`#a84439`、`#fdf3f1`、`#fbe9e7` 与 4 种半透明红散落在 60 多处；现在统一走 `--danger`（文字/边框/小圆点）、`--danger-strong(-hover)`（白字按钮/横幅底）、`--danger-pale(-strong)`（浅底）、`--danger-soft(-hover)` / `--danger-ring` / `--danger-border`。**浅色下取值保持不变**（`--danger` = `#c0392b`、`--danger-strong` = `#b23a2c`），深色下错误色改为更亮的 `#f2726a` / `#c0392b`，暗底可读性提升。同时 `docs/DESIGN.md` 补上 token 表与收敛清单，`AGENTS.md` 增加「改 UI 先读 DESIGN.md」。
    验证方式：`npm run typecheck` + `npm run build`；`grep -c "#c0392b\|#b23a2c" src/renderer/src/styles.css` 应只剩 4 处变量定义。应用内：亮色下错误提示/删除按钮观感不变；切到暗色，工具错误、搜索无结果、到期提醒等红色明显变亮（不再发暗）。

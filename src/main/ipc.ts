@@ -4271,8 +4271,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         throw new RemoteProtocolError("STT_UNAVAILABLE", `语音识别失败：${detail}`);
       }
     },
-    subscribeThread: (threadId, listener) => {
-      return remoteEventHub.subscribe(threadId, listener);
+    subscribeThread: (threadId, listener, sinceSeq) => {
+      return remoteEventHub.subscribe(threadId, listener, sinceSeq);
     },
     warmThread: async (threadId) => {
       const ref = await remoteThread(threadId);

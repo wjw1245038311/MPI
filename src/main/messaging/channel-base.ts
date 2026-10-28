@@ -475,7 +475,7 @@ export abstract class ChannelBase<S> {
           buffer += `\n${lang.errorPrefix}${detail.trim()}`;
           settledResolve();
         }
-      });
+      }).unsubscribe;
 
       watchdog = setTimeout(() => {
         if (!ref.cancelled) buffer += `\n${lang.timeoutNote}`;
