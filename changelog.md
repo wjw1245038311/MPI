@@ -39,6 +39,14 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    `remote-snapshot incremental=hit … sent=1/N`（而不是 6/N）；再杀掉 App 重进，首屏内容应是最后一轮而不是少一轮。
    **已发：安卓 v0.5.153**（`sha256=92C43739…C547`，ECS 清单已更新）。
 
+5. **查：给 PWA 的 resync 加带调用栈的取证**——真机（ThinkBook 浏览器）在**没有任何事件发布**的空闲窗口里
+   5 秒连续发了 4 次 `thread.resync`（每次只回 2 条增量，130ms），主机侧日志完全看不出是谁调的。现在
+   `resync(reason)` 带上触发原因（`seq-gap` / `socket-open` / `media-backfill` / `auth-ok` / `pair-ok` /
+   `visibility-visible` / `manual-refresh`），并往 `?dbg=1` 覆盖层与控制台各写一条 `RESYNC <reason> <- 栈顶三帧`。
+   行为不变（纯诊断）。
+   验证方式：`npm test -- pwa`（20 个）+ `cd mobile/pwa && npx tsc --noEmit`；已部署到 ECS（`assets/index-Wx69Kcmg.js`）。
+   应用内：浏览器打开 `<地址>?dbg=1` → 复现一次 → 覆盖层出现 `RESYNC …` 行（或控制台过滤 `[resync]`），把栈贴出来即可定位。
+
 
 ## v0.13.5（2026-10-28）
 1. **改：错误/危险色统一收敛为 `--danger` 家族（浅深各一套，共 9 个变量）**——原来 `#c0392b`（18 次）、`#b23a2c`（17 次）、`#9a3d32`、`#a84439`、`#fdf3f1`、`#fbe9e7` 与 4 种半透明红散落在 60 多处；现在统一走 `--danger`（文字/边框/小圆点）、`--danger-strong(-hover)`（白字按钮/横幅底）、`--danger-pale(-strong)`（浅底）、`--danger-soft(-hover)` / `--danger-ring` / `--danger-border`。**浅色下取值保持不变**（`--danger` = `#c0392b`、`--danger-strong` = `#b23a2c`），深色下错误色改为更亮的 `#f2726a` / `#c0392b`，暗底可读性提升。同时 `docs/DESIGN.md` 补上 token 表与收敛清单，`AGENTS.md` 增加「改 UI 先读 DESIGN.md」。

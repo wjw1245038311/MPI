@@ -272,7 +272,7 @@ export class ThreadSession {
       // 气泡卡在「发送中」、整条回复连同提问一起晚到。resync 内部会在未订阅时自动
       // 走 thread.subscribe。
       this.invalidateSubscription();
-      void this.resync().catch(() => { /* surfaced via UI error state */ });
+      void this.resync("socket-open").catch(() => { /* surfaced via UI error state */ });
     });
   }
 
@@ -338,10 +338,18 @@ export class ThreadSession {
     } catch { /* 兜底失败不阻断发送 */ }
   }
 
-  /** Re-fetch the live snapshot (gap detected or socket recovered).
-   * 并发调用复用同一次同步：重连回调会连着来好几次。 */
-  async resync(): Promise<void> {
+  /**
+   * Re-fetch the live snapshot (gap detected or socket recovered).
+   * 并发调用复用同一次同步：重连回调会连着来好几次。
+   *
+   * @param reason 谁触发的（`seq-gap` / `socket-open` / `media-backfill` / `auth-ok` /
+   *   `pair-ok` / `visibility-visible` / `manual-refresh`）。**只用于诊断**：2026-10-29
+   *   真机出现「空闲窗口里 5 秒连续 4 次 resync」，主机侧日志看不出谁调的，于是在
+   *   `?dbg=1` 覆盖层 / 控制台里留一条带调用栈的记录（`[resync] <reason>`）。
+   */
+  async resync(reason = "unknown"): Promise<void> {
     if (this.syncInFlight) return this.syncInFlight;
+    traceResync(reason);
     this.syncInFlight = (async () => {
       try {
         await this.runSync();
@@ -457,7 +465,7 @@ export class ThreadSession {
     if (seq > 0 && this.expectNext !== null) {
       if (seq < this.expectNext) return; // duplicate/stale — ignore
       if (seq > this.expectNext) {
-        void this.resync().catch(() => { /* surfaced via UI error state */ });
+        void this.resync("seq-gap").catch(() => { /* surfaced via UI error state */ });
         return; // missed events — recover from the live snapshot
       }
     }
@@ -612,7 +620,7 @@ export class ThreadSession {
             // 本体在事件里（视频/图片）→ 补一次全量快照。防抖：in-flight 时不重复发。
             if (media.length && !this.mediaBackfillInFlight) {
               this.mediaBackfillInFlight = true;
-              void this.resync()
+              void this.resync("media-backfill")
                 .catch(() => { /* 经 errorBanner 上报 */ })
                 .finally(() => { this.mediaBackfillInFlight = false; });
             }
@@ -993,4 +1001,31 @@ export function isHostMessageId(id: string): boolean {
   if (!id) return false;
   if (id.startsWith("local-") || id.startsWith("a-") || id.startsWith("u-")) return false;
   return /^(user|assistant|system|tool)-/.test(id);
+}
+
+/**
+ * resync 触发点取证：`?dbg=1` 覆盖层与控制台都留一条带调用栈的记录。
+ *
+ * 为什么需要：2026-10-29 真机（ThinkBook 浏览器）在**没有任何事件发布**的空闲窗口里
+ * 5 秒连续发了 4 次 `thread.resync`（每次只回 2 条增量），主机侧日志完全看不出是谁
+ * 调的。这里把触发原因 + 栈顶三帧记下来，复现一次就能定位。
+ */
+function traceResync(reason: string): void {
+  try {
+    const stack = (new Error().stack ?? "")
+      .split(String.fromCharCode(10))
+      .slice(2, 5)
+      .map((line) => line.trim().replace(/^at\s+/, "").replace(/\?[^)]*\)/g, ")").slice(0, 90))
+      .join(" <- ");
+    // eslint-disable-next-line no-console
+    console.debug(`[resync] ${reason} ${stack}`);
+    (globalThis as unknown as { __mpi_dbg?: { dbg?: (e: Record<string, unknown>) => void } }).__mpi_dbg?.dbg?.({
+      kind: "resync",
+      label: reason,
+      reason,
+      stack,
+    });
+  } catch {
+    /* 诊断绝不能影响主流程 */
+  }
 }

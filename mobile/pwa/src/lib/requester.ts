@@ -43,7 +43,7 @@ export interface RequesterOptions {
 
 /** S8.7 diagnostic hooks — the ?dbg=1 overlay registers here to trace request
  * correlation on a real device (sent / removed / unmatched, with instance label). */
-type DbgEvent = { kind: "sent" | "removed" | "unmatched"; label: string; type?: string; requestId?: string; reason?: string; pending?: number };
+type DbgEvent = { kind: "sent" | "removed" | "unmatched" | "resync"; label: string; type?: string; requestId?: string; reason?: string; pending?: number; stack?: string };
 interface DbgHooks { dbg?: (event: DbgEvent) => void }
 declare global {
   interface Window { __mpi_dbg?: DbgHooks }

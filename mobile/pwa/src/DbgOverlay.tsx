@@ -61,9 +61,10 @@ export default function DbgOverlay({ client, threadView }: { client: RelayClient
     };
     const g = globalThis as { __mpi_dbg?: Record<string, unknown> };
     g.__mpi_dbg = {
-      dbg: (e: { kind: string; label: string; type?: string; requestId?: string; reason?: string; pending?: number }) => {
+      dbg: (e: { kind: string; label: string; type?: string; requestId?: string; reason?: string; pending?: number; stack?: string }) => {
         if (e.kind === "sent") push(`OUT ${e.label} ${e.type} rid=${e.requestId}`);
         else if (e.kind === "removed") push(`DEL ${e.label} rid=${e.requestId ?? "?"} (${e.reason})`, true);
+        else if (e.kind === "resync") push(`RESYNC ${e.reason ?? "?"} <- ${e.stack ?? "-"}`, true);
         else push(`UNMATCHED ${e.label} ${e.type} rid=${e.requestId} pending=${e.pending}`, true);
       },
     };

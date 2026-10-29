@@ -604,7 +604,7 @@ export default function App() {
         await syncHostRelayInfo(client, record.hostId, chosenUrl);
       })();
       void sessionRef.current?.refresh(); // the open-triggered refresh may have raced AUTH_REQUIRED
-      void threadSessionRef.current?.resync().catch(() => {}); // same race for an open conversation
+      void threadSessionRef.current?.resync("auth-ok").catch(() => {}); // same race for an open conversation
     }, record.hostPublicKeyPem);
     client.connect();
     enterHome(client, record);
@@ -738,7 +738,7 @@ export default function App() {
         // S6：配对成功后同样拉一次主机通道列表（票里的列表可能已过期）
         void syncHostRelayInfo(liveClient, payload.hostId, chosenUrl);
         void sessionRef.current?.refresh();
-        void threadSessionRef.current?.resync().catch(() => {});
+        void threadSessionRef.current?.resync("pair-ok").catch(() => {});
       }, pairResult.hostPublicKeyPem);
       setHostId(payload.hostId);
       enterHome(liveClient, record);
@@ -996,7 +996,7 @@ export default function App() {
         ensureConnected(); // 回前台：没连着就整条重来（顺带择优）
         // 后台冻结期间可能丢事件：回到前台主动拉一次当前会话的最新快照，
         // 不然对话会停在旧内容上（用户得手动刷新）。
-        if (threadSessionRef.current) void threadSessionRef.current.resync().catch(() => {});
+        if (threadSessionRef.current) void threadSessionRef.current.resync("visibility-visible").catch(() => {});
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -1011,7 +1011,7 @@ export default function App() {
     setRefreshing(true);
     try {
       const jobs: Promise<unknown>[] = [];
-      if (threadSessionRef.current) jobs.push(threadSessionRef.current.resync());
+      if (threadSessionRef.current) jobs.push(threadSessionRef.current.resync("manual-refresh"));
       jobs.push(sessionRef.current?.refresh() ?? Promise.resolve());
       await Promise.allSettled(jobs);
     } finally {
