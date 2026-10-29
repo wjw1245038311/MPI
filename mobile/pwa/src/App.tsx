@@ -234,8 +234,21 @@ export default function App() {
   /** Both client-creation sites share this: track state + last error (REPLACED etc.). */
   /** 是否成功连上过（用来区分"首次连接"与"断线重连"的文案）。 */
   const everOpenedRef = useRef(false);
+  /**
+   * 本页是否被「另一个窗口/标签页」顶掉（relay 的 `replaced` / 4006）。
+   *
+   * 为什么要锁存：relay-client 收到 `replaced` 会停掉自己的重连，但 App 里还有几条
+   * **页面级**恢复路径（回前台 `ensureConnected`、降级看门狗、初始连接）会重新
+   * `startSession` → 新 socket 把对面顶掉 → 对面也这么干 → 两个页面每几秒互顶一次
+   * （2026-10-29 真机 diag：`remote-conn closed reason=relay-device-replaced` 连发，
+   * 每次重连都附带一次 thread.resync）。所以这里锁住：被顶掉就**不再自动重连**，
+   * 只在用户点「在此页继续」时才重新接管。
+   */
+  const replacedRef = useRef(false);
   const onClientState = (s: string, err: string | null) => {
     if (s === "open") everOpenedRef.current = true;
+    if (err === "REPLACED") replacedRef.current = true;
+    else if (s === "open") replacedRef.current = false;
     setConnState(s);
     // 错误要“粘”住：重连重试会把 state 置回 connecting 且 err=null，如果跟着清，
     // 身份不被认可（4001/AUTH_FAILED）这类永不恢复的错误就会一闪而过。只有真连上才清。
@@ -583,6 +596,7 @@ export default function App() {
         degradeWatchdogRef.current = null;
         off();
         if (clientRef.current !== client) return; // 已被别的会话取代
+        if (replacedRef.current) return; // 已在本页之外被顶掉：别再抢，否则两边互顶
         if (client.getState() === "open") return;
         startSession(record, seedB64url, name, [...tried, chosenUrl]);
       }, RELAY_DEGRADE_MS);
@@ -973,7 +987,16 @@ export default function App() {
    * （局域网 TLS 在首位，等于顺便择优），并复用现成的重认证 / 重新订阅 / resync 路径。
    * 后台期间不重连这件事在 RelayClient.setBackgrounded 里（省无线电唤醒）。
    */
+  /** 用户在「此设备已在别处打开」提示里点「在此页继续」：解除锁存并重新接管。 */
+  const resumeHere = () => {
+    replacedRef.current = false;
+    setConnErr(null);
+    ensureConnected();
+  };
+
   const ensureConnected = () => {
+    // 被另一个窗口顶掉了就别再抢（抢回来对面也会抢回去，两边一直互顶）。
+    if (replacedRef.current) return;
     const client = clientRef.current;
     // ⚠ 判**真 socket**（isOpen）而不是 getState()：冻结/休眠后可能状态还停在 open、
     // 而 socket 已经没了（无头 Chrome 实测过），那样这里会误判「已连着」→ 不重连、永远转圈。
@@ -1280,7 +1303,10 @@ export default function App() {
             </p>
             {error && <p className="hint error-text">{error}</p>}
             {connState === "closed" && connErr === "REPLACED" && (
-              <p className="hint error-text">此设备已在另一个窗口/标签页连接——请关闭另一个，然后刷新本页。</p>
+              <>
+                <p className="hint error-text">此设备已在另一个窗口/标签页连接（同一设备同一时间只能开一个页面）。关掉另一个即可；要在这个页面继续，点下面按钮（会顶掉另一处）。</p>
+                <button className="btn primary" onClick={resumeHere}>在此页继续</button>
+              </>
             )}
             {connState === "closed" && connErr === "REVOKED" && (
               <p className="hint error-text">此设备已被桌面端撤销（令牌已失效），不会再自动重连——请重新配对。</p>
@@ -1363,7 +1389,10 @@ export default function App() {
           <>
             {error && <p className="hint error-text">{error}</p>}
             {connState === "closed" && connErr === "REPLACED" && (
-              <p className="hint error-text">此设备已在另一个窗口/标签页连接——请关闭另一个，然后刷新本页。</p>
+              <>
+                <p className="hint error-text">此设备已在另一个窗口/标签页连接（同一设备同一时间只能开一个页面）。关掉另一个即可；要在这个页面继续，点下面按钮（会顶掉另一处）。</p>
+                <button className="btn primary" onClick={resumeHere}>在此页继续</button>
+              </>
             )}
             {connState === "closed" && connErr === "REVOKED" && (
               <p className="hint error-text">此设备已被桌面端撤销（令牌已失效），不会再自动重连——请重新配对。</p>

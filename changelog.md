@@ -47,6 +47,16 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    验证方式：`npm test -- pwa`（20 个）+ `cd mobile/pwa && npx tsc --noEmit`；已部署到 ECS（`assets/index-Wx69Kcmg.js`）。
    应用内：浏览器打开 `<地址>?dbg=1` → 复现一次 → 覆盖层出现 `RESYNC …` 行（或控制台过滤 `[resync]`），把栈贴出来即可定位。
 
+6. **修：同一个设备开两个 PWA 页面会互顶（`replaced` 后仍在自动重连）**——真机 diag：`remote-conn closed
+   reason=relay-device-replaced` 每 3–13 秒一次，每次重连都附带一次 `thread.resync`（这正是上一轮那几次
+   多余重同步的来源）。`relay-client` 收到 `replaced` 本来就会停掉自己的重连，但 App 里还有几条**页面级**
+   恢复路径（回前台 `ensureConnected`、通道降级看门狗、初始连接）会重新 `startSession` → 新 socket 把对面顶掉
+   → 对面也这么干 → 两个页面打乒乓。现在加页面级锁存 `replacedRef`：被顶掉就**不再自动重连**，提示文案写清
+   「同一设备同一时间只能开一个页面」，并给一个「在此页继续」按钮由用户手动接管（会顶掉另一处）。
+   验证方式：`npm test -- pwa`（20 个）+ `cd mobile/pwa && npx tsc --noEmit`；已部署 ECS（`assets/index-CDZdEzuw.js`）。
+   应用内：同一浏览器开两个标签页 → 后开的那个显示「已在另一处连接」且**不再**反复抢回（旧行为下两边都会一直转圈）；
+   点「在此页继续」→ 本页接管，另一页显示被顶掉。
+
 
 ## v0.13.5（2026-10-28）
 1. **改：错误/危险色统一收敛为 `--danger` 家族（浅深各一套，共 9 个变量）**——原来 `#c0392b`（18 次）、`#b23a2c`（17 次）、`#9a3d32`、`#a84439`、`#fdf3f1`、`#fbe9e7` 与 4 种半透明红散落在 60 多处；现在统一走 `--danger`（文字/边框/小圆点）、`--danger-strong(-hover)`（白字按钮/横幅底）、`--danger-pale(-strong)`（浅底）、`--danger-soft(-hover)` / `--danger-ring` / `--danger-border`。**浅色下取值保持不变**（`--danger` = `#c0392b`、`--danger-strong` = `#b23a2c`），深色下错误色改为更亮的 `#f2726a` / `#c0392b`，暗底可读性提升。同时 `docs/DESIGN.md` 补上 token 表与收敛清单，`AGENTS.md` 增加「改 UI 先读 DESIGN.md」。
