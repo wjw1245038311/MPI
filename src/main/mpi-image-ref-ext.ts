@@ -23,6 +23,8 @@
  *
  * 自愈与边界：
  *   - 服务端没有 `/vision/refs`（老版本 / 别的 provider）→ 探测 404 → 永久退化为无操作；
+ *     回环地址同样要探测：`127.0.0.1` 上还可能是 LM Studio、llama-server，
+ *     或第三方透明代理（如 WorkBuddy 接入应用），把图片换成路径引用它们只会当成坏图；
  *   - 只改 `context` 深拷贝出来的那一份 messages，会话存档与 TUI 显示仍是原图；
  *   - 本地缓存目录可随时删除（下次会重新落盘），不参与任何同步。
  *
@@ -99,18 +101,25 @@ async function refsFor(provider: string | undefined): Promise<Set<string> | null
       return null;
     }
     if (!res.ok) {
+      // 不是视觉服务（或没权限）：退化为无操作，本轮照常发原图。
       state = { ...cfg, refs: new Set(), at: now };
-      return new Set();
+      return null;
     }
     const json = (await res.json()) as { refs?: unknown };
+    if (!Array.isArray(json?.refs)) {
+      // 200 但不是 Strata 的应答（随便返回 200 的服务端也算）：本会话永久退化为无操作。
+      if (provider) unsupported.add(provider);
+      state = { ...cfg, refs: new Set(), at: now };
+      return null;
+    }
     const refs = new Set<string>(
-      Array.isArray(json.refs) ? json.refs.filter((r): r is string => typeof r === "string") : [],
+      json.refs.filter((r): r is string => typeof r === "string"),
     );
     state = { ...cfg, refs, at: now };
     return refs;
   } catch {
     state = { ...cfg, refs: new Set(), at: now };
-    return new Set();
+    return null;
   }
 }
 
@@ -138,8 +147,10 @@ export default function (pi: ExtensionAPI) {
     const cfg = providerConfig(provider);
     if (!cfg) return;
     const sameHost = LOOPBACK.test(cfg.baseUrl);
-    const refs = sameHost ? null : await refsFor(provider);
-    if (!sameHost && !refs?.size) return;              // 跨机且服务端没有缓存 → 什么都别动
+    // 同机也要先确认对面真的是 Strata：回环地址不保证服务端认识 `image/x-strata-path`。
+    const refs = await refsFor(provider);
+    if (!refs) return;                                 // 没有 /vision/refs → 本会话退化为无操作
+    if (!sameHost && !refs.size) return;
 
     let changed = false;
     const messages = event.messages.map((message) => {
@@ -161,7 +172,7 @@ export default function (pi: ExtensionAPI) {
           touched = true;
           return { ...p, data: file, mimeType: PATH_MIME };
         }
-        if (!refs?.has(hash)) return part;             // 服务端没有这张图：照常发原图
+        if (!refs.has(hash)) return part;               // 服务端没有这张图：照常发原图
         touched = true;
         return { ...p, data: hash, mimeType: REF_MIME };
       });

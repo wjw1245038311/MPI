@@ -1,0 +1,93 @@
+{
+  "id": "workbuddy-connect",
+  "name": {
+    "zh": "WorkBuddy 模型接入",
+    "en": "WorkBuddy Connect"
+  },
+  "version": "2.0.5",
+  "category": "model",
+  "description": {
+    "zh": "把本机已登录的 WorkBuddy（腾讯 CodeBuddy Code 桌面版）模型接入 MPI：直连其 OpenAI 兼容网关，工具调用由 pi 执行、支持流式与真实 usage，并每天自动签到领取积分。不再需要 WorkBuddy CLI。",
+    "en": "Brings the models of a locally signed-in WorkBuddy desktop app into MPI by talking to its OpenAI-compatible gateway directly: tool calls execute on the pi side, with streaming and real usage; daily check-in credits are claimed automatically. No WorkBuddy CLI required."
+  },
+  "guide": {
+    "zh": "前置：本机已安装并登录 WorkBuddy 桌面端，且能直连 `www.workbuddy.cn`（公司代理/DNS 拦截会导致不可用）。\n\n启用后：\n1. 应用在本机内存里解密 WorkBuddy 登录态（不落盘、不上传）。\n2. 从账号目录 `/v3/config` 读模型与真实上下文/输出上限。\n3. 起本机透传代理（默认 127.0.0.1:8096，占用自动顺延）：把 `/v1/chat/completions` 转发到 WorkBuddy 的 `/v2/chat/completions`，只注入最新 token 与身份头。\n4. 把 provider `workbuddy` 写进 `~/.pi/agent/models.json`（首次写入前备份到应用数据目录）。\n5. 每天自动签到一次（同一天不重复）。\n\n修改服务代码后必须完全退出 MPI 再打开（仅停用/启用无效，同一进程的模块缓存不会失效）。启用后请新建会话或重启 MPI，模型选择器里才会出现 WorkBuddy 分组。\n\n工具调用：代理原样透传 tools / tool_choice / tool_calls / role:\"tool\"，由 pi 在自己这边执行——代理不执行任何东西，MPI 的只读/沙盒/审批权限门照常生效。\n\n配置说明：\n· 「接入的模型」留空 = 账号目录里的全部模型；填逗号分隔的 id 只接其中几个。\n· 「每日自动签到」关掉后不会自动领取，下次启用时仍会尝试。\n· 「并发上限」限制同时打给上游的请求数（默认 4）。\n\n这是第三方接入，用的是你自己账号的额度；WorkBuddy 客户端升级后接口可能变化，届时应用会报错但不影响 MPI 其它功能。\n\n图片：账号目录里 `supportsImages` 的模型可直接发图；目录不准时用「支持图片的模型」显式覆盖。本代理跑在回环地址上，MPI 的 image-ref 扩展（只该对接 Strata 视觉服务）可能把历史图片换成 `data:image/x-strata-path;base64,<本机路径>` 引用，代理会自动读回 `~/.cache/mpi-image-ref/` 里的文件还原成真图再转发。上游偶发返回 `code 11135`（图片无法识别）时代理会自动重试 1 次。",
+    "en": "Prerequisite: WorkBuddy desktop is installed and signed in on this machine, and `www.workbuddy.cn` is reachable directly (a corporate proxy/DNS block will break it).\n\nAfter enabling:\n1. The app decrypts the WorkBuddy sign-in in memory (never written to disk or uploaded).\n2. It reads the model catalog and real context/output limits from `/v3/config`.\n3. It starts a local pass-through proxy (127.0.0.1:8096 by default; next free port if busy): `/v1/chat/completions` is forwarded to WorkBuddy's `/v2/chat/completions` with the latest token and identity headers injected.\n4. Provider `workbuddy` is written into `~/.pi/agent/models.json` (backed up into the app data dir first).\n5. One daily check-in is claimed (once per day).\n\nAfter changing service code you must quit MPI completely and reopen it (disable/enable alone does not reload it). Create a new thread or restart MPI after enabling so the WorkBuddy group appears in the model picker.\n\nTool calls: the proxy passes tools / tool_choice / tool_calls / role:\"tool\" through untouched; pi executes them on its side. The proxy never executes anything, so MPI's read-only/sandbox/approval gate still applies.\n\nConfig:\n· \"Models\" empty = every model in the account catalog; a comma-separated list narrows it.\n· Turning off the daily check-in skips auto-claiming; it will try again next time the app is enabled.\n· \"Concurrency\" caps simultaneous upstream requests (default 4).\n\nThis is an unofficial integration using your own account quota. A WorkBuddy update may change the API; the app will then report an error without affecting the rest of MPI.\n\nImages: models with `supportsImages` in the account catalog can take images; override with \"Vision models\" when the catalog is wrong. If the upstream intermittently answers `code 11135` (image not recognized), the proxy retries once; if it still fails, resend, use another image, or switch models."
+  },
+  "capabilities": ["process", "network", "fs"],
+  "service": { "entry": "service/index.cjs", "autostart": true },
+  "config": {
+    "fields": [
+      {
+        "key": "models",
+        "type": "text",
+        "label": {
+          "zh": "接入的模型（逗号分隔，留空 = 全部）",
+          "en": "Models to expose (comma-separated; empty = all)"
+        },
+        "placeholder": {
+          "zh": "glm-5.3, deepseek-v4.1-flash",
+          "en": "glm-5.3, deepseek-v4.1-flash"
+        },
+        "default": "",
+        "hint": {
+          "zh": "可用 id 见本页日志「模型 …」几行（来自账号目录 /v3/config）。",
+          "en": "See the \"model …\" log lines on this page for ids available to this account."
+        }
+      },
+      {
+        "key": "autoCheckin",
+        "type": "select",
+        "label": {
+          "zh": "每日自动签到",
+          "en": "Daily auto check-in"
+        },
+        "default": "on",
+        "options": [
+          { "value": "on", "label": { "zh": "开启", "en": "On" } },
+          { "value": "off", "label": { "zh": "关闭", "en": "Off" } }
+        ],
+        "hint": {
+          "zh": "每天第一次启用/启动 MPI 时领取一次；同一天不会重复请求。",
+          "en": "Claimed once on the first enable/startup of the day; repeats are skipped."
+        }
+      },
+      {
+        "key": "imageModels",
+        "type": "text",
+        "label": {
+          "zh": "支持图片的模型（逗号分隔，留空 = 按账号目录）",
+          "en": "Vision models (comma-separated; empty = follow the catalog)"
+        },
+        "placeholder": {
+          "zh": "glm-5.3-flash, minimax-m3",
+          "en": "glm-5.3-flash, minimax-m3"
+        },
+        "default": "",
+        "hint": {
+          "zh": "默认按 /v3/config 的 supportsImages（并排除 disabledMultimodal）；目录不准时在这里显式指定，被点名的模型才会带 image 输入。",
+          "en": "Defaults to supportsImages from /v3/config (minus disabledMultimodal); list ids here to override when the catalog is wrong."
+        }
+      },
+      {
+        "key": "maxConcurrency",
+        "type": "select",
+        "label": {
+          "zh": "并发上限（同时打给上游的请求数）",
+          "en": "Concurrency (simultaneous upstream requests)"
+        },
+        "default": "4",
+        "options": [
+          { "value": "1", "label": { "zh": "1", "en": "1" } },
+          { "value": "2", "label": { "zh": "2", "en": "2" } },
+          { "value": "4", "label": { "zh": "4（默认）", "en": "4 (default)" } },
+          { "value": "8", "label": { "zh": "8", "en": "8" } }
+        ],
+        "hint": {
+          "zh": "工具轮与多会话同时使用时会有并发请求；上限只控制同时打给上游的数量。",
+          "en": "Tool turns and multiple threads can overlap; this caps how many requests hit the upstream at once."
+        }
+      }
+    ]
+  }
+}
