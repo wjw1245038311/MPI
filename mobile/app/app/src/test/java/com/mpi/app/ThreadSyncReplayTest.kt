@@ -57,8 +57,11 @@ class ThreadSyncReplayTest {
 
     private class Requests(private val handler: suspend (type: String) -> JsonElement?) {
         val calls = CopyOnWriteArrayList<String>()
+        /** 每次请求的 payload 原文（断言增量锚点用）。 */
+        val payloads = CopyOnWriteArrayList<Pair<String, String?>>()
         suspend fun request(type: String, payload: JsonElement?, threadId: String?, timeoutMs: Long?): JsonElement? {
             calls += type
+            payloads += type to payload?.toString()
             return handler(type)
         }
     }
@@ -182,6 +185,51 @@ class ThreadSyncReplayTest {
         )
         assertTrue("补发的事件应按序接上：实际 streaming=$streaming", streaming.contains("断线期间写的字"))
         assertTrue("补发不该把历史消息换掉", view.messages.isNotEmpty())
+        session.detach()
+    }
+
+
+    @Test
+    fun `a phone-sent message adopts the host id so the next subscribe carries a real anchor`() = runBlocking {
+        // 手机发的消息：先乐观回显（local-N / u-local-N），随后收到 message_start(user)。
+        // 必须把 id 改成主机那串（user-<timestamp>），否则下一次订阅带上去的就是个
+        // 主机不认识的 id → 增量永远 miss → 每次重进会话都重下整段历史。
+        val transport = Transport()
+        val requests = Requests { type ->
+            if (type == "thread.subscribe") Envelope.json.parseToJsonElement(SNAPSHOT) else null
+        }
+        val session = ThreadSession(
+            threadId = "t-sync",
+            transport = transport,
+            request = requests::request,
+            scope = scope,
+        )
+        session.subscribe()
+        session.echoUserMessage("在验证下")
+        // 与真机一致：pi 的 user message 带 timestamp（session 文件里那条是 1793232049109）
+        session.push(
+            transport,
+            1,
+            "message_start",
+            """{"event":{"message":{"role":"user","timestamp":1793232049109,"content":[{"type":"text","text":"在验证下"}]}}}""",
+        )
+        delay(120)
+
+        assertEquals(
+            "回显转正后应改用主机 id",
+            "user-1793232049109",
+            session.view.value.messages.last().id,
+        )
+
+        // 重进/重连：带上这个锚点
+        session.invalidateSubscription()
+        session.resync()
+        delay(120)
+        val subscribePayload = requests.payloads.last { it.first == "thread.subscribe" }.second.orEmpty()
+        assertTrue(
+            "订阅应带主机锚点，实际 payload：$subscribePayload",
+            subscribePayload.contains("\"haveMessageId\":\"user-1793232049109\""),
+        )
         session.detach()
     }
 
