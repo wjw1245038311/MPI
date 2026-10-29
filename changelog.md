@@ -29,6 +29,16 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    主机与客户端 1:1），代价只是「当前这一轮重发一次」（几 KB）。
    验证方式：`npm test -- pwa-thread`（新增 `pickAnchorId` 断言：最后一轮里只取 `user-*`、待发占位不影响）+
    安卓 `IncrementalSnapshotTest`（新增同名用例）；真机看 diag 的 `remote-snapshot incremental=hit … sent=N/M`。应用内：**重启 dev** → 桌面 diag 出现 `remote-snapshot incremental=hit`；手机/网页反复开关会话，响应应只剩几百字节级增量，不再每次都卡一下等整段历史。
+4. **修：回前台补一次增量快照 —— 缓存只跟快照走，导致冷启动后锚点停在旧一轮**——真机（2026-10-29 08:02）重进会话时
+   `incremental=hit` 但 `sent=6/23`：锚点是 07:48 那条用户消息，而不是最新一条。查 pi 源码确认事件里**是带**
+   `message.timestamp` 的（`{role:"user",content,timestamp:Date.now()}`，`message_start` 推的是同一个对象），所以不是 id 算不出来；
+   真正原因是**本地缓存只在收到快照时写**（`onSnapshot`），之后由事件推进的内容不进缓存 —— App 被重启后视图来自缓存，
+   锚点只能取到缓存里那条用户消息，于是主机把上一整轮重发一遍。现在安卓回前台（`kickConnection` 之后）补一次
+   `threadSession.resync()`，把缓存推进到最新（PWA 早就有同样行为）。顺带让「手机端一个回合多个气泡」与「桌面折叠成单回合」对齐。
+   验证方式：安卓 `./gradlew assembleDebug :app:testDebugUnitTest`；真机：后台待一会儿再回前台，diag 应出现一条
+   `remote-snapshot incremental=hit … sent=1/N`（而不是 6/N）；再杀掉 App 重进，首屏内容应是最后一轮而不是少一轮。
+   **已发：安卓 v0.5.153**（`sha256=92C43739…C547`，ECS 清单已更新）。
+
 
 ## v0.13.5（2026-10-28）
 1. **改：错误/危险色统一收敛为 `--danger` 家族（浅深各一套，共 9 个变量）**——原来 `#c0392b`（18 次）、`#b23a2c`（17 次）、`#9a3d32`、`#a84439`、`#fdf3f1`、`#fbe9e7` 与 4 种半透明红散落在 60 多处；现在统一走 `--danger`（文字/边框/小圆点）、`--danger-strong(-hover)`（白字按钮/横幅底）、`--danger-pale(-strong)`（浅底）、`--danger-soft(-hover)` / `--danger-ring` / `--danger-border`。**浅色下取值保持不变**（`--danger` = `#c0392b`、`--danger-strong` = `#b23a2c`），深色下错误色改为更亮的 `#f2726a` / `#c0392b`，暗底可读性提升。同时 `docs/DESIGN.md` 补上 token 表与收敛清单，`AGENTS.md` 增加「改 UI 先读 DESIGN.md」。

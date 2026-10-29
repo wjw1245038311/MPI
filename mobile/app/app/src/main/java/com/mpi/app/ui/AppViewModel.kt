@@ -1862,6 +1862,21 @@ class AppViewModel(
         if (best.isNotEmpty()) currentUrl = best
     }
 
+    /**
+     * 回前台时补一次**增量**快照（打开着会话才发）。
+     *
+     * 为什么需要：本地缓存只在收到**快照**时写（onSnapshot），事件推进出来的内容不进缓存。
+     * 于是「后台待一会儿 → 进程被杀/重启 → 重进会话」时，视图来自缓存，增量锚点只能取到
+     * 缓存里那条用户消息 → 主机会把上一整轮重发一遍（2026-10-29 实测 sent=6/23，本来 1 条就够）。
+     * 回前台补一次增量（几 KB）就能把缓存推进到最新，顺带让手机的多气泡与桌面折叠成的
+     * 单回合对齐。失败静默：连接恢复路径自己还会 resync。
+     */
+    fun refreshOpenThread() {
+        val current = threadSession ?: return
+        if (session?.isAuthenticated != true) return
+        scope.launch { runCatching { current.resync() } }
+    }
+
     // ---- 内部 ----
 
     /**

@@ -105,6 +105,9 @@ fun MpiApp(container: AppContainer) {
             return@LaunchedEffect
         }
         viewModel.kickConnection()
+        // 回前台也把打开的会话补一次增量：缓存只在收到快照时写，事件推进的内容不进缓存，
+        // 不补的话下次冷启动打开会话会「少一轮」（锚点也停在旧位置）。
+        viewModel.refreshOpenThread()
     }
     var settingsOpen by remember { mutableStateOf(false) }
     var diagnosticsOpen by remember { mutableStateOf(false) }
