@@ -13,6 +13,7 @@ import { findMessageOccurrences } from "../lib/chat-search";
 import { MarkedDiv, useSearchMark } from "../lib/search-mark";
 import { getExpandState, setExpandState } from "../lib/expand-state";
 import { formatElapsed, shouldShowThinkingIndicator, thinkingElapsedSeconds } from "../lib/thinking-indicator";
+import { looksAwaitingReply } from "../lib/awaiting-reply";
 import type { ContentBlock, HtmlElementReference, ToolRun, ViewMessage } from "../lib/types";
 import { Composer } from "./Composer";
 import { ExtUiPromptCard } from "./ExtUiPromptCard";
@@ -669,6 +670,16 @@ export function Chat() {
   const lastGroup = groups[groups.length - 1];
   const streamingExtends = !!streaming && !!lastGroup && lastGroup.role === "assistant";
   const headGroups = streamingExtends ? groups.slice(0, -1) : groups;
+  // 回合已经彻底停下来、而末条 assistant 正在提问 → 给一个弱提示（见 lib/awaiting-reply.ts）。
+  // 提示词侧要求「需要用户决策时用 choices 收尾」，这里兜的是模型没遵守的那次：
+  // 会话文件里一切正常（stopReason=stop），界面上却和「任务做完」一模一样。
+  const awaitingReply = useMemo(() => {
+    if (thread.isStreaming || streaming || thinkingActive || thread.error) return false;
+    const last = groups[groups.length - 1];
+    if (!last || last.role !== "assistant") return false;
+    const tail = last.items[last.items.length - 1];
+    return looksAwaitingReply(tail?.text || "");
+  }, [groups, thread.isStreaming, streaming, thinkingActive, thread.error]);
   // 「更早的对话」加载完成后并入导航（earlierLoaded 变化驱动重渲染，缓存本身是模块级 Map）。
   const earlierCount = useStore((s) => (activeThreadId ? s.earlierLoaded[activeThreadId] : undefined));
   const userGroups = useMemo(() => {
@@ -1160,6 +1171,12 @@ Right-click: switch working folder`
             {thread.error && (
               <div className="msg system">
                 <div className="msg-body">⚠ {thread.error}</div>
+              </div>
+            )}
+            {awaitingReply && (
+              <div className="awaiting-reply" role="status">
+                <span className="awaiting-reply-dot" aria-hidden="true" />
+                {language === "zh" ? "等你回复 —— 上一轮停在这里，还没结束" : "Awaiting your reply — the previous turn paused here"}
               </div>
             )}
           </div>

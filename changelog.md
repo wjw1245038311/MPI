@@ -66,6 +66,12 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    复现方式：**重启 dev**（提示词在启动时注入，`appendPromptFingerprint` 变了）→ 开新会话触发 grilling；若某次只剩正文 ❓ 而没有面板，说明该轮模型没遵守硬约束，需再看是否被 `manual` 模式覆盖。
 
 
+8. **修：回合停在「等你回复」时界面看不出来 —— 加一条弱提示**——minibox 现场（`session-01a1885c`，2026-10-30 00:27）：模型干完当轮活后以正文「…我没有 apply 它，等你对第 4 条的意见」收尾，会话文件完全干净（`stopReason=stop`、无 error），界面却与「任务已做完」一模一样，用户 7 小时后才发现任务停在等签字。第 7 条已从提示词侧要求这类场合用 choices 面板收尾，但只要模型偶尔不遵守仍会静默；而**格式自动重试兜不住这种**——`detectFailure` 首行就是「没有任何 choices 围栏痕迹 → 不重试」（宁漏判不误判），它只修「写了围栏但写坏」。
+   所以补一道纯展示兜底（`src/renderer/src/lib/awaiting-reply.ts`）：回合已结束（无流式、无在跑工具、无 error）且末条 assistant 以**收尾问句**或**等待语**（等你 / 待你 / 请确认 / let me know …）结尾时，在消息列底部显示灰色胶囊「等你回复 —— 上一轮停在这里，还没结束」。已有 choices 围栏时不叠加（面板本身就是提示）；正常汇报、代码块/表格收尾不触发；等待语只看尾部 400 字窗口，长文开头的问题不会误中。
+   验证方式：`npm test -- awaiting`（13 条断言：现场原句 / 收尾问句 / 尾部装饰符 / 等待语 / 普通汇报 / 空文本 / 有面板不叠加 / 代码块与表格收尾 / 400 字窗口外不算）+ `npm run typecheck`。
+   应用内：`Ctrl+R`（纯 renderer 改动，不用重启 dev）→ 打开一个以提问收尾的历史会话（minibox 那份即可），消息列底部应出现灰色胶囊；点过 choices 面板的回合、以及正常汇报的回合不应出现。
+
+
 ## v0.13.5（2026-10-28）
 1. **改：错误/危险色统一收敛为 `--danger` 家族（浅深各一套，共 9 个变量）**——原来 `#c0392b`（18 次）、`#b23a2c`（17 次）、`#9a3d32`、`#a84439`、`#fdf3f1`、`#fbe9e7` 与 4 种半透明红散落在 60 多处；现在统一走 `--danger`（文字/边框/小圆点）、`--danger-strong(-hover)`（白字按钮/横幅底）、`--danger-pale(-strong)`（浅底）、`--danger-soft(-hover)` / `--danger-ring` / `--danger-border`。**浅色下取值保持不变**（`--danger` = `#c0392b`、`--danger-strong` = `#b23a2c`），深色下错误色改为更亮的 `#f2726a` / `#c0392b`，暗底可读性提升。同时 `docs/DESIGN.md` 补上 token 表与收敛清单，`AGENTS.md` 增加「改 UI 先读 DESIGN.md」。
    验证方式：`npm run typecheck` + `npm run build`；`grep -c "#c0392b\|#b23a2c" src/renderer/src/styles.css` 应只剩 4 处变量定义。应用内：亮色下错误提示/删除按钮观感不变；切到暗色，工具错误、搜索无结果、到期提醒等红色明显变亮（不再发暗）。
