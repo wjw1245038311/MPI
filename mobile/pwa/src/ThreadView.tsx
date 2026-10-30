@@ -24,6 +24,7 @@ import { COLUMN_PRESETS, COLUMN_PRESET_ORDER, type ColumnPreset } from "./lib/co
 import { groupToolBlocks, type ToolGroup } from "./lib/tool-groups";
 import { formatTokens, readContextUsage } from "./lib/context-usage";
 import { formatElapsed, shouldShowThinkingIndicator } from "./lib/thinking-indicator";
+import { looksAwaitingReply } from "./lib/awaiting-reply";
 
 /** 主机侧上限（见 src/main/remote/service.ts MAX_REMOTE_FILES / MAX_REMOTE_FILE_DATA）。 */
 const MAX_FILES = 3;
@@ -1217,6 +1218,19 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     streaming: view.streaming,
   });
 
+  // 回合已停下、而末条 assistant 在提问 → 弱提示（与桌面/Android 同判据，见 lib/awaiting-reply.ts）。
+  // 提示词侧要求「需要用户决策时用 choices 收尾」；这里兜的是模型没遵守的那次。
+  const awaitingReply = (() => {
+    if (running || view.streaming || thinkingActive || view.errorBanner) return false;
+    const last = view.messages[view.messages.length - 1];
+    if (!last || last.role !== "assistant") return false;
+    const text = last.blocks
+      .filter((block) => block.type === "text")
+      .map((block) => block.text || "")
+      .join("");
+    return looksAwaitingReply(text);
+  })();
+
   // Auto-scroll while the user is pinned to the bottom.
   useEffect(() => {
     if (!atBottom) return;
@@ -2000,6 +2014,13 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
               {view.streaming && <Message message={view.streaming} />}
               {/* prefill 等待占位：覆盖「还没流式消息」与「响应头已到但一个块都没有」两个窗口 */}
               {thinkingActive && <ThinkingPlaceholder key={view.threadId} />}
+              {/* 回合已停、而末条回复在提问：让「暂停」与「做完」在视觉上分开 */}
+              {awaitingReply && (
+                <p className="hint awaiting-reply" role="status">
+                  <span className="awaiting-reply-dot" aria-hidden="true" />
+                  等你回复 —— 上一轮停在这里，还没结束
+                </p>
+              )}
             </div>
             {!atBottom && view.messages.length > 0 && (
               <button type="button" className="to-bottom" onClick={scrollToBottom} aria-label="回到底部">

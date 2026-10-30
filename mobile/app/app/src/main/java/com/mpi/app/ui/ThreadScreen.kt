@@ -252,6 +252,8 @@ fun ThreadScreen(
     /** 图片查看器（原图那一路）开着没 —— 开着就禁用抽屉手势，见 LocalImageViewerOpen。 */
     var imageViewerOpen by remember { mutableStateOf(false) }
     val showThinkingPlaceholder = shouldShowThinkingPlaceholder(view)
+    // 回合已停下、而末条 assistant 在提问 → 弱提示（与桌面/PWA 同判据，见 AwaitingReplyLogic.kt）
+    val showAwaitingReply = shouldShowAwaitingReply(view)
     val display = visibleMessages(renderable, showToolCalls, showThinking)
         // 占位行出现时，把「已 start 但一个块都没有」的流式消息从列表里摘掉：
         // 否则会先渲染一个只有头像的空行（MessageRow 对空 blocks 只画头像），
@@ -284,12 +286,13 @@ fun ThreadScreen(
     // 内容增长时，只要还在跟随就贴底。key 取「消息数 + 流式内容总长度」：
     // 只看最后一块的长度会漏掉「变的不是最后一块」（如工具结果回填）。
     val streamLength = view.streaming?.blocks?.sumOf { it.text?.length ?: 0 } ?: 0
-    LaunchedEffect(display.size, streamLength, showThinkingPlaceholder) {
+    LaunchedEffect(display.size, streamLength, showThinkingPlaceholder, showAwaitingReply) {
         if (following && display.isNotEmpty()) {
             // 必须用大 offset 真滚到底：scrollToItem(lastIndex) 只是把最后一条的“顶部”
             // 对齐视口，最后一条很长时仍可下滚，atBottom 就永远为 false（按钮不消失）。
-            // 占位行是 display 之外的第 size 个 item，贴底得滚到它。
-            val lastItem = if (showThinkingPlaceholder) display.size else display.lastIndex
+            // 占位行是 display 之外的第 size 个 item，贴底得滚到它（尾部有几种就加几项）。
+            val tailItems = (if (showThinkingPlaceholder) 1 else 0) + (if (showAwaitingReply) 1 else 0)
+            val lastItem = if (tailItems > 0) display.size + tailItems - 1 else display.lastIndex
             listState.scrollToItem(lastItem, Int.MAX_VALUE)
         }
     }
@@ -433,6 +436,10 @@ fun ThreadScreen(
                     // 与桌面端同一谓词（见 ThinkingIndicator.kt）。
                     if (showThinkingPlaceholder) {
                         item(key = "thinking-placeholder") { ThinkingPlaceholderRow() }
+                    }
+                    // 回合已停、而末条回复在提问：让「暂停」与「做完」在视觉上分开
+                    if (showAwaitingReply) {
+                        item(key = "awaiting-reply") { AwaitingReplyRow() }
                     }
                 }
             }
@@ -2620,6 +2627,31 @@ private fun ThinkingPlaceholderRow() {
             text = "思考中 · ${formatElapsed(elapsedSec)}",
             style = MaterialTheme.typography.bodySmall,
             color = MpiTheme.colors.textFaint,
+        )
+    }
+}
+
+/**
+ * 「等你回复」提示行（与桌面/PWA 同一判据，见 AwaitingReplyLogic.kt）：
+ * 回合已停、而末条回复在提问时出现。纯展示，不拦截任何交互；误显示只是多一行弱提示。
+ */
+@Composable
+private fun AwaitingReplyRow() {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary),
+        )
+        Text(
+            text = "等你回复 —— 上一轮停在这里，还没结束",
+            style = MaterialTheme.typography.bodySmall,
+            color = MpiTheme.colors.textDim,
         )
     }
 }

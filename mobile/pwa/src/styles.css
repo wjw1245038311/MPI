@@ -115,6 +115,30 @@ html, body {
 
 .hint { color: var(--muted); font-size: 13px; line-height: 1.5; }
 
+/* 「等你回复」提示（lib/awaiting-reply.ts）：回合已停、末条回复在提问时出现。
+   纯展示兜底，不拦截交互���颜色全用现有 token（--accent-soft / --border / --warn
+   均已定义暗色），所以暗色自动跟随。 */
+.awaiting-reply {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: 2px 16px 10px;
+  padding: 5px 11px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.awaiting-reply-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 textarea, input[type="text"] {
   width: 100%;
   background: var(--accent-soft);

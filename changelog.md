@@ -67,9 +67,9 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 
 8. **修：回合停在「等你回复」时界面看不出来 —— 加一条弱提示**——minibox 现场（`session-01a1885c`，2026-10-30 00:27）：模型干完当轮活后以正文「…我没有 apply 它，等你对第 4 条的意见」收尾，会话文件完全干净（`stopReason=stop`、无 error），界面却与「任务已做完」一模一样，用户 7 小时后才发现任务停在等签字。第 7 条已从提示词侧要求这类场合用 choices 面板收尾，但只要模型偶尔不遵守仍会静默；而**格式自动重试兜不住这种**——`detectFailure` 首行就是「没有任何 choices 围栏痕迹 → 不重试」（宁漏判不误判），它只修「写了围栏但写坏」。
-   所以补一道纯展示兜底（`src/renderer/src/lib/awaiting-reply.ts`）：回合已结束（无流式、无在跑工具、无 error）且末条 assistant 以**收尾问句**或**等待语**（等你 / 待你 / 请确认 / let me know …）结尾时，在消息列底部显示灰色胶囊「等你回复 —— 上一轮停在这里，还没结束」。已有 choices 围栏时不叠加（面板本身就是提示）；正常汇报、代码块/表格收尾不触发；等待语只看尾部 400 字窗口，长文开头的问题不会误中。
-   验证方式：`npm test -- awaiting`（13 条断言：现场原句 / 收尾问句 / 尾部装饰符 / 等待语 / 普通汇报 / 空文本 / 有面板不叠加 / 代码块与表格收尾 / 400 字窗口外不算）+ `npm run typecheck`。
-   应用内：`Ctrl+R`（纯 renderer 改动，不用重启 dev）→ 打开一个以提问收尾的历史会话（minibox 那份即可），消息列底部应出现灰色胶囊；点过 choices 面板的回合、以及正常汇报的回合不应出现。
+   所以补一道纯展示兜底，**三端同判据**（桌面 `src/renderer/src/lib/awaiting-reply.ts`、PWA `mobile/pwa/src/lib/awaiting-reply.ts`、安卓 `ui/AwaitingReplyLogic.kt`）：回合已结束（无流式、无在跑工具、无 error/压缩）且末条 assistant 以**收尾问句**或**等待语**（等你 / 待你 / 请确认 / let me know …）结尾时，在消息列末尾显示胶囊「等你回复 —— 上一轮停在这里，还没结束」。已有 choices 围栏时不叠加（面板本身就是提示）；正常汇报、代码块/表格收尾不触发；等待语只看尾部 400 字窗口，长文开头的问题不会误中。样式全用现有 token（`--accent-soft` / `--border` / `--accent`），暗色自动跟随。
+   验证方式：`npm test -- awaiting`（13 组用例 × 桌面与 PWA 两份实现，含 **parity 断言**——两边结论必须一致）+ `npm run typecheck` + `cd mobile/pwa && npx tsc --noEmit` + `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug :app:testDebugUnitTest`（新增 `AwaitingReplyLogicTest`：现场原句 / 收尾问句 / 等待语 / 正常汇报 / 有面板不叠加 / 400 字窗口 / running、streaming、error、compacting、末条是用户消息、空列表 十种回合状态）。
+   应用内：桌面 `Ctrl+R` 即可（纯 renderer）；PWA 需重新部署或本地构建；安卓装新包。打开一个以提问收尾的历史会话（minibox 那份即可），消息列底部应出现胶囊；点过 choices 面板的回合、以及正常汇报的回合不应出现。
 
 
 ## v0.13.5（2026-10-28）
