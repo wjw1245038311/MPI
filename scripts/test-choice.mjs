@@ -43,9 +43,8 @@ assert.ok(logic.qaModeInstruction("inline", "zh").includes("内联快速选择")
 assert.ok(logic.qaModeInstruction("inline", "zh").includes("我的选择："));
 assert.ok(logic.qaModeInstruction("manual", "zh").startsWith("## 问答方式：手动回答"));
 assert.ok(logic.qaModeInstruction("manual", "zh").includes("不要输出"));
-// conflict resolution: skills prescribing their own question format yield to the fence
-assert.ok(logic.qaModeInstruction("inline", "zh").includes("skill"));
-assert.ok(logic.qaModeInstruction("inline", "en").includes("interviewing skill"));
+// skills that prescribe their own question format are out of scope: 列举例举不尽，
+// 只保证「正常使用」（用户决策 / 下一步）这个主场景，不写冲突消解规则。
 assert.ok(logic.qaModeInstruction("inline", "en").includes("inline quick choice"));
 assert.ok(logic.qaModeInstruction("manual", "en").includes("Do NOT emit"));
 // format hard rule: the closing fence must sit on its own line (a glued ``` silently
@@ -57,8 +56,28 @@ assert.ok(logic.qaModeInstruction("inline", "en").includes("own line"));
 assert.ok(logic.qaModeInstruction("inline", "zh").includes("一条回复最多一个块"));
 assert.ok(logic.qaModeInstruction("inline", "zh").includes("草稿块"));
 assert.ok(logic.qaModeInstruction("inline", "zh").includes("```choices>"));
-assert.ok(logic.qaModeInstruction("inline", "en").includes("at most ONE block per reply"));
+assert.ok(logic.qaModeInstruction("inline", "en").includes("At most ONE block per reply"));
 assert.ok(logic.qaModeInstruction("inline", "en").includes("draft block"));
+// 2026-10-30 minibox 现场（session-01a1885c）：模型把「等你对第 4 条的意见」写成正文收尾，
+// 用户 7 小时后回来问「怎么结束了」。提示词现在把「阻塞决策必须走面板」写成硬约束。
+assert.ok(logic.qaModeInstruction("inline", "zh").includes("用 choices 围栏收尾"));
+assert.ok(logic.qaModeInstruction("inline", "zh").includes("多选问答"));
+assert.ok(logic.qaModeInstruction("inline", "zh").includes("不要用正文问句收尾"));
+assert.ok(logic.qaModeInstruction("inline", "en").includes("end with a choices fence"));
+assert.ok(logic.qaModeInstruction("inline", "en").includes("multi-choice question"));
+assert.ok(logic.qaModeInstruction("inline", "en").includes("never with a bare open-ended question"));
+assert.ok(logic.qaModeInstruction("manual", "zh").includes("等你回答后我继续"));
+assert.ok(logic.qaModeInstruction("manual", "en").includes("I will continue once you answer"));
+// 提示词本身是上下文负担：越长越容易被长上下文淡化。2026-10-30 从 23 行压到 13 行，
+// 这里给个上限防反弹（加规则时先删旧的，而不是一路追加）。
+assert.ok(
+  logic.qaModeInstruction("inline", "zh").split("\n").length <= 16,
+  `内联提示词不应超过 16 行，当前 ${logic.qaModeInstruction("inline", "zh").split("\n").length} 行`,
+);
+assert.ok(
+  logic.qaModeInstruction("inline", "en").split("\n").length <= 16,
+  `EN inline prompt should stay <= 16 lines`,
+);
 
 // --- real extension source against stubs (same pattern as channel-ext) ------
 const root = mkdtempSync(join(tmpdir(), "mpi-choice-ext-"));
