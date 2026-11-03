@@ -39,6 +39,20 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    「已借鉴 / 仍可做 / 不必抄 / 不该抄」分档），`docs/OPTIMIZATION-BACKLOG.md` 追加 36–42 条（36–39 已完成）。
    验证方式：打开两份文档核对编号与状态一致（本文件的 1–4 对应 backlog 36–39）。
 
+6. **运行时：内置 Pi 从 `1.3.0` 升到 `1.5.0`**——`package.json` 的 `piRuntimeVersion` 改 1.5.0，重打运行时归档
+   （`MPI-Runtime-1.5.0-win-x64.tar.gz`，46.4 MiB）。上游这版的 **breaking 是工具参数校验换到 `@earendil-works/pi-schema`**
+   （TypeBox 的 `Refine/BigInt/Undefined/codecs/Format.Set` 对 tool args 失效；MCP 工具开始做类型强转），
+   已核对 MPI 自带扩展只用 `Type.Object/String/Number/Optional`（都是纯 JSON Schema），**不受影响**；
+   RPC 命令表（`--mode rpc` 的 prompt/steer/get_state/…）与扩展 UI 方法（select/confirm/setWidget/…）、
+   `contentText` / `completeSimple` 入口均与 1.3.0 一致。另外顺带拿到 1.4 的修复：摘要不再因思考吃满输出上限而失败、
+   并发扩展对话框不再互相顶掉（第 2 个 select 导致第 1 个 promise 永不 settle）、BOM 版 `mcp.json` 不再整份跳过、
+   截断的工具调用恢复后会话不再永久 400。
+   验证方式：`PI_PACKAGE_DIR=<pi 1.5.0 包目录> npm run bundle`（要求 pi 包目录内有 `node_modules`，见 `docs/PI-1.5-UPGRADE.md`）；
+   `npm test -- app-runtime`；已用 1.5.0 运行时 + 本机全部 13 个 `mpi-*.ts` 扩展起 `--mode rpc` 跑 `get_state`，
+   扩展零报错、返回结构正常。应用内待验：正常发一轮带工具调用的对话 + 一个长会话触发压缩 + MCP 工具调用。
+   已知新增噪声：用户级扩展包（`pi-web-access` / `rpiv-todo`）把 `typebox` 声明成 dependencies，1.5 启动会在 stderr
+   打 `Host-provided extension packages must be declared in peerDependencies` 警告（不影响功能）。
+
 ## v0.13.6（2026-10-30）
 
 1. **修：手机端「对话不刷新」——断线期间的事件不再被丢弃，重连只补增量、不重置视图**——现场（2026-10-28）：桌面已写出一大段，手机停在旧内容；主机 diag 显示同一条健康连接 4.4 秒内 5 次 `thread.resync`、每次回 1.6MB 全量快照，而另一些时段是 `subs=0`（手机根本没订阅，主机把事件直接丢了）。三层一起改：
