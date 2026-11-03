@@ -9,6 +9,7 @@ import { ensureKnowledgeDirConfigured } from "./knowledge-dir";
 import { ensureZhiyaFiles, migrateUserProfileToZhiya, zhiyaMasterDir } from "./zhiya";
 import { flushTodos, ingestInbox } from "./todo-store";
 import { cleanupOldRuntimes, readManagedPiStatus } from "./core-updater";
+import { ensureEmbeddedRuntimeCurrent } from "./runtime-package";
 import { registerHtmlPreviewProtocol, registerHtmlPreviewScheme } from "./html-preview-protocol";
 import { registerPdfViewerProtocol, registerPdfViewerScheme } from "./pdf-viewer-protocol";
 import { registerTodoAttachmentProtocol, registerTodoAttachmentScheme } from "./todo-attachment-protocol";
@@ -400,6 +401,20 @@ if (!gotLock) {
   app.whenReady().then(() => {
     bootMark("when-ready");
     loadConfig(app.getPath("userData"));
+    // 静默跟上安装包内置的 Pi 运行时（2026-11-03 用户拍板：不要提示）。
+    // 纯本地：归档就在 resources/runtime-package/，校验后解压，不联网；
+    // 只有内置比现役新才动，失败只记 diag、不拦启动。
+    const runtimeAdopt = ensureEmbeddedRuntimeCurrent()
+      .then((result) => {
+        if (result.action === "installed") {
+          appendDiagLog(`runtime auto-adopt ${result.from || "?"} -> ${result.to} (silent)`);
+        } else if (result.action === "error") {
+          appendDiagLog(`runtime auto-adopt failed ${result.from || "?"} -> ${result.to}: ${result.error}`);
+        }
+      })
+      .catch((error: any) => {
+        appendDiagLog(`runtime auto-adopt crashed: ${error?.message || String(error)}`);
+      });
     // Apply data-location migrations recorded by Settings (session store /
     // todo data). Must run before the window opens so the UI reads from the
     // new locations; failures stay pending and retry on the next launch.
@@ -500,7 +515,9 @@ if (!gotLock) {
     // Remove runtime trees superseded by an in-app core update (they may have
     // been locked by pi child processes during the previous run; nothing holds
     // them now). Best effort — leftovers simply wait for the next launch.
-    cleanupOldRuntimes();
+    // 必须排在静默安装之后：否则可能在「解压到 versions/<新版本>」之后、「改 current.json」
+    // 之前，把它当成非 active 目录删掉（cleanupRuntimeVersions 只保留 active）。
+    void runtimeAdopt.finally(() => cleanupOldRuntimes());
     registerIpc(getWin);
     bootMark("ipc-registered");
     // One-time backfill of the observed-tools registry from historical session

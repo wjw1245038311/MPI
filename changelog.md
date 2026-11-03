@@ -53,6 +53,18 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    已知新增噪声：用户级扩展包（`pi-web-access` / `rpiv-todo`）把 `typebox` 声明成 dependencies，1.5 启动会在 stderr
    打 `Host-provided extension packages must be declared in peerDependencies` 警告（不影响功能）。
 
+7. **新增：升级 MPI 后自动跟上安装包内置的 Pi 运行时（静默、不联网、不提示）**——以前只有「userData 里完全没有运行时」
+   才会解压内置归档；升级 MPI 本体后机器上那份旧的继续用，内置的新版本永远躺着，必须去设置点一次「更新 Pi」。
+   现在启动时判定一次：**内置版本严格更新才换上**（同版本/更旧一律不动，不降级），路径为
+   `resources/runtime-package/<归档>` → size + sha512 校验 → 本地 tar 解压 → 原子改 `runtime/current.json`，
+   **整个过程不访问网络、不弹窗、不发通知**，只往 diag 写一行 `runtime auto-adopt <旧> -> <新> (silent)`；
+   失败也不拦启动，下次启动自动重试。同时把启动清理（`cleanupRuntimeVersions` 只保留 active）排到安装之后，
+   避免「解压完但还没改指针」时被当成旧目录删掉。
+   验证方式：`npm test -- runtime-version`（新增 `scripts/test-runtime-version.mjs`：只升不降、同版本不动、
+   无现役/无内置都不动、1.10.0 > 1.9.9）+ `npm test -- app-runtime` + `npm test -- core-update`。
+   真机：改装新安装包后首次启动，等 5–10 秒看 diag 有 `runtime auto-adopt …`，设置 → 关于 里 Pi 版本已变成内置版本，
+   全程无弹窗；断网启动同样能完成。
+
 ## v0.13.6（2026-10-30）
 
 1. **修：手机端「对话不刷新」——断线期间的事件不再被丢弃，重连只补增量、不重置视图**——现场（2026-10-28）：桌面已写出一大段，手机停在旧内容；主机 diag 显示同一条健康连接 4.4 秒内 5 次 `thread.resync`、每次回 1.6MB 全量快照，而另一些时段是 `subs=0`（手机根本没订阅，主机把事件直接丢了）。三层一起改：

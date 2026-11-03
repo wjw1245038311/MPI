@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { app } from "electron";
 import { getConfigDir } from "./config";
+import { shouldAdoptEmbeddedRuntime } from "../shared/runtime-version";
 
 /**
  * The runtime archive is embedded in the desktop installer and extracted once
@@ -335,6 +336,56 @@ export function ensureRuntimePackage(onProgress?: ProgressFn): Promise<string | 
     });
   }
   return installPromise;
+}
+
+/** 当前 active 运行时的版本号（pointer 指向的版本目录，或旧的 `<runtime>/pi` 布局）。 */
+export function activeRuntimeVersion(): string | null {
+  const root = getActiveRuntimeRoot();
+  if (!root) return null;
+  for (const rel of [["pi", "package.json"], ["package.json"]]) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(root, ...rel), "utf8")) as { version?: unknown };
+      if (typeof pkg.version === "string" && pkg.version.trim()) return pkg.version.trim();
+    } catch {
+      /* 换下一个候选路径 */
+    }
+  }
+  return null;
+}
+
+export interface EmbeddedRuntimeAutoResult {
+  /** none = 无需动作（无内置 / 同版本 / 内置更旧）；installed = 已换上；error = 失败，下次启动重试 */
+  action: "none" | "installed" | "error";
+  from: string | null;
+  to: string | null;
+  error?: string;
+}
+
+/**
+ * 启动时**静默**跟上安装包内置的运行时（2026-11-03 用户拍板：静默安装、不要提示）。
+ *
+ * 背景：`ensureRuntimePackage` 只在「根本没有运行时」时解压内置归档，升级 MPI 本体后
+ * 机器上那份旧的继续用，内置的新版本永远躺着——用户不点「更新 Pi」就永远用不上。
+ *
+ * 行为约定：
+ *   - 完全离线：归档就在 `resources/runtime-package/`，size + sha512 校验后本地解开；
+ *   - 只有内置**严格更新**才动（`shouldAdoptEmbeddedRuntime`），不降级、不重复装；
+ *   - 不弹窗、不发通知——结果只写 diag（调用方负责记）；
+ *   - 失败不拦启动：下次启动会因为目录不完整而重试。
+ */
+export async function ensureEmbeddedRuntimeCurrent(): Promise<EmbeddedRuntimeAutoResult> {
+  const manifest = getRuntimePackageManifest();
+  const from = activeRuntimeVersion();
+  if (!manifest) return { action: "none", from, to: null };
+  if (!shouldAdoptEmbeddedRuntime(from, manifest.runtimeVersion)) {
+    return { action: "none", from, to: manifest.runtimeVersion };
+  }
+  try {
+    await installRuntimePackage(manifest);
+    return { action: "installed", from, to: manifest.runtimeVersion };
+  } catch (error: any) {
+    return { action: "error", from, to: manifest.runtimeVersion, error: error?.message || String(error) };
+  }
 }
 
 /** Remove superseded version directories after no child process can hold them. */

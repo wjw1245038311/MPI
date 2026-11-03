@@ -91,6 +91,21 @@ ode.exe`；进程表里两个 pi 子进程都在 1.5.0 目录下 |
 
 仍未覆盖：长会话触发压缩、MCP 工具的实际入参（类型强转）。
 
+## 5.1 升级 MPI 后如何跟上内置运行时（2026-11-03 起自动）
+
+以前只有「userData 里没有任何可用运行时」才解压内置归档（`ensureRuntimePackage`），所以升级 MPI 本体后
+机器上旧的 pi 继续用，必须手动点「更新 Pi」。现在启动时多了 `ensureEmbeddedRuntimeCurrent()`
+（`runtime-package.ts`）：
+
+- 判据：`shouldAdoptEmbeddedRuntime(activeVersion, embeddedVersion)`（`src/shared/runtime-version.ts`，纯函数）
+  —— **内置严格更新才换**，同版本/更旧不动，不降级；
+- 动作：`resources/runtime-package/<归档>` → size + sha512 校验 → 本地 `tar -xzf` → 原子写 `current.json`；
+- **完全离线**，不弹窗、不发通知，结果只写 diag：`runtime auto-adopt 1.3.0 -> 1.5.0 (silent)`；
+- 失败不拦启动，下次启动重试（目标目录不完整时会重装）；
+- 启动清理 `cleanupRuntimeVersions()`（只保留 active 版本）已排到安装之后，避免竞态删除。
+
+「更新 Pi」按钮仍然保留，用于**主动**检查和安装；它那条路径会先访问 `pi.dev`，静默路径不会。
+
 ## 6. 已知噪声与遗留风险
 
 - **新增 stderr 警告**：用户安装的 `pi-web-access` / `@juicesharp/rpiv-todo` 把 `typebox` 写成 dependencies，
