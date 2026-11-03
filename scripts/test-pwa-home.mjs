@@ -171,8 +171,15 @@ async function main() {
     // --- mid-session drop: auto-reconnect + reauth + refetch ----------------------------
     client.simulateDrop();
     await waitFor(() => session.getSnapshot().hostOnline === false, "session sees the drop");
+    // `hostOnline` 在 socket open 时就会置真，而 reauth（以及它触发的 refresh）是另一条异步链：
+    // 只等「在线 + 无错 + 列表恢复」会先满足，断言接在后面就会偶发 count=0（flake）。
+    // 把 reauth 计数并进同一个等待条件，语义上也才对得上「reconnect + reauth + refetch」。
     await waitFor(
-      () => session.getSnapshot().hostOnline && session.getSnapshot().error === null && session.getSnapshot().projects.length === 2,
+      () =>
+        session.getSnapshot().hostOnline &&
+        session.getSnapshot().error === null &&
+        session.getSnapshot().projects.length === 2 &&
+        reauthCount >= 1,
       "reconnect + reauth + refetch",
       15_000,
     );

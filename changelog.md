@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
-## Unreleased
+## v0.14.0（2026-11-03）
 
 1. **新增：界面进程崩溃的有界自动恢复（白屏不再只能手动杀进程）**——参考 DSH Desktop v0.13.0 的 bounded recovery。
    以前 `render-process-gone` 只往控制台打一行日志，渲染层一白屏用户就只能杀进程重启，而重启后同一坏驱动照样白；
@@ -64,6 +64,13 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    无现役/无内置都不动、1.10.0 > 1.9.9）+ `npm test -- app-runtime` + `npm test -- core-update`。
    真机：改装新安装包后首次启动，等 5–10 秒看 diag 有 `runtime auto-adopt …`，设置 → 关于 里 Pi 版本已变成内置版本，
    全程无弹窗；断网启动同样能完成。
+
+8. **修：`pwa-home` 测试偶发失败（不是产品回归）**——`attachAutoReauth answered the post-drop challenge (count=0)`
+   在全量跑里约 1/3 概率出现。根因在测试自身的竞态：`hostOnline` 在 socket 重连 open 时就置真，
+   而 reauth 是另一条异步链（成功后才会 `onReauth` 计数），原等待条件只看「在线 + 无错 + 列表恢复」，
+   先满足就断言计数，于是偶发为 0。修法是把 `reauthCount >= 1` 并进同一个等待条件（语义上也才是
+   「reconnect + reauth + refetch」）。产品侧行为未改。
+   验证方式：`npm test -- pwa-home` 连跑 5 次全过（修前在 HEAD 上也能复现失败）。
 
 ## v0.13.6（2026-10-30）
 
