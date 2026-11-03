@@ -188,3 +188,42 @@
 4. 小项打包：**08/09**（composer 交互）+ **10/11/12**（顺手修）一次清掉
 5. **26 → 27** 大脑继续推进（25 已完成）；**35** S1 封装可与 24 并行；**33** 随时可插队（15min）
 6. 长期候选：**02 / 03 / 04 / 05 / 06 / 07** 按使用痛点再挑
+
+---
+
+## 四、参考 DSH Desktop（0.9 → 0.13.1，2026-11-03 对照）
+
+> 对照笔记全文见 **`docs/DSH-0.9-0.13-NOTES.md`**（版本时间线 + 三条主线 + 「该不该抄」分档）。
+> 本机装的 DSH Desktop 是 0.12.1，最新 0.13.1；下面只列**对 MPI 成立**的项，
+> 工作台 / Office/PPT / 公文模板 / Harness 插件代际这些产品形态不同的不列。
+
+### 36 · 渲染进程 / GPU 崩溃的有界恢复 ✅ 2026-11-03
+- 参考 dsh v0.13.0「bounded recovery + 软件渲染兜底」。以前 `render-process-gone` 只打日志，白屏只能手动杀进程。
+- 实现：`src/main/crash-guard.ts`（纯判定，跨启动落盘 `userData/crash-guard.json`）+ `src/main/index.ts` 接线。10 分钟窗口内第 1–2 次崩溃自动 reload；第 3 次落盘并 relaunch 到软件渲染；软件渲染下再崩 2 次改为弹窗交用户（不再自动重启）；GPU 子进程窗口内崩 2 次 → 下次启动禁用硬件加速（不当场 relaunch）。
+- 验证：`node --experimental-strip-types scripts/test-crash-guard.mjs`（`npm test -- crashguard`）+ diag 里的 `crash-guard renderer-gone … action=`。
+
+### 37 · 更新器三件套：6h 定时检查 + 跳过此版本 + 后台/手动分离 ✅ 2026-11-03
+- 参考 dsh v0.12.0/v0.13.0 的更新策略。原来只有「关于」里的手动检查（`autoDownload=false`，无定时、无 skip）。
+- 实现：`app-updater.ts` 的 `startAppUpdateAutoCheck`（启动 30s 后 + 每 6h，**只查不下载**，静默检查不污染手动检查的错误态）、`appUpdateSkipVersion` / `clearAppUpdateSkip`（config 新增两个字段）；发现新版本走现有 `SystemNotificationCenter.notifyAppUpdate`，点击只把窗口带到前台。跳过只影响后台提示，卡片与手动检查仍然显示。
+- 验证：`npm test -- app-update`；应用内装旧版 → 等 30s 后台通知出现 → 点「跳过 vX」后不再提醒、「不再跳过」恢复。
+
+### 38 · 更新说明 Markdown 渲染 ✅ 2026-11-03
+- 参考 dsh v0.13.1「更新弹窗支持 Markdown 日志」。MPI 的 changelog 本身是 Markdown，但更新卡片只有版本号。
+- 实现：`AppUpdateStatus.notes`（Release body 归一成 Markdown，HTML 标签降级、上限 4000 字）+ 卡片内 `<details>` 复用 `lib/markdown.tsx` 的 `Markdown`；无说明时不占位，仍给「查看更新日志」入口。
+- 验证：`npm test -- markdown`；应用内手动检查到新版本 → 卡片出现可折叠的更新说明且排版正常（暗色下同样）。
+
+### 39 · 冷启动遮罩 ✅ 2026-11-03
+- 参考 dsh v0.13.0「启动遮罩覆盖内容出现前的空白帧」。MPI 主窗口 `show:false` + `ready-to-show`，冷启动期间桌面全空。
+- 实现：`src/main/splash.ts`（纯内联 HTML，无 preload / 无额外打包资源，>600ms 才显示「正在启动…」）；主窗口 `ready-to-show` / `did-fail-load` / 20s 兜底时销毁。
+- 验证：冷启动（先彻底退出）观察 380×210 遮罩出现并在首屏渲染后消失；开发态 `npm run dev` 同样生效。
+
+### 40 · 模型能力自动识别 + 自定义模型 ⬜ 中
+- dsh v0.13.1 从服务端模型列表推断能力（vision / tool / reasoning）并提供自定义模型入口。
+- MPI 现状：`model-context.ts` 只探测 contextWindow，`model-autopilot.ts` 只管选型，**没有能力维度**。建议先做只读能力表（对话里按能力禁用图片附件等），再做自定义模型表单。
+
+### 41 · 文件预览保留行号 ⬜ ~20min
+- dsh v0.13.1「打开文件路径时正确处理并转发行号」。MPI 预览入口（`app:readPreview` / Preview.tsx）是否保留 `:line` 未核实，先查再改。
+
+### 42 · MCP 市场借它的分页 / 排序 / 状态一致性 ⬜ 与 05 合并
+- dsh v0.11.0/v0.12.1：市场目录分页 + 默认按星标排序 + 请求期 busy 状态 + 卸载清启用开关 + 陈旧安装清理。
+- MPI `mcp-market.ts` 只有列表/详情（120 行）。做 05（一键安装）时一并照此设计：**启用状态单一事实源**、失败态协调、不要自造第二套安装状态。

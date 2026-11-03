@@ -319,6 +319,17 @@ export interface AppConfig {
    */
   serverMigration?: number;
   /**
+   * 「跳过此版本」（2026-11-03，参考 DSH Desktop v0.12.0 的更新策略）：
+   * 后台自动检查发现有新版本时不弹提示；**手动点「检查最新版本」仍然显示**（跳过不等于隐藏）。
+   * 空字符串 = 没跳过任何版本。装到更高版本后这项自然失效（只比对版本号相等）。
+   */
+  appUpdateSkipVersion?: string;
+  /**
+   * 后台自动检查应用更新：启动约 30s 后一次，之后每 6 小时一次（默认开）。
+   * 只查不下载：发现新版本发系统通知，下载/安装仍由用户在「关于 MPI」里点。
+   */
+  appUpdateAutoCheck?: boolean;
+  /**
    * 局域网直连模式（P2，见 docs/RELAY-SHARING.md §3.2）：桌面端自己起一个只绑局域网的中继，
    * 手机连内网地址 → 不依赖 Tailscale/公网，附件也走内网。**代价是没有推送通道**。
    *
@@ -531,6 +542,8 @@ const DEFAULTS: AppConfig = {
   lanModeEnabled: false,
   lanModePort: 9001,
   localRelayStaticDir: "",
+  appUpdateSkipVersion: "",
+  appUpdateAutoCheck: true,
 };
 
 let cached: AppConfig | null = null;
@@ -701,6 +714,10 @@ export function loadConfig(userDataDir: string): AppConfig {
           : {}),
         relayChannels: sanitizeRelayChannels(parsed.relayChannels),
         ...(typeof parsed.serverMigration === "number" ? { serverMigration: Math.floor(parsed.serverMigration) } : {}),
+        ...(typeof parsed.appUpdateSkipVersion === "string" && parsed.appUpdateSkipVersion.trim()
+          ? { appUpdateSkipVersion: parsed.appUpdateSkipVersion.trim() }
+          : {}),
+        appUpdateAutoCheck: typeof parsed.appUpdateAutoCheck === "boolean" ? parsed.appUpdateAutoCheck : DEFAULTS.appUpdateAutoCheck,
         ...(typeof parsed.customRelayUrl === "string" && parsed.customRelayUrl.trim()
           ? { customRelayUrl: parsed.customRelayUrl.trim() }
           : {}),

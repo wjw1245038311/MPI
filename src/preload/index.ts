@@ -120,6 +120,9 @@ const api = {
     checkAppUpdate: () => ipcRenderer.invoke("app:checkAppUpdate"),
     downloadAppUpdate: () => ipcRenderer.invoke("app:downloadAppUpdate"),
     installAppUpdate: () => ipcRenderer.invoke("app:installAppUpdate"),
+    /** 「跳过此版本」：只影响后台提醒与卡片提示，不阻止手动更新。 */
+    skipAppUpdateVersion: (version: string) => ipcRenderer.invoke("app:skipAppUpdateVersion", version),
+    clearAppUpdateSkip: () => ipcRenderer.invoke("app:clearAppUpdateSkip"),
     checkCoreUpdate: () => ipcRenderer.invoke("app:checkCoreUpdate"),
     /** Open (or focus) the standalone changelog window. */
     openChangelogWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke("app:openChangelogWindow"),

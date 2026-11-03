@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { app, BrowserWindow, Menu, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, Menu, shell, Tray } from "electron";
 import { loadConfig, getConfig, updateConfig } from "./config";
 import { flushDrafts } from "./draft-store";
 import { runPendingDataMigrations } from "./data-migration";
@@ -18,7 +18,18 @@ import { getSessionsDir, listAllSessionFiles } from "./session-store";
 import { threadUuidFromSessionFile } from "./messaging/channel-threads";
 import { pruneThreadKeyedMaps } from "./thread-config";
 import { pruneChatAttachments } from "./chat-attachment-store";
-import { appendDiagLog } from "./diag-log";
+import { appendDiagLog, diagLogPath } from "./diag-log";
+import { writeJsonAtomic } from "./json-store";
+import {
+  crashGuardSummary,
+  emptyCrashGuardState,
+  markSoftwareRendering,
+  recordGpuCrash,
+  recordRendererCrash,
+  sanitizeCrashGuardState,
+  type CrashGuardState,
+} from "./crash-guard";
+import { closeSplashWindow, createSplashWindow } from "./splash";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
 
 /**
@@ -53,6 +64,90 @@ app.setName(IS_DEV_BUILD ? "MPI Dev" : "MPI");
 if (IS_DEV_BUILD) app.setPath("userData", join(app.getPath("appData"), "MPI Dev"));
 if (process.platform === "win32") app.setAppUserModelId(APP_USER_MODEL_ID);
 
+/* ---------------------- 崩溃有界恢复（crash-guard） ---------------------- */
+
+/**
+ * 见 crash-guard.ts 的文件头。这里只负责「落盘 + 按判定执行」。
+ * 状态文件放 userData/crash-guard.json：**跨启动累计**，否则「重启一次就好」的
+ * 坏驱动场景永远升级不到软件渲染。
+ */
+function crashGuardPath(): string {
+  return join(app.getPath("userData"), "crash-guard.json");
+}
+
+function loadCrashGuard(): CrashGuardState {
+  try {
+    return sanitizeCrashGuardState(JSON.parse(readFileSync(crashGuardPath(), "utf8")));
+  } catch {
+    return emptyCrashGuardState();
+  }
+}
+
+function saveCrashGuard(state: CrashGuardState): void {
+  try {
+    mkdirSync(app.getPath("userData"), { recursive: true });
+    writeJsonAtomic(crashGuardPath(), JSON.stringify(state, null, 2));
+  } catch (error: any) {
+    // 写不进去只影响「下次启动还能不能记住」，不能影响本次运行。
+    console.warn("[crash-guard] save failed:", error?.message || String(error));
+  }
+}
+
+let crashGuard: CrashGuardState = loadCrashGuard();
+// disableHardwareAcceleration 必须在 ready 之前调用，所以放在模块顶层。
+if (crashGuard.softwareRendering) {
+  app.disableHardwareAcceleration();
+  // eslint-disable-next-line no-console
+  console.warn(`[crash-guard] 已禁用硬件加速（${crashGuard.softwareRenderingReason || "上次启动崩溃恢复"}）`);
+}
+
+/** 落盘「下次软件渲染」并重启。只在用户已无法正常操作界面时调用。 */
+function relaunchWithSoftwareRendering(reason: string): void {
+  crashGuard = markSoftwareRendering(crashGuard, reason);
+  saveCrashGuard(crashGuard);
+  appendDiagLog(`crash-guard relaunch software-render reason=${reason}`);
+  try {
+    app.relaunch();
+    app.exit(0);
+  } catch (error: any) {
+    appendDiagLog(`crash-guard relaunch failed: ${error?.message || String(error)}`);
+  }
+}
+
+/** 渲染进程反复崩溃、软件渲染也救不回来时的最后一步：交给用户，不再自动重启。 */
+async function handleRendererGiveUp(crashes: number, reason: string): Promise<void> {
+  const zh = getConfig().language === "zh";
+  const { response } = await dialog.showMessageBox({
+    type: "error",
+    title: "MPI",
+    message: zh ? "界面进程反复崩溃" : "The UI process keeps crashing",
+    detail: zh
+      ? `最近 10 分钟内崩溃 ${crashes} 次（${reason}）。已尝试软件渲染仍未稳定。\n\n可以再以软件渲染重启一次；若仍不行，请退出后把日志发给我们：\n${diagLogPath()}`
+      : `Crashed ${crashes} times in the last 10 minutes (${reason}), even with software rendering.\n\nYou can restart once more in software rendering, or quit and send us the log:\n${diagLogPath()}`,
+    buttons: zh ? ["以软件渲染重启", "退出"] : ["Restart in software rendering", "Quit"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (response === 0) relaunchWithSoftwareRendering("renderer-crash-give-up");
+  else app.quit();
+}
+
+/** GPU 子进程崩溃：不 relaunch（界面还活着），只标记下次软件渲染。 */
+app.on("child-process-gone", (_event, details) => {
+  if (details.type !== "GPU") return;
+  const result = recordGpuCrash(crashGuard, Date.now(), String(details.reason));
+  crashGuard = result.state;
+  appendDiagLog(
+    `crash-guard gpu-gone reason=${details.reason} exit=${details.exitCode} inWindow=${result.crashesInWindow} fallback=${result.shouldFallbackToSoftware ? 1 : 0}`,
+  );
+  if (result.shouldFallbackToSoftware) {
+    crashGuard = markSoftwareRendering(crashGuard, "gpu-process-crashed");
+    console.warn("[crash-guard] GPU 反复崩溃，下次启动改用软件渲染");
+  }
+  saveCrashGuard(crashGuard);
+});
+
 registerHtmlPreviewScheme();
 registerPdfViewerScheme();
 registerTodoAttachmentScheme();
@@ -76,6 +171,7 @@ registerChatAttachmentScheme();
 }
 
 let mainWindow: BrowserWindow | null = null;
+let splashWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 const getWin = () => mainWindow;
@@ -154,6 +250,14 @@ function createWindow(): void {
   const cfg = getConfig();
   const b = cfg.windowBounds;
   const windowIcon = resolveWindowIcon();
+  // 冷启动遮罩：主窗口 ready-to-show 之前占住桌面（见 splash.ts）。
+  if (!splashWindow) splashWindow = createSplashWindow();
+  const dismissSplash = () => {
+    closeSplashWindow(splashWindow);
+    splashWindow = null;
+  };
+  // 兜底：加载失败或 ready-to-show 一直不来时，遮罩不能永远挂着。
+  setTimeout(dismissSplash, 20_000);
   mainWindow = new BrowserWindow({
     width: b?.width ?? 1440,
     height: b?.height ?? 920,
@@ -189,7 +293,13 @@ function createWindow(): void {
   // Restore the saved window zoom (50–150%); setZoomLevel uses log2(factor).
   mainWindow.webContents.setZoomLevel(Math.log2(cfg.zoomPercent / 100));
 
+  mainWindow.webContents.on("did-fail-load", (_event, _code, _desc, _url, isMainFrame) => {
+    // 只关心主框架失败：子 iframe 失败不该收掉启动遮罩。
+    if (isMainFrame !== false) dismissSplash();
+  });
+
   mainWindow.on("ready-to-show", () => {
+    dismissSplash();
     if (!mainWindow) return;
     bootMark("window-ready-to-show");
     // On Windows, explicitly reapply the ICO after Chromium has created the
@@ -245,9 +355,31 @@ function createWindow(): void {
     // eslint-disable-next-line no-console
     console.log(`[renderer:${tag}] ${message}  (${sourceId}:${line})`);
   });
+  // 渲染进程崩溃：有界恢复（crash-guard.ts）。以前这里只打日志，白屏后只能手动杀进程。
   mainWindow.webContents.on("render-process-gone", (_e, details) => {
-    // eslint-disable-next-line no-console
-    console.error("[renderer] process gone:", details.reason, details.exitCode);
+    const at = Date.now();
+    const result = recordRendererCrash(crashGuard, at, String(details.reason));
+    crashGuard = result.state;
+    saveCrashGuard(crashGuard);
+    appendDiagLog(
+      `crash-guard renderer-gone reason=${details.reason} exit=${details.exitCode} action=${result.action} inWindow=${result.crashesInWindow} ${crashGuardSummary(crashGuard, at)}`,
+    );
+    console.error("[renderer] process gone:", details.reason, details.exitCode, "→", result.action);
+
+    if (result.action === "give-up") {
+      void handleRendererGiveUp(result.crashesInWindow, String(details.reason));
+      return;
+    }
+    // 稍等一下再重启：崩溃瞬间 webContents 往往还在销毁途中，立即 reload 可能无效。
+    setTimeout(() => {
+      if (result.action === "software-render") {
+        relaunchWithSoftwareRendering(`renderer-crash-${result.crashesInWindow}x`);
+        return;
+      }
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      console.warn("[renderer] 自动重载界面（第", result.crashesInWindow, "次崩溃）");
+      mainWindow.reload();
+    }, 800);
   });
 
   const rendererUrl = process.env["ELECTRON_RENDERER_URL"];

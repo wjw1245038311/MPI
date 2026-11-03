@@ -1,6 +1,6 @@
 import { app, net } from "electron";
 import { autoUpdater, type ProgressInfo, type UpdateCheckResult, type UpdateInfo } from "electron-updater";
-import { getConfig } from "./config";
+import { getConfig, updateConfig } from "./config";
 import { builtinServer } from "../shared/builtin-server";
 import {
   APP_UPDATE_ECS_PROBE_TIMEOUT_MS,
@@ -54,6 +54,10 @@ export interface AppUpdateStatus {
   /** Whether the current process can install and restart the packaged app. */
   installable: boolean;
   downloaded: boolean;
+  /** 用户点过「跳过此版本」，且跳过的正是当前 latest。 */
+  skipped: boolean;
+  /** 发布说明（Markdown，取自 Release body）；无说明或不可用时为 null。 */
+  notes: string | null;
   error?: string;
 }
 
@@ -144,6 +148,52 @@ function applyFeed(source: AppUpdateSource, target: AppUpdateFeedTarget): void {
   autoUpdater.requestHeaders = null;
 }
 
+/** 用户点过「跳过此版本」的版本号；空串 = 未跳过。 */
+export function appUpdateSkipVersion(): string {
+  const value = getConfig().appUpdateSkipVersion;
+  return normalizeVersion(typeof value === "string" ? value : "");
+}
+
+/** 把某个版本标记为「跳过」。只影响后台提示与卡片上的提示，不阻止手动更新。 */
+export function skipAppUpdateVersion(version: string): void {
+  const normalized = normalizeVersion(version);
+  updateConfig({ appUpdateSkipVersion: normalized });
+}
+
+/** 取消跳过（用户反悔 / 想重新收到提示）。 */
+export function clearAppUpdateSkip(): void {
+  if (appUpdateSkipVersion()) updateConfig({ appUpdateSkipVersion: "" });
+}
+
+/**
+ * 发布说明 → Markdown。electron-updater 的 releaseNotes 可能是纯文本，也可能是
+ * GitHub 的 release body；两种都归一到 Markdown（Markdown 渲染器只认 md）。
+ * 上限 4000 字：更新弹窗不是文档阅读器，长文请点「查看更新日志」。
+ */
+function updateNotes(info: UpdateInfo): string | null {
+  const raw = (info as { releaseNotes?: unknown }).releaseNotes;
+  let text = "";
+  if (typeof raw === "string") {
+    text = raw;
+  } else if (Array.isArray(raw)) {
+    text = raw
+      .map((item) => (item && typeof item === "object" && typeof (item as { note?: unknown }).note === "string"
+        ? ((item as { note: string }).note)
+        : ""))
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  if (!text.trim()) return null;
+  const normalized = text
+    .replace(/<h3[^>]*>/gi, "\n### ")
+    .replace(/<\/h3>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/?(p|ul|ol|li|div|strong|b|em|i|code)[^>]*>/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return normalized.length > 4000 ? normalized.slice(0, 4000) + "\n\n…" : normalized;
+}
+
 function normalizeVersion(raw: string): string {
   const value = String(raw || "").trim().replace(/^v/i, "");
   const match = /^(\d+(?:\.\d+){0,2})(?:[-+].*)?$/.exec(value);
@@ -230,6 +280,8 @@ function statusFromInfo(current: string, info: UpdateInfo): AppUpdateStatus {
     packaged: app.isPackaged,
     installable,
     downloaded: downloadedVersion === latest,
+    skipped: latest === appUpdateSkipVersion(),
+    notes: updateNotes(info),
     ...(lastUpdaterError ? { error: lastUpdaterError } : {}),
   };
 }
@@ -246,6 +298,8 @@ function emptyStatus(current: string, error?: string): AppUpdateStatus {
     packaged: app.isPackaged,
     installable: isPackagedInstallable(),
     downloaded: false,
+    skipped: false,
+    notes: null,
     ...(error ? { error } : {}),
   };
 }
@@ -383,11 +437,16 @@ async function checkWithFallback(): Promise<UpdateCheckResult | null> {
   throw new Error(firstError || "更新服务不可用");
 }
 
-export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
+export async function checkForAppUpdate(options: { silent?: boolean } = {}): Promise<AppUpdateStatus> {
   configureUpdater();
+  const silent = options.silent === true;
   const current = normalizeVersion(app.getVersion());
-  lastUpdaterError = null;
-  latestUpdateInfo = null;
+  // 后台静默检查不碰 lastUpdaterError / latestUpdateInfo：否则一次网络失败会把用户
+  // 手动检查看到的「最新版本」抹成错误态（两处共享同一个模块状态）。
+  if (!silent) {
+    lastUpdaterError = null;
+    latestUpdateInfo = null;
+  }
 
   if (!isPackagedInstallable()) {
     return emptyStatus(current);
@@ -399,7 +458,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateStatus> {
     return info ? statusFromInfo(current, info) : emptyStatus(current, lastUpdaterError || undefined);
   } catch (error: any) {
     const message = friendlyUpdaterError(error?.message || String(error), updateFeedTarget().source !== "relay");
-    lastUpdaterError = message;
+    if (!silent) lastUpdaterError = message;
     return emptyStatus(current, message);
   }
 }
@@ -514,4 +573,49 @@ export function installAppUpdate(): AppUpdateResult {
     emitProgress({ stage: "error", message });
     return { ok: false, downloaded: true, version, message: "启动安装程序失败：" + message };
   }
+}
+
+/* --------------------- 后台自动检查（启动 + 每 6 小时） --------------------- */
+
+/** 启动后多久跑第一次：避开首屏与 pi 运行时启动高峰。 */
+const AUTO_CHECK_INITIAL_DELAY_MS = 30_000;
+/** 之后每 6 小时一次（DSH Desktop 同量级；比每小时查 GitHub 省心，也比一天一次及时）。 */
+const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+let autoCheckStarted = false;
+/** 同一个版本只提醒一次（本次运行内）；否则每 6 小时弹一次同样的通知。 */
+let autoNotifiedVersion: string | null = null;
+
+/**
+ * 启动后台自动检查。**只查不下载**：发现新版本发一条系统通知，下载/安装仍由用户决定
+ * （`autoUpdater.autoDownload = false` 的既有约定不变）。
+ *
+ * `notify` 由 ipc.ts 注入系统通知中心——本模块不直接碰 Electron 的 Notification，
+ * 以便测试与「通知中心」保持单点。
+ */
+export function startAppUpdateAutoCheck(notify: (status: AppUpdateStatus) => void): void {
+  if (autoCheckStarted) return;
+  autoCheckStarted = true;
+
+  const run = async () => {
+    try {
+      if (getConfig().appUpdateAutoCheck === false) return;
+      const status = await checkForAppUpdate({ silent: true });
+      if (!status.hasUpdate || !status.latest) return;
+      if (!status.supported || !status.installable) return;
+      if (status.skipped) return;
+      if (autoNotifiedVersion === status.latest) return;
+      autoNotifiedVersion = status.latest;
+      notify(status);
+    } catch (error: any) {
+      // 后台检查失败保持安静：网络抖动不该弹任何东西（手动检查时才报错）。
+      console.warn("[app-updater] 后台检查失败:", error?.message || String(error));
+    }
+  };
+
+  const initial = setTimeout(() => void run(), AUTO_CHECK_INITIAL_DELAY_MS);
+  const timer = setInterval(() => void run(), AUTO_CHECK_INTERVAL_MS);
+  // 定时器不该拖着进程不退出。
+  initial.unref?.();
+  timer.unref?.();
 }

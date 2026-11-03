@@ -5,7 +5,7 @@ import { homedir, hostname, networkInterfaces } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, safeStorage, shell } from "electron";
 import WebSocket from "ws";
-import { checkForAppUpdate, downloadAppUpdate, installAppUpdate } from "./app-updater";
+import { checkForAppUpdate, clearAppUpdateSkip, downloadAppUpdate, installAppUpdate, skipAppUpdateVersion, startAppUpdateAutoCheck } from "./app-updater";
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { appendDiagLog } from "./diag-log";
@@ -1981,6 +1981,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   idleSweepTimer.unref?.();
   app.once("before-quit", () => clearInterval(idleSweepTimer));
   systemNotifications = createSystemNotificationCenter(getWin);
+  // 后台检查应用更新（启动 30s 后 + 每 6h）——只发通知，不自动下载。
+  // dev 实例查不到（not packaged），但启动也毫无意义，所以只在安装版启动。
+  if (app.isPackaged) {
+    startAppUpdateAutoCheck((status) => {
+      const language = getConfig().language === "zh" ? "zh" : "en";
+      systemNotifications?.notifyAppUpdate(status.latest || "", language);
+    });
+  }
   warmEnabled = true;
 
   // Long-task monitor: broadcast active transfers (extension installs,
@@ -7440,6 +7448,15 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
   ipcMain.handle("app:checkAppUpdate", () => checkForAppUpdate());
   ipcMain.handle("app:downloadAppUpdate", async () => downloadAppUpdate((p) => send("pi:appUpdate", p)));
   ipcMain.handle("app:installAppUpdate", () => installAppUpdate());
+  // 跳过此版本：后台通知与卡片提示不再提它（手动检查仍会显示，不隐藏事实）。
+  ipcMain.handle("app:skipAppUpdateVersion", (_e, version: unknown) => {
+    if (typeof version === "string" && version.trim()) skipAppUpdateVersion(version);
+    return { ok: true };
+  });
+  ipcMain.handle("app:clearAppUpdateSkip", () => {
+    clearAppUpdateSkip();
+    return { ok: true };
+  });
   // Pass the configured piCliPath so the comparison follows the same runtime
   // resolution as app:updatePi (dev mode / custom installs are not managed).
   ipcMain.handle("app:checkCoreUpdate", () => checkForCoreUpdate(getConfig().piCliPath));

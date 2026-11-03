@@ -11,6 +11,8 @@ export interface TaskCompletionNotification {
 export interface SystemNotificationCenter {
   notifySandboxApproval(threadId: string, language: NotificationLanguage, operation?: string): void;
   notifyTaskComplete(threadId: string, details: TaskCompletionNotification): void;
+  /** 后台检查发现新版本（2026-11-03）：点击只把 MPI 窗口带到前台，不自动下载。 */
+  notifyAppUpdate(version: string, language: NotificationLanguage): void;
 }
 
 type WindowGetter = () => BrowserWindow | null;
@@ -57,13 +59,21 @@ function revealThread(getWindow: WindowGetter, threadId: string): void {
   else sendFocus();
 }
 
+function revealAppWindow(getWindow: WindowGetter): void {
+  const window = getWindow();
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  if (!window.isVisible()) window.show();
+  window.focus();
+}
+
 export function createSystemNotificationCenter(getWindow: WindowGetter): SystemNotificationCenter {
   // Keeping a reference until close makes the click handler reliable on Windows,
   // where the native toast can outlive the JavaScript call stack.
   const active = new Set<Notification>();
 
   const show = (
-    threadId: string,
+    threadId: string | null,
     language: NotificationLanguage,
     options: { title: string; subtitle?: string; body: string; persistent?: boolean },
   ) => {
@@ -87,7 +97,7 @@ export function createSystemNotificationCenter(getWindow: WindowGetter): SystemN
     }
 
     active.add(notification);
-    notification.once("click", () => revealThread(getWindow, threadId));
+    notification.once("click", () => (threadId ? revealThread(getWindow, threadId) : revealAppWindow(getWindow)));
     notification.once("close", () => active.delete(notification));
     notification.once("failed", (_event, error) => {
       active.delete(notification);
@@ -108,6 +118,18 @@ export function createSystemNotificationCenter(getWindow: WindowGetter): SystemN
             ? `操作正在等待确认（${label}）。点击此提醒返回 MPI。`
             : `A gated operation is waiting for approval (${label}). Click to return to MPI.`,
         persistent: true,
+      });
+    },
+
+    notifyAppUpdate(version, language) {
+      const label = truncateNotificationText(version, 24);
+      show(null, language, {
+        title: language === "zh" ? "MPI · 有新版本" : "MPI · Update available",
+        subtitle: `v${label}`,
+        body:
+          language === "zh"
+            ? `MPI v${label} 已发布。点击打开 MPI，在「关于」里下载（不会自动安装）。`
+            : `MPI v${label} is available. Click to open MPI and download it from About (nothing installs automatically).`,
       });
     },
 

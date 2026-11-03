@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import type { Diagnostics } from "../lib/types";
 import { cleanOutput, hasLibuvAssertion, lastLine, stripAnsi } from "../lib/update";
+import { Markdown } from "../lib/markdown";
 import { translateUiText } from "../lib/i18n";
 
 /* 应用更新卡片里对外给的地址（旧规约：不展示“从哪儿拿到这个版本”，直接给 GitHub 地址）。 */
@@ -47,6 +48,10 @@ export function AppUpdatePanel() {
     packaged: boolean;
     installable: boolean;
     downloaded: boolean;
+    /** 用户点过「跳过此版本」，且跳过的正是当前 latest。 */
+    skipped?: boolean;
+    /** 发布说明（Markdown）；没有时 omit。 */
+    notes?: string | null;
     error?: string;
   } | null>(null);
   const [appUpdateProgress, setAppUpdateProgress] = useState<{ stage: string; message: string; pct?: number } | null>(null);
@@ -139,8 +144,32 @@ export function AppUpdatePanel() {
     }
   };
 
-  const installAppRelease = async () => {
-    setAppUpdateError(null);
+  const skipThisVersion = async () => {
+    const version = appUpdateStatus?.latest;
+    if (!version) return;
+    try {
+      await window.pi.app.skipAppUpdateVersion(version);
+      setAppUpdateStatus((prev) => (prev ? { ...prev, skipped: true } : prev));
+      pushToast(
+        "info",
+        language === "zh" ? `已跳过 v${version}，后台不再提醒（手动检查仍会显示）` : `v${version} skipped — no more background reminders (manual checks still show it)`,
+      );
+    } catch (e: any) {
+      pushToast("error", e?.message || String(e));
+    }
+  };
+
+  const unskipThisVersion = async () => {
+    try {
+      await window.pi.app.clearAppUpdateSkip();
+      setAppUpdateStatus((prev) => (prev ? { ...prev, skipped: false } : prev));
+      pushToast("info", language === "zh" ? "已恢复该版本的后台提醒" : "Background reminders for this version restored");
+    } catch (e: any) {
+      pushToast("error", e?.message || String(e));
+    }
+  };
+
+  const installAppRelease = async () => {    setAppUpdateError(null);
     try {
       const result: any = await window.pi.app.installAppUpdate();
       if (!result?.ok) setAppUpdateError(result?.message || (language === "zh" ? "启动安装程序失败" : "Could not start the installer"));
@@ -225,7 +254,32 @@ export function AppUpdatePanel() {
             {language === "zh" ? "安装并重启" : "Install and restart"}
           </button>
         )}
+        {appUpdateStatus?.hasUpdate && !appUpdateReady && !appUpdateStatus.skipped && (
+          <button className="set-btn ghost" onClick={skipThisVersion} disabled={appUpdating}>
+            {language === "zh" ? `跳过 v${appUpdateStatus.latest}` : `Skip v${appUpdateStatus.latest}`}
+          </button>
+        )}
+        {appUpdateStatus?.skipped && (
+          <button className="set-btn ghost" onClick={unskipThisVersion} disabled={appUpdating}>
+            {language === "zh" ? "不再跳过" : "Stop skipping"}
+          </button>
+        )}
       </div>
+      {appUpdateStatus?.skipped && (
+        <div className="set-hint" style={{ marginTop: 8 }}>
+          {language === "zh"
+            ? `已跳过 v${appUpdateStatus.latest}：后台不再提醒，但这台机器仍是旧版。想升级时直接点「下载」。`
+            : `v${appUpdateStatus.latest} is skipped: no background reminders, but this machine stays on the old build. Click Download whenever you want it.`}
+        </div>
+      )}
+      {appUpdateStatus?.notes && (
+        <details className="upd-notes" open>
+          <summary>{language === "zh" ? `v${appUpdateStatus.latest} 更新说明` : `What's new in v${appUpdateStatus.latest}`}</summary>
+          <div className="upd-notes-body">
+            <Markdown text={appUpdateStatus.notes} />
+          </div>
+        </details>
+      )}
       {appUpdateProgress && (appUpdating || appUpdateReady) && (
         <div className="upd-progress">
           <div className="upd-progress-head">

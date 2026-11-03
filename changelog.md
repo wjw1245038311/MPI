@@ -4,6 +4,41 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## Unreleased
+
+1. **新增：界面进程崩溃的有界自动恢复（白屏不再只能手动杀进程）**——参考 DSH Desktop v0.13.0 的 bounded recovery。
+   以前 `render-process-gone` 只往控制台打一行日志，渲染层一白屏用户就只能杀进程重启，而重启后同一坏驱动照样白；
+   现在 `src/main/crash-guard.ts` 统一判定（纯逻辑、跨启动落盘 `userData/crash-guard.json`）：
+   10 分钟窗口内第 1–2 次崩溃自动 reload；第 3 次落盘「禁用硬件加速」并 relaunch 到软件渲染；
+   软件渲染下再崩 2 次就**停止自动重启**，弹窗说明并提供「以软件渲染重启 / 退出」+ 日志路径；
+   GPU 子进程窗口内崩 2 次只标记（界面还活着，不当场重启），下次启动 `app.disableHardwareAcceleration()`。
+   每步都写 diag（`crash-guard renderer-gone … action=`、`crash-guard gpu-gone …`）。
+   验证方式：`npm run typecheck`；`npm test -- crashguard`（新增 `scripts/test-crash-guard.mjs`：窗口裁剪/时钟回拨、
+   第 3 次才升级软件渲染、软件渲染下不再 relaunch、GPU 只标记不重启、坏 JSON 不炸）。应用内：**重启 dev** 后
+   在 DevTools 控制台执行 `process.crash()` 模拟渲染崩溃 → 界面应自动恢复且 diag 出现 `action=reload`；
+   连续 3 次后应自动以软件渲染重启（启动日志有「已禁用硬件加速」）。
+
+2. **新增：应用更新后台自动检查 + 跳过此版本**——原来只有「关于 MPI」里的手动检查（`autoDownload=false`，无定时、无 skip）。
+   现在安装版启动 30s 后、之后每 6h **静默检查一次**（只查不下载；静默检查不覆盖手动检查的错误态），
+   发现新版本发**一条系统通知**（点击只把窗口带到前台，不自动下载），同一版本本次运行只提醒一次；
+   `config.json` 新增 `appUpdateSkipVersion` / `appUpdateAutoCheck`，卡片上可「跳过 vX / 不再跳过」，
+   跳过只影响后台提示，手动检查与卡片仍然显示该版本（不隐藏事实）。
+   验证方式：`npm test -- app-update`；应用内装旧版 → 等约 30s 出现「MPI · 有新版本」通知 → 点卡片「跳过 vX」
+   后不再提醒、重启也不提醒 → 点「不再跳过」恢复；关掉 `appUpdateAutoCheck` 后不再后台检查。
+
+3. **新增：更新说明按 Markdown 渲染到更新卡片**——`AppUpdateStatus` 新增 `notes`（Release body 归一成 Markdown，
+   简单 HTML 标签降级、上限 4000 字），卡片里以可折叠区渲染（复用 `lib/markdown.tsx`），无说明时不占位。
+   验证方式：`npm test -- markdown`；应用内手动检查到新版本 → 卡片出现「vX 更新说明」折叠区且排版正常（浅色/暗色都看一遍）。
+
+4. **新增：冷启动遮罩**——主窗口 `show:false` + `ready-to-show`，冷启动（asar 首读、pi 运行时解压）期间桌面全空。
+   新增 `src/main/splash.ts`（纯内联 HTML，不依赖 preload、不增加打包资源；>600ms 才出现「正在启动…」），
+   主窗口 `ready-to-show` / `did-fail-load` / 20s 兜底时销毁。
+   验证方式：彻底退出后冷启动，观察 380×210 遮罩出现并在首屏可交互后立即消失（`npm run dev` 同样生效）。
+
+5. **文档：DSH Desktop 0.9 → 0.13.1 对照笔记**——新增 `docs/DSH-0.9-0.13-NOTES.md`（版本时间线、三条主线、
+   「已借鉴 / 仍可做 / 不必抄 / 不该抄」分档），`docs/OPTIMIZATION-BACKLOG.md` 追加 36–42 条（36–39 已完成）。
+   验证方式：打开两份文档核对编号与状态一致（本文件的 1–4 对应 backlog 36–39）。
+
 ## v0.13.6（2026-10-30）
 
 1. **修：手机端「对话不刷新」——断线期间的事件不再被丢弃，重连只补增量、不重置视图**——现场（2026-10-28）：桌面已写出一大段，手机停在旧内容；主机 diag 显示同一条健康连接 4.4 秒内 5 次 `thread.resync`、每次回 1.6MB 全量快照，而另一些时段是 `subs=0`（手机根本没订阅，主机把事件直接丢了）。三层一起改：
