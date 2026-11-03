@@ -72,6 +72,25 @@ npm run bundle
 - 用本机 `<userData>` 下全部 13 个 `mpi-*.ts` 扩展起 `--mode rpc`，发 `get_state` → **成功返回**，
   stderr 无扩展加载错误（只有用户级扩展包的 `typebox` peerDependencies 警告，见下）。
 
+### 真实 dev 实例（2026-11-03 21:00）
+
+把归档解到 `<userData>/runtime/versions/1.5.0/{node,npm,pi}` 并把 `current.json` 指过去（旧值备份
+`current.json.bak-1.3.0`），重启 dev 后实测：
+
+| 检查 | 结果 |
+|---|---|
+| 实际加载的运行时 | `logs/dev-run.log` 出现 `[pi] runtime resolved -> …ersions.5.0
+ode
+ode.exe`；进程表里两个 pi 子进程都在 1.5.0 目录下 |
+| 扩展加载 | 13 个 `mpi-*.ts` 全部加载，无 `extension_error` / `Failed to load extension` |
+| 工具调用 | 本次会话本身就是带 bash/read/edit 的多轮工具调用，正常 |
+| MCP | `pi mcp list` → `lark-mcp: connected, 19 tools`（配置解析正常） |
+| 旧噪声 | 上一实例（1.3.0）有 13 次 `Error: AttachConsole failed`，新实例 **0 次** |
+
+**回滚**：`cp current.json.bak-1.3.0 current.json` 后重启即可（1.3.0 目录未删）。
+
+仍未覆盖：长会话触发压缩、MCP 工具的实际入参（类型强转）。
+
 ## 6. 已知噪声与遗留风险
 
 - **新增 stderr 警告**：用户安装的 `pi-web-access` / `@juicesharp/rpiv-todo` 把 `typebox` 写成 dependencies，
