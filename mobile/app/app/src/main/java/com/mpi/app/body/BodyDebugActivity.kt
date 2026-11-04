@@ -17,6 +17,7 @@ import com.mpi.app.body.proto.Msg
 import com.mpi.app.body.proto.Proto
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.put
 
 /**
  * 身体层调试页（跑在 `:body` 进程，和 [MpiA11yService] 同一个进程）。
@@ -31,6 +32,10 @@ class BodyDebugActivity : Activity() {
 
     private lateinit var output: TextView
     private lateinit var status: TextView
+    private lateinit var idInput: android.widget.EditText
+
+    /** 上一次采集拿到的屏幕号：动作必须带它（过期就是 STALE_SCREEN）。 */
+    private var lastScreen: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,6 +82,20 @@ class BodyDebugActivity : Activity() {
         }
         root.addView(remote)
 
+        // 动作验证：P1 还没有客户端，这里用最小参数发起真实的 act.tap
+        val row2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        idInput = android.widget.EditText(this).apply {
+            hint = "元素编号"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        }
+        row2.addView(idInput, LinearLayout.LayoutParams(0, WRAP, 1f))
+        row2.addView(button("点一下") { tapById() })
+        row2.addView(button("返回键") { globalKey("back") })
+        root.addView(row2)
+
         val scroll = ScrollView(this).apply { layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f) }
         output = TextView(this).apply {
             textSize = 13f
@@ -98,14 +117,85 @@ class BodyDebugActivity : Activity() {
             val ok = (response["ok"] as? JsonPrimitive)?.content == "true"
             if (ok) {
                 val result = response["result"] as? JsonObject
+                lastScreen = (result?.get("screen") as? JsonPrimitive)?.content
                 (result?.get("text") as? JsonPrimitive)?.content ?: response.toString()
             } else {
-                "失败：${(response["code"] as? JsonPrimitive)?.content} " +
-                    "${(response["message"] as? JsonPrimitive)?.content}"
+                failureText(response)
             }
         }
         status.text = statusText()
     }
+
+    /** 走真实的 `act.tap` 路径：先拿写入锁，再点，最后放锁。 */
+    private fun tapById() {
+        val screen = lastScreen
+        if (screen == null) {
+            output.text = "先点「读当前屏」，编号才有意义"
+            return
+        }
+        val id = idInput.text.toString().toIntOrNull()
+        if (id == null) {
+            output.text = "上面填一个编号（屏文本里的 [n]）"
+            return
+        }
+        val begin = BodyHub.handle(Msg.req(2L, Proto.M_TASK_BEGIN)) ?: return
+        val taskId = ((begin["result"] as? JsonObject)?.get("taskId") as? JsonPrimitive)?.content
+        if (taskId == null) {
+            output.text = "拿不到写入锁：${failureText(begin)}"
+            return
+        }
+        try {
+            val params = kotlinx.serialization.json.buildJsonObject {
+                put("screen", screen)
+                put("id", id)
+            }
+            val tap = BodyHub.handle(Msg.req(3L, Proto.M_ACT_TAP, params))
+            output.text = tap?.let { resp ->
+                val ok = (resp["ok"] as? JsonPrimitive)?.content == "true"
+                if (ok) {
+                    val result = resp["result"] as? JsonObject
+                    lastScreen = (result?.get("screen") as? JsonPrimitive)?.content
+                    "点成功 → 新屏 ${lastScreen}\n\n${(result?.get("text") as? JsonPrimitive)?.content.orEmpty()}"
+                } else {
+                    failureText(resp)
+                }
+            } ?: "身体层没初始化"
+        } finally {
+            BodyHub.handle(
+                Msg.req(
+                    4L,
+                    Proto.M_TASK_END,
+                    kotlinx.serialization.json.buildJsonObject { put("taskId", taskId) },
+                ),
+            )
+        }
+    }
+
+    /** 系统键（back/home/recents/notifications），同样需要写入锁。 */
+    private fun globalKey(key: String) {
+        val begin = BodyHub.handle(Msg.req(5L, Proto.M_TASK_BEGIN)) ?: return
+        val taskId = ((begin["result"] as? JsonObject)?.get("taskId") as? JsonPrimitive)?.content ?: return
+        try {
+            val params = kotlinx.serialization.json.buildJsonObject { put("key", key) }
+            val resp = BodyHub.handle(Msg.req(6L, Proto.M_ACT_KEY, params))
+            output.text = resp?.let { r ->
+                val ok = (r["ok"] as? JsonPrimitive)?.content == "true"
+                if (ok) "已按 $key" else failureText(r)
+            } ?: "身体层没初始化"
+        } finally {
+            BodyHub.handle(
+                Msg.req(
+                    7L,
+                    Proto.M_TASK_END,
+                    kotlinx.serialization.json.buildJsonObject { put("taskId", taskId) },
+                ),
+            )
+        }
+    }
+
+    private fun failureText(response: JsonObject): String =
+        "失败：${(response["code"] as? JsonPrimitive)?.content} " +
+            "${(response["message"] as? JsonPrimitive)?.content}"
 
     private fun statusText(): String {
         val enabled = MpiA11yService.isEnabled(this)
