@@ -663,12 +663,14 @@ private fun File.sizeSafe(): Long = runCatching {
 }.getOrDefault(0L)
 
 /** 「下载并安装」右侧提示：能走增量时显示「增量 x（全量 y）」。 */
-internal fun downloadTrailing(info: UpdateInfo, currentVersion: String = BuildConfig.VERSION_NAME): String =
-    if (info.patchUsable(currentVersion)) {
-        "增量 ${formatBytes(info.patch!!.size)}（全量 ${formatBytes(info.size)}）"
+internal fun downloadTrailing(info: UpdateInfo, currentVersion: String = BuildConfig.VERSION_NAME): String {
+    val patch = info.bestPatch(currentVersion)
+    return if (patch != null) {
+        "增量 ${formatBytes(patch.size)}（全量 ${formatBytes(info.size)}）"
     } else {
         formatBytes(info.size)
     }
+}
 
 /**
  * 存储明细：把「应用数据到底被什么占了」摊开。

@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MPI</string>
+    <!-- 身体层（手机操控）在系统无障碍设置里的说明 -->
+    <string name="body_a11y_desc">只在任务进行时读取当前屏幕，用来点按与输入。密码、验证码、系统设置页不由它操作；屏幕文字会发给所选模型前先打码。</string>
 </resources>

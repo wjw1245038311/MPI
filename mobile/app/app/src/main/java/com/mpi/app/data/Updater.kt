@@ -33,12 +33,19 @@ data class UpdateInfo(
     val size: Long,
     val sha256: String,
     val github: String?,
-    /** 有增量包时不为 null；是否可用还要看 `from` 是否等于当前安装版本。 */
+    /** 单基线增量（旧清单格式，继续兼容）。 */
     val patch: UpdatePatch? = null,
+    /** 多基线增量（新格式）：客户端挑基线等于当前版本的那一条，跨一版也能走增量。 */
+    val patches: List<UpdatePatch> = emptyList(),
 ) {
+    /** 命中的增量包；没有则 null。[patches] 优先于单条 [patch]。 */
+    fun bestPatch(currentVersion: String = BuildConfig.VERSION_NAME): UpdatePatch? =
+        patches.firstOrNull { it.from == currentVersion }
+            ?: patch?.takeIf { it.from == currentVersion }
+
     /** 本机能否走增量（基线版本必须正好等于当前安装版本）。 */
     fun patchUsable(currentVersion: String = BuildConfig.VERSION_NAME): Boolean =
-        patch != null && patch.from == currentVersion
+        bestPatch(currentVersion) != null
 }
 
 /**
@@ -167,9 +174,12 @@ class Updater(private val context: Context) {
             // 27MB 永远堆在 cacheDir（2026-09-26 真机：装了十几个版本，数据被撑到 1.4GB）。
             pruneDownloadArtifacts()
             if (info.patchUsable()) {
-                val viaPatch = runCatching { downloadViaPatch(info, info.patch!!) }
-                viaPatch.getOrNull()?.let { return@runCatching DownloadResult(it, viaPatch = true) }
-                // 增量失败（基线不符/下载坏/合并失败/校验不符）→ 落回全量
+                val best = info.bestPatch()
+                if (best != null) {
+                    val viaPatch = runCatching { downloadViaPatch(info, best) }
+                    viaPatch.getOrNull()?.let { return@runCatching DownloadResult(it, viaPatch = true) }
+                    // 增量失败（基线不符/下载坏/合并失败/校验不符）→ 落回全量
+                }
             }
             DownloadResult(downloadFull(info), viaPatch = false)
         }
@@ -214,23 +224,29 @@ class Updater(private val context: Context) {
         return target
     }
 
+    /**
+     * 增量下载与合并。**全程流式**：安装包不再整个读进内存（见 `ApkPatch.applyStreaming`）。
+     * 合并结果仍按完整包的 sha256 核对——那是最后一道闸门。
+     */
     private fun downloadViaPatch(info: UpdateInfo, patch: UpdatePatch): File {
         val patchFile = File(context.cacheDir, "patch-${info.version}.bin")
+        val target = File(context.cacheDir, "update-${info.version}.apk")
         fetchTo(patch.url, patchFile)
         try {
-            val patchBytes = patchFile.readBytes()
-            if (patch.sha256.isNotEmpty() && !sha256Of(patchBytes).equals(patch.sha256, ignoreCase = true)) {
+            if (patch.sha256.isNotEmpty() && !sha256Of(patchFile).equals(patch.sha256, ignoreCase = true)) {
                 error("增量包校验失败")
             }
-            // 当前已安装的 APK（增量基线）
-            val installed = File(context.applicationInfo.sourceDir).readBytes()
-            val merged = ApkPatch.apply(installed, patchBytes)
-            if (info.sha256.isNotEmpty() && !sha256Of(merged).equals(info.sha256, ignoreCase = true)) {
+            if (target.exists()) target.delete()
+            // 当前已安装的 APK 就是增量基线；不在内存里展开
+            ApkPatch.applyStreaming(File(context.applicationInfo.sourceDir), patchFile, target)
+            if (info.sha256.isNotEmpty() && !sha256Of(target).equals(info.sha256, ignoreCase = true)) {
+                target.delete()
                 error("合并结果校验失败")
             }
-            val target = File(context.cacheDir, "update-${info.version}.apk")
-            target.writeBytes(merged)
             return target
+        } catch (e: Exception) {
+            if (target.exists()) target.delete()
+            throw e
         } finally {
             patchFile.delete()
         }
@@ -299,23 +315,11 @@ class Updater(private val context: Context) {
             val urlField = (obj["url"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             if (version.isEmpty() || (file.isEmpty() && urlField.isEmpty())) return null
 
-            val patchObj = obj["patch"] as? JsonObject
-            val patch = patchObj?.let { p ->
-                val from = (p["from"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
-                val patchFile = (p["file"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
-                val patchUrlField = (p["url"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
-                if (from.isEmpty() || (patchFile.isEmpty() && patchUrlField.isEmpty())) {
-                    null
-                } else {
-                    UpdatePatch(
-                        from = from,
-                        file = patchFile,
-                        url = resolveAsset(base, patchUrlField, patchFile),
-                        size = (p["size"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
-                        sha256 = (p["sha256"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
-                    )
-                }
-            }
+            val patch = (obj["patch"] as? JsonObject)?.let { parsePatch(base, it) }
+            // 多基线：清单里可能带多条（只保留最近几版基线），客户端挑匹配的那条
+            val patches = (obj["patches"] as? kotlinx.serialization.json.JsonArray)
+                ?.mapNotNull { (it as? JsonObject)?.let { p -> parsePatch(base, p) } }
+                .orEmpty()
 
             return UpdateInfo(
                 version = version,
@@ -325,6 +329,22 @@ class Updater(private val context: Context) {
                 sha256 = (obj["sha256"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
                 github = (obj["github"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() },
                 patch = patch,
+                patches = patches,
+            )
+        }
+
+        /** 一条增量记录；缺 `from` 或没有可下地址就当作没有。 */
+        private fun parsePatch(base: String, p: JsonObject): UpdatePatch? {
+            val from = (p["from"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            val patchFile = (p["file"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            val patchUrlField = (p["url"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            if (from.isEmpty() || (patchFile.isEmpty() && patchUrlField.isEmpty())) return null
+            return UpdatePatch(
+                from = from,
+                file = patchFile,
+                url = resolveAsset(base, patchUrlField, patchFile),
+                size = (p["size"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L,
+                sha256 = (p["sha256"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
             )
         }
 

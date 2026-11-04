@@ -1,8 +1,12 @@
 package com.mpi.app.data
 
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.RandomAccessFile
 import java.util.zip.InflaterInputStream
 
 /**
@@ -82,6 +86,74 @@ object ApkPatch {
 
         if (outPos != out.size) throw IOException("增量包长度不符（期望 ${out.size}，实得 $outPos）")
         return out
+    }
+
+    /**
+     * **流式**版本（APK 到 100MB+ 后必用）：旧包 / 增量包 / 新包都是文件，内存占用 O(拷贝缓冲)。
+     *
+     * 为什么要加它：旧实现把安装包整个读进 ByteArray 再返回一个新 ByteArray，
+     * 峰值≈ 3×APK（32MB 时还行，110MB 时 ~300MB，低内存机型会被系统杀）。
+     * 合并结果的 sha256 校验仍由调用方做（加载完后算，不影响内存峰值）。
+     *
+     * @return 写出的字节数（应等于头部声明的 newSize）
+     */
+    fun applyStreaming(old: File, patch: File, out: File) {
+        val header = ByteArray(HEADER_SIZE)
+        patch.inputStream().use { input -> readFully(input, header, 0, HEADER_SIZE) }
+        for (i in MAGIC.indices) {
+            if (header[i] != MAGIC[i]) throw IOException("不是 MPI 增量包")
+        }
+        val newSize = readLongLE(header, MAGIC.size)
+        if (newSize <= 0 || newSize > MAX_NEW_SIZE) throw IOException("新包大小异常：$newSize")
+
+        RandomAccessFile(old, "r").use { source ->
+            FileOutputStream(out).use { sink ->
+                val srcChannel = source.channel
+                val outChannel = sink.channel
+                // 增量包主体（跳过 17 字节头部），直接流式读文件，不整包进内存
+                val opsInput = FileInputStream(patch).apply { skip(HEADER_SIZE.toLong()) }
+                InflaterInputStream(opsInput).use { ops ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        when (val op = ops.read()) {
+                            -1, OP_END -> break
+
+                            OP_COPY -> {
+                                val srcOffset = readIntLE(ops).toLong()
+                                val length = readIntLE(ops).toLong()
+                                if (srcOffset < 0 || length < 0 || srcOffset + length > source.length()) {
+                                    throw IOException("增量包的 COPY 越界")
+                                }
+                                var written = 0L
+                                while (written < length) {
+                                    val chunk = minOf(buffer.size.toLong(), length - written)
+                                    val n = srcChannel.transferTo(srcOffset + written, chunk, outChannel)
+                                    if (n <= 0) throw IOException("COPY 写入失败")
+                                    written += n
+                                }
+                            }
+
+                            OP_ADD -> {
+                                var remaining = readIntLE(ops)
+                                if (remaining < 0) throw IOException("增量包的 ADD 长度非法")
+                                while (remaining > 0) {
+                                    val n = ops.read(buffer, 0, minOf(buffer.size, remaining))
+                                    if (n < 0) throw IOException("增量包被截断")
+                                    sink.write(buffer, 0, n)
+                                    remaining -= n
+                                }
+                            }
+
+                            else -> throw IOException("增量包含未知指令：$op")
+                        }
+                    }
+                }
+                sink.flush()
+                if (out.length() != newSize) {
+                    throw IOException("增量包长度不符（期望 $newSize，实得 ${out.length()}）")
+                }
+            }
+        }
     }
 
     private fun readLongLE(bytes: ByteArray, offset: Int): Long {

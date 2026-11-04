@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  身体层（手机操控）的无障碍声明。
+  - canRetrieveWindowContent：读屏文本必需
+  - canPerformGestures：三级退化里的手势点击/滑动必需
+  - flagRetrieveInteractiveWindows：拿弹窗/系统窗口（安全闸据此判定「系统页面」）
+  - flagReportViewIds：标签取值会用到 viewId 尾段
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/body_a11y_desc"
+    android:notificationTimeout="100"
+    android:settingsActivity="com.mpi.app.body.BodyDebugActivity" />

@@ -17,7 +17,49 @@
 | 2 | 身体层是否对桌面开放 | **开放，但默认关闭**（设置项显式开启） |
 | 3 | 先做什么 | 本文（隔离边界 + IPC 契约 + 更新方案） |
 
-### 0.2 非目标
+### 0.2 施工进度（2026-11-05，P1 骨架已落地）
+
+| 项 | 状态 | 位置 |
+|---|---|---|
+| 屏数据模型 + 屏文本格式（编号/分区/缩进/预算/打码/敏感词/`+` 标记） | ✅ 已实现 + 单测 | `body/proto/ScreenModel.kt`、`body/proto/ScreenText.kt`、`body/proto/Masking.kt` |
+| 安全闸（硬拒绝 + 确认模式，纯函数） | ✅ 已实现 + 单测 | `body/proto/Safety.kt` |
+| IPC 帧与消息（长度前缀帧、方法/错误码常量） | ✅ 已实现 + 单测 | `body/proto/Frames.kt` |
+| 采集（无障碍树 → 纯数据） | ✅ 已实现（需真机） | `body/TreeCapture.kt` |
+| 动作三级退化 + 手势注入 | ✅ 已实现（需真机） | `body/Actuator.kt` |
+| 无障碍服务（`:body` 进程、熄屏即停） | ✅ 已实现（需真机） | `body/MpiA11yService.kt` |
+| LocalSocket 服务端（token + 桌面开关） | ✅ 已实现 | `body/BodyServer.kt`、`body/BodyHub.kt` |
+| 方法表（capture/tap/type/scroll/key/task） | ✅ 已实现 | `body/BodyDispatcher.kt` |
+| 调试页（不依赖任何脑就能验证读屏） | ✅ 已实现 | `body/BodyDebugActivity.kt` |
+| 更新：流式增量合并（去 3× 内存峰值） | ✅ 已实现 + 单测 | `data/ApkPatch.kt` `applyStreaming` |
+| 更新：多基线 `patches[]` | ✅ 已实现 + 单测 | `data/Updater.kt` |
+| 悬浮条 / 确认卡 | ❌ 未做（P2）→ 现在 `Ask` 一律 fail-closed 返回 `NEEDS_CONFIRM` | — |
+| `:agent` 脑（libnode） | ❌ 未做（P4，卡在构建链验证） | — |
+| 桌面代理（`device.call/reply`） | ❌ 未做（P3） | — |
+
+**与 §1.1 的偏差（有意）**：本阶段没有拆 Gradle 模块，全部代码放在 `:app` 的
+`com.mpi.app.body` / `com.mpi.app.body.proto` 包下，进程隔离用 manifest 的
+`android:process=":body"` 实现。理由：新建 3 个模块会同时改动 `settings.gradle.kts`
+与构建缓存，风险大于收益；等 P3/P4 真要引入独立依赖树时再拆。
+（隔离的**实质**是进程与依赖方向，模块只是编译期护栏。）
+
+### 0.3 P1 真机验收步骤
+
+```bash
+# 1) 装包（app/build/outputs/apk/debug/app-debug.apk，当前 33.3MB）
+cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew assembleDebug
+
+# 2) 打开调试页（跑在 :body 进程）
+adb shell am start -n com.mpi.app/.body.BodyDebugActivity
+
+# 3) 侧载安装在 Android 13+ 需先允许「受限设置」才能勾无障碍：
+#    设置 → 应用 → MPI → 右上角菜单「允许受限制的设置」
+#    再到 设置 → 无障碍 → MPI 手机操控 打开
+
+# 4) 回调试页点「读当前屏」：应看到编号化的屏文本；切微信/高德/设置再读，
+#    确认标题、列表缩进、⚠ 标记；勾「免确认」后动作接口才能放开（P3 才有客户端）。
+```
+
+### 0.4 非目标
 
 - 不做 iOS；不做 root 级特权通道（Shizuku 只在身体层预留接口，首版不实现）。
 - 不让手机端跑完整的 MPI 主进程（MPI 有 `node-pty`、`@zvec/zvec`、`@napi-rs` 原生依赖，
