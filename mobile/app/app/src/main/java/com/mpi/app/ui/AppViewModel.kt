@@ -778,6 +778,8 @@ class AppViewModel(
         val actions = threadActions ?: return false
         if (target.length() > 0) return true
         val part = File(target.parentFile, "${target.name}.part")
+        /** 直连那段失败的原因（只在**两条路都失败**时汇总报给用户，否则是噪音）。 */
+        var directError: String? = null
         return try {
             // 先试**加密直连**（手机不装 Tailscale 时走它：公网明文 HTTP + 应用层加密）。
             // 拿到令牌但主机没要求加密 → 这条路不适用，回落中继分片（保持原有行为）。
@@ -787,14 +789,27 @@ class AppViewModel(
             if (direct != null && threadId != null && key != null) {
                 val readTarget = direct.requestTarget(threadId, "read", name = name)
                 if (readTarget?.enc == AttachmentCrypto.VERSION) {
-                    if (direct.downloadEncrypted(readTarget, key, part, onProgress = onProgress, onError = { msg -> reportAttachmentError("加密直连下载失败：$msg") })) {
-                        return part.renameTo(target) || target.length() > 0
-                    }
-                    return false
+                    val ok = direct.downloadEncrypted(readTarget, key, part, onProgress = onProgress, onError = { msg -> directError = msg })
+                    if (ok) return part.renameTo(target) || target.length() > 0
+                    // ⚠️ 直连失败**绝不能直接判死**（2026-11-05 真机）：主机直连入口不可达是常见情况
+                    // （换网 / 证书没配 / 反向隧道掉了），而中继分片那条路本来就还能用。
+                    // 以前这里直接 `return false`，用户看到的是「附件已不可用（可能已被清理）」
+                    // 加一条「加密直连下载失败」的横幅——明明中继能下。这里清掉半截文件、继续往下走。
+                    runCatching { part.delete() }
                 }
             }
-            actions.fetchAttachmentTo(name, part, onProgress)
-            part.renameTo(target) || target.length() > 0
+            try {
+                actions.fetchAttachmentTo(name, part, onProgress)
+                part.renameTo(target) || target.length() > 0
+            } catch (relayError: Exception) {
+                // 两条路都失败了：把两边的真实原因一起报出来——只报直连会误导“主机入口坏了”。
+                val reason = listOfNotNull(
+                    directError?.let { "直连：$it" },
+                    "中继：${relayError.message ?: relayError.toString()}",
+                ).joinToString("；")
+                reportAttachmentError("附件下载失败（$reason）")
+                false
+            }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (_: Exception) {

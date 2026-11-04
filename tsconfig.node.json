@@ -29,6 +29,7 @@
     "src/main/mpi-memory-ext.ts",
     "src/main/mpi-choice-retry-ext.ts",
     "src/main/mpi-image-ref-ext.ts",
+    "src/main/mpi-update-ext.ts",
     "src/main/messaging/channel-command-ext.ts"
   ]
 }

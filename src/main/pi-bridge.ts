@@ -328,6 +328,9 @@ export interface PiBridgeOptions {
    * “not configured” instead of silently doing nothing.
    */
   attachFilePaths?: { inboxDir: string; outboxDir: string; configFile: string };
+  /** Dirs for the 自更新 bridge (mpi-update-ext)：agent 用 `mpi_update_app` 请求「更新这台设备」，
+   * 主进程查/下/装后写回执。手机端只能发对话，所以更新必须能被 agent 触发。 */
+  updatePaths?: { inboxDir: string; outboxDir: string };
   /** Inbox dir for the 记忆池 capture bridge (mpi-memory-ext): the extension drops
    * one candidate JSON per memory here; the main process ingests them into the
    * pool (it is the single writer). */
@@ -427,6 +430,10 @@ export class PiBridge {
       env.MPI_ATTACH_OUTBOX_DIR = this.opts.attachFilePaths.outboxDir;
       env.MPI_ATTACH_CONFIG_FILE = this.opts.attachFilePaths.configFile;
       if (this.opts.sessionFile) env.MPI_ATTACH_SESSION_FILE = this.opts.sessionFile;
+    }
+    if (this.opts.updatePaths) {
+      env.MPI_UPDATE_INBOX_DIR = this.opts.updatePaths.inboxDir;
+      env.MPI_UPDATE_OUTBOX_DIR = this.opts.updatePaths.outboxDir;
       // MPI_WORKSPACE_ROOT (which widens the no-approval area past the session cwd)
       // is inherited straight from the app environment — no per-bridge plumbing.
     }

@@ -253,7 +253,16 @@ fun ThreadScreen(
     var imageViewerOpen by remember { mutableStateOf(false) }
     val showThinkingPlaceholder = shouldShowThinkingPlaceholder(view)
     // 回合已停下、而末条 assistant 在提问 → 弱提示（与桌面/PWA 同判据，见 AwaitingReplyLogic.kt）
-    val showAwaitingReply = shouldShowAwaitingReply(view)
+    //
+    // 可手动关掉（2026-11-05 真机：「我回复之后它还挂着」）：它是启发式弱提示，判据只能
+    // 看末条消息的文本/句尾问号——用户回完之后如果又收到一条以问号收尾的回复，提示会
+    // 反复出现，看起来就像「一直不消除」。所以记一个「已被关掉的消息 id」：点一下就不再
+    // 为**那条消息**显示，换成新消息才会重新判（不搞全局静音，免得真在等你时没提示）。
+    var dismissedAwaitingReply by remember(view.threadId) { mutableStateOf<String?>(null) }
+    val awaitingReplyId = view.messages.lastOrNull()?.takeIf { it.role == "assistant" }?.id
+    val showAwaitingReply = shouldShowAwaitingReply(view) &&
+        awaitingReplyId != null &&
+        awaitingReplyId != dismissedAwaitingReply
     val display = visibleMessages(renderable, showToolCalls, showThinking)
         // 占位行出现时，把「已 start 但一个块都没有」的流式消息从列表里摘掉：
         // 否则会先渲染一个只有头像的空行（MessageRow 对空 blocks 只画头像），
@@ -437,9 +446,11 @@ fun ThreadScreen(
                     if (showThinkingPlaceholder) {
                         item(key = "thinking-placeholder") { ThinkingPlaceholderRow() }
                     }
-                    // 回合已停、而末条回复在提问：让「暂停」与「做完」在视觉上分开
+                    // 回合已停、而末条回复在提问：让「暂停」与「做完」在视觉上分开（点一下可隐藏）
                     if (showAwaitingReply) {
-                        item(key = "awaiting-reply") { AwaitingReplyRow() }
+                        item(key = "awaiting-reply") {
+                            AwaitingReplyRow(onDismiss = { dismissedAwaitingReply = awaitingReplyId })
+                        }
                     }
                 }
             }
@@ -2648,11 +2659,17 @@ private fun ThinkingPlaceholderRow() {
 /**
  * 「等你回复」提示行（与桌面/PWA 同一判据，见 AwaitingReplyLogic.kt）：
  * 回合已停、而末条回复在提问时出现。纯展示，不拦截任何交互；误显示只是多一行弱提示。
+ *
+ * 点一下即可对**这条消息**关掉（2026-11-05 真机：判据看句尾问号，模型连续两轮以问号
+ * 收尾时就显得「一直不消除」）。
  */
 @Composable
-private fun AwaitingReplyRow() {
+private fun AwaitingReplyRow(onDismiss: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onDismiss() }
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -2666,6 +2683,12 @@ private fun AwaitingReplyRow() {
             text = "等你回复 —— 上一轮停在这里，还没结束",
             style = MaterialTheme.typography.bodySmall,
             color = MpiTheme.colors.textDim,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "点一下隐藏",
+            style = MaterialTheme.typography.labelSmall,
+            color = MpiTheme.colors.textFaint,
         )
     }
 }

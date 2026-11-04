@@ -278,6 +278,29 @@ assert.equal(blockTypesOf(sharedProto), blockTypesOf(desktopProto), "PWA 的块�
   console.log("ok 4f - 附件块类型按 mime 分发（mp4/mp3 → video/audio，文档 → file）");
 }
 
+// ---- 4h. 台账兜底去重必须含 image（真机：手机端同一张图出现两次）----------
+// 事故（2026-11-05）：快照里回执元数据已经出过一次 image 块，台账兜底又追加了同一张图——
+// 去重集合只收 file/video/audio，漏了 image。
+{
+  const refs = await import("../src/main/chat-attachment-refs.ts");
+  const blocks = [
+    { type: "text", text: "发好了" },
+    { type: "image", name: "img1" },
+    { type: "video", name: "vid1" },
+    { type: "audio", name: "aud1" },
+    { type: "file", name: "doc1" },
+    { type: "tool", name: "bash" },
+  ];
+  const names = refs.mediaBlockNames(blocks);
+  assert.deepEqual(names.sort(), ["aud1", "doc1", "img1", "vid1"], "四种媒体块都要收（含 image），文本/工具块不收");
+  assert.deepEqual(refs.mediaBlockNames(undefined), []);
+  // 台账兜底的实际判定：已经在快照里的对象不能再补一块。
+  const already = new Set(names);
+  const pending = [{ name: "img1" }, { name: "new2" }].filter((e) => !already.has(e.name));
+  assert.deepEqual(pending.map((e) => e.name), ["new2"], "已出现过的图片不能被台账重复追加");
+  console.log("ok 4h - 台账去重含 image（图片不会被追加两次）");
+}
+
 // ---- 4g. GC 必须把 mpi_attachment 的对象名算进 live-set -------------------
 // 事故隐患（2026-11-04）：这类附件不写 `<file … attach="…" />`，只在工具回执里留一行
 // JSON。引用集合以前只认 attach 属性，于是对象区一超 1GB 就被当成「没人引用」删掉，

@@ -137,11 +137,13 @@ import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
 // 附件下行（agent → 客户端）：扩展桥 + 收件箱 + 引用 mime 推断。
 import { ensureAttachFileExtension } from "./attach-file-extension";
+import { ensureUpdateExtension } from "./update-extension";
+import { ensureUpdateDirs, ingestUpdateRequests, writeUpdateReceipt } from "./update-request";
 import { ensureImageRefExtension } from "./image-ref-extension";
 import { ensureAttachFileDirs, ingestAttachFileRequests } from "./attach-file-inbox";
 import { attachBackfillEvent, guessMimeType } from "./attach-file-core";
 import { ensureAttachImageThumb } from "./attach-file-thumbs";
-import { attachBlockPlan, desktopFilePlainEnvelope, desktopFileRefEnvelope, planDesktopFile, shouldInlineDesktopText } from "./chat-attachment-refs";
+import { attachBlockPlan, desktopFilePlainEnvelope, desktopFileRefEnvelope, mediaBlockNames, planDesktopFile, shouldInlineDesktopText } from "./chat-attachment-refs";
 import { ensureMemoryExtension, ensureMemoryCandidateInbox } from "./memory-extension";
 import { startMemoryInboxWatcher } from "./memory-inbox";
 import { getMemoryIndex, memoryPoolDir, scheduleMemoryMaintenance } from "./memory-service";
@@ -729,6 +731,8 @@ function createHandle(
       // desktop shows a card, paired phones/PWA can download it). Loaded for every
       // thread — an agent that cannot offer "I'll send it to you" is the whole point.
       ensureAttachFileExtension(getConfigDir()),
+      // 自更新 bridge: mpi_update_app 让 agent（含手机端发来的请求）触发「更新这台设备」。
+      ensureUpdateExtension(getConfigDir()),
       // 图片引用 bridge：历史图片只在首次发送，之后换成引用（服务端按内容 hash 缓存）；
       // 一条作图会话每轮上行 39 MB，换成引用后只剩几十 KB。服务端没有 /vision/refs 时自动退化为无操作。
       ensureImageRefExtension(getConfigDir()),
@@ -766,6 +770,7 @@ function createHandle(
     // honored from the next spawned bridge on.
     todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
     attachFilePaths: { ...ensureAttachFileDirs(getConfigDir()), configFile: join(getConfigDir(), "config.json") },
+    updatePaths: ensureUpdateDirs(getConfigDir()),
     memoryInboxDir: ensureMemoryCandidateInbox(getConfigDir()),
     memoryProject: cwd.split(/[\\/]/).filter(Boolean).pop(),
     // 秘密执行中介（P2）：扩展只拿到目录，值永不出主进程。
@@ -3120,11 +3125,11 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       );
       const storedList = matched;
       if (storedList.length) {
+        // 去重集合要**含 image**（2026-11-05 真机：手机端同一张图出现两次——只收
+        // file/video/audio 时，回执元数据出过一次图之后台账又补了一块）。
         const already = new Set<string>();
         for (const msg of output) {
-          for (const block of msg.blocks || []) {
-            if ((block.type === "file" || block.type === "video" || block.type === "audio") && block.name) already.add(block.name);
-          }
+          for (const name of mediaBlockNames(msg.blocks)) already.add(name);
         }
         const pending = storedList.filter((entry) => !already.has(entry.name));
         if (pending.length) {
@@ -5863,6 +5868,80 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   }
   const attachFilePoll = setInterval(ingestAttachFiles, 1000);
   attachFilePoll.unref?.();
+
+  /**
+   * 「更新这台设备」的巡检（mpi_update_app 的工具请求落在 inbox）。
+   *
+   * 为什么由主进程执行：只有这里能碰 electron-updater（扩展跑在 pi 子进程里）。
+   * 时序注意：**先写回执再装**——安装会重启应用、连带杀掉这个 pi 进程，模型就再也
+   * 说不出话了；所以 installing 的回执写完，再延迟 1.5s 调 installAppUpdate()。
+   */
+  const updateDirs = ensureUpdateDirs(getConfigDir());
+  const handleUpdateRequest = async (request: { id: string; install: boolean }) => {
+    try {
+      const status = await checkForAppUpdate({ silent: false });
+      const base = { id: request.id, current: status.current, ...(status.latest ? { latest: status.latest } : {}) };
+      if (status.error && !status.hasUpdate) {
+        writeUpdateReceipt(updateDirs, { ...base, ok: false, state: "error", message: status.error });
+        appendDiagLog(`app-update request id=${request.id.slice(0, 8)} check-error=${status.error}`);
+        return;
+      }
+      if (!status.packaged) {
+        writeUpdateReceipt(updateDirs, { ...base, ok: false, state: "error", message: "this is a dev build; packaged installs only" });
+        return;
+      }
+      if (!status.hasUpdate) {
+        writeUpdateReceipt(updateDirs, { ...base, ok: true, state: "up-to-date" });
+        appendDiagLog(`app-update request id=${request.id.slice(0, 8)} state=up-to-date current=${status.current}`);
+        return;
+      }
+      // 先告诉模型「找到了、开始下载」，剩下的在后台跑（140MB 可能要几分钟）。
+      writeUpdateReceipt(updateDirs, { ...base, ok: true, state: "downloading" });
+      appendDiagLog(`app-update request id=${request.id.slice(0, 8)} state=downloading latest=${status.latest}`);
+      const result = await downloadAppUpdate((progress) => {
+        if (progress.stage === "downloading" || progress.stage === "ready") {
+          appendDiagLog(`app-update progress ${progress.stage} ${progress.pct ?? 0}% ${progress.message || ""}`);
+        }
+      });
+      if (!result.ok) {
+        writeUpdateReceipt(updateDirs, { ...base, ok: false, state: "error", message: result.message });
+        appendDiagLog(`app-update download failed: ${result.message}`);
+        return;
+      }
+      if (!request.install) {
+        writeUpdateReceipt(updateDirs, { ...base, ok: true, state: "downloaded" });
+        return;
+      }
+      writeUpdateReceipt(updateDirs, { ...base, ok: true, state: "installing" });
+      appendDiagLog(`app-update installing v${result.version ?? status.latest} (requested from remote)`);
+      setTimeout(() => {
+        // 让回执与工具结果先送达（安装会立刻退出进程）。
+        const installed = installAppUpdate();
+        if (!installed.ok) appendDiagLog(`app-update install failed: ${installed.message}`);
+      }, 1500);
+    } catch (error) {
+      writeUpdateReceipt(updateDirs, {
+        id: request.id,
+        ok: false,
+        state: "error",
+        message: String(error instanceof Error ? error.message : error),
+      });
+    }
+  };
+  const ingestUpdates = () => {
+    try {
+      ingestUpdateRequests({ ...updateDirs, onRequest: (request) => void handleUpdateRequest(request) });
+    } catch {
+      /* 下一轮巡检再来 */
+    }
+  };
+  try {
+    watch(updateDirs.inboxDir, ingestUpdates);
+  } catch {
+    /* 轮询兜底 */
+  }
+  const updatePoll = setInterval(ingestUpdates, 1000);
+  updatePoll.unref?.();
 
   // op 执行器的依赖装配（dream/审批共用）。单飞标志放在闭包外：
   // 本地模型一次分诊要 1-2 分钟，叠加跑两个会把机器拖死。

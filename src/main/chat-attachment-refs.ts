@@ -122,6 +122,24 @@ export function attachBlockPlan(
 }
 
 /**
+ * 快照里**已经出现过的媒体块名**（台账兜底据此去重）。
+ *
+ * 为什么单独一个纯函数：2026-11-05 真机发现手机端图片重复——去重集合只收了
+ * file/video/audio，漏了 image，于是「回执元数据已经出过一次图」之后，台账兜底又
+ * 追加了同一张图（日志指纹：`attach-block source=meta kind=image:…` 紧跟
+ * `attach-block source=ledger kind=image:…`）。这类"少写一个类型"的错必须能被单测钉住。
+ */
+export function mediaBlockNames(blocks: Array<{ type?: string; name?: string }> | undefined): string[] {
+  const names: string[] = [];
+  for (const block of blocks || []) {
+    const type = String(block?.type || "");
+    if (type !== "image" && type !== "video" && type !== "audio" && type !== "file") continue;
+    if (typeof block?.name === "string" && block.name) names.push(block.name);
+  }
+  return names;
+}
+
+/**
  * 入库失败时的兜底引用：**不带** `attach=` 标记（快照不为它生成块，与历史行为一致），
  * 但把失败原因写进去，免得 agent 以为文件不存在。
  */
