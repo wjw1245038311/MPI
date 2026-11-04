@@ -4,6 +4,116 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## v0.14.1（2026-11-04）
+
+1. **新增：文件卡片按类型给图标**——以前不带文件后缀一律用同一个回形针（桌面）/ `📄`（手机），
+   现在按后缀分成 11 类（压缩包 / PDF / Word / 表格 / 幻灯片 / 代码 / 纯文本 / 图片 / 音频 / 视频 / 其它），
+   三端用同一套彩色文件页图标（白页身 + 折角 + 彩色徽标）。分类表：源 `src/shared/file-kind.ts`，
+   PWA 与安卓各一份移植副本（`test:file-kind` 逐条比对，改一处忘另一处会失败）。
+   验证方式：`npm test -- file-kind`；应用内发一个 xlsx / docx / zip → 气泡卡片上分别应看到绿色 `X`、蓝色 `W`、灰色包箱图标。
+
+2. **修：agent 递交的文件落成 `.bin`，桌面预览与手机「打开方式」都认不出类型**——
+   `MEDIA_EXT_BY_MIME` 里把 `application/octet-stream` 写成了 `.bin` 的确定答案，
+   但这个 mime 的语义是「不知道是什么」；于是 mime 为 octet-stream 时永远落成 `.bin`，
+   “用原名后缀”的兜底分支根本走不到（2026-11-04 发 `测试.xlsx` 时暴露）。现在 octet-stream
+   按「不认识」处理，继续用名字后缀。
+   验证方式：`npm test -- chat-attachments`（新增断言：octet-stream 下 .xlsx/.zip 必须保留原名后缀）。
+
+3. **修：手机端的审批卡在桌面端应答后不消失**——桌面点了「允许/取消」，手机上那张卡还挂着，
+   再点会报「已失效」，像卡死。根因有两个：
+   ① 桌面应答后广播 `ui.resolved` 时用 `remoteIdForSession(args.threadId)` 找远端 id，
+   但渲染层传的是**本地桥 id**（不是会话文件路径），这个函数只认 `.jsonl` → 广播根本没发出去；
+   ② 即使广播发了，手机在后台断线时也会错过它；重连时 resync 又把旧卡原样保留（为了不在
+   断线期间丢卡）。
+   现在：广播改用宽容解析 `resolveRemoteIdForLocal`（正式映射 → 远端 id 形状 → 反向查表，
+   漏发时写 diag）；快照新增 `pendingUiId` 字段，客户端 resync 时按它校对（旧主机没有这个字段
+   → 保留不误清；null → 清掉；不同 id → 清掉本地那张）。判据三端一致。
+   验证方式：`npm test -- pwa-actions`（新增：`ui.resolved` 收起卡片 / 同 id 不再弹 / 其它 id 不受影响）
+   + `npm test -- pwa-shared`（新增源码级哨兵：三端快照都得声明 `pendingUiId`，
+   删掉任一边会报「PWA 协议副本缺少 pendingUiId」）+ 安卓 `:app:testDebugUnitTest`。
+   真机：手机停在审批卡上 → 桌面点「允许」→ 手机那张卡应自动消失；再把手机切后台断网后恢复，
+   重连也不应把旧卡带回来。
+
+4. **改：附件审批卡显示「桌面/测试.docx」而不是 `[path]`**——远程通道会把卡片正文里的绝对路径
+   脱敏成 `[path]`（防主机目录泄露），于是手机上只看到「把文件发送到会话？/ [path] / 0.01 MB」，
+   用户根本不知道自己批准的是什么文件。现在改给「一级目录 + 文件名」，常见系统目录换中文叫法
+   （Desktop → 桌面、Downloads → 下载…）。
+   验证方式：让 agent 递一个工作区外的文件 → 手机上的审批卡应显示 `桌面/xxx.docx` 这类可读位置。
+
+6. **改：文件附件的发送完全交给 MPI 内部，模型不再接触任何标记**——用户原话：「模型应该只能读取文件的名称路径信息，其它发送应该完全交给 mpi 的内置工具处理」。
+   以前 `mpi_attach_file` 的**工具说明与回执**都在教模型把 `<file … attach="media" … />`
+   原样贴回回复（原文是「paste it verbatim into your reply so the card renders」），
+   于是模型真的会把它写进回答；主机侧的剥除器只要漏一条路径（事件通道的助手正文、
+   thinking 块…），用户就会在手机上看到一大段 XML（ 2026-11-04 真机反复复现）。
+   现在：工具 description 改成「调用即发送，MPI 自己出卡与同步，**永远不要**在回复里
+   写文件标记」；回执只说「Sent "<文件名>" into this conversation」；引用改由主进程
+   在 ingest 时**直接登记到会话**（新增 `attachFileStored` + `ingestAttachFileRequests`
+   的 `onStored` 回调），快照从登记表挂 file 块，不依赖模型转述。
+   验证方式：`npm test -- attach-file`（新增 4b 组源码级哨兵：回执不得输出 `receipt.text`、
+   工具说明/回执不得出现 `verbatim`、成功回执必须是自然语言句式。故意改回旧文案会报
+   「工具说明/回执不得要求模型「原样贴回」引用」）+ `npm test -- chat-attachments` + `npm test -- remote`。
+   真机：让 agent 发一个文件 → 它的回复正文里**不应出现任何** `<file` 文本，
+   但手机/桌面上依然有可下载的文件卡片。
+
+7. **修：桌面端发的普通文件，手机端拿不到（只能看到一行 `[path]` 文本）**——用户原话「MPI 的文件发送根本没法用」。
+   桌面拖入/选中 pdf、xlsx、zip、docx 这类文件发出后，手机端只看到一行脱敏成 `[path]` 的
+   `<file …/>` 原始标签，既没有卡片也没法下载。根因在主机 `processAttachments`：只有图片和视频
+   会转成快照块，其余走的是**不带 `attach=` 的裸引用**，快照不为它生成块，字节也从未进过附件区。
+   现在二进制/大文件先入内容寻址对象库，再发 `attach="media" kind="file"` 引用（与 agent 的
+   `mpi_attach_file` 同一条路）：**桌面出卡片、安卓出 📄 卡（点按下载 + 分享）、PWA 出下载卡**，
+   字节受 GC 引用保护。**纯文本小文件（≤500KB）仍然内联全文、不出卡片**（内容是给 agent 读的）。
+   顺带修两处连带问题：① 桌面文件卡片标题显示 64 位内容哈希 → 改用引用里的 `label`（可读原名）；
+   ② 附件 GC 的 live-set 只认 `attach="video"`，漏了 `attach="media"` 的图/音/文件——
+   附件区一旦超 1GB，这些对象会被当成「没人引用」删掉，点开即「已不可用」。
+   验证方式：`npm run typecheck` + `npm run test:chat-attachments`（新增 1c 组：文本/二进制分界、
+   入库后引用能被主机与桌面两侧解析器原样认出、去重命中同一对象、入库失败退回裸引用不静默丢消息）
+   + `npm test -- remote` + `npm test -- pwa` + `npm run test:attach-file`。应用内：**重启 dev** →
+   桌面拖一个 pdf/xlsx 进输入框发送 → 手机进同一会话，应看到文件卡片（名字 + 大小·类型），
+   点一下出下载进度、完成后弹「打开方式」；桌面那张卡片的标题应是原文件名而不是一串哈希。
+
+8. **修：agent 递交附件后，手机端不会自动出现卡片（要切走再切回才看到）**——两个独立的错：
+   ① 入库后主机推的「去刷新」信号写成了 `kind:"agent.event"`，而两端客户端都是拿 `payload.kind`
+   直接 switch **pi 事件类型**，整帧被静默忽略（日志上 `backfill-ping … subs=1` 看着送达，
+   客户端一次快照都没拉）；
+   ② 扩展把附件登记在 **桥启动时**的 sessionFile 名下（`MPI_ATTACH_SESSION_FILE`），而桥是跨会话
+   复用的——会话一换，附件就记到别的会话身上，当前会话的快照永远查不到（`attach-block … hit=0`）。
+   现在信号改回 `message_start` + 一个媒体占位块（形状钉进单测），会话文件改从 pi 运行时的
+   `ctx.sessionManager.getSessionFile()` 取（env 只作兜底）。
+   验证方式：`npm run test:attach-file`（新增 4d/4e 组：信号 kind 必须是事件类型、占位块用 video
+   以兼容未升级的客户端；入库请求不得直接用 spawn 时的 env）+ `npm run test:pwa-thread`
+   （用主机真实的 `attachBackfillEvent()` 喂 PWA，断言触发 resync 且卡片出现、不残留假气泡）
+   + 安卓 `ThreadSessionReducerTest`。真机：桌面调 `mpi_attach_file` → 手机停在会话页别动，
+   卡片应**立即**出现；diag 应出现 `backfill-ping … subs=1` → `remote-req resync` → `hit=1`。
+
+9. **新增：agent 递交的视频/音频可内联播放，图片直接在气泡里显示**——以前 `mpi_attach_file`
+   无差别生成 `file` 块，于是 agent 递的 mp4 在手机上只能「下载 + 系统播放器」，同一会话里
+   用户自己发的视频却是内联播放器；图片同理（只有一张下载卡）。现在按 mime 分发块类型
+   （`attachBlockPlan`）：视频 → `video`、音频 → `audio`（都走既有的「快照只给名字、点开按需
+   拉本体」），图片 → `image` + 入库时生成的 1280px 缩略图（base64 内联，手机直接看到，原图按 key 拉）。
+   `octet-stream` 当「不知道」按文件名兜底（扩展只给路径，mime 常是 octet-stream）。
+   验证方式：`npm run test:attach-file`（4f 组：mp4/mp3/png/docx 的类型分发，含 octet-stream 兜底）
+   + `npm test -- chat-attachments`。真机：让 agent 发一个 mp4 / mp3 / png → 手机与桌面都应是
+   播放器/图片，而不是下载卡。
+
+10. **新增：桌面端也显示 agent 递交的附件卡片**——手机靠**快照**出卡，而桌面渲染的是**事件流/历史
+    条目**，从来没解析过工具回执里的 `{"mpi_attachment":…}` 元数据：桌面看到的是「发完了」+ 一行
+    原始 JSON，对话框里一张卡都没有。现在按本条回复的工具运行解析成卡片（图片内联、音视频内联播放、
+    其它文件卡点开预览），并把机器 JSON 行从给人看的输出里抽掉。
+    验证方式：`npm test -- chat-attachments`（第 8 组：元数据解析、机器行不外露、半截行不造卡）。
+
+11. **修（安卓 0.5.157）：回合进行中到达的附件卡不显示，切走再切回才出现**——定位到客户端：
+    回合中途因附件补拉了一次快照（里面已含本回合 + video 块），而 `message_end` 又**追加**了一条
+    同 id 的流式气泡；会话列表用 `key = { it.id }`，LazyColumn 的 key 必须唯一，重复时那一段整个
+    不渲染。现在同 id 时**合并**（正文/工具块以流式为准，附件块以快照为准），并补了能复现的单测
+    （先红后绿）。**注意：这一条要装新版安卓 APK 才生效（0.5.157）。**
+    验证方式：安卓 `:app:testDebugUnitTest`（新增用例：快照先到 + message_end 后到 → 只能有一条
+    `assistant-<ts>`，且 video 块与流式正文都在）。真机：桌面发一个文件 → 手机**不切走**也应看到卡片。
+
+12. **修：附件 GC 会把 agent 递交的对象当垃圾删掉**——GC 的 live-set 只认 `<file … attach="…" />`
+    引用，而 `mpi_attach_file` 的对象名只出现在工具回执的一行 JSON 里；附件区一超 1GB，这些对象
+    就会被当成「没人引用」删掉，历史里只剩一张点不开的卡片。现在从回执里采集对象名进 live-set。
+    验证方式：`npm run test:attach-file`（4g 组：工具回执里的对象名可被采集，缺 name 不报脏名字）。
+
 ## v0.14.0（2026-11-03）
 
 1. **新增：界面进程崩溃的有界自动恢复（白屏不再只能手动杀进程）**——参考 DSH Desktop v0.13.0 的 bounded recovery。

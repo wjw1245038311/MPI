@@ -2310,7 +2310,21 @@ private fun FileBlock(block: MessageBlock) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(if (saved != null) "📄" else "⬇️", style = MaterialTheme.typography.titleMedium)
+        // 文件类型图标按后缀判定（压缩包/文档/表格/代码…），下载中与已下载用同一图标，
+        // 不再用 📄/⬇️ 两个字符——用户在深色主题下几乎看不出区别（2026-11-04 反馈）。
+        // 下载中在图标右下角叠一个小圆点：既告诉用户“正在拉”，也不把图标换成另一套。
+        Box(contentAlignment = Alignment.Center) {
+            FileKindIcon(name = label, mimeType = block.mimeType, sideDp = 26)
+            if (fetching) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                )
+            }
+        }
         Column(Modifier.weight(1f)) {
             Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(

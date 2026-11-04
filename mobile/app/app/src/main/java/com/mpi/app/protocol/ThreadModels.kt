@@ -180,6 +180,15 @@ data class ThreadSnapshot(
     val messages: List<ThreadMessage> = emptyList(),
     /** true = 只带新增（含锚点那条），按 id 合并而不是整体替换。 */
     val incremental: Boolean = false,
+    /**
+     * 主机当前还挂着的审批卡 id（没有 → null）。**缺省表示旧主机没有这个字段**，
+     * 那时不能据此清卡（见 ThreadSession 里的 resync 处理）。
+     *
+     * 为什么用原始 JsonElement 而不是 String?：Kotlin 的 `String?` 默认值无法区分
+     * 「字段缺失」与「字段是 null」，而这两种情况的行为要求正好相反
+     * （缺失 = 保留旧卡；null = 清掉旧卡）。
+     */
+    val pendingUiId: kotlinx.serialization.json.JsonElement? = null,
     val nextSeq: Int = 0,
 )
 

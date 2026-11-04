@@ -22,7 +22,9 @@ import { splitChoiceSegments } from "../lib/choice-block";
 import type { ChoiceClampInfo, ChoiceFailure, ChoiceSplitStats } from "../lib/choice-block";
 import { logChoiceFenceDuplicate, logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRender, logChoiceFenceRepaired } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
-import { chatAttachmentUrl, parseAgentMediaRefs } from "../lib/chat-attachments";
+import { FileTypeIcon } from "./FileTypeIcon";
+import { fileCategory } from "../../../shared/file-kind";
+import { attachmentSizeText, chatAttachmentUrl, parseAgentMediaRefs, parseAttachMetaLine, stripAttachMetaLine } from "../lib/chat-attachments";
 import { Sidebar, PanelRight, Copy, ThumbUp, ThumbDown, Edit, Folder, Files, Branch, Check, ChevronRight, ChevronUp, ChevronDown, ChevronsDown, Close, Search, Pin, Terminal, Stop, Volume } from "./icons";
 import { TuiView } from "./TuiView";
 import doraemonAvatarUrl from "../../../../resources/doraemon.jpeg";
@@ -1857,15 +1859,15 @@ function MessageGroupInner({
                       className="msg-user-file"
                       key={`${attachment.name}-${index}`}
                       disabled={!attachment.path}
-                      title={attachment.path ? language === "zh" ? "在 MPI 中查看附件" : "View attachment in MPI" : attachment.name}
-                      aria-label={attachment.path ? `${language === "zh" ? "查看附件" : "View attachment"}: ${attachment.name}` : attachment.name}
+                      title={attachment.path ? language === "zh" ? "在 MPI 中查看附件" : "View attachment in MPI" : `attachment.label || attachment.name}`}
+                      aria-label={attachment.path ? `${language === "zh" ? "查看附件" : "View attachment"}: ${attachment.label || attachment.name}` : attachment.label || attachment.name}
                       onClick={() => void openAttachment(attachment)}
                     >
                       <span className="msg-user-file-icon" aria-hidden="true">
-                        <Files size={15} />
+                        <FileTypeIcon cat={fileCategory(attachment.label || attachment.name)} size={16} />
                       </span>
                       <span className="msg-user-file-copy">
-                        <span className="msg-user-file-name">{attachment.name}</span>
+                        <span className="msg-user-file-name">{attachment.label || attachment.name}</span>
                         <span className={`msg-user-file-meta${attachment.error ? " error" : ""}`}>
                           {attachment.error
                             ? language === "zh" ? "附件读取失败" : "Attachment unavailable"
@@ -1912,6 +1914,14 @@ function MessageGroupInner({
 
   // Assistant round: ONE avatar shared by every assistant message in the group.
   const last = group.items[group.items.length - 1];
+  // agent 递交的附件（mpi_attach_file）：卡片从**工具回执**的机器元数据解出来——
+  // 桌面渲染的是事件流/历史条目，没有快照那条路，不解析就一张卡也没有（2026-11-04 反馈）。
+  // 流式中也能出：tool_execution_end 一到，toolRuns 里就有 resultText 了。
+  const attachRuns = group.items
+    .flatMap((message) => message.blocks || [])
+    .filter((block): block is Extract<ContentBlock, { type: "toolCall" }> => block.type === "toolCall")
+    .map((block) => toolRuns[block.id])
+    .filter((run): run is ToolRun => !!run && run.name === "mpi_attach_file");
   const openArtifact = async (artifact: (typeof artifacts)[number]) => {
     try {
       const exists = await window.pi.app.fileExists(artifact.path);
@@ -1944,6 +1954,7 @@ function MessageGroupInner({
         )}
         {/* 「还没有任何块」的等待提示已上交给 Chat 的 ThinkingPlaceholder（带秒数），
             这里不再重复输出一句静态「思考中」。 */}
+        <AgentToolAttachCards runs={attachRuns} language={language} cwd={cwd} />
         {streaming && <span className="streaming-dot" />}
         {last.errorMessage && <div style={{ color: "#c0392b", marginTop: 6 }}>{last.errorMessage}</div>}
         {visibleArtifacts.length > 0 && (
@@ -2281,6 +2292,108 @@ function choiceFenceWarnText(reason: ChoiceFailure | undefined, language: "en" |
       : "This choices block was not rendered as a panel and is shown as a plain code block (cause: invalid JSON or a broken fence, e.g. a closing ``` that is not on its own line). The raw text was written to the diagnostic log.";
 }
 
+/**
+ * agent 递交的附件（`mpi_attach_file`）→ 对话框里的卡片（桌面端）。
+ *
+ * 为什么单独一个组件：手机端靠**快照**生成卡片（主机把块挂在 assistant 回合上），
+ * 而桌面渲染的是事件流/历史条目，一直没接这条线——用户看到的就是「发完了」+ 一行
+ * 原始 JSON，对话框里一张卡也没有（2026-11-04 桌面反馈）。
+ *
+ * 三类的呈现与用户自己发的保持一致：视频/音频做内联播放（字节按块名走 chatatt:// 拉），
+ * 其它渲染成文件卡片，点开预览窗口（用工具参数里的原路径；对象库里的副本没扩展名）。
+ */
+function AgentToolAttachCards({
+  runs,
+  language,
+  cwd,
+}: {
+  runs: ToolRun[];
+  language: "en" | "zh";
+  cwd?: string;
+}) {
+  const openPreview = useStore((s) => s.openPreview);
+  if (!runs.length) return null;
+  const cards = runs.flatMap((run) => {
+    const meta = parseAttachMetaLine(run.resultText || "");
+    if (!meta) return [];
+    const args = parseToolArgs(run, undefined) as Record<string, unknown> | null;
+    const rawPath = typeof args?.path === "string" ? args.path : undefined;
+    return [{ ...meta, path: resolveAttachOpenPath(rawPath, cwd) }];
+  });
+  if (!cards.length) return null;
+  return (
+    <div className="msg-user-files msg-agent-files" aria-label={language === "zh" ? "本条回复附带的文件" : "Files attached to this reply"}>
+      {cards.map((card, index) => {
+        const category = fileCategory(card.label || card.name);
+        // 图片：直接内联显示（与用户自己发的图一致）。字节走 chatatt:// 按名字取对象，
+        // 不需要本地路径——agent 递的是对象库里的副本。
+        if (category === "image") {
+          return (
+            <button
+              type="button"
+              key={`attach-image-${index}`}
+              className="msg-user-img-button"
+              title={card.path || card.label}
+              onClick={() => {
+                if (card.path) void openPreview(card.path, cwd);
+              }}
+            >
+              <img className="msg-user-img" src={chatAttachmentUrl(card.name)} alt={card.label} />
+            </button>
+          );
+        }
+        if (category === "video") {
+          return <UserVideo key={`attach-video-${index}`} name={card.name} path={card.path} language={language} />;
+        }
+        if (category === "audio") {
+          return <UserAudio key={`attach-audio-${index}`} name={card.name} path={card.path} language={language} />;
+        }
+        const sizeText = card.size ? attachmentSizeText(card.size) : "";
+        return (
+          <button
+            type="button"
+            key={`attach-file-${index}`}
+            className="msg-user-file"
+            disabled={!card.path}
+            title={card.path || card.label}
+            aria-label={`${language === "zh" ? "查看附件" : "View attachment"}: ${card.label}`}
+            onClick={() => {
+              if (card.path) void openPreview(card.path, cwd);
+            }}
+          >
+            <span className="msg-user-file-icon" aria-hidden="true">
+              <FileTypeIcon cat={category} size={16} />
+            </span>
+            <span className="msg-user-file-copy">
+              <span className="msg-user-file-name">{card.label}</span>
+              <span className="msg-user-file-meta">
+                {sizeText || (language === "zh" ? "已发到本会话，可点开" : "Sent to this conversation")}
+              </span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * 工具参数里的路径 → 本机可打开的绝对路径。
+ *
+ * 模型给的可能是不带盘符的相对路径、Git Bash 的 `/e/a/b`、带引号的路径。对象库里
+ * 的副本名是 64 位哈希（没扩展名），预览识别不了类型；原文件就在本机，用原路径更直观。
+ */
+function resolveAttachOpenPath(raw: string | undefined, cwd?: string): string | undefined {
+  const value = String(raw || "").trim().replace(/^["']+|["']+$/g, "");
+  if (!value) return undefined;
+  const msys = value.match(/^\/([a-zA-Z])\/(.+)$/);
+  if (msys) return `${msys[1].toUpperCase()}:/${msys[2]}`;
+  if (/^[a-zA-Z]:[\\/]/.test(value) || value.startsWith("\\\\") || value.startsWith("/")) return value;
+  if (!cwd) return undefined;
+  const sep = cwd.includes("\\") ? "\\" : "/";
+  return `${cwd.replace(/[\\/]+$/, "")}${sep}${value.replace(/^\.\//, "")}`;
+}
+
 /** 面板下方提示：题目/选项超限被截断了多少。 */
 function clampedChoiceNote(clamped: ChoiceClampInfo, language: "en" | "zh"): string {
   const parts: string[] = [];
@@ -2314,10 +2427,10 @@ function AgentFileCards({ attachments, language }: { attachments: NonNullable<Vi
           }}
         >
           <span className="msg-user-file-icon" aria-hidden="true">
-            <Files size={15} />
+            <FileTypeIcon cat={fileCategory(attachment.label || attachment.name)} size={16} />
           </span>
           <span className="msg-user-file-copy">
-            <span className="msg-user-file-name">{attachment.name}</span>
+            <span className="msg-user-file-name">{attachment.label || attachment.name}</span>
             <span className="msg-user-file-meta">
               {attachment.note || (language === "zh" ? "已发到本会话，可点开" : "Sent to this conversation")}
             </span>
@@ -2502,7 +2615,7 @@ function UserAudio({ name, path, language }: { name: string; path?: string; lang
   );
 }
 
-function UserVideo({ name, path, language }: { name: string; path: string; language: "en" | "zh" }) {
+function UserVideo({ name, path, language }: { name: string; path?: string; language: "en" | "zh" }) {
   const [failed, setFailed] = useState(false);
   const [playing, setPlaying] = useState(false);
   const url = chatAttachmentUrl(name);
@@ -2762,7 +2875,7 @@ const ToolCard = memo(function ToolCard({
       if (expandKey) setExpandState(expandKey, true);
     }
   }, [autoExpand]);
-  const result = run?.resultText ?? run?.partialText ?? "";
+  const result = stripAttachMetaLine(run?.resultText ?? run?.partialText ?? "");
   const status = toolStatus(run);
   const summary = toolSummary(name, run, blockArgs, language);
   const duration = toolDuration(run);

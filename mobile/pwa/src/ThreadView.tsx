@@ -20,6 +20,7 @@ import { parseBlocks, type MdBlock } from "./lib/block-md";
 import { withChoiceSegments } from "./lib/choice-block";
 import type { ChoiceFailure } from "./lib/choice-block";
 import { ChoicePanel } from "./components/ChoicePanel";
+import { FileKindIcon } from "./components/FileKindIcon";
 import { COLUMN_PRESETS, COLUMN_PRESET_ORDER, type ColumnPreset } from "./lib/column-preset";
 import { groupToolBlocks, type ToolGroup } from "./lib/tool-groups";
 import { formatTokens, readContextUsage } from "./lib/context-usage";
@@ -616,7 +617,7 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
     if (!block.name) {
       return (
         <div className="msg-video-placeholder">
-          <span className="mvp-icon" aria-hidden="true">📄</span>
+          <FileKindIcon name={label} mimeType={block.mimeType} size={20} />
           <span className="mvp-text">
             <strong>{label}</strong>
             <em>{block.text || "文件未随本次同步下发"}</em>
@@ -632,7 +633,9 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
         data-download-mime={block.mimeType || "application/octet-stream"}
         title={label}
       >
-        <span className="mfc-icon" aria-hidden="true">📄</span>
+        <span className="mfc-icon">
+          <FileKindIcon name={label} mimeType={block.mimeType} size={22} />
+        </span>
         <span className="mfc-copy">
           <strong>{label}</strong>
           <em>{meta || "点按下载"}</em>

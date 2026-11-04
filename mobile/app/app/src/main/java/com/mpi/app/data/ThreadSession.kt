@@ -417,6 +417,34 @@ class ThreadSession(
         }
     }
 
+    /**
+     * resync 时校对本地审批卡（与 PWA 的 resolvePendingUiAfterResync 同判据）。
+     *
+     * 三种输入（宿主传的是原始 JsonElement，才能区分「字段缺失」与「字段是 null」）：
+     *   - 缺省 → 旧主机，原样保留（不能据此清卡）
+     *   - null → 主机没有挂着的卡，本地那张已失效 → 清掉
+     *   - "<id>" → 主机还挂着这张：是它就留；是**别的** id 就清掉本地那张（新卡等事件推）
+     */
+    private fun resolvePendingUiAfterResync(raw: kotlinx.serialization.json.JsonElement?): UiRequest? {
+        val local = _view.value.pendingUi
+        // 字段缺失（旧主机）与「显式 null」在这里必须分开：前者什么都不做。
+        if (raw == null) return local
+        if (raw is JsonNull) {
+            if (local != null) synchronized(lock) { respondedUiIds += local.id }
+            return null
+        }
+        val pendingId = raw.jsonPrimitiveOrNull()?.contentOrNull ?: return local
+        if (local == null) return null // 本地没有卡：等 ui.request 事件推正文
+        if (local.id == pendingId) return local
+        // 主机挂着另一张：本地这张一定已失效。
+        synchronized(lock) { respondedUiIds += local.id }
+        return null
+    }
+
+    /** JsonElement → JsonPrimitive（不是 primitive 就给 null）。 */
+    private fun kotlinx.serialization.json.JsonElement.jsonPrimitiveOrNull(): kotlinx.serialization.json.JsonPrimitive? =
+        this as? kotlinx.serialization.json.JsonPrimitive
+
     /** ui.respond 成功后调用：去重，避免重复推送又把卡片弹回来。 */
     fun markUiResponded(requestId: String) {
         synchronized(lock) {
@@ -555,8 +583,10 @@ class ThreadSession(
                 // 快照到达即认为压缩结束：真在压缩时后面的 compaction_end 会纠正，
                 // 而漏掉一个 end 会让按钮永远转圈
                 compacting = false,
-                // 待处理审批卡要保留：主机还开着那个弹窗
-                pendingUi = _view.value.pendingUi,
+                // 审批卡：默认保留（断线期间不能丢卡），但要跟主机核对——
+                // 手机在后台断线时会**错过** `ui.resolved`（桌面已经点了「允许」），
+                // 保留旧卡就会挂着一张已经失效的卡片（2026-11-04 真机）。
+                pendingUi = resolvePendingUiAfterResync(snapshot.pendingUiId),
                 // 实时快照到了，不再是"显示缓存"状态
                 cachedAt = null,
             )
@@ -651,6 +681,18 @@ class ThreadSession(
                 }
             }
 
+            // 别的端（桌面）已经应答了：把本机挂着的卡收起来（2026-11-04）。
+            // 不处理的话手机会一直显示一张已经失效的审批卡，点了还会报错。
+            "ui.resolved" -> {
+                val resolvedId = data?.get("id")?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (resolvedId.isNotEmpty()) {
+                    synchronized(lock) { respondedUiIds += resolvedId }
+                    if (_view.value.pendingUi?.id == resolvedId) {
+                        patch { it.copy(pendingUi = null) }
+                    }
+                }
+            }
+
             else -> Unit // 其它 kind 本版忽略
         }
 
@@ -729,8 +771,32 @@ class ThreadSession(
         // id 取第一条的时间戳——就是这条 message_end 的时间戳。
         val hostId = message.str("timestamp")?.toLongOrNull()?.let { "assistant-$it" }
         patch { view ->
+            val finished = streaming.copy(id = hostId ?: streaming.id, stopReason = stopReason, errorMessage = errorMessage)
+            // 同一回合可能已经在快照里了（回合中途因附件补拉过）→ **合并**，不能追加。
+            //
+            // 2026-11-04 真机：桌面 `mpi_attach_file` 发视频，手机停在当前页看不到卡片，
+            // 「切走再切回」才出现。链路是：补拉快照（含本回合 + video 块）→ messages 里
+            // 已有 `assistant-<ts>` → 回合结束时这里又追加一条同 id 的流式气泡 →
+            // ThreadScreen 用 `key = { it.id }`，LazyColumn 的 key **必须唯一**，重复时那一段
+            // 可能整个不渲染（用户看到的就是「卡片没出现」）。切走再切回时没有流式气泡参与，
+            // 所以正常——这正是当时的现象。
+            val existing = view.messages.indexOfFirst { it.id == finished.id }
+            val messages = if (existing >= 0) {
+                val snap = view.messages[existing]
+                view.messages.toMutableList().also { list ->
+                    list[existing] = snap.copy(
+                        // 正文/工具块以**流式**为准（快照可能停在回合中途，少最后几段）；
+                        // 附件类块只能从**快照**来（事件通道只有占位标记）。
+                        blocks = mergeRoundBlocks(finished.blocks, snap.blocks),
+                        stopReason = finished.stopReason ?: snap.stopReason,
+                        errorMessage = finished.errorMessage ?: snap.errorMessage,
+                    )
+                }
+            } else {
+                view.messages + finished
+            }
             view.copy(
-                messages = view.messages + streaming.copy(id = hostId ?: streaming.id, stopReason = stopReason, errorMessage = errorMessage),
+                messages = messages,
                 streaming = null,
                 errorBanner = if (stopReason == "error") {
                     errorMessage?.takeIf { it.isNotEmpty() } ?: "本轮以错误结束"
@@ -739,6 +805,27 @@ class ThreadSession(
                 },
             )
         }
+    }
+
+    /**
+     * 合并「流式气泡的块」与「快照里同一回合的块」。
+     *
+     * 媒体块（image/video/audio/file）只存在于快照（事件通道只给占位标记）；其它块
+     * （text/thinking/tool）以流式那份为准，因为它是最新的。流式那边恰好什么都没有时
+     * （纯媒体回合）直接整份用快照的，否则正文会丢。
+     */
+    private fun mergeRoundBlocks(streamed: List<MessageBlock>, snapshot: List<MessageBlock>): List<MessageBlock> {
+        if (snapshot.isEmpty()) return streamed
+        val hasStreamedContent = streamed.any {
+            it.type == BlockType.Text || it.type == BlockType.Thinking || it.type == BlockType.Tool
+        }
+        if (!hasStreamedContent) return snapshot
+        val media = snapshot.filter {
+            it.type == BlockType.Image || it.type == BlockType.Video || it.type == BlockType.Audio || it.type == BlockType.File
+        }
+        if (media.isEmpty()) return streamed
+        val have = streamed.map { it.type to it.name }.toSet()
+        return streamed + media.filter { (it.type to it.name) !in have }
     }
 
     private fun handleContextUsage(data: JsonObject?) {
@@ -1064,10 +1151,18 @@ class ThreadSession(
      * 2026-09-28：原来只认 image → 视频消息永远不触发补拉，手机装了新版也看不到
      * （事件通道会把视频引用剥掉，本地根本不知道这条消息里有视频）。
      */
+    /**
+     * 这条消息里有没有需要「补拉快照」的媒体占位块。
+     *
+     * `file` 也得算（2026-11-04 真机）：agent 递交附件时，事件通道只给一个
+     * `{type:"file", omitted:true}` 占位块（见主机 withVideoMarkers），真块在快照里。
+     * 以前只认 image/video，于是卡片要等下一次自然重订阅才出现（用户感知为“没卡片”）。
+     */
     private fun contentNeedsMediaBackfill(content: JsonElement?): Boolean =
         (content as? kotlinx.serialization.json.JsonArray)?.any {
             val part = it as? JsonObject
-            part?.str("type") == "image" || part?.str("type") == "video"
+            val type = part?.str("type")
+            type == "image" || type == "video" || type == "file" || type == "audio"
         } ?: false
 
     /** 带媒体（图/视频）的用户消息 → 一次全量快照补拉（防抖：在途时不重复发）。 */

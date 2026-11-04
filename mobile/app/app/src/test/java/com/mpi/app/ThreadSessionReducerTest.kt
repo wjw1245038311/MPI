@@ -376,6 +376,101 @@ class ThreadSessionReducerTest {
         session.detach()
     }
 
+    // ---- 附件补拉信号（mpi_attach_file 入库后主机推的那一帧） ----
+
+    @Test
+    fun `the host attach nudge triggers a full resync and leaves no bubble`() = runBlocking {
+        val transport = FakeTransport()
+        val requests = FakeRequests(SNAPSHOT, listOf(SNAPSHOT))
+        val session = newSession(transport, requests)
+        session.subscribe()
+        val before = session.view.value.messages.size
+
+        // 主机 attach-file-core.ts 的 attachBackfillEvent：空文本 + `video` 占位块（故意用
+        // video 而不是 file，兼容现场没升级的 APK）。2026-11-04 真机：这一帧曾被写成
+        // kind="agent.event"，客户端 switch 不到 → 卡片要等手动切走再切回才出现。
+        // 这里钉住「收到就补拉，且不留假气泡」。
+        transport.deliver(
+            event(
+                seq = 1,
+                kind = "message_start",
+                event = buildJsonObject {
+                    put(
+                        "message",
+                        buildJsonObject {
+                            put("role", "user")
+                            put(
+                                "content",
+                                buildJsonArray {
+                                    add(
+                                        buildJsonObject {
+                                            put("type", "video"); put("omitted", true); put("name", "abc123")
+                                        },
+                                    )
+                                },
+                            )
+                        },
+                    )
+                },
+            ),
+        )
+
+        withTimeout(3000) {
+            while (!requests.calls.contains("thread.resync")) delay(20)
+        }
+        val payload = requests.payloads[requests.calls.indexOf("thread.resync")] as JsonObject
+        assertNull("补拉必须是全量的：带锚点只回增量，新挂上的文件块就补不回来", payload["haveMessageId"])
+        assertEquals("信号不能变成一条真的用户气泡", before, session.view.value.messages.size)
+        session.detach()
+    }
+
+    // ---- 回合中途收到快照（带附件卡）→ message_end 不得用同一 id 重复追加 ----
+    // 2026-11-04 真机：桌面发视频后，手机上「切走再切回」才有卡。主机的快照里确实有
+    // video 块（日志 `attach-block source=meta kind=video:…`），所以问题在客户端：补拉快照
+    // 把本回合（id=`assistant-<ts>`）连同附件块写进了 messages，而随后 message_end 又
+    // **追加**一条同 id 的流式气泡 → LazyColumn 的 key 重复（ThreadScreen 用 `key={it.id}`），
+    // 那一段卡片就可能整个不渲染。切走再切回时没有流式气泡参与，所以能正常显示。
+    @Test
+    fun `snapshot mid-turn plus message_end must not duplicate the same assistant id`() = runBlocking {
+        val transport = FakeTransport()
+        val requests = FakeRequests(SNAPSHOT, listOf(SNAPSHOT_MID_TURN_WITH_VIDEO))
+        val session = newSession(transport, requests)
+        session.subscribe()
+
+        // 回合开始：流式气泡出现（与真实时序一致，message_end 只在这一前提下生效）。
+        transport.deliver(event(seq = 1, kind = "agent_start", event = buildJsonObject { }))
+        transport.deliver(event(seq = 2, kind = "message_start", event = buildJsonObject { put("message", buildJsonObject { put("role", "assistant") }) }))
+        transport.deliver(textDelta(seq = 3, delta = "发好了"))
+
+        // 附件入库后的补拉：快照已包含本回合（id=assistant-500）且带 video 块。
+        session.resync(full = true)
+
+        // 回合结束：同一时间戳 → 同一个 hostId。
+        transport.deliver(
+            event(
+                seq = 4,
+                kind = "message_end",
+                event = buildJsonObject {
+                    put("message", buildJsonObject { put("role", "assistant"); put("timestamp", 500); put("stopReason", "stop") })
+                },
+            ),
+        )
+
+        val messages = session.view.value.messages
+        val ids = messages.map { it.id }
+        assertEquals("同一回合只能有一条（LazyColumn 的 key 必须唯一）", ids.size, ids.toSet().size)
+        val round = messages.single { it.id == "assistant-500" }
+        assertTrue(
+            "合并后必须保留快照里的附件卡（video 块），否则用户看到的就是「卡片消失了」",
+            round.blocks.any { it.type == BlockType.Video },
+        )
+        assertTrue(
+            "流式期间的正文也不能丢",
+            round.blocks.any { it.type == BlockType.Text && it.text == "发好了" },
+        )
+        session.detach()
+    }
+
     @Test
     fun `own image echo does not trigger a backfill`() = runBlocking {
         val transport = FakeTransport()
@@ -1031,6 +1126,23 @@ class ThreadSessionReducerTest {
                 {"id":"m2","role":"assistant","blocks":[{"type":"tool","name":"bash","result":"工具输出内容"}]}
               ],
               "nextSeq":0
+            }}
+        """.trimIndent()
+
+        /** 回合进行中的快照：含本回合（id=assistant-500）且带一张视频卡（mpi_attach_file）。 */
+        val SNAPSHOT_MID_TURN_WITH_VIDEO = """
+            {"snapshot":{
+              "id":"t-1","projectId":"p1","title":"视频","preview":"p","updatedAt":500,
+              "messageCount":2,"state":"running","permission":"full","cwdName":"MPI",
+              "model":{"provider":"anthropic","id":"model-x"},
+              "availableModels":[],"thinkingLevel":"off","thinkingLevels":["off"],"taskMode":null,
+              "availableModes":[],"messages":[
+                {"id":"u1","role":"user","blocks":[{"type":"text","text":"发个视频"}]},
+                {"id":"assistant-500","role":"assistant","blocks":[
+                  {"type":"text","text":"发好了"},
+                  {"type":"video","name":"305cd82f35e2","label":"rec.mp4","mimeType":"video/mp4","size":3118067,"omitted":true}
+                ]}
+              ],"nextSeq":0
             }}
         """.trimIndent()
 

@@ -676,7 +676,16 @@ button:disabled { opacity: 0.5; cursor: default; }
   user-select: none;
 }
 .msg-file-card:active { transform: scale(0.99); }
-.msg-file-card .mfc-icon { font-size: 18px; line-height: 1; }
+.msg-file-card .mfc-icon { font-size: 18px; line-height: 1; display: flex; align-items: center; }
+/* 彩色文件类型图标（components/FileKindIcon.tsx）：白页身在深色底上很跳，
+   所以给容器一个淡底；深色主题下白页身本身自带边缘，不需要额外描边。 */
+.msg-file-card .mfc-icon .fkind,
+.msg-video-placeholder .fkind { display: block; }
+@media (prefers-color-scheme: dark) {
+  .msg-file-card .mfc-icon .fkind {
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+  }
+}
 .msg-file-card .mfc-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .msg-file-card .mfc-copy strong {
   font-size: 13px;

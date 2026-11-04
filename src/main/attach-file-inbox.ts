@@ -47,6 +47,15 @@ export interface IngestAttachFileOptions {
   workspaceRoot?: string;
   maxBytes?: number;
   now?: () => number;
+  /**
+   * 入库成功后**直接通知主进程**（2026-11-04）。
+   *
+   * 为什么需要：以前引用只通过回执文本给模型，靠模型把它贴进正文才进得了会话历史。
+   * 现在回执不再带标记（否则模型会抄进回答，手机端就得剥不胜剥），所以附件必须走
+   * 主机内部通道挂到会话上——这个回调就是那个通道。参数里的引用文本可直接拿去
+   * 生成 file 块，不经过任何模型输出。
+   */
+  onStored?: (entry: { name: string; abs: string; size: number; label: string; text: string; sessionFile?: string }) => void;
 }
 
 function writeReceipt(outboxDir: string, receipt: AttachFileReceipt): void {
@@ -124,7 +133,28 @@ function ingestOne(file: string, opts: IngestAttachFileOptions): boolean {
     label: verdict.label,
     size: stored.size,
   });
-  writeReceipt(opts.outboxDir, { id, ok: true, text, size: stored.size, ...(isKey ? { key: stored.name } : {}) });
+  writeReceipt(opts.outboxDir, {
+    id,
+    ok: true,
+    text,
+    size: stored.size,
+    label: verdict.label,
+    ...(req?.sessionFile ? { sessionFile: String(req.sessionFile) } : {}),
+    ...(isKey ? { key: stored.name } : {}),
+  });
+  // 主机内部通道：直接把这次入库结果告诉主进程（不经模型文本）。
+  try {
+    opts.onStored?.({
+      name: stored.name,
+      abs: stored.abs,
+      size: stored.size,
+      label: verdict.label || stored.name,
+      text,
+      ...(req?.sessionFile ? { sessionFile: String(req.sessionFile) } : {}),
+    });
+  } catch {
+    /* 挂不上也不能影响入库（模型仍会看到“已发送”） */
+  }
   dropQuietly(file);
   return true;
 }

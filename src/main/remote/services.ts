@@ -220,6 +220,22 @@ export class RemoteEventHub {
     return this.listeners.get(threadId)?.size ?? 0;
   }
 
+  /**
+   * 当前有订阅者的全部会话 id（无副本数组）。
+   *
+   * 用在哪里（2026-11-04）：`mpi_attach_file` 入库后要推一个「去刷新」信号，
+   * 但那时手上只有 sessionFile，而映射表 `remoteLocalToId` 可能給出与手机实际
+   * 订阅的 id **不一致**的值（真机：推送去了 7GKetH1…，手机订的是 P_P3tek…）。
+   * 与其猜映射，不如按「谁真在看」定向：拿到有订阅者的 id 集合，反向找木。
+   */
+  activeThreadIds(): string[] {
+    const ids: string[] = [];
+    for (const [threadId, listeners] of this.listeners) {
+      if (listeners.size > 0) ids.push(threadId);
+    }
+    return ids;
+  }
+
   clear(): void {
     this.listeners.clear();
     this.sequences.clear();

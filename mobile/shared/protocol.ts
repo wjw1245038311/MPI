@@ -253,6 +253,18 @@ export interface RemoteThreadSnapshot extends RemoteThreadSummary {
    * 客户端应把消息**合并**进已有列表（同 id 以新到达的为准），而不是整体替换。
    */
   incremental?: boolean;
+  /**
+   * 主机当前还挂着的审批卡 id（没有 → null / 缺省）。
+   *
+   * 为什么要有它：手机在后台断线时会**错过** `ui.resolved` 事件（桌面端已经点了
+   * 「允许」），重连后 resync 又会把本地的 `pendingUi` 原样保留（这是为了不在断线
+   * 期间丢卡）——结果就是一张已经失效的卡片一直挂着（2026-11-04 真机）。
+   * 客户端拿到快照后按这个字段核对：本地卡片 id 不在这里 → 清掉。
+   *
+   * 旧主机的快照没有这个字段（undefined）→ 客户端**不要**据此清卡（否则一断线
+   * 就误清所有待办），只有字段存在且为 null 时才清。
+   */
+  pendingUiId?: string | null;
   nextSeq: number;
 }
 

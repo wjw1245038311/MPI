@@ -282,7 +282,10 @@ export type ContentBlock =
 /** A local file carried by a user message. The path is retained for matching
  * and future actions, but the chat bubble only needs to show the file name. */
 export interface ViewAttachment {
+  /** 取字节用的名字（内容寻址后就是 64 位哈希）；界面上不要直接显示它。 */
   name: string;
+  /** 可读的原文件名（P3 媒体引用才带）。有它就用它当标题，哈希名只用于取字节。 */
+  label?: string;
   path?: string;
   note?: string;
   error?: string;

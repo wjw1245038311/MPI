@@ -139,7 +139,9 @@ import { ensureTodoExtension } from "./todo-extension";
 import { ensureAttachFileExtension } from "./attach-file-extension";
 import { ensureImageRefExtension } from "./image-ref-extension";
 import { ensureAttachFileDirs, ingestAttachFileRequests } from "./attach-file-inbox";
-import { guessMimeType } from "./attach-file-core";
+import { attachBackfillEvent, guessMimeType } from "./attach-file-core";
+import { ensureAttachImageThumb } from "./attach-file-thumbs";
+import { attachBlockPlan, desktopFilePlainEnvelope, desktopFileRefEnvelope, planDesktopFile, shouldInlineDesktopText } from "./chat-attachment-refs";
 import { ensureMemoryExtension, ensureMemoryCandidateInbox } from "./memory-extension";
 import { startMemoryInboxWatcher } from "./memory-inbox";
 import { getMemoryIndex, memoryPoolDir, scheduleMemoryMaintenance } from "./memory-service";
@@ -247,6 +249,7 @@ import {
   mediaRefEnvelope,
   type MediaRef,
   splitVideoRefs,
+  thumbNameFor,
   videoMimeForPath,
   videoRefEnvelope,
 } from "./remote/video-refs";
@@ -540,6 +543,9 @@ function toolArgsSummary(args: unknown): string | undefined {
 /** Escape attribute values for the <file> envelope (session titles may contain quotes). */
 const attr = (s: string) => s.replace(/"/g, "&quot;");
 
+/** 取路径末段（附件没有 name 时兜底当展示名；不引 basename 以免与本地变量混淆）。 */
+const basenameSafe = (file: string): string => String(file || "").split(/[\\/]/).filter(Boolean).pop() || "附件";
+
 // 视频附件的引用格式、上限与预算都在 remote/video-refs.ts（写入与解析必须同源）。
 
 /** @ 小帮手前缀："@<name> 问题"（name = 1–32 位 a-z/0-9/_/-，字母开头；仅消息开头生效）。 */
@@ -598,15 +604,42 @@ function processAttachments(attachments: Attachment[] | undefined, text: string)
           }
           // 复制失败（太大/读不到）→ 退回普通引用，至少 agent 还能读到原文件
         }
+        // 纯文本小文件：内联全文（给 agent 读），**不出卡片**——用户 2026-11-04 的决定。
         if (TEXT_ATTACH_EXTS.has(ext) || ext === "") {
           const st = statSync(a.abs);
-          if (st.size <= 500_000) {
+          if (shouldInlineDesktopText(st.size, true)) {
             const content = readFileSync(a.abs, "utf8");
             extra += `\n\n<file name="${attr(a.name)}" path="${attr(a.abs)}">\n${content}\n</file>`;
             continue;
           }
         }
-        extra += `\n\n<file name="${attr(a.name)}" path="${attr(a.abs)}" note="attached (binary or large; not inlined)" />`;
+        // 其余（二进制 / 大文本）：**先入内容寻址对象库，再发媒体引用**。
+        // 2026-11-04 修：以前这里发的是一条不带 `attach=` 的裸 `<file path=…/>`，快照不为它
+        // 生成块 —— 手机端只看到一行被脱敏成 `[path]` 的 XML，拿不到本体（用户原话「根本没法
+        // 用」）。现在与 agent 的 mpi_attach_file 走同一条路：三端都有卡片，字节受 GC 保护。
+        const meta = {
+          abs: a.abs,
+          label: a.name || basenameSafe(a.abs),
+          size: statSync(a.abs).size,
+          mime: guessMimeType(a.abs, a.name),
+        };
+        const plan = planDesktopFile(meta, {
+          inline: false,
+          store: (args) => storeObject({ sourcePath: args.sourcePath, label: args.label, mime: args.mime }),
+          mediaKind: mediaKindForMime(meta.mime, meta.label),
+        });
+        if (plan.kind === "ref") {
+          extra += desktopFileRefEnvelope({
+            name: plan.name,
+            abs: plan.abs,
+            size: plan.size,
+            label: meta.label,
+            mediaKind: plan.mediaKind,
+          });
+        } else {
+          // 入库失败：退回旧行为（裸引用），至少 agent 还能按路径读。
+          extra += desktopFilePlainEnvelope(meta, plan.kind === "plain" ? plan.reason : "attached");
+        }
       } catch (e: any) {
         extra += `\n\n<file name="${attr(a.name)}" path="${attr(a.abs)}" error="${attr(e?.message || "read failed")}" />`;
       }
@@ -2175,6 +2208,30 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     return mapped || null;
   };
 
+  /**
+   * 本地桥 id → 手机侧 threadId（宽容版，供「桌面操作要广播给手机」这类场景用）。
+   *
+   * `remoteIdForSession` 只处理会话文件路径；但渲染层在很多 IPC 里传的是
+   * **临时/草稿 id** 或尚未落盘的会话，直接用它只能拿到 null（2026-11-04：
+   * 桌面批准后手机端卡片不消失，就是因为广播根本没发出去）。这里依次试：
+   *   ① 作为 sessionFile 走正式映射；
+   *   ② 本身已经是远端 id（形如 `thread-…` / `draft-…`）；
+   *   ③ 扫 remoteLocalToId 找值等于它的项（反向查）。
+   */
+  const resolveRemoteIdForLocal = (localId?: string | null): string | null => {
+    const id = String(localId || "");
+    if (!id) return null;
+    const direct = remoteIdForSession(id);
+    if (direct) return direct;
+    // 已经是远端 id（远端 id 不会是文件路径）。
+    if (!id.includes("\\") && !id.includes("/") && /^(?:thread|draft)-/.test(id)) return id;
+    // 反向查：某些调用方传的就是 remoteId，但登记在 remoteLocalToId 的**值**里。
+    for (const value of remoteLocalToId.values()) {
+      if (value === id) return id;
+    }
+    return null;
+  };
+
   /** 手机端的任务模式列表：与桌面下拉同源（normalizeTaskModes），只带展示元数据。 */
   const remoteModeOptions = (): RemoteTaskModeOption[] => {
     const cfg = getConfig();
@@ -2189,6 +2246,16 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
     }));
   };
   const remoteUiRequests = new Map<string, { threadId: string; localId: string }>();
+
+  /**
+   * `mpi_attach_file` 入库的附件（按 sessionFile 小写归口）。
+   *
+   * 为什么主进程自己要记一份（2026-11-04）：以前引用只存在于**工具结果文本**里，
+   * 模型就学会了把它抄进回答（手机端反复露出 `<file …/>` XML）。现在回执不再带
+   * 标记语法，附件改由主进程在 ingest 时直接登记到这里，快照生成时优先取它
+   * （tool 结果文本那条仍保留作兜底：老会话里的引用还在文本里）。
+   */
+  const attachFileStored = new Map<string, Array<{ name: string; abs: string; size: number; label: string; at: number }>>();
   let remoteProjectsCache: { expiresAt: number; value: ProjectSummary[] } | null = null;
   let remoteProjectsLoad: Promise<ProjectSummary[]> | null = null;
   const invalidateRemoteProjects = () => {
@@ -2497,19 +2564,49 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
  */
 function withVideoMarkers<T extends Record<string, any>>(event: T): T {
   const message = event?.message;
-  if (!message || message.role !== "user") return event;
+  if (!message || (message.role !== "user" && message.role !== "assistant")) return event;
   const raw = message.content;
   const parts: any[] | null = typeof raw === "string" ? [{ type: "text", text: raw }] : Array.isArray(raw) ? raw : null;
   if (!parts) return event;
   const refs: Array<{ name: string; path: string }> = [];
+  /** 从 tool 回执里解出来的附件元数据（`mpi_attachment`，2026-11-04）。 */
+  const attachMarkers: Array<{ name: string; label: string; size?: number }> = [];
   const next = parts.map((part: any) => {
     if (part?.type !== "text" || typeof part.text !== "string") return part;
     const split = splitVideoRefs(part.text);
-    if (!split.refs.length) return part;
+    // 回执里的 `{"mpi_attachment":…}` 元数据也在这里转成占位块。
+    // 为什么不靠快照：快照只在（重）订阅时生成，而工具调用是**回合中的事件**——
+    // 2026-11-04 真机：实时事件流里没有 file 块，客户端就不去补拉，卡片一直不出来；
+    // 直到手动切走再切回（触发快照）才出现。给个占位块就能让它立即补拉。
+    const meta = parseAttachMetaLine(part.text);
+    if (meta) attachMarkers.push(meta);
+    if (!split.refs.length) {
+      return meta ? { ...part, text: stripAttachMetaText(part.text) } : part;
+    }
     refs.push(...split.refs);
-    return { ...part, text: split.text };
+    return { ...part, text: stripAttachMetaText(split.text) };
   });
-  if (!refs.length) return event;
+  const assistantMarkers = attachMarkers.map((meta) => ({
+    type: "file",
+    omitted: true,
+    name: meta.name,
+    label: meta.label,
+    mimeType: guessMimeType(meta.name, meta.label),
+    ...(meta.size ? { size: meta.size } : {}),
+  }));
+  if (!refs.length && !assistantMarkers.length) return event;
+  // 占位块只对**用户**消息有意义（客户端据此补拉快照）。
+  //
+  // 助手消息（2026-11-04 真机）：agent 可能把 `<file … attach="media" … />` **原文**写进
+  // 自己的回复（`mpi_attach_file` 的说明就要求它把引用原样贴出来）。事件通道以前只剥
+  // 用户消息，于是手机端把整段 XML 当正文画了出来。助手这边只需要**剥掉**；
+  // 但 `mpi_attachment` 元数据要转成 file 占位块——客户端靠它去补拉快照拿真块。
+  if (message.role === "assistant") {
+    return {
+      ...event,
+      message: { ...message, content: [...next, ...assistantMarkers] },
+    } as T;
+  }
   return {
     ...event,
     message: {
@@ -2520,6 +2617,38 @@ function withVideoMarkers<T extends Record<string, any>>(event: T): T {
       ],
     },
   } as T;
+}
+
+/** 事件通道版：从一段文本里解出 `mpi_attachment` 元数据（与 remoteMessages 里同口径）。 */
+function parseAttachMetaLine(text: string): { name: string; label: string; size?: number } | null {
+  if (!text.includes("mpi_attachment")) return null;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as any;
+      const meta = parsed?.mpi_attachment;
+      if (!meta || typeof meta.name !== "string" || !meta.name) continue;
+      return {
+        name: String(meta.name),
+        label: String(meta.label || meta.name),
+        ...(typeof meta.size === "number" && meta.size > 0 ? { size: Math.floor(meta.size) } : {}),
+      };
+    } catch {
+      /* 不是我们那一行 */
+    }
+  }
+  return null;
+}
+
+/** 把 `mpi_attachment` 那行 JSON 从文本里剔掉（工具行不该显示它）。 */
+function stripAttachMetaText(text: string): string {
+  if (!text.includes("mpi_attachment")) return text;
+  return text
+    .split("\n")
+    .filter((line) => !(line.trim().startsWith("{") && line.includes("mpi_attachment")))
+    .join("\n")
+    .trim();
 }
 
 function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unknown {
@@ -2562,7 +2691,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     return result;
   }
 
-  function remoteMessages(messages: any[], cwd: string): RemoteMessage[] {
+  function remoteMessages(messages: any[], cwd: string, sessionFile?: string): RemoteMessage[] {
     // Keep the initial history response well below the SCTP data-channel
     // message budget. `text` remains available for previews and compatibility,
     // while text blocks preserve the actual thinking/tool/reply order in the
@@ -2606,6 +2735,27 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         return null;
       }
     };
+    /**
+     * 附件元数据（`mpi_attachment` / 台账）→ 快照块。
+     *
+     * 图片要**内联缩略图**：手机上图片是直接看到的，而 file 卡得点开下载（2026-11-04 用户要求）。
+     * 缩略图由 ensureAttachImageThumb 在入库时生成；这里只读盘取 base64，取不到就退回 file 卡
+     * （宁可少一张内联图，也不要一个空白块）。
+     */
+    const attachBlockForMeta = (meta: { name: string; label?: string; size?: number }): RemoteBlock => {
+      const mime = objectMeta(meta.name)?.mime || guessMimeType(meta.name, meta.label);
+      const plan = attachBlockPlan(meta, mime);
+      const named = { name: meta.name, mimeType: plan.mimeType, ...(meta.label ? { label: meta.label } : {}) };
+      if (plan.type === "image") {
+        const thumb = readThumbnailBase64(thumbNameFor(meta.name));
+        if (thumb) {
+          return { type: "image", data: thumb, mimeType: "image/jpeg", key: meta.name, ...(meta.label ? { label: meta.label } : {}) };
+        }
+        return { type: "file", ...named, ...(meta.size ? { size: meta.size } : {}), omitted: true };
+      }
+      return { type: plan.type, ...named, ...(meta.size ? { size: meta.size } : {}), omitted: true };
+    };
+
     // 手机端「往上拉不动」的根因就是这里的 -80：更早的消息根本没下发。
     // 注意 source 是**原始 pi 条目**（含 toolResult），与用户看到的会话条目不是
     // 一回事（2026-09-16 取证：400 原始条目 → 17 条会话消息）。这里只控制解析
@@ -2629,6 +2779,56 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       }
     }
 
+    /**
+     * 本次快照里从**工具结果**剥出来的媒体引用（`mpi_attach_file` 走的这条）。
+     *
+     * 为什么单独攒：`blocksFor` 是纯映射，不知道自己要成“本轮”的附件；而引用要
+     * 变成 `file` 块必须与消息正文里的那批走**同一套** kind 分发（见 remoteMessages
+     * 里 mediaBlocks 的构造）。所以先攒、随消息一块交给调用方处理。
+     */
+    const toolMediaRefs: MediaRef[] = [];
+
+    /**
+     * 从 tool 结果里解出来的附件元数据（`mpi_attach_file` 的新回执格式）。
+     *
+     * 回执形如：`Sent "x.docx" into this conversation...\n{"mpi_attachment":{"name":"<sha256>","label":"x.docx","size":123}}`。
+     * 模型**不会**转述这段 JSON（它没被要求贴任何东西），但主机能可靠地拿到它——
+     * 而且与工具调用同行到达，不受异步入库的时序影响。
+     */
+    const toolAttachMetas: Array<{ name: string; label: string; size?: number }> = [];
+
+    /** 解析回执里的 `mpi_attachment` 行；没有/解不动 → null。 */
+    function parseAttachMeta(text: unknown): { name: string; label: string; size?: number } | null {
+      if (typeof text !== "string" || !text.includes("mpi_attachment")) return null;
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("{")) continue;
+        try {
+          const parsed = JSON.parse(trimmed) as any;
+          const meta = parsed?.mpi_attachment;
+          if (!meta || typeof meta.name !== "string" || !meta.name) continue;
+          return {
+            name: String(meta.name),
+            label: String(meta.label || meta.name),
+            ...(typeof meta.size === "number" && meta.size > 0 ? { size: Math.floor(meta.size) } : {}),
+          };
+        } catch {
+          // 不是我们那一行（模型可能在正文里写了别的 JSON）→ 继续找。
+        }
+      }
+      return null;
+    }
+
+    /** 把回执里的 JSON 元数据行剔掉（别让它占工具行的位置）。 */
+    function stripAttachMetaLine(text: unknown): string {
+      if (typeof text !== "string" || !text.includes("mpi_attachment")) return String(text || "");
+      return text
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("{") || !line.includes("mpi_attachment"))
+        .join("\n")
+        .trim();
+    }
+
     const blocksFor = (message: any, imageRefs: MediaRef[] = []): RemoteBlock[] => {
       if (typeof message?.content === "string") {
         const text = splitVideoRefs(message.content).text.slice(0, 12_000);
@@ -2646,11 +2846,24 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         if (block?.type === "thinking") return { type: "thinking", text: String(block.thinking || "") };
         if (block?.type === "toolCall") {
           const result = typeof block.id === "string" ? toolResults.get(block.id) : undefined;
+          // 工具结果里也可能带媒体引用——`mpi_attach_file` 就是这么回给 agent 的（一条
+          // `<file … attach="media" … />`）。不剥的话手机端会把整段 XML 当正文显示
+          // （2026-11-04 真机：气泡里一大段 `name="07027e91…"`）。
+          // 剥出来的引用由下面的 toolMediaRefs 统一转成 file 块（与用户/助手正文同语义）。
+          const splitResult = result?.text ? splitVideoRefs(result.text) : null;
+          if (splitResult?.refs.length) toolMediaRefs.push(...splitResult.refs);
+          // `mpi_attach_file` 的新回执：正文是自然语言，附件信息藏在一行
+          // `{"mpi_attachment":{name,label,size}}` 里（2026-11-04）。
+          // 从这里取比台账可靠：台账是**异步**写入的（watch + 1s 轮询），而快照在工具
+          // 返回时就已经生成（实测快照先跑、登记 45s 后才到 → 卡片丢了）。
+          const attachMeta = parseAttachMeta(splitResult ? splitResult.text : result?.text);
+          if (attachMeta) toolAttachMetas.push(attachMeta);
           return {
             type: "tool",
             name: String(block.name || "tool"),
             running: result == null,
-            result: result?.text || undefined,
+            // JSON 那行也不该占地方：它能被解析时就剔语掉。
+            result: stripAttachMetaLine(splitResult ? splitResult.text : result?.text) || undefined,
             args: toolArgsSummary(block.arguments),
           };
         }
@@ -2693,7 +2906,10 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       }).filter((block: RemoteBlock | null): block is RemoteBlock => block !== null);
     };
 
-    const textFor = (message: any): string | undefined => remoteText(message?.content).slice(0, 12_000) || undefined;
+    // `message.text` 是兼容字段（预览/纯文本客户端用），安卓端不读它——但它也会带着
+    // 引用原文发出去（含 `<file …/>`），所以同样要剥。
+    const textFor = (message: any): string | undefined =>
+      splitVideoRefs(remoteText(message?.content)).text.slice(0, 12_000) || undefined;
     const mergeArtifacts = (current: RemoteFileArtifact[] | undefined, next: RemoteFileArtifact[] | undefined): RemoteFileArtifact[] | undefined => {
       const merged = [...(current || [])];
       const seen = new Set(merged.map((artifact) => artifact.path.toLowerCase()));
@@ -2723,6 +2939,35 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           }))],
         };
         unmatchedToolOutputs = [];
+      }
+      // 工具结果里剥出来的媒体引用（`mpi_attach_file`）**必须在这里消费**：
+      // 它们属于这一轮 assistant，晚一步就会被错挂到下一条用户消息上（而且本轮
+      // 已经 push 进 output，就再也补不回去了）。
+      if (toolMediaRefs.length) {
+        const toolBlocks = toolMediaRefs
+          .splice(0)
+          .map((ref) => mediaRefToBlock(ref))
+          .filter((block): block is RemoteBlock => block !== null);
+        if (toolBlocks.length) {
+          assistantRound = {
+            ...assistantRound,
+            blocks: [...(assistantRound.blocks || []), ...toolBlocks].slice(0, 80),
+          };
+        }
+      }
+      // `mpi_attach_file` 的元数据（新回执格式）→ 按 mime 出块。
+      //
+      // 为什么要分发而不是一律 file（2026-11-04）：无差别 file 会让 agent 递的 mp4/mp3
+      // 变成「下载卡」，而同一会话里用户自己发的视频却是内联播放器——差异全在块类型。
+      // video/audio 块本来就支持「快照只给名字、点开按需拉本体」，所以只要接上分发。
+      if (toolAttachMetas.length) {
+        const attachBlocks = toolAttachMetas.splice(0).map((meta) => attachBlockForMeta(meta));
+        assistantRound = {
+          ...assistantRound,
+          blocks: [...(assistantRound.blocks || []), ...attachBlocks].slice(0, 80),
+        };
+        // 取证（2026-11-04「视频变成文件卡/没卡片」排查）：附件最终以什么类型下发。
+        appendDiagLog(`attach-block source=meta kind=${attachBlocks.map((b) => `${b.type}:${String(b.label || b.name).slice(0, 20)}`).join(",")}`);
       }
       output.push(assistantRound);
       assistantRound = null;
@@ -2757,6 +3002,51 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         stopReason: typeof message?.stopReason === "string" ? message.stopReason : assistantRound.stopReason,
       };
     };
+
+    /**
+     * 一条媒体引用 → 快照块（用户正文与工具结果**共用**同一套 kind 分发）。
+     *
+     * 抽出来是因为 2026-11-04 真机暴露了第二处调用点：`mpi_attach_file` 回给 agent 的
+     * 引用藏在 tool 结果里，以前完全不处理，手机端就把整段 `<file …/>` XML 当正文画出来了。
+     * 两处各写一份的话，kind 分发规则（file/audio/video 各自的 mime 推定与封面登记）
+     * 迟早会漂——这函数就是唯一入口。
+     */
+    function mediaRefToBlock(ref: MediaRef): RemoteBlock | null {
+      if (ref.kind === "image") return null; // 图片由 blocksFor 用缩略图替换，不出独立块
+      if (ref.kind === "file") {
+        // agent 主动递交的任意文件（mpi_attach_file）。以前 kind="file" 会一路
+        // 掉进下面的 video 分支，生成一张点开必失败的「视频卡片」（2026-10-15 修）。
+        // 快照只给名字与大小，本体由客户端拿 read 令牌按需拉（同视频语义）。
+        const meta = isContentKey(ref.name) ? objectMeta(ref.name) : null;
+        return {
+          type: "file",
+          name: ref.name,
+          mimeType: meta?.mime || guessMimeType(ref.path, ref.label),
+          ...(ref.label ? { label: ref.label } : {}),
+          ...(ref.size ? { size: ref.size } : {}),
+          omitted: true,
+        };
+      }
+      if (ref.kind === "audio") {
+        return {
+          type: "audio",
+          name: ref.name,
+          mimeType: mediaMimeForPath(ref.path),
+          ...(ref.label ? { label: ref.label } : {}),
+          ...(ref.size ? { size: ref.size } : {}),
+          omitted: true,
+        };
+      }
+      const block: RemoteBlock = {
+        type: "video",
+        name: ref.name,
+        mimeType: videoMimeForPath(ref.path),
+        ...(ref.label ? { label: ref.label } : {}),
+        omitted: true,
+      };
+      pendingVideos.push({ block, path: ref.path, ...(ref.thumb ? { posterName: ref.thumb } : {}) });
+      return block;
+    }
 
     source.forEach((message: any, index) => {
       if (message?.role === "assistant") {
@@ -2798,41 +3088,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       // 从前这里会把 image 引用也生成一个 video 块（哈希名 + video/mp4），点开必失败。
       const mediaBlocks = mediaRefs
         .filter((ref) => ref.kind !== "image")
-        .map((ref): RemoteBlock => {
-          if (ref.kind === "file") {
-            // agent 主动递交的任意文件（mpi_attach_file）。以前 kind="file" 会一路
-            // 掉进下面的 video 分支，生成一张点开必失败的「视频卡片」（2026-10-15 修）。
-            // 快照只给名字与大小，本体由客户端拿 read 令牌按需拉（同视频语义）。
-            const meta = isContentKey(ref.name) ? objectMeta(ref.name) : null;
-            return {
-              type: "file",
-              name: ref.name,
-              mimeType: meta?.mime || guessMimeType(ref.path, ref.label),
-              ...(ref.label ? { label: ref.label } : {}),
-              ...(ref.size ? { size: ref.size } : {}),
-              omitted: true,
-            };
-          }
-          if (ref.kind === "audio") {
-            return {
-              type: "audio",
-              name: ref.name,
-              mimeType: mediaMimeForPath(ref.path),
-              ...(ref.label ? { label: ref.label } : {}),
-              ...(ref.size ? { size: ref.size } : {}),
-              omitted: true,
-            };
-          }
-          const block: RemoteBlock = {
-            type: "video",
-            name: ref.name,
-            mimeType: videoMimeForPath(ref.path),
-            ...(ref.label ? { label: ref.label } : {}),
-            omitted: true,
-          };
-          pendingVideos.push({ block, path: ref.path, ...(ref.thumb ? { posterName: ref.thumb } : {}) });
-          return block;
-        });
+        .map((ref) => mediaRefToBlock(ref))
+        .filter((block): block is RemoteBlock => block !== null);
       const allBlocks = [...blocks, ...mediaBlocks];
       output.push({
         id: remoteMessageId(message, role, index),
@@ -2847,6 +3104,46 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       });
     });
     flushAssistantRound();
+
+    // `mpi_attach_file` 的附件——**兜底路径**（2026-11-04）。
+    //
+    // 常规路径是上面的 `toolAttachMetas`：回执里的 JSON 元数据与工具结果同行到达，
+    // 时序可靠。这张台账只在两种情况下救命：
+    //   ① 扩展版本较旧（回执仍是 XML，没有 JSON）——那种情况 XML 会被 toolMediaRefs 接住；
+    //   ② 工具调用和快照生成之间发生过重启（in-memory 台账会丢，但 JSON 在会话文件里）。
+    // 所以这里按 name 去重，绝不重复出卡。
+    if (sessionFile) {
+      const lookupKey = resolve(sessionFile).toLowerCase();
+      const matched = attachFileStored.get(lookupKey) || [];
+      appendDiagLog(
+        `attach-block fallback keys=${attachFileStored.size} hit=${matched.length ? 1 : 0} file=${lookupKey.slice(-40)}`,
+      );
+      const storedList = matched;
+      if (storedList.length) {
+        const already = new Set<string>();
+        for (const msg of output) {
+          for (const block of msg.blocks || []) {
+            if ((block.type === "file" || block.type === "video" || block.type === "audio") && block.name) already.add(block.name);
+          }
+        }
+        const pending = storedList.filter((entry) => !already.has(entry.name));
+        if (pending.length) {
+          const blocks = pending.map((entry) => attachBlockForMeta(entry));
+          // 挂到最后一轮 assistant（就是调用了这个工具的那轮）；没有 assistant 轮
+          // （极端情形：工具被单独触发）就新开一条，宁可多一条也不静默丢附件。
+          const lastAssistant = [...output].reverse().find((msg) => msg.role === "assistant");
+          // 取证（同上面的 source=meta）：台账兵分多少、都生成了什么块类型。
+          appendDiagLog(
+            `attach-block source=ledger kind=${blocks.map((b) => `${b.type}:${String(b.label || b.name).slice(0, 20)}`).join(",")}`,
+          );
+          if (lastAssistant) {
+            lastAssistant.blocks = [...(lastAssistant.blocks || []), ...blocks].slice(0, 80);
+          } else {
+            output.push({ id: `attach-${Date.now()}`, role: "assistant", blocks });
+          }
+        }
+      }
+    }
     // 封面回填：**最新优先**。快照**不下发视频本体**（那是几 MB 级字节，会把快照撑爆、
     // 还会把更早的历史从裁剪里挤掉），只下发一张首帧封面 + 名字 + 大小；原片由客户端
     // 点开时按需拉（attachment.fetch）。没有封面 → 深色卡片，照样可点开。
@@ -3093,6 +3390,20 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     }
   }
 
+  /**
+   * 该会话当前还挂着的审批卡 id（快照的 `pendingUiId`）。
+   *
+   * 手机重连后靠它校对本地那张 `pendingUi` 是否已失效——后台断线会错过
+   * `ui.resolved` 广播（见 RemoteThreadSnapshot.pendingUiId 的注释）。
+   * 一个会话同时有多条时取最早那条：手机端也只显示一张卡，对齐即可。
+   */
+  const pendingUiIdFor = (threadId: string): string | null => {
+    for (const [id, pending] of remoteUiRequests) {
+      if (pending.threadId === threadId) return id;
+    }
+    return null;
+  };
+
   async function remoteSnapshot(threadId: string, options: { live?: boolean; haveMessageId?: string } = {}): Promise<RemoteThreadSnapshot> {
     const ref = await remoteThread(threadId);
     const configuredModels = configuredRemoteModelOptions();
@@ -3127,12 +3438,13 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         availableModes: remoteModeOptions(),
         contextUsage: null,
         messages: [],
+        pendingUiId: pendingUiIdFor(threadId),
         nextSeq: 0,
       };
     }
     if (live) {
       const gathered: any = await gatherThread(live.bridge, live.getId(), live.permission);
-      const messages = remoteMessages(gathered.messages, ref.cwd);
+      const messages = remoteMessages(gathered.messages, ref.cwd, ref.sessionFile);
       // 快照生成即登记本会话引用过的附件（`attachment.fetch` 的作用域校验用）。
       rememberAttachmentNames(threadId, videoRefNamesInMessages(gathered.messages));
       const state = remoteState(!!gathered.isStreaming, messages.length > 0);
@@ -3156,6 +3468,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         contextUsage: await threadContextUsage(live.getId(), compactionEstimates.get(live.getId()) ?? null),
         // 回合不在跑 → 不可能还有在飞的工具；把被中断、永远等不到 toolResult 的那行收口
         messages: settleToolsOutsideRunningTurn(messages, state),
+        pendingUiId: pendingUiIdFor(threadId),
         nextSeq: 0,
       };
     }
@@ -3170,7 +3483,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       appendDiagLog(`remote history not on disk yet → empty (${threadId.slice(0, 12)})`);
       history = { cwd: null, sessionName: null, model: null, thinkingLevel: null, messages: [], branchMessages: [] };
     }
-    const messages = remoteMessages(history.messages, ref.cwd);
+    const messages = remoteMessages(history.messages, ref.cwd, ref.sessionFile);
     rememberAttachmentNames(threadId, videoRefNamesInMessages(history.messages));
     // 已打开的桥能直接给出真实用量与实时配置（不额外冷启动）。
     // 这里必须优先用桥的状态：否则手机切完模型后重新 subscribe（只走磁盘快照）
@@ -3204,6 +3517,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       availableModes: remoteModeOptions(),
       contextUsage: open ? await threadContextUsage(open.getId(), compactionEstimates.get(open.getId()) ?? null) : null,
       messages: settleToolsOutsideRunningTurn(messages, state),
+      pendingUiId: pendingUiIdFor(threadId),
       nextSeq: 0,
     };
   }
@@ -5469,11 +5783,75 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   secretReceiptSweep.unref?.();
 
   // 附件下行：agent 的 mpi_attach_file 把请求丢进 inbox，主进程在这里入库（对象库的唯一
-  // 写入者）并回写引用文本。watch + 轮询双保险，与待办收件箱同一套；处理完即删请求文件。
+  // 写入者）并回写回执。watch + 轮询双保险，与待办收件箱同一套；处理完即删请求文件。
+  //
+  // onStored（2026-11-04）：入库后**直接挂到会话上**，不依赖模型把引用贴进正文。
+  // 回执不再带标记语法（否则模型会抄进回答 → 手机端反复露出 XML），所以附件必须走这条
+  // 主机内部通道：记到 sessionFile 名下，快照生成时优先从这里取。
   const attachFileDirs = ensureAttachFileDirs(getConfigDir());
   const ingestAttachFiles = () => {
     try {
-      ingestAttachFileRequests({ ...attachFileDirs, storeObject });
+      ingestAttachFileRequests({
+        ...attachFileDirs,
+        storeObject,
+        onStored: ({ name, abs, size, label, sessionFile }) => {
+          if (!sessionFile) {
+            // 拿不到 sessionFile（扩展没传）→ 只登记作用域，快照仍能靠 tool 结果文本拿到。
+            appendDiagLog(`attach-file stored without sessionFile name=${name.slice(0, 12)}`);
+            return;
+          }
+          const remoteId = remoteIdForSession(sessionFile);
+          const localKey = resolve(sessionFile).toLowerCase();
+          const entry = { name, abs, size, label, at: Date.now() };
+          const list = attachFileStored.get(localKey) ?? [];
+          list.push(entry);
+          // 只留最近 50 条：这是快照生成的补充来源，不是历史库（历史在会话 JSONL 里）。
+          attachFileStored.set(localKey, list.slice(-50));
+          if (remoteId) rememberAttachmentNames(remoteId, [name]);
+          // 图片：入库顺手生成缩略图。快照里图片块要内联 base64 才能「直接看到」，
+          // 现算会把每次快照都拖慢（历史会重复生成多次）。
+          try {
+            const mime = objectMeta(name)?.mime || guessMimeType(abs, label);
+            if (mediaKindForMime(mime === "application/octet-stream" ? "" : mime, label) === "image") {
+              if (!ensureAttachImageThumb(name, abs)) {
+                appendDiagLog(`attach-thumb failed name=${name.slice(0, 12)} label=${label}`);
+              }
+            }
+          } catch {
+            /* 缩略图失败不影响入库；快照会退回文件卡 */
+          }
+          appendDiagLog(
+            `attach-file stored name=${name.slice(0, 12)} label=${label} key=${localKey.slice(-24)} remoteThread=${remoteId ? remoteId.slice(0, 12) : "-"}`,
+          );
+          // 主动推一个**补拉信号**，让客户端立即去拉快照把卡片显示出来。
+          //
+          // 为什么必须推（2026-11-04 真机）：附件是入库到会话文件里的，而快照只在
+          // （重）订阅时生成。不推的话卡片要等用户手动切走再切回才出现——用户看到的是
+          // 「卡片根本没出现」。信号本身、以及它为什么用 `message_start` + video 占位块，
+          // 见 attach-file-core.ts 的 attachBackfillEvent。
+          try {
+            const ping = attachBackfillEvent(name);
+            // 优先推到算出 id 的会话；没人订阅时（或压根没算出 id：`remoteLocalToId`
+            // 的值曾与手机实际订阅的 id 不一致，日志里推给了 7GKetH1… 而手机订的是
+            // P_P3tek…）就广播到所有活跃会话——补拉信号多推几次无害（客户端有防抖），
+            // 少推一次却是「卡片永不出现」。
+            if (remoteId && remoteEventHub.subscriberCount(remoteId) > 0) {
+              remoteEventHub.publish(remoteId, ping);
+              appendDiagLog(
+                `attach-file backfill-ping name=${name.slice(0, 12)} thread=${remoteId.slice(0, 12)} subs=${remoteEventHub.subscriberCount(remoteId)}`,
+              );
+            } else {
+              const active = remoteEventHub.activeThreadIds();
+              for (const activeId of active) remoteEventHub.publish(activeId, ping);
+              appendDiagLog(
+                `attach-file backfill-ping name=${name.slice(0, 12)} mapped=${remoteId ? remoteId.slice(0, 12) : "-"} subs=0 → broadcast=${active.length}`,
+              );
+            }
+          } catch {
+            /* 推送失败不影响入库 */
+          }
+        },
+      });
     } catch {
       /* never let one bad request kill the channel; the next sweep retries */
     }
@@ -7241,6 +7619,28 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
         const cur = getConfig();
         updateConfig({ trustedTools: [...new Set([...(cur.trustedTools || []), trustedTool])] });
         trustedAdded = trustedTool;
+      }
+      // 反向同步（2026-11-04）：桌面端点了「允许/取消」后，已配对的手机/PWA 得把
+      // 那张审批卡收起来——否则手机上会永远挂着一张已经失效的卡（用户点了还会报
+      // 「已失效」，体验上像卡死）。
+      //
+      // 与 `respondUi` 里那条 `pi:extuiResolved` 恰好是一对：那边是手机答→桌面收，
+      // 这边是桌面答→手机收。两端都靠「别再展示这条 id」实现，不需要额外状态。
+      //
+      // ⚠️ 渲染层传的 `args.threadId` 是**本地桥 id**（会话文件路径或临时 id），
+      // 不是手机侧 threadId：`remoteIdForSession` 只认 `.jsonl`。临时/新会话拿不到
+      // → 再回退到 `remoteLocalToId`（sessionFile → remoteId 的正式映射表）。
+      const resolvedRemoteId = resolveRemoteIdForLocal(args.threadId);
+      if (resolvedRemoteId) {
+        remoteUiRequests.delete(args.id);
+        remoteEventHub.publish(resolvedRemoteId, {
+          kind: "ui.resolved",
+          data: { id: args.id, source: "desktop" },
+        });
+        appendDiagLog(`ui-resolved broadcast id=${args.id.slice(0, 16)} thread=${resolvedRemoteId.slice(0, 12)}`);
+      } else {
+        // 取证：广播漏发时能分清是「本地 id 没映射到远端」还是「手机端没处理」。
+        appendDiagLog(`ui-resolved skipped (no remote thread for local id) id=${args.id.slice(0, 16)}`);
       }
       return { ok: true, ...(trustedAdded ? { trustedAdded } : {}) };
     },

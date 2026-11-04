@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { FileCategory } from "../../../shared/file-kind";
 
 /**
  * Modern line-style file-type icons (same stroke language as icons.tsx),
@@ -18,8 +19,31 @@ type Cat =
   | "sheet"
   | "slide"
   | "image"
+  | "audio"
+  | "video"
   | "archive"
   | "file";
+
+/**
+ * 共用分类（`src/shared/file-kind.ts`）→ 本组件的 Cat。
+ *
+ * 聊天里的附件卡片走这张表（与 PWA / 安卓同源）；本文件自己的 EXT_CAT 仍是
+ * 侧栏文件树用的更细的一套（react / config / html / css）——两套不冲突：
+ * 调用方给了 `cat` 就不查 EXT_CAT。
+ */
+export const FILE_CATEGORY_TO_CAT: Record<FileCategory, Cat> = {
+  archive: "archive",
+  pdf: "pdf",
+  doc: "doc",
+  sheet: "sheet",
+  slide: "slide",
+  code: "code",
+  text: "text",
+  image: "image",
+  audio: "audio",
+  video: "video",
+  other: "file",
+};
 
 const EXT_CAT: Record<string, Cat> = {
   ".ts": "code", ".mts": "code", ".cts": "code", ".js": "code", ".mjs": "code", ".cjs": "code",
@@ -40,6 +64,10 @@ const EXT_CAT: Record<string, Cat> = {
   ".svg": "image", ".bmp": "image", ".ico": "image", ".avif": "image",
   ".zip": "archive", ".tar": "archive", ".gz": "archive", ".tgz": "archive", ".rar": "archive",
   ".7z": "archive", ".bz2": "archive",
+  ".mp3": "audio", ".m4a": "audio", ".aac": "audio", ".ogg": "audio", ".opus": "audio",
+  ".flac": "audio", ".wav": "audio", ".weba": "audio",
+  ".mp4": "video", ".m4v": "video", ".mov": "video", ".webm": "video", ".mkv": "video",
+  ".avi": "video",
 };
 
 /** macOS Finder-style colors: white page + folded corner + colored bottom band. */
@@ -56,6 +84,8 @@ const FINDER_COLORS: Record<Cat, string> = {
   sheet: "#32D74B",
   slide: "#FF9F0A",
   image: "#FF375F",
+  audio: "#AF52DE",
+  video: "#FF9F0A",
   archive: "#A8A29E",
   file: "", // plain page, no band
 };
@@ -132,6 +162,16 @@ const WIN_BADGES: Record<Cat, WinBadge> = {
         <path d="m5 18.6 2-2.1 1.4 1.4 1.7-1.7 1.9 2" strokeWidth={1.3} />
       </>
     ),
+  },
+  audio: {
+    color: "#AF52DE",
+    glyph: (
+      <path d="M8 19.4V15.6l-2.4.5v3.3a1.2 1.2 0 1 0 .8 1.1V17l4-1v2a1.2 1.2 0 1 0 .8 1.1v-6.6z" strokeWidth={1.1} fill="#fff" stroke="none" />
+    ),
+  },
+  video: {
+    color: "#FF9F0A",
+    glyph: <path d="m6 14.5 3 1.7 3-1.7v3.4l-3 1.7-3-1.7z" strokeWidth={1.2} />,
   },
   archive: {
     color: "#8E8E93",
@@ -263,6 +303,18 @@ const GLYPHS: Record<Cat, ReactNode> = {
       <path d="m5 18 5-5 3 3 3-3 3 3" />
     </>
   ),
+  audio: (
+    <>
+      <path d="M11 5 6 9H3v6h3l5 4z" />
+      <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
+    </>
+  ),
+  video: (
+    <>
+      <rect x="3" y="5" width="13" height="14" rx="2" />
+      <path d="m16 10 5-3v10l-5-3z" />
+    </>
+  ),
   archive: (
     <>
       <rect x="4" y="7" width="16" height="13" rx="2" />
@@ -274,17 +326,24 @@ const GLYPHS: Record<Cat, ReactNode> = {
 
 export function FileTypeIcon({
   ext,
+  cat: explicitCat,
   isDir = false,
   size = 14,
   variant = "windows",
 }: {
   ext?: string;
+  /** 已归好的大类（聊天附件用共用分类表，见 src/shared/file-kind.ts）；给了就不再查后缀。 */
+  cat?: FileCategory;
   isDir?: boolean;
   size?: number;
   /** windows = Explorer app-badge docs; finder = macOS Finder filled documents; line = SF-Symbols strokes. */
   variant?: "line" | "finder" | "windows";
 }) {
-  const cat: Cat = isDir ? "dir" : EXT_CAT[(ext || "").toLowerCase()] || "file";
+  const cat: Cat = isDir
+    ? "dir"
+    : explicitCat
+      ? FILE_CATEGORY_TO_CAT[explicitCat]
+      : EXT_CAT[(ext || "").toLowerCase()] || "file";
   if (variant === "windows") return <WindowsGlyph cat={cat} size={size} />;
   if (variant === "finder") return <FinderGlyph cat={cat} size={size} />;
   return (

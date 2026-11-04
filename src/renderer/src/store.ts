@@ -113,6 +113,9 @@ export function parseUserMessage(text: string): ParsedUserMessage {
       consumed = true;
       const attachment: ViewAttachment = { name };
       const path = readAttribute(attrs, "path");
+      // 可读名：内容寻址后 name 是 64 位哈希，界面上显示它没有意义（手机/桌面都一样）。
+      const label = readAttribute(attrs, "label");
+      if (label) attachment.label = label;
       const note = readAttribute(attrs, "note");
       const error = readAttribute(attrs, "error");
       if (path) attachment.path = path;

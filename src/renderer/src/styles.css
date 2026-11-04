@@ -1503,8 +1503,9 @@ body.sidebar-resizing * {
   width: 28px;
   height: 28px;
   border-radius: var(--radius-sm);
-  color: var(--accent);
-  background: rgba(46, 125, 82, .1);
+  /* 彩色文件类型图标（FileTypeIcon）自带底色与形制：这里不再叠一层绿色底
+     （叠了会与图标的白色页身打架，看着发脏），只留着位作用。 */
+  background: transparent;
 }
 .msg-user-file-copy {
   display: grid;
@@ -9804,8 +9805,7 @@ mark.hl {
   box-shadow: var(--ring-accent);
 }
 :root[data-theme="dark"] .msg-user-file-icon {
-  background: #2d4d3b;
-  color: #92e1ad;
+  background: transparent;
 }
 :root[data-theme="dark"] .msg-user-file-name {
   color: #e8eef0;

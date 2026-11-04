@@ -1,6 +1,6 @@
 {
   "name": "mpi",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "piRuntimeVersion": "1.5.0",
   "private": true,
   "license": "MIT",
@@ -35,6 +35,7 @@
     "test:todos": "node --experimental-strip-types scripts/test-todo-store.mjs",
     "test:quote": "node --experimental-strip-types scripts/test-quote.mjs",
     "test:image-notes": "node --experimental-strip-types scripts/test-image-notes.mjs",
+    "test:file-kind": "node --experimental-strip-types scripts/test-file-kind.mjs",
     "test:quickadd": "node --experimental-strip-types scripts/test-quick-add-date.mjs",
     "test:config": "node --experimental-strip-types scripts/test-config-inherit.mjs",
     "test:markdown": "node --experimental-strip-types scripts/test-markdown-autolink.mjs",

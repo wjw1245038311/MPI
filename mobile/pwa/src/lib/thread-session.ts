@@ -144,14 +144,21 @@ function textOfContent(content: unknown): string {
  * 剥了——客户端因此**根本不知道这条消息里有视频**，于是一辈子不显示、也不会去补快照
  * （手机端 2026-09-28 就是如此）。主机现在会额外补一个 `{type:"video",omitted:true}` 块。
  */
-function mediaPartsOfContent(content: unknown): Array<{ type: "image" | "video"; name?: string; mimeType?: string }> {
+/**
+ * 事件通道里的媒体占位块 → 触发补拉快照。
+ *
+ * `file` / `audio` 也算（2026-11-04）：agent 递交附件时事件里只带
+ * `{type:"file", omitted:true}`，真块在快照——不补拉的话卡片要等下一次重订阅才出现
+ * （用户看到的是「没有卡片」）。
+ */
+function mediaPartsOfContent(content: unknown): Array<{ type: "image" | "video" | "file" | "audio"; name?: string; mimeType?: string }> {
   if (!Array.isArray(content)) return [];
   return content.flatMap((item) => {
     if (!item || typeof item !== "object") return [];
     const part = item as Record<string, unknown>;
-    if (part.type !== "image" && part.type !== "video") return [];
+    if (part.type !== "image" && part.type !== "video" && part.type !== "file" && part.type !== "audio") return [];
     return [{
-      type: part.type as "image" | "video",
+      type: part.type as "image" | "video" | "file" | "audio",
       name: typeof part.name === "string" ? part.name : undefined,
       mimeType: typeof part.mimeType === "string" ? part.mimeType : undefined,
     }];
@@ -552,7 +559,15 @@ export class ThreadSession {
       // 抹掉就变成又一次黑箱等待。
       handoff: this.view.handoff ?? null,
       cachedAt,
-      pendingUi: this.view.pendingUi, // a pending approval survives the resync
+      // 审批卡：本地挂着的卡要跟主机核对一下——手机在后台断线时会**错过**
+      // `ui.resolved`（桌面已经点了「允许」），而这里默认保留旧卡（为了不在
+      // 断线期间丢卡），结果就是一张已经失效的卡片永远挂着（2026-11-04 真机）。
+      //
+      // 判据分两种，**不能一刀切**：
+      //   - 快照带 `pendingUiId`（新主机）→ 有且仅当它是本地这张的 id 才留；
+      //     主机说「没有挂着的卡」（null）就清掉，主机说是**别的** id 就换成那张。
+      //   - 字段缺省（旧主机）→ 保持原样（旧主机根本没有这个字段，不能据此清卡）。
+      pendingUi: this.resolvePendingUiAfterResync(snapshot.pendingUiId),
     });
     // 快照已落地：解除「等快照期间先缓冲」，再按序重放缓冲帧（它们可能不在快照里）。
     this.awaitingSnapshot = false;
@@ -768,6 +783,16 @@ export class ThreadSession {
         }
         break;
       }
+      case "ui.resolved": {
+        // 别的端（桌面）已经应答了——把本页挂着的卡收起来，并记住这个 id，
+        // 避免重连后补发的事件又把卡弹回来（2026-11-04）。
+        const resolvedId = payload.data?.id;
+        if (typeof resolvedId === "string" && resolvedId) {
+          this.respondedUiIds.add(resolvedId);
+          if (this.view.pendingUi?.id === resolvedId) this.patch({ pendingUi: null });
+        }
+        break;
+      }
       default:
         // Other kinds are ignored by the simplified reducer.
         break;
@@ -912,6 +937,30 @@ export class ThreadSession {
         listener(this.view);
       } catch { /* listeners must never break the session */ }
     }
+  }
+
+  /**
+   * resync 时校对本地审批卡（见调用处注释）。
+   *
+   * 三种输入：
+   *   - `undefined`：旧主机没有这个字段 → 原样保留（不能据此清卡）。
+   *   - `null`：主机说没有挂着的卡 → 清掉（本地那张已经失效）。
+   *   - `"<id>"`：主机还挂着这张 → 本地是它就留；是**别的** id 也留（那张卡的
+   *     内容得等 `ui.request` 事件补，快照不带卡片正文）；本地没有卡则什么都不做。
+   */
+  private resolvePendingUiAfterResync(pendingUiId: string | null | undefined): RemoteUiRequest | null {
+    const local = this.view.pendingUi;
+    if (pendingUiId === undefined) return local; // 旧主机：保持原状
+    if (pendingUiId === null) {
+      // 主机已经没有挂着的卡 → 本地这张是残留。
+      if (local) this.respondedUiIds.add(local.id);
+      return null;
+    }
+    if (!local) return null; // 本地没有卡：等 ui.request 事件推正文过来
+    if (local.id === pendingUiId) return local; // 还挂着同一张
+    // 主机挂着另一张：本地这张一定已经失效了，先清掉；新卡等事件。
+    this.respondedUiIds.add(local.id);
+    return null;
   }
 }
 

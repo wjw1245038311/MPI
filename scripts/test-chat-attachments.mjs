@@ -6,7 +6,7 @@
 //   2. 主进程能按文件名安全地把它递给 <video>，且支持 Range（拖进度条）。
 // 这里钉死三件事：两侧解析规则不能漂移、文件名白名单挡得住路径穿越、Range 解析正确。
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { register } from "node:module";
@@ -134,6 +134,103 @@ const envelope = (name, path) => `<file name="${name}" path="${path}" attach="vi
   for (const parsed of [image, video, audio, file]) {
     assert.ok(!parsed.text.includes("attach="), "信封必须从可见文本里剔掉");
   }
+}
+
+// --- 1c. 桌面拖入的普通文件必须变成媒体引用（2026-11-04 修）--------------------
+// 事故：桌面端拖入/选中 pdf、xlsx、zip 这类普通文件发到手机，手机端只看到一行
+// `<file name="报表.xlsx" path="[path]" note="attached (binary or large; not inlined)" />`，
+// 拿不到本体也没法下载（用户原话「根本没法用」）。根因是 processAttachments 只把
+// 图片和视频转成块，其余走**不带 attach=** 的裸引用，快照不为它生成块。
+//
+// 修后：二进制/大文件先进内容寻址对象库，再发 `attach="media" kind=…` 引用；
+// 纯文本小文件仍内联全文、**不出卡片**（用户 2026-11-04 的决定）。
+// 这里钉住三件事：① 计划判定不会把二进制文件误送进内联分支；② 生成的引用能被
+// 三端解析器（主机 splitMediaRefs / 桌面 parseUserMessage）原样认出来；③ 入库失败要
+// 退回可用的裸引用而不是静默丢消息。
+{
+  const refs = await import("../src/main/chat-attachment-refs.ts");
+
+  // ① 文本/二进制的分界。
+  assert.equal(refs.shouldInlineDesktopText(1000, true), true, "小文本文件应内联（给 agent 读）");
+  assert.equal(refs.shouldInlineDesktopText(refs.DESKTOP_INLINE_TEXT_MAX_BYTES + 1, true), false, "超 500KB 的文本不再内联");
+  assert.equal(refs.shouldInlineDesktopText(1024, false), false, "非文本永远不走内联（哪怕很小）");
+
+  // ② 入库 → 引用 → 三端解析（真落盘一遍，不造假数据）。
+  const binPath = join(TEMP, "desktop-report.xlsx");
+  writeFileSync(binPath, Buffer.from("fake-xlsx-bytes-" + Date.now()));
+  const plan = refs.planDesktopFile(
+    { abs: binPath, label: "报表.xlsx", size: statSync(binPath).size, mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+    {
+      inline: false,
+      store: (args) => storeSide.storeObject({ sourcePath: args.sourcePath, label: args.label, mime: args.mime }),
+      mediaKind: hostSide.mediaKindForMime("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "报表.xlsx"),
+    },
+  );
+  assert.equal(plan.kind, "ref", "普通文件必须走入库 + 媒体引用（不是裸 <file>）");
+  assert.equal(plan.mediaKind, "file", "xlsx 应判成 kind=file（不是 video）");
+  assert.ok(storeSide.hasObject(plan.name), "字节必须真的进了对象库（否则客户端按需拉会 404）");
+
+  const envelope = refs.desktopFileRefEnvelope({ name: plan.name, abs: plan.abs, size: plan.size, label: "报表.xlsx", mediaKind: plan.mediaKind });
+  // 主机侧：能被剥成 kind=file 的引用（快照据此生成 file 块）。
+  const hostParsed = hostSide.splitMediaRefs(`看下${envelope}`);
+  assert.equal(hostParsed.text, "看下", "引用必须从给模型的正文里剔掉（否则气泡里露 XML）");
+  assert.equal(hostParsed.refs.length, 1, "必须生成一条引用");
+  assert.equal(hostParsed.refs[0].kind, "file", "kind 必须是 file");
+  assert.equal(hostParsed.refs[0].name, plan.name, "name 必须是对象库名字（客户端靠它拉字节）");
+  assert.equal(hostParsed.refs[0].label, "报表.xlsx", "可读名必须带上（否则界面上是 64 位哈希）");
+  assert.ok(hostParsed.refs[0].key?.startsWith("sha256:"), "内容寻址的对象必须带 key");
+  assert.equal(hostParsed.refs[0].size, statSync(binPath).size, "大小要带上（卡片副标题）");
+
+  // 桌面侧：必须变成附件卡片（而不是消失）。
+  const deskParsed = parseUserMessage(`看下${envelope}`);
+  assert.equal(deskParsed.attachments.length, 1, "桌面端应看到一张文件卡片");
+  assert.equal(deskParsed.attachments[0].label, "报表.xlsx", "可读名要带到桌面卡片上（否则界面显示 64 位哈希）");
+  assert.equal(deskParsed.attachments[0].name, plan.name, "name 保留对象库名字（预览/取字节要用它）");
+  assert.ok(deskParsed.attachments[0].path, "卡片必须带 path（点开要在 MPI 里预览）");
+
+  // 去重：同一内容再发一次不重复落盘（内容寻址）。
+  const again = refs.planDesktopFile(
+    { abs: binPath, label: "报表.xlsx", size: statSync(binPath).size, mime: "application/octet-stream" },
+    { inline: false, store: (args) => storeSide.storeObject({ sourcePath: args.sourcePath, label: args.label, mime: args.mime }), mediaKind: "file" },
+  );
+  assert.equal(again.name, plan.name, "同一内容必须命中同一个对象（不重复占空间）");
+
+  // ③ 入库失败 → 退回裸引用（不带 attach=），agent 仍能按路径读，不静默丢消息。
+  const failed = refs.planDesktopFile(
+    { abs: binPath, label: "报表.xlsx", size: 1, mime: "application/octet-stream" },
+    { inline: false, store: () => null, mediaKind: "file" },
+  );
+  assert.equal(failed.kind, "plain", "入库失败应退回裸引用");
+  const fallback = refs.desktopFilePlainEnvelope({ abs: binPath, label: "报表.xlsx", size: 1, mime: "x" }, failed.reason);
+  assert.ok(fallback.includes("报表.xlsx") && fallback.includes("path="), "兜底引用仍要带名字与路径");
+  assert.ok(!fallback.includes("attach="), "兜底引用不能带 attach= 标记（否则快照会生成一个拉不到字节的块）");
+  assert.equal(hostSide.splitMediaRefs(fallback).refs.length, 0, "没标记的引用不会被剥成块——正是兜底想要的");
+  console.log("ok - 1c：桌面拖入的普通文件 → 对象库 + media 引用（三端可下载；文本小文件仍内联）");
+}
+
+// --- 1d. 工具结果里的媒体引用必须被剥掉（2026-11-04 真机事故）-------------------
+// `mpi_attach_file` 把引用作为**工具结果**回给 agent。当时快照只对用户/助手正文
+// 跑 splitVideoRefs，tool 结果原样透传 → 手机气泡里露出一大段 XML：
+//
+//     <file name="07027e91…" label="测试2.docx" path="C:\Users\…" attach="media" … />
+//
+// 现在 tool 结果也过同一个剥除器，引用转成 file 块（与正文引用同一套分发）。
+// 这里钉住剥除器本身的行为（ipc.ts 的调用点就是直接用它）。
+{
+  const resultWithRef = [
+    "Sent `测试2.docx` into the conversation.",
+    "",
+    `<file name="${'0'.repeat(64)}" label="测试2.docx" path="/x/测试2.docx" attach="media" kind="file" key="sha256:${'0'.repeat(64)}" size="10112" note="media attachment; playable/viewable in MPI clients" />`,
+  ].join("\n");
+
+  const split = hostSide.splitMediaRefs(resultWithRef);
+  assert.equal(split.refs.length, 1, "工具结果里的引用必须被拾出来（否则客户端拿不到文件块）");
+  assert.equal(split.refs[0].kind, "file");
+  assert.equal(split.refs[0].label, "测试2.docx");
+  assert.ok(!split.text.includes("attach="), `工具结果里的标签必须剔掉，否则手机端会把 XML 当正文画（实际：${split.text.slice(0, 80)}）`);
+  assert.ok(!split.text.includes("name=\""), "标签属性不能残留");
+  assert.ok(split.text.includes("Sent `测试2.docx` into the conversation."), "人话那部分要留着");
+  console.log("ok - 1d：工具结果里的媒体引用被剥掉并转成 file 块（不留 XML）");
 }
 
 // --- 2. chatatt:// URL + 文件名白名单 ------------------------------------------
@@ -321,6 +418,23 @@ console.log("ok - P2：别名解析 / 块序置换合并（含拒绝异内容）
   assert.equal(storeSide.materializeIntoWorkspace({ name: key, workspaceDir: "relative/dir" }), null, "相对路径一律拒（不能猜工作目录）");
   assert.equal(storeSide.materializeIntoWorkspace({ name: "0".repeat(64), workspaceDir: workspace }), null, "对象不存在 → null");
   console.log("ok - P3：非媒体对象入库 + 降落到 <cwd>/mpi-inbox/（同名加后缀 / 目录不逃逸 / 相对路径拒绝）");
+
+  // 2026-11-04 事故：agent 递交的 xlsx 落成了 `.bin`（对象路径在**登记前**算，
+  // `objectExtFor` 查索引查不到 → mime 是 octet-stream → 兜底 .bin）。后果：
+  // 桌面按 .bin 预览、安卓「打开方式」也认不出类型。现在 objectPath 接收 labelHint。
+  {
+    const xlsxPath = join(TEMP, "测试.xlsx");
+    writeFileSync(xlsxPath, Buffer.from("fake-xlsx" + Date.now()));
+    const octet = storeSide.storeObject({ sourcePath: xlsxPath, label: "测试.xlsx", mime: "application/octet-stream" });
+    assert.ok(octet?.abs.endsWith(".xlsx"), `mime 不认识时必须靠名字后缀定扩展名（实际落成 ${octet?.abs}）`);
+    assert.ok(storeSide.resolveChatAttachment(octet.name)?.endsWith(".xlsx"), "按 key 回源也应拿到 .xlsx 那份");
+
+    const zipPath = join(TEMP, "包.zip");
+    writeFileSync(zipPath, Buffer.from("fake-zip" + Date.now()));
+    const zip = storeSide.storeObject({ sourcePath: zipPath, label: "包.zip", mime: "application/octet-stream" });
+    assert.ok(zip?.abs.endsWith(".zip"), `压缩包也要保留原名后缀（实际 ${zip?.abs}）`);
+    console.log("ok - 对象落盘保留原名后缀（mime 为 octet-stream 时靠 label，不落成 .bin）");
+  }
 }
 
 // --- 7. P3-S3a：给 agent 的图片字节从对象库回读 -------------------------------
@@ -339,6 +453,27 @@ console.log("ok - P2：别名解析 / 块序置换合并（含拒绝异内容）
   assert.equal(forAgent.thumb, thumbName, "缩略图名一并带回去");
   assert.equal(storeSide.agentImageFor("d".repeat(64)), null, "对象不在 → null（调用方回落到客户端内联数据）");
   console.log("ok - P3-S3a：agent 取图走对象库（原图字节 / mime / 可读名 / 缩略图名 / 缺失返回 null）");
+}
+
+// --- 8. 桌面端：工具回执里的机器元数据 → 卡片 + 从输出文本里抽掉 ---------------
+// 2026-11-04 桌面反馈：手机端靠快照出卡，桌面渲染的是事件流/历史条目——不解析这行
+// 元数据的话，对话框里一张卡也没有，只有一串原始 JSON。
+{
+  const line = JSON.stringify({ mpi_attachment: { name: "a".repeat(64), label: "测试6.docx", size: 10255 } });
+  const receipt = `Sent "测试6.docx" (10.0 KB) into this conversation.\n${line}`;
+  const meta = rendererSide.parseAttachMetaLine(receipt);
+  assert.equal(meta?.label, "测试6.docx", "卡片标题用可读名");
+  assert.equal(meta?.size, 10255, "卡片副标题用字节数");
+  assert.equal(meta?.name, "a".repeat(64), "取字节用对象名");
+  const stripped = rendererSide.stripAttachMetaLine(receipt);
+  assert.ok(!stripped.includes("mpi_attachment"), "给人看的文本里不能留机器行");
+  assert.ok(stripped.includes("Sent \"测试6.docx\""), "自然语言回执要保留");
+  assert.equal(rendererSide.parseAttachMetaLine("普通输出，没有元数据"), null);
+  assert.equal(rendererSide.parseAttachMetaLine('{"mpi_attachment":{"label":"x"}}'), null, "缺 name 时不能造卡");
+  // 流式中可能只有半行：不报错、不吐卡，下一次渲染再解析。
+  assert.equal(rendererSide.parseAttachMetaLine('{"mpi_attachment":{"name":"ab'), null);
+  assert.equal(rendererSide.stripAttachMetaLine("没有元数据"), "没有元数据");
+  console.log("ok - 桌面端：mpi_attachment 解析成卡片 + 机器行不外露");
 }
 
 rmSync(TEMP, { recursive: true, force: true });

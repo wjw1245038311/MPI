@@ -15,6 +15,51 @@ export function chatAttachmentUrl(name: string): string {
   return `chatatt://attachment/?name=${encodeURIComponent(name)}`;
 }
 
+// ---- agent 主动递交的附件（mpi_attach_file 的机器元数据）---------------------
+
+/**
+ * 工具回执里那行机器元数据：`{"mpi_attachment":{"name","label","size"}}`。
+ *
+ * 为什么要解析它（2026-11-04 桌面反馈）：手机端靠快照生成卡片，而桌面渲染的是
+ * **事件流**（工具回执文本），它没有快照那条路——不解析的话用户看到的是
+ * 「发完了」+ 一行原始 JSON，对话框里一张卡都没有。
+ */
+export function parseAttachMetaLine(text: string): { name: string; label: string; size?: number } | null {
+  if (!text || !text.includes("mpi_attachment")) return null;
+  for (const line of text.split("\n")) {
+    if (!line.includes("mpi_attachment")) continue;
+    try {
+      const parsed = JSON.parse(line.trim()) as { mpi_attachment?: { name?: unknown; label?: unknown; size?: unknown } };
+      const meta = parsed?.mpi_attachment;
+      if (!meta || typeof meta.name !== "string" || !meta.name) return null;
+      const size = typeof meta.size === "number" && Number.isFinite(meta.size) && meta.size > 0 ? meta.size : undefined;
+      return {
+        name: meta.name,
+        label: typeof meta.label === "string" && meta.label ? meta.label : meta.name,
+        ...(size ? { size } : {}),
+      };
+    } catch {
+      return null; // 半截行（流式中）不报错，下一次渲染再试
+    }
+  }
+  return null;
+}
+
+/**
+ * 把机器元数据那一行从**给人看**的文本里抽掉（其它内容原样保留）。
+ *
+ * 机器行不是给人读的：它出现在工具输出里只会让用户看到一串哈希。卡片由
+ * parseAttachMetaLine 负责渲。
+ */
+export function stripAttachMetaLine(text: string): string {
+  if (!text || !text.includes("mpi_attachment")) return text;
+  return text
+    .split("\n")
+    .filter((line) => !(line.includes("mpi_attachment") && parseAttachMetaLine(line)))
+    .join("\n")
+    .trimEnd();
+}
+
 // ---- agent 主动递交的附件引用（mpi_attach_file）------------------------------
 
 /** `<file … />` 信封（只取自闭合的那种）。 */

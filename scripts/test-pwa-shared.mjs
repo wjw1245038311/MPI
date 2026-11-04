@@ -83,3 +83,31 @@ assert.deepEqual(
 );
 
 console.log("pwa-shared protocol equivalence tests passed");
+
+// --- 类型定义漂移哨兵 -----------------------------------------------------------------
+// 上面比的是**函数行为**，类型 union / 接口字段的漂移它完全测不到（2026-10-19 记过一次
+// 教训）。审批卡的 `pendingUiId` 就是这种：两边函数都正常，但只有一边声明了字段，
+// 另一边读出来永远是 undefined → 手机端会一直挂着一张失效的卡片。
+// 这里按源码文本比对接口块，必它两边同时存在（或同时不存在）。
+{
+  const { readFileSync } = await import("node:fs");
+  const { resolve } = await import("node:path");
+  const ROOT = resolve(import.meta.dirname, "..");
+  const read = (p) => readFileSync(resolve(ROOT, p), "utf8");
+
+  // 可选字段写 `name?:`；必填字段（nextSeq）只写 `name:`，所以按「名字后跟 : 或 ?:」判。
+  // String.raw 必需：普通模板字符串会把 \b 与 \s 吃成字面字符，正则直接报错。
+  const FIELD_RE = (name) => new RegExp(String.raw`\b${name}\s*\??:`);
+  const FIELDS = ["pendingUiId", "incremental", "nextSeq"];
+  const desktopSrc = read("src/main/remote/protocol.ts");
+  const sharedSrc = read("mobile/shared/protocol.ts");
+  for (const field of FIELDS) {
+    assert.ok(FIELD_RE(field).test(desktopSrc), `桌面协议缺少 ${field}`);
+    assert.ok(FIELD_RE(field).test(sharedSrc), `PWA 协议副本缺少 ${field}（两边要同步）`);
+  }
+
+  // 安卓那份是 Kotlin，同样得有这个字段（否则手机永远读不到）。
+  const kotlinSrc = read("mobile/app/app/src/main/java/com/mpi/app/protocol/ThreadModels.kt");
+  assert.ok(kotlinSrc.includes("pendingUiId"), "安卓 ThreadSnapshotDto 缺少 pendingUiId");
+  console.log("ok - 三端快照都带 pendingUiId（审批卡 resync 校对靠它）");
+}

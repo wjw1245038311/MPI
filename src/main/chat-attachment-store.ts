@@ -250,9 +250,11 @@ const OBJECT_EXT_CANDIDATES = [...new Set([...VIDEO_EXT_LIST, ".jpg", ".jpeg", "
  *
  * 为什么对象文件名要带扩展名：服务端靠它给 Content-Type（网页端 <video>/<img> 不吃
  * octet-stream），快照也靠它推 mime——key 本身没有任何可读信息。 */
-function objectExtFor(key: string, mimeHint?: string): string {
+function objectExtFor(key: string, mimeHint?: string, labelHint?: string): string {
   const record = readIndex()[key];
-  return mediaExtForMime(mimeHint || record?.mime, record?.label);
+  // label 优先取「索引里已登记的」（那是首次上传时的可读名），其次取调用方刚给的那个
+  // （新建对象时索引里还没有——见 objectPath 的注释）。
+  return mediaExtForMime(mimeHint || record?.mime, record?.label || labelHint);
 }
 
 /** 对象所在的分片目录（`objects/<前两位>`，避免单目录堆几十万文件）。 */
@@ -260,9 +262,16 @@ function objectShardDir(key: string): string {
   return join(dir(false), "objects", key.slice(0, 2));
 }
 
-/** 对象的落盘路径（含扩展名；不建目录，建目录由写入方负责）。 */
-function objectPath(key: string, mimeHint?: string): string {
-  return join(objectShardDir(key), key + objectExtFor(key, mimeHint));
+/**
+ * 对象的落盘路径（含扩展名；不建目录，建目录由写入方负责）。
+ *
+ * `labelHint` 是**新建对象时**必须传的：`objectExtFor` 先查索引，而新建对象那一刻
+ * 还没登记（`storeObject` 先写文件、后 `registerObject`），于是只能靠 mime 推扩展名；
+ * mime 不认识时（如 `application/octet-stream`）必须靠名字后缀——不传 label 就落成
+ * `.bin`，桌面预览与安卓「打开方式」都拿不到正确类型（2026-11-04 测试.xlsx 事故）。
+ */
+function objectPath(key: string, mimeHint?: string, labelHint?: string): string {
+  return join(objectShardDir(key), key + objectExtFor(key, mimeHint, labelHint));
 }
 
 /** 已存在的对象文件（索引里的 mime 优先，其次探测候选扩展名）；没有 → null。 */
@@ -492,7 +501,7 @@ export function storeObject(args: {
     const known = hasObject(key);
     if (!known) {
       mkdirSync(objectShardDir(key), { recursive: true });
-      const abs = objectPath(key, args.mime);
+      const abs = objectPath(key, args.mime, args.label);
       if (source) copyFileSync(source, abs);
       else writeFileSync(abs, args.bytes as Buffer, { flag: "wx" });
     }

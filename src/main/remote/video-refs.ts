@@ -156,7 +156,11 @@ export function mediaKindForMime(mimeType: string | undefined, name?: string): M
 export const mediaExtForMime = (mimeType: string | undefined, name?: string): string => {
   const mime = String(mimeType || "").toLowerCase();
   const known = MEDIA_EXT_BY_MIME[mime];
-  if (known) return known;
+  // `application/octet-stream` 是「**不知道**是什么」（不是「是一堆字节」）：直接采信它
+  // 就会把 xlsx/zip 全落成 `.bin`，桌面预览与手机「打开方式」都认不出类型
+  // （2026-11-04 测试.xlsx 事故：agent 递交时 mime 就是 octet-stream）。
+  // 所以它和「表里没有」同等对待：继续用名字后缀。
+  if (known && mime !== "application/octet-stream") return known;
   // mime 不认识时用原名后缀（比如 .docx/.xlsx 这种没必要穷举的）
   const ext = name ? extname(String(name)).toLowerCase() : "";
   return /^\.[a-z0-9]{1,8}$/.test(ext) ? ext : ".bin";
@@ -289,6 +293,41 @@ export function splitMediaRefs(text: string): { text: string; refs: MediaRef[] }
 
 /** 兼容别名（旧调用方名字；行为已泛化到媒体）。 */
 export const splitVideoRefs = splitMediaRefs;
+
+/**
+ * 把一条消息的 `content` 里的媒体引用剥掉（**事件通道**用，快照有自己的路径）。
+ *
+ * 为什么单独一个纯函数：2026-11-04 真机发现事件通道只处理用户消息，助手自己写的
+ * `<file … attach="media" … />`（`mpi_attach_file` 要求 agent 把引用原样贴出来）
+ * 会直接当正文显示在手机上。这段判定必须能脱离 Electron 单测
+ * （`test-chat-attachments` 的 1e 组），而 ipc.ts 拖整条依赖链、导不进去。
+ *
+ * 只剥 `type: "text"` 块里的引用，其它块（image/thinking/toolCall…）原样返回；
+ * 没有引用时**返回原对象**（不制造无谓拷贝，事件通道每帧都跑）。
+ */
+export function stripMediaRefsFromContent(content: unknown): { content: unknown; refs: MediaRef[] } {
+  const parts: any[] | null =
+    typeof content === "string"
+      ? [{ type: "text", text: content }]
+      : Array.isArray(content)
+        ? content
+        : null;
+  if (!parts) return { content, refs: [] };
+  const refs: MediaRef[] = [];
+  let changed = false;
+  const next = parts.map((part: any) => {
+    if (part?.type !== "text" || typeof part.text !== "string") return part;
+    const split = splitMediaRefs(part.text);
+    if (!split.refs.length) return part;
+    refs.push(...split.refs);
+    changed = true;
+    return { ...part, text: split.text };
+  });
+  if (!changed) return { content, refs: [] };
+  // 字符串输入 → 字符串输出（保持形状，否则主机的 remoteSafeEventValue 会把它当数组）。
+  if (typeof content === "string") return { content: String((next[0] as any)?.text ?? ""), refs };
+  return { content: next, refs };
+}
 
 /** `<file … />` 标签与属性解析（两段式：先括标签，再逐个取属性）。 */
 const FILE_TAG_RE = /<file\s+([^>]*?)\s*\/>/g;

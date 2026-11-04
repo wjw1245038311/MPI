@@ -66,6 +66,8 @@ async function main() {
     const { parsePairingLink, runPairing, attachAutoReauth } = await import("../mobile/pwa/src/lib/pairing.ts");
     const { RelayClient } = await import("../mobile/pwa/src/lib/relay-client.ts");
     const { ThreadSession, mergeIncremental, isHostMessageId, pickAnchorId } = await import("../mobile/pwa/src/lib/thread-session.ts");
+    // 补拉信号的**真实形状**由主机侧提供（不在测试里手写，否则形状退化了测不出来）。
+    const { attachBackfillEvent } = await import("../src/main/attach-file-core.ts");
     const { shouldShowThinkingIndicator } = await import("../mobile/pwa/src/lib/thinking-indicator.ts");
     const { SnapshotCache } = await import("../mobile/pwa/src/lib/snapshot-cache.ts");
     const { makeEnvelope, responseFor } = await import("../mobile/shared/protocol.ts");
@@ -76,6 +78,11 @@ async function main() {
     const THREAD_RUNNING = "thread-running";
     /** 专用于视频块映射/占位/乐观回显（见下面 tsVideo 块）。 */
     const THREAD_VIDEO = "thread-video";
+    /** 专用于「附件入库后的补拉信号」（见下面 tsAttach 块）。 */
+    const THREAD_ATTACH = "thread-attach";
+    /** 附件是否已入库：入库前快照没有卡片，入库后的快照才有（主机的真实时序）。 */
+    let attachStored = false;
+    let attachResyncs = 0;
     let seqCounter = 0;
     let resyncCount = 0;
     let subscribeCount = 0;
@@ -106,6 +113,35 @@ async function main() {
           // response itself must notify view listeners (UI was stuck on loading).
           if ((request.type === "thread.subscribe" || request.type === "thread.resync") && request.threadId === "t-idle") {
             ctx.send(responseFor(request, { snapshot: { id: "t-idle", projectId: "p1", title: "Idle thread", preview: "", updatedAt: Date.now(), messageCount: 0, state: "idle", permission: "sandbox", cwdName: "demo", model: null, availableModels: [], skills: [], thinkingLevel: "off", messages: [], nextSeq: 0 } }));
+            return;
+          }
+          if ((request.type === "thread.subscribe" || request.type === "thread.resync") && request.threadId === THREAD_ATTACH) {
+            // 主机的真实时序：附件入库后快照才会把 file 块挂到调用它的那轮 assistant 上
+            // （见 ipc.ts 的 remoteMessages：toolAttachMetas / attachFileStored 台账）。
+            if (request.type === "thread.resync") attachResyncs += 1;
+            ctx.send(
+              responseFor(request, {
+                snapshot: {
+                  ...makeSnapshot("idle"),
+                  id: THREAD_ATTACH,
+                  messages: [
+                    { id: "u1", role: "user", text: "把报告发我" },
+                    {
+                      id: "a1",
+                      role: "assistant",
+                      ...(attachStored
+                        ? {
+                            blocks: [
+                              { type: "text", text: "发好了" },
+                              { type: "file", name: "abc123", label: "报告.docx", mimeType: "application/vnd.openxmlformats", size: 2048, omitted: true },
+                            ],
+                          }
+                        : { blocks: [{ type: "text", text: "发好了" }] }),
+                    },
+                  ],
+                },
+              }),
+            );
             return;
           }
           if ((request.type === "thread.subscribe" || request.type === "thread.resync") && request.threadId === THREAD_VIDEO) {
@@ -209,6 +245,14 @@ async function main() {
             const skip = gapArmed ? 1 : 0;
             gapArmed = false;
             ctx.send(makeEnvelope("thread.event", request.sessionId, { kind: "agent_settled", data: {} }, { threadId: THREAD_ID, seq: ++seqCounter + skip }));
+            return responseFor(request, { ok: true });
+          }
+          if (request.type === "thread.poke-attach") {
+            // Test hook: 复刻主机在 onStored 里真正发出的那一帧（形状来自 attach-file-core）。
+            // 这里故意**不在测试里手写形状**：形状写错了（曾经是 kind:"agent.event"）
+            // 客户端会整帧忽略，而这个测试必须能抓到那种退化。
+            attachStored = true;
+            ctx.send(makeEnvelope("thread.event", request.sessionId, attachBackfillEvent("abc123"), { threadId: THREAD_ATTACH, seq: ++seqCounter }));
             return responseFor(request, { ok: true });
           }
         },
@@ -464,6 +508,42 @@ async function main() {
       assert.deepEqual(echo.blocks.map((b) => b.type), ["video", "text"], "回显气泡要先视频后文字（与图片同一顺序）");
       assert.equal(echo.blocks[0].data, "BBBB");
       tsVideo.detach();
+    }
+
+    // --- 附件入库后的补拉信号（2026-11-04 真机最后一环）---------------------------------
+    // 事故：`mpi_attach_file` 递交附件后，手机端停在当前页面看不到卡片，必须手动切走
+    // 再切回（触发快照）才出现。根因不是快照内容，而是主机推的「去刷新」信号写成了
+    // `kind:"agent.event"`——两端客户端都拿 `payload.kind` switch pi 事件类型，于是整帧
+    // 落进 default 被静默忽略（主机日志 `backfill-ping … subs=1` 看着送达，客户端一次
+    // 快照都没拉）。这里用主机**真实**的 attachBackfillEvent 形状喂一遍：必须触发 resync、
+    // 且卡片出现在视图里。
+    {
+      const tsAttach = new ThreadSession(client, THREAD_ATTACH, { requestTimeoutMs: 3_000 });
+      await tsAttach.open();
+      const before = tsAttach.getSnapshot();
+      assert.equal(
+        before.messages.flatMap((m) => m.blocks).some((b) => b.type === "file"),
+        false,
+        "入库前快照里没有文件卡片（这就是用户此刻看到的样子）",
+      );
+      const resyncsBefore = attachResyncs;
+      await client.sendData(makeEnvelope("thread.poke-attach", "test-session", {}));
+      await waitFor(() => attachResyncs > resyncsBefore, "补拉信号 → 客户端立刻拉快照", 10_000);
+      await waitFor(
+        () => tsAttach.getSnapshot().messages.flatMap((m) => m.blocks).some((b) => b.type === "file"),
+        "补拉后卡片出现在当前页面（无需切走再切回）",
+        10_000,
+      );
+      const card = tsAttach.getSnapshot().messages.flatMap((m) => m.blocks).find((b) => b.type === "file");
+      assert.equal(card.label, "报告.docx", "卡片标题用可读名（不是 64 位哈希）");
+      assert.equal(card.size, 2048, "卡片带上字节数");
+      // 信号本身不能留下一条假消息：`{type:"video",omitted:true}` 占位块只用来触发补拉。
+      assert.equal(
+        tsAttach.getSnapshot().messages.length,
+        2,
+        "补拉信号不得在会话里留下多余气泡（全量快照替换掉临时占位）",
+      );
+      tsAttach.detach();
     }
 
     // --- P1 Tier 1：本地缓存播种（切回来先出内容，不再白屏「加载会话…」） --------------

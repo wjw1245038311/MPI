@@ -309,6 +309,23 @@ async function part2FullStack() {
     await sleep(150);
     assert.equal(ts.getSnapshot().pendingUi, null, "answered id never re-pops");
 
+    // F2. 桌面端应答 → 手机端卡片收起（2026-11-04）。
+    // 事故：桌面点了「允许」，手机上那张卡还挂着；用户再点会报「已失效」，像卡死。
+    const second = { id: "ui-2b", method: "select", title: "把文件发送到会话？", options: ["允许发送", "取消"] };
+    threadListener({ kind: "ui.request", data: { request: second } });
+    await waitFor(() => ts.getSnapshot().pendingUi?.id === "ui-2b", "another approval card appears");
+    threadListener({ kind: "ui.resolved", data: { id: "ui-2b", source: "desktop" } });
+    await sleep(150);
+    assert.equal(ts.getSnapshot().pendingUi, null, "桌面应答后手机端的卡必须收起");
+    // 收起后同一条再推一次也不能弹回来（重连补发事件会重放它）。
+    threadListener({ kind: "ui.request", data: { request: second } });
+    await sleep(150);
+    assert.equal(ts.getSnapshot().pendingUi, null, "已被别的端应答的 id 不能再弹");
+    // 别的 id 不受影响（不能“一收俱收”）。
+    const third = { id: "ui-3", method: "select", title: "另一条确认", options: ["确定"] };
+    threadListener({ kind: "ui.request", data: { request: third } });
+    await waitFor(() => ts.getSnapshot().pendingUi?.id === "ui-3", "unrelated card still shows");
+
     // G. a second request without diff (confirm) also flows through
     threadListener({ kind: "ui.request", data: { request: { id: "ui-2", method: "confirm", title: "确认执行？" } } });
     await waitFor(() => ts.getSnapshot().pendingUi?.id === "ui-2", "second approval card appears");

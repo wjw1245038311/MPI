@@ -211,12 +211,60 @@ export function checkAttachRequest(req: AttachFileRequest, opts: { requireInside
 }
 
 /** 回执：主进程写完对象库后回给扩展的内容。 */
+/**
+ * 「附件已入库」的**补拉信号**（主机 → 远程客户端，走事件通道）。
+ *
+ * 为什么需要它：附件是入库到会话文件里的，而快照只在（重）订阅/重同步时生成。
+ * 不推信号的话，卡片要等用户手动切走再切回（触发快照）才出现——用户看到的就是
+ * 「卡片根本没出现」（2026-11-04 真机）。
+ *
+ * 为什么 `kind` 必须是 `message_start`：两端客户端（安卓 `ThreadSession.applyEvent`、
+ * PWA `thread-session.applyEvent`）都是拿 `payload.kind` 直接 `switch` 的，而 kind 的
+ * 取值就是 **pi 事件类型**（`String(piEvent.type)`，见 ipc.ts 的 remotePublish）。
+ * 第一版这里写成了 `kind: "agent.event"`——把「通道包装」误当成协议，于是两端都落进
+ * default 分支被静默忽略：日志上 `backfill-ping … subs=1` 看着送达了，客户端却一次
+ * 快照都没拉（同一时刻 `remote-req resync` 一条也没有）。
+ *
+ * 为什么占位块故意写成 `video`：客户端只判断「这条消息里有没有媒体占位块」——
+ * 安卓 `contentNeedsMediaBackfill` / PWA `mediaPartsOfContent` 从 2026-09-28 就认
+ * image/video，`file`/`audio` 是 2026-11-04 才加的。用 video 意味着**现场的老 APK
+ * 也能补拉**，不用为了一个信号强推一次安装包。占位块本身不会被渲染：安卓在
+ * 「无文本 + 无待发回显」时提前 return，PWA 那条临时气泡会被随后的全量快照整份替换。
+ *
+ * 真正的卡片内容仍以**快照**为准（含 mime/label/size），这里只提供「去拉」的理由。
+ */
+export function attachBackfillEvent(name: string): { kind: string; data: Record<string, unknown> } {
+  return {
+    kind: "message_start",
+    data: {
+      event: {
+        type: "message_start",
+        message: {
+          role: "user",
+          // 空文本：这不是一条真消息，而是一个「媒体已经在库里，去拉快照」的信号。
+          content: [{ type: "video", omitted: true, name }],
+        },
+      },
+    },
+  };
+}
+
 export interface AttachFileReceipt {
   id: string;
   ok: boolean;
-  /** 成功时给 agent 的完整引用文本（原样贴进回复正文即可） */
+  /**
+   * 成功时给**主机内部**用的完整引用文本。
+   *
+   * ⚠️ 不要回给模型（2026-11-04 设计修正）：这段 `<file …/>` 一旦出现在工具回执里，
+   * 模型就会把它当成「应该贴进回复的东西」抄进正文，各端剥不胜剥。发送与出卡完全由
+   * MPI 内部完成，模型只需要知道「发成了、叫什么」。
+   */
   text?: string;
   error?: string;
   size?: number;
   key?: string;
+  /** 可读文件名（回给模型看的那部分，不含任何标记语法）。 */
+  label?: string;
+  /** 本会话的 sessionFile（主进程据此把附件挂到对的消息上，不依赖模型转述）。 */
+  sessionFile?: string;
 }
