@@ -3746,8 +3746,16 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           rememberAttachmentNames(threadId, [name]);
         },
       };
+      // 绑哪个地址：**广告了局域网直连就必须绑 0.0.0.0**（2026-11-05 真机：手机拿到的
+      // 直连基地址是 http://<lan-ip>:8899，而服务只监听 127.0.0.1 → 局域网永远连不上，
+      // 所有下载都退回中继（同网段也走 ECS，慢）。没广告内网地址时仍只绑回环，
+      // 公网那条路径走反向隧道到 127.0.0.1，不需要暴露网卡。
+      // 安全边界不变：每个请求仍要带 HMAC 能力令牌（绑定会话/设备/方向/时限），
+      // 并在设备有 E2E 密钥时强制载荷加密。
+      const attachmentHost = lanModeStatus().attachmentBase ? "0.0.0.0" : "127.0.0.1";
       const server = createAttachmentServer({
         ...shared,
+        host: attachmentHost,
         port: ATTACHMENT_HTTP_PORT,
         // 附件载荷的应用层加密（见 attachment-crypto.ts）：ikm 用该设备的 E2E 会话密钥
         // （配对时协商、永不经过网络）；没建好会话的设备拿不到密钥 → 加密请求被拒。
@@ -3768,6 +3776,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         try {
           attachmentHttpsServer = createAttachmentServer({
             ...shared,
+            host: attachmentHost,
             port: ATTACHMENT_HTTPS_PORT,
             tls: { certFile: config.attachmentCertFile, keyFile: config.attachmentKeyFile },
           });
