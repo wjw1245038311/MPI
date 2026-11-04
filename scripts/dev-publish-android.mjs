@@ -38,7 +38,7 @@
  *   · 版本号自增会弄脏 `mobile/app/app/build.gradle.kts`（开发期用；之后自行 revert 或提交）。
  */
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
@@ -71,11 +71,51 @@ const shareBase = (valueOf("--share") || process.env.MPI_SEAFILE_SHARE || "").re
  */
 const publicBase = (valueOf("--public-base") || process.env.MPI_PUBLIC_DOWNLOAD_BASE || "").replace(/\/+$/, "");
 
-const log = (m) => console.log(m);
-const sha256Upper = (file) => createHash("sha256").update(readFileSync(file)).digest("hex").toUpperCase();
+const log = (m) => console.log(m);const sha256Upper = (file) => createHash("sha256").update(readFileSync(file)).digest("hex").toUpperCase();
 
 function currentVersion() {
   return /versionName\s*=\s*"([^"]+)"/.exec(readFileSync(GRADLE, "utf8"))?.[1] ?? null;
+}
+
+/** 版本号比大小（非数字段当 0；`0.10 > 0.9`）。与 Kotlin 侧 compareVersions 同义。 */
+function compareVersions(a, b) {
+  const left = String(a).replace(/^v/, "").split(/[.\-+]/);
+  const right = String(b).replace(/^v/, "").split(/[.\-+]/);
+  const size = Math.max(left.length, right.length);
+  for (let i = 0; i < size; i += 1) {
+    const l = Number.parseInt(left[i] ?? "0", 10) || 0;
+    const r = Number.parseInt(right[i] ?? "0", 10) || 0;
+    if (l !== r) return l - r;
+  }
+  return 0;
+}
+
+/**
+ * 把 publish 目录里「基线 → 本次版本」的增量包都收进 patches[]。
+ *
+ * 客户端（Updater.bestPatch）按「基线 == 当前安装版本」挑一条，所以**跨一版也能走增量**；
+ * 文件本身仍由 `scripts/make-apk-patch.mjs` 逐对生成（生成慢、发布快，两步分开）。
+ * 条目只写相对文件名 → 客户端按清单所在目录拼绝对地址（与 `file` 字段同样处理）。
+ */
+function collectPatches(version, apkName) {
+  if (!existsSync(PUBLISH_DIR)) return [];
+  const escaped = version.replace(/\./g, "\\.");
+  const pattern = new RegExp(`^mpi-android-native-(\\d[\\w.]*)-to-${escaped}\\.patch$`);
+  const found = [];
+  for (const name of readdirSync(PUBLISH_DIR)) {
+    if (name === apkName) continue;
+    const hit = pattern.exec(name);
+    if (!hit) continue;
+    const file = join(PUBLISH_DIR, name);
+    found.push({
+      from: hit[1],
+      file: name,
+      size: statSync(file).size,
+      sha256: sha256Upper(file),
+    });
+  }
+  found.sort((a, b) => compareVersions(b.from, a.from));
+  return found;
 }
 
 function bumpVersion() {
@@ -164,6 +204,14 @@ function main() {
     sha256: sha,
     publishedAt: new Date().toISOString().slice(0, 10),
     github: "",
+    // 多基线增量：把 publish 目录里所有 `...-<from>-to-<version>.patch` 都列出来，
+    // 客户端挑基线等于自己版本的那条（生成的还是单条 patch 老格式，这里只负责不丢）。
+    // ⚠ 生成多份增量包仍是外部步骤（scripts/make-apk-patch.mjs 逐对生成）。
+    ...(() => {
+      const patches = collectPatches(version, downloadUrl, apkName);
+      if (!patches.length) return {};
+      return { patch: patches[0], patches };
+    })(),
   };
   const manifestJson = `${JSON.stringify(manifest, null, 2)}\n`;
   if (!dryRun) {

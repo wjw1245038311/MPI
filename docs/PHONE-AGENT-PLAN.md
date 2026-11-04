@@ -263,8 +263,13 @@ scroll / key / tap_xy / handoff`）：名称、描述、schema **不随权限状
 
 1. **多基线**：清单从 `patch` 改 `patches: [{from, file, size, sha256}]`，客户端挑匹配项；
    发布侧只保留最近 N=3 版基线（体积换覆盖率，代价是发布脚本要维护窗口）。
+   **状态（2026-11-05）**：客户端已支持（`Updater.bestPatch`）；`scripts/dev-publish-android.mjs`
+   已会把 publish 目录里所有 `...-<from>-to-<version>.patch` 收进 `patches[]`（并用最新基线
+   兼容老客户端的 `patch` 字段）。**还缺**：批量生成多份增量包（现在仍靠
+   `scripts/make-apk-patch.mjs` 逐对生成）+ 保留/清理 N 版基线的窗口策略。
 2. **流式合并**：COPY 用 `RandomAccessFile`/`FileChannel.transferTo` 直接写新文件，内存 O(1)；
-   彻底消除 3× 峰值。这是**上线前必做项**，不是优化。
+   彻底消除 3× 峰值。这是**上线前必做项**，不是优化。**状态**：已实现
+   （`ApkPatch.applyStreaming`，单测覆盖 COPY/ADD/越界/长度不符）。
 3. **可重现构建 + 大资产不压缩**：`jniLibs` 不压缩、`zipalign -p` 4096 对齐、assets 固定顺序与
    固定 mtime（`SOURCE_DATE_EPOCH`）。依据：现在 32 MB 的包能产出 15 MB 增量，说明 zip 压缩把
    字节流打乱了——对齐后同样的改动应该降到几 MB。
