@@ -1,6 +1,6 @@
 {
   "name": "mpi",
-  "version": "0.14.5",
+  "version": "0.14.6",
   "piRuntimeVersion": "1.5.0",
   "private": true,
   "license": "MIT",
@@ -177,7 +177,8 @@
     "test:pwa-relay-client-heal": "node --experimental-transform-types scripts/test-pwa-relay-client-heal.mjs",
     "test:update-cmd": "node --experimental-transform-types scripts/test-update-cmd.mjs",
     "test:account": "node --experimental-strip-types scripts/test-account-api.mjs",
-    "test:account-desktop": "node --experimental-strip-types scripts/test-account-desktop.mjs"
+    "test:account-desktop": "node --experimental-strip-types scripts/test-account-desktop.mjs",
+    "test:account-pwa": "node --experimental-strip-types scripts/test-account-pwa.mjs"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.73.3",

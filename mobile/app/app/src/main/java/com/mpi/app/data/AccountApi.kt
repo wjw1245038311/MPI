@@ -129,6 +129,32 @@ class AccountApi(
         }
     }
 
+    /**
+     * 发送短信验证码。返回 **dev 模式的码**（服务端没配短信服务时直接回给客户端，
+     * 方便自测）；正常模式返回 null，真码只会发到手机上。
+     */
+    suspend fun sendCode(identifier: String): String? = withContext(Dispatchers.IO) {
+        val payload = json.encodeToString(CodeRequest.serializer(), CodeRequest(identifier = identifier.trim()))
+        val request = Request.Builder().url(base() + "/acct/code").post(payload.toRequestBody(mediaJson)).build()
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw AccountApiException(errorOf(body, response.code), response.code)
+            // {sent, dev, devCode?}
+            val parsed = runCatching { json.decodeFromString(CodeResponse.serializer(), body) }.getOrNull()
+            parsed?.devCode?.takeIf { it.isNotBlank() }
+        }
+    }
+
+    /** 用验证码登录/注册（register=true 时创建账号）。 */
+    suspend fun loginWithCode(identifier: String, code: String, register: Boolean): AccountSession =
+        postSession(if (register) "/acct/register" else "/acct/login", identifier, password = "", code = code.trim())
+
+    @Serializable
+    private data class CodeRequest(val identifier: String)
+
+    @Serializable
+    private data class CodeResponse(val sent: Boolean = false, val dev: Boolean = false, val devCode: String? = null, val error: String? = null)
+
     @Serializable
     private data class BlobWrite(val ciphertext: String, val revision: Int)
 
@@ -141,11 +167,16 @@ class AccountApi(
         val error: String? = null,
     )
 
-    private suspend fun postSession(path: String, identifier: String, password: String): AccountSession =
+    private suspend fun postSession(
+        path: String,
+        identifier: String,
+        password: String,
+        code: String = "",
+    ): AccountSession =
         withContext(Dispatchers.IO) {
             val payload = json.encodeToString(
                 Credentials.serializer(),
-                Credentials(identifier = identifier.trim(), password = password),
+                Credentials(identifier = identifier.trim(), password = password, code = code),
             )
             val request = Request.Builder()
                 .url(base() + path)
@@ -175,7 +206,7 @@ class AccountApi(
         }
 
     @Serializable
-    private data class Credentials(val identifier: String, val password: String)
+    private data class Credentials(val identifier: String, val password: String = "", val code: String = "")
 
     @Serializable
     private data class ErrorBody(val error: String? = null)
@@ -188,6 +219,10 @@ class AccountApi(
             "ALREADY_EXISTS" -> "这个账号已经注册过了"
             "BAD_CREDENTIALS" -> "账号或密码不对"
             "RATE_LIMITED" -> "尝试太频繁，请稍后再试"
+            "CODE_TOO_SOON" -> "验证码刚发过，请 1 分钟后再试"
+            "BAD_CODE" -> "验证码不对或已过期"
+            "SMS_PHONE_ONLY" -> "验证码登录只支持手机号"
+            "SMS_FAILED" -> "短信发送失败，请稍后再试"
             "TOO_LARGE" -> "同步包太大（上限约 500KB）"
             "NOT_AUTHENTICATED" -> "登录已失效，请重新登录"
             null -> "账号服务返回 $status"

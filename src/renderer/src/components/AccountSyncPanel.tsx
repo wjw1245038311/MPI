@@ -21,6 +21,11 @@ export function AccountSyncPanel({ language }: { language: "zh" | "en" }) {
   const [status, setStatus] = useState<AccountStatus | null>(null);
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  // 验证码登录（2026-11-05）：供应商可后配，dev 模式下服务端直接回码，便于自测。
+  const [mode, setMode] = useState<"password" | "code">("password");
+  const [code, setCode] = useState("");
+  const [syncPassword, setSyncPassword] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -59,6 +64,18 @@ export function AccountSyncPanel({ language }: { language: "zh" | "en" }) {
       setError(String((e as Error)?.message || e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const sendCode = async () => {
+    setError(null);
+    setInfo(null);
+    try {
+      const devCode = await window.pi.account.sendCode(identifier);
+      setCodeSent(true);
+      setInfo(devCode ? `${zh ? "已发送（自测码：" : "Sent (dev code: "}${devCode}）` : zh ? "验证码已发到手机" : "Code sent");
+    } catch (e) {
+      setError(String((e as Error)?.message || e));
     }
   };
 
@@ -126,22 +143,62 @@ export function AccountSyncPanel({ language }: { language: "zh" | "en" }) {
               autoComplete="username"
             />
           </label>
-          <label className="set-field">
-            <span>{zh ? "密码（至少 8 位）" : "Password (8+ chars)"}</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-            />
-          </label>
+          <div className="set-row-actions">
+            <button className={`set-btn ${mode === "password" ? "" : "ghost"}`} onClick={() => setMode("password")}>
+              {zh ? "密码登录" : "Password"}
+            </button>
+            <button className={`set-btn ${mode === "code" ? "" : "ghost"}`} onClick={() => setMode("code")}>
+              {zh ? "验证码登录" : "SMS code"}
+            </button>
+          </div>
+          {mode === "password" ? (
+            <label className="set-field">
+              <span>{zh ? "密码（至少 8 位）" : "Password (8+ chars)"}</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </label>
+          ) : (
+            <>
+              <label className="set-field">
+                <span>{zh ? "6 位验证码" : "6-digit code"}</span>
+                <div className="set-row-actions">
+                  <input
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/D/g, "").slice(0, 6))}
+                    inputMode="numeric"
+                  />
+                  <button className="set-btn ghost" disabled={!identifier.trim()} onClick={() => void sendCode()}>
+                    {codeSent ? (zh ? "重新发送" : "Resend") : zh ? "发送" : "Send"}
+                  </button>
+                </div>
+              </label>
+              <label className="set-field">
+                <span>{zh ? "同步密码（8 位以上，用于加密同步包）" : "Sync password (8+, encrypts the blob)"}</span>
+                <input type="password" value={syncPassword} onChange={(e) => setSyncPassword(e.target.value)} />
+              </label>
+              <p className="set-hint">
+                {zh
+                  ? "验证码只证明「这个手机号是你的」；同步包仍用这把密码派生的密钥加密，换机时才解得开。"
+                  : "The code proves the number is yours; the blob is still encrypted with a key derived from this password."}
+              </p>
+            </>
+          )}
           <div className="set-row-actions">
             <button
               className="set-btn"
-              disabled={busy || !identifier.trim() || password.length < 8}
+              disabled={busy || !identifier.trim() || (mode === "code" ? code.length !== 6 || syncPassword.length < 8 : password.length < 8)}
               onClick={() =>
                 void run(
-                  () => window.pi.account.signIn({ identifier, password, register: false }),
+                  () =>
+                    window.pi.account.signIn(
+                      mode === "code"
+                        ? { identifier, code, syncPassword, register: false }
+                        : { identifier, password, register: false },
+                    ),
                   zh ? "已登录并完成首次同步" : "Signed in and synced",
                 )
               }
@@ -150,10 +207,15 @@ export function AccountSyncPanel({ language }: { language: "zh" | "en" }) {
             </button>
             <button
               className="set-btn ghost"
-              disabled={busy || !identifier.trim() || password.length < 8}
+              disabled={busy || !identifier.trim() || (mode === "code" ? code.length !== 6 || syncPassword.length < 8 : password.length < 8)}
               onClick={() =>
                 void run(
-                  () => window.pi.account.signIn({ identifier, password, register: true }),
+                  () =>
+                    window.pi.account.signIn(
+                      mode === "code"
+                        ? { identifier, code, syncPassword, register: true }
+                        : { identifier, password, register: true },
+                    ),
                   zh ? "已注册并完成首次同步" : "Registered and synced",
                 )
               }

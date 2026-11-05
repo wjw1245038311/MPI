@@ -120,6 +120,9 @@ fun SettingsScreen(
     account: AccountUi?,
     onAccountDialog: (Boolean) -> Unit,
     onAccountSignIn: (String, String, Boolean) -> Unit,
+    onAccountSendCode: (String) -> Unit,
+    onAccountSignInWithCode: (String, String, Boolean) -> Unit,
+    onAccountSyncPassword: (String) -> Unit,
     onAccountSyncNow: () -> Unit,
     onAccountSignOut: () -> Unit,
     onClose: () -> Unit,
@@ -417,6 +420,9 @@ fun SettingsScreen(
         AccountSyncDialog(
             account = account,
             onSignIn = onAccountSignIn,
+            onSendCode = onAccountSendCode,
+            onSignInWithCode = onAccountSignInWithCode,
+            onSyncPassword = onAccountSyncPassword,
             onSyncNow = onAccountSyncNow,
             onSignOut = onAccountSignOut,
             onDismiss = { onAccountDialog(false) },
@@ -861,12 +867,19 @@ private fun DiagRow(label: String, value: String, monospace: Boolean = false) {
 private fun AccountSyncDialog(
     account: AccountUi,
     onSignIn: (String, String, Boolean) -> Unit,
+    onSendCode: (String) -> Unit,
+    onSignInWithCode: (String, String, Boolean) -> Unit,
+    onSyncPassword: (String) -> Unit,
     onSyncNow: () -> Unit,
     onSignOut: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var identifier by remember { mutableStateOf(account.identifier.orEmpty()) }
     var password by remember { mutableStateOf("") }
+    // 登录方式：密码 / 验证码（2026-11-05：供应商可后配，先用 dev 码自测）。
+    var useCode by remember { mutableStateOf(false) }
+    var code by remember { mutableStateOf("") }
+    var syncPassword by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -894,15 +907,60 @@ private fun AccountSyncDialog(
                         label = { Text("手机号或邮箱") },
                         enabled = !account.busy,
                     )
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        label = { Text("密码（至少 8 位）") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        enabled = !account.busy,
-                    )
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        TextButton(onClick = { useCode = false }, enabled = !account.busy) {
+                            Text(if (!useCode) "· 密码登录" else "密码登录")
+                        }
+                        TextButton(onClick = { useCode = true }, enabled = !account.busy) {
+                            Text(if (useCode) "· 验证码登录" else "验证码登录")
+                        }
+                    }
+                    if (!useCode) {
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("密码（至少 8 位）") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            enabled = !account.busy,
+                        )
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedTextField(
+                                value = code,
+                                onValueChange = { code = it.filter(Char::isDigit).take(6) },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                label = { Text("6 位验证码") },
+                                enabled = !account.busy,
+                            )
+                            TextButton(onClick = { onSendCode(identifier) }, enabled = !account.busy) {
+                                Text(if (account.codeSent) "重新发送" else "发送")
+                            }
+                        }
+                        OutlinedTextField(
+                            value = syncPassword,
+                            onValueChange = { syncPassword = it; onSyncPassword(it) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("同步密码（8 位以上，用于加密同步包）") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            enabled = !account.busy,
+                        )
+                        Text(
+                            text = "验证码只用来证明「这个手机号是你的」；同步包仍需这把密码派生的密钥，换机时才解得开。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MpiTheme.colors.textFaint,
+                        )
+                    }
                     Text(
                         text = "密码只在本机派生同步密钥，服务器看不到你的配对与设备令牌。",
                         style = MaterialTheme.typography.bodySmall,
@@ -924,9 +982,12 @@ private fun AccountSyncDialog(
             if (account.loggedIn) {
                 TextButton(onClick = onSyncNow, enabled = !account.busy) { Text("立即同步") }
             } else {
+                val ready = !account.busy && if (useCode) code.length == 6 && syncPassword.length >= 8 else identifier.isNotBlank() && password.length >= 8
                 TextButton(
-                    onClick = { onSignIn(identifier, password, false) },
-                    enabled = !account.busy && identifier.isNotBlank() && password.length >= 8,
+                    onClick = {
+                        if (useCode) onSignInWithCode(identifier, code, false) else onSignIn(identifier, password, false)
+                    },
+                    enabled = ready,
                 ) { Text("登录") }
             }
         },
@@ -935,8 +996,10 @@ private fun AccountSyncDialog(
                 TextButton(onClick = onSignOut, enabled = !account.busy) { Text("退出登录") }
             } else {
                 TextButton(
-                    onClick = { onSignIn(identifier, password, true) },
-                    enabled = !account.busy && identifier.isNotBlank() && password.length >= 8,
+                    onClick = {
+                        if (useCode) onSignInWithCode(identifier, code, true) else onSignIn(identifier, password, true)
+                    },
+                    enabled = !account.busy && if (useCode) code.length == 6 && syncPassword.length >= 8 else identifier.isNotBlank() && password.length >= 8,
                 ) { Text("注册") }
             }
         },

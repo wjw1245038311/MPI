@@ -58,13 +58,14 @@ const api = {
     account: {
       status: (): Promise<{ loggedIn: boolean; identifier: string | null; lastSyncAt: number | null; revision: number; base: string | null }> =>
         ipcRenderer.invoke("account:status"),
-      signIn: (args: { identifier: string; password: string; register?: boolean }): Promise<{
+      signIn: (args: { identifier: string; password?: string; code?: string; syncPassword?: string; register?: boolean }): Promise<{
         loggedIn: boolean;
         identifier: string | null;
         lastSyncAt: number | null;
         revision: number;
         restored?: boolean;
       }> => ipcRenderer.invoke("account:signIn", args),
+      sendCode: (identifier: string): Promise<string | null> => ipcRenderer.invoke("account:sendCode", { identifier }),
       sync: (): Promise<{ loggedIn: boolean; lastSyncAt: number | null; revision: number; restored?: boolean }> =>
         ipcRenderer.invoke("account:sync"),
       signOut: (): Promise<{ loggedIn: boolean }> => ipcRenderer.invoke("account:signOut"),

@@ -117,6 +117,10 @@ enum class VoiceChatState { Listening, Transcribing, Thinking, Speaking }
 data class AccountUi(
     val identifier: String? = null,
     val busy: Boolean = false,
+    /** 已发出验证码（界面上显示「重新发送」）。 */
+    val codeSent: Boolean = false,
+    /** dev 模式拿到的码（服务端没配短信服务时直接给，便于自测）。 */
+    val devCode: String? = null,
     val lastSyncAt: Long? = null,
     val revision: Int = 0,
     val error: String? = null,
@@ -414,6 +418,76 @@ class AppViewModel(
                 }
             }
         }
+    }
+
+    /** 发送验证码（短信登录）。 */
+    fun accountSendCode(identifier: String) {
+        val id = identifier.trim()
+        if (id.isEmpty()) {
+            _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(error = "先填手机号")) }
+            return
+        }
+        scope.launch {
+            _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(busy = true, error = null, info = null)) }
+            try {
+                val devCode = accountApiOrThrow().sendCode(id)
+                _ui.update {
+                    it.copy(
+                        account = (it.account ?: AccountUi()).copy(
+                            busy = false,
+                            codeSent = true,
+                            devCode = devCode,
+                            info = if (devCode != null) "已发送（自测码：$devCode）" else "验证码已发到手机",
+                        ),
+                    )
+                }
+            } catch (e: Exception) {
+                _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(busy = false, error = e.message ?: "发送失败")) }
+            }
+        }
+    }
+
+    /** 决定用哪条路登录：有验证码就用验证码，否则用密码。 */
+    fun accountSignInWithCode(identifier: String, code: String, register: Boolean) {
+        val id = identifier.trim()
+        val trimmed = code.trim()
+        if (id.isEmpty() || trimmed.length != 6) {
+            _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(error = "填手机号和 6 位验证码")) }
+            return
+        }
+        scope.launch {
+            _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(busy = true, error = null, info = null)) }
+            try {
+                val api = accountApiOrThrow()
+                val session = api.loginWithCode(id, trimmed, register)
+                // 验证码登录没有密码 → 用一个**本地随机口令**派生同步密钥？不行：换机要能复现。
+                // 所以验证码登录的用户在首次同步时要求设置一个「同步密码」（见 syncPassword 逻辑）。
+                val key = if (pendingSyncPassword != null) {
+                    AcctCrypto.deriveKey(pendingSyncPassword!!, session.kdfSalt)
+                } else {
+                    // 已有 syncPassword（本机存储里带着）→ 用它；两者都没有就只能报错。
+                    throw IllegalStateException("验证码登录需要先设置同步密码（在登录界面下方设置）")
+                }
+                keyStore.saveAccount(
+                    AccountState(session = session, keyB64 = Base64.getEncoder().encodeToString(key)),
+                )
+                _ui.update { it.copy(account = AccountUi(identifier = session.identifier, dialogOpen = true, busy = true)) }
+                syncAccountLocked()
+                _ui.update {
+                    it.copy(account = (it.account ?: AccountUi()).copy(busy = false, info = if (register) "已注册并完成首次同步" else "已登录并完成同步"))
+                }
+            } catch (e: Exception) {
+                _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(busy = false, error = e.message ?: "登录失败")) }
+            }
+        }
+    }
+
+    /** 验证码登录时用的「同步密码」（只存内存：本次会话内有效）。 */
+    var pendingSyncPassword: String? = null
+        private set
+
+    fun setPendingSyncPassword(value: String) {
+        pendingSyncPassword = value.trim().ifEmpty { null }
     }
 
     /** 手动同步一次（登录后自动同步过，这里是兜底按钮）。 */

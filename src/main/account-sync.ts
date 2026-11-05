@@ -75,9 +75,17 @@ export interface SyncIdentity {
   trustedDevices: unknown[];
 }
 
+/** 删除墓碑（与手机端同一结构）：hostId + 删除时刻。 */
+export interface SyncTombstone {
+  hostId: string;
+  at: number;
+}
+
 export interface DesktopSyncPayload {
   version: number;
   updatedAt: number;
+  /** 已删除的主机（墓碑）：桌面不维护主机列表，只负责**带上**它们，让手机端跟随删除。 */
+  deleted?: SyncTombstone[];
   /** 主机身份（换机恢复 hostId 用）。 */
   identity?: SyncIdentity;
   /** 桌面设置白名单（语言 / 主题…）。 */
@@ -125,7 +133,28 @@ export function mergeDesktopPayload(
     updatedAt: Math.max(local.updatedAt || 0, remote.updatedAt || 0),
     identity: local.identity ?? remote.identity,
     settings,
+    deleted: mergeTombstones(local.deleted || [], remote.deleted || []),
   };
+}
+
+/** 墓碑保留期（与手机端一致）：90 天足够所有设备都同步到。 */
+export const TOMBSTONE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+export const TOMBSTONE_MAX = 200;
+
+/** 墓碑合并：同 hostId 取较新那条，丢掉过期的，按时间倒序截断。 */
+export function mergeTombstones(
+  local: SyncTombstone[],
+  remote: SyncTombstone[],
+  now: number = Date.now(),
+): SyncTombstone[] {
+  const newest = new Map<string, SyncTombstone>();
+  for (const stone of [...local, ...remote]) {
+    if (!stone?.hostId || typeof stone.at !== "number") continue;
+    if (now - stone.at > TOMBSTONE_TTL_MS) continue;
+    const kept = newest.get(stone.hostId);
+    if (!kept || stone.at > kept.at) newest.set(stone.hostId, { hostId: stone.hostId, at: stone.at });
+  }
+  return [...newest.values()].sort((a, b) => b.at - a.at).slice(0, TOMBSTONE_MAX);
 }
 
 export function encodePayload(payload: DesktopSyncPayload): Buffer {
@@ -230,6 +259,21 @@ function requestJson(
   });
 }
 
+/** 发送验证码；返回 dev 模式的码（服务端没配短信服务时直接回，便于自测）。 */
+export async function accountSendCode(
+  base: string,
+  identifier: string,
+  options: AccountHttpOptions = {},
+): Promise<string | null> {
+  const res = await requestJson(base, "/acct/code", {
+    method: "POST",
+    body: { identifier: identifier.trim() },
+    ...options,
+  });
+  if (res.status !== 200) throw apiError(res.status, res.json?.error);
+  return typeof res.json?.devCode === "string" && res.json.devCode ? String(res.json.devCode) : null;
+}
+
 export interface AccountSession {
   accountId: string;
   kdfSalt: string;
@@ -241,13 +285,17 @@ export interface AccountSession {
 /** 登录或注册；错误翻成中文文案（与手机端一致）。 */
 export async function accountSignIn(
   base: string,
-  input: { identifier: string; password: string; register: boolean },
+  input: { identifier: string; password?: string; code?: string; register: boolean },
   options: AccountHttpOptions = {},
 ): Promise<AccountSession> {
   const path = input.register ? "/acct/register" : "/acct/login";
   const res = await requestJson(base, path, {
     method: "POST",
-    body: { identifier: input.identifier.trim(), password: input.password },
+    body: {
+      identifier: input.identifier.trim(),
+      ...(input.password ? { password: input.password } : {}),
+      ...(input.code ? { code: input.code } : {}),
+    },
     ...options,
   });
   if (res.status !== 200 || !res.json?.token) {
@@ -340,6 +388,14 @@ function accountErrorText(status: number, code?: string): string {
       return "账号或密码不对";
     case "RATE_LIMITED":
       return "尝试太频繁，请稍后再试";
+    case "CODE_TOO_SOON":
+      return "验证码刚发过，请 1 分钟后再试";
+    case "BAD_CODE":
+      return "验证码不对或已过期";
+    case "SMS_PHONE_ONLY":
+      return "验证码登录只支持手机号";
+    case "SMS_FAILED":
+      return "短信发送失败，请稍后再试";
     case "TOO_LARGE":
       return "同步包太大（上限约 500KB）";
     case "NOT_AUTHENTICATED":

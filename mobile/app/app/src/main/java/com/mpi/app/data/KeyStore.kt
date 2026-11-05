@@ -63,6 +63,9 @@ interface KeyStore {
 
     suspend fun savePairing(record: PairingRecord)
 
+    suspend fun getTombstones(): List<Tombstone>
+    suspend fun saveTombstones(list: List<Tombstone>)
+
     suspend fun getAccount(): AccountState?
     suspend fun saveAccount(state: AccountState)
     suspend fun clearAccount()
@@ -80,6 +83,7 @@ class MemoryKeyStore : KeyStore {
     private var device: DeviceRecord? = null
     private val pairings = linkedMapOf<String, PairingRecord>()
     private var account: AccountState? = null
+    private var tombstones: List<Tombstone> = emptyList()
 
     override suspend fun getDevice(): DeviceRecord? = device
 
@@ -99,6 +103,12 @@ class MemoryKeyStore : KeyStore {
 
     override suspend fun listPairings(): List<PairingRecord> = pairings.values.toList()
 
+    override suspend fun getTombstones(): List<Tombstone> = tombstones
+
+    override suspend fun saveTombstones(list: List<Tombstone>) {
+        tombstones = list
+    }
+
     override suspend fun getAccount(): AccountState? = account
 
     override suspend fun saveAccount(state: AccountState) {
@@ -113,5 +123,6 @@ class MemoryKeyStore : KeyStore {
         device = null
         pairings.clear()
         account = null
+        tombstones = emptyList()
     }
 }

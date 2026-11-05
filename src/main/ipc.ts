@@ -13,6 +13,7 @@ import {
   accountBasesOf,
   accountGetBlob,
   accountPutBlob,
+  accountSendCode,
   accountSignIn,
   buildDesktopPayload,
   decodePayload,
@@ -5380,14 +5381,30 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
 
   ipcMain.handle("account:status", () => accountStatusOf(readAccountState()));
 
-  ipcMain.handle("account:signIn", async (_e, args: { identifier?: string; password?: string; register?: unknown }) => {
+  ipcMain.handle("account:sendCode", async (_e, args: { identifier?: string }) => {
+    const identifier = String(args?.identifier || "").trim();
+    if (!identifier) throw new Error("先填手机号");
+    return withAccountBase((base, caPem) => accountSendCode(base, identifier, { caPem }));
+  });
+
+  ipcMain.handle("account:signIn", async (_e, args: { identifier?: string; password?: string; code?: string; syncPassword?: string; register?: unknown }) => {
     const identifier = String(args?.identifier || "").trim();
     const password = String(args?.password || "");
-    if (!identifier || password.length < 8) throw new Error("账号必填，密码至少 8 位");
+    const code = String(args?.code || "").trim();
+    // 验证码登录：码证明身份，但同步包还需要一把**可携带**的密钥 → 要求同时给「同步密码」。
+    const viaCode = !password && code.length > 0;
+    const keySecret = viaCode ? String(args?.syncPassword || "") : password;
+    if (!identifier) throw new Error("账号必填");
+    if (viaCode) {
+      if (code.length !== 6) throw new Error("填 6 位验证码");
+      if (keySecret.length < 8) throw new Error("验证码登录需要设置「同步密码」（8 位以上，用于加密同步包）");
+    } else if (password.length < 8) {
+      throw new Error("密码至少 8 位");
+    }
     const result = await withAccountBase((base, caPem) =>
-      accountSignIn(base, { identifier, password, register: args?.register === true }, { caPem }),
+      accountSignIn(base, { identifier, ...(viaCode ? { code } : { password }), register: args?.register === true }, { caPem }),
     );
-    const key = deriveAccountKey(password, result.kdfSalt);
+    const key = deriveAccountKey(keySecret, result.kdfSalt);
     let state: StoredAccount = {
       identifier: result.identifier,
       accountId: result.accountId,

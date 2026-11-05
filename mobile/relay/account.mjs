@@ -14,10 +14,15 @@
  * 3. 账号标识：手机号或邮箱同一个输入框（规范化后做 key，避免 +86/空格/大小写差异）。
  * 4. 令牌：登录发 32 字节随机串，只存 sha256；有效期 30 天，单账号最多 8 个（旧的自动淘汰）。
  * 5. 存储：`<dir>/users.json` + `<dir>/blobs/<accountId>.json`，全部原子写（tmp + rename）。
+ * 6. **两种登录**（2026-11-05 追加）：密码，或**短信验证码**。
+ *      POST /acct/code {identifier} → 发 6 位码（10 分钟有效，同一账号 60s 一条 / 每小时 5 条）
+ *      POST /acct/login|register {identifier, code} → 验证码换令牌
+ *    发送：配了 ALIYUN_SMS_* 就走阿里云短信；没配则 **dev 模式**（写日志，且
+ *    ACCT_SMS_DEV=1（默认）时在响应里带 devCode），方便自测。配置齐全后 dev 自动关闭。
  *
  * 纯 Node（无第三方依赖），便于在中继那个极简运行时里跑。
  */
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -147,6 +152,20 @@ class AccountStore {
     return { account, token, exp };
   }
 
+  /** 只签发令牌（验证码登录用：身份已由码证明）。 */
+  issueToken(normalized) {
+    const account = this.findByIdentifier(normalized);
+    if (!account) return null;
+    const token = randomBytes(32).toString("base64url");
+    const exp = Date.now() + TOKEN_TTL_MS;
+    const tokens = (account.tokens || []).filter((entry) => entry.exp > Date.now());
+    tokens.push({ h: hashToken(token), exp });
+    account.tokens = tokens.slice(-MAX_TOKENS);
+    account.updatedAt = nowIso();
+    this.save();
+    return { account, token, exp };
+  }
+
   /** 令牌 → 账号（顺带清理过期令牌）。 */
   auth(token) {
     if (!token) return null;
@@ -182,6 +201,107 @@ class AccountStore {
     writeJsonAtomic(this.blobFile(accountId), record);
     return record;
   }
+}
+
+/**
+ * 验证码（登录用）。5 分钟太长、1 分钟太短；10 分钟 + 单次使用是常见取舍。
+ *
+ * 只存**哈希**：库文件泄露也不能直接拿去登录。每条记录带：exp（过期时刻）、
+ * used（用掉即失效）、attempts（错 5 次作废，防爆破）。
+ */
+class CodeStore {
+  constructor() {
+    this.items = new Map();
+  }
+
+  /** 生成并暂存；返回明文码与是否 dev 模式（dev = 没配短信服务）。 */
+  issue(identifierKey) {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    this.items.set(identifierKey, {
+      h: createHash("sha256").update(code).digest("base64url"),
+      exp: Date.now() + 10 * 60_000,
+      used: false,
+      attempts: 0,
+      sentAt: Date.now(),
+    });
+    this.prune();
+    return code;
+  }
+
+  /** 校验；成功即作废。 */
+  verify(identifierKey, code) {
+    const entry = this.items.get(identifierKey);
+    if (!entry || entry.used || entry.exp <= Date.now()) return false;
+    entry.attempts += 1;
+    if (entry.attempts > 5) {
+      this.items.delete(identifierKey);
+      return false;
+    }
+    const h = createHash("sha256").update(String(code || "")).digest("base64url");
+    if (h !== entry.h) return false;
+    entry.used = true;
+    return true;
+  }
+
+  /** 发送节流：同一账号 60s 一条。返回 false = 太频繁。 */
+  canSend(identifierKey, now = Date.now()) {
+    const entry = this.items.get(identifierKey);
+    return !entry || now - entry.sentAt >= 60_000;
+  }
+
+  prune(now = Date.now()) {
+    for (const [key, entry] of this.items) {
+      if (entry.exp <= now) this.items.delete(key);
+    }
+  }
+}
+
+/**
+ * 发短信：配了阿里云就真发，否则 dev 模式（返回 devCode，并由调用方写日志）。
+ *
+ * 环境变量：ALIYUN_SMS_ACCESS_KEY_ID / ALIYUN_SMS_ACCESS_KEY_SECRET /
+ *           ALIYUN_SMS_SIGN_NAME / ALIYUN_SMS_TEMPLATE_CODE（模板变量名默认 code）
+ */
+async function sendSmsCode(identifier, code, log) {
+  const keyId = process.env.ALIYUN_SMS_ACCESS_KEY_ID || "";
+  const secret = process.env.ALIYUN_SMS_ACCESS_KEY_SECRET || "";
+  const signName = process.env.ALIYUN_SMS_SIGN_NAME || "";
+  const templateCode = process.env.ALIYUN_SMS_TEMPLATE_CODE || "";
+  if (!keyId || !secret || !signName || !templateCode) {
+    log(`acct code for ${identifier.slice(0, 3)}****${identifier.slice(-2)} = ${code} (dev mode, no SMS provider)`);
+    return { sent: false, dev: process.env.ACCT_SMS_DEV !== "0" };
+  }
+  // 阿里云短信 RPC 签名（HMAC-SHA1）。只在真配了凭证时才走到这里。
+  const params = {
+    AccessKeyId: keyId,
+    Action: "SendSms",
+    Format: "JSON",
+    PhoneNumbers: identifier,
+    RegionId: "cn-hangzhou",
+    SignName: signName,
+    SignatureMethod: "HMAC-SHA1",
+    SignatureNonce: randomBytes(16).toString("hex"),
+    SignatureVersion: "1.0",
+    TemplateCode: templateCode,
+    TemplateParam: JSON.stringify({ code }),
+    Timestamp: new Date().toISOString().replace(/.d{3}Z$/, "Z"),
+    Version: "2017-05-25",
+  };
+  const canonical = Object.keys(params)
+    .sort()
+    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`)
+    .join("&");
+  const stringToSign = `GET&${encodeURIComponent("/")}&${encodeURIComponent(canonical)}`;
+  const signature = createHmac("sha1", `${secret}&`).update(stringToSign).digest("base64");
+  const url = `https://dysmsapi.aliyuncs.com/?Signature=${encodeURIComponent(signature)}&${canonical}`;
+  const res = await fetch(url);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.Code !== "OK") {
+    log(`acct sms failed status=${res.status} code=${body.Code || "?"} msg=${body.Message || ""}`);
+    return { sent: false, dev: false, error: true };
+  }
+  log(`acct sms sent to ${identifier.slice(0, 3)}****${identifier.slice(-2)}`);
+  return { sent: true, dev: false };
 }
 
 /** 简单的按 IP 滑动窗口（只用于登录/注册失败计数）。 */
@@ -225,6 +345,7 @@ class RateLimiter {
 export function createAccountApi(options) {
   const store = new AccountStore(options.dir);
   const limiter = new RateLimiter();
+  const codes = new CodeStore();
   const log = options.log || (() => {});
   const readBody = options.readBody;
   const clientIp = options.clientIp || (() => "unknown");
@@ -245,6 +366,24 @@ export function createAccountApi(options) {
     if (!path.startsWith("/acct/")) return false;
     const ip = clientIp(req);
 
+    // ---- 发送验证码 ----
+    if (path === "/acct/code") {
+      if (req.method !== "POST") return send(res, 405, { error: "METHOD_NOT_ALLOWED" }), true;
+      if (limiter.blocked(ip)) return send(res, 429, { error: "RATE_LIMITED" }), true;
+      const body = await readBody(req, 8 * 1024);
+      const normalized = normalizeIdentifier(body?.identifier);
+      if (!normalized) return send(res, 400, { error: "BAD_IDENTIFIER" }), true;
+      if (normalized.kind !== "phone") return send(res, 400, { error: "SMS_PHONE_ONLY" }), true;
+      const key = hashIdentifier(normalized);
+      const account = store.users.accounts[key];
+      if (!codes.canSend(key)) return send(res, 429, { error: "CODE_TOO_SOON" }), true;
+      // 未注册的号码也允许发码（注册即登录）：不额外暴露「这个号码有没有账号」。
+      const code = codes.issue(key);
+      const delivery = await sendSmsCode(normalized.display, code, log);
+      if (delivery.error) return send(res, 502, { error: "SMS_FAILED" }), true;
+      return send(res, 200, { sent: delivery.sent, dev: delivery.dev, ...(delivery.dev ? { devCode: code } : {}) }), true;
+    }
+
     // ---- 注册 / 登录 ----
     if (path === "/acct/register" || path === "/acct/login") {
       if (req.method !== "POST") return send(res, 405, { error: "METHOD_NOT_ALLOWED" }), true;
@@ -253,21 +392,32 @@ export function createAccountApi(options) {
       if (!body) return send(res, 400, { error: "BAD_JSON" }), true;
       const normalized = normalizeIdentifier(body.identifier);
       const password = typeof body.password === "string" ? body.password : "";
+      const code = typeof body.code === "string" ? body.code.trim() : "";
       if (!normalized) return limiter.fail(ip), send(res, 400, { error: "BAD_IDENTIFIER" }), true;
-      if (password.length < 8 || password.length > 128) {
+      // 验证码路径：码对了就算验明正身（等价于密码正确）。
+      const viaCode = !password && code.length > 0;
+      if (viaCode) {
+        if (!codes.verify(hashIdentifier(normalized), code)) {
+          limiter.fail(ip);
+          return send(res, 401, { error: "BAD_CODE" }), true;
+        }
+      } else if (password.length < 8 || password.length > 128) {
         return limiter.fail(ip), send(res, 400, { error: "BAD_PASSWORD", hint: "至少 8 位" }), true;
       }
 
       if (path === "/acct/register") {
         if (store.findByIdentifier(normalized)) return send(res, 409, { error: "ALREADY_EXISTS" }), true;
-        const account = store.create({ normalized, password });
-        const logged = store.login(normalized, password);
+        // 验证码注册没有密码：存一个随机口令哈希（不可登录），只用验证码进。
+        const account = store.create({ normalized, password: viaCode ? randomBytes(24).toString("base64url") : password });
+        // 验证码注册没有可用密码 → 直接签发令牌（身份已由码证明）。
+        const logged = viaCode ? store.issueToken(normalized) : store.login(normalized, password);
+        if (!logged) return send(res, 400, { error: "ACCOUNT_UNAVAILABLE" }), true;
         limiter.reset(ip);
         log(`acct register ${normalized.kind} ${account.accountId.slice(0, 8)}`);
         return send(res, 200, { accountId: account.accountId, kdfSalt: account.kdfSalt, token: logged.token, exp: logged.exp }), true;
       }
 
-      const result = store.login(normalized, password);
+      const result = viaCode ? store.issueToken(normalized) : store.login(normalized, password);
       if (!result) {
         limiter.fail(ip);
         log(`acct login failed ${normalized.kind} ip=${ip}`);

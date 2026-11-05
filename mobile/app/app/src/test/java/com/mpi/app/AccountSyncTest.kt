@@ -5,6 +5,7 @@ import com.mpi.app.data.AccountSync
 import com.mpi.app.data.AcctCrypto
 import com.mpi.app.data.PairingRecord
 import com.mpi.app.data.SyncPayload
+import com.mpi.app.data.Tombstone
 import java.util.Base64
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -121,6 +122,48 @@ class AccountSyncTest {
         val decoded = AccountSync.decode("""{"version":99,"pairings":[],"settings":{},"extra":true}""".toByteArray())
         assertNotNull(decoded)
         assertTrue(decoded!!.pairings.isEmpty())
+    }
+
+    // ---- 2b. 删除墓碑（一处解绑，各端跟随） --------------------------------------
+
+    @Test
+    fun `tombstones delete local pairings but never a later re-pairing`() {
+        val older = pairing("h1").copy(pairedAt = 1_000L)
+        val repaire = pairing("h1").copy(pairedAt = 5_000L)   // 删了又重配
+        // 墓碑发生在 3000：早于重配，所以重配的那条必须保留
+        val kept = AccountSync.applyTombstones(listOf(repaire), listOf(Tombstone("h1", 3_000L)))
+        assertEquals("删了又重配的主机不能被旧墓碑删掉", listOf("h1"), kept.map { it.hostId })
+        // 墓碑晚于配对 → 删除生效
+        val removed = AccountSync.applyTombstones(listOf(older), listOf(Tombstone("h1", 3_000L)))
+        assertTrue("删除后本机不应再有这台主机", removed.isEmpty())
+        // 没被删过的照常保留
+        assertEquals(1, AccountSync.applyTombstones(listOf(pairing("h2")), listOf(Tombstone("h1", 3_000L))).size)
+    }
+
+    @Test
+    fun `tombstone merge keeps the newest per host and drops expired ones`() {
+        val now = 10_000_000L
+        val merged = AccountSync.mergeTombstones(
+            local = listOf(Tombstone("h1", now - 1_000), Tombstone("h2", now - 10_000)),
+            remote = listOf(Tombstone("h1", now - 500), Tombstone("h3", now - AccountSync.TOMBSTONE_TTL_MS - 1)),
+            now = now,
+        )
+        assertEquals("同 hostId 取较新那条；过期墓碑丢弃", listOf("h1", "h2"), merged.map { it.hostId })
+        assertEquals("同 hostId 取较新那条的删除时刻", now - 500, merged.first().at)
+    }
+
+    @Test
+    fun `payload carries tombstones so the delete follows the account`() {
+        // 墓碑带时间戳：太老的会被 TTL 丢掉（42L 是 1970 年，属于「过期」）。
+        val at = System.currentTimeMillis() - 1_000
+        val payload = AccountSync.build(
+            pairings = emptyList(),
+            settings = emptyMap(),
+            tombstones = listOf(Tombstone("h1", at)),
+        )
+        assertEquals(listOf("h1"), payload.deleted.map { it.hostId })
+        val decoded = AccountSync.decode(AccountSync.encode(payload))
+        assertEquals(listOf(Tombstone("h1", at)), decoded?.deleted)
     }
 
     // ---- 3. 地址推导 -----------------------------------------------------------

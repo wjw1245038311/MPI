@@ -21,6 +21,8 @@ internal data class StoreSnapshot(
     val pairings: List<PairingRecord> = emptyList(),
     /** 账号登录状态 + 同步密钥（与配对同处加密存储；卸载即失，重新登录可恢复）。 */
     val account: AccountState? = null,
+    /** 删除墓碑（账号同步用）：本机删掉的主机，其他设备同步后也跟着删。 */
+    val tombstones: List<Tombstone> = emptyList(),
 )
 
 /**
@@ -64,6 +66,10 @@ class FileKeyStore(
     }
 
     override suspend fun listPairings(): List<PairingRecord> = read().pairings
+
+    override suspend fun getTombstones(): List<Tombstone> = read().tombstones
+
+    override suspend fun saveTombstones(list: List<Tombstone>) = update { it.copy(tombstones = list) }
 
     override suspend fun getAccount(): AccountState? = read().account
 

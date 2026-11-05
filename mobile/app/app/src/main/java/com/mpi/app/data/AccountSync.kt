@@ -29,15 +29,23 @@ data class AccountState(
  *
  * 不装的：会话历史、草稿、附件（在各自主机上，量大且与设备强相关）。
  *
- * 合并策略是**本地优先**：同一个 hostId 以本机为准（本机的 relayUrl/lastGood 才是最新的），
- * 远端多出来的补进来。**删除不做同步**——"换掉手机"和"误删"在服务端看起来一样，
- * 自动跟随删除会把另一台设备上还能用的配对干掉。
+ * 合并策略：**新增本地优先、删除按墓碑跟随**。
+ *   · 同一个 hostId 以本机为准（本机的 relayUrl/lastGood 才是最新的），远端多出来的补进来；
+ *   · 删除靠 [Tombstone]（hostId + 删除时刻）：一台设备删了，其他设备同步后也跟着删。
+ *     为什么不用「远端缺少=删除」：那会把「另一台设备还没同步上来」误判成删除，
+ *     一次网络抖动就能把配对清空。墓碑是显式意图，且带时间戳可防倒序覆盖。
  */
+/** 删除墓碑：hostId + 删除时刻（毫秒）。 */
+@Serializable
+data class Tombstone(val hostId: String, val at: Long)
+
 @Serializable
 data class SyncPayload(
     val version: Int = AccountSync.VERSION,
     val updatedAt: Long = 0,
     val pairings: List<PairingRecord> = emptyList(),
+    /** 已删除的配对（墓碑）。合并时据此删除本地同 hostId 的记录。 */
+    val deleted: List<Tombstone> = emptyList(),
     val settings: Map<String, String> = emptyMap(),
 )
 
@@ -66,6 +74,45 @@ object AccountSync {
     fun mergePairings(local: List<PairingRecord>, remote: List<PairingRecord>): List<PairingRecord> {
         val known = local.map { it.hostId }.toSet()
         return local + remote.filterNot { it.hostId in known }
+    }
+
+    /** 墓碑保留期：超过就丢（避免同步包无限长大；90 天足够所有设备都同步到）。 */
+    const val TOMBSTONE_TTL_MS = 90L * 24 * 60 * 60 * 1000
+    /** 墓碑上限（防滥用；正常用户一辈子也到不了）。 */
+    const val TOMBSTONE_MAX = 200
+
+    /**
+     * 墓碑合并：按 hostId 取**较新**的那条，丢掉过期的，按时间倒序截断。
+     *
+     * 取较新而不是取并集：同一台主机可能被删过多次（删了又配对再删），只需要最新那次。
+     */
+    fun mergeTombstones(
+        local: List<Tombstone>,
+        remote: List<Tombstone>,
+        now: Long = System.currentTimeMillis(),
+    ): List<Tombstone> {
+        val newest = LinkedHashMap<String, Tombstone>()
+        for (stone in local + remote) {
+            if (stone.hostId.isBlank() || now - stone.at > TOMBSTONE_TTL_MS) continue
+            val kept = newest[stone.hostId]
+            if (kept == null || stone.at > kept.at) newest[stone.hostId] = stone
+        }
+        return newest.values.sortedByDescending { it.at }.take(TOMBSTONE_MAX)
+    }
+
+    /**
+     * 应用墓碑：从本地配对里去掉被删过的那些，**同时**防止「旧墓碑删掉后来重新配的对」。
+     *
+     * 判据：墓碑时间 **晚于** 该配对的 pairedAt 才算数——用户删了以后又扫码连回来，
+     * 旧墓碑不该再把它删掉（这正是自动删除最容易出错的地方）。
+     */
+    fun applyTombstones(pairings: List<PairingRecord>, tombstones: List<Tombstone>): List<PairingRecord> {
+        if (tombstones.isEmpty()) return pairings
+        val removedAt = tombstones.associate { it.hostId to it.at }
+        return pairings.filterNot { record ->
+            val deletedAt = removedAt[record.hostId] ?: return@filterNot false
+            deletedAt >= record.pairedAt
+        }
     }
 
     /** 设置合并：本地已有键为准，远端补缺（与配对清单同一语义）。 */
@@ -102,11 +149,17 @@ object AccountSync {
     private val FONT_SIZES = setOf("small", "normal", "large")
 
     /** 把当前状态打包成待上传的同步包。 */
-    fun build(pairings: List<PairingRecord>, settings: Map<String, String>, now: Long = System.currentTimeMillis()): SyncPayload =
+    fun build(
+        pairings: List<PairingRecord>,
+        settings: Map<String, String>,
+        tombstones: List<Tombstone> = emptyList(),
+        now: Long = System.currentTimeMillis(),
+    ): SyncPayload =
         SyncPayload(
             version = VERSION,
             updatedAt = now,
             pairings = pairings,
+            deleted = mergeTombstones(tombstones, emptyList(), now),
             settings = settings.filterKeys { it in SETTING_KEYS },
         )
 }

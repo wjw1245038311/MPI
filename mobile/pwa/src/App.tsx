@@ -12,6 +12,7 @@ import ThreadView from "./ThreadView";
 import { Check, ChevronRight, Close, Phone, Plus, Refresh } from "./components/icons";
 import DbgOverlay from "./DbgOverlay";
 import { IdbKeyStore } from "./lib/keystore-idb";
+import { AccountCard } from "./components/AccountCard";
 import type { KeyStore, PairingRecord } from "./lib/keystore";
 import { createDeviceIdentity, randomSeedB64url } from "./lib/device-identity";
 import { LEGACY_DEVICE_NAME, defaultDeviceName } from "./lib/device-name";
@@ -1545,6 +1546,7 @@ export default function App() {
             </button>
           </span>
         </div>
+        <AccountCard store={storeRef.current} pairings={pairings} />
         {pairings.length > 0 ? (
           <div className="device-list">
             {pairings.map((item) => (
