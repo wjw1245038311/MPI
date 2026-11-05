@@ -40,6 +40,7 @@
  *   明文侧同样服务 `/ws` 与 `/download/*`，于是手机的「控制通道」和「更新下载」都不再依赖 Tailscale。
  */
 import { dirname, extname, join, resolve, sep } from "node:path";
+import { createAccountApi } from "./account.mjs";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
 import https from "node:https";
@@ -460,6 +461,21 @@ function readJsonBody(req, limit = 8 * 1024) {
     req.on("error", () => resolve(null));
   });
 }
+
+/**
+ * 账号与配置同步（/acct/*，见 account.mjs）——挂在**同一个 TLS 监听**上，
+ * 所以不需要新端口、不需要动安全组。
+ *
+ * 目录：RELAY_ACCOUNT_DIR（默认 /opt/mpi-account）。禁用：RELAY_ACCOUNT_DISABLED=1。
+ */
+const accountApi = process.env.RELAY_ACCOUNT_DISABLED === "1"
+  ? null
+  : createAccountApi({
+      dir: process.env.RELAY_ACCOUNT_DIR || "/opt/mpi-account",
+      readBody: readJsonBody,
+      clientIp,
+      log,
+    });
 
 /** 检查结果：ok / 拒因（调用方负责回错并断开）；`token` = 命中的授权码（空 = 开放模式）。 */
 function checkHostAuth(frame) {
@@ -1035,6 +1051,8 @@ function handleDeviceFrame(conn, raw) {
 
 // --- server -----------------------------------------------------------------------------
 async function onRequest(req, res) {
+  // 账号/同步（/acct/*）：同一 TLS 端口，先于静态与中继逻辑处理。
+  if (accountApi && (await accountApi(req, res))) return;
   if (req.method === "GET" && req.url?.split("?")[0] === "/healthz") {
     // 收敛（2026-10-16）：配了准入（对外服务）时，**没带有效激活码只回 {ok:true}**——
     // 之前公开回 hosts/devices/tickets 计数，等于免费给扫描者做情报。自用/开放模式保持原样。
