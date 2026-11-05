@@ -176,6 +176,8 @@ fun ConfigSheet(
     view: ThreadView,
     busy: Boolean,
     error: String?,
+    /** 同步进行中：刷新按钮显示「同步中…」并禁用，避免「点了没反应」的错觉。 */
+    syncing: Boolean = false,
     onDismiss: () -> Unit,
     onSetPermission: (RemotePermission) -> Unit,
     onSetModel: (String, String) -> Unit,
@@ -378,10 +380,13 @@ fun ConfigSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(
                     onClick = onRefresh,
-                    enabled = !busy,
+                    enabled = !busy && !syncing,
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp, vertical = 0.dp),
                 ) {
-                    Text("与桌面端同步（刷新）", style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        if (syncing) "同步中…" else "与桌面端同步（刷新）",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                 }
                 Spacer(Modifier.width(4.dp))
                 if (ctx.isEstimate) {

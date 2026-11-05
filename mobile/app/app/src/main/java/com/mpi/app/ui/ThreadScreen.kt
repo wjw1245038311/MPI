@@ -192,7 +192,8 @@ fun ThreadScreen(
     onChoiceDraftChange: (String, ChoiceAnswer?) -> Unit,
     onClearChoiceDrafts: (String) -> Unit,
     attachments: List<Attachment>,
-    attachmentBusy: Boolean,
+    /** 还在上传队列里（含正在跑）的附件数；>0 时进度条显示「还有 N 个」。 */
+    uploadPending: Int,
     attachmentError: String?,
     /** 正在直连上传的视频/大文件（null = 没有）；有值时输入条显示「正在上传 N% · 名字」。 */
     videoUpload: VideoUpload?,
@@ -230,6 +231,8 @@ fun ThreadScreen(
     onDismissSendError: () -> Unit,
     configSheetOpen: Boolean,
     configBusy: Boolean,
+    /** 会话内同步进行中（顶栏/配置面板的「刷新」）——按钮显示进度，不再「点了没反应」。 */
+    syncing: Boolean,
     configError: String?,
     onOpenConfigSheet: () -> Unit,
     onDismissConfigSheet: () -> Unit,
@@ -501,9 +504,9 @@ fun ThreadScreen(
             sending = sending,
             running = view.running,
             attachments = attachments,
-            attachmentBusy = attachmentBusy,
             attachmentError = attachmentError,
             videoUpload = videoUpload,
+            uploadPending = uploadPending,
             onPickAttachment = onPickAttachment,
             onCancelVideoUpload = onCancelVideoUpload,
             onAttachmentPermissionDenied = onAttachmentPermissionDenied,
@@ -539,6 +542,7 @@ fun ThreadScreen(
             ConfigSheet(
                 view = view,
                 busy = configBusy,
+                syncing = syncing,
                 error = configError,
                 onDismiss = onDismissConfigSheet,
                 onSetPermission = onSetPermission,
@@ -568,10 +572,11 @@ private fun Composer(
     sending: Boolean,
     running: Boolean,
     attachments: List<Attachment>,
-    attachmentBusy: Boolean,
     attachmentError: String?,
     /** 正在直连上传的视频（null = 没有）：显示进度 + 可取消。 */
     videoUpload: VideoUpload?,
+    /** 还有几个附件等着传（含正在跑的那个）；带队列时多选不再丢东西。 */
+    uploadPending: Int,
     /** 系统选择器选到的**任意附件**：按 mime 自动分流（图/视/音/文件）。 */
     onPickAttachment: (Uri) -> Unit,
     onCancelVideoUpload: () -> Unit,
@@ -632,9 +637,15 @@ private fun Composer(
     ) { granted -> if (granted) launchPhoto() else onAttachmentPermissionDenied() }
 
     // 一个入口吃所有类型：图/视/音/文件的区分交给 mime（见 AppViewModel.addPickedAttachment），
-    // 菜单因此只剩「拍照 / 附件」两项——用户不必替程序做分类，新增类型也不用改 UI。
+    // 菜单因此只剩「拍照 / 相册 / 附件」三项——用户不必替程序做分类，新增类型也不用改 UI。
     val pickAny = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris -> uris.forEach(onPickAttachment) }
+
+    // 相册：系统照片网格（Android 13+ 是 Photo Picker，无需权限），可一次多选。
+    // 上限与 App 内附件上限一致——PickMultipleVisualMedia 要求 maxItems > 1。
+    val pickPhotos = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(AppViewModel.MAX_ATTACHMENTS),
     ) { uris -> uris.forEach(onPickAttachment) }
     // 已授权时 RequestPermission 会立即回调 true，无需先查权限
     // 长按 3 秒的语音模式：与普通点击共用同一个权限申请，用一个标记区分拿到权限后干什么
@@ -693,7 +704,7 @@ private fun Composer(
         }
         // 直连上传进度：几十 MB 要几分钟，没反馈的形态最容易被当成卡死（与 PWA 同一文案）。
         if (videoUpload != null) {
-            VideoUploadRow(upload = videoUpload, onCancel = onCancelVideoUpload)
+            VideoUploadRow(upload = videoUpload, pending = uploadPending, onCancel = onCancelVideoUpload)
         }
         // 发送 / 停止失败贴输入框显示（PWA 语义）：这里才是手指所在的位置。
         if (sendNote != null) {
@@ -785,19 +796,15 @@ private fun Composer(
                 Box {
                     RoundIconButton(
                         onClick = { attachMenuOpen = true },
-                        enabled = !attachmentBusy && videoUpload == null && attachments.size < 3,
+                        enabled = attachments.size < AppViewModel.MAX_ATTACHMENTS,
                         background = MpiTheme.colors.control,
                     ) {
-                        if (attachmentBusy) {
-                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(
-                                IconPlus,
-                                contentDescription = "添加附件",
-                                tint = MpiTheme.colors.textDim,
-                                modifier = Modifier.size(17.dp),
-                            )
-                        }
+                        Icon(
+                            IconPlus,
+                            contentDescription = "添加附件",
+                            tint = MpiTheme.colors.textDim,
+                            modifier = Modifier.size(17.dp),
+                        )
                     }
                     DropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
                         DropdownMenuItem(
@@ -805,6 +812,17 @@ private fun Composer(
                             onClick = {
                                 attachMenuOpen = false
                                 cameraPermissionForPhoto.launch(android.Manifest.permission.CAMERA)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("相册") },
+                            onClick = {
+                                attachMenuOpen = false
+                                pickPhotos.launch(
+                                    androidx.activity.result.PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                    ),
+                                )
                             },
                         )
                         DropdownMenuItem(
@@ -968,7 +986,7 @@ private fun PendingFollowUpBanner(text: String, onReEdit: () -> Unit, onSteer: (
  * 能立刻停下的按钮（停下的代价只是这文件白传一半，主机侧的临时分片有令牌超时兜底）。
  */
 @Composable
-private fun VideoUploadRow(upload: VideoUpload, onCancel: () -> Unit) {
+private fun VideoUploadRow(upload: VideoUpload, pending: Int, onCancel: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -979,7 +997,9 @@ private fun VideoUploadRow(upload: VideoUpload, onCancel: () -> Unit) {
     ) {
         CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
         Text(
-            text = "正在上传 " + (upload.percent?.let { "$it%" } ?: "…") + " · ${upload.name}",
+            text = "正在上传 " + (upload.percent?.let { "$it%" } ?: "…") + " · ${upload.name}" +
+                // 多选时告诉用户后面还有几个在排队（否则会以为只传了第一张）
+                (if (pending > 1) "（队列还有 ${pending - 1} 个）" else ""),
             style = MaterialTheme.typography.labelMedium,
             color = MpiTheme.colors.textDim,
             maxLines = 1,

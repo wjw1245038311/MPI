@@ -85,6 +85,16 @@ class HostRepository(
     private var watchJob: Job? = null
     private var lastCacheWriteAt = 0L
 
+    /**
+     * 刷新进行中又被点了一次（用户手动「刷新」/ 重试）。
+     *
+     * 旧实现是 `tryLock` 失败就**静默 return**：用户点刷新时刚好有轮询在跑 → 界面一点反应
+     * 都没有，看起来像「刷新按钮坏了」（真机反馈 2026-11-05）。现在改成合并：记下来，
+     * 现任这一轮跑完再补跑一次。
+     */
+    @Volatile
+    private var refreshAgain = false
+
     /** 跟随会话状态：连上就自动刷新；掉线就停轮询并标离线。 */
     fun start() {
         watchJob?.cancel()
@@ -102,11 +112,24 @@ class HostRepository(
         }
     }
 
-    /** 拉一次列表。已有刷新在跑时直接返回（避免重复请求打满主机）。 */
-    suspend fun refresh() {
-        if (!refreshLock.tryLock()) return
+    /**
+     * 拉一次列表。
+     *
+     * @param userInitiated 用户**主动**点了「刷新」/「重试」。
+     *   这时如果已经有一轮在跑，不能静默丢掉（旧行为：`tryLock` 失败就 return，
+     *   真机观感就是「刷新没反应」）——记一个标记，等这一轮跑完再补跑一次 [refreshAgain]。
+     *   轮询 / 连接恢复这类自动调用保持「合并即忽略」，不把主机打成请求风暴。
+     */
+    suspend fun refresh(userInitiated: Boolean = false) {
+        if (!refreshLock.tryLock()) {
+            if (userInitiated) refreshAgain = true
+            return
+        }
         try {
-            doRefresh()
+            do {
+                refreshAgain = false
+                doRefresh()
+            } while (refreshAgain)
         } finally {
             refreshLock.unlock()
             schedulePoll()
@@ -125,29 +148,39 @@ class HostRepository(
 
         val projects = try {
             RemoteModels.decodeProjects(request("projects.list", null))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 被取消（切设备 / 退后台）：必须把 loading 收掉，否则首屏永远转圈
+            _snapshot.update { it.copy(loading = false) }
+            throw e
         } catch (e: Exception) {
             _snapshot.update { it.copy(loading = false, error = e.message ?: "加载项目列表失败") }
             return
         }
 
         val partial = mutableListOf<String>()
-        val threads = coroutineScope {
-            projects.map { project ->
-                async {
-                    val threadsForProject = try {
-                        RemoteModels.decodeThreads(
-                            request("threads.list", buildJsonObject { put("projectId", project.id) }),
-                        )
-                    } catch (e: Exception) {
-                        // 单个项目失败不拖垮整列，但记下来给 UI 提示
-                        synchronized(partial) {
-                            partial += "${project.name.ifEmpty { project.id }}：${e.message ?: "加载失败"}"
+        val threads = try {
+            coroutineScope {
+                projects.map { project ->
+                    async {
+                        val threadsForProject = try {
+                            RemoteModels.decodeThreads(
+                                request("threads.list", buildJsonObject { put("projectId", project.id) }),
+                            )
+                        } catch (e: Exception) {
+                            // 单个项目失败不拖垮整列，但记下来给 UI 提示
+                            synchronized(partial) {
+                                partial += "${project.name.ifEmpty { project.id }}：${e.message ?: "加载失败"}"
+                            }
+                            emptyList()
                         }
-                        emptyList()
+                        project.id to threadsForProject
                     }
-                    project.id to threadsForProject
-                }
-            }.awaitAll().toMap()
+                }.awaitAll().toMap()
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 同上：取消也要收 loading，否则首屏卡在加载态
+            _snapshot.update { it.copy(loading = false) }
+            throw e
         }
 
         _snapshot.update {

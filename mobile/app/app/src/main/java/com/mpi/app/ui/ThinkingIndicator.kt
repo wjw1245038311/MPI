@@ -16,6 +16,11 @@ internal fun shouldShowThinkingPlaceholder(view: ThreadView): Boolean {
     if (!view.running) return false
     // 压缩进行中 → 输入条一侧已有自己的指示
     if (view.compacting) return false
+    // 审批卡挂着 = agent 在**等人**，不是在思考：这时聊天区已经有卡片，
+    // 再挂一行「思考中 · Ns」会让人以为模型在跑（2026-11-05 真机反馈：
+    // 「明明不是思考却显示思考中」，当时屏上正挂着一张权限确认卡）。
+    // 三个端同一判据：桌面 `thinking-indicator.ts`、PWA `lib/thinking-indicator.ts`。
+    if (view.pendingUi != null) return false
     // 工具卡正在展示活动，不再叠加占位行
     if (view.renderable.any { message -> message.blocks.any { it.running } }) return false
     // 判据是「还没有任何可见内容」，而不是「assistant 消息还没开始」：

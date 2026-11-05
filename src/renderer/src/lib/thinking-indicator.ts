@@ -25,8 +25,13 @@ export function formatElapsed(seconds: number): string {
 export function shouldShowThinkingIndicator(
   t: Pick<ThreadState, "isStreaming" | "compacting" | "toolRuns"> | null | undefined,
   streaming: ViewMessage | null | undefined,
+  /** 审批卡（confirm/select）是否正挂在屏幕上：挂着 = agent 在**等人**，不是在思考。 */
+  waitingForApproval = false,
 ): boolean {
   if (!t || !t.isStreaming) return false;
+  // 审批卡挂着 = 在等人，不是模型在思考（卡片本身就是「该你了」的信号）。
+  // 三端同一判据：PWA `lib/thinking-indicator.ts`、安卓 `ui/ThinkingIndicator.kt`。
+  if (waitingForApproval) return false;
   // 压缩进行中 → composer 侧已有自己的指示（按钮 busy + 提示）。
   if (t.compacting) return false;
   const runs = t.toolRuns ?? {};

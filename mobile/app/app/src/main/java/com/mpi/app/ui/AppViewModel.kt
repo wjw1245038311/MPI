@@ -102,6 +102,18 @@ internal fun queuedNoteOf(response: kotlinx.serialization.json.JsonElement?): St
     }
 
 /**
+ * 发送成功后的提示语（纯函数，可单测）。
+ *
+ * 手机**主动**发 followUp（回合进行中又发了消息，或带附件时）主机只回 `{ok:true}`，
+ * 不带 `queuedAs`——于是界面一点反馈都没有，加上全量快照会把乐观气泡收走，
+ * 真机观感就是「没进队列 + 消息消失了」（2026-11-05）。这里补一句。
+ */
+internal fun sendNoteOf(response: kotlinx.serialization.json.JsonElement?, mode: SendMode): String? {
+    queuedNoteOf(response)?.let { return it }
+    return if (mode == SendMode.FollowUp) "已排队：本回合结束后自动发送" else null
+}
+
+/**
  * 语音对话模式的状态（浮层据此显示进度）。
  *
  * 阶段 1 是**半双工**：听 → 转写 → 等回复 → 播报 → 再听；播报时不停录，
@@ -166,6 +178,8 @@ data class AppUiState(
     val draft: String = "",
     /** 正在发送（避免重复点发送）。 */
     val sending: Boolean = false,
+    /** 正在进行会话内同步（顶栏/配置面板的「刷新」）——按钮显示进行中，不再「点什么都没反应」。 */
+    val syncing: Boolean = false,
     /** 正在提交审批回应。 */
     val responding: Boolean = false,
     /** 审批回应失败的原因（卡片不消失，显示在卡片内）。 */
@@ -190,10 +204,10 @@ data class AppUiState(
     val sendNote: String? = null,
     /** 正在新建会话的项目 id（非 null = 进行中，用于禁用重复点击）。 */
     val creatingThread: String? = null,
-    /** 待发送的附件（最多 3 个，图片已压缩）。 */
+    /** 待发送的附件（上限见 [AppViewModel.MAX_ATTACHMENTS]，图片已压缩）。 */
     val attachments: List<Attachment> = emptyList(),
-    /** 正在读取/压缩附件。 */
-    val attachmentBusy: Boolean = false,
+    /** 还在上传队列里（含正在跑）的附件数；输入条据此显示「还有 N 个」。 */
+    val uploadPending: Int = 0,
     /** 附件读取失败原因（可关闭）。 */
     val attachmentError: String? = null,
     /**
@@ -285,8 +299,25 @@ class AppViewModel(
     private var threadActions: ThreadActions? = null
     /** 附件直连（P2）：上行分片 PUT / 下行换读 URL。与 [threadActions] 同生命周期。 */
     private var directAttachments: DirectAttachments? = null
-    /** 正在跑的上传作业（点「取消上传」/ 关会话时取消）。 */
+    /** 正在跑的附件上传队列（点「取消上传」/ 关会话时取消）。 */
     private var videoUploadJob: Job? = null
+    /** 附件上传队列的驱动 job（null = 队列空/未启动）。 */
+    private var uploadDrainJob: Job? = null
+
+    /**
+     * 附件上传**串行队列**（2026-11-05 修）。
+     *
+     * 背景：一次多选 N 个文件时，选择器回调里是同步 `forEach`，而每个 add*Attachment
+     * 开头都有 `if (videoUpload != null) return` 的互斥闸——第 1 个占住上传槽之后，
+     * 第 2..N 个**静默丢弃**，真机表现就是「不能多选 / 只进来一张」。
+     * 现在统一入队、按选择顺序逐个上传，进度条显示「还有 N 个」。
+     */
+    private val uploadQueue = ArrayDeque<suspend () -> Unit>()
+    private val uploadQueueLock = Any()
+    /** 已入队但**还没跑完**的上传数（含正在跑的那个），用于附件上限判定与 UI 提示。 */
+    private var uploadsOutstanding = 0
+    /** 是否有任务正在跑（决定入队时要不要拉起 drain）。 */
+    private var uploadRunning = false
     /**
      * 本回合是**手机自己发起**的吗？发送成功后置起，回合结束时消费掉。
      * 「对话完成」通知只对手机发起的回合发——桌面发起的没必要响（见 [notifyTurnComplete]）。
@@ -998,13 +1029,37 @@ class AppViewModel(
         threadActions = null
         videoUploadJob?.cancel()
         videoUploadJob = null
+        // 上传队列一并清空：切走会话后旧任务不该再往新会话的输入条里塞附件
+        synchronized(uploadQueueLock) {
+            uploadQueue.clear()
+            uploadsOutstanding = 0
+            uploadRunning = false
+        }
+        uploadDrainJob?.cancel()
+        uploadDrainJob = null
         directAttachments = null
-        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, configSheetOpen = false, configBusy = false, configError = null, pendingFollowUp = null, sendError = null, attachments = emptyList(), attachmentBusy = false, attachmentError = null, videoUpload = null, recording = false, transcribing = false, voiceError = null, handoffStartedAt = null) }
+        _ui.update { it.copy(openThreadId = null, thread = null, draft = "", sending = false, responding = false, respondError = null, configSheetOpen = false, configBusy = false, configError = null, pendingFollowUp = null, sendError = null, attachments = emptyList(), attachmentError = null, videoUpload = null, uploadPending = 0, recording = false, transcribing = false, voiceError = null, handoffStartedAt = null) }
     }
 
-    /** 手动重新同步（错误横幅上的按钮）。 */
+    /** 手动重新同步（错误横幅上的按钮）。失败要看得见，不能只 `runCatching` 吞掉。 */
     fun resyncThread() {
-        scope.launch { runCatching { threadSession?.resync() } }
+        val current = threadSession
+        if (current == null) {
+            _ui.update { it.copy(sendError = "会话还没准备好，稍后再试") }
+            return
+        }
+        _ui.update { it.copy(syncing = true) }
+        scope.launch {
+            val failure = runCatching { current.resync() }.exceptionOrNull()
+            _ui.update { state ->
+                val problems = if (failure == null) {
+                    state.problems
+                } else {
+                    (state.problems + "同步失败：${failure.message ?: "未知错误"}").distinct().takeLast(MAX_PROBLEMS)
+                }
+                state.copy(syncing = false, problems = problems)
+            }
+        }
     }
 
     /**
@@ -1133,24 +1188,25 @@ class AppViewModel(
      * 所以这里失败了就静静地走老路，不弹错。
      */
     fun addImageAttachment(uri: android.net.Uri) {
+        if (!reserveAttachmentSlot()) return
+        enqueueUpload { uploadImageAttachment(uri) }
+    }
+
+    /** [addImageAttachment] 的队列内实现：只把上传流程起成 job 并**等它跑完**，保证串行。 */
+    private suspend fun uploadImageAttachment(uri: android.net.Uri) {
         val direct = directAttachments
         val threadId = _ui.value.openThreadId
         val source = attachmentLoader.loadImageSource(uri).getOrElse {
             // 读不出缩略图（格式不支持等）→ 老路（内联）自己会给出可读错误。
-            loadAttachment { attachmentLoader.loadImage(uri) }
+            loadAttachmentInline { attachmentLoader.loadImage(uri) }
             return
         }
         if (direct == null || threadId == null) {
-            loadAttachment { attachmentLoader.loadImage(uri) }
-            return
-        }
-        if (_ui.value.videoUpload != null || _ui.value.attachmentBusy) return
-        if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
-            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
+            loadAttachmentInline { attachmentLoader.loadImage(uri) }
             return
         }
         _ui.update { it.copy(attachmentError = null, videoUpload = VideoUpload(source.name, 0, source.size)) }
-        videoUploadJob = scope.launch {
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             try {
                 val upload = direct.uploadMedia(
                     threadId = threadId,
@@ -1166,7 +1222,7 @@ class AppViewModel(
                 if (upload == null) {
                     // 直连不可用（老主机/未开服务）→ 回落内联。
                     _ui.update { it.copy(videoUpload = null) }
-                    loadAttachment { attachmentLoader.loadImage(uri) }
+                    loadAttachmentInline { attachmentLoader.loadImage(uri) }
                     return@launch
                 }
                 // 记住「key → 本机原图」：消息快照重建后依然能按 key 找回本地那份。
@@ -1190,31 +1246,36 @@ class AppViewModel(
             } catch (_: Exception) {
                 // 任何失败都静静回落内联（图片内联本来就装得下）。
                 _ui.update { it.copy(videoUpload = null) }
-                loadAttachment { attachmentLoader.loadImage(uri) }
+                loadAttachmentInline { attachmentLoader.loadImage(uri) }
             } finally {
                 videoUploadJob = null
             }
         }
+        videoUploadJob = job
+        job.start()
+        // 串行关键：等这一个跑完，队列才轮到下一个。
+        job.join()
     }
 
     /** 文件选择器选到的文件：≤6MB 走内联（老路）；更大的走**直连 + 降落到工作区**（P3-S2）。 */
     fun addFileAttachment(uri: android.net.Uri) {
+        if (!reserveAttachmentSlot()) return
+        enqueueUpload { uploadFileAttachment(uri) }
+    }
+
+    /** [addFileAttachment] 的队列内实现。 */
+    private suspend fun uploadFileAttachment(uri: android.net.Uri) {
         val direct = directAttachments
         val threadId = _ui.value.openThreadId
         val meta = attachmentLoader.fileMeta(uri)
         // 拿不到元信息 / 读不到大小 / 不大 / 直连不可用 → 都走内联老路（那里有 6MB 检查与明确报错）。
         if (meta == null || meta.size <= MAX_FILE_BYTES || direct == null || threadId == null) {
-            loadAttachment { attachmentLoader.loadFile(uri) }
-            return
-        }
-        if (_ui.value.videoUpload != null || _ui.value.attachmentBusy) return
-        if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
-            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
+            loadAttachmentInline { attachmentLoader.loadFile(uri) }
             return
         }
         // 进度条复用视频那条（上传状态本来就只能有一个）。
         _ui.update { it.copy(attachmentError = null, videoUpload = VideoUpload(meta.name, 0, meta.size)) }
-        videoUploadJob = scope.launch {
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             try {
                 val upload = direct.uploadMedia(
                     threadId = threadId,
@@ -1261,6 +1322,9 @@ class AppViewModel(
                 videoUploadJob = null
             }
         }
+        videoUploadJob = job
+        job.start()
+        job.join()
     }
 
     /**
@@ -1272,15 +1336,16 @@ class AppViewModel(
      * 字节**始终流式读**（不在内存里拼整段）：128MB 的视频拼成 ByteArray 就是一次 OOM。
      */
     fun addVideoAttachment(uri: android.net.Uri) {
+        if (!reserveAttachmentSlot()) return
+        enqueueUpload { uploadVideoAttachment(uri) }
+    }
+
+    /** [addVideoAttachment] 的队列内实现。 */
+    private suspend fun uploadVideoAttachment(uri: android.net.Uri) {
         val direct = directAttachments
         val threadId = _ui.value.openThreadId
         if (direct == null || threadId == null) {
             reportAttachmentError("先打开一个会话再选视频")
-            return
-        }
-        if (_ui.value.videoUpload != null || _ui.value.attachmentBusy) return
-        if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
-            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
             return
         }
         val source = attachmentLoader.loadVideoSource(uri).getOrElse { error ->
@@ -1288,7 +1353,7 @@ class AppViewModel(
             return
         }
         _ui.update { it.copy(attachmentError = null, videoUpload = VideoUpload(source.name, 0, source.size)) }
-        videoUploadJob = scope.launch {
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             try {
                 val storedName = direct.uploadVideo(
                     threadId = threadId,
@@ -1354,6 +1419,9 @@ class AppViewModel(
                 videoUploadJob = null
             }
         }
+        videoUploadJob = job
+        job.start()
+        job.join()
     }
 
     /**
@@ -1363,15 +1431,16 @@ class AppViewModel(
      * 不做内联回落：主机把内联音频当普通文件（不可播），宁可如实报错。
      */
     fun addAudioAttachment(uri: android.net.Uri) {
+        if (!reserveAttachmentSlot()) return
+        enqueueUpload { uploadAudioAttachment(uri) }
+    }
+
+    /** [addAudioAttachment] 的队列内实现。 */
+    private suspend fun uploadAudioAttachment(uri: android.net.Uri) {
         val direct = directAttachments
         val threadId = _ui.value.openThreadId
         if (direct == null || threadId == null) {
             reportAttachmentError("先打开一个会话再选音频")
-            return
-        }
-        if (_ui.value.videoUpload != null || _ui.value.attachmentBusy) return
-        if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
-            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
             return
         }
         val source = attachmentLoader.loadAudioSource(uri).getOrElse { error ->
@@ -1380,7 +1449,7 @@ class AppViewModel(
         }
         // 进度条复用视频那条（上传状态本来就只能有一个）。
         _ui.update { it.copy(attachmentError = null, videoUpload = VideoUpload(source.name, 0, source.size)) }
-        videoUploadJob = scope.launch {
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             try {
                 val upload = direct.uploadMedia(
                     threadId = threadId,
@@ -1462,11 +1531,93 @@ class AppViewModel(
         }
     }
 
-    /** 取消正在跑的直连上传（输入条上的「取消」）。 */
+    /**
+     * 占一个附件位（把**队列里还没跑完的**也算进去，否则多选时前几个还没落地就能突破上限）。
+     * 满了就给一句明确提示并返回 false——绝不静默丢。
+     */
+    private fun reserveAttachmentSlot(): Boolean {
+        val used = synchronized(uploadQueueLock) { _ui.value.attachments.size + uploadsOutstanding }
+        if (used >= MAX_ATTACHMENTS) {
+            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
+            return false
+        }
+        return true
+    }
+
+    /** 入队一个上传任务；队列空闲时拉起 drain，否则就排队等着（按选择顺序串行）。 */
+    private fun enqueueUpload(task: suspend () -> Unit) {
+        val start = synchronized(uploadQueueLock) {
+            uploadQueue.addLast(task)
+            uploadsOutstanding += 1
+            // 在锁内占住「有 drain 在跑」的位，避免两个几乎同时的入队各拉起一个 drain
+            if (uploadRunning) {
+                false
+            } else {
+                uploadRunning = true
+                true
+            }
+        }
+        syncUploadPending()
+        if (!start) return
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { drainUploads() }
+        uploadDrainJob = job
+        job.start()
+    }
+
+    /** 逐个跑队列里的上传任务（一次只有它们在跑，所以进度条和上限判定都是准的）。 */
+    private suspend fun drainUploads() {
+        try {
+            while (true) {
+                val next = synchronized(uploadQueueLock) { uploadQueue.removeFirstOrNull() } ?: break
+                syncUploadPending()
+                try {
+                    next()
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    reportAttachmentError(error.message ?: "添加附件失败")
+                } finally {
+                    synchronized(uploadQueueLock) {
+                        uploadsOutstanding = (uploadsOutstanding - 1).coerceAtLeast(0)
+                    }
+                    _ui.update { it.copy(videoUpload = null) }
+                    syncUploadPending()
+                }
+            }
+        } finally {
+            // 必须无条件收口：若这里被取消（或抛异常）而把标志留在 true，
+            // 之后所有入队都以为「已有 drain 在跑」→ 附件永远卡在队列里。
+            synchronized(uploadQueueLock) { uploadRunning = false }
+            syncUploadPending()
+        }
+    }
+
+    /** 把「还有几个没传完」同步给 UI（输入条的「还有 N 个」）。 */
+    private fun syncUploadPending() {
+        val pending = synchronized(uploadQueueLock) { uploadsOutstanding }
+        _ui.update { if (it.uploadPending == pending) it else it.copy(uploadPending = pending) }
+    }
+
+    /** 取消正在跑的直连上传（输入条上的「取消」）——队列里还没跑的一并丢掉。 */
     fun cancelVideoUpload() {
+        val dropped = synchronized(uploadQueueLock) {
+            val queued = uploadQueue.size
+            uploadQueue.clear()
+            uploadsOutstanding = (uploadsOutstanding - queued).coerceAtLeast(0)
+            uploadRunning = false
+            queued
+        }
         videoUploadJob?.cancel()
         videoUploadJob = null
-        _ui.update { it.copy(videoUpload = null, attachmentError = "已取消上传") }
+        uploadDrainJob?.cancel()
+        uploadDrainJob = null
+        _ui.update {
+            it.copy(
+                videoUpload = null,
+                uploadPending = 0,
+                attachmentError = if (dropped > 0) "已取消上传（队列里还有 $dropped 个也一并取消）" else "已取消上传",
+            )
+        }
     }
 
     /**
@@ -1677,29 +1828,28 @@ class AppViewModel(
         )
         withTimeoutOrNull(VOICE_SPEAK_TIMEOUT_MS) { done.await() }
     }
-    private fun loadAttachment(block: () -> Result<Attachment>) {
-        if (_ui.value.attachmentBusy) return
-        if (_ui.value.attachments.size >= MAX_ATTACHMENTS) {
-            _ui.update { it.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件") }
-            return
-        }
-        _ui.update { it.copy(attachmentBusy = true, attachmentError = null) }
-        scope.launch {
-            block()
-                .onSuccess { attachment ->
-                    // 连续点选时可能撞上限，这里再兜一次
-                    _ui.update { state ->
-                        if (state.attachments.size >= MAX_ATTACHMENTS) {
-                            state.copy(attachmentBusy = false, attachmentError = "最多 $MAX_ATTACHMENTS 个附件")
-                        } else {
-                            state.copy(attachmentBusy = false, attachments = state.attachments + attachment)
-                        }
+    /**
+     * 队列内使用的内联加载：**在调用方协程里直接跑完**再返回。
+     *
+     * 不能另起 job：那样多选时第 2 个及之后的回落请求会互相覆盖/丢弃——那正是
+     * 「多选不生效」的另一半原因。读字节/压缩放 IO 线程（原先在调用方默认调度器上跑，
+     * 大文件会卡界面）。
+     */
+    private suspend fun loadAttachmentInline(block: () -> Result<Attachment>) {
+        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { block() }
+        result
+            .onSuccess { attachment ->
+                _ui.update { state ->
+                    if (state.attachments.size >= MAX_ATTACHMENTS) {
+                        state.copy(attachmentError = "最多 $MAX_ATTACHMENTS 个附件")
+                    } else {
+                        state.copy(attachments = state.attachments + attachment)
                     }
                 }
-                .onFailure { error ->
-                    _ui.update { it.copy(attachmentBusy = false, attachmentError = error.message ?: "添加附件失败") }
-                }
-        }
+            }
+            .onFailure { error ->
+                _ui.update { it.copy(attachmentError = error.message ?: "添加附件失败") }
+            }
     }
 
     /** 回合结束（running true→false）：自动投递暂存的「待处理后续」。 */
@@ -2005,7 +2155,7 @@ class AppViewModel(
                 phoneTurnStarted = true
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
                 _ui.update {
-                    it.copy(sending = false, attachments = emptyList(), sendNote = queuedNoteOf(result))
+                    it.copy(sending = false, attachments = emptyList(), sendNote = sendNoteOf(result, mode))
                 }
             } catch (error: Exception) {
                 val raw = error.message.orEmpty()
@@ -2087,8 +2237,9 @@ class AppViewModel(
         }
     }
 
+    /** 用户点了首屏的「刷新」/ 错误横幅上的「重试」：一定要真的拉一次（不能静默合并掉）。 */
     fun refresh() {
-        scope.launch { repository?.refresh() }
+        scope.launch { repository?.refresh(userInitiated = true) }
     }
 
     fun reconnect() {
@@ -2357,7 +2508,11 @@ class AppViewModel(
          * 误判成“连不上”而去降级，比多等几秒更糟。
          */
         private const val RELAY_DEGRADE_MS = 3_000L
-        private const val MAX_ATTACHMENTS = 3
+        /**
+         * 单条消息的附件上限。原来是 3——真机反馈「最多只能两张三张」太少；桌面端
+         * 聊天没有张数限制，这里取 10（与「待办面板附件」同一口径）。
+         */
+        internal const val MAX_ATTACHMENTS = 10
 
         // ---- 语音对话模式（阶段 1）----
 

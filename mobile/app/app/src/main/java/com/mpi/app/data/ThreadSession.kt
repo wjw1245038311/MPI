@@ -156,6 +156,20 @@ class ThreadSession(
     @Volatile
     private var awaitingSync = false
 
+    /** 本轮同步的开始时刻（毫秒）——用于 [SYNC_STALL_MS] 卡住取证。 */
+    @Volatile
+    private var awaitingSince = 0L
+    /** 本轮同步已经上报过「卡住」，不重复刷屏。 */
+    @Volatile
+    private var stallReported = false
+
+    /** 进入等同步态（记时刻 + 清掉上一轮的「已上报」标记）。 */
+    private fun beginSync() {
+        awaitingSync = true
+        awaitingSince = System.currentTimeMillis()
+        stallReported = false
+    }
+
     /** 进行中的重同步（缺口可能连着来好几条帧，只跑一次）。 */
     private var resyncJob: Job? = null
 
@@ -221,7 +235,7 @@ class ThreadSession(
     /** 订阅并取快照。重复调用是安全的（用于重连后重新同步）。 */
     suspend fun subscribe() {
         syncLock.withLock {
-            awaitingSync = true
+            beginSync()
             val payload = try {
                 requestWhenReady("thread.subscribe", threadIdPayload(), threadId, SNAPSHOT_TIMEOUT_MS)
             } catch (e: Exception) {
@@ -291,7 +305,7 @@ class ThreadSession(
      */
     private suspend fun ensureSubscribedLocked(full: Boolean = false): JsonElement? {
         if (subscribed) return null
-        awaitingSync = true
+        beginSync()
         val payload = requestWhenReady("thread.subscribe", threadIdPayload(full), threadId, SNAPSHOT_TIMEOUT_MS)
         subscribed = true
         return payload
@@ -304,7 +318,7 @@ class ThreadSession(
     suspend fun ensureSubscribed() {
         syncLock.withLock {
             try {
-                awaitingSync = true
+                beginSync()
                 ensureSubscribedLocked()?.let { applySyncResponse(it) } ?: finishSync()
             } catch (e: Exception) {
                 finishSync()
@@ -325,7 +339,7 @@ class ThreadSession(
     suspend fun resync(full: Boolean = false) {
         syncLock.withLock {
             try {
-                awaitingSync = true
+                beginSync()
                 val fresh = ensureSubscribedLocked(full)
                 if (fresh != null) {
                     applySyncResponse(fresh)
@@ -336,6 +350,9 @@ class ThreadSession(
             } catch (e: Exception) {
                 finishSync()
                 _view.value = _view.value.copy(errorBanner = e.message ?: "同步失败")
+                // 同步失败必须进问题列表：只挂 errorBanner 时用户很容易看不到
+                //（2026-11-05：「刷新没反应」现场就是这个状况——失败被吞在局部）。
+                onProblem("同步失败：${e.message ?: "未知错误"}")
                 throw e
             }
         }
@@ -476,6 +493,14 @@ class ThreadSession(
             // 所以这些帧不丢不乱。等同步的**不只是** ready 之前——快照传输期间也会
             // 进来帧，不缓冲就会被当成「缺号」再触发一次 resync（自激循环）。
             if (awaitingSync || !_view.value.ready) {
+                // 取证（2026-11-05）：同步等太久说明快照/补发卡住了——此时**所有实时帧都在缓冲**，
+                // 界面表现为「停在旧内容 / 一直思考中 / 刷新也没反应」。上报一次，别让这种
+                // 问题静默积压（用户下次截一张问题列表就能定位）。
+                if (awaitingSync && !stallReported && System.currentTimeMillis() - awaitingSince > SYNC_STALL_MS) {
+                    stallReported = true
+                    val waited = (System.currentTimeMillis() - awaitingSince) / 1000
+                    onProblem("同步卡住：等快照已 ${waited}s，期间实时消息都在缓冲")
+                }
                 pendingEvents += seq to payload
                 return
             }
@@ -503,7 +528,7 @@ class ThreadSession(
     private fun scheduleResync() {
         synchronized(lock) {
             if (resyncJob?.isActive == true) return
-            awaitingSync = true
+            beginSync()
             resyncJob = scope.launch { runCatching { resync() } }
         }
     }
@@ -562,7 +587,9 @@ class ThreadSession(
                 messages = if (snapshot.incremental) {
                     mergeIncremental(_view.value.messages, snapshot.messages)
                 } else {
-                    snapshot.messages
+                    // 全量也不能把**还没被主机确认**的乐观消息一起丢掉：followUp 排队期间
+                    // 快照里还没有那条，丢掉就表现为「消息和图片一起消失」。
+                    mergeFull(_view.value.messages, snapshot.messages)
                 },
                 // 回合进行中**留住**正在长的流式气泡：快照是磁盘历史，不含这半条；
                 // 清掉的话用户看到的就是「桌面写了一大段、手机停在上一条」。
@@ -1216,6 +1243,15 @@ class ThreadSession(
          * 60s 与 PWA 的 SNAPSHOT_TIMEOUT_MS 对齐。
          */
         private const val SNAPSHOT_TIMEOUT_MS = 60_000L
+
+        /**
+         * 「等同步」多久算卡住（12s）。
+         *
+         * 快照正常是中继往返 + 几十~几百 KB 解析，个位数秒；超过这个量还在等，基本可以
+         * 肯定帧全在缓冲、界面停在旧内容。只在 [handleEnvelope] 收到帧时检查并上报一次，
+         * 不做轮询定时器（免得为了取证反而扰民）。
+         */
+        private const val SYNC_STALL_MS = 12_000L
     }
 }
 
@@ -1257,7 +1293,8 @@ internal fun mergeIncremental(
     // 但**未确认的乐观回显（pending）不能丢**（快照可能产生于它之前）。
     val anchorIndex = current.indexOfFirst { it.id == incoming.first().id }
     val head = if (anchorIndex >= 0) current.take(anchorIndex) else current
-    val pendingTail = if (anchorIndex >= 0) current.drop(anchorIndex).filter { it.pending } else emptyList()
+    // 锚点找不到时也要留乐观占位（回全量的窗口里同样存在）
+    val pendingTail = if (anchorIndex >= 0) current.drop(anchorIndex).filter { it.pending } else current.filter { it.pending }
     val byId = incoming.associateBy { it.id }
     val merged = head.map { byId[it.id] ?: it }
     val seen = merged.mapTo(HashSet()) { it.id }
@@ -1265,6 +1302,46 @@ internal fun mergeIncremental(
     val tail = incoming.filterNot { it.id in known || it.id in seen }
     tail.forEach { seen += it.id }
     return merged + tail + pendingTail.filterNot { it.id in seen }
+}
+
+/**
+ * 合并**全量**快照（纯函数，可单测）。
+ *
+ * 历史以主机为准（主机才是真相源），但**本地还没被主机确认的乐观消息（pending）必须留在末尾**。
+ *
+ * 为什么（2026-11-05 真机）：「带图片 + 回合进行中 → 发送」走的是 followUp 排队，那条消息
+ * 要等当前回合结束才落盘进历史；这段窗口里任何一次全量快照（重连 / seq 缺口 / 媒体补拉 /
+ * 缓存对齐）都会把乐观气泡整条替掉——用户看到的就是「消息和图片一起凭空消失」。
+ * 增量分支早就有这层保护（见 [mergeIncremental]），全量分支没有——这里补上，与 PWA 同语义。
+ *
+ * 去重：主机历史里已经有「同文本 + 同媒体块数」的用户消息时，那条占位已被取代，
+ * 不能再留一份（否则会多一个气泡）。
+ */
+internal fun mergeFull(
+    current: List<ThreadMessage>,
+    incoming: List<ThreadMessage>,
+): List<ThreadMessage> {
+    val pending = current.filter { it.pending && it.role == "user" }
+    if (pending.isEmpty()) return incoming
+    val hostLeft = incoming.filter { it.role == "user" }
+        .groupingBy { userMessageSignature(it) }.eachCount().toMutableMap()
+    val keep = mutableListOf<ThreadMessage>()
+    for (message in pending) {
+        val key = userMessageSignature(message)
+        val left = hostLeft[key] ?: 0
+        if (left > 0) hostLeft[key] = left - 1 else keep += message
+    }
+    return incoming + keep
+}
+
+/** 用户消息的「对账签名」：文本 + 媒体块数（主机回显的那条与本地占位用同一个签名）。 */
+internal fun userMessageSignature(message: ThreadMessage): String {
+    val text = message.blocks.filter { it.type == BlockType.Text }.joinToString("") { it.text.orEmpty() }
+    val media = message.blocks.count {
+        it.type == BlockType.Image || it.type == BlockType.Video ||
+            it.type == BlockType.Audio || it.type == BlockType.File
+    }
+    return "$text|$media"
 }
 
 /**

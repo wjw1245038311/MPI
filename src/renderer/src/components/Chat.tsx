@@ -151,7 +151,14 @@ export function Chat() {
   // Prefill 等待指示器：agent run 活跃但 assistant 消息尚未开始（本地模型 prefill
   // 可达数十秒）、且没有工具卡在跑 → 显示「思考中 · Ns」占位行。
   // 秒数的计时器在 ThinkingPlaceholder 内部：每秒钟只重渲染那一行，不惊动整个聊天区。
-  const thinkingActive = shouldShowThinkingIndicator(thread, streaming);
+  // 审批卡（confirm/select）正挂在这个会话上 = agent 在等人，不是在思考：
+  // 这时不叠「思考中 · Ns」占位行（三端同一判据，见 lib/thinking-indicator.ts）。
+  const waitingForApproval = useStore((s) =>
+    s.extuiQueue.some(
+      (q) => q.threadId === activeThreadId && (q.request.method === "confirm" || q.request.method === "select"),
+    ),
+  );
+  const thinkingActive = shouldShowThinkingIndicator(thread, streaming, waitingForApproval);
 
   // 「活跃输入」跟踪：区分真实滚动手势与布局引起的 scrollTop 位移。
   // content-visibility 高度解析 / 浏览器钳制会在无用户输入时产生微小位移，

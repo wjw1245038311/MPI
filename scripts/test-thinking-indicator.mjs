@@ -69,6 +69,22 @@ assert.equal(ti.thinkingElapsedSeconds(undefined, NOW, NOW - 3_000), 3); // 无�
 assert.equal(ti.thinkingElapsedSeconds(NaN, NOW, NOW - 2_000), 2); // 脏值同样退化成兜底
 assert.equal(ti.thinkingElapsedSeconds(NOW + 5_000, NOW, NOW), 0); // 时钟回拨/负值不出负数
 
+// --- 挂着审批卡 = 在等人，不是在思考（2026-11-05 安卓真机反馈） -------------------
+// 现象：「明明不是思考却显示思考中」，当时屏上正挂着一张权限确认卡。
+// 三端同一判据：桌面（本文件）、PWA test-pwa-thinking-indicator.mjs、安卓 ThinkingIndicatorTest。
+assert.equal(
+  ti.shouldShowThinkingIndicator(base(), null, true),
+  false,
+); // 审批卡挂着 → 不叠占位行
+assert.equal(
+  ti.shouldShowThinkingIndicator(base(), streamingWithText, true),
+  false,
+); // 有正文时本来就不显示，加卡也不显示
+assert.equal(
+  ti.shouldShowThinkingIndicator(base(), null, false),
+  true,
+); // 没卡、无可见内容 → 仍要显示（回归护栏）
+
 // --- 计时起点必须在「每段等待开始」刷新（源级护栏） -------------------------------
 // 为什么是读源码而不是跑行为：reduceThread 不导出，也没有 store 的测试夹具（它依赖
 // React/pi SDK）。而这两个刷新点很容易在重构中被抹掉：丢了就回到「整轮累加」这个

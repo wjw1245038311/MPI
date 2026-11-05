@@ -59,6 +59,21 @@ assert.equal(
   true,
 ); // 工具全部结束 → 等待下一次 LLM 响应头（第二轮 prefill）
 
+// --- 挂着审批卡 = 在等人，不是在思考（2026-11-05 安卓真机反馈） -------------------
+// 三端同一判据：桌面 test-thinking-indicator.mjs、本文件、安卓 ThinkingIndicatorTest。
+assert.equal(
+  ti.shouldShowThinkingIndicator(base({ hasPendingApproval: true })),
+  false,
+); // 审批卡挂着 → 不叠占位行
+assert.equal(
+  ti.shouldShowThinkingIndicator(base({ hasPendingApproval: true, streaming: emptyStreaming })),
+  false,
+); // 卡在 + Stream 已开但还没内容 → 仍然是「在等人」
+assert.equal(
+  ti.shouldShowThinkingIndicator(base({ hasPendingApproval: false })),
+  true,
+); // 没卡 → 旧行为不变（回归护栏）
+
 // --- 秒数文案（与桌面端 formatElapsed 逐条对齐） -----------------------------
 
 assert.equal(ti.formatElapsed(0), "0s");

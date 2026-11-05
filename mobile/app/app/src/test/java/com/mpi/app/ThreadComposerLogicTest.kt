@@ -133,4 +133,25 @@ class QueuedSendNoteTest {
     fun `an unknown queuedAs value is ignored`() {
         assertEquals(null, com.mpi.app.ui.queuedNoteOf(json("""{"queuedAs":"steer"}""")))
     }
+
+    @Test
+    fun `client-initiated followUp also gets a note`() {
+        // 2026-11-05 真机：回合进行中带图片发送 → 走 followUp，主机只回 {ok:true}，
+        // 界面一点反馈都没有，加上乐观气泡被快照收走，观感就是「没进队列 + 消息消失」。
+        val note = com.mpi.app.ui.sendNoteOf(json("""{"ok":true}"""), com.mpi.app.data.SendMode.FollowUp)
+        assertEquals(true, note != null && note.contains("排队"))
+    }
+
+    @Test
+    fun `prompt send stays silent`() {
+        assertEquals(null, com.mpi.app.ui.sendNoteOf(json("""{"ok":true}"""), com.mpi.app.data.SendMode.Prompt))
+        assertEquals(null, com.mpi.app.ui.sendNoteOf(json("""{"ok":true}"""), com.mpi.app.data.SendMode.Steer))
+    }
+
+    @Test
+    fun `host queuedAs note wins over the generic one`() {
+        val note = com.mpi.app.ui.sendNoteOf(json("""{"ok":true,"queuedAs":"followUp"}"""), com.mpi.app.data.SendMode.FollowUp)
+        // 主机自己的话术优先（它带着「当前任务还在跑」的上下文）
+        assertEquals(true, note != null && note.contains("当前任务还在跑"))
+    }
 }

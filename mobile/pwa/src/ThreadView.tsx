@@ -1219,6 +1219,8 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     compacting: view.compacting,
     messages: view.messages,
     streaming: view.streaming,
+    // 审批卡挂着 = 在等人，不是模型在思考
+    hasPendingApproval: !!view.pendingUi,
   });
 
   // 回合已停下、而末条 assistant 在提问 → 弱提示（与桌面/Android 同判据，见 lib/awaiting-reply.ts）。

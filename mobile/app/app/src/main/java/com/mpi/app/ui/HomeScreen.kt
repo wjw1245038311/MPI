@@ -157,7 +157,11 @@ private fun TopBar(
                 )
             }
         }
-        TextButton(onClick = onRefresh) { Text("刷新") }
+        TextButton(onClick = onRefresh, enabled = !state.host.loading) {
+            // 加载中要看得见：上一版点下去没有任何变化（尤其当轮询正在跑时），
+            // 真机反馈就是「刷新没反应」（2026-11-05）。
+            Text(if (state.host.loading) "刷新中…" else "刷新")
+        }
         TextButton(onClick = onOpenHosts) { Text("主机") }
     }
 }

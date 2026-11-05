@@ -24,6 +24,14 @@ export interface ThinkingIndicatorInput {
   compacting: boolean;
   messages: Array<{ blocks: BlockLike[] }>;
   streaming: { blocks: BlockLike[] } | null;
+  /**
+   * 审批卡（confirm/select）正挂在屏幕上。
+   *
+   * 挂着卡 = agent 在**等人**，不是在思考；这时再挂一行「思考中 · Ns」会让人以为模型在跑
+   * （2026-11-05 安卓真机：「明明不是思考却显示思考中」，当时屏上正挂着一张权限确认卡）。
+   * 三端同一判据：桌面 `lib/thinking-indicator.ts`、安卓 `ui/ThinkingIndicator.kt`。
+   */
+  hasPendingApproval?: boolean;
 }
 
 /**
@@ -38,6 +46,8 @@ export function shouldShowThinkingIndicator(
   view: ThinkingIndicatorInput | null | undefined,
 ): boolean {
   if (!view || !view.running) return false;
+  // 审批卡挂着 = 在等人，不是模型在思考（卡片本身就是「该你了」的信号）。
+  if (view.hasPendingApproval) return false;
   // 压缩进行中 → composer/上下文 chip 侧已有自己的指示。
   if (view.compacting) return false;
   for (const message of view.messages) {

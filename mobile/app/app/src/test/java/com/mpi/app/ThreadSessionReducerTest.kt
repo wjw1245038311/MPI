@@ -652,15 +652,48 @@ class ThreadSessionReducerTest {
     }
 
     @Test
-    fun `a snapshot discards leftover optimistic messages`() = runBlocking {
+    fun `a snapshot keeps the optimistic message the host has not echoed yet`() = runBlocking {
+        // 2026-11-05 真机：回合进行中带图片发送走 followUp 排队，那条消息要等当前回合结束
+        // 才落盘；这段窗口里任何一次全量快照若把它替掉，用户看到的就是「消息和图片一起消失」。
+        // 现在历史仍以主机为准，但**还没被主机确认**的乐观消息留在末尾。
         val transport = FakeTransport()
         val session = newSession(transport)
         session.subscribe()
-        session.echoUserMessage("这条不会有回执")
+        val localId = session.echoUserMessage("这条不会有回执")
         assertEquals(3, session.view.value.messages.size)
 
         session.resync() // 快照是权威历史
-        assertEquals("快照后乐观占位应被丢弃", 2, session.view.value.messages.size)
+        val messages = session.view.value.messages
+        assertEquals("未被主机确认的乐观占位要留着", 3, messages.size)
+        assertEquals(localId, messages.last().id)
+        assertTrue(messages.last().pending)
+        session.detach()
+    }
+
+    @Test
+    fun `a snapshot drops the optimistic message once the host has it`() = runBlocking {
+        // 反向护栏：主机历史里已经有同一条（同文本）→ 占位必须让位，不能出现两个气泡。
+        val echoed = """
+            {"snapshot":{
+              "id":"t-1","projectId":"p1","title":"t","preview":"p","updatedAt":300,
+              "messageCount":1,"state":"idle","permission":"full","cwdName":"MPI",
+              "model":{"provider":"anthropic","id":"model-x"},
+              "availableModels":[],"thinkingLevel":"off","thinkingLevels":[],"taskMode":null,
+              "availableModes":[],"messages":[
+                {"id":"user-300","role":"user","blocks":[{"type":"text","text":"这条主机已经有了"}]}
+              ],"nextSeq":0
+            }}
+        """.trimIndent()
+        val session = newSession(requests = FakeRequests(echoed))
+        session.subscribe()
+        session.echoUserMessage("这条主机已经有了")
+        assertEquals(2, session.view.value.messages.size)
+
+        session.resync()
+        val messages = session.view.value.messages
+        assertEquals("主机已有同一条时占位要让位", 1, messages.size)
+        assertEquals("user-300", messages.single().id)
+        assertFalse("留下的必须是主机那条", messages.single().pending)
         session.detach()
     }
 

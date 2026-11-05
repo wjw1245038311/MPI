@@ -4,6 +4,7 @@ import com.mpi.app.data.ThreadView
 import com.mpi.app.protocol.BlockType
 import com.mpi.app.protocol.MessageBlock
 import com.mpi.app.protocol.ThreadMessage
+import com.mpi.app.protocol.UiRequest
 import com.mpi.app.ui.formatElapsed
 import com.mpi.app.ui.shouldShowThinkingPlaceholder
 import org.junit.Assert.assertEquals
@@ -23,12 +24,14 @@ class ThinkingIndicatorTest {
         streaming: ThreadMessage? = null,
         compacting: Boolean = false,
         messages: List<ThreadMessage> = emptyList(),
+        pendingUi: UiRequest? = null,
     ) = ThreadView(
         threadId = "t",
         running = running,
         streaming = streaming,
         compacting = compacting,
         messages = messages,
+        pendingUi = pendingUi,
     )
 
     private fun assistant(id: String, running: Boolean) = ThreadMessage(
@@ -68,6 +71,17 @@ class ThinkingIndicatorTest {
     @Test
     fun `hidden while compacting`() {
         assertFalse(shouldShowThinkingPlaceholder(view(compacting = true)))
+    }
+
+    @Test
+    fun `hidden while an approval card is waiting for the user`() {
+        // 2026-11-05 真机：「明明不是思考却显示思考中」——当时屏上正挂着一张权限确认卡。
+        // 挂着卡 = agent 在等人，不是在跑模型；三端同一判据。
+        val card = UiRequest(id = "ui-1", method = "confirm", title = "权限确认")
+        assertFalse(shouldShowThinkingPlaceholder(view(pendingUi = card)))
+        assertFalse(shouldShowThinkingPlaceholder(view(streaming = ThreadMessage(id = "s", role = "assistant"), pendingUi = card)))
+        // 没卡时旧行为不变
+        assertTrue(shouldShowThinkingPlaceholder(view(pendingUi = null)))
     }
 
     @Test
