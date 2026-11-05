@@ -2296,6 +2296,14 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
    * （tool 结果文本那条仍保留作兜底：老会话里的引用还在文本里）。
    */
   const attachFileStored = new Map<string, Array<{ name: string; abs: string; size: number; label: string; at: number }>>();
+  /**
+   * 台账兜底补卡的「新鲜度」阈值（10 分钟）。
+   *
+   * 只在「工具调用 → 快照生成」之间发生过重启、内存台账丢了这类**刚刚发生**的场景里补卡；
+   * 更早的附件属于历史（历史在会话 JSONL 里），不能再补到最新一轮上——否则老附件会
+   * 凭空反复出现在当前对话里（2026-11-06 真机：「附件还是会乱出来，我也没让它发」）。
+   */
+  const FALLBACK_FRESH_MS = 10 * 60_000;
   let remoteProjectsCache: { expiresAt: number; value: ProjectSummary[] } | null = null;
   let remoteProjectsLoad: Promise<ProjectSummary[]> | null = null;
   const invalidateRemoteProjects = () => {
@@ -3162,16 +3170,35 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       if (storedList.length) {
         // 去重集合要**含 image**（2026-11-05 真机：手机端同一张图出现两次——只收
         // file/video/audio 时，回执元数据出过一次图之后台账又补了一块）。
+        // 同时收 name 与 label（2026-11-06）：元数据路径出的块用内容哈希当 name，
+        // 台账那条若按展示名匹配就会认不出，于是同一张卡被补了第二份。
         const already = new Set<string>();
         for (const msg of output) {
           for (const name of mediaBlockNames(msg.blocks)) already.add(name);
+          for (const block of msg.blocks || []) {
+            if (typeof block?.label === "string" && block.label) already.add(block.label);
+          }
         }
-        const pending = storedList.filter((entry) => !already.has(entry.name));
+        const lastAssistant = [...output].reverse().find((msg) => msg.role === "assistant");
+        const lastAt = typeof lastAssistant?.timestamp === "number" ? lastAssistant.timestamp : 0;
+        const now = Date.now();
+        const pending = storedList.filter((entry) => {
+          if (already.has(entry.name) || (entry.label && already.has(entry.label))) return false;
+          // ⚠️ 只救「刚刚发生」的（2026-11-06 真机：「附件还是会乱出来，我也没让它发」）
+          // 台账是**整个会话**的附件清单（留最近 50 条），而快照只渲染最近若干条消息。
+          // 以前拿「本窗口里没出现过」当「卡片丢了」，于是所有早就翻页过去的旧附件
+          // 都会被当成缺失，补到**最新一轮** assistant 下面——看起来就是附件凭空
+          // 出现在当前对话里。现在加两道时限：
+          //   ① 台账条目必须很新（10 分钟内）；
+          //   ② 必须晚于最后一轮 assistant 的开始时间（属于这一轮之后的产出）。
+          if (now - entry.at > FALLBACK_FRESH_MS) return false;
+          if (lastAt > 0 && entry.at < lastAt) return false;
+          return true;
+        });
         if (pending.length) {
           const blocks = pending.map((entry) => attachBlockForMeta(entry));
           // 挂到最后一轮 assistant（就是调用了这个工具的那轮）；没有 assistant 轮
           // （极端情形：工具被单独触发）就新开一条，宁可多一条也不静默丢附件。
-          const lastAssistant = [...output].reverse().find((msg) => msg.role === "assistant");
           // 取证（同上面的 source=meta）：台账兵分多少、都生成了什么块类型。
           appendDiagLog(
             `attach-block source=ledger kind=${blocks.map((b) => `${b.type}:${String(b.label || b.name).slice(0, 20)}`).join(",")}`,
