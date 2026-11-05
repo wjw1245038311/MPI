@@ -266,6 +266,11 @@ export class RemoteHost {
     // S3：有序地址列表（旧客户端读 relayUrl 单值，新客户端可读 relayUrls 并按序选路）。
     const listed = (this.options.mobileRelayUrls?.() ?? []).map((url) => (url || "").trim()).filter(Boolean);
     const phoneRelayUrls = listed.length ? listed : phoneRelayUrl ? [phoneRelayUrl] : [];
+    // 旧字段 relayUrl **不能用列表首项**（那通常是局域网地址）：旧客户端只读这一个值，
+    // 手机不在同一网段（移动数据 / 只走 tailnet）时直接连不上，还没有别的地址可回落
+    // （2026-11-05 真机：0.5.154 扫码 timeout）。
+    // phoneRelayUrl 由调用方保证是「公网可达那条」（ipc.ts 的 legacyPhoneRelayUrl）。
+    const legacyRelayUrl = phoneRelayUrl || phoneRelayUrls.find((url) => url) || "";
     return {
       hostId: this.identity.hostId,
       hostName: hostname(),
@@ -273,7 +278,7 @@ export class RemoteHost {
       hostPublicKeyPem: this.identity.publicKeyPem,
       signalingUrl: this.options.signalingUrl,
       stunUrls: [...this.options.stunUrls],
-      ...(phoneRelayUrls[0] ? { relayUrl: phoneRelayUrls[0] } : {}),
+      ...(legacyRelayUrl ? { relayUrl: legacyRelayUrl } : {}),
       ...(phoneRelayUrls.length ? { relayUrls: phoneRelayUrls } : {}),
       ticket,
       expiresAt,
