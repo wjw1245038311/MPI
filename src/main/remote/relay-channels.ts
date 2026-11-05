@@ -155,6 +155,20 @@ export function lanChannel(ctx: ChannelContext): RelayChannel | null {
 }
 
 /**
+ * **旧客户端**（配对票里只有一个 `relayUrl` 字段）该给哪条地址。
+ *
+ * 2026-11-05 真机：手机退回 0.5.154 后扫码配对 **timeout**——旧版不认 `mobileRelayUrls`
+ * 数组，只读单值，而那个值以前取的是地址列表第一条＝局域网地址（`ws://<内网IP>:9001/ws`）。
+ * 手机在 tailnet / 移动数据上到不了内网 IP，也没有别的地址可回落。
+ *
+ * 规则：跳过局域网地址，给公网可达的那条；全部都是局域网（只在局域网里用）则退回第一条。
+ */
+export function legacyTicketUrl(addresses: string[], lanUrls: string[]): string {
+  const lan = new Set(lanUrls);
+  return addresses.find((url) => !lan.has(url)) || addresses[0] || "";
+}
+
+/**
  * 生效的通道列表：配置里的（或旧字段合成的）+ 运行时合成的局域网通道。
  * 局域网**排在最前**（同网段最快，设备端按序选路时优先）。
  */

@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { fromLegacy, lanChannel, lanChannels, effectiveChannels, hostUrlFor, planUplinks, uplinkChannels, ticketAddresses, validateChannels, pickRelayFeedUrl, flipScheme } =
+const { fromLegacy, lanChannel, lanChannels, effectiveChannels, hostUrlFor, planUplinks, uplinkChannels, ticketAddresses, validateChannels, pickRelayFeedUrl, flipScheme, legacyTicketUrl } =
   await import("../src/main/remote/relay-channels.ts");
 
 const ctx = (over = {}) => ({ localRelayPort: 9001, lanPhoneUrl: null, lanAddress: null, ...over });
@@ -229,6 +229,19 @@ test("同址归并：局域网关闭时 local 独自成立；不同地址各留�
   );
   assert.deepEqual(two.chosen.map((item) => item.channel.id), ["builtin", "local"], "不同中继各自一条");
   assert.deepEqual(two.skipped, []);
+});
+
+test("旧客户端单值：跳过局域网地址，给公网可达那条（2026-11-05 真机 timeout）", () => {
+  const lanUrls = ["ws://10.215.35.72:9001/ws", "wss://10.215.35.72:9443/ws"];
+  const addresses = [...lanUrls, "ws://47.97.28.110:10445/ws", "wss://47.97.28.110:9443/ws"];
+  assert.equal(
+    legacyTicketUrl(addresses, lanUrls),
+    "ws://47.97.28.110:10445/ws",
+    "旧版只有一个 relayUrl 字段，给它局域网地址就是必然 timeout",
+  );
+  // 只有局域网通道（纯内网部署）→ 退回第一条，别给空值。
+  assert.equal(legacyTicketUrl(lanUrls, lanUrls), lanUrls[0]);
+  assert.equal(legacyTicketUrl([], lanUrls), "");
 });
 
 console.log("relay-channels tests passed");

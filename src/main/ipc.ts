@@ -233,7 +233,7 @@ import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
 import { RelayUplink } from "./remote/relay-uplink";
 import { RelayFanout } from "./remote/relay-fanout";
-import { lanChannels, planUplinks, uplinkChannels, type ChannelContext, type RelayChannel } from "./remote/relay-channels";
+import { lanChannels, legacyTicketUrl, planUplinks, uplinkChannels, type ChannelContext, type RelayChannel } from "./remote/relay-channels";
 import { WEB_ENTRY_TTL_MS, localEntryCandidates, resolveWebEntry, webEntryCandidates, httpOriginOf as httpOriginOfUrl, type WebEntry } from "./remote/web-entry";import { FilePreviewService, ProjectService, RemoteEventHub, ThreadService } from "./remote/services";
 import { RemoteService, type RemoteBackend } from "./remote/service";
 import {
@@ -1814,6 +1814,23 @@ function builtinRelayChannel(builtin: BuiltinServer, authCode: string, hostUrl?:
  * 局域网（若开）→ 云中继（自定义或内置）→ 备用公网地址。
  * 本机回环地址（`ws://127.0.0.1`）对手机没意义，不进票。
  */
+/**
+ * **旧客户端**（只有一个 `relayUrl` 字段）该拿哪条地址。
+ *
+ * 2026-11-05 真机：手机退回 0.5.154 后扫码配对 timeout——旧版不认 `mobileRelayUrls` 数组，
+ * 只读这个单值，而它以前取的是地址列表**第一条**（＝局域网地址 `ws://<内网IP>:9001/ws`）。
+ * 手机在 tailnet / 移动数据上根本到不了那个内网 IP，于是连不上、也没有别的地址可回落。
+ *
+ * 规则：跳过局域网地址，给**公网可达**的那条（内置/自定义中继）。新客户端走数组
+ * （局域网优先、失败逐个回落），不受这里影响。
+ */
+function legacyPhoneRelayUrl(): string {
+  return legacyTicketUrl(
+    phoneTicketAddresses(),
+    lanChannels(relayChannelContext()).map((channel) => channel.phoneUrl),
+  );
+}
+
 function phoneTicketAddresses(): string[] {
   const cfg = getConfig();
   const urls: string[] = [];
@@ -4684,7 +4701,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     sendToRenderer: send,
     service: remoteService,
     // 配对票里给手机的地址（S2：由通道列表算出；局域网通道已置顶——同网段直连更快、不占公网）。
-    mobileRelayUrl: () => phoneTicketAddresses()[0] || "",
+    // 旧客户端只认这一个值 → 必须公网可达（见 legacyPhoneRelayUrl 的注释）。
+    mobileRelayUrl: () => legacyPhoneRelayUrl(),
     // S3：同一份列表整份给票（旧客户端读 relayUrl 单值，新客户端按序选路）。
     mobileRelayUrls: () => phoneTicketAddresses(),
     // 同名且离线的旧绑定在配对时被替换（设置里可关）——网页端换网址就是新身份，
@@ -5063,7 +5081,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       // 手机该连的地址（与主机→中继的上行可以不同：手机没有 Tailscale，必须给公网可达地址）。
       mobileRelayUrl: cfg.mobileRelayUrl || "",
       // **本次配对票里实际会告诉手机的地址**（S2：由通道列表算出，局域网优先）。
-      phoneRelayUrl: addresses[0] || "",
+      phoneRelayUrl: legacyPhoneRelayUrl(),
       /**
        * **配对二维码/链接该指向的网页入口 | 单一来源**（2026-10 收敛）。
        *
