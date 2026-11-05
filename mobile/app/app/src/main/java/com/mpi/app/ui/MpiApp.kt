@@ -324,6 +324,11 @@ fun MpiApp(container: AppContainer) {
                     onCheckUpdate = { viewModel.checkUpdate(manual = true) },
                     onInstallUpdate = viewModel::downloadAndInstallUpdate,
                     onDismissUpdateError = viewModel::dismissUpdateError,
+                    account = state.account,
+                    onAccountDialog = viewModel::setAccountDialog,
+                    onAccountSignIn = viewModel::accountSignIn,
+                    onAccountSyncNow = viewModel::accountSyncNow,
+                    onAccountSignOut = viewModel::accountSignOut,
                     onClose = { settingsOpen = false },
                 )
             }

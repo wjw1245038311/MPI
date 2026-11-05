@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -115,6 +116,12 @@ fun SettingsScreen(
     onCheckUpdate: () -> Unit,
     onInstallUpdate: () -> Unit,
     onDismissUpdateError: () -> Unit,
+    /** 账号与配置同步（null = 从未登录）。 */
+    account: AccountUi?,
+    onAccountDialog: (Boolean) -> Unit,
+    onAccountSignIn: (String, String, Boolean) -> Unit,
+    onAccountSyncNow: () -> Unit,
+    onAccountSignOut: () -> Unit,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -148,6 +155,18 @@ fun SettingsScreen(
                     title = "通知",
                     trailing = "在系统设置里管理",
                     onClick = { openAppNotificationSettings(context) },
+                )
+                // 配置同步：登录后把「主机配对清单 + 外观/字号等设置」加密同步到账号，
+                // 换机/重装后登录即恢复（卸载会清空本地加密存储，这是账号存在的意义）。
+                SettingsItem(
+                    icon = null,
+                    title = "配置同步",
+                    trailing = when {
+                        account?.busy == true -> "同步中…"
+                        account?.loggedIn == true -> account.identifier ?: "已登录"
+                        else -> "未登录"
+                    },
+                    onClick = { onAccountDialog(true) },
                 )
                 // 「对话完成」提醒：只在**后台/锁屏**且回合是**手机自己发起**时发。
                 // 前台盯着屏幕看回复时不打扰；桌面发起的回合也不响（用户确认的口径）。
@@ -391,6 +410,16 @@ fun SettingsScreen(
                     runCatching { context.startActivity(intent) }
                 }) { Text("电池优化") }
             },
+        )
+    }
+
+    if (account?.dialogOpen == true) {
+        AccountSyncDialog(
+            account = account,
+            onSignIn = onAccountSignIn,
+            onSyncNow = onAccountSyncNow,
+            onSignOut = onAccountSignOut,
+            onDismiss = { onAccountDialog(false) },
         )
     }
 
@@ -817,4 +846,109 @@ private fun DiagRow(label: String, value: String, monospace: Boolean = false) {
             modifier = Modifier.weight(1f),
         )
     }
+}
+
+/**
+ * 账号与同步对话框。
+ *
+ * 未登录：账号（手机号或邮箱）+ 密码，「登录 / 注册」两个按钮；
+ * 已登录：显示账号与最近同步时间，「立即同步 / 退出登录」。
+ *
+ * 密码只用于本地派生同步密钥（PBKDF2），服务器收到的是它自己那份 scrypt 哈希——
+ * 界面上不要缓存明文，所以每次打开都是空栏位。
+ */
+@Composable
+private fun AccountSyncDialog(
+    account: AccountUi,
+    onSignIn: (String, String, Boolean) -> Unit,
+    onSyncNow: () -> Unit,
+    onSignOut: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var identifier by remember { mutableStateOf(account.identifier.orEmpty()) }
+    var password by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (account.loggedIn) "配置同步" else "登录账号") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (account.loggedIn) {
+                    Text("账号：${account.identifier}", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = account.lastSyncAt?.let { "上次同步：${formatSyncTime(it)}" } ?: "尚未同步",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MpiTheme.colors.textDim,
+                    )
+                    Text(
+                        text = "同步内容：主机配对清单 + 外观/字号等设置。卸载或换机后，登录这个账号即可恢复。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MpiTheme.colors.textFaint,
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = identifier,
+                        onValueChange = { identifier = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("手机号或邮箱") },
+                        enabled = !account.busy,
+                    )
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("密码（至少 8 位）") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        enabled = !account.busy,
+                    )
+                    Text(
+                        text = "密码只在本机派生同步密钥，服务器看不到你的配对与设备令牌。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MpiTheme.colors.textFaint,
+                    )
+                }
+                account.error?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MpiTheme.colors.err)
+                }
+                account.info?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MpiTheme.colors.textDim)
+                }
+                if (account.busy) {
+                    Text("处理中…", style = MaterialTheme.typography.bodySmall, color = MpiTheme.colors.textFaint)
+                }
+            }
+        },
+        confirmButton = {
+            if (account.loggedIn) {
+                TextButton(onClick = onSyncNow, enabled = !account.busy) { Text("立即同步") }
+            } else {
+                TextButton(
+                    onClick = { onSignIn(identifier, password, false) },
+                    enabled = !account.busy && identifier.isNotBlank() && password.length >= 8,
+                ) { Text("登录") }
+            }
+        },
+        dismissButton = {
+            if (account.loggedIn) {
+                TextButton(onClick = onSignOut, enabled = !account.busy) { Text("退出登录") }
+            } else {
+                TextButton(
+                    onClick = { onSignIn(identifier, password, true) },
+                    enabled = !account.busy && identifier.isNotBlank() && password.length >= 8,
+                ) { Text("注册") }
+            }
+        },
+    )
+}
+
+/** 同步时间：今天只显示时分，更早显示「月-日 时:分」（手机上不需要精确到秒）。 */
+private fun formatSyncTime(at: Long): String {
+    val date = java.util.Date(at)
+    val fmt = java.text.SimpleDateFormat(
+        if (System.currentTimeMillis() - at < 24L * 60 * 60 * 1000) "HH:mm" else "MM-dd HH:mm",
+        java.util.Locale.getDefault(),
+    )
+    return fmt.format(date)
 }

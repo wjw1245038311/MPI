@@ -19,6 +19,8 @@ internal data class StoreSnapshot(
     val version: Int = FileKeyStore.STORE_VERSION,
     val device: DeviceRecord? = null,
     val pairings: List<PairingRecord> = emptyList(),
+    /** 账号登录状态 + 同步密钥（与配对同处加密存储；卸载即失，重新登录可恢复）。 */
+    val account: AccountState? = null,
 )
 
 /**
@@ -62,6 +64,12 @@ class FileKeyStore(
     }
 
     override suspend fun listPairings(): List<PairingRecord> = read().pairings
+
+    override suspend fun getAccount(): AccountState? = read().account
+
+    override suspend fun saveAccount(state: AccountState) = update { it.copy(account = state) }
+
+    override suspend fun clearAccount() = update { it.copy(account = null) }
 
     /** 显式清空本地数据（用户主动要求时调用）。 */
     override suspend fun reset() = mutex.withLock {

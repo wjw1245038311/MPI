@@ -5,6 +5,10 @@ import androidx.lifecycle.ViewModelProvider
 import android.os.SystemClock
 import com.mpi.app.AppContainer
 import com.mpi.app.AppVisibility
+import com.mpi.app.data.AcctCrypto
+import com.mpi.app.data.AccountApi
+import com.mpi.app.data.AccountState
+import com.mpi.app.data.AccountSync
 import com.mpi.app.data.Attachment
 import com.mpi.app.data.AttachmentLoader
 import com.mpi.app.data.AttachmentCrypto
@@ -35,6 +39,7 @@ import com.mpi.app.data.SendMode
 import com.mpi.app.data.SettingsStore
 import com.mpi.app.data.Speaker
 import com.mpi.app.data.ThreadActions
+import java.util.Base64
 import java.io.File
 import com.mpi.app.data.ThreadCache
 import com.mpi.app.data.ThreadSession
@@ -104,6 +109,23 @@ internal fun queuedNoteOf(response: kotlinx.serialization.json.JsonElement?): St
  */
 enum class VoiceChatState { Listening, Transcribing, Thinking, Speaking }
 
+/**
+ * 账号与同步的界面状态（登录后才有 lastSyncAt / revision）。
+ *
+ * 密钥只存内存 + SecretBox 加密的本地存储，**从不落明文**；见 [com.mpi.app.data.AccountState]。
+ */
+data class AccountUi(
+    val identifier: String? = null,
+    val busy: Boolean = false,
+    val lastSyncAt: Long? = null,
+    val revision: Int = 0,
+    val error: String? = null,
+    val info: String? = null,
+    val dialogOpen: Boolean = false,
+) {
+    val loggedIn: Boolean get() = !identifier.isNullOrEmpty()
+}
+
 data class AppUiState(
     val initializing: Boolean = true,
     val pairings: List<PairingRecord> = emptyList(),
@@ -118,6 +140,8 @@ data class AppUiState(
     val addingHost: Boolean = false,
     /** 本地存储损坏：需要用户显式决定是否重置（绝不静默清空）。 */
     val storeError: String? = null,
+    /** 账号与配置同步（null = 从未登录过）。 */
+    val account: AccountUi? = null,
     /**
      * 语音对话模式（null = 未开启）。开启时长按麦克风 3 秒进入。
      */
@@ -325,6 +349,14 @@ class AppViewModel(
             val pairings = keyStore.listPairings().sortedByDescending { it.sortKey }
             _ui.update { it.copy(initializing = false, pairings = pairings, storeError = null) }
 
+            // 账号状态（只读本地，不联网；没登录过就什么都不显示）
+            loadAccountUi()
+            // 已登录就在后台静默同步一次（多设备场景下“别处新加的主机”能自动出现）。
+            // 失败静默：启动时网络不一定就绪，报错只会吓人，用户可在设置里手动同步。
+            if (keyStore.getAccount() != null) {
+                scope.launch { runCatching { syncAccountLocked() } }
+            }
+
             // 自动重连最近用过的那台主机
             pairings.firstOrNull()?.let { attach(it) }
         } catch (e: KeyStoreCorruptException) {
@@ -341,6 +373,135 @@ class AppViewModel(
     }
 
     // ---- 配对 ----
+
+    // ---- 账号与配置同步（Stage 2）-------------------------------------------------
+    //
+    // 为什么放这里而不是单独一个类：它要读配对清单（本机 authority）、写本地设置、
+    // 并在成功后刷新列表——都是这个 ViewModel 的既有职责，拆出去反而要互相回调。
+
+    /** 打开/关闭「账号与同步」对话框。 */
+    fun setAccountDialog(open: Boolean) = _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(dialogOpen = open, error = null)) }
+
+    /**
+     * 登录或注册，然后立刻同步一次。
+     *
+     * 成功后：派生同步密钥 → 与账号状态一起写进加密存储（AndroidKeyStore 那层保护），
+     * 这样日常重启不必再输密码；卸载/换机后这份没了，重新登录即可恢复。
+     */
+    fun accountSignIn(identifier: String, password: String, register: Boolean) {
+        val id = identifier.trim()
+        if (id.isEmpty() || password.length < 8) {
+            _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(error = "账号必填，密码至少 8 位")) }
+            return
+        }
+        scope.launch {
+            _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(busy = true, error = null, info = null)) }
+            try {
+                val api = accountApiOrThrow()
+                val session = if (register) api.register(id, password) else api.login(id, password)
+                val key = AcctCrypto.deriveKey(password, session.kdfSalt)
+                keyStore.saveAccount(
+                    AccountState(session = session, keyB64 = Base64.getEncoder().encodeToString(key)),
+                )
+                _ui.update { it.copy(account = AccountUi(identifier = session.identifier, dialogOpen = true, busy = true)) }
+                syncAccountLocked()
+                _ui.update {
+                    it.copy(account = (it.account ?: AccountUi()).copy(busy = false, info = if (register) "已注册并完成首次同步" else "已登录并完成同步"))
+                }
+            } catch (e: Exception) {
+                _ui.update {
+                    it.copy(account = (it.account ?: AccountUi()).copy(busy = false, error = e.message ?: "账号操作失败"))
+                }
+            }
+        }
+    }
+
+    /** 手动同步一次（登录后自动同步过，这里是兜底按钮）。 */
+    fun accountSyncNow() {
+        scope.launch {
+            _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(busy = true, error = null, info = null)) }
+            try {
+                syncAccountLocked()
+                _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(busy = false, info = "已同步")) }
+            } catch (e: Exception) {
+                _ui.update { it.copy(account = (it.account ?: AccountUi()).copy(busy = false, error = e.message ?: "同步失败")) }
+            }
+        }
+    }
+
+    /** 退出账号：只清账号状态，**配对与本地设置原样保留**（退出不等于解绑设备）。 */
+    fun accountSignOut() {
+        scope.launch {
+            keyStore.clearAccount()
+            _ui.update { it.copy(account = AccountUi(dialogOpen = (it.account?.dialogOpen ?: false), info = "已退出账号（配对未删除）")) }
+        }
+    }
+
+    /** 启动时把已保存的账号状态读回界面（不联网）。 */
+    private suspend fun loadAccountUi() {
+        val saved = keyStore.getAccount() ?: return
+        _ui.update {
+            it.copy(
+                account = AccountUi(
+                    identifier = saved.session.identifier,
+                    lastSyncAt = saved.lastSyncAt.takeIf { value -> value > 0 },
+                    revision = saved.revision,
+                ),
+            )
+        }
+    }
+
+    /** 账号接口地址：从**所有配对记录的中继候选**里挑 TLS 那一条，并 TOFU 取回自签 CA。 */
+    private suspend fun accountApiOrThrow(): AccountApi {
+        val candidates = _ui.value.pairings
+            .flatMap { listOfNotNull(it.relayUrl, it.lastGoodRelayUrl) + it.relayUrls }
+            .distinct()
+        val tlsBase = AccountApi.tlsBaseOf(candidates)
+            ?: throw IllegalStateException("当前没有任何 TLS 中继地址，无法使用账号（先在设置里连一台主机）")
+        val caPem = AccountApi.plainBaseOf(candidates)?.let { AccountApi.fetchCaPem(it) }
+        return AccountApi(tlsBase, caPem)
+    }
+
+    /**
+     * 真正的同步（调用方负责 busy/错误态）：
+     *   拉密文 → 用派生密钥解密 → **本地优先合并** → 写回本地 → 加密上传。
+     *
+     * 顺序不能反：先上传会把这台机器上缺失的配对推给服务器，另一台设备再拉就永远补不回来。
+     */
+    private suspend fun syncAccountLocked() {
+        val state = keyStore.getAccount() ?: throw IllegalStateException("尚未登录账号")
+        val key = Base64.getDecoder().decode(state.keyB64)
+        val api = accountApiOrThrow()
+
+        val remote = api.getBlob(state.session.token)
+        val remotePayload = remote.ciphertext?.let { sealed -> AcctCrypto.open(key, sealed)?.let(AccountSync::decode) }
+        val localPairings = keyStore.listPairings()
+        val merged = AccountSync.mergePairings(localPairings, remotePayload?.pairings ?: emptyList())
+        // 远端多出来的配对落到本地（本地已有的不覆盖）。
+        val known = localPairings.map { it.hostId }.toSet()
+        for (record in merged) {
+            if (record.hostId !in known) keyStore.savePairing(record)
+        }
+        // 设置：本地没有的键才从远端补（本地优先，与配对同语义）。
+        val appliedSettings = AccountSync.mergeSettings(AccountSync.settingsToMap(settingsStore.settings.value), remotePayload?.settings ?: emptyMap())
+        AccountSync.applySettings(appliedSettings, settingsStore)
+
+        val payload = AccountSync.build(
+            pairings = keyStore.listPairings(),
+            settings = appliedSettings,
+        )
+        val sealed = AcctCrypto.seal(key, AccountSync.encode(payload))
+        val written = api.putBlob(state.session.token, sealed, remote.revision)
+        val now = System.currentTimeMillis()
+        keyStore.saveAccount(state.copy(lastSyncAt = now, revision = written.revision))
+        // 刷新界面里的主机列表（可能刚补进别的设备配对的主机）。
+        _ui.update {
+            it.copy(
+                pairings = keyStore.listPairings().sortedByDescending { record -> record.sortKey },
+                account = (it.account ?: AccountUi(identifier = state.session.identifier)).copy(lastSyncAt = now, revision = written.revision),
+            )
+        }
+    }
 
     fun pairWithLink(link: String) {
         scope.launch {
