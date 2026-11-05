@@ -1220,7 +1220,8 @@ class AppViewModel(
     fun steerPendingFollowUp() {
         val text = _ui.value.pendingFollowUp ?: return
         _ui.update { it.copy(pendingFollowUp = null) }
-        send(text, SendMode.Steer)
+        // 待处理后续只有文本：别把输入条上正给下一轮准备的附件抢走
+        send(text, SendMode.Steer, includeAttachments = false)
     }
 
     /** ✎ 取回输入框重新编辑。 */
@@ -1241,7 +1242,8 @@ class AppViewModel(
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _ui.value.sending) return
         val mode = if (_ui.value.thread?.running == true) SendMode.FollowUp else SendMode.Prompt
-        send(trimmed, mode, clearDraft = false)
+        // choices 面板只发这几个选项，**不带**输入条里待发的附件（用户下一条还要用）
+        send(trimmed, mode, clearDraft = false, includeAttachments = false)
     }
 
     // ---- 附件（M4 原生能力）----
@@ -1924,7 +1926,7 @@ class AppViewModel(
     private fun flushPendingFollowUp() {
         val text = _ui.value.pendingFollowUp ?: return
         _ui.update { it.copy(pendingFollowUp = null) }
-        send(text, SendMode.Prompt)
+        send(text, SendMode.Prompt, includeAttachments = false)
     }
 
     /**
@@ -2120,13 +2122,26 @@ class AppViewModel(
         }
     }
 
-    private fun send(text: String, mode: SendMode, clearDraft: Boolean = true, retried: Boolean = false) {
+    /**
+     * 发一条消息。
+     *
+     * @param includeAttachments 是否带上**输入条里待发的附件**。只有用户点发送（[sendDraft]）
+     *   才该带上；choices 面板回复、投递「待处理后续」、立即插入（steer）都不该抢用户的附件——
+     *   2026-11-06 真机：「通过 choice 面板回复，却把下一轮要发的图片一起发掉了」。
+     */
+    private fun send(
+        text: String,
+        mode: SendMode,
+        clearDraft: Boolean = true,
+        retried: Boolean = false,
+        includeAttachments: Boolean = true,
+    ) {
         val session = threadSession ?: return
         val actions = threadActions ?: return
         // 附件：图片与文件分别按协议形状打包（主机端会逐项校验）。
         // 图片（P3）：直连上传成功的是「key + 缩略图」，未成功的是内联 base64——由
         // imagePayloads 统一组装（纯函数，单测钉住了两种形状）。
-        val pending = _ui.value.attachments
+        val pending = if (includeAttachments) _ui.value.attachments else emptyList()
         val images = imagePayloads(pending)
         val files = pending.filterIsInstance<Attachment.File>().map { file ->
             kotlinx.serialization.json.buildJsonObject {
@@ -2222,8 +2237,13 @@ class AppViewModel(
                 // notifyFinishedTurns 的飞书已读口径）。
                 phoneTurnStarted = true
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
-                _ui.update {
-                    it.copy(sending = false, attachments = emptyList(), sendNote = sendNoteOf(result, mode))
+                _ui.update { state ->
+                    state.copy(
+                        sending = false,
+                        // 没带附件的那条（choices / 待处理后续 / steer）不能清输入条上的附件
+                        attachments = if (includeAttachments) emptyList() else state.attachments,
+                        sendNote = sendNoteOf(result, mode),
+                    )
                 }
             } catch (error: Exception) {
                 val raw = error.message.orEmpty()
@@ -2232,7 +2252,7 @@ class AppViewModel(
                 if (!retried && mode != SendMode.FollowUp && isBusyError(raw)) {
                     session.prepareRetry(localId)
                     _ui.update { it.copy(sending = false) }
-                    send(text, SendMode.FollowUp, clearDraft = false, retried = true)
+                    send(text, SendMode.FollowUp, clearDraft = false, retried = true, includeAttachments = includeAttachments)
                     return@launch
                 }
                 session.markSendFailed(localId, error.message ?: "发送失败")
