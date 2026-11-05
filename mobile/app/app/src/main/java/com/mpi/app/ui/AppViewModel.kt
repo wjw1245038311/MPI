@@ -178,6 +178,8 @@ data class AppUiState(
     val draft: String = "",
     /** 正在发送（避免重复点发送）。 */
     val sending: Boolean = false,
+    /** 安全模式：上次启动崩过，这次不自动连主机（界面给一条横幅，点一下就恢复）。 */
+    val startupSafeMode: Boolean = false,
     /** 正在进行会话内同步（顶栏/配置面板的「刷新」）——按钮显示进行中，不再「点什么都没反应」。 */
     val syncing: Boolean = false,
     /** 正在提交审批回应。 */
@@ -281,6 +283,8 @@ class AppViewModel(
     private val networkWatcher: NetworkWatcher,
     /** 上一次打开的会话（重启后优先回到它，见 [LastThreadStore]）。 */
     private val lastThread: LastThreadStore,
+    /** 从协程逃出来的非致命异常（见 AppContainer.scope 的处理器）——当成「问题」展示。 */
+    private val containerUncaught: kotlinx.coroutines.flow.SharedFlow<String>,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(AppUiState())
@@ -362,11 +366,29 @@ class AppViewModel(
     private var unsubscribeProblems: (() -> Unit)? = null
     private val jobs = mutableListOf<Job>()
 
+    /**
+     * 这次启动要不要走**安全模式**（上次死在启动/自动重连阶段）。
+     *
+     * 必须在这里就读定：构造函数里安排 `initialize()`，而安全模式影响的就是它。
+     * 读的时候顺手把「上次崩在启动阶段」的标记清掉——本次已经在安全模式里跑，
+     * 下次启动就该回正常路径（若又崩，崩溃处理器会再写一份，仍会进安全模式）。
+     */
+    private val safeMode = com.mpi.app.CrashLog.shouldEnterSafeMode()
+
     init {
         // 快恢复：系统恢复网络（Doze 维护窗口 / 回 Wi-Fi）时立刻重连，不等退避。
         // 与 MpiApp 的前后台 kick 并列；已连上时 HostSession.kick 自己短路。
         networkWatcher.start()
         networkWatcher.addListener { session?.kick() }
+        // 协程里逃出来的非致命异常（挂了 CoroutineExceptionHandler）→ 当成一条「问题」展示，
+        // 不再让它们只活在 logcat 里（更不能让它们把进程带走）。
+        scope.launch {
+            containerUncaught.collect { message ->
+                _ui.update { state ->
+                    state.copy(problems = (state.problems.filterNot { it == message } + message).takeLast(MAX_PROBLEMS))
+                }
+            }
+        }
         // 清掉历史更新包（一版一个 27MB 堆在 cacheDir，老用户装上新版后得主动释放）。
         scope.launch { withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { updater.pruneDownloadArtifacts() } } }
         scope.launch { initialize() }
@@ -382,10 +404,17 @@ class AppViewModel(
             identity = createDeviceIdentity(stored.seedB64url)
 
             val pairings = keyStore.listPairings().sortedByDescending { it.sortKey }
-            _ui.update { it.copy(initializing = false, pairings = pairings, storeError = null) }
+            _ui.update {
+                it.copy(initializing = false, pairings = pairings, storeError = null, startupSafeMode = safeMode)
+            }
 
             // 账号状态（只读本地，不联网；没登录过就什么都不显示）
             loadAccountUi()
+            if (safeMode) {
+                // 安全模式：上次就是死在启动/自动重连/账号同步这一段，这次一个网络动作都不做，
+                // 先保证 App 能进去（真机诉求：「完全无法进入 App」）。
+                return
+            }
             // 已登录就在后台静默同步一次（多设备场景下“别处新加的主机”能自动出现）。
             // 失败静默：启动时网络不一定就绪，报错只会吓人，用户可在设置里手动同步。
             if (keyStore.getAccount() != null) {
@@ -404,6 +433,9 @@ class AppViewModel(
                     pairingError = "本地数据读写失败：${e.message ?: e::class.java.simpleName}",
                 )
             }
+        } finally {
+            // 启动阶段结束：清掉「启动中」标记（否则下次会被当成交付前又崩了）
+            com.mpi.app.CrashLog.finishStartup()
         }
     }
 
@@ -566,8 +598,9 @@ class AppViewModel(
             throw IllegalStateException("当前没有任何 TLS 中继地址，无法使用账号（先在设置里连一台主机）")
         }
         // CA 也从**任一可达**的明文候选取（手机可能不在主机同网段：真机曾连内网 9443 超时）。
+        // 最多探 3 条：每条 4s 连 + 4s 读，候选一多就能把启动拖到几秒——账号服务不是关键路径。
         var caPem: String? = null
-        for (plain in AccountApi.plainBasesOf(candidates)) {
+        for (plain in AccountApi.plainBasesOf(candidates).take(3)) {
             caPem = AccountApi.fetchCaPem(plain)
             if (caPem != null) break
         }
@@ -2243,11 +2276,24 @@ class AppViewModel(
     }
 
     fun reconnect() {
-        session?.reauthenticate()
+        val record = currentRecord
+        val current = session
+        if (current == null) {
+            // 安全模式下没有任何会话：这里手动补上自动连接（并清掉安全模式）
+            val target = record ?: _ui.value.pairings.firstOrNull()
+            if (target == null) {
+                _ui.update { it.copy(problems = (it.problems + "还没有配对的主机，先去「主机」里添加").takeLast(MAX_PROBLEMS)) }
+                return
+            }
+            com.mpi.app.CrashLog.clearSafeMode()
+            _ui.update { it.copy(startupSafeMode = false) }
+            attach(target)
+            return
+        }
+        current.reauthenticate()
     }
 
-    /**
-     * 回到前台时踢一次重连（MpiApp 在前后台变化时调用）。
+    /** 回到前台时踢一次重连（MpiApp 在前后台变化时调用）。
      *
      * 长时间后台后连接已死，而自动重连是按退避走的（最长 30s）——不等退避就能立刻恢复，
      * 不用再「完全关掉 App」。
@@ -2469,6 +2515,10 @@ class AppViewModel(
         // M5：起前台服务保活——进程活着，连接与审批提醒才收得到
         notifier.startLinkService()
 
+        // 能走到这里说明「连接这条路」正常：安全模式该解除了（下次启动回正常路径）。
+        com.mpi.app.CrashLog.clearSafeMode()
+        if (_ui.value.startupSafeMode) _ui.update { it.copy(startupSafeMode = false) }
+
         // 记住「最近用过」，下次启动自动重连这台
         scope.launch { keyStore.savePairing(record.copy(lastSeenAt = System.currentTimeMillis())) }
     }
@@ -2545,6 +2595,7 @@ class AppViewModel(
                         container.turnWakeLock,
                         container.networkWatcher,
                         container.lastThread,
+                        container.uncaught,
                     ) as T
             }
     }

@@ -108,14 +108,27 @@ class RelayClient(
         return { stateListeners -= listener }
     }
 
-    /** 发起连接；已有 socket（含握手中）时返回 false。 */
+    /** 发起连接；已有 socket（含握手中）时返回 false。
+     *
+     * **绝不抛异常**（2026-11-06）：`Request.Builder().url(...)` 和中继只接受 ws/wss，
+     * 配对记录里若出现空串 / 奇形地址（手改、旧版本写入、或服务端给的异常值），
+     * 这里会抛 IllegalArgumentException；而调用点一个在**主线程**（kick）、
+     * 一个在**协程**（重连）——两者都会把进程带走，真机表现就是「闪退」+「再也进不去」。
+     * 现在一律转成 Failed 状态，界面上能看到原因。
+     */
     fun connect(): Boolean {
         if (socket != null) return false
         val gen = generation.incrementAndGet()
         opened = false
         publishState(RelayState.Connecting)
-        val request = Request.Builder().url(url).build()
-        socket = httpClient.newWebSocket(
+        val request = try {
+            Request.Builder().url(url).build()
+        } catch (e: IllegalArgumentException) {
+            publishState(RelayState.Failed("中继地址无效（$url）：${e.message}"))
+            return false
+        }
+        socket = try {
+            httpClient.newWebSocket(
             request,
             object : WebSocketListener() {
                 /** 本回调是否属于当前这条 socket（旧 socket 的事件一律丢弃）。 */
@@ -157,7 +170,14 @@ class RelayClient(
                     publishState(RelayState.Failed(t.message ?: t::class.java.simpleName))
                 }
             },
-        )
+            )
+        } catch (e: Exception) {
+            // newWebSocket 对非 ws/wss 也会抛（比如地址被误写成 http://）——同样不能让它冒出去
+            socket = null
+            opened = false
+            publishState(RelayState.Failed("中继连接失败（$url）：${e.message ?: e.javaClass.simpleName}"))
+            return false
+        }
         return true
     }
 

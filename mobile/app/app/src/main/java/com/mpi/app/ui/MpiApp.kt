@@ -56,6 +56,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mpi.app.AppContainer
+import com.mpi.app.CrashLog
 import com.mpi.app.data.Appearance
 import com.mpi.app.data.PairingRecord
 import com.mpi.app.data.SessionState
@@ -80,8 +81,25 @@ fun MpiAppRoot(container: AppContainer) {
         Appearance.Light -> false
         Appearance.Dark -> true
     }
+    // 上次崩溃的现场：先占一屏（可复制/分享），否则手机端闪退后没有任何证据可拿。
+    // 先把安全模式判定读出来（它会顺手记下「本次该降级」），再决定要不要创建 ViewModel。
+    val safeMode = remember { CrashLog.shouldEnterSafeMode() }
+    var crashReport by remember { mutableStateOf(CrashLog.lastCrash()) }
     MpiTheme(darkTheme = dark, fontScale = settings.fontSize.scale) {
-        MpiApp(container)
+        val report = crashReport
+        if (report != null) {
+            CrashScreen(
+                report = report,
+                safeMode = safeMode,
+                onDismiss = {
+                    // 看过就清掉（否则每次启动都拦一屏）；崩溃若再现会再写一份。
+                    CrashLog.clearLastCrash()
+                    crashReport = null
+                },
+            )
+        } else {
+            MpiApp(container)
+        }
     }
 }
 

@@ -71,6 +71,17 @@ fun HomeScreen(
             )
         }
 
+        // 安全模式（上次启动崩在初始化/自动重连阶段）：这次故意不自动连上次的主机，
+        // 保证 App 能进去；用户点一下就连（也顺便清掉安全模式）。
+        if (state.startupSafeMode) {
+            Banner(
+                text = "安全模式：本次没有自动连接上次的主机（上次启动崩溃过）",
+                tone = Tone.Warning,
+                actionLabel = "立即连接",
+                onAction = onReconnect,
+            )
+        }
+
         if (host.partialErrors.isNotEmpty()) {
             Banner(
                 text = "部分项目加载失败：" + host.partialErrors.joinToString("；"),

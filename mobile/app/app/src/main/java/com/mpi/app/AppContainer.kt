@@ -18,9 +18,12 @@ import com.mpi.app.data.TurnWakeLock
 import com.mpi.app.data.Updater
 import com.mpi.app.data.VoiceRecorder
 import java.io.File
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -88,8 +91,20 @@ class AppContainer(context: Context) {
      */
     val foreground = MutableStateFlow(false)
 
+    /** 从协程里逃出来的非致命异常（文案）——UI 拿去当「问题」展示。 */
+    val uncaught = MutableSharedFlow<String>(extraBufferCapacity = 8)
+
     /** 与 UI 生命周期同长的作用域（会话/仓库/轮询都挂在这里）。 */
-    val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val scope: CoroutineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
+            // 2026-11-06：以前这里没处理器——任何 scope.launch 里逃出来的异常都会
+            // **直接打死进程**（真机就表现为「随机闪退 / 闪退后进不去 App」，而且拿不到任何栈）。
+            // 现在：写一份取证 + 通报给 UI（问题列表），进程继续跑。
+            if (error is CancellationException) return@CoroutineExceptionHandler
+            CrashLog.recordNonFatal(error)
+            uncaught.tryEmit("后台任务出错（已忽略）：${error.javaClass.simpleName} ${error.message ?: ""}".trim())
+        },
+    )
 
     /**
      * 报给桌面端的设备名（多设备列表里用来区分是哪台手机）。

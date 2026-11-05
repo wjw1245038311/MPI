@@ -69,7 +69,8 @@ class AccountApi(
      */
     private suspend fun base(): String = withContext(Dispatchers.IO) {
         var lastError: Exception? = null
-        for (candidate in bases) {
+        // 最多探 3 条：候选多时不为账号接口把所有地址都试一遍（每条 3s）
+        for (candidate in bases.take(3)) {
             val ok = runCatching {
                 val probe = client.newBuilder()
                     .connectTimeout(3, TimeUnit.SECONDS)
