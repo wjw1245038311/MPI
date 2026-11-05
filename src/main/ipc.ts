@@ -2748,7 +2748,13 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     // 2026-10-10：400KB → 900KB —— 手机端缩略图从 640px/150KB 提到 960px/220KB 后，
     // 旧预算一张图就吃光了，同屏后面的图会直接没有画面。再往上要慎重：
     // 快照是每次刷新都要传的，预算是「刷新速度 ↔ 图片清晰度」的直接互换。
-    let imageBudget = 900_000;
+    //
+    // 2026-11-06：900KB → 240KB，并且**只给最近的消息**上图片（见 IMAGE_RECENT_MESSAGES）。
+    // 真机一次全量快照 encoded=1.18MB，大头是历史图片的 base64：手机要整帧解析 + 逐张解码。
+    // 图片是「会滚走的旧内容」——保留最近一段即可，更早的仍可点开按需拉（块里带 key 时不丢链接）。
+    let imageBudget = 240_000;
+    /** 只有「最近这么多条消息」里的图片才随快照下发（更早的省掉，避免每次刷新都传历史图）。 */
+    const IMAGE_RECENT_MESSAGES = 12;
     /**
      * 读缩略图并转 base64（P3）；读不到 → null（调用方回落到「内联小原图」那条老路）。
      *
@@ -2877,7 +2883,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         .trim();
     }
 
-    const blocksFor = (message: any, imageRefs: MediaRef[] = []): RemoteBlock[] => {
+    const blocksFor = (message: any, imageRefs: MediaRef[] = [], messageIndex = -1): RemoteBlock[] => {
       if (typeof message?.content === "string") {
         const text = splitVideoRefs(message.content).text.slice(0, 12_000);
         return text ? [{ type: "text", text }] : [];
@@ -2916,6 +2922,11 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           };
         }
         if (block?.type === "image" && typeof block.data === "string") {
+          // 只给最近一段消息上图（2026-11-06）：历史图片的 base64 是全量快照里最大的一块，
+          // 而旧图早已滚出屏幕，没必要每次刷新都重传一遍。
+          if (messageIndex >= 0 && totalSource > 0 && messageIndex < totalSource - IMAGE_RECENT_MESSAGES) {
+            return null;
+          }
           // P3：有缩略图就下发缩略图（几十 KB），原图由客户端按 key 拉；
           // 没有缩略图（老消息）才照旧内联小原图。决策表在 remote/image-thumbs.ts。
           const ref = refs.shift();
@@ -3023,7 +3034,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
 
     const appendAssistant = (message: any, index: number) => {
       const text = textFor(message);
-      const blocks = blocksFor(message);
+      const blocks = blocksFor(message, [], index);
       const artifacts = artifactsByMessage.get(index);
       if (!assistantRound) {
         assistantRound = {
@@ -3096,6 +3107,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       return block;
     }
 
+    /** 本轮快照的原始消息条数（用于「最近 N 条才上图」的判定）。 */
+    const totalSource = source.length;
     source.forEach((message: any, index) => {
       if (message?.role === "assistant") {
         appendAssistant(message, index);
@@ -3130,7 +3143,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         role === "user" ? stripImageDimensionNotes(rawUserText) : rawUserText,
       );
       const imageRefs = mediaRefs.filter((ref) => ref.kind === "image" && ref.thumb);
-      const blocks = blocksFor(message, imageRefs);
+      const blocks = blocksFor(message, imageRefs, index);
       // 按 kind 分发块：video 走 video 块（封面在函数末尾按预算回填），audio 走 audio 块。
       // **图片引用在这里排掉**——它们已经由上面的 blocksFor 用缩略图替换成 image 块；
       // 从前这里会把 image 引用也生成一个 video 块（哈希名 + video/mp4），点开必失败。

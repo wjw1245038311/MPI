@@ -59,7 +59,20 @@ export const REMOTE_HISTORY_BYTE_BUDGET = MAX_INNER_ENVELOPE_BYTES - SNAPSHOT_HE
  * 增量快照（客户端带 haveMessageId）是治本；这里是**兼底**：首次/全量下发也不超 2MB，
  * 而 8MB 那层硬保证仍由 [trimRemoteHistoryByEncodedSize] 的默认值守着。
  */
-export const REMOTE_SNAPSHOT_BYTE_BUDGET = 2_000_000;
+/**
+ * 一次**全量快照**的软预算（字节）。
+ *
+ * 2026-11-06 从 2MB 降到 420KB：真机实测一次订阅下发 `encoded=1181376`（1.18MB），
+ * 内容是 39 条消息 + 5 张缩略图的 base64。1MB 级的 JSON 在手机上要整体解析、再 base64
+ * 解码若干张图，是「打开会话卡一下 / 内存吃紧」的主要来源（当晚还撞上过 LazyColumn
+ * 崩溃，虽然那是 id 重复，但大帧让一切更糟）。
+ *
+ * 为什么敢降到 420KB：文字/工具输出会被 shrinkToBudget 逐级减半（带「已截断」标记），
+ * 图片只保留最近若干条消息的缩略图（见 ipc.ts 的 IMAGE_BUDGET + 最近窗口），游戏里翻页
+ * 去看的老内容本来就不该一次全塞进帧里——真需要时可以按 key 按需拉。
+ * 上限（MAX_INNER_ENVELOPE_BYTES − headroom，7.6MB）与硬保证不变。
+ */
+export const REMOTE_SNAPSHOT_BYTE_BUDGET = 420_000;
 
 /** 估算单条消息下发后的字节数（正文长度 + 图片 base64 长度 + 固定开销）。 */
 export function remoteMessageSize(message: RemoteMessage): number {
