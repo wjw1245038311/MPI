@@ -2451,7 +2451,22 @@ class AppViewModel(
             if (_ui.value.activeHostId != record.hostId) return@launch
             if (session.state.value is SessionState.Connected) return@launch
             if ((session.state.value as? SessionState.Failed)?.reason?.isTerminal == true) return@launch
-            attach(record, tried + chosenUrl)
+            // **只换地址 + kick，不重建会话**（2026-11-06）：attach 会拆掉 socket 并重新认证，
+            // 中继日志里就是一条 gone(1000) + 整套 pair.challenge/hello —— 看门狗每超时一次
+            // 就来一遍，量大了自己就是「反复断线」的根源。候选全试完才退回 attach。
+            val next = RelaySelect.remainingCandidates(
+                record.relayUrl,
+                record.relayUrls,
+                record.lastGoodRelayUrl,
+                tried + chosenUrl,
+            )
+            if (next.isEmpty()) {
+                attach(record)
+                return@launch
+            }
+            session.kickAt(next.first())
+            currentUrl = next.first()
+            scheduleRelayDegrade(record, session, next, next.first(), tried + chosenUrl)
         }
     }
 
@@ -2468,8 +2483,6 @@ class AppViewModel(
     }
 
     private fun attachLocked(record: PairingRecord, tried: List<String> = emptyList()) {
-        detachSession()
-        autoOpenedThread = false
         val deviceIdentity = identity ?: return
 
         // S6：主机给的顺序取候选（跳过已试过的），首位 = 主机首选；旧记录回落上次可用
@@ -2480,6 +2493,22 @@ class AppViewModel(
             tried,
         )
         val chosenUrl = candidates.firstOrNull() ?: record.relayUrl
+
+        // —— 复用会话（2026-11-06，中继侧取证后加）——
+        // 旧行为：每次 attach 都「先 detach 旧的、再新建整套」（新 socket + 重新认证 + 新订阅）。
+        // 而 attach 会被降级看门狗反复调用 → 每隔几秒就一次干净的 close(1000) + 整套
+        // 重新握手。中继日志实测：两小时内该设备 hello 54 次（≈ 每 2 分钟一次完整重握手），
+        // 期间订阅丢失、事件全进 remote-pub-miss —— 这就是「信息不同步」的直接来源。
+        // 现在：同一台主机 + 同一地址 + 会话还活着 → 只 kick（不重建、不重认证）。
+        val existing = session
+        if (existing != null && currentRecord?.hostId == record.hostId && currentUrl == chosenUrl) {
+            currentRecord = record
+            existing.kick()
+            return
+        }
+
+        detachSession()
+        autoOpenedThread = false
         val client = RelayClient(chosenUrl)
         currentRecord = record
         currentUrl = chosenUrl
