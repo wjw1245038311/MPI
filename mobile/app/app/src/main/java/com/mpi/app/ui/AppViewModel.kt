@@ -415,6 +415,7 @@ class AppViewModel(
             if (safeMode) {
                 // 安全模式：上次就是死在启动/自动重连/账号同步这一段，这次一个网络动作都不做，
                 // 先保证 App 能进去（真机诉求：「完全无法进入 App」）。
+                recoverFromStartupCrashes()
                 return
             }
             // 已登录就在后台静默同步一次（多设备场景下“别处新加的主机”能自动出现）。
@@ -438,6 +439,38 @@ class AppViewModel(
         } finally {
             // 启动阶段结束：清掉「启动中」标记（否则下次会被当成交付前又崩了）
             com.mpi.app.CrashLog.finishStartup()
+        }
+    }
+
+    /**
+     * 安全模式下的**分级自愈**：连续崩在启动阶段时，把「可能害它崩」的本地缓存逐步清掉。
+     *
+     * 为什么需要（2026-11-06 真机）：「崩溃后完全没法打开 App」——这时连崩溃页面都看不到，
+     * 用户给不了任何信息。而启动阶段最可能把进程弄死的是**超大缓存的重放**（上次那条大会话
+     * 的完整快照、满屏工具卡）。所以：
+     *   · 第 2 次连续启动崩溃 → 忘掉「上次打开的会话」（重开时停在列表，不去重放那条会话）
+     *   · 第 3 次 → 连首页列表缓存一起清（下次重新从主机拉）
+     *
+     * 只动**缓存**，配对记录 / 密钥 / 设置一律不碰（那些清了要重新扫码，不属于自愈范围）。
+     */
+    private fun recoverFromStartupCrashes() {
+        val count = com.mpi.app.CrashLog.startupCrashCount()
+        if (count < 2) return
+        val hadOldThread = lastThread.threadId
+        if (hadOldThread != null) {
+            lastThread.threadId = null
+            _ui.value.activeHostId?.let { hostId ->
+                runCatching { threadCache.deleteHost(hostId) }
+            }
+        }
+        if (count >= 3) {
+            runCatching { threadCache.clear() }
+            runCatching { homeCache.clear() }
+        }
+        _ui.update {
+            it.copy(
+                problems = (it.problems + "安全模式自愈：已清掉本地缓存（第 $count 次启动崩溃）").takeLast(MAX_PROBLEMS),
+            )
         }
     }
 

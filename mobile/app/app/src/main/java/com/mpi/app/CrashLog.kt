@@ -30,6 +30,8 @@ object CrashLog {
     private const val PREFS = "mpi-crash"
     private const val KEY_STARTUP = "startup_in_progress"
     private const val KEY_SAFE_MODE = "safe_mode"
+    /** 连续多少次「启动阶段崩溃」——用于分级自愈（清缓存）。 */
+    private const val KEY_STARTUP_CRASHES = "startup_crashes"
     private const val DIR = "crash"
     private const val FILE_LAST = "last-crash.txt"
     private const val FILE_RECENT = "recent-errors.txt"
@@ -73,7 +75,23 @@ object CrashLog {
             appendLine()
             appendLine(readableStack(error))
         }
-        runCatching { file(context, FILE_LAST).writeText(details.take(64 * 1024)) }
+        writeAll(context, FILE_LAST, details.take(64 * 1024))
+    }
+
+    /**
+     * 同时写私有目录**与**外部应用目录（`Android/data/com.mpi.app/files/crash/`）。
+     *
+     * 后者是给「App 完全打不开」时留的逃生口：手机插电脑选「文件传输」就能把它拷出来，
+     * 不需要 App 能动、也不需要开 USB 调试（部分机型/新系统会隐藏 Android/data，
+     * 那时只能走 adb 或安全模式自愈）。
+     */
+    private fun writeAll(context: Context, name: String, content: String) {
+        runCatching { file(context, name).writeText(content) }
+        runCatching {
+            val external = context.getExternalFilesDir(null) ?: return@runCatching
+            val dir = File(external, DIR).apply { mkdirs() }
+            File(dir, name).writeText(content)
+        }
     }
 
     /**
@@ -139,6 +157,7 @@ object CrashLog {
         val context = appContext ?: return
         runCatching { file(context, FILE_LAST).delete() }
         runCatching { file(context, FILE_RECENT).delete() }
+        runCatching { context.getExternalFilesDir(null)?.let { File(File(it, DIR), FILE_LAST).delete() } }
     }
 
     // ---- 启动标记与安全模式 ----
@@ -154,10 +173,23 @@ object CrashLog {
         }
     }
 
-    /** 初始化跑完（无论成功失败）：清标记。 */
+    /** 初始化跑完（无论成功失败）：清标记与「连续启动崩溃」计数。 */
     fun finishStartup() {
         val context = appContext ?: return
-        runCatching { prefs(context).edit().putBoolean(KEY_STARTUP, false).apply() }
+        runCatching {
+            prefs(context).edit().putBoolean(KEY_STARTUP, false).putInt(KEY_STARTUP_CRASHES, 0).apply()
+        }
+    }
+
+    /**
+     * 连续第几次「死在启动阶段」。0 = 没有。
+     *
+     * 用于分级自愈：就算崩溃取证页也进不去，也能靠「清掉本地缓存」把 App 救回来——
+     * 真机反馈「崩溃后完全没法打开 App，连截图都给不了」。
+     */
+    fun startupCrashCount(): Int {
+        val context = appContext ?: return 0
+        return runCatching { prefs(context).getInt(KEY_STARTUP_CRASHES, 0) }.getOrDefault(0)
     }
 
     private fun isStartupInProgress(context: Context): Boolean =
@@ -173,7 +205,13 @@ object CrashLog {
         val context = appContext ?: return false
         val crashedDuringStartup = isStartupInProgress(context) && file(context, FILE_LAST).exists()
         if (crashedDuringStartup) {
-            runCatching { prefs(context).edit().putBoolean(KEY_SAFE_MODE, true).apply() }
+            runCatching {
+                val next = startupCrashCount() + 1
+                prefs(context).edit()
+                    .putBoolean(KEY_SAFE_MODE, true)
+                    .putInt(KEY_STARTUP_CRASHES, next)
+                    .apply()
+            }
         }
         return crashedDuringStartup || runCatching { prefs(context).getBoolean(KEY_SAFE_MODE, false) }.getOrDefault(false)
     }
