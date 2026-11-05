@@ -341,6 +341,8 @@ class AppViewModel(
     private var relayInfoJob: Job? = null
     /** S4 缺口补齐：通道降级看门狗（首选连不上就换下一条）。 */
     private var degradeJob: Job? = null
+    /** 换主机的互斥锁：attach 不允许并发（见 [attach] 的注释）。 */
+    private val attachLock = Any()
     /** 按会话保存的草稿（内存；跨重启持久化留待需要时再说）。 */
     private val drafts = mutableMapOf<String, String>()
     /**
@@ -2410,13 +2412,29 @@ class AppViewModel(
         degradeJob = scope.launch {
             delay(RELAY_DEGRADE_MS)
             if (this@AppViewModel.session !== session) return@launch // 已被别的 attach 取代
+            // 还必须是**当前这台**主机：两台主机（一台局域网 minibox、一台 ECS workstation）
+            // 来回切时，旧主机的看门狗如果不看这一条，就会在用户已经切走之后把旧主机拉回来，
+            // 两边互相顶掉（真机表现：通道反复切换 + 同步全乱）。
+            if (_ui.value.activeHostId != record.hostId) return@launch
             if (session.state.value is SessionState.Connected) return@launch
             if ((session.state.value as? SessionState.Failed)?.reason?.isTerminal == true) return@launch
             attach(record, tried + chosenUrl)
         }
     }
 
-    private fun attach(record: PairingRecord, tried: List<String> = emptyList()) {
+    /**
+     * 换/重连一台主机。**串行化**（[attachLock]）。
+     *
+     * 为什么必须串行（2026-11-06）：调用方至少四个，彼此可能撞车——启动自动连、抽屉切主机
+     * （`switchHost` 在 IO 线程）、局域网超时后的降级看门狗、移除主机后的回落。
+     * `attach` 会「先 detach 旧的再装新的」，两个字线程交错就会装出一半旧一半新的状态
+     * （新 session 被旧流程 stop 掉 / 两个 requester 指向不同主机），后续表现为同步错乱甚至崩。
+     */
+    private fun attach(record: PairingRecord, tried: List<String> = emptyList()): Unit = synchronized(attachLock) {
+        attachLocked(record, tried)
+    }
+
+    private fun attachLocked(record: PairingRecord, tried: List<String> = emptyList()) {
         detachSession()
         autoOpenedThread = false
         val deviceIdentity = identity ?: return

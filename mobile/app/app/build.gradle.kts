@@ -14,8 +14,8 @@ android {
         // 与旧壳 (com.mpi.remote) 区分，保证两者可并存安装
         minSdk = 26
         targetSdk = 34
-        versionCode = 166
-        versionName = "0.5.163"
+        versionCode = 167
+        versionName = "0.5.164"
 
         // 只保留手机（arm64-v8a）与模拟器（x86_64）——个人自用，不做全 ABI 分发包
         ndk {
