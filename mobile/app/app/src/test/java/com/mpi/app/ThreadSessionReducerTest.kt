@@ -471,6 +471,65 @@ class ThreadSessionReducerTest {
         session.detach()
     }
 
+    // ---- 一轮 = 一个气泡（回合 id 取本轮第一条的时间戳） ----
+    // 2026-11-06 真机：「附件卡片经常窜位置，明明在上轮突然跑到下轮」。原因：主机把一轮里
+    // 连续的 assistant 条目折成一条（id = 第一条的时间戳），而客户端原先每段 message_end 都
+    // 新建一个气泡；快照回来时附件块被并进「本轮第一条」那个气泡，工具行留在后面几条 ——
+    // 看起来就是卡片自己换了位置。现在客户端也按「本轮第一条」定 id，一轮一个气泡。
+    @Test
+    fun `two assistant segments of one turn stay in a single bubble`() = runBlocking {
+        val transport = FakeTransport()
+        val session = newSession(transport)
+        session.subscribe()
+        val before = session.view.value.messages.size
+
+        transport.deliver(event(seq = 1, kind = "agent_start", event = buildJsonObject { }))
+        // 第一段（工具调用前后各一段的典型回合）
+        transport.deliver(
+            event(
+                seq = 2,
+                kind = "message_start",
+                event = buildJsonObject { put("message", buildJsonObject { put("role", "assistant"); put("timestamp", 1000) }) },
+            ),
+        )
+        transport.deliver(textDelta(seq = 3, delta = "第一段"))
+        transport.deliver(
+            event(
+                seq = 4,
+                kind = "message_end",
+                event = buildJsonObject {
+                    put("message", buildJsonObject { put("role", "assistant"); put("timestamp", 1000); put("stopReason", "toolUse") })
+                },
+            ),
+        )
+        // 同一轮的第二段（自己的时间戳是 2000，但回合 id 必须还是 1000）
+        transport.deliver(
+            event(
+                seq = 5,
+                kind = "message_start",
+                event = buildJsonObject { put("message", buildJsonObject { put("role", "assistant"); put("timestamp", 2000) }) },
+            ),
+        )
+        transport.deliver(textDelta(seq = 6, delta = "第二段"))
+        transport.deliver(
+            event(
+                seq = 7,
+                kind = "message_end",
+                event = buildJsonObject {
+                    put("message", buildJsonObject { put("role", "assistant"); put("timestamp", 2000); put("stopReason", "stop") })
+                },
+            ),
+        )
+
+        val added = session.view.value.messages.drop(before)
+        assertEquals("一轮只能有一个气泡（否则快照合并时块会跳位置）", 1, added.size)
+        assertEquals("assistant-1000", added.single().id)
+        val texts = added.single().blocks.filter { it.type == BlockType.Text }.map { it.text }
+        assertTrue("第一段正文不能丢", texts.contains("第一段"))
+        assertTrue("第二段正文要追加在后面", texts.contains("第二段"))
+        session.detach()
+    }
+
     @Test
     fun `own image echo does not trigger a backfill`() = runBlocking {
         val transport = FakeTransport()

@@ -734,6 +734,8 @@ class ThreadSession(
         val message = event?.get("message") as? JsonObject ?: return
         val role = message.str("role").orEmpty()
         if (role == "user") {
+            // 新的一轮：回合 id 重新取（见 roundHostId）
+            roundHostId = null
             // 与主机快照同名（`role-<timestamp>`）：下一轮增量快照的锚点才能对上。
             val hostId = message.str("timestamp")?.toLongOrNull()?.let { "user-$it" }
             // 剥掉 pi 的图片注解：它只在图片被缩放/转换过时出现（大图必中），而下面
@@ -784,7 +786,18 @@ class ThreadSession(
             }
             if (hasMediaPart && !echoHasMedia) scheduleMediaBackfill()
         } else if (_view.value.streaming == null) {
-            patch { it.copy(streaming = ThreadMessage(id = "a-$seq", role = "assistant")) }
+            // 一轮 = 一个气泡（与主机快照的折叠口径对齐）。
+            //
+            // 2026-11-06 真机：「附件卡片经常窜位置，明明在上轮突然跑到下轮」。根因就在这里：
+            // 主机把一轮里连续的 assistant 条目**折成一条**（id 取本轮第一条的时间戳），
+            // 而客户端原先每条 message_end 都新建一个气泡（id 各自的时间戳）。于是快照回来时
+            // 附件块被并进「本轮第一条」那个气泡，而工具行留在后面几条——看上去就是卡片自己
+            // 跑到别的消息下面了。现在客户端的回合 id 也取**本轮第一条**的时间戳，一轮一个气泡，
+            // 与主机 1:1，块就不会被挪来挪去。
+            if (roundHostId == null) {
+                roundHostId = message.str("timestamp")?.toLongOrNull()?.let { "assistant-$it" }
+            }
+            patch { it.copy(streaming = ThreadMessage(id = roundHostId ?: "a-$seq", role = "assistant")) }
         }
     }
 
@@ -795,8 +808,8 @@ class ThreadSession(
         val stopReason = message.str("stopReason")
         val errorMessage = message.str("errorMessage")
         // 与主机快照同名（`assistant-<timestamp>`）：主机把连续 assistant 条目折成一个回合，
-        // id 取第一条的时间戳——就是这条 message_end 的时间戳。
-        val hostId = message.str("timestamp")?.toLongOrNull()?.let { "assistant-$it" }
+        // id 取**第一条**的时间戳（见 [roundHostId] 的说明）。
+        val hostId = roundHostId ?: message.str("timestamp")?.toLongOrNull()?.let { "assistant-$it" }
         patch { view ->
             val finished = streaming.copy(id = hostId ?: streaming.id, stopReason = stopReason, errorMessage = errorMessage)
             // 同一回合可能已经在快照里了（回合中途因附件补拉过）→ **合并**，不能追加。
@@ -812,9 +825,10 @@ class ThreadSession(
                 val snap = view.messages[existing]
                 view.messages.toMutableList().also { list ->
                     list[existing] = snap.copy(
-                        // 正文/工具块以**流式**为准（快照可能停在回合中途，少最后几段）；
-                        // 附件类块只能从**快照**来（事件通道只有占位标记）。
-                        blocks = mergeRoundBlocks(finished.blocks, snap.blocks),
+                        // 一轮 = 一个气泡（回合 id 固定为本轮第一条的时间戳，与主机快照 1:1）：
+                        // 本段只是这轮里的又一段输出，**追加**在后面，不能拿它替换前面那几段。
+                        // 媒体块只可能从快照来（事件通道只给占位标记），已在 snap 里，这里去重保留。
+                        blocks = appendSegment(snap.blocks, finished.blocks),
                         stopReason = finished.stopReason ?: snap.stopReason,
                         errorMessage = finished.errorMessage ?: snap.errorMessage,
                     )
@@ -841,18 +855,36 @@ class ThreadSession(
      * （text/thinking/tool）以流式那份为准，因为它是最新的。流式那边恰好什么都没有时
      * （纯媒体回合）直接整份用快照的，否则正文会丢。
      */
-    private fun mergeRoundBlocks(streamed: List<MessageBlock>, snapshot: List<MessageBlock>): List<MessageBlock> {
-        if (snapshot.isEmpty()) return streamed
-        val hasStreamedContent = streamed.any {
-            it.type == BlockType.Text || it.type == BlockType.Thinking || it.type == BlockType.Tool
+    /**
+     * 把本段（一次 message_end 的块）并入**同一回合已存在**的气泡：已有内容一律保留，本段
+     * 新增的补在后面。
+     *
+     * 为什么不能“以流式为准”整份替换（旧写法）：一轮里有多段（工具调用前后各一段），第二段
+     * message_end 会用自己那份去覆盖整个气泡，前面那段正文/工具行就没了。
+     * 也不再用“媒体块只从快照来、其它看流式”的混合规则——那是给「快照先行」写的，现在
+     * 一轮固定一个 id，两种情况走同一个入口，追加最安全。
+     */
+    private fun appendSegment(existing: List<MessageBlock>, segment: List<MessageBlock>): List<MessageBlock> {
+        if (segment.isEmpty()) return existing
+        val out = existing.toMutableList()
+        // 工具/媒体块按 id 或名字去重（快照可能已经带了同一张卡/同一行工具）
+        val seen = existing.mapNotNullTo(HashSet()) { block ->
+            when (block.type) {
+                BlockType.Tool -> block.id?.let { "tool:$it" }
+                BlockType.Image, BlockType.Video, BlockType.Audio, BlockType.File -> "media:${block.name}"
+                else -> null
+            }
         }
-        if (!hasStreamedContent) return snapshot
-        val media = snapshot.filter {
-            it.type == BlockType.Image || it.type == BlockType.Video || it.type == BlockType.Audio || it.type == BlockType.File
+        for (block in segment) {
+            val key = when (block.type) {
+                BlockType.Tool -> block.id?.let { "tool:$it" }
+                BlockType.Image, BlockType.Video, BlockType.Audio, BlockType.File -> "media:${block.name}"
+                else -> null
+            }
+            if (key != null && !seen.add(key)) continue
+            out += block
         }
-        if (media.isEmpty()) return streamed
-        val have = streamed.map { it.type to it.name }.toSet()
-        return streamed + media.filter { (it.type to it.name) !in have }
+        return out
     }
 
     private fun handleContextUsage(data: JsonObject?) {
@@ -1120,6 +1152,9 @@ class ThreadSession(
      *
      * 与 PWA 的 ThreadSession.settleTurn 保持同构。
      */
+    /** 本轮（一次用户消息之后的连续 assistant 输出）的稳定 id，= 主机快照里那条的 id。 */
+    private var roundHostId: String? = null
+
     private fun settleTurn(errorBanner: String? = null) {
         val close: (ThreadMessage) -> ThreadMessage = { message ->
             if (message.blocks.none { it.type == BlockType.Tool && it.running }) {
@@ -1140,6 +1175,8 @@ class ThreadSession(
                 streaming = view.streaming?.let(close),
             )
         }
+        // 回合彻底结束：下一轮重新取回合 id
+        roundHostId = null
     }
 
     private fun patch(transform: (ThreadView) -> ThreadView) {

@@ -57,6 +57,17 @@ const val DIRECT_REQUEST_TIMEOUT_MS = 20_000L
 private const val DIRECT_CHUNK_TIMEOUT_MS = 60_000L
 
 /**
+ * 下载专用客户端的读超时（秒级）。
+ *
+ * 为什么比上传短：真机反馈「下载卡在 6% 一动不动」——旧值 60s，一条挂住的连接就是整整
+ * 一分钟没数据。现在 20s 无数据就判这片失败 → 上一层回落到中继分片（那条路至少会动）。
+ */
+private const val DOWNLOAD_READ_TIMEOUT_MS = 20_000L
+
+/** 流式读的缓冲块（只影响进度回调频率，不影响一次读多少）。 */
+private const val DOWNLOAD_READ_BUFFER_BYTES = 32 * 1024
+
+/**
  * 中继分片上传的片大小：3MB 明文 → base64 后 4MB。
  * 中继单帧上限 8MB、主机侧对 base64 字符数的硬限是 6M，这个值两边都留了余量。
  */
@@ -242,6 +253,11 @@ class DirectAttachments(
     private val request: suspend (type: String, payload: JsonElement?, threadId: String?, timeoutMs: Long?) -> JsonElement?,
     private val http: OkHttpClient = defaultHttpClient(),
 ) {
+
+    /** 下载用的客户端：与 [http] 同一套 TLS/拦截器，只把读超时调短（见 DOWNLOAD_READ_TIMEOUT_MS）。 */
+    private val downloadHttp: OkHttpClient by lazy {
+        http.newBuilder().readTimeout(DOWNLOAD_READ_TIMEOUT_MS, TimeUnit.MILLISECONDS).build()
+    }
     /**
      * 逐个探测主机声明的基地址，返回第一个可达的（任何 HTTP 响应都算——`/` 正常回 404）。
      *
@@ -639,14 +655,20 @@ class DirectAttachments(
                 val channel = raf.channel
                 writeAt(channel, headPlain, 0L)
                 val done = AtomicLong(headPlain.size.toLong())
-                onProgress(done.get(), total)
+                // 进度口径：**已收到的密文字节 / 总密文字节**（与浏览器同）。
+                // 为什么不看 done（已落盘的明文）：一片 2MB，一个 32MB 的包只有 16 次跳动——
+                // 真机反馈「先到 6% 就卡住，然后突然 100%」就是这个粒度造成的。
+                // 另外片内的 GCM 必须整片到手才能解，所以只有密文字节能做到片内连续。
+                val received = AtomicLong(head.body.size.toLong())
+                val totalCipher = AtomicLong(total)
+                onProgress(received.get(), maxOf(totalCipher.get(), received.get()))
                 val offsets = downloadOffsets(total, headPlain.size.toLong(), chunkBytes.toLong())
                 val failure = AtomicReference<String?>(null)
                 coroutineScope {
                     val ticker = launch {
                         while (isActive) {
-                            delay(150)
-                            onProgress(done.get(), total)
+                            delay(120)
+                            onProgress(received.get(), maxOf(totalCipher.get(), received.get()))
                         }
                     }
                     try {
@@ -655,7 +677,11 @@ class DirectAttachments(
                             launch(Dispatchers.IO) {
                                 gate.withPermit {
                                     if (failure.get() != null) return@withPermit
-                                    val slice = fetchRangeSlice(resolved.url, offset, chunkBytes)
+                                    val slice = fetchRangeSlice(resolved.url, offset, chunkBytes) { gotDelta, sliceTotal ->
+                                        // 片内流式计数：每读到一块就往前推，进度不再是一格一格的
+                                        received.addAndGet(gotDelta)
+                                        if (sliceTotal > 0) totalCipher.updateAndGet { old -> maxOf(old, sliceTotal) }
+                                    }
                                     if (slice == null) {
                                         failure.compareAndSet(null, "取片失败：offset=$offset（网络/令牌/主机不可达）")
                                         return@withPermit
@@ -720,27 +746,44 @@ class DirectAttachments(
     }
 
     /** 取一片加密载荷（含解密所需元数据）。失败 → null。 */
-    private suspend fun fetchRangeSlice(url: String, offset: Long, chunkBytes: Int): RangeSlice? =
+    private suspend fun fetchRangeSlice(
+        url: String,
+        offset: Long,
+        chunkBytes: Int,
+        /** 片内流式进度：(本次新增的字节数, 本次响应的总长)。首片探测不用传。 */
+        onBytes: (Long, Long) -> Unit = { _, _ -> },
+    ): RangeSlice? =
         withContext(Dispatchers.IO) {
             val request = Request.Builder()
                 .url(url)
                 .header(AttachmentCrypto.HEADER, AttachmentCrypto.VERSION)
                 .header("Range", "bytes=$offset-${offset + chunkBytes - 1}")
                 .build()
-            val call = http.newCall(request)
+            val call = downloadHttp.newCall(request)
             val handle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
             try {
                 call.execute().use { response ->
-                    val body = if (response.isSuccessful) response.body?.bytes() else null
-                    if (body == null) {
-                        null
-                    } else {
-                        RangeSlice(
-                            body = body,
-                            plainLength = response.header("X-MPI-Len")?.toIntOrNull() ?: (body.size - AttachmentCrypto.OVERHEAD),
-                            total = parseRangeTotal(response.header("Content-Range")),
-                        )
+                    if (!response.isSuccessful) return@use null
+                    val body = response.body ?: return@use null
+                    val length = body.contentLength()
+                    // 流式读：边下边报进度（旧写法 body.bytes() 是“一块全满才算”）。
+                    // 密文大小 = 明文 + 16(16) 的开销；用于总长兜底。
+                    val buffer = ByteArray(DOWNLOAD_READ_BUFFER_BYTES)
+                    val out = java.io.ByteArrayOutputStream(if (length in 1..(8L * 1024 * 1024)) length.toInt() else 256 * 1024)
+                    body.byteStream().use { input ->
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            out.write(buffer, 0, read)
+                            onBytes(read.toLong(), length)
+                        }
                     }
+                    val bytes = out.toByteArray()
+                    RangeSlice(
+                        body = bytes,
+                        plainLength = response.header("X-MPI-Len")?.toIntOrNull() ?: (bytes.size - AttachmentCrypto.OVERHEAD),
+                        total = parseRangeTotal(response.header("Content-Range")),
+                    )
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
