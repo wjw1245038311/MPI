@@ -133,8 +133,19 @@ class AccountSyncTest {
             "ws://47.97.28.110:10445/ws",
             "wss://47.97.28.110:9443/ws",
         )
-        assertEquals("https://10.215.35.72:9443", AccountApi.tlsBaseOf(candidates))
-        assertEquals("http://10.215.35.72:9001", AccountApi.plainBaseOf(candidates))
+        // 2026-11-05 真机：手机在 192.168.68.x，主机内网是 10.215.35.72 —— 直接取第一条 wss
+        // 会把账号服务钉死在一条到不了的地址上（报错 "failed to connect to /10.215.35.72:9443"）。
+        assertEquals(
+            "公网地址必须排在前面（手机可能不在主机同网段）",
+            "https://47.97.28.110:9443",
+            AccountApi.tlsBasesOf(candidates).first(),
+        )
+        assertEquals(listOf("https://47.97.28.110:9443", "https://10.215.35.72:9443"), AccountApi.tlsBasesOf(candidates))
+        assertEquals("http://47.97.28.110:10445", AccountApi.plainBasesOf(candidates).first())
+        assertEquals("https://47.97.28.110:9443", AccountApi.tlsBaseOf(candidates))
+        assertTrue("内网判定要覆盖 RFC1918", AccountApi.isPrivateHost("https://192.168.68.1:9443"))
+        assertTrue(AccountApi.isPrivateHost("http://172.20.1.9:9001"))
+        assertFalse("域名不当内网（会解析到公网）", AccountApi.isPrivateHost("https://relay.whomidas.cn:9443"))
         assertNull("只有明文候选时不做账号请求（密码不能裸奔）", AccountApi.tlsBaseOf(listOf("ws://47.97.28.110:10445/ws")))
         assertNull(AccountApi.plainBaseOf(listOf("wss://47.97.28.110:9443/ws")))
     }

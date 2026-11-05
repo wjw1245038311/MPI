@@ -451,15 +451,22 @@ class AppViewModel(
         }
     }
 
-    /** 账号接口地址：从**所有配对记录的中继候选**里挑 TLS 那一条，并 TOFU 取回自签 CA。 */
+    /** 账号接口地址：从**所有配对记录的中继候选**里挑 TLS 那几条（公网优先），并 TOFU 取回自签 CA。 */
     private suspend fun accountApiOrThrow(): AccountApi {
         val candidates = _ui.value.pairings
             .flatMap { listOfNotNull(it.relayUrl, it.lastGoodRelayUrl) + it.relayUrls }
             .distinct()
-        val tlsBase = AccountApi.tlsBaseOf(candidates)
-            ?: throw IllegalStateException("当前没有任何 TLS 中继地址，无法使用账号（先在设置里连一台主机）")
-        val caPem = AccountApi.plainBaseOf(candidates)?.let { AccountApi.fetchCaPem(it) }
-        return AccountApi(tlsBase, caPem)
+        val tlsBases = AccountApi.tlsBasesOf(candidates)
+        if (tlsBases.isEmpty()) {
+            throw IllegalStateException("当前没有任何 TLS 中继地址，无法使用账号（先在设置里连一台主机）")
+        }
+        // CA 也从**任一可达**的明文候选取（手机可能不在主机同网段：真机曾连内网 9443 超时）。
+        var caPem: String? = null
+        for (plain in AccountApi.plainBasesOf(candidates)) {
+            caPem = AccountApi.fetchCaPem(plain)
+            if (caPem != null) break
+        }
+        return AccountApi(tlsBases, caPem)
     }
 
     /**

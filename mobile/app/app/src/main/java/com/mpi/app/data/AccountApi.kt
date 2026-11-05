@@ -52,9 +52,43 @@ class AccountApiException(message: String, val status: Int = 0) : Exception(mess
  * 指纹掐（安卓 OkHttp 实测），且密码绝不能走明文。
  */
 class AccountApi(
-    private val tlsBase: String,
+    /** 候选基地址（https）。按「公网优先、内网在后」排好序；调用方用 [tlsBasesOf] 生成。 */
+    private val bases: List<String>,
     caPem: String? = null,
 ) {
+    /** 探测成功后缓存的基地址（同一进程内不再重复探测）。 */
+    @Volatile
+    private var resolvedBase: String? = bases.firstOrNull()
+
+    /**
+     * 取一个真的连得上的基地址。
+     *
+     * 为什么必须探测（2026-11-05 真机）：配对记录里的中继候选是**局域网优先**（同网段最快），
+     * 但手机可能在另一个网段（真机报错：连 `10.215.35.72:9443` 超时，手机自己是 192.168.68.x）。
+     * 直接“取第一个 wss”就把账号服务钉死在一条到不了的地址上了。
+     */
+    private suspend fun base(): String = withContext(Dispatchers.IO) {
+        var lastError: Exception? = null
+        for (candidate in bases) {
+            val ok = runCatching {
+                val probe = client.newBuilder()
+                    .connectTimeout(3, TimeUnit.SECONDS)
+                    .readTimeout(3, TimeUnit.SECONDS)
+                    .build()
+                val request = Request.Builder().url(candidate + "/healthz").get().build()
+                probe.newCall(request).execute().use { it.isSuccessful || it.code == 401 || it.code == 404 }
+            }.getOrElse { error ->
+                lastError = error as? Exception
+                false
+            }
+            if (ok) {
+                resolvedBase = candidate
+                return@withContext candidate
+            }
+        }
+        // 全都没探通：抱最后一个网络错误（比“所有通道都连不上”具体，便于用户行动）。
+        throw lastError ?: AccountApiException("连不上账号服务器（所有中继地址都不可达）")
+    }
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val mediaJson = "application/json; charset=utf-8".toMediaType()
 
@@ -69,7 +103,7 @@ class AccountApi(
 
     /** 读同步包（没有就是 ciphertext=null）。 */
     suspend fun getBlob(token: String): AccountBlob = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url("$tlsBase/acct/blob").header("authorization", "Bearer $token").get().build()
+        val request = Request.Builder().url(base() + "/acct/blob").header("authorization", "Bearer $token").get().build()
         client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw AccountApiException(errorOf(body, response.code), response.code)
@@ -84,7 +118,7 @@ class AccountApi(
             BlobWrite(ciphertext = ciphertext, revision = revision),
         )
         val request = Request.Builder()
-            .url("$tlsBase/acct/blob")
+            .url(base() + "/acct/blob")
             .header("authorization", "Bearer $token")
             .put(payload.toRequestBody(mediaJson))
             .build()
@@ -114,7 +148,7 @@ class AccountApi(
                 Credentials(identifier = identifier.trim(), password = password),
             )
             val request = Request.Builder()
-                .url("$tlsBase$path")
+                .url(base() + path)
                 .post(payload.toRequestBody(mediaJson))
                 .build()
             client.newCall(request).execute().use { response ->
@@ -168,28 +202,59 @@ class AccountApi(
          * 只认 `wss://`（账号接口只在中继 TLS 监听上）；取第一条就够——同一台中继的不同
          * 端口指向同一个进程。
          */
-        fun tlsBaseOf(candidates: List<String>): String? {
+        /**
+         * 从配对记录的中继候选里挑账号接口地址（**多条，公网优先**）。
+         *
+         * 为什么要多条且要排序（2026-11-05 真机）：候选是「局域网优先」（同网段最快），
+         * 但手机在另一个网段时那条永远连不上（真机：连 10.215.35.72:9443 超时）。
+         * 所以这里把**非内网地址排前面**，调用方再逐条探测，谁通用谁。
+         */
+        fun tlsBasesOf(candidates: List<String>): List<String> {
+            val out = LinkedHashSet<String>()
             for (raw in candidates) {
                 val url = raw.trim()
                 if (!url.startsWith("wss://", ignoreCase = true)) continue
                 val hostPart = url.removePrefix("wss://").substringBefore("/")
                 if (hostPart.isBlank()) continue
-                return "https://$hostPart"
+                out.add("https://" + hostPart)
             }
-            return null
+            return out.toList().sortedBy { base -> if (isPrivateHost(base)) 1 else 0 }
         }
 
-        /** 明文候选（只在需要 TOFU 下载 CA 时用）。 */
-        fun plainBaseOf(candidates: List<String>): String? {
+        /** 明文候选（同样公网优先；只在需要 TOFU 下载 CA 时用）。 */
+        fun plainBasesOf(candidates: List<String>): List<String> {
+            val out = LinkedHashSet<String>()
             for (raw in candidates) {
                 val url = raw.trim()
                 if (!url.startsWith("ws://", ignoreCase = true)) continue
                 val hostPart = url.removePrefix("ws://").substringBefore("/")
                 if (hostPart.isBlank()) continue
-                return "http://$hostPart"
+                out.add("http://" + hostPart)
             }
-            return null
+            return out.toList().sortedBy { base -> if (isPrivateHost(base)) 1 else 0 }
         }
+
+        /** 内网地址（RFC1918 / link-local / .local / 裸主机名）——手机换网段时它必然不通。 */
+        fun isPrivateHost(baseUrl: String): Boolean {
+            val host = baseUrl.substringAfter("://").substringBefore(":").substringBefore("/").lowercase()
+            if (host.isEmpty()) return true
+            if (host == "localhost" || host.endsWith(".local") || host.endsWith(".lan")) return true
+            val parts = host.split(".")
+            if (parts.size != 4) return false            // 域名或无点主机名：不当内网（域名会解析到公网）
+            val a = parts[0].toIntOrNull() ?: return false
+            val b = parts[1].toIntOrNull() ?: return false
+            return a == 10 ||
+                (a == 172 && b in 16..31) ||
+                (a == 192 && b == 168) ||
+                (a == 169 && b == 254) ||
+                a == 127
+        }
+
+        /** 兼容旧调用（单值）：取排序后的第一条。 */
+        fun tlsBaseOf(candidates: List<String>): String? = tlsBasesOf(candidates).firstOrNull()
+
+        /** 兼容旧调用（单值）：取排序后的第一条。 */
+        fun plainBaseOf(candidates: List<String>): String? = plainBasesOf(candidates).firstOrNull()
 
         /**
          * 从明文侧取中继的 CA（`/mpi-selfsigned-ca.crt`，中继静态目录里就有一份）。
