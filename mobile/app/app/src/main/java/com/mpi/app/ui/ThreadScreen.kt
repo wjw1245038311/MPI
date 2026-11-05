@@ -278,6 +278,17 @@ fun ThreadScreen(
             }
         }
 
+    // 列表 key：预先算成**稳定且唯一**（重复 id 的第 2、3… 个加 #n 后缀）。
+    // 2026-11-06 真机崩的就是这个：重复 id 让 Compose 抛 IllegalArgumentException，整个 App 没了。
+    val displayKeys = remember(display) {
+        val seen = HashMap<String, Int>()
+        display.map { message ->
+            val n = (seen[message.id] ?: 0) + 1
+            seen[message.id] = n
+            if (n == 1) message.id else "${message.id}#$n"
+        }
+    }
+
     // ---- 会话节点（右边缘左划拉出）----
     // 节点 = 用户消息（与桌面端左侧用户消息导航同口径）；索引按 display 算，可直接定位滚动。
     val nodes = userMessageNodes(display)
@@ -431,7 +442,12 @@ fun ThreadScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 10.dp),
                 ) {
-                    items(display, key = { it.id }) { message ->
+                    // key 必须唯一（Compose 的 LazyList 硬要求）：一旦重复就是**直接崩溃**
+                    // —— 2026-11-06 真机：`Key "assistant-1793896527882" was already used`，
+                    // 崩在 scrollToItem 的 measure 阶段，App 直接没了。
+                    // [displayKeys] 是预先算好的稳定唯一键（重复 id 的第 2、3… 个带上 #n）。
+                    items(count = display.size, key = { index -> displayKeys[index] }) { index ->
+                        val message = display[index]
                         MessageRow(
                             message = message,
                             onRetry = onRetry,

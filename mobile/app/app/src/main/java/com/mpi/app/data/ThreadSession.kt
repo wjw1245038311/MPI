@@ -214,7 +214,7 @@ class ThreadSession(
             _view.value = _view.value.copy(
                 ready = true,
                 summary = snapshot.summary,
-                messages = snapshot.messages,
+                messages = uniqueMessageIds(snapshot.messages),
                 streaming = null,
                 running = snapshot.summary.state == RemoteThreadState.Running,
                 model = snapshot.model,
@@ -584,13 +584,17 @@ class ThreadSession(
                 summary = snapshot.summary,
                 // 全量快照是权威历史：残留的乐观占位一并丢弃；
                 // 增量快照（incremental）只带新增（含锚点那条），按 id 合并，别把本地已有历史丢掉。
-                messages = if (snapshot.incremental) {
-                    mergeIncremental(_view.value.messages, snapshot.messages)
-                } else {
-                    // 全量也不能把**还没被主机确认**的乐观消息一起丢掉：followUp 排队期间
-                    // 快照里还没有那条，丢掉就表现为「消息和图片一起消失」。
-                    mergeFull(_view.value.messages, snapshot.messages)
-                },
+                // ⚠️ 最后再兜一道 [uniqueMessageIds]：id 重复会让 LazyColumn 直接崩
+                // （2026-11-06 真机 `Key "assistant-…" was already used`，整个 App 没了）。
+                messages = uniqueMessageIds(
+                    if (snapshot.incremental) {
+                        mergeIncremental(_view.value.messages, snapshot.messages)
+                    } else {
+                        // 全量也不能把**还没被主机确认**的乐观消息一起丢掉：followUp 排队期间
+                        // 快照里还没有那条，丢掉就表现为「消息和图片一起消失」。
+                        mergeFull(_view.value.messages, snapshot.messages)
+                    },
+                ),
                 // 回合进行中**留住**正在长的流式气泡：快照是磁盘历史，不含这半条；
                 // 清掉的话用户看到的就是「桌面写了一大段、手机停在上一条」。
                 streaming = if (snapshot.summary.state == RemoteThreadState.Running) {
@@ -797,7 +801,12 @@ class ThreadSession(
             if (roundHostId == null) {
                 roundHostId = message.str("timestamp")?.toLongOrNull()?.let { "assistant-$it" }
             }
-            patch { it.copy(streaming = ThreadMessage(id = roundHostId ?: "a-$seq", role = "assistant")) }
+            // ⚠️ 流式气泡仍用**本地唯一 id**（`a-<seq>`），不能提前用回合 id：
+            // 回合中途的快照里已经有一条 `assistant-<ts>`（= roundHostId），两者同 id 就会
+            // 在 LazyColumn 里撞 key。2026-11-06 真机就是这样直接崩掉的：
+            // `Key "assistant-1793896527882" was already used`。
+            // 回合 id 只在 message_end 时贴上（并优先合并到已有那条）。
+            patch { it.copy(streaming = ThreadMessage(id = "a-$seq", role = "assistant")) }
         }
     }
 
@@ -1339,6 +1348,33 @@ internal fun mergeIncremental(
     val tail = incoming.filterNot { it.id in known || it.id in seen }
     tail.forEach { seen += it.id }
     return merged + tail + pendingTail.filterNot { it.id in seen }
+}
+
+/**
+ * 保证消息 id 唯一（纯函数）：重复的那条改成 `<id>#2`、`#3`…
+ *
+ * 为什么必须有：聊天区用 `LazyColumn(key = { it.id })`，key 重复时 Compose 会抛
+ * `IllegalArgumentException: Key "assistant-…" was already used` 并**直接崩溃**。
+ * 2026-11-06 真机：0.5.166 让流式气泡提前用了回合 id，与快照里那条同 id，一点就崩，
+ * 而且写坏的缓存会让每次打开都崩（连安全模式也救不回来）。
+ *
+ * 这里只把**第二条及之后**的同 id 改名，不改顺序、不丢内容——即使缓存里已经有坏数据，
+ * 打开也只是「多一条 Message」而不会崩。
+ */
+internal fun uniqueMessageIds(messages: List<ThreadMessage>): List<ThreadMessage> {
+    val seen = HashMap<String, Int>()
+    var changed = false
+    val out = messages.map { message ->
+        val n = (seen[message.id] ?: 0) + 1
+        seen[message.id] = n
+        if (n == 1) {
+            message
+        } else {
+            changed = true
+            message.copy(id = "${message.id}#$n")
+        }
+    }
+    return if (changed) out else messages
 }
 
 /**

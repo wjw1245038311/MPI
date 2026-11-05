@@ -1,6 +1,7 @@
 package com.mpi.app
 
 import com.mpi.app.data.mergeFull
+import com.mpi.app.data.uniqueMessageIds
 import com.mpi.app.protocol.BlockType
 import com.mpi.app.protocol.MessageBlock
 import com.mpi.app.protocol.ThreadMessage
@@ -80,6 +81,27 @@ class FullSnapshotMergeTest {
         )
         val incoming = listOf(text("user-100", role = "user", body = "好"))
         assertEquals(listOf("user-100", "u-local-2"), ids(mergeFull(local, incoming)))
+    }
+
+    @Test
+    fun `duplicate ids are made unique instead of crashing the list`() {
+        // 2026-11-06 真机崩溃：LazyColumn 的 key 重复 → IllegalArgumentException，App 直接没了。
+        // 这里只把第 2 个及之后的改名，顺序和内容都不动。
+        val dup = listOf(
+            text("assistant-100", body = "第一段"),
+            text("assistant-100", body = "第二段"),
+            text("assistant-200", body = "第三条"),
+            text("assistant-100", body = "第三段"),
+        )
+        val fixed = uniqueMessageIds(dup)
+        assertEquals(listOf("assistant-100", "assistant-100#2", "assistant-200", "assistant-100#3"), ids(fixed))
+        assertEquals(listOf("第一段", "第二段", "第三条", "第三段"), fixed.map { it.blocks.first().text })
+    }
+
+    @Test
+    fun `unique ids is a no-op when there is no duplicate`() {
+        val clean = listOf(text("a-1"), text("b-2"))
+        assertEquals(clean, uniqueMessageIds(clean))
     }
 
     @Test
