@@ -11,6 +11,7 @@ import { classifyToolName } from "@repo-root/src/shared/tool-trust-meta";
 import { thinkingLevelsFromMap, THINKING_LEVEL_ORDER as THINK_LEVELS } from "@repo-root/src/shared/thinking-levels";
 import { EDGE_VOICES, defaultEdgeVoice } from "../lib/edge-voices";
 import { Archive, Check, ChevronRight, Close, Edit, Plus, Refresh, Folder, Search, Trash } from "./icons";
+import { AccountSyncPanel } from "./AccountSyncPanel";
 import { AppUpdatePanel, PiCoreUpdatePanel } from "./AboutPanels";
 import { ServerPanel } from "./ServerPanel";
 import { CredentialsPanel } from "./CredentialsPanel";
@@ -952,7 +953,7 @@ function ProviderCard({
  * Main panel
  * ------------------------------------------------------------------ */
 
-type Tab = "conversation" | "models" | "permissions" | "credentials" | "server" | "data" | "appearance" | "system";
+type Tab = "conversation" | "models" | "permissions" | "credentials" | "account" | "server" | "data" | "appearance" | "system";
 
 /** Mirror of main's DataMigrationStatus (preload inlines the same shape). */
 interface DataMigrationStatus {
@@ -2351,6 +2352,7 @@ export function Settings() {
               ["models", "模型与提供商"],
               ["permissions", language === "zh" ? "权限与安全" : "Permissions & security"],
               ["credentials", language === "zh" ? "凭据" : "Credentials"],
+              ["account", language === "zh" ? "账号" : "Account"],
               ["server", language === "zh" ? "服务器" : "Server"],
               ["data", language === "zh" ? "数据管理" : "Data management"],
               ["appearance", language === "zh" ? "外观" : "Appearance"],
@@ -2397,6 +2399,10 @@ export function Settings() {
                       ? language === "zh"
                         ? "凭据"
                         : "Credentials"
+                    : tab === "account"
+                      ? language === "zh"
+                        ? "账号与配置同步"
+                        : "Account & config sync"
                     : tab === "server"
                       ? language === "zh"
                         ? "服务器"
@@ -3427,6 +3433,7 @@ export function Settings() {
             )}
 
 
+            {tab === "account" && <AccountSyncPanel language={language} />}
             {tab === "server" && <ServerPanel language={language} />}
             {tab === "data" && (
               <div className="set-card">

@@ -54,6 +54,21 @@ const api = {
       return null;
     }
   })(),
+    /** 账号与配置同步（桌面端）：与手机端同一套 /acct/* 协议。 */
+    account: {
+      status: (): Promise<{ loggedIn: boolean; identifier: string | null; lastSyncAt: number | null; revision: number; base: string | null }> =>
+        ipcRenderer.invoke("account:status"),
+      signIn: (args: { identifier: string; password: string; register?: boolean }): Promise<{
+        loggedIn: boolean;
+        identifier: string | null;
+        lastSyncAt: number | null;
+        revision: number;
+        restored?: boolean;
+      }> => ipcRenderer.invoke("account:signIn", args),
+      sync: (): Promise<{ loggedIn: boolean; lastSyncAt: number | null; revision: number; restored?: boolean }> =>
+        ipcRenderer.invoke("account:sync"),
+      signOut: (): Promise<{ loggedIn: boolean }> => ipcRenderer.invoke("account:signOut"),
+    },
   app: {
     getVersion: () => ipcRenderer.invoke("app:getVersion"),
     getConfig: () => ipcRenderer.invoke("app:getConfig"),

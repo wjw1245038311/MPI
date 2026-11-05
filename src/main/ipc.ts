@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, watch, writeFileSync, rmSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { homedir, hostname, networkInterfaces } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -9,6 +9,23 @@ import { checkForAppUpdate, clearAppUpdateSkip, downloadAppUpdate, installAppUpd
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
 import { checkForCoreUpdate, installCoreUpdate } from "./core-updater";
 import { appendDiagLog } from "./diag-log";
+import {
+  accountBasesOf,
+  accountGetBlob,
+  accountPutBlob,
+  accountSignIn,
+  buildDesktopPayload,
+  decodePayload,
+  deriveAccountKey,
+  encodePayload,
+  fetchRelayCa,
+  identifierFingerprint,
+  mergeDesktopPayload,
+  openAccountPayload,
+  sealAccountPayload,
+  type StoredAccount,
+  type SyncIdentity,
+} from "./account-sync";
 import { remoteMessageId } from "./remote/message-id";
 import { MAX_REMOTE_RAW_MESSAGES, applyIncrementalSnapshot, prepareRemoteHistory, remoteMessageSize, settleToolsOutsideRunningTurn } from "./remote/history-limit";
 import { cancelDevRelease, getDevReleaseLogBuffer, getDevReleaseStatus, getReleaseReview, startDevRelease } from "./dev-release";
@@ -229,7 +246,7 @@ import { APPROVAL_GRACE_MS, getChannelThread, isChannelOwnedSession, threadUuidF
 import { ensureChannelCommandInbox, startChannelCommandInboxWatcher } from "./messaging/channel-command";
 import { ensureChannelExtension } from "./messaging/channel-extension";
 import { buildApprovalDiff } from "./remote/approval-diff";
-import { loadOrCreateIdentity, opaqueId } from "./remote/identity";
+import { loadOrCreateIdentity, opaqueId, saveIdentity } from "./remote/identity";
 import { RemoteHost } from "./remote/host";
 import { RelayUplink } from "./remote/relay-uplink";
 import { RelayFanout } from "./remote/relay-fanout";
@@ -5214,6 +5231,193 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   });
   // The Feishu app secret never crosses into the renderer: it is masked here
   // and only ever written through messaging:setConfig.
+  // ---- 账号与配置同步（桌面端）------------------------------------------------------
+  //
+  // 与手机端同一套协议（mobile/relay/account.mjs）。价值：换电脑/重装后把**主机身份**
+  // （hostId + 私钥 + 已配对设备）恢复回来，手机不用重新扫码。
+  //
+  // 落盘：account-sync.json，里面的同步密钥用 safeStorage（DPAPI）再包一层——
+  // 日常重启免输密码；换机器后那层包不住，用户重新登录（密码）即可重新派生。
+  const accountStatePath = join(getConfigDir(), "account-sync.json");
+  const readAccountState = (): StoredAccount | null => {
+    try {
+      if (!existsSync(accountStatePath)) return null;
+      const raw = JSON.parse(readFileSync(accountStatePath, "utf8")) as { data?: string };
+      if (!raw?.data) return null;
+      if (!safeStorage.isEncryptionAvailable()) return null;
+      return JSON.parse(safeStorage.decryptString(Buffer.from(raw.data, "base64"))) as StoredAccount;
+    } catch {
+      return null;
+    }
+  };
+  const writeAccountState = (state: StoredAccount | null) => {
+    try {
+      if (!state) {
+        if (existsSync(accountStatePath)) rmSync(accountStatePath, { force: true });
+        return;
+      }
+      if (!safeStorage.isEncryptionAvailable()) throw new Error("本机加密不可用，拒绝保存账号状态");
+      const data = safeStorage.encryptString(JSON.stringify(state)).toString("base64");
+      writeFileSync(accountStatePath, JSON.stringify({ v: 1, data }, null, 2), "utf8");
+    } catch (error) {
+      appendDiagLog(`account-state save failed: ${String((error as Error)?.message).slice(0, 60)}`);
+    }
+  };
+
+  /** 账号接口候选：中继票地址 + 内置服务器地址 + 信令地址（去重）。 */
+  const accountCandidates = (): string[] => {
+    const out: string[] = [];
+    for (const url of phoneTicketAddresses()) out.push(url);
+    for (const url of builtinServer()?.phoneUrls ?? []) out.push(url);
+    const signaling = String(getConfig().remoteSignalingUrl || "");
+    if (signaling) out.push(signaling);
+    return [...new Set(out.filter(Boolean))];
+  };
+
+  /** 中继的自签 CA（TOFU：从任一可达的明文候选取；CA 就放在中继静态目录里）。 */
+  const relayCaPem = async (): Promise<string | null> => {
+    for (const candidate of accountCandidates()) {
+      if (!/^ws:\/\//i.test(candidate)) continue; // 只从明文侧取（没有信任起点时只能这样）
+      const plain = candidate.replace(/^ws:\/\//i, "http://").replace(/\/ws$/, "");
+      const pem = await fetchRelayCa(plain);
+      if (pem) return pem;
+    }
+    const mirror = builtinServer()?.mirrorUrl;
+    if (mirror) {
+      const origin = (() => {
+        try {
+          const url = new URL(mirror);
+          return `${url.protocol}//${url.host}`;
+        } catch {
+          return "";
+        }
+      })();
+      if (origin) {
+        const pem = await fetchRelayCa(origin);
+        if (pem) return pem;
+      }
+    }
+    return null;
+  };
+
+  /** 逐条基地址尝试：网络错误换下一条，业务错误直接抛（换地址也没用）。 */
+  const withAccountBase = async <T>(fn: (base: string, caPem: string | null) => Promise<T>): Promise<T> => {
+    const bases = accountBasesOf(accountCandidates());
+    if (!bases.length) throw new Error("没有可用的 TLS 中继地址（先连一台主机/配好中继）");
+    const caPem = await relayCaPem();
+    let lastError: unknown = null;
+    for (const base of bases) {
+      try {
+        return await fn(base, caPem);
+      } catch (error) {
+        if ((error as Error)?.name === "AccountApiError") throw error;
+        lastError = error;
+        appendDiagLog(`account base failed ${base}: ${String((error as Error)?.message).slice(0, 60)}`);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("连不上账号服务器");
+  };
+
+  /** 同步一次：拉密文 → 解密 → 本地优先合并 → 写回 → 上传。 */
+  const syncAccount = async (state: StoredAccount) => {
+    const key = Buffer.from(state.keyB64, "base64");
+    return withAccountBase(async (base, caPem) => {
+      const remote = await accountGetBlob(base, state.token, { caPem });
+      const remotePayload = remote.ciphertext
+        ? decodePayload(openAccountPayload(key, remote.ciphertext) ?? Buffer.alloc(0))
+        : null;
+
+      const identity = loadOrCreateIdentity(getConfigDir());
+      const syncIdentity: SyncIdentity = {
+        hostId: identity.hostId,
+        publicKeyPem: identity.publicKeyPem,
+        privateKeyPem: identity.privateKeyPem,
+        hmacSecret: identity.hmacSecret,
+        x25519PubB64u: identity.x25519PubB64u,
+        x25519PrivB64u: identity.x25519PrivB64u,
+        trustedDevices: identity.trustedDevices as unknown[],
+      };
+      const local = buildDesktopPayload({
+        identity: syncIdentity,
+        settings: { language: getConfig().language, theme: getConfig().theme },
+      });
+      const merged = mergeDesktopPayload(local, remotePayload);
+
+      // 恢复主机身份：只有本机**还没配过任何设备**时才接受远端那份（否则等于把手机全踢下线）。
+      let restored = false;
+      if (merged.identity && identity.trustedDevices.length === 0 && merged.identity.hostId !== identity.hostId) {
+        saveIdentity(getConfigDir(), {
+          hostId: merged.identity.hostId,
+          publicKeyPem: merged.identity.publicKeyPem,
+          privateKeyPem: merged.identity.privateKeyPem,
+          hmacSecret: merged.identity.hmacSecret,
+          x25519PubB64u: merged.identity.x25519PubB64u,
+          x25519PrivB64u: merged.identity.x25519PrivB64u,
+          trustedDevices: (merged.identity.trustedDevices || []) as never,
+        });
+        restored = true;
+        appendDiagLog(`account-sync restored identity ${merged.identity.hostId.slice(0, 8)} (restart required)`);
+      }
+
+      const sealed = sealAccountPayload(key, encodePayload({ ...merged, updatedAt: Date.now() }));
+      const written = await accountPutBlob(base, state.token, sealed, remote.revision, { caPem });
+      const next: StoredAccount = { ...state, base, lastSyncAt: Date.now(), revision: written.revision };
+      writeAccountState(next);
+      appendDiagLog(
+        `account-sync ok id=${identifierFingerprint(state.identifier)} rev=${written.revision} restored=${restored}`,
+      );
+      return { state: next, restored };
+    });
+  };
+
+  const accountStatusOf = (state: StoredAccount | null) => ({
+    loggedIn: !!state,
+    identifier: state?.identifier ?? null,
+    lastSyncAt: state?.lastSyncAt ?? null,
+    revision: state?.revision ?? 0,
+    base: state?.base ?? null,
+  });
+
+  ipcMain.handle("account:status", () => accountStatusOf(readAccountState()));
+
+  ipcMain.handle("account:signIn", async (_e, args: { identifier?: string; password?: string; register?: unknown }) => {
+    const identifier = String(args?.identifier || "").trim();
+    const password = String(args?.password || "");
+    if (!identifier || password.length < 8) throw new Error("账号必填，密码至少 8 位");
+    const result = await withAccountBase((base, caPem) =>
+      accountSignIn(base, { identifier, password, register: args?.register === true }, { caPem }),
+    );
+    const key = deriveAccountKey(password, result.kdfSalt);
+    let state: StoredAccount = {
+      identifier: result.identifier,
+      accountId: result.accountId,
+      kdfSalt: result.kdfSalt,
+      token: result.token,
+      exp: result.exp,
+      keyB64: key.toString("base64"),
+      lastSyncAt: 0,
+      revision: 0,
+      base: "",
+    };
+    writeAccountState(state);
+    const synced = await syncAccount(state);
+    state = synced.state;
+    appendDiagLog(`account signIn ok id=${identifierFingerprint(identifier)} register=${args?.register === true}`);
+    return { ...accountStatusOf(state), restored: synced.restored };
+  });
+
+  ipcMain.handle("account:sync", async () => {
+    const state = readAccountState();
+    if (!state) throw new Error("尚未登录账号");
+    const synced = await syncAccount(state);
+    return { ...accountStatusOf(synced.state), restored: synced.restored };
+  });
+
+  ipcMain.handle("account:signOut", () => {
+    writeAccountState(null);
+    return accountStatusOf(null);
+  });
+
   ipcMain.handle("app:getConfig", () => configForRenderer());
   ipcMain.handle("lanmode:status", () => lanModeStatus());
   ipcMain.handle("lanmode:set", async (_e, args: { enabled?: boolean; port?: number }) => {
