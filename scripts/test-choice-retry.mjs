@@ -8,6 +8,7 @@
  * 运行：npm run test:choiceretry
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { register } from "node:module";
 
 register(new URL("./ts-ext-loader.mjs", import.meta.url));
@@ -46,10 +47,12 @@ const fence = (body, info = "choices") => "```" + info + "\n" + body + "\n```";
   );
   assert.equal(isValidChoicesBody('[{"title":"题","options":["只有一项"]}]'), false, "单选项应判非法");
   assert.equal(isValidChoicesBody("[]"), false, "空数组应判非法");
+  // 超过 6 题改成「不判非法」（改于 2026-11-06）：渲染端是**截断成 6 题 + 写明被截掉**，
+  // 旧块已经画面板了；这里判非法只会白重试一轮，然后同一问题出两个可点面板。
   assert.equal(
     isValidChoicesBody(JSON.stringify(Array.from({ length: 7 }, (_, i) => ({ title: "q" + i, options: ["a", "b"] })))),
-    false,
-    "超过 6 题应判非法",
+    true,
+    "超过 6 题不判非法（与渲染端的截断保持一致）",
   );
   ok("结构校验：label/title、单选项、空数组、超 6 题");
 }
@@ -200,6 +203,18 @@ const fence = (body, info = "choices") => "```" + info + "\n" + body + "\n```";
     '[{"title":"题","options":["甲","乙"]}',
     // options 里丢了 {} 的裸 label 对
     '[{"title":"题","options":["label":"甲","detail":"说明","label":"乙","detail":"说明2"]}]',
+    // ④ 键名漏开头的引号（2026-11-06 新补，两边必须同样认为能渲染）
+    '[{"title":"题","options":[{"label":"甲"},{"label":"乙",detail":"说明"}]}]',
+    '[{"title":"题","options":[{label:"甲"},{label:"乙"}]}]',
+    // ⑤ 无键成员：数组提前收尾 / 对象里多一段
+    '[{"title":"题","options":["甲","乙"],{"label":"丙","detail":"说明"}]}]',
+    '[{"title":"题",{"x":1},"options":["甲","乙"]}]',
+    // ⑥ 顶层漏了 []
+    '{"title":"题","options":["甲","乙"]}',
+    '{"title":"甲题","options":["1","2"]},{"title":"乙题","options":["3","4"]}',
+    '{"title":"题","options":["甲","乙"]',
+    // ⑦ 逐题兜底：中间一题坏掉，其余仍该出面版（也绝不能去重试）
+    '[{"title":"甲题","options":["1","2"]},{"title":乙题,"options":["3","4"]},{"title":"丙题","options":["5","6"]}]',
     // 正常块
     '[{"title":"题","options":["甲","乙"]}]',
   ];
@@ -210,7 +225,7 @@ const fence = (body, info = "choices") => "```" + info + "\n" + body + "\n```";
     assert.equal(panel, true, "这些块都应能渲染：" + body.slice(0, 40));
     assert.equal(detectFailure(fence(body)), null, "能渲染的块绝不能触发重试：" + body.slice(0, 40));
   }
-  ok("修复链 parity：能渲染 ⇔ 不重试（裸引号 / 尾逗号 / 缺括号 / 裸 label）");
+  ok("修复链 parity：能渲染 ⇔ 不重试（七类坏法逐个对账）");
 
   // 真救不回来的块：两边都判非法，且报错位置要进提示词
   const broken = '[{"title":"题" "options":["甲","乙"]}]';
@@ -218,7 +233,62 @@ const fence = (body, info = "choices") => "```" + info + "\n" + body + "\n```";
   const fail = detectFailure(fence(broken));
   assert.ok(fail, "真坏块仍要触发重试");
   assert.match(fail.reason, /position|line \d+|unexpected/i, "重试原因应带上解析错误位置");
+  // 占位符式的正文（模型真在写草稿）：不能因为「能补标点」就硬拼个面板出来
+  const draft = "[{下一步怎么走…}, {推不推…}]";
+  assert.equal(rendersAsPanel(draft), false, "没有 title/options 的草稿不是选择题");
+  assert.ok(detectFailure(fence(draft)), "草稿块照旧触发重试");
   ok("真坏块：仍重试，且原因带 JSON 错误位置");
+}
+
+// ---- [12] 两份实现的源码对账（注释除外必须逐字一致）------------------------------
+// 背面的事故已经踩过两次：只改渲染端不改这份拷贝 → 同一输出「那边能渲染、
+// 这边判非法」→ 白重试一轮 + 两个面板。行为语料只能覆盖想到的坏法，这一条直接防「改了没同步」。
+{
+  const RB = new URL("../src/renderer/src/lib/choice-block.ts", import.meta.url);
+  const EX = new URL("../src/main/mpi-choice-retry-ext.ts", import.meta.url);
+  // 网页版客户端自己有一份移植件（同语言），一并纳入对账。
+  const TARGETS = [
+    ["主进程重试扩展", EX],
+    ["PWA 客户端", new URL("../mobile/pwa/src/lib/choice-block.ts", import.meta.url)],
+  ];
+  /** 取顶层函数体，剪掉注释与缩进（两边写同一个字符允许 '"' 或 '\"' 两种写法）。 */
+  const shared = (file, name) => {
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    const i = lines.findIndex((l) => l.startsWith(`function ${name}(`));
+    if (i < 0) return null;
+    let j = i;
+    while (j < lines.length && lines[j] !== "}") j++;
+    return lines
+      .slice(i, j + 1)
+      .filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l))
+      .map((l) => l.trim().replace(/\\"/g, '"'))
+      .join("\n");
+  };
+  // 必须是同一份算法的函数（新增修复时把名字跟着加进来）。
+  const names = [
+    "sliceFirstJson",
+    "escapeStrayQuotes",
+    "closeOpenBrackets",
+    "dropTrailingCommas",
+    "peekKey",
+    "wrapBareLabelPairs",
+    "skipBalanced",
+    "quoteBareKeys",
+    "repairStrayMembers",
+    "questionStarts",
+    "splitQuestionChunks",
+    "repairChain",
+    "repairCandidates",
+  ];
+  for (const [label, target] of TARGETS) {
+    for (const name of names) {
+      const a = shared(RB, name);
+      const b = shared(target, name);
+      assert.ok(a !== null && b !== null, `${label} 里也该有 ${name}（缺就是漏搬）`);
+      assert.equal(b, a, `${name} 在「桌面端 vs ${label}」两份实现不一致——改了一边就得同步另一边`);
+    }
+  }
+  ok(`多份实现对账：${names.length} 个函数 × ${TARGETS.length} 份副本逐字一致`);
 }
 
 console.log(`

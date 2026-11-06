@@ -333,6 +333,85 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   }
 }
 
+// --- JSON 修复链·第二批（2026-11-06 再盘点：1101 个围栏 / 5 个失败）--------------
+// 这批全是「漏符号」：④ 键名漏开头的引号；⑤ 对象里冒出无键成员；⑥ 顶层漏 []
+// 包裹；⑦ 一题写坏不拖全块。原则不变：**只补标点、不改内容**，修出的结果仍要过结构校验。
+{
+  const withFence = (body) => `前\n${FENCE_OPEN}\n${body}\n\`\`\`\n后`;
+  /** 跑解析，返回第一个面板（没有面板就拿到 null）。 */
+  const panel = (body) => {
+    const seg = cb.splitChoiceSegments(withFence(body)).find((s) => s.kind !== "md");
+    return seg && seg.kind === "choice" ? seg : null;
+  };
+  const labelsOf = (body, q = 0) => {
+    const p = panel(body);
+    return p ? p.data.questions[q]?.options.map((o) => o.label) : null;
+  };
+
+  // ④ 键名漏了开头的英文双引号（历史真实坏法：2026-10-16 会话的 `,detail":"…"}`）
+  {
+    const body = `[{"title":"走哪步？","options":[{"label":"甲"},{"label":"乙",detail":"一句说明"}]}]`;
+    assert.deepEqual(labelsOf(body), ["甲", "乙"], "detail 漏开头引号应能修好");
+    assert.equal(panel(body).repaired, true);
+  }
+  // ④ 键名两头都漏
+  assert.deepEqual(
+    labelsOf(`[{"title":"题","options":[{label:"甲"},{label:"乙"}]}]`),
+    ["甲", "乙"],
+    "裸 label 键名应补引号",
+  );
+  // ④ 同一份正文里另一题的 options 写成了 `options":null`：那题丢掉，好的那题照画面板
+  {
+    const p = panel(`[{"title":"甲题","options":["1","2"]},{"title":"乙题",options":null}]`);
+    assert.ok(p, "好的那题不能被坏的那题拖下马");
+    assert.deepEqual(p.data.questions.map((q) => q.title), ["甲题"]);
+    assert.ok(p.data.clamped, "丢掉的题要计入截断提示");
+  }
+
+  // ⑤ 数组提前收尾（模型其实想把选项对象当数组元素）：一个选项都不能丢
+  assert.deepEqual(
+    labelsOf(`[{"title":"题","options":["甲","乙"],{"label":"丙","detail":"说明"}]}]`),
+    ["甲", "乙", "丙"],
+    "「],{」应当作数组接着写",
+  );
+  // ⑤ 对象里真的多了一个无键成员 → 丢掉它，题目保留
+  assert.deepEqual(
+    labelsOf(`[{"title":"题",{"x":1},"options":["甲","乙"]}]`),
+    ["甲", "乙"],
+    "无键成员整段丢弃",
+  );
+
+  // ⑥ 顶层漏了 []：只写一个对象 / 一串对象 / 还写到一半就断
+  assert.deepEqual(labelsOf(`{"title":"题","options":["甲","乙"]}`), ["甲", "乙"], "单个问题对象");
+  {
+    const p = panel(`{"title":"甲题","options":["1","2"]},{"title":"乙题","options":["3","4"]}`);
+    assert.ok(p, "两题没包外层数组也要出面板");
+    assert.deepEqual(p.data.questions.map((q) => q.title), ["甲题", "乙题"]);
+  }
+  assert.deepEqual(labelsOf(`{"title":"题","options":["甲","乙"]`), ["甲", "乙"], "漏外层又写到一半就断");
+
+  // ⑦ 逐题兜底：中间一题坏掉，其余照常出面版（并记下被截断的题数）
+  {
+    const p = panel(`[{"title":"甲题","options":["1","2"]},{"title":乙题,"options":["3","4"]},{"title":"丙题","options":["5","6"]}]`);
+    assert.ok(p, "一题坏掉不该让三题一起降级成代码块");
+    assert.deepEqual(p.data.questions.map((q) => q.title), ["甲题", "丙题"]);
+    assert.equal(p.data.clamped.questions, 1, "坏掉那题要计入截断");
+    assert.equal(p.repaired, true);
+  }
+  // ⑦ 后面几题被写断（正文到一半结束）：前面写完的题仍要出来
+  {
+    const p = panel(`[{"title":"甲题","options":["1","2"]},{"title":"乙题","options":["3","4"}`);
+    assert.ok(p && p.data.questions.length >= 1, "写完的题不能丢");
+  }
+
+  // 反例：修不好的仍然降级，绝不能把围栏里的普通文字 / 无关对象读成面板
+  assert.equal(panel("这段话根本不是 JSON，只是模型写在围栏里的说明。"), null);
+  assert.equal(panel(`{"a":1} 这不是 choices`), null);
+  assert.equal(panel("先把 title: 这段说明拄一遍，然后再说。"), null);
+  // 合法块依旧不走修复链（repaired 不置位）
+  assert.equal(panel(JSON.stringify([{ title: "q", options: ["a", "b"] }])).repaired, undefined);
+}
+
 // --- reply build/parse round-trip --------------------------------------------
 
 for (const language of ["zh", "en"]) {

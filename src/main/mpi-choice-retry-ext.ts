@@ -19,7 +19,7 @@
  *    渲染端有 JSON 修复链（裸引号 / 缺括号 / 裸 label 对），这里的 parseChoicesBody
  *    拷贝了同一套修复链——否则「判非法 → 重试」与「仍能渲染 → 面板」会同时发生，
  *    一次输出就多出两个面板（2026-10-26 thinkbook16p 会话实证）。
- *    改这套修复链时两处必须同步（test-choice-retry 有 parity 断言）。
+ *    改这套修复链时必须同步两份副本；`npm run test:choiceretry` 除了行为语料，还会**逐字比对**这几段源码。
  *
  * 失败策略：全程 fail-open——判定抛错、注入失败，都只写 stderr 一行，绝不影响对话。
  */
@@ -104,9 +104,12 @@ function closeReFor(len: number): RegExp {
   return new RegExp("^\\s*`{" + len + ",}\\s*$");
 }
 
-/** 结构校验：数组、每题有 title、2-6 个选项、选项是字符串或 {label}。 */
+/** 结构校验：数组、每题有 title、至少两个选项、选项是字符串或 {label}。
+ * 题数**没有上限**：渲染端超出 6 题是截断渲染 + 写明「已截断 N 题」（见
+ * choice-block.ts 的 choiceDataFromJson）。这边判非法只会白重试一轮，
+ * 而旧块已经画出来了 = 同一问题两个可点面板（2026-10-26 那个事故的同一个根）。 */
 function shapeOk(raw: unknown): boolean {
-  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 6) return false;
+  if (!Array.isArray(raw) || raw.length === 0) return false;
   for (const q of raw as any[]) {
     if (!q || typeof q !== "object") return false;
     if (typeof q.title !== "string" || !q.title.trim()) return false;
@@ -129,7 +132,7 @@ function shapeOk(raw: unknown): boolean {
 // 为什么必须有：判定「要不要重试」的标准必须与「能不能渲染成面板」一致。
 // 之前这里只做严格 JSON.parse，而渲染端有修复链 → 同一块被判非法（触发重试）
 // 却照样渲染成面板 → 一次输出出现**两个面板**（2026-10-26 thinkbook16p 会话实证）。
-// 改动此处必须同步 src/renderer/src/lib/choice-block.ts，test-choice-retry 有 parity 断言。
+// 改动此处必须同步 src/renderer/src/lib/choice-block.ts（test:choiceretry 会逐字比对两边源码）。
 
 /** 截出正文里第一个括号配对的 JSON 值（跳过字符串内的括号与转义）。 */
 function sliceFirstJson(text: string): string | null {
@@ -326,9 +329,216 @@ function wrapBareLabelPairs(src: string): string {
   return out;
 }
 
-/** 三段修复的组合（与渲染端同序：先转义引号，再补包裹，最后补括号/去尾逗号）。 */
+// ---------------- 以下五段与 src/renderer/src/lib/choice-block.ts 逐字一致 ----------------
+// 2026-11-06 新增的四类「漏符号」修复：键名漏引号 / 无键成员 / 顶层漏 [] / 逐题兜底。
+// ⚠️ 拷贝件：改这里必须同步渲染端，否则同一份输出会出现「这边能渲染成面板、那边判非法 → 白重试一轮」。
+
+/** 跳过一个以 src[start]（`[` 或 `{`）开头的配平片段，返回其后的下标；不配平返回 -1。 */
+function skipBalanced(src: string, start: number): number {
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "[" || ch === "{") stack.push(ch === "[" ? "]" : "}");
+    else if (ch === "]" || ch === "}") {
+      if (stack.pop() !== (ch === "]" ? "]" : "}")) return -1;
+      if (!stack.length) return i + 1;
+    }
+  }
+  return -1;
+}
+
+const BARE_KEY_RE = /^[A-Za-z_$][A-Za-z0-9_$]*/;
+
+/** ④ 键名漏了开头的英文双引号 → 补引号。
+ * 实测两种写法：`,detail":"说明"}`（只漏开头，原文里那个引号是键名的收尾）和
+ * `{label:"甲"}`（两头都漏）。判定只看结构：不在字符串里、前一个有效字符是
+ * `{` 或 `,`、裸标识符后面（可跳空白）确实跟着 `:`。值位置一概不碰——宁可漏修，
+ * 也不要把中文正文改坏。 */
+function quoteBareKeys(src: string): string {
+  let out = "";
+  let i = 0;
+  let inStr = false;
+  let esc = false;
+  let prevSig = "";
+  while (i < src.length) {
+    const ch = src[i];
+    if (inStr) {
+      out += ch;
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      i++;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      out += ch;
+      prevSig = '"';
+      i++;
+      continue;
+    }
+    if ((prevSig === "{" || prevSig === ",") && /[A-Za-z_$]/.test(ch)) {
+      const key = BARE_KEY_RE.exec(src.slice(i))?.[0] ?? "";
+      if (key) {
+        let j = i + key.length;
+        while (j < src.length && /\s/.test(src[j])) j++;
+        if (src[j] === ":") {
+          // `label:` → `"label":`
+          out += `"${key}"`;
+          i += key.length;
+          prevSig = '"';
+          continue;
+        }
+        let k = j + 1;
+        if (src[j] === '"') {
+          while (k < src.length && /\s/.test(src[k])) k++;
+          if (src[k] === ":") {
+            // `detail":` → `"detail":`
+            out += `"${src.slice(i, j + 1)}`;
+            i = j + 1;
+            prevSig = '"';
+            continue;
+          }
+        }
+      }
+    }
+    out += ch;
+    prevSig = ch;
+    i++;
+  }
+  return out;
+}
+
+/** ⑤ 对象里冒出「没有键名」的成员——JSON 的键必须是字符串，这个位置出现 `[`/`{`
+ * 只能是漏了键。实测两种坏法，分开处理：
+ *   A. `"options":["甲","乙"],{"label":"丙"}]}` ——数组刚收尾就被逗号接上一个对象：
+ *      模型其实是想把它当数组元素，多吃了一个 `]`。吃掉那个过早的 `]` 把数组
+ *      重新打开（它本来就没写完，后面的 `]` 正好拿来收尾），**选项一个不丢**；
+ *   B. 其它形态（真的多了一个成员）→ 整段丢掉，剩下的照常渲染；丢完留下的空逗号
+ *      交给尾逗号修复。
+ * 动手条件很窄：当前容器是**对象**、位置该放键名（前一个有效字符是 `{` 或 `,`）。 */
+function repairStrayMembers(src: string): string {
+  let out = "";
+  let i = 0;
+  let inStr = false;
+  let esc = false;
+  const stack: string[] = [];
+  let prevSig = "";
+  while (i < src.length) {
+    const ch = src[i];
+    if (inStr) {
+      out += ch;
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      i++;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      out += ch;
+      prevSig = '"';
+      i++;
+      continue;
+    }
+    if ((ch === "[" || ch === "{") && stack[stack.length - 1] === "}" && (prevSig === "{" || prevSig === ",")) {
+      // A. 紧跟在 `],` 后面：数组被提前关掉了，这个对象本该是它的元素。
+      if (prevSig === "," && /]\s*,\s*$/.test(out)) {
+        out = out.replace(/]\s*(,\s*)$/, "$1");
+        stack.push("]"); // 那个 `]` 被吃掉了，容器还在里层
+        continue; // 不推进 i：当前括号按正常入栈处理（此时顶层已是数组）
+      }
+      // B. 真的多了一个成员：整段跳过（带它前面的逗号）。
+      const end = skipBalanced(src, i);
+      if (end > i) {
+        if (prevSig === ",") out = out.replace(/,\s*$/, "");
+        i = end;
+        continue;
+      }
+    }
+    if (ch === "[" || ch === "{") stack.push(ch === "[" ? "]" : "}");
+    else if (ch === "]" || ch === "}") stack.pop();
+    out += ch;
+    prevSig = ch;
+    i++;
+  }
+  return out;
+}
+
+/** ⑦ 找出「一道题」的起点：「{」后面（可跳空白）就是 title 键。
+ * 用 title 当锚点而不是按括号配平切项——模型漏一个引号就会让后面所有引号成对
+ * 错位，跟着的括号计数一起乱（2026-11-06 实测：三项里坏一项，旧切法一项都取不出）。
+ * 而结构校验本来也只认带 title 的对象，锚点与「能渲染的项」正好是同一个条件。 */
+function questionStarts(src: string): number[] {
+  const out: number[] = [];
+  const re = /\{\s*"?\s*title\s*"?\s*:/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null && out.length < 12) {
+    out.push(m.index);
+    if (re.lastIndex <= m.index) re.lastIndex = m.index + 1;
+  }
+  return out;
+}
+
+/** ⑦ 按锚点切成「一题一段」。段尾剪到最后一个右花括号（把逗号、外层数组的
+ * 右方括号这类尾巴剪掉）；本来就没写完的段落保留原样，交给 closeOpenBrackets 收尾。 */
+function splitQuestionChunks(src: string): string[] {
+  const starts = questionStarts(src);
+  // 少于两段就没有「逐题兜底」的必要（整块的候选已经把它试过一遍了）。
+  if (starts.length < 2) return [];
+  const out: string[] = [];
+  for (let k = 0; k < starts.length; k++) {
+    const to = k + 1 < starts.length ? starts[k + 1] : src.length;
+    let piece = src.slice(starts[k], to);
+    const close = piece.lastIndexOf("}");
+    if (close > 0) piece = piece.slice(0, close + 1);
+    piece = piece.trim();
+    if (piece) out.push(piece);
+  }
+  return out;
+}
+
+/** 修复组合。顺序有讲究：**先补键名漏掉的引号**（不先把键名补正，后面所有引号的成对
+ * 判定会跟着错位，裸引号修复会把好文本改坏）→ 转义串内裸引号 → 修无键成员 →
+ * 给裸 `"label":` 对补 `{}` 包裹 → 补结尾括号 → 去尾逗号。（与渲染端同序）*/
 function repairChain(src: string): string {
-  return dropTrailingCommas(closeOpenBrackets(wrapBareLabelPairs(escapeStrayQuotes(src))));
+  return dropTrailingCommas(
+    closeOpenBrackets(wrapBareLabelPairs(repairStrayMembers(escapeStrayQuotes(quoteBareKeys(src))))),
+  );
+}
+
+/** ⑦ 逐题兜底：整块修不好时一段一段各自解析，只要有一段是能渲染的题就算合法。
+ * （渲染端保留的就是这些段，两边判据必须一致，否则又是「白重试一轮」。） */
+function salvageOk(body: string): boolean {
+  return splitQuestionChunks(body).some((chunk) => {
+    const variants = [chunk, repairChain(chunk), chunk.replace(/\}\s*$/, ""), repairChain(chunk.replace(/\}\s*$/, ""))];
+    return variants.some((candidate) => {
+      try {
+        return shapeOk([JSON.parse(candidate)]);
+      } catch {
+        return false;
+      }
+    });
+  });
 }
 
 /** 修复候选（改动越小越先试；全部由调用方做 JSON.parse + 结构校验）。 */
@@ -337,6 +547,11 @@ function repairCandidates(body: string): string[] {
   const sliced = sliceFirstJson(trimmed);
   const out = [sliced ?? "", repairChain(trimmed)];
   if (sliced) out.push(repairChain(sliced));
+  // ⑥ 顶层漏了数组包裹（只写了一个对象、或 `{` 前面那个 `[` 被吐掉）：
+  //    只补开头的 `[`——结尾交给链上的 closeOpenBrackets 按实际层级补。
+  if (trimmed && !trimmed.startsWith("[")) {
+    out.push(`[${trimmed}]`, `[${trimmed}`, repairChain(`[${trimmed}`));
+  }
   return out.filter((c) => c.length > 0);
 }
 
@@ -358,6 +573,8 @@ export function parseChoicesBody(body: string): { ok: boolean; repaired?: boolea
       // 换下一个候选
     }
   }
+  // 最后一道：逐题兜底（与渲染端同一判据）。
+  if (salvageOk(body)) return { ok: true, repaired: true };
   return { ok: false, ...(firstError ? { error: firstError } : {}) };
 }
 
