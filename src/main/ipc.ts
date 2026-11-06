@@ -160,7 +160,7 @@ import { ensureUpdateDirs, ingestUpdateRequests, writeUpdateReceipt } from "./up
 import { ensureImageRefExtension } from "./image-ref-extension";
 import { ensureAttachFileDirs, ingestAttachFileRequests } from "./attach-file-inbox";
 import { attachBackfillEvent, guessMimeType } from "./attach-file-core";
-import { ensureAttachImageThumb } from "./attach-file-thumbs";
+import { ensureAttachImageThumb, storeImageVariants } from "./attach-file-thumbs";
 import { attachBlockPlan, desktopFilePlainEnvelope, desktopFileRefEnvelope, mediaBlockNames, planDesktopFile, shouldInlineDesktopText } from "./chat-attachment-refs";
 import { ensureMemoryExtension, ensureMemoryCandidateInbox } from "./memory-extension";
 import { startMemoryInboxWatcher } from "./memory-inbox";
@@ -270,12 +270,14 @@ import {
   type MediaRef,
   splitVideoRefs,
   thumbNameFor,
+  lqipNameFor,
   derivedAttachmentBase,
   videoMimeForPath,
   videoRefEnvelope,
 } from "./remote/video-refs";
 import { snapshotImagePayload } from "./remote/image-thumbs";
 import { remoteImageMetadataBlock } from "./remote/image-block";
+import { ImageIngestQueue } from "./remote/image-ingest";
 import { redactRemotePaths } from "./remote/path-redact";
 import { fillVideoPosters } from "./remote/video-poster";
 import { uploadAttachmentChunk } from "./remote/attachment-relay-upload";
@@ -2741,13 +2743,29 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     return result;
   }
 
+  /**
+   * 内联图的后台落库队列（见 remote/image-ingest.ts 的模块注释）。
+   *
+   * 快照（同步）只做一次 sha256 查表：命中 → key 当次就能用；没命中 → 入队，
+   * 本轮仍走老路径（内联缩略图）。队列逐张落库并生成 thumb/LQIP，下次快照自然切到新路径。
+   * 这样 30 张 ComfyUI 产物不会把主进程卡 1–2 秒。
+   */
+  const imageIngest = new ImageIngestQueue({
+    store: ({ bytes, mimeType, label }) => {
+      const stored = storeObject({ bytes, mime: mimeType ?? undefined, label: label || "图片" });
+      if (!stored?.name) return null;
+      const derived = storeImageVariants(stored.name, bytes, mimeType);
+      return { key: stored.name, thumbName: derived.thumbName, lqipName: derived.lqipName };
+    },
+    log: appendDiagLog,
+  });
+
   function remoteMessages(
     messages: any[],
     cwd: string,
     sessionFile?: string,
     options: { imageKeys?: boolean; threadId?: string } = {},
-  ): RemoteMessage[] {
-    // Keep the initial history response well below the SCTP data-channel
+  ): RemoteMessage[] {    // Keep the initial history response well below the SCTP data-channel
     // message budget. `text` remains available for previews and compatibility,
     // while text blocks preserve the actual thinking/tool/reply order in the
     // mobile renderer.
@@ -2760,6 +2778,9 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     // 真机一次全量快照 encoded=1.18MB，大头是历史图片的 base64：手机要整帧解析 + 逐张解码。
     // 图片是「会滚走的旧内容」——保留最近一段即可，更早的仍可点开按需拉（块里带 key 时不丢链接）。
     let imageBudget = 240_000;
+    /** 本次快照的新路径命中/入队统计（诊断用，汇总成一行日志）。 */
+    let imageKeysHit = 0;
+    let imageKeysEnqueued = 0;
     /** 只有「最近这么多条消息」里的图片才随快照下发（更早的省掉，避免每次刷新都传历史图）。 */
     const IMAGE_RECENT_MESSAGES = 12;
     /**
@@ -2944,28 +2965,44 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           // 早就只发名字）。240KB 图片预算只够 1–3 张，超出的块直接 return null ——
           // 手机上连图带 key 一起消失，点不开也拉不到。详见 docs/MOBILE-IMAGE-KEY.md。
           //
-          // 约束：必须有内容 key。key 来自引用（ref.name）；**没有引用**的内联图（agent
-          // 直接吐在 tool result 里的 base64）暂时仍走老路径——给它们落库要解码 + 算 sha256，
-          // 一次 30 张 ComfyUI 产物会把主进程同步卡住 1–2 秒。后台落库队列是第二阶段。
-          if (options.imageKeys && ref?.name && isContentKey(ref.name)) {
-            const key = ref.name;
-            const thumbName = ref.thumb || findVideoPoster(key);
-            const meta = objectMeta(key);
-            // 作用域登记：客户端随后要按 key/缩略图名拉字节，白名单里必须有它们。
-            // 快照是**每次**都会重新登记的（主机重启后内存白名单清空，下一次快照就补回来）。
-            if (options.threadId) {
-              rememberAttachmentNames(options.threadId, [key, ...(thumbName ? [thumbName] : [])]);
+          // key 有两个来源：
+          //   ① 引用（用户发的图 / mpi_attach_file 递交）—— ref.name 就是内容地址；
+          //   ② 内联图（agent 直接吐在 tool result 里的 base64）—— 查后台落库队列；
+          //      㦡没命中就入队，本轮继续走老路径（下次快照就能用上）。
+          if (options.imageKeys) {
+            let key = ref?.name && isContentKey(ref.name) ? ref.name : "";
+            if (!key && typeof block.data === "string") {
+              key = imageIngest.lookup(block.data) ?? "";
+              if (!key) {
+                imageIngest.enqueue(block.data, typeof block.mimeType === "string" ? block.mimeType : undefined, ref?.label);
+                imageKeysEnqueued += 1;
+              }
             }
-            appendDiagLog(
-              `snapshot-image-key key=${key.slice(0, 8)} thumb=${thumbName ? "1" : "0"} size=${meta?.size ?? "?"}`,
-            );
-            return remoteImageMetadataBlock({
-              key,
-              mimeType: (typeof block.mimeType === "string" ? block.mimeType : undefined) ?? meta?.mime,
-              label: ref.label,
-              thumbName,
-              bytes: meta?.size,
-            });
+            if (key) {
+              const thumbName = ref?.thumb || findVideoPoster(key);
+              const lqipName = lqipNameFor(key);
+              // LQIP 也是可选的：队列刚处理完 key、缩略图可能还没写好。
+              const lqip = readThumbnailBase64(lqipName);
+              const meta = objectMeta(key);
+              // 作用域登记：客户端随后要按 key/缩略图/LQIP 名拉字节，白名单里必须有它们。
+              // 快照是**每次**都会重新登记的（主机重启后内存白名单清空，下一次快照就补回来）。
+              if (options.threadId) {
+                rememberAttachmentNames(options.threadId, [
+                  key,
+                  ...(thumbName ? [thumbName] : []),
+                  ...(lqip ? [lqipName] : []),
+                ]);
+              }
+              imageKeysHit += 1;
+              return remoteImageMetadataBlock({
+                key,
+                mimeType: (typeof block.mimeType === "string" ? block.mimeType : undefined) ?? meta?.mime,
+                label: ref?.label,
+                thumbName,
+                lqip: lqip ?? undefined,
+                bytes: meta?.size,
+              });
+            }
           }
 
           // ── 老路径（未声明能力 / 无 key 的内联图）：内联缩略图，受窗口与预算约束 ──
@@ -3320,7 +3357,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     const estimated = trimmed.reduce((sum, m) => sum + remoteMessageSize(m), 0);
     const encoded = JSON.stringify(trimmed).length;
     appendDiagLog(
-      `remote-history total=${source.length} rendered=${output.length} sent=${trimmed.length} bytes=${estimated} encoded=${encoded} vid=${pendingVideos.length} posters=${posterResult.posters} posterBytes=${posterResult.posterBytes}`,
+      `remote-history total=${source.length} rendered=${output.length} sent=${trimmed.length} bytes=${estimated} encoded=${encoded} vid=${pendingVideos.length} posters=${posterResult.posters} posterBytes=${posterResult.posterBytes} imgKeys=${imageKeysHit} imgQueued=${imageKeysEnqueued}`,
     );
     return trimmed;
   }

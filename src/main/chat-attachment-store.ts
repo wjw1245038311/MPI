@@ -17,7 +17,7 @@ import { app } from "electron";
 import { closeSync, constants as fsConstants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { basename, extname, isAbsolute, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME, VIDEO_POSTER_MAX_BYTES, VIDEO_POSTER_MIME_TYPES, mediaExtForMime, posterNameFor, thumbNameFor, videoMimeForPath } from "./remote/video-refs";
+import { REMOTE_VIDEO_MAX_BYTES, VIDEO_EXT_BY_MIME, VIDEO_POSTER_MAX_BYTES, VIDEO_POSTER_MIME_TYPES, lqipNameFor, mediaExtForMime, posterNameFor, thumbNameFor, videoMimeForPath } from "./remote/video-refs";
 
 export const CHAT_ATTACHMENT_DIR = "chat-attachments";
 /**
@@ -600,6 +600,32 @@ export function storeThumbnail(name: string, thumb?: VideoPosterInput): string |
   try {
     writeFileSync(join(dir(), name_), bytes);
     return name_;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * LQIP 占位图（长边 ≤40px，见 docs/MOBILE-IMAGE-KEY.md §4）：与缩略图同一套落盘规则，
+ * 但名字是 `<name>.lqip.<ext>`、硬上限 8KB（40px JPEG 实测 0.5–1.5KB，8KB 是护栏）。
+ *
+ * 为什么不复用 `storeThumbnail`：它固定写 `<name>.thumb.*`，而两者要同时存在。
+ */
+export function storeLqip(name: string, input?: VideoPosterInput): string | null {
+  if (!input || typeof input.data !== "string" || !input.data) return null;
+  const mimeType = String(input.mimeType || "image/jpeg").toLowerCase();
+  if (!VIDEO_POSTER_MIME_TYPES.has(mimeType)) return null;
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(input.data, "base64");
+  } catch {
+    return null;
+  }
+  if (!bytes.length || bytes.length > 8 * 1024) return null;
+  const filename = lqipNameFor(name, mimeType);
+  try {
+    writeFileSync(join(dir(), filename), bytes);
+    return filename;
   } catch {
     return null;
   }

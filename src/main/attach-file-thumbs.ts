@@ -13,7 +13,7 @@
  * 预算（`VIDEO_POSTER_MAX_BYTES` 是硬上限，超了 storeThumbnail 会拒绝）。
  */
 import { nativeImage } from "electron";
-import { storeThumbnail } from "./chat-attachment-store";
+import { storeLqip, storeThumbnail } from "./chat-attachment-store";
 
 /** 缩略图候选（宽, JPEG 质量）：从清晰到省字节，第一个能被 `storeThumbnail` 接受的胜出。
  *
@@ -43,5 +43,70 @@ export function ensureAttachImageThumb(name: string, sourcePath: string): string
     return null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * 给对象库里的图片（内容已落库）生成**缩略图 + LQIP 占位**并落盘。
+ *
+ * 用在「内联图后台落库队列」（`remote/image-ingest.ts`）里：agent 直接吐在 tool result 里的
+ * base64 只有字节、没有文件路径，所以这里从 Buffer 建图，而不是 `createFromPath`。
+ *
+ * 参数按 `docs/MOBILE-IMAGE-KEY.md` §4 分两档：
+ *   - 疑似截图（PNG/WebP 源）→ 1600 宽 / q92，文字才不糊；
+ *   - 照片 → 1280 宽 / q78。
+ * 两档都从清晰往省字节降——`storeThumbnail` 有 160KB 硬上限，超了就只能退下一档，
+ * 这也是截图档为什么需要多级回落。
+ *
+ * 返回的名字客户端拿去按需拉（`attachment.fetch` / `attachment.url`）。
+ */
+export function storeImageVariants(
+  key: string,
+  bytes: Buffer,
+  mimeType: string | null,
+): { thumbName: string | null; lqipName: string | null } {
+  try {
+    const image = nativeImage.createFromBuffer(bytes);
+    if (image.isEmpty()) return { thumbName: null, lqipName: null };
+    const { width } = image.getSize();
+    const textLike = /^image\/(png|webp)$/i.test(String(mimeType || ""));
+    const plan = textLike
+      ? [
+          { width: 1600, quality: 92 },
+          { width: 1280, quality: 85 },
+          { width: 1024, quality: 78 },
+        ]
+      : THUMB_ATTEMPTS;
+    let thumbName: string | null = null;
+    for (const attempt of plan) {
+      const target = width && width < attempt.width ? image : image.resize({ width: attempt.width, quality: "good" });
+      const jpeg = target.toJPEG(attempt.quality);
+      if (!jpeg.length) continue;
+      const stored = storeThumbnail(key, { data: jpeg.toString("base64"), mimeType: "image/jpeg" });
+      if (stored) {
+        thumbName = stored;
+        break;
+      }
+    }
+    // LQIP：长边 40px（对齐 Telegram minithumbnail 的量级），只为不闪白/不跳布局。
+    let lqipName: string | null = null;
+    try {
+      const size = image.getSize();
+      if (size.width && size.height) {
+        const small =
+          size.width >= size.height
+            ? image.resize({ width: 40, quality: "good" })
+            : image.resize({ height: 40, quality: "good" });
+        const lqipJpeg = small.toJPEG(50);
+        if (lqipJpeg.length) {
+          lqipName = storeLqip(key, { data: lqipJpeg.toString("base64"), mimeType: "image/jpeg" });
+        }
+      }
+    } catch {
+      lqipName = null;
+    }
+    return { thumbName, lqipName };
+  } catch {
+    return { thumbName: null, lqipName: null };
   }
 }

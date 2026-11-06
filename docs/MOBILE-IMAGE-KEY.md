@@ -257,6 +257,20 @@ LQIP/灰块 ──可见──► 拉 thumb ──成功──► 清晰缩略�
 **与 PWA 的行为差异（有意）**：安卓用 `LazyColumn` 的“只组合可见项”实现可见即拉，不需要
 IntersectionObserver；缩略图落盘在 `cacheDir`（系统可清），PWA 只在内存里 LRU。
 
+### 8.3 已落地：主机侧内联图后台落库（A2，2026-11-06）
+
+agent 直接吐在 tool result / 正文里的图（ComfyUI 产物最典型）只有 base64、没有内容 key。
+同步落库要「解码 + sha256 + 缩放」，30 张会把主进程卡 1–2 秒，所以拆成两条时序：
+
+| 阶段 | 做什么 | 代价 |
+| --- | --- | --- |
+| 快照（同步） | 对 base64 算一次 sha256，查「指纹 → key」表：命中 → 当次就用元数据；没命中 → 入队，本轮仍走老路径 | 实测单张最大 0.72MB、单会话最多 9 张（≈0.3–4.1MB）→ 哈希成本 10ms 量级 |
+| 队列（后台） | 逐张解码 → `storeObject` 落库 → `storeImageVariants` 生成缩略图（截图档 1600/q92 起，超 160KB 降档）与 LQIP（长边 40px）→ 写回指纹表 | 串行 + `setImmediate` 让出事件循环，每张 20–100ms 且不连续阻塞；下次快照自然切新路径 |
+
+护栏：单张 base64 > 6M 直接放弃（记 `dropped`）；指纹表 LRU 600 条；队列上限 200 张（溢出丢最旧）；
+落库失败**不写表**（下次快照会重新入队重试）。实现：`src/main/remote/image-ingest.ts`（纯逻辑，
+落库与缩略图生成由 `ipc.ts` 注入）+ `storeImageVariants` / `storeLqip`。
+
 ---
 
 ## 9. 兼容与灰度（最容易翻车的一步）
@@ -322,7 +336,7 @@ IntersectionObserver；缩略图落盘在 `cacheDir`（系统可清），PWA 只
 | 步 | 内容 | 涉及 | 相对体量 |
 | --- | --- | --- | --- |
 | A | 主机：元数据 + 存量回填 + 授权按父 key + 后台生成 thumb/LQIP（新老分支按请求标记并存） | `ipc.ts`、`chat-attachment-store.ts`、`attach-file-thumbs.ts`、`video-refs.ts`、新单测 | 中 |
-| A2 | **内联图后台落库队列**（ComfyUI 直接吐在 tool result 里的 base64）+ thumb/LQIP 预生成 | 新增后台队列模块 + `image-block.ts` | 中 |
+| A2 | **内联图后台落库队列**（ComfyUI 直接吐在 tool result 里的 base64）+ thumb/LQIP 预生成 | 新增后台队列模块 + `image-block.ts` | 中 ✅ 2026-11-06 已落地（§8.3） |
 | B | PWA 客户端（解析 / 可见即拉 / 缓存 / 占位），先于 A 发布 | `mobile/pwa` 3–4 个文件 | 中 |
 | C | 安卓客户端（同上），先于 A 发布 | `mobile/app` 3–4 个文件 + 单测 | 中 |
 | D | 九宫格聚合 + 翻页查看器（可后置） | 两端 UI | 中 |

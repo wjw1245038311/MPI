@@ -87,11 +87,13 @@ const KEY = "a".repeat(64);
 
 {
   const ipc = readFileSync(resolve(import.meta.dirname, "..", "src", "main", "ipc.ts"), "utf8");
-  assert.match(ipc, /if \(options\.imageKeys && ref\?\.name && isContentKey\(ref\.name\)\)/, "新路径必须同时要求：客户端声明 + 有内容 key");
+  assert.match(ipc, /if \(options\.imageKeys\) \{/, "新路径必须由请求标记 imageKeys 触发（旧客户端不带 = 老行为）");
+  assert.match(ipc, /imageIngest\.lookup\(block\.data\)/, "内联图要先去后台落库队列里查 key");
+  assert.match(ipc, /imageIngest\.enqueue\(/, "没命中要入队（否则 agent 内联图永远走老路径）");
   assert.match(ipc, /remoteImageMetadataBlock\(/, "新路径要复用纯函数（不要再抄一份字段拼装）");
-  assert.match(ipc, /snapshotImagePayload\(block\.data, thumbnail, imageBudget\)/, "老路径（旧客户端/无 key 的内联图）必须保留");
+  assert.match(ipc, /snapshotImagePayload\(block\.data, thumbnail, imageBudget\)/, "老路径（旧客户端/未落库的内联图）必须保留");
   // 新路径必须在扣图片预算**之前**返回，否则又会被 240KB 预算拖回老问题
-  const newPath = ipc.indexOf("if (options.imageKeys && ref?.name && isContentKey(ref.name))");
+  const newPath = ipc.indexOf("if (options.imageKeys) {");
   const budget = ipc.indexOf("imageBudget -= decision.data.length");
   assert.ok(newPath > 0 && budget > newPath, "新路径应先于图片预算扣减返回");
 }
