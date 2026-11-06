@@ -719,7 +719,7 @@ function ImagePreview({
   onIndex,
   onClose,
 }: {
-  items: Array<{ src: string; name?: string; mime?: string }>;
+  items: Array<{ src: string; name?: string; key?: string; mime?: string }>;
   index: number;
   actions: ThreadActions | null;
   onIndex: (index: number) => void;
@@ -729,9 +729,42 @@ function ImagePreview({
   const imgRef = useRef<HTMLImageElement | null>(null);
   /** 按索引缓存的 objectURL（同一张翻回来不重拉）。 */
   const [resolved, setResolved] = useState<Record<number, string>>({});
+  /** 按索引缓存的原图 objectURL（点开/翻页时按 key 拉，缩略图先顶着）。 */
+  const [originals, setOriginals] = useState<Record<number, string>>({});
+  /** 预览期间创建的原图 URL，卸载时统一 revoke（objectURL 不随 GC 释放）。 */
+  const originalUrlsRef = useRef<string[]>([]);
   const item = items[index];
-  const src = resolved[index] ?? item?.src ?? "";
+  /** 原图优先 → 缩略图 → 调用方给的 src（单图点开时就是当前那画面）。 */
+  const src = originals[index] ?? resolved[index] ?? item?.src ?? "";
   const hasMultiple = items.length > 1;
+
+  // 当前这张有内容 key → 拉原图（九宫格打开时气泡里是缩略图，放大后要看细节/读字）。
+  // 翻页会取消上一张的请求：快速左右滑动不该攒一堆几 MB 的传输。
+  useEffect(() => {
+    const target = items[index];
+    if (!target?.key || originals[index] || !actions) return;
+    const controller = new AbortController();
+    void actions
+      .fetchAttachmentBytes(target.key, { signal: controller.signal })
+      .then((bytes) => {
+        const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: target.mime || "image/jpeg" }));
+        originalUrlsRef.current.push(url);
+        setOriginals((prev) => ({ ...prev, [index]: url }));
+      })
+      .catch(() => {
+        /* 拉不到就停在缩略图上：已经有画面，不打断看图 */
+      });
+    return () => controller.abort();
+  }, [index, item?.key, item?.mime, actions, originals]);
+
+  // 关闭预览 → 释放这次创建的所有原图 URL。
+  useEffect(
+    () => () => {
+      for (const url of originalUrlsRef.current) URL.revokeObjectURL(url);
+      originalUrlsRef.current = [];
+    },
+    [],
+  );
 
   // 当前这张还没字节（但有名字）→ 按需拉。九宫格打开时 src 是空的，字节靠这里来
   // （图片缓存命中时几乎瞬时，所以翻页不卡）。
@@ -1317,7 +1350,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
    * 单图与多图共用一套：`items` 里每一项要么已有 `src`（单图点开时的缩略图/原图），
    * 要么只有 `name`（九宫格：把整组图交给预览器，字节由它按需拉）。`index` 指向当前张。
    */
-  const [preview, setPreview] = useState<{ items: Array<{ src: string; name?: string; mime?: string }>; index: number } | null>(null);
+  const [preview, setPreview] = useState<{ items: Array<{ src: string; name?: string; key?: string; mime?: string }>; index: number } | null>(null);
   // 视频全屏预览（气泡里的播放器在竖屏手机上太小）。
   const [videoPreviewSrc, setVideoPreviewSrc] = useState<string | null>(null);
   // 大视频按需拉取（点开才拉）：进度 + 取消。null = 当前没有进行中的拉取。
@@ -1507,25 +1540,18 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
         void loadLazyImage(target, target.dataset.lazyImage, target.dataset.lazyImageMime || "image/jpeg");
         return;
       }
-      const fallback = target.currentSrc || target.src;
-      const originalName = target.dataset.lazyOriginal;
-      const originalMime = target.dataset.lazyOriginalMime || "image/jpeg";
-      setPreview({ items: [{ src: fallback, name: originalName, mime: originalMime }], index: 0 });
-      // 点开 = 拉**原图**（气泡里是缩略图/LQIP）。原图故意不进 image-cache：一张几 MB，
-      // 塞进去会把整屏缩略图挤掉；预览关掉后由浏览器回收。
-      if (originalName && actions) {
-        void actions
-          .fetchAttachmentBytes(originalName)
-          .then((bytes) => {
-            const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: originalMime }));
-            setPreview((prev) =>
-              prev ? { ...prev, items: prev.items.map((item, i) => (i === 0 ? { ...item, src: url } : item)) } : prev,
-            );
-          })
-          .catch(() => {
-            /* 拉不到就留在缩略图上：已经有画面，不打断用户 */
-          });
-      }
+      // 点开 = 看原图：这里只给当前画面（缩略图/LQIP），原图由预览器按 key 拉回来替换。
+      // 原图故意不进 image-cache：一张几 MB，塞进去会把整屏缩略图挤掉。
+      setPreview({
+        items: [
+          {
+            src: target.currentSrc || target.src,
+            key: target.dataset.lazyOriginal || undefined,
+            mime: target.dataset.lazyOriginalMime || "image/jpeg",
+          },
+        ],
+        index: 0,
+      });
       return;
     }
     // agent 递交的文件卡片 → 按需拉字节并下载（不缓存 URL，见 downloadLazyFile 的注释）。
