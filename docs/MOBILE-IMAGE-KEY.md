@@ -226,11 +226,24 @@ LQIP/灰块 ──可见──► 拉 thumb ──成功──► 清晰缩略�
 
 | 项 | 建议 |
 | --- | --- |
+| 请求标记 | `thread.subscribe` / `thread.resync` / `thread.get` 的 payload 带 `imageKeys: true`（由主机决定是否发元数据；不带 = 老行为） |
 | 缓存 | 内存 LRU（bitmap，~32 MB）+ 磁盘 LRU（按 key 命名，跨会话天然去重，~256 MB） |
 | 预取 | 可视区 ±1 屏，并发 ≤4；不预取原图 |
 | 失败 / 离线 | 保留 LQIP + 可点重试；主机离线且无缓存 → 明确文案「主机离线，图片未缓存」 |
 | 多图 | 一条消息里 N 张折叠成**九宫格 + 数量角标**，点开横向翻页（飞书/微信口径） |
 | 旧数据 | 块没有 `key`（旧主机）→ 沿用现在的 `data` 渲染路径 |
+
+### 8.1 已落地：PWA（2026-11-06）
+
+| 文件 | 做了什么 |
+| --- | --- |
+| `lib/thread-session.ts` | `ViewBlock` 补 `key/thumb/lqip/width/height/bytes` 并映射；subscribe/resync 带 `imageKeys: true` |
+| `lib/image-cache.ts`（新） | 图片 objectURL 缓存：**张数 120 + 估算 24MB** 双上限、并发去重、淘汰必 revoke。刻意**不复用** `attachment-fetch` 的 urlCache（上限 2，给几十 MB 视频/文件定的，混用会互相挤掉） |
+| `ThreadView.tsx` | 新块形态渲染（LQIP 立即上屏 + 比例占位）；`IntersectionObserver`（root = 滚动容器，提前 400px）可见即拉；点开拉原图（不进缓存）；失败保留占位、点一下重试 |
+| `styles.css` | `.msg-image--lazy` / `--blank` / `--error` / `.msg-image-placeholder` |
+| `scripts/test-pwa-image-cache.mjs` | 命中零请求 / 并发只拉一次 / 双上限淘汰并 revoke / 空字节算失败 |
+
+**未做**：安卓端（下一条）、九宫格聚合、thumb/LQIP 预生成（第二阶段）。
 
 ---
 

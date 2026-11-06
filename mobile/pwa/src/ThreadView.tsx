@@ -13,6 +13,7 @@ import { compressImageFile, type CompressedImage } from "./lib/image-attach";
 import { routeDroppedFiles } from "./lib/attach-route";
 import { extractVideoPoster, looksLikeVideo } from "./lib/video-attach";
 import { requestDirectPlaybackUrl, uploadVideoDirect } from "./lib/attachment-direct";
+import { loadImageUrl } from "./lib/image-cache";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
 import { parseInline } from "./lib/inline";
@@ -529,12 +530,47 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
     return <ToolRow block={block} />;
   }
   if (block.type === "image") {
+    // 老主机 / 内联图：有 data 就直接画（base64 → data URL）。
     // 主机下发的 data 是裸 base64（无 data: 前缀，与 JSONL 一致）——直接当 src
     // 会被浏览器解析成相对 URL 而加载失败（真机「图片看不了」的根因）。这里补前缀；
     // 已是完整 data URL 的原样使用。
-    if (!block.data) return null;
-    const src = block.data.startsWith("data:") ? block.data : `data:${block.mimeType || "image/jpeg"};base64,${block.data}`;
-    return <img className="msg-image" src={src} alt={block.mimeType || "image"} />;
+    if (block.data) {
+      const src = block.data.startsWith("data:") ? block.data : `data:${block.mimeType || "image/jpeg"};base64,${block.data}`;
+      return <img className="msg-image" src={src} alt={block.mimeType || "image"} />;
+    }
+    // 2026-11-06：快照只发元数据（key/thumb/lqip），字节由客户端**可见时**拉。
+    // 既无 data 也无 key = 真占位（历史遗留 / 附件已被清理）——不要把空块藏起来，
+    // 用户至少要知道“这里本来有张图”。
+    if (!block.key && !block.thumb) {
+      return (
+        <div className="msg-image-placeholder">
+          <span aria-hidden="true">🖼</span>
+          <em>图片未随本次同步下发</em>
+        </div>
+      );
+    }
+    const lqipSrc = block.lqip
+      ? block.lqip.startsWith("data:")
+        ? block.lqip
+        : `data:image/jpeg;base64,${block.lqip}`
+      : undefined;
+    // 比例先用宽高撑好（没有宽高就只给最小高度），避免加载完成后整列跳动。
+    const ratio = block.width && block.height ? block.width / block.height : undefined;
+    return (
+      <img
+        className={`msg-image msg-image--lazy${lqipSrc ? "" : " msg-image--blank"}`}
+        // LQIP（长边 ≤40px）立即上屏：模糊但有形，不闪白。真缩略图由容器上的
+        // IntersectionObserver 替换 src（data-lazy-image 被读走后就不会再拉）。
+        src={lqipSrc}
+        alt={block.label || "图片"}
+        data-lazy-image={block.thumb || block.key}
+        data-lazy-image-mime={block.thumb ? "image/jpeg" : block.mimeType || "image/jpeg"}
+        data-lazy-original={block.key}
+        data-lazy-original-mime={block.mimeType || "image/jpeg"}
+        data-lazy-bytes={block.bytes ? String(block.bytes) : undefined}
+        style={ratio ? ({ aspectRatio: String(ratio) } as CSSProperties) : undefined}
+      />
+    );
   }
   if (block.type === "video") {
     const meta = [block.size ? formatSize(block.size) : "", (block.mimeType || "").replace("video/", "")].filter(Boolean).join(" · ");
@@ -1255,12 +1291,93 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
   };
 
+  // ---- 图片按需拉取（2026-11-06）--------------------------------------------
+  // 快照只发元数据（key/thumb/lqip），字节在这里「滚到可见」才拉。用
+  // IntersectionObserver + 直接改 DOM，与图片/视频点击的事件委托同一取舍：
+  // 不把 actions 穿进 Block（那是纯展示组件）。
+  const imageObserverRef = useRef<IntersectionObserver | null>(null);
+
+  const loadLazyImage = async (img: HTMLImageElement, name: string, mime: string): Promise<void> => {
+    if (!actions || img.dataset.lazyLoaded === "1" || img.dataset.lazyLoading === "1") return;
+    img.dataset.lazyLoading = "1";
+    try {
+      const url = await loadImageUrl(name, mime, { request: (target) => actions.fetchAttachmentBytes(target) });
+      img.src = url;
+      img.dataset.lazyLoaded = "1";
+      delete img.dataset.lazyError;
+      img.classList.remove("msg-image--blank", "msg-image--error");
+    } catch {
+      // 失败保留占位（LQIP/灰块），点一下重试。
+      img.dataset.lazyError = "1";
+      img.classList.add("msg-image--error");
+    } finally {
+      delete img.dataset.lazyLoading;
+    }
+  };
+
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const img = entry.target as HTMLImageElement;
+          observer.unobserve(img);
+          const name = img.dataset.lazyImage;
+          if (name) void loadLazyImage(img, name, img.dataset.lazyImageMime || "image/jpeg");
+        }
+      },
+      // 提前约一屏开始拉：滚到跟前通常已经就位，不出现「空白追着滚」。
+      { root, rootMargin: "400px 0px" },
+    );
+    imageObserverRef.current = observer;
+    return () => {
+      observer.disconnect();
+      imageObserverRef.current = null;
+    };
+  }, [actions]);
+
+  // 消息集合变化后把新出现的懒加载图纳入观察（已加载/已观察的跳过）。
+  useEffect(() => {
+    const root = scrollRef.current;
+    const observer = imageObserverRef.current;
+    if (!root || !observer) return;
+    root.querySelectorAll<HTMLImageElement>("img.msg-image--lazy").forEach((img) => {
+      if (img.dataset.lazySeen === "1" || img.dataset.lazyLoaded === "1") return;
+      img.dataset.lazySeen = "1";
+      observer.observe(img);
+    });
+  }, [view.messages, view.streaming]);
+
   /** 图片/视频点击 → 全屏预览。事件委托在滚动容器上：不用把回调穿进 Message/Block，
    *  以后任何地方再渲染 msg-image / msg-video 也自动生效。 */
   const handleImageClick = (e: React.MouseEvent) => {
     const target = e.target;
     if (target instanceof HTMLImageElement && target.classList.contains("msg-image")) {
-      setPreviewSrc(target.currentSrc || target.src);
+      // 上次拉取失败 → 这次点击当作重试（不要弹出一个还没有画面的预览）。
+      if (target.dataset.lazyError === "1" && target.dataset.lazyImage) {
+        void loadLazyImage(target, target.dataset.lazyImage, target.dataset.lazyImageMime || "image/jpeg");
+        return;
+      }
+      const fallback = target.currentSrc || target.src;
+      setPreviewSrc(fallback);
+      // 点开 = 拉**原图**（气泡里是缩略图/LQIP）。原图故意不进 image-cache：一张几 MB，
+      // 塞进去会把整屏缩略图挤掉；预览关掉后由浏览器回收。
+      const originalName = target.dataset.lazyOriginal;
+      if (originalName && actions) {
+        void actions
+          .fetchAttachmentBytes(originalName)
+          .then((bytes) => {
+            const url = URL.createObjectURL(
+              new Blob([bytes as BlobPart], { type: target.dataset.lazyOriginalMime || "image/jpeg" }),
+            );
+            setPreviewSrc(url);
+          })
+          .catch(() => {
+            /* 拉不到就留在缩略图上：已经有画面，不打断用户 */
+          });
+      }
       return;
     }
     // agent 递交的文件卡片 → 按需拉字节并下载（不缓存 URL，见 downloadLazyFile 的注释）。

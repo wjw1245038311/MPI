@@ -596,6 +596,20 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .msg-image { max-width: 100%; border-radius: 8px; cursor: zoom-in; }
 
+/* 图片按需加载（2026-11-06）：快照只给元数据，滚到可见才拉字节。
+ * LQIP 已经上屏时只是模糊色块；没有 LQIP 就是灰底占位。两者都不要“闪白”。 */
+.msg-image--lazy { display: block; width: 100%; max-width: 320px; min-height: 72px; object-fit: cover; background: rgba(127, 127, 127, 0.12); }
+.msg-image--blank { aspect-ratio: 4 / 3; }
+.msg-image--error { cursor: pointer; outline: 1px dashed rgba(220, 120, 120, 0.55); }
+
+.msg-image-placeholder {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px; border-radius: 8px;
+  background: rgba(127, 127, 127, 0.10);
+  color: rgba(127, 127, 127, 0.95); font-size: 12px;
+}
+.msg-image-placeholder em { font-style: normal; }
+
 /* ---- 视频附件（飞书式：气泡里只有一个视频框，点一下直接全屏）-------------- */
 .msg-video-card {
   position: relative;

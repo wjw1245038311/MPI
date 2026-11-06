@@ -41,8 +41,20 @@ export interface ViewBlock {
   /** 视频**首帧封面**（base64 图片）：快照不再下发视频本体后，气泡里的画面就是它。 */
   poster?: string;
   posterMimeType?: string;
-  /** 主机刻意没下发本体（实时事件通道防大帧，或超出快照视频预算）→ 渲染占位卡片。 */
+  /** 主机刻意没下发本体（实时事件通道防大帧，或快照只给元数据）→ 渲染占位卡片。 */
   omitted?: boolean;
+  /**
+   * 图片的按需拉取信息（2026-11-06，快照不再内联图片字节）。
+   *
+   * `key` 是内容寻址名，`thumb` 是缩略图名（没有则拉原图），`lqip` 是极低分辨率
+   * 占位（长边 ≤40px，只为不闪白/不跳布局），`width/height/bytes` 用来先撑好布局。
+   */
+  key?: string;
+  thumb?: string;
+  lqip?: string;
+  width?: number;
+  height?: number;
+  bytes?: number;
 }
 
 export interface ViewMessage {
@@ -206,6 +218,13 @@ function mapRemoteMessage(m: RemoteMessage): ViewMessage {
       /** 可读原名（P3；audio 块靠它显示文件名）。 */
       label: b.label,
       omitted: b.omitted,
+      // 图片按需拉取（2026-11-06）：快照只给元数据，字节由客户端可见时拉
+      key: b.key,
+      thumb: b.thumb,
+      lqip: b.lqip,
+      width: b.width,
+      height: b.height,
+      bytes: b.bytes,
     })),
     artifacts: m.artifacts,
     stopReason: m.stopReason,
@@ -319,7 +338,7 @@ export class ThreadSession {
     if (this.subscribed) return;
     this.awaitingSnapshot = true;
     try {
-      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.subscribe", { threadId: this.view.threadId, haveMessageId: this.lastKnownMessageId() }, "subscribe", SNAPSHOT_TIMEOUT_MS);
+      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.subscribe", { threadId: this.view.threadId, haveMessageId: this.lastKnownMessageId(), imageKeys: true }, "subscribe", SNAPSHOT_TIMEOUT_MS);
       if (!payload?.snapshot) throw new Error("thread.subscribe returned no snapshot");
       // 先置位再应用快照：applySnapshot 会 flush 缓冲事件，那一刻起已算已订阅。
       this.subscribed = true;
@@ -383,7 +402,7 @@ export class ThreadSession {
     this.awaitingSnapshot = true;
     this.patch({ ready: false });
     try {
-      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.resync", { threadId: this.view.threadId, haveMessageId: this.lastKnownMessageId() }, "resync", SNAPSHOT_TIMEOUT_MS);
+      const payload = await this.requester.request<{ snapshot?: RemoteThreadSnapshot }>("thread.resync", { threadId: this.view.threadId, haveMessageId: this.lastKnownMessageId(), imageKeys: true }, "resync", SNAPSHOT_TIMEOUT_MS);
       if (!payload?.snapshot) throw new Error("thread.resync returned no snapshot");
       this.applySnapshot(payload.snapshot);
     } catch (error) {

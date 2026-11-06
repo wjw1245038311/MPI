@@ -212,6 +212,21 @@ export interface RemoteMessage {
     label?: string;
     /** 实时事件通道里刻意剥掉了本体（防大帧）——照图片的语义。true 表示这不是 blob 缺失。 */
     omitted?: boolean;
+    /**
+     * 图片按需拉取（2026-11-06，docs/MOBILE-IMAGE-KEY.md）：image 块不再内联 base64，
+     * 只给内容地址与元数据。客户端可见时拉 `thumb`（没有就拉 `key`），点开拉 `key`。
+     *
+     * 主机只在客户端订阅/同步时带 `imageKeys: true` 时才发这种形态；否则仍是老的内联。
+     */
+    key?: string;
+    /** 缩略图名（`<key>.thumb.<ext>`）。缺省 = 主机没有缩略图 → 直接拉原图。 */
+    thumb?: string;
+    /** 极低分辨率占位（长边 ≤40px，base64）。只为不闪白/不跳布局，不承担可读性。 */
+    lqip?: string;
+    /** 原图像素尺寸与字节数：客户端先撑好布局再加载。 */
+    width?: number;
+    height?: number;
+    bytes?: number;
   }>;
   /** Files created or updated by this assistant round. Paths are project-relative. */
   artifacts?: RemoteFileArtifact[];
