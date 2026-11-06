@@ -1367,8 +1367,8 @@ class AppViewModel(
         val direct = directAttachments
         val threadId = _ui.value.openThreadId
         val meta = attachmentLoader.fileMeta(uri)
-        // 拿不到元信息 / 读不到大小 / 不大 / 直连不可用 → 都走内联老路（那里有 6MB 检查与明确报错）。
-        if (meta == null || meta.size <= MAX_FILE_BYTES || direct == null || threadId == null) {
+        // 拿不到元信息 / 读不到大小 / 不大（≤256KB）/ 直连不可用 → 都走内联老路。
+        if (meta == null || meta.size <= INLINE_FILE_MAX_BYTES || direct == null || threadId == null) {
             loadAttachmentInline { attachmentLoader.loadFile(uri) }
             return
         }
@@ -2249,7 +2249,31 @@ class AppViewModel(
         val workspaceEnvelopes = workspaceFiles.joinToString("") { file ->
             "\n\n<file name=\"${file.name.replace("\"", "&quot;")}\" path=\"${file.path.replace("\"", "&quot;")}\" note=\"attached file; read it with file tools\" />"
         }
-        val localId = session.echoUserMessage(text, localImageBlocks + localVideoBlocks + localAudioBlocks)
+        // 文件附件也要上屏（2026-11-06 真机：「输入的附件文档在手机对话框内没了」）：
+        // 以前只回显图/视/音频，文件在快照回来之前**完全看不到**，像是发送时被吞了。
+        // 这里用可读名 + 大小先画一张卡；快照到达后主机版（带对象库 key）会替换它。
+        val localFileBlocks = pending.mapNotNull { attachment ->
+            when (attachment) {
+                is Attachment.File -> MessageBlock(
+                    type = BlockType.File,
+                    name = attachment.name,
+                    label = attachment.name,
+                    mimeType = attachment.mimeType,
+                    size = (attachment.bytesB64.length.toLong() * 3 / 4),
+                )
+                is Attachment.WorkspaceFile -> MessageBlock(
+                    type = BlockType.File,
+                    name = attachment.name,
+                    label = attachment.name,
+                    size = attachment.size,
+                )
+                else -> null
+            }
+        }
+        val localId = session.echoUserMessage(
+            text,
+            localImageBlocks + localVideoBlocks + localAudioBlocks + localFileBlocks,
+        )
         // 后台/锁屏播报保活：**点击就抢锁**，而不是等 send RPC 回来。
         // 用户按下 home/锁屏只发生在发出后的几十毫秒内，等成功后（几百 ms）再 acquire
         // 会赶不及——2026-09-26 真机就是切后台 ~1s 内被中继判 relay-device-offline。
@@ -2272,6 +2296,16 @@ class AppViewModel(
                 // notifyFinishedTurns 的飞书已读口径）。
                 phoneTurnStarted = true
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
+                if (pending.isNotEmpty()) {
+                    // 带附件的消息：主机的卡片（图片块 / 文件块）只存在于**快照**里，
+                    // 事件通道只会给文本+引用。发完补一次增量快照，让卡片立刻变成
+                    // 主机版（可点开、有对象库 key），而不是停在乐观占位或干脆没有。
+                    // 2026-11-06 真机：「输入的附件文档在手机对话框内没了」。
+                    scope.launch {
+                        delay(1200)
+                        runCatching { session.resync() }
+                    }
+                }
                 _ui.update { state ->
                     state.copy(
                         sending = false,
@@ -2705,6 +2739,15 @@ class AppViewModel(
          * 聊天没有张数限制，这里取 10（与「待办面板附件」同一口径）。
          */
         internal const val MAX_ATTACHMENTS = 10
+
+        /**
+         * 超过这个大小的文件**走直连上传**（只带主机侧的 storedName / 路径），不再内联进消息帧。
+         *
+         * 2026-11-06 真机实测：1.5MB 的 PDF 内联后 base64 ≈2MB，一条消息帧 2.4MB，手机上行慢、
+         * 中继也吃力。改成 >256KB 就走直连后，同一帧能降到 ~200KB，而 agent 拿到的仍是路径
+         * （直连的文件落在会话 `mpi-inbox/`），行为一致。
+         */
+        internal const val INLINE_FILE_MAX_BYTES = 256 * 1024L
 
         // ---- 语音对话模式（阶段 1）----
 
