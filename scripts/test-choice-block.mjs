@@ -412,6 +412,34 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   assert.equal(panel(JSON.stringify([{ title: "q", options: ["a", "b"] }])).repaired, undefined);
 }
 
+// --- 围栏写法容错（2026-11-06 v0.14.9：另一台设备实测「整块被当代码块、连提示都没有」）----
+// 原则：**语言标签里必须出现 choices 这个词**，剩下只修「围栏怎么写」。含不含 json 不放宽。
+{
+  const bodyOk = '[{"title":"题","options":["甲","乙"]}]';
+  const bodyShort = '[{"title":"题","options":["甲","乙"]'; // 缺收尾括号
+  const panelOf = (text) => cb.splitChoiceSegments(text).some((s) => s.kind === "choice");
+  const code = "```";
+  const cases = [
+    ["标签后带第二个词（choices json）", `${code}choices json\n${bodyOk}\n${code}`],
+    ["闭合用浪加号", `${code}choices\n${bodyOk}\n~~~`],
+    ["写在列表项里", `- ${code}choices\n${bodyOk}\n  ${code}`],
+    ["正文与开围栏同行", `${code}choices ${bodyOk}`],
+    ["同行 + 正文还缺尾括号", `${code}choices ${bodyShort}`],
+  ];
+  for (const [name, text] of cases) {
+    assert.equal(panelOf(text), true, `应画面板：${name}`);
+  }
+  // 保险丝：不含 choices 字样的一律不画面板（文档里引用的 JSON 示例不能被误当选择题）
+  for (const [name, text] of [
+    ["```json", `${code}json\n${bodyOk}\n${code}`],
+    ["```JSON", `${code}JSON\n${bodyOk}\n${code}`],
+    ["无标签围栏", `${code}\n${bodyOk}\n${code}`],
+    ["外层被四个反引号包住（引用中的示例）", `\`\`\`\`markdown\n${code}choices\n${bodyOk}\n${code}\n\`\`\`\``],
+  ]) {
+    assert.equal(panelOf(text), false, `不该画面板：${name}`);
+  }
+}
+
 // --- reply build/parse round-trip --------------------------------------------
 
 for (const language of ["zh", "en"]) {

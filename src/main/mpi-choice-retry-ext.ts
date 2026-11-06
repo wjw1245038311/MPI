@@ -94,14 +94,26 @@ export function messagesOf(entries: unknown): { role: string; text: string; id: 
   return out;
 }
 
-/** 开围栏：```choices / ```Choices / ```choices> 算；```choicesjson 也认（形态错的一种）。 */
-const OPEN_RE = /^\s*(`{3,})\s*choices([^\s`]*)\s*$/i;
+/** 开围栏（2026-11-06 与渲染端同步放宽）：**语言标签以 choices 这个词开头**就算，
+ * 后面的噪声一律忍（`choices>` / `choices json` / 正文直接写在同一行），并允许
+ * 波浪号闭合与列表项前缀（`- ```choices）。不含 choices 字样的（```json）仍不算——
+ * 那种情况走 looksLikeMislabelledJson 的回喂路径。
+ * ⚠️ 两边的判据必须一致：能渲染成面板的块绝不能被判坏（否则白重试一轮 + 两个面板）。 */
+const OPEN_RE = /^[ \t]{0,3}(?:(?:[-*+]|\d+[.)])[ \t]+)?(`{3,}|~{3,})[ \t]*(choices(?![a-z0-9]).*)$/i;
+/** 与开围栏同一行的正文：只有以 `[` / `{` 开头才算，否则它是第二个语言标签。 */
+const INLINE_HEAD_RE = /^\S+[ \t]+([[{].*)$/i;
 /** 形态错之「choices 单独一行，紧跟 ```json」或「空围栏下一行写 choices」。 */
 const BARE_CHOICES_RE = /^\s*choices\s*[:：]?\s*$/i;
 const ANY_FENCE_RE = /^\s*`{3,}\s*([a-zA-Z0-9_+-]*)\s*$/;
+/** 任何语言的开围栏（含波浪号），给 looksLikeMislabelledJson 用。 */
+const ANY_FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})[ \t]*([a-zA-Z0-9_+-]*)[ \t]*$/;
+/** 被当成选择题却写错语言标签的几种（模型最常把 ```choices 写成 ```json）。 */
+const MISLABELLED_JSON_LANG_RE = /^(json|json5)?$/i;
 
-function closeReFor(len: number): RegExp {
-  return new RegExp("^\\s*`{" + len + ",}\\s*$");
+
+/** choices 围栏的闭合行：反引号或浪加号都认（与渲染端 choiceCloseReFor 同一规则）。 */
+function choiceCloseReFor(len: number): RegExp {
+  return new RegExp("^\\s*[`~]{" + len + ",}\\s*$");
 }
 
 /** 结构校验：数组、每题有 title、至少两个选项、选项是字符串或 {label}。
@@ -606,8 +618,8 @@ export function inspectChoices(text: string): {
 
   const finish = () => {
     if (openLen === null) return;
-    // 与渲染层容错对齐：模型常把闭合反引号粘在 JSON 末尾，解析前先剥掉。
-    const raw = body.join("\n").trim().replace(/`{3,}\s*$/, "").trim();
+    // 与渲染层容错对齐：模型常把闭合围栏粘在 JSON 末尾，解析前先剥掉（反引号/浪加号都算）。
+    const raw = body.join("\n").trim().replace(/(?:`{3,}|~{3,})\s*$/, "").trim();
     const verdict = parseChoicesBody(raw);
     if (verdict.ok) validBlocks++;
     else {
@@ -621,7 +633,7 @@ export function inspectChoices(text: string): {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (openLen !== null) {
-      if (closeReFor(openLen).test(line)) {
+      if (choiceCloseReFor(openLen).test(line)) {
         finish();
         continue;
       }
@@ -632,7 +644,9 @@ export function inspectChoices(text: string): {
     if (open) {
       fenced = true;
       openLen = open[1].length;
-      body = [];
+      // 正文与开围栏同行（```choices [{…}]）时，那一截就是首行正文。
+      const inline = INLINE_HEAD_RE.exec((open[2] || "").trim());
+      body = inline ? [inline[1]] : [];
       continue;
     }
     // 形态错：一行只有 choices，后面紧跟 ```json（模型把语言标签写到了围栏上）
@@ -654,13 +668,62 @@ export function inspectChoices(text: string): {
 }
 
 /**
+ * 形态错之「把语言标签写成了 json」：正文本身是**严格的** choices 数组，而且这个块是
+ * 整条回答的最后一个内容块。
+ *
+ * 为什么要有位置门：文档里引用的 JSON 示例后面总跟着解说文字，而按契约 choices 就是用来
+ * 收尾提问的。两者一区分，就只剩下「明显想问问题却写错了标签」这一种会被回喂。
+ * 注意：渲染端**不会**把 ```json 画面板（不含 choices 字样的一律不认），这里只是让它重试。
+ */
+export function looksLikeMislabelledJson(text: string): boolean {
+  const lines = String(text || "").split(/\r?\n/);
+  let lastLang: string | null = null;
+  let lastBody: string[] = [];
+  let tailAfterBlock = "";
+  let openRun: string | null = null;
+  for (const line of lines) {
+    if (openRun) {
+      if (line.trim().startsWith(openRun) && line.trim().length >= openRun.length) {
+        openRun = null;
+        continue;
+      }
+      lastBody.push(line);
+      continue;
+    }
+    const fence = ANY_FENCE_OPEN_RE.exec(line);
+    if (!fence) {
+      if (lastLang !== null && line.trim()) tailAfterBlock += line.trim();
+      continue;
+    }
+    openRun = fence[1][0]; // 反引号或浪加号
+    lastLang = (fence[2] || "").trim().toLowerCase();
+    lastBody = [];
+    tailAfterBlock = "";
+  }
+  if (lastLang === null || tailAfterBlock) return false;
+  if (!MISLABELLED_JSON_LANG_RE.test(lastLang)) return false;
+  const raw = lastBody.join("\n").trim().replace(/(?:`{3,}|~{3,})\s*$/, "");
+  try {
+    return shapeOk(JSON.parse(raw));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 一轮回答是否需要重试。保守：出现 choices 标记、且一个合法块都没有。
  * - 有合法块：不重试（哪怕另有坏块——重试会导致面板重复出现）
  * - 没有任何 choices 痕迹：不重试（正常纯文本提问）
  */
 export function detectFailure(text: string): Failure | null {
   const info = inspectChoices(text);
-  if (!info.fenced && !info.missingShape) return null;
+  if (!info.fenced && !info.missingShape) {
+    // 完全没有 choices 痕迹：只有一种情况值得回喂——末尾是个写着 ```json 的合法选择题。
+    if (looksLikeMislabelledJson(text)) {
+      return { reason: "把选择题写成了 ```json（或没写语言标签），MPI 只认单独一行的 ```choices 围栏" };
+    }
+    return null;
+  }
   if (info.validBlocks > 0) return null;
   if (info.broken) {
     // 能进到这里说明没有合法块（修复链也救不回来），坏块的具体原因对重试提示有区分价值：

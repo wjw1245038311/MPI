@@ -240,6 +240,41 @@ const fence = (body, info = "choices") => "```" + info + "\n" + body + "\n```";
   ok("真坏块：仍重试，且原因带 JSON 错误位置");
 }
 
+// ---- [13] 围栏写法容错 + ```json 的回喂（2026-11-06）-------------------------
+// 放宽后的两条线：① 标签里含 choices → 能渲染，绝不重试；② 不含 choices（```json）→
+// 不渲染，但只有「它确实是整条回答的末尾且正文严格合法」才回喂模型重写（文档示例不触发）。
+{
+  const rb = await import("../src/renderer/src/lib/choice-block.ts");
+  const body = '[{"title":"题","options":["甲","乙"]}]';
+  const rendersAsPanel = (text) => rb.splitChoiceSegments(text).some((s) => s.kind === "choice");
+
+  // ① 四种新接受的写法：两端结论都是「能渲染 + 不重试」
+  for (const [name, text] of [
+    ["choices json", "```choices json\n" + body + "\n```"],
+    ["浪加号闭合", "```choices\n" + body + "\n~~~"],
+    ["列表项里", "- ```choices\n" + body + "\n  ```"],
+    ["正文与围栏同行", "```choices " + body],
+  ]) {
+    assert.equal(rendersAsPanel(text), true, `渲染端应画面板：${name}`);
+    assert.equal(detectFailure(text), null, `能画面板就绝不能重试：${name}`);
+  }
+
+  // ② ```json：渲染端不画；位置在末尾才回喂
+  const jsonTail = "先说明一下方案：\n\n```json\n" + body + "\n```";
+  assert.equal(rendersAsPanel(jsonTail), false, "```json 不画面板（保险丝）");
+  const fail = detectFailure(jsonTail);
+  assert.ok(fail, "末尾的 ```json 选择题该回喂重写");
+  assert.match(fail.reason, /json/, "原因要说清是标签写错了");
+
+  // 文档里的 JSON 示例：后面还跟着解说文字 → 不动它（这正是用户担心的误伤）
+  const docExample =
+    "格式如下：\n\n```json\n" + body + "\n```\n\n上面就是一个合法的选择题写法，客户端会渲染成面板。";
+  assert.equal(detectFailure(docExample), null, "引用示例不该触发重试");
+  // ```json 但正文本身不是合法选择题 → 也不重试
+  assert.equal(detectFailure("随便聊聊\n\n```json\n{\"a\":1}\n```"), null, "普通 JSON 不算选择题");
+  ok("围栏容错四写法均不重试；```json 只在「末尾且严格合法」时回喂");
+}
+
 // ---- [12] 两份实现的源码对账（注释除外必须逐字一致）------------------------------
 // 背面的事故已经踩过两次：只改渲染端不改这份拷贝 → 同一输出「那边能渲染、
 // 这边判非法」→ 白重试一轮 + 两个面板。行为语料只能覆盖想到的坏法，这一条直接防「改了没同步」。

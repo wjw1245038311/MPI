@@ -33,13 +33,20 @@
  *
  * info string 的判定分两档（2026-10-12：模型把开围栏写成 ```choices> 时整块静默
  * 降级成代码块，既没有面板也没有提示，只能靠用户截图反馈）：
- *   ① 精确档 `isChoicesInfoString`：`choices` 加尾随空白或非字母数字噪声
- *      （`choices>` / `choices:` / `Choices`）——按标准 choices 围栏处理；
- *      但 `choicesjson` / `choices_block` 这类「另一个标签」不算。
- *   ② 疑似档（以 choices 开头但带字母，如 `choicesjson`）：只有正文**严格**
+ *   ① 精确档 `isChoicesInfoString`：**开头必须是 choices 这个词**（后面不紧跟字母/数字），
+ *      再往后带什么噪声都忍（`choices>` / `choices:` / `choices json` / 正文直接写在同一行）
+ *      ——按标准 choices 围栏处理；`choicesjson` 这类「另一个标签」不算。
+ *      （放宽于 2026-11-06：旧规则只允许非字母数字尾缀，`choices json` 不画面板。）
+ *   ② 疑似档（以 choices 开头但紧跟字母，如 `choicesjson`）：只有正文**严格**
  *      解析通过才升级为面板（不开修复链），否则维持原行为当普通围栏。
  * 两档里 info string 不等于标准 `choices` 的，段上带 `info` 字段，由 Chat.tsx
  * 写一行诊断日志（choice-fence-info），便于以后看哪些笔误形态真的出现过。
+ *
+ * 围栏本身还宽忍三种写法（同上，全部以「含 choices 字样」为前提，2026-11-06）：
+ * 闭合用 `~~~`、开围栏写在 markdown 列表项里（`- ```choices）、正文与开围栏同一行。
+ * **不含 choices 字样的（```json）依旧不画面板**——这是「文档里的 JSON 示例不会被误当
+ * 选择题」的保险；那种写法由主进程的重试判定回喂模型重写（且仅限位于回答末尾时，
+ * 见 mpi-choice-retry-ext.ts 的 looksLikeMislabelledJson）。
  *
  * 再往里一层是「JSON 修复链」（见 repairCandidates）：模型偶尔把正文写成
  * 语法非法的 JSON（中文串里夹未转义的英文双引号、结尾少括号、options 里丢
@@ -112,20 +119,39 @@ export type ChoiceSegment =
 
 /** Opening backtick fence: capture the run length + info string. */
 const FENCE_OPEN_RE = /^\s*(`{3,})(.*)$/;
+/** choices 专用开围栏：允许前面是 markdown 列表符号（`- ` / `1. `）。
+ * 模型把提问写在列表项里时会出现（2026-11-06 另一台设备实测：整块被当普通代码块渲染，
+ * 连「格式不合法」提示都没有）。只用在 choices 路径，普通代码块仍走 FENCE_OPEN_RE。 */
+const CHOICES_LIST_OPEN_RE = /^[ \t]{0,3}(?:[-*+]|\d+[.)])[ \t]+(`{3,}|~{3,})(.*)$/;
 /** Closing fence for a fence opened with `len` backticks (CommonMark: the
  * closer must be at least as long and carry no info string). */
 const closeReFor = (len: number) => new RegExp("^\\s*`{" + len + ",}\\s*$");
-/** 行尾挂着 ≥3 个反引号的行（模型把闭合围栏粘在正文末尾时）；捕获反引号之前的正文。 */
-const GLUED_CLOSE_RE = /^(.*?)`{3,}\s*$/;
-/** 精确档 info string：`choices` + 尾随空白或非字母数字噪声（`choices>` 等笔误）。
- *  故意不接受 `choicesjson` / `choices-2` 这类「另一个标签」——它们走疑似档。 */
-const CHOICES_INFO_RE = /^choices[^a-z0-9_-]*$/i;
+/** choices 围栏的闭合行：比 CommonMark 多忍一种——**波浪号闭合**（模型混用 ``` 与 ~~~ 时，
+ * 严格判定会把后面的正文全吃进代码块）。同样只用在 choices 路径。 */
+const choiceCloseReFor = (len: number) => new RegExp("^\\s*[`~]{" + len + ",}\\s*$");
+/** 正文末尾挂着的闭合围栏（反引号或波浪号），「忘了写闭合」那道兜底先剥掉它。 */
+const TRAILING_FENCE_RE = /(?:`{3,}|~{3,})\s*$/;
+/** 行尾挂着 ≥3 个反引号/浪加号的行（模型把闭合围栏粘在正文末尾时）；捕获之前的正文。 */
+const GLUED_CLOSE_RE = /^(.*?)(?:`{3,}|~{3,})\s*$/;
+/** 精确档 info string：**开头必须是 choices 这个词**（后面不能紧跟字母/数字），再往后带什么
+ * 噪声都忍：`choices>` / `choices:` / `choices json` / 以及正文直接写在同一行的 `choices [{…}]`。
+ * 为什么放宽（2026-11-06）：旧规则只允许非字母数字尾缀，`choices json` 会掉到严格档不画面板；
+ * 而放宽的边界很窄——**不含 choices 字样的一律进不来**，这就是「文档里引用的 ```json 示例
+ * 不会被误当面板」的保险。`choicesjson` 这种「另一个标签」仍走疑似档。 */
+const CHOICES_INFO_RE = /^choices(?![a-z0-9])/i;
 /** 疑似档：以 choices 开头的其它标签（模型把语言标签写歪）。 */
 const CHOICES_LIKE_RE = /^choices/i;
 
-/** info string 是否应视为 choices 围栏（`choices` / `choices>` / `Choices` 都算）。 */
+/** info string 是否应视为 choices 围栏（`choices` / `choices>` / `Choices` / `choices json` 都算）。 */
 export function isChoicesInfoString(info: string | undefined): boolean {
   return CHOICES_INFO_RE.test((info ?? "").trim());
+}
+
+/** 开围栏同一行后面挂的正文（形如 ` ```choices [{"title":…}] `）：只有以 `[` 或 `{` 开头才算，
+ * 否则它是第二个语言标签（`choices json` 里的 json），归 info 管。 */
+function inlineBodyHead(info: string): string {
+  const m = /^\S+[ \t]+([[{].*)$/.exec((info ?? "").trim());
+  return m ? m[1].trim() : "";
 }
 
 /** Parse the JSON body of a choices fence and validate/shape it. Null when invalid. */
@@ -689,12 +715,20 @@ function readChoiceFence(
   lines: string[],
   openIndex: number,
   openLen: number,
+  /** 与开围栏写在同一行的正文（作为首行拼回去）。 */
+  head = "",
+  /** 首行来自同行（inline）：这种写法本身就是明确的 choices 块，
+   *  所以“忘了写闭合”那一遍也可以走修复链（普通正文仍只允许严格解析）。
+   *  2026-11-06：同栏「同行 + 正文缺尾括号」实测不画面板就是这个门槛卡住的。 */
+  inline = false,
 ): { data: ChoiceBlockData | null; end: number; failure?: ChoiceFailure; repaired?: boolean; body: string } | null {
-  // 第一遍：CommonMark 严格闭合行优先，且无论正文是否合法都以它为界。
+  const prefix = head ? [head] : [];
+  // 第一遍：严格闭合行优先（choices 比 CommonMark 多忍一种波浪号闭合），
+  // 且无论正文是否合法都以它为界。
   let loose: { index: number; prefix: string } | null = null;
   for (let k = openIndex + 1; k < lines.length; k++) {
-    if (closeReFor(openLen).test(lines[k])) {
-      const body = lines.slice(openIndex + 1, k).join("\n");
+    if (choiceCloseReFor(openLen).test(lines[k])) {
+      const body = [...prefix, ...lines.slice(openIndex + 1, k)].join("\n");
       return { ...parseChoiceBodyEx(body), end: k, body };
     }
     // 顺手记下首个「行尾反引号」候选（粘行闭合 / 反引号数不足），等严格扫描落空后再验证。
@@ -706,15 +740,18 @@ function readChoiceFence(
   // 第二遍：容错闭合——剥掉行尾反引号后正文仍能解析才采纳；解析失败但边界明确
   // （确实是模型写坏的围栏）仍以它为界返回，让调用方降级成代码块而不是当普通文本。
   if (loose) {
-    const body = [...lines.slice(openIndex + 1, loose.index), loose.prefix].join("\n");
+    const body = [...prefix, ...lines.slice(openIndex + 1, loose.index), loose.prefix].join("\n");
     return { ...parseChoiceBodyEx(body), end: loose.index, body };
   }
   // 第三遍：一个闭合都没有（模型忘了写）——把剩余文本整体当正文，剥掉可能的行尾反引号。
-  const tail = lines.slice(openIndex + 1).join("\n").replace(/`{3,}\s*$/, "");
+  const tail = [...prefix, ...lines.slice(openIndex + 1)].join("\n").replace(TRAILING_FENCE_RE, "");
+  if (inline) {
+    const rep = parseChoiceBodyEx(tail);
+    return rep.data || rep.failure ? { ...rep, end: lines.length - 1, body: tail } : null;
+  }
   const tailData = parseChoiceBodyBoundary(tail);
   return tailData ? { data: tailData, end: lines.length - 1, body: tail } : null;
 }
-
 /**
  * Split an assistant text block around ```choices fences. Fast path: blocks
  * without the marker come back as a single md segment with the ORIGINAL string
@@ -752,17 +789,23 @@ export function splitChoiceSegments(text: string, stats?: ChoiceSplitStats): Cho
       continue;
     }
     const open = FENCE_OPEN_RE.exec(line);
-    const info = open ? open[2].trim() : "";
-    const exact = !!open && isChoicesInfoString(info);
+    // choices 专用：上面没匹配时再试「列表项里写围栏」这种形态（普通代码块不走这条路）。
+    const listOpen = open ? null : CHOICES_LIST_OPEN_RE.exec(line);
+    const fence = open ?? listOpen;
+    const info = fence ? fence[2].trim() : "";
+    const exact = !!fence && isChoicesInfoString(info);
     // 疑似档（choicesjson / choices_v2 这类写歪的标签）：升级门槛是正文严格解析通过。
-    const like = !exact && !!open && CHOICES_LIKE_RE.test(info);
+    const like = !exact && !!fence && CHOICES_LIKE_RE.test(info);
     if (!exact && !like) {
       if (open) fenceLen = open[1].length; // generic fence — skip until its close
       buf.push(line);
       i++;
       continue;
     }
-    const read = readChoiceFence(lines, i, open[1].length);
+    // 与开围栏写在同一行的正文（` ```choices [{…}] `）当首行传进去；
+    // `choices json` 里的第二个标签不是正文（inlineBodyHead 只认以 [ / { 开头的）。
+    const inlineHead = inlineBodyHead(info);
+    const read = readChoiceFence(lines, i, fence![1].length, inlineHead, inlineHead !== "");
     if (!read) {
       // Unterminated fence — treat the opening line as plain text.
       buf.push(line);
@@ -772,7 +815,7 @@ export function splitChoiceSegments(text: string, stats?: ChoiceSplitStats): Cho
     // 疑似档不开修复链：正文严格解析不过就维持原行为（当普通围栏，不给提示、不吞正文）。
     const likeData = like ? parseChoiceBodyBoundary(read.body) : null;
     if (like && !likeData) {
-      fenceLen = open[1].length;
+      if (open) fenceLen = open[1].length;
       buf.push(line);
       i++;
       continue;
