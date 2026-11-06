@@ -207,6 +207,42 @@ function escapingMessage(index, bodyLength) {
       `主机上限(${MAX_INNER_ENVELOPE_BYTES}) 不得超过客户端上限(${CLIENT_MAX_ENVELOPE_BYTES})`,
     );
   }
+
+  // 7) 收缩顺序：越旧越先让位，**最新一条（本轮结论）保持完整**（2026-11-06）
+  //
+  // 原实现「全局挑最大字段砍半」：**最新那条最大时**就优先砍它（也就是「历史太长」的
+  // 代价落在用户最想读的结论上）。现在从最旧的消息开始收缩。
+  //
+  // 输入故意选成「最新最大、旧的两条较小」——只有这样才能区分两种实现：
+  //   旧：砍 latest（120k → 60k）→ 进预算，结论被腰斩；
+  //   新：先砍 old/mid 到地板 → latest 一个字不动。
+  {
+    const old = { id: "old", role: "assistant", text: big(30_000) };
+    const mid = { id: "mid", role: "assistant", text: big(30_000) };
+    const latest = { id: "latest", role: "assistant", text: big(120_000) };
+    const out = shrinkToBudget([old, mid, latest], 150_000);
+    assert.equal(out.length, 3, "只收缩，不丢消息");
+    assert.ok(JSON.stringify(out).length <= 150_000, "收缩后进预算");
+    assert.ok(out[0].text.endsWith(SHRINK_MARKER), "最旧的那条先被收缩");
+    assert.equal(out[2].text.length, 120_000, "最新一条一个字都不动（结论优先）");
+    assert.ok(!out[2].text.includes(SHRINK_MARKER), "最新一条不带省略标记");
+  }
+}
+
+// ---- 回归守卫：不得再按块数裁回合内容（2026-11-06）--------------------------
+//
+// 真机取证：会话 01a1af71（775 条原始消息）21 个回合里 4 个超过 80 块，其中三个回合的
+// **最终回答整段被砍**——手机端只看到工具行，刷新也无效（快照每次重新生成都再砍一遍）。
+// 体积控制只能按**字节**、且从最旧的整条消息开始丢（prepareRemoteHistory），块数不是风险：
+// 实测该会话最大的一轮 211 块约 380KB，远低于 420KB 软预算。
+//
+// 这条守卫防的是「防大帧」的直觉把块数上限又加回来。
+{
+  const ipc = readFileSync(resolve(import.meta.dirname, "..", "src", "main", "ipc.ts"), "utf8");
+  assert.ok(
+    !/blocks:\s*\[[^\]]*\]\.slice\(0, 80\)/.test(ipc) && !/lastAssistant\.blocks\s*=\s*\[[^\]]*\]\.slice\(0, 80\)/.test(ipc),
+    "快照不得按块数裁回合内容——它会砍掉回合末尾的正文（见 2026-11-06 取证）",
+  );
 }
 
 // --- 快照兜底：回合不在跑时收口工具块 -----------------------------------------

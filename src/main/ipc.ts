@@ -3015,7 +3015,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         if (toolBlocks.length) {
           assistantRound = {
             ...assistantRound,
-            blocks: [...(assistantRound.blocks || []), ...toolBlocks].slice(0, 80),
+            // 不再按块数裁（2026-11-06，见 appendAssistant 的注释）：块数上限会砍掉尾部。
+            blocks: [...(assistantRound.blocks || []), ...toolBlocks],
           };
         }
       }
@@ -3028,7 +3029,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         const attachBlocks = toolAttachMetas.splice(0).map((meta) => attachBlockForMeta(meta));
         assistantRound = {
           ...assistantRound,
-          blocks: [...(assistantRound.blocks || []), ...attachBlocks].slice(0, 80),
+          // 同上：不按块数裁，否则工具多的回合会把后挂的附件卡一起砍掉。
+          blocks: [...(assistantRound.blocks || []), ...attachBlocks],
         };
         // 取证（2026-11-04「视频变成文件卡/没卡片」排查）：附件最终以什么类型下发。
         appendDiagLog(`attach-block source=meta kind=${attachBlocks.map((b) => `${b.type}:${String(b.label || b.name).slice(0, 20)}`).join(",")}`);
@@ -3055,10 +3057,22 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         };
         return;
       }
+      // 一个回合的块数**不设上限**（2026-11-06 修）。
+      //
+      // 这里原来是 `.slice(0, 80)`：早期（v0.3.2）防单回合无限大的粗防护，从引入起就
+      // 没有任何注释说明 80 的来历，而它**从头保留、砍掉尾部**——而本回合最后的正文块
+      // 正是用户要看的结论。真机取证（2026-11-06，会话 01a1af71，775 条原始消息）：
+      // 21 个回合里 4 个超 80 块，其中三个回合的最终回答整段被砍（手机端只看到工具行，
+      // 刷新无效——快照每次重新生成都再砍一遍）。
+      //
+      // 现在体积控制只由 [prepareRemoteHistory] 按**字节**负责（从最旧的整条消息开始丢），
+      // 那是唯一能防住「单帧超客户端 8MB 硬上限」的层，见 remote/history-limit.ts。
+      // 块数本身不构成风险：实测同一条会话 21 个回合最大一轮 211 块、约 380KB，
+      // 远低于 420KB 软预算。
       assistantRound = {
         ...assistantRound,
         text: [assistantRound.text, text].filter(Boolean).join("\n\n") || undefined,
-        blocks: [...(assistantRound.blocks || []), ...blocks].slice(0, 80),
+        blocks: [...(assistantRound.blocks || []), ...blocks],
         artifacts: mergeArtifacts(assistantRound.artifacts, artifacts),
         timestamp: assistantRound.timestamp ?? (typeof message?.timestamp === "number" ? message.timestamp : undefined),
         provider: assistantRound.provider || (typeof message?.provider === "string" ? message.provider : undefined),
@@ -3222,7 +3236,8 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
             `attach-block source=ledger kind=${blocks.map((b) => `${b.type}:${String(b.label || b.name).slice(0, 20)}`).join(",")}`,
           );
           if (lastAssistant) {
-            lastAssistant.blocks = [...(lastAssistant.blocks || []), ...blocks].slice(0, 80);
+            // 同样不按块数裁：补的卡本来就在尾部，裁了等于白补。
+            lastAssistant.blocks = [...(lastAssistant.blocks || []), ...blocks];
           } else {
             output.push({ id: `attach-${Date.now()}`, role: "assistant", blocks });
           }

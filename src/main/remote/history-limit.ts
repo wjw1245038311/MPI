@@ -179,25 +179,43 @@ const SHRINKABLE_KEYS = ["text", "result", "data", "poster"] as const;
  *
  * 在此之前这个出口是安全的，靠的是逐块上限本身（≤80 块 × 12,000 字符 + 图片 400KB
  * ≈ 单条 ≤1.36MB）。**去掉 thinking 的逐块上限后，那道隐式保证就没了**，所以由这里
- * 显式兜住：反复把「最大的可收缩字段」砍半，直到进预算或所有字段都到地板。
+ * 显式兜住：反复把「可收缩字段」砍半，直到进预算或所有字段都到地板。
  *
- * 只动副本（不回写调用方对象）；复杂度 O(总字节) 一次 + 每轮 O(字段数)。
+ * **收缩顺序：越旧越先让位**（2026-11-06）。
+ *
+ * 原实现是「全局挑最大的字段砍半」——最大字段往往就是**最新一轮的正文**，于是「历史
+ * 太长」的代价被算到用户最想读的那段结论上（而且带省略标记后仍看不出被砍的是哪一段的
+ * 语义优先级）。现在从最旧的消息开始找可收缩字段，最新一条**最后**才被碰。
+ *
+ * 三条不变量：
+ *   ① 只收缩，不丢消息（丢消息是 trim* 的活，且只从最旧丢）；
+ *   ② 越新的内容越晚被收缩——先牺牲最早的历史；
+ *   ③ 单条自己就超预算时仍然必须裁它（否则整帧被手机端 PAYLOAD_TOO_LARGE 丢掉，
+ *      比“看到一条带省略标记的结论”更糟）——这就是 `maxPasses` 存在的意义。
+ *
+ * 只动副本（不回写调用方对象）；复杂度 O(总字节) 一次 + 每轮 O(消息数 × 字段数)。
  */
-export function shrinkToBudget<T extends RemoteMessage>(messages: T[], limit: number, maxPasses = 200): T[] {
+export function shrinkToBudget<T extends RemoteMessage>(messages: T[], limit: number, maxPasses = 4000): T[] {
   if (messages.length === 0) return messages;
   const copy = messages.map((message) => ({ ...message, blocks: message.blocks?.map((block) => ({ ...block })) })) as T[];
   const sizes = copy.map((message) => JSON.stringify(message).length + 1); // +1 = 数组逗号
   let total = sizes.reduce((sum, size) => sum + size, 0) + 2; // +2 = []
+  /** 已经砍不动的字段（`<消息下标>:<路径>`）：加标记后长度落在 SHRINK_FLOOR 之上，
+   *  再砍也是同一个长度——不记下来会一直白砍到 maxPasses 用完。 */
+  const stuck = new Set<string>();
 
   for (let pass = 0; pass < maxPasses && total > limit; pass++) {
     let target: { index: number; path: string; length: number } | null = null;
-    const consider = (index: number, path: string, value: unknown) => {
-      if (typeof value !== "string" || value.length <= SHRINK_FLOOR) return;
-      if (target && value.length <= target.length) return;
-      target = { index, path, length: value.length };
-    };
-    copy.forEach((message, index) => {
-      consider(index, "text", message.text);
+    // 从最旧往最新扫：第一条还有可收缩字段的消息就是本轮的牺牲者。
+    for (let index = 0; index < copy.length && !target; index++) {
+      const message = copy[index] as RemoteMessage;
+      const consider = (path: string, value: unknown) => {
+        if (stuck.has(`${index}:${path}`)) return;
+        if (typeof value !== "string" || value.length <= SHRINK_FLOOR) return;
+        if (target && value.length <= target.length) return;
+        target = { index, path, length: value.length };
+      };
+      consider("text", message.text);
       message.blocks?.forEach((block, blockIndex) => {
         for (const key of SHRINKABLE_KEYS) {
           // base64 媒体本体（image/video）与**封面**均**不可收缩**：砍半再追一句中文标记会让
@@ -205,10 +223,10 @@ export function shrinkToBudget<T extends RemoteMessage>(messages: T[], limit: nu
           // 赶预算的事交给「丢更早的消息」；封面的预算见 ipc.ts 的 VIDEO_POSTER_BASE64_BUDGET
           // （单张 ≤160KB，永远小于 7.6MB 的预算，所以不会出现“单条消息自己就超帧”的死局）。
           if ((key === "data" || key === "poster") && (block.type === "image" || block.type === "video")) continue;
-          consider(index, `blocks.${blockIndex}.${key}`, (block as Record<string, unknown>)[key]);
+          consider(`blocks.${blockIndex}.${key}`, (block as Record<string, unknown>)[key]);
         }
       });
-    });
+    }
     if (!target) break; // 所有字段都到地板了
 
     const slot = target as { index: number; path: string; length: number };
@@ -222,6 +240,8 @@ export function shrinkToBudget<T extends RemoteMessage>(messages: T[], limit: nu
       block[key] = `${String(block[key]).slice(0, half)}${SHRINK_MARKER}`;
     }
     sizes[slot.index] = JSON.stringify(copy[slot.index]).length + 1;
+    // 砍了却没变短（已经在地板上、只是标记把余量吃回去）→ 记下来，别在它身上耗 pass。
+    if (sizes[slot.index] >= before) stuck.add(`${slot.index}:${slot.path}`);
     total += sizes[slot.index] - before;
   }
   return copy;
