@@ -211,26 +211,68 @@ function escapeStrayQuotes(src: string): string {
   return out;
 }
 
-/** 结尾括号补齐（模型把 JSON 写短了），顺便收尾未闭合的字符串。 */
-function closeOpenBrackets(src: string): string {
+/** 能补的括号上限：再多就不是「漏了一两个符号」，而是整段乱写了，直接不修。 */
+const MAX_REPAIR_BRACKETS = 24;
+
+/** 补漏掉的闭合括号——**中间和末尾都补**。
+ * 旧版只往末尾追加（治「写到一半断了」），但 2026-11-06 用真实会话实测到另一种写法：
+ * `"options":["甲","乙"}` ——少的是**中间那一层的 `]`**，末尾补多少个括号也修不好。
+ * 现在扫描时维护「应该出现哪个闭符号」的栈：遇到类型不符的闭符号，先把缺的补上再收下它；
+ * 栈里根本没这一层（模型多敲的）就丢掉；走完还剩没关的，按内→外补全。
+ * 补错也不会误渲染：调用方还要过 JSON.parse + 结构校验才采纳。
+ * ⚠️ 同名同义的两份拷贝：主进程重试扩展与 PWA 客户端（test:choiceretry 逐字比对）。 */
+function completeBrackets(src: string): string {
+  let out = "";
   const stack: string[] = [];
   let inStr = false;
   let esc = false;
+  let inserted = 0;
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
     if (inStr) {
+      out += ch;
       if (esc) esc = false;
       else if (ch === "\\") esc = true;
-      else if (ch === '\"') inStr = false;
+      else if (ch === '"') inStr = false;
       continue;
     }
-    if (ch === '\"') inStr = true;
-    else if (ch === "{") stack.push("}");
-    else if (ch === "[") stack.push("]");
-    else if (ch === "}" || ch === "]") stack.pop();
+    if (ch === '"') {
+      inStr = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "{") {
+      stack.push("}");
+      out += ch;
+      continue;
+    }
+    if (ch === "[") {
+      stack.push("]");
+      out += ch;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      // 正常情形：类型对得上，弹栈收下。
+      if (stack[stack.length - 1] === ch) {
+        stack.pop();
+        out += ch;
+        continue;
+      }
+      // 栈里根本没这一层 → 模型多敲了一个，丢掉（末尾多出的 `]` 就是这么来的）。
+      if (!stack.includes(ch)) continue;
+      // 有这一层，但它上面还压着没关的 → 那一层忘了闭合：先补上再收下。
+      while (stack.length && stack[stack.length - 1] !== ch) {
+        out += stack.pop() ?? "";
+        if (++inserted > MAX_REPAIR_BRACKETS) return src;
+      }
+      stack.pop();
+      out += ch;
+      continue;
+    }
+    out += ch;
   }
-  let out = src;
-  if (inStr) out += '\"';
+  if (inStr) out += '"';
+  if (stack.length > MAX_REPAIR_BRACKETS) return src;
   while (stack.length) out += stack.pop();
   return out;
 }
@@ -512,7 +554,7 @@ function questionStarts(src: string): number[] {
 }
 
 /** ⑦ 按锚点切成「一题一段」。段尾剪到最后一个右花括号（把逗号、外层数组的
- * 右方括号这类尾巴剪掉）；本来就没写完的段落保留原样，交给 closeOpenBrackets 收尾。 */
+ * 右方括号这类尾巴剪掉）；本来就没写完的段落保留原样，交给 completeBrackets 收尾。 */
 function splitQuestionChunks(src: string): string[] {
   const starts = questionStarts(src);
   // 少于两段就没有「逐题兜底」的必要（整块的候选已经把它试过一遍了）。
@@ -534,7 +576,7 @@ function splitQuestionChunks(src: string): string[] {
  * 给裸 `"label":` 对补 `{}` 包裹 → 补结尾括号 → 去尾逗号。（与渲染端同序）*/
 function repairChain(src: string): string {
   return dropTrailingCommas(
-    closeOpenBrackets(wrapBareLabelPairs(repairStrayMembers(escapeStrayQuotes(quoteBareKeys(src))))),
+    completeBrackets(wrapBareLabelPairs(repairStrayMembers(escapeStrayQuotes(quoteBareKeys(src))))),
   );
 }
 
@@ -560,7 +602,7 @@ function repairCandidates(body: string): string[] {
   const out = [sliced ?? "", repairChain(trimmed)];
   if (sliced) out.push(repairChain(sliced));
   // ⑥ 顶层漏了数组包裹（只写了一个对象、或 `{` 前面那个 `[` 被吐掉）：
-  //    只补开头的 `[`——结尾交给链上的 closeOpenBrackets 按实际层级补。
+  //    只补开头的 `[`——结尾交给链上的 completeBrackets 按实际层级补。
   if (trimmed && !trimmed.startsWith("[")) {
     out.push(`[${trimmed}]`, `[${trimmed}`, repairChain(`[${trimmed}`));
   }

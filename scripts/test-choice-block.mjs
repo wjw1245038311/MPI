@@ -140,12 +140,47 @@ const fence = (body) => `${FENCE_OPEN}\n${body}\n\`\`\``;
   assert.equal(segs[0].text, text);
 }
 
-// Unterminated fence → plain text.
+// 「没有闭合围栏」的两种命运（2026-11-06 用真实会话改规则）：
+// 正文以 [ / { 开头 → 走修复链画面板（模型写到围栏里就停了，三条实测坏块里有两条是这样）；
+// 正文是普通文字 → 照旧当普通文本，绝不把散文吞成面板。
 {
   const text = `abc\n${FENCE_OPEN}\n{"title":"q","options":["a","b"]}`;
   const segs = cb.splitChoiceSegments(text);
+  const panel = segs.find((s) => s.kind === "choice");
+  assert.ok(panel, "未闭合但正文是明确的 JSON：该修好并画面板");
+  assert.deepEqual(panel.data.questions.map((q) => q.title), ["q"]);
+}
+{
+  const prose = `abc\n${FENCE_OPEN}\n这里是一段普通的说明文字，没有收尾。`;
+  const segs = cb.splitChoiceSegments(prose);
   assert.equal(segs.length, 1);
   assert.equal(segs[0].kind, "md");
+  assert.ok(segs[0].text.includes("普通的说明文字"), "散文不能被当成面板");
+}
+{
+  // ⑧ 中间漏一层括号（真实坏法：`"options":["甲","乙"}`）：只往末尾补是修不出来的
+  const mid = `${FENCE_OPEN}\n[{"title":"题","options":["甲","乙"}]
+\`\`\``;
+  const panel = cb.splitChoiceSegments(mid).find((s) => s.kind === "choice");
+  assert.ok(panel, "中间漏闭合括号也该修好");
+  assert.deepEqual(panel.data.questions[0].options.map((o) => o.label), ["甲", "乙"]);
+}
+
+// 真实会话原文回归（另一台设备 movieapp，2026-11-06 13:58 / 15:01，用户当场导出的消息）。
+// 三条都只出了一个灰色代码卡片：前两条「没有闭合围栏」，第三条「中间少一层 ]」。
+{
+  const real = [
+    // ⑨ 写到正文里就停了，连闭合围栏都没写；第二题只有 1 个选项（该被截掉，第一题保留）
+    '```choices\n[{"title":"先走哪一步？","options":[{"label":"只做第 1 步（不联网）","detail":"本地回填已有条目号"},{"label":"第 1+2 步一起跑"}]},{"title":"以上都不是？","options":["我另有安排，直接说下一步"]}',
+    // ⑧ 有闭合围栏，但 options 数组少了收尾的 ]
+    '```choices\n[{"title":"先走哪一步？","options":["只做第 1 步：本地回填 + 修那个覆盖缺陷（不联网）","1+2 一起：跑最小实验验「拆开带不带 Cookie」这条假设","直接改成自适应退避 + 夜里慢跑（接受假设未证）","先试 HK 中转机跑，换出口 IP 才是根治","都不是，我另有安排"}]\n```',
+  ];
+  real.forEach((text, i) => {
+    const panel = cb.splitChoiceSegments(text).find((s) => s.kind === "choice");
+    assert.ok(panel, `真实样本 ${i + 1} 该画面板`);
+    assert.equal(panel.data.questions[0].title, "先走哪一步？");
+    assert.ok(panel.data.questions[0].options.length >= 2, `真实样本 ${i + 1} 的选项不能丢`);
+  });
 }
 
 // 粘行闭合（模型把闭合反引号贴在 JSON 同一行末尾，deepseek 系常见）——仍应识别为 choices。

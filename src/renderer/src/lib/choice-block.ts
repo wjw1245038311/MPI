@@ -252,14 +252,21 @@ function sliceFirstJson(text: string): string | null {
  * 全部只在严格解析失败后才启用，结果必须能通过 chooseDataFromJson 的结构校验才采纳。
  * 依据 2026-10 对全部历史会话的盘点（498 个 choices 围栏 / 5 个失败）实践出来的前三类：
  *   ① 字符串里夹未转义的英文双引号（中文串里常发生）→ escapeStrayQuotes
- *   ② JSON 结尾被写短（少了 `}`/`]`）→ closeOpenBrackets
+ *   ② JSON 结尾被写短（少了 `}`/`]`）→ completeBrackets
  *   ③ options 里丢了 `{}` 包裹的裸 `"label":…` 对 → wrapBareLabelPairs
- * 以及 2026-11-06 再盘点（1101 个围栏 / 5 个失败）补的后四类（都是「漏符号」）：
+ * 再往后两批。2026-11-06 下午先按 1101 个围栏的盘点补了四类（都是「漏符号」）：
  *   ④ 键名漏了开头的 `"`（`,detail":"说明"}`、`{label:"甲"}`）→ quoteBareKeys
  *   ⑤ 对象里冒出无键成员（`],{` ——数组提前收尾 / 真的多一个）→ repairStrayMembers
  *   ⑥ 顶层漏了 `[]`（只写一个对象，或 `[` 被吐掉）→ repairCandidates 里的包裹候选
- *   ⑦ 一题写坏拖全块 → splitTopLevelItems + salvageQuestions（逐题兜底）
- * 这七类之外（真正乱七八糟的）修不出来，维持原行为。
+ *   ⑦ 一题写坏拖全块 → questionStarts + splitQuestionChunks + salvageQuestions（逐题兜底）
+ * 傍晚又拿另一台设备的**真实坏块原文**（用户提供的会话导出）复现出两类，那才是他遇到的：
+ *   ⑧ **中间**漏一层闭合括号：`"options":["甲","乙"}` ——旧版只往末尾追加括号，
+ *      这种怎么补都修不好 → completeBrackets 改成按层补，并丢弃多余的闭符号；
+ *   ⑨ 整个围栏**没有闭合**（模型写到正文里就停了，stop_reason 仍是 stop 不是截断）：
+ *      这一档原先只允许严格解析，于是「没闭合 + 缺个括号」谁都不管——既不画面板也
+ *      **不显示降级提示**（用户看到的就是一个普通代码卡片）。现在正文以 `[` / `{` 开头时
+ *      允许走修复链，且只在真修好了才接管（修不好原样留着，绝不把下文吸进代码块）。
+ * 这九类之外（真正乱七八糟的）修不出来，维持原行为。
  *
  * ⚠️ 下面这段修复链有**两份拷贝**：src/main/mpi-choice-retry-ext.ts（判要不要重试）
  * 与 mobile/pwa/src/lib/choice-block.ts（网页版客户端）。`npm run test:choiceretry`
@@ -307,26 +314,68 @@ function escapeStrayQuotes(src: string): string {
   return out;
 }
 
-/** 结尾括号补齐（模型把 JSON 写短了：`…"}]` 其实少了 `}`），顺便收尾未闭合的字符串。 */
-function closeOpenBrackets(src: string): string {
+/** 能补的括号上限：再多就不是「漏了一两个符号」，而是整段乱写了，直接不修。 */
+const MAX_REPAIR_BRACKETS = 24;
+
+/** 补漏掉的闭合括号——**中间和末尾都补**。
+ * 旧版只往末尾追加（治「写到一半断了」），但 2026-11-06 用真实会话实测到另一种写法：
+ * `"options":["甲","乙"}` ——少的是**中间那一层的 `]`**，末尾补多少个括号也修不好。
+ * 现在扫描时维护「应该出现哪个闭符号」的栈：遇到类型不符的闭符号，先把缺的补上再收下它；
+ * 栈里根本没这一层（模型多敲的）就丢掉；走完还剩没关的，按内→外补全。
+ * 补错也不会误渲染：调用方还要过 JSON.parse + 结构校验才采纳。
+ * ⚠️ 同名同义的两份拷贝：主进程重试扩展与 PWA 客户端（test:choiceretry 逐字比对）。 */
+function completeBrackets(src: string): string {
+  let out = "";
   const stack: string[] = [];
   let inStr = false;
   let esc = false;
+  let inserted = 0;
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
     if (inStr) {
+      out += ch;
       if (esc) esc = false;
       else if (ch === "\\") esc = true;
       else if (ch === '"') inStr = false;
       continue;
     }
-    if (ch === '"') inStr = true;
-    else if (ch === "{") stack.push("}");
-    else if (ch === "[") stack.push("]");
-    else if (ch === "}" || ch === "]") stack.pop();
+    if (ch === '"') {
+      inStr = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "{") {
+      stack.push("}");
+      out += ch;
+      continue;
+    }
+    if (ch === "[") {
+      stack.push("]");
+      out += ch;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      // 正常情形：类型对得上，弹栈收下。
+      if (stack[stack.length - 1] === ch) {
+        stack.pop();
+        out += ch;
+        continue;
+      }
+      // 栈里根本没这一层 → 模型多敲了一个，丢掉（末尾多出的 `]` 就是这么来的）。
+      if (!stack.includes(ch)) continue;
+      // 有这一层，但它上面还压着没关的 → 那一层忘了闭合：先补上再收下。
+      while (stack.length && stack[stack.length - 1] !== ch) {
+        out += stack.pop() ?? "";
+        if (++inserted > MAX_REPAIR_BRACKETS) return src;
+      }
+      stack.pop();
+      out += ch;
+      continue;
+    }
+    out += ch;
   }
-  let out = src;
   if (inStr) out += '"';
+  if (stack.length > MAX_REPAIR_BRACKETS) return src;
   while (stack.length) out += stack.pop();
   return out;
 }
@@ -595,7 +644,7 @@ function repairStrayMembers(src: string): string {
  *  判定会跟着错位，裸引号修复会把好文本改坏）→ 转义串内裸引号 → 修无键成员 → 给裸 `"label":` 对补 `{}` 包裹 → 补结尾括号 → 去尾逗号。 */
 function repairChain(src: string): string {
   return dropTrailingCommas(
-    closeOpenBrackets(wrapBareLabelPairs(repairStrayMembers(escapeStrayQuotes(quoteBareKeys(src))))),
+    completeBrackets(wrapBareLabelPairs(repairStrayMembers(escapeStrayQuotes(quoteBareKeys(src))))),
   );
 }
 
@@ -606,7 +655,7 @@ function repairCandidates(body: string): string[] {
   const out = [sliced ?? "", repairChain(trimmed)];
   if (sliced) out.push(repairChain(sliced));
   // ⑥ 顶层漏了数组包裹：只写了一个对象，或 `{` 前面那个 `[` 被吐掉。
-  //    只补开头的 `[`——结尾交给链上的 closeOpenBrackets 按实际层级补，
+  //    只补开头的 `[`——结尾交给链上的 completeBrackets 按实际层级补，
   //    这样「既漏外层又写到一半就断」也能一起修好。已以 `[` 开头的不试。
   if (trimmed && !trimmed.startsWith("[")) {
     out.push(`[${trimmed}]`, `[${trimmed}`, repairChain(`[${trimmed}`));
@@ -630,7 +679,7 @@ function questionStarts(src: string): number[] {
 }
 
 /** ⑦ 按锚点切成「一题一段」。段尾剪到最后一个右花括号（把逗号、外层数组的
- * 右方括号这类尾巴剪掉）；本来就没写完的段落保留原样，交给 closeOpenBrackets 收尾。 */
+ * 右方括号这类尾巴剪掉）；本来就没写完的段落保留原样，交给 completeBrackets 收尾。 */
 function splitQuestionChunks(src: string): string[] {
   const starts = questionStarts(src);
   // 少于两段就没有「逐题兜底」的必要（整块的候选已经把它试过一遍了）。
@@ -717,10 +766,6 @@ function readChoiceFence(
   openLen: number,
   /** 与开围栏写在同一行的正文（作为首行拼回去）。 */
   head = "",
-  /** 首行来自同行（inline）：这种写法本身就是明确的 choices 块，
-   *  所以“忘了写闭合”那一遍也可以走修复链（普通正文仍只允许严格解析）。
-   *  2026-11-06：同栏「同行 + 正文缺尾括号」实测不画面板就是这个门槛卡住的。 */
-  inline = false,
 ): { data: ChoiceBlockData | null; end: number; failure?: ChoiceFailure; repaired?: boolean; body: string } | null {
   const prefix = head ? [head] : [];
   // 第一遍：严格闭合行优先（choices 比 CommonMark 多忍一种波浪号闭合），
@@ -745,9 +790,13 @@ function readChoiceFence(
   }
   // 第三遍：一个闭合都没有（模型忘了写）——把剩余文本整体当正文，剥掉可能的行尾反引号。
   const tail = [...prefix, ...lines.slice(openIndex + 1)].join("\n").replace(TRAILING_FENCE_RE, "");
-  if (inline) {
+  // 门槛：正文**从 [ 或 { 开头**才走修复链——这种形状不可能是散文，补括号不会误吞正文；
+  // 其它正文仍只允许严格解析。旧规则一律严格，于是「没有闭合围栏 + 缺个括号」谁都不管。
+  if (/^\s*[[{]/.test(tail)) {
+    // **只在真的修好了时才接管**：这种写法根本没有任何闭合边界，
+    // 修不好就把后面的文字原样留着（不能把整段下文吸进代码块）。
     const rep = parseChoiceBodyEx(tail);
-    return rep.data || rep.failure ? { ...rep, end: lines.length - 1, body: tail } : null;
+    return rep.data ? { ...rep, end: lines.length - 1, body: tail } : null;
   }
   const tailData = parseChoiceBodyBoundary(tail);
   return tailData ? { data: tailData, end: lines.length - 1, body: tail } : null;
@@ -805,7 +854,7 @@ export function splitChoiceSegments(text: string, stats?: ChoiceSplitStats): Cho
     // 与开围栏写在同一行的正文（` ```choices [{…}] `）当首行传进去；
     // `choices json` 里的第二个标签不是正文（inlineBodyHead 只认以 [ / { 开头的）。
     const inlineHead = inlineBodyHead(info);
-    const read = readChoiceFence(lines, i, fence![1].length, inlineHead, inlineHead !== "");
+    const read = readChoiceFence(lines, i, fence![1].length, inlineHead);
     if (!read) {
       // Unterminated fence — treat the opening line as plain text.
       buf.push(line);

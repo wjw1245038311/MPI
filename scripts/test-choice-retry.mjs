@@ -303,7 +303,7 @@ const fence = (body, info = "choices") => "```" + info + "\n" + body + "\n```";
   const names = [
     "sliceFirstJson",
     "escapeStrayQuotes",
-    "closeOpenBrackets",
+    "completeBrackets",
     "dropTrailingCommas",
     "peekKey",
     "wrapBareLabelPairs",
