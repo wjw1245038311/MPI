@@ -146,10 +146,15 @@ const ifaces = (...entries) => Object.fromEntries(entries);
 {
   const { readFileSync } = await import("node:fs");
   const ipc = readFileSync(new URL("../src/main/ipc.ts", import.meta.url), "utf8");
+  // 2026-11-06：v0.14.4（d81c6ad）把「旧客户端单值地址」换成了 legacyPhoneRelayUrl()——
+  // 旧客户端不认 mobileRelayUrls 数组，只拿这一个值，所以必须是**公网可达**的首选地址
+  // （局域网地址置顶在数组里，但不能塞给旧客户端，否则扫码配对会 timeout）。
+  // 断言同步到这里：这条守卫钉的是「有且只有一条单值地址、且来自统一算地址的地方」，
+  // 不是钉某个具体函数名（函数名会随通道模型演进，已经被改过一次）。
   assert.match(
     ipc,
-    /mobileRelayUrl: \(\) => phoneTicketAddresses\(\)\[0\]/,
-    "配对票地址改由通道列表算出（局域网通道已置顶；优先级语义见 test-relay-channels）",
+    /mobileRelayUrl: \(\) => (?:legacyPhoneRelayUrl|phoneTicketAddresses)\(\)/,
+    "旧客户端的单值配对地址必须来自统一算地址的入口（公网可达优先，见 remote/relay-channels）",
   );
   const lan = readFileSync(new URL("../src/main/lan-mode.ts", import.meta.url), "utf8");
   assert.ok(!/remoteRelayToken/.test(lan), "LAN 模块不该碰中继准入 token");
