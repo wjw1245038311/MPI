@@ -238,15 +238,22 @@ LQIP/灰块 ──可见──► 拉 thumb ──成功──► 清晰缩略�
 
 现网客户端（安卓 0.5.172 / PWA）只认 `data`。主机突然只发 `key` → 满屏「［图片无法显示］」。
 
-**做法：能力协商，仓库已有先例**（`host.ts` 的 `caps: [E2E_BINARY_CAP]` + `activateE2E(deviceId, pub, caps)`）。
+**做法：请求级能力标记（已落地，2026-11-06）**
 
-| 阶段 | 谁先发 | 行为 |
-| --- | --- | --- |
-| ① | **客户端** | 解析 `key`/`lqip`/`omitted`/`thumb`，可见即拉，本地缓存；订阅时上报 `caps: ["image-key"]` |
-| ② | **主机** | 对带 `image-key` 的设备：只发元数据 + LQIP；对旧设备：走老分支（缩略图内联 + 240 KB 预算） |
-| ③ | 观察 1–2 周 | 旧版本占比下来后再收紧/关闭老分支 |
+客户端在 `thread.subscribe` / `thread.resync` / `thread.get` 的 payload 里带 `imageKeys: true`；
+主机的 `getThread` options 接收它，`blocksFor` 据此决定走元数据还是老的内联分支。
 
-**顺序不能反**：先客户端、后主机，否则中间窗口期旧客户端看不到图。
+> 为什么不用「设备能力注册表 + `caps`」：仓库里虽有 `E2E_BINARY_CAP` 的先例，但那是**握手期**的
+> 一次性能力；图片这个需求只需要「本次请求要不要新格式」。请求级标记天然无状态：客户回滚旧版本、
+> 换浏览器、清缓存、多设备混用都自动生效，主机不需要维护任何设备能力表，也不需要发版顺序约束。
+
+| 请求 | 主机行为 |
+| --- | --- |
+| 不带 `imageKeys`（旧客户端） | 老分支：内联缩略图 + 240KB 预算 + 最近 12 条窗口 |
+| 带 `imageKeys: true` 且该图**有内容 key** | 新分支：`key` + `thumb` + 尺寸 + `omitted`，**不占图片预算、不受窗口限制** |
+| 带 `imageKeys: true` 但该图**无 key**（内联 base64） | 暂时回落老分支（见 §13 第二阶段：后台落库队列） |
+
+**两边都可以独立发版**：主机先上不影响旧客户端；客户端先上（带标记）在旧主机上会被当未知字段忽略。
 
 ---
 
@@ -289,7 +296,8 @@ LQIP/灰块 ──可见──► 拉 thumb ──成功──► 清晰缩略�
 
 | 步 | 内容 | 涉及 | 相对体量 |
 | --- | --- | --- | --- |
-| A | 主机：元数据 + 存量回填 + 授权按父 key + 后台生成 thumb/LQIP（新老分支按 caps 并存） | `ipc.ts`、`chat-attachment-store.ts`、`attach-file-thumbs.ts`、`video-refs.ts`、新单测 | 中 |
+| A | 主机：元数据 + 存量回填 + 授权按父 key + 后台生成 thumb/LQIP（新老分支按请求标记并存） | `ipc.ts`、`chat-attachment-store.ts`、`attach-file-thumbs.ts`、`video-refs.ts`、新单测 | 中 |
+| A2 | **内联图后台落库队列**（ComfyUI 直接吐在 tool result 里的 base64）+ thumb/LQIP 预生成 | 新增后台队列模块 + `image-block.ts` | 中 |
 | B | PWA 客户端（解析 / 可见即拉 / 缓存 / 占位），先于 A 发布 | `mobile/pwa` 3–4 个文件 | 中 |
 | C | 安卓客户端（同上），先于 A 发布 | `mobile/app` 3–4 个文件 + 单测 | 中 |
 | D | 九宫格聚合 + 翻页查看器（可后置） | 两端 UI | 中 |

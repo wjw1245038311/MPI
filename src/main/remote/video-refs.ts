@@ -191,6 +191,27 @@ export function mediaMimeForPath(path: string): string {
 export const thumbNameFor = (name: string, mimeType = "image/jpeg"): string =>
   `${name}.thumb${posterExtForMime(mimeType)}`;
 
+/** 占位图文件名（LQIP）：`<name>.lqip.<ext>`。 */
+export const lqipNameFor = (name: string, mimeType = "image/jpeg"): string =>
+  `${name}.lqip${posterExtForMime(mimeType)}`;
+
+/**
+ * 从**派生附件名**反推父名（`<key>.thumb.jpg` / `<key>.poster.jpg` / `<key>.lqip.jpg` → `<key>`）。
+ *
+ * 为什么要它（2026-11-06）：附件授权是按「会话引用过的名字」白名单做的，而白名单里
+ * 只会有原图 key（引用里写的就是它）——客户端按 `thumb` 字段拉缩略图时如果按精确名
+ * 校验，**主机重启后**（内存白名单清空、走回源扇描）就会被 NOT_FOUND 掐掉。
+ * 派生名的授权应当只看它的父名：父名在会话作用域内，它的缩略图/占位图也就够格。
+ *
+ * 只认固定后缀，避免把任意文件名当“父名”放行。
+ */
+export function derivedAttachmentBase(name: string): string | null {
+  const match = /^(.+)\.(?:thumb|poster|lqip)\.[a-z0-9]+$/i.exec(String(name || ""));
+  if (!match) return null;
+  const base = match[1];
+  return base && base.length <= 200 ? base : null;
+}
+
 /** <file> 属性值转义（会话名等也可能含引号，与 ipc.ts 的 attr 同规则）。 */
 const attr = (value: string): string => String(value).replace(/"/g, "&quot;");
 

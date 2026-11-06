@@ -251,6 +251,21 @@ export interface RemoteMessage {
     key?: string;
     /** 实时事件通道刻意剥掉本体（防大帧）——照图片语义。 */
     omitted?: boolean;
+    /**
+     * image 块的**缩略图名**（`<key>.thumb.<ext>`，P3 起落盘）。
+     *
+     * 2026-11-06 起配合 `imageKeys` 能力：快照只告诉客户端「去哪拉」，不再内联缩略图
+     * base64。客户端拿到名字后走 `attachment.fetch` / `attachment.url` 按需拉。
+     * 缺省 = 主机没有这张图的缩略图（老消息 / agent 产出的图还没预生成）→ 客户端只能拉原图。
+     */
+    thumb?: string;
+    /** 极低分辨率占位（长边 ≤40px、≤1KB，base64）。只为「不闪白 + 不跳布局」，
+     *  不承担可读性（对齐 Telegram minithumbnail 的量级）。可选。 */
+    lqip?: string;
+    /** 原图像素宽高 / 字节数：客户端先撑好布局再加载，避免滚动跳动。可选。 */
+    width?: number;
+    height?: number;
+    bytes?: number;
   }>;
   /** Files created or updated by this assistant round. Paths are project-relative. */
   artifacts?: RemoteFileArtifact[];

@@ -270,10 +270,12 @@ import {
   type MediaRef,
   splitVideoRefs,
   thumbNameFor,
+  derivedAttachmentBase,
   videoMimeForPath,
   videoRefEnvelope,
 } from "./remote/video-refs";
 import { snapshotImagePayload } from "./remote/image-thumbs";
+import { remoteImageMetadataBlock } from "./remote/image-block";
 import { redactRemotePaths } from "./remote/path-redact";
 import { fillVideoPosters } from "./remote/video-poster";
 import { uploadAttachmentChunk } from "./remote/attachment-relay-upload";
@@ -2739,7 +2741,12 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     return result;
   }
 
-  function remoteMessages(messages: any[], cwd: string, sessionFile?: string): RemoteMessage[] {
+  function remoteMessages(
+    messages: any[],
+    cwd: string,
+    sessionFile?: string,
+    options: { imageKeys?: boolean; threadId?: string } = {},
+  ): RemoteMessage[] {
     // Keep the initial history response well below the SCTP data-channel
     // message budget. `text` remains available for previews and compatibility,
     // while text blocks preserve the actual thinking/tool/reply order in the
@@ -2927,6 +2934,41 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           };
         }
         if (block?.type === "image" && typeof block.data === "string") {
+          // 引用（用户发的图 / `mpi_attach_file` 递交）按顺序与图片块一一对应。
+          // ⚠️ 无论走哪条路径都必须 shift 一次，否则后续图片会错位。
+          const ref = refs.shift();
+
+          // ── 新路径（2026-11-06）：客户端声明支持 imageKeys → 只发元数据，字节按需拉 ──
+          //
+          // 为什么不再内联：`image` 是最后一个还在快照里搬字节的块类型（file/video/audio
+          // 早就只发名字）。240KB 图片预算只够 1–3 张，超出的块直接 return null ——
+          // 手机上连图带 key 一起消失，点不开也拉不到。详见 docs/MOBILE-IMAGE-KEY.md。
+          //
+          // 约束：必须有内容 key。key 来自引用（ref.name）；**没有引用**的内联图（agent
+          // 直接吐在 tool result 里的 base64）暂时仍走老路径——给它们落库要解码 + 算 sha256，
+          // 一次 30 张 ComfyUI 产物会把主进程同步卡住 1–2 秒。后台落库队列是第二阶段。
+          if (options.imageKeys && ref?.name && isContentKey(ref.name)) {
+            const key = ref.name;
+            const thumbName = ref.thumb || findVideoPoster(key);
+            const meta = objectMeta(key);
+            // 作用域登记：客户端随后要按 key/缩略图名拉字节，白名单里必须有它们。
+            // 快照是**每次**都会重新登记的（主机重启后内存白名单清空，下一次快照就补回来）。
+            if (options.threadId) {
+              rememberAttachmentNames(options.threadId, [key, ...(thumbName ? [thumbName] : [])]);
+            }
+            appendDiagLog(
+              `snapshot-image-key key=${key.slice(0, 8)} thumb=${thumbName ? "1" : "0"} size=${meta?.size ?? "?"}`,
+            );
+            return remoteImageMetadataBlock({
+              key,
+              mimeType: (typeof block.mimeType === "string" ? block.mimeType : undefined) ?? meta?.mime,
+              label: ref.label,
+              thumbName,
+              bytes: meta?.size,
+            });
+          }
+
+          // ── 老路径（未声明能力 / 无 key 的内联图）：内联缩略图，受窗口与预算约束 ──
           // 只给最近一段消息上图（2026-11-06）：历史图片的 base64 是全量快照里最大的一块，
           // 而旧图早已滚出屏幕，没必要每次刷新都重传一遍。
           if (messageIndex >= 0 && totalSource > 0 && messageIndex < totalSource - IMAGE_RECENT_MESSAGES) {
@@ -2934,7 +2976,6 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           }
           // P3：有缩略图就下发缩略图（几十 KB），原图由客户端按 key 拉；
           // 没有缩略图（老消息）才照旧内联小原图。决策表在 remote/image-thumbs.ts。
-          const ref = refs.shift();
           const thumbnail = ref?.thumb ? readThumbnailBase64(ref.thumb) : null;
           const decision = snapshotImagePayload(block.data, thumbnail, imageBudget);
           if (!decision) return null;
@@ -3470,6 +3511,14 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
    */
   async function attachmentNameAllowed(threadId: string, name: string): Promise<boolean> {
     if (remoteAttachmentAllow.get(threadId)?.has(name)) return true;
+    // 派生名（`<key>.thumb.jpg` / `<key>.poster.jpg` / `<key>.lqip.jpg`）只看父名：
+    // 父名在本会话作用域里，它的缩略图/占位图也就够格。
+    //
+    // 为什么必须有这层（2026-11-06）：图片改成「快照只发 key、客户端按 thumb 名拉」后，
+    // 客户端请求的是 `<key>.thumb.jpg`，而白名单/回源扇描里只有原图 key —— 按精确名校验
+    // 会让**主机重启后的第一次拉缩略图**全部 404。
+    const derivedBase = derivedAttachmentBase(name);
+    if (derivedBase && remoteAttachmentAllow.get(threadId)?.has(derivedBase)) return true;
     try {
       const ref = await remoteThread(threadId);
       const handle = ref.localId ? bridges.get(ref.localId) : undefined;
@@ -3481,9 +3530,13 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         messages = (await readThreadHistory(ref.sessionFile))?.messages || [];
       }
       const names = videoRefNamesInMessages(messages);
-      if (!names.includes(name)) return false;
-      rememberAttachmentNames(threadId, names);
-      return true;
+      if (names.includes(name)) return true;
+      if (derivedBase && names.includes(derivedBase)) {
+        // 命中父名：顺带把派生名也登记上，下次直接命中缓存。
+        rememberAttachmentNames(threadId, [name]);
+        return true;
+      }
+      return false;
     } catch {
       // 读不到就按「不允许」处理（宁可不给，也不放行没验证过的名字）。
       return false;
@@ -3504,7 +3557,10 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     return null;
   };
 
-  async function remoteSnapshot(threadId: string, options: { live?: boolean; haveMessageId?: string } = {}): Promise<RemoteThreadSnapshot> {
+  async function remoteSnapshot(
+    threadId: string,
+    options: { live?: boolean; haveMessageId?: string; imageKeys?: boolean } = {},
+  ): Promise<RemoteThreadSnapshot> {
     const ref = await remoteThread(threadId);
     const configuredModels = configuredRemoteModelOptions();
     const permission = toRemotePermission(ref.sessionFile ? resolvePermission(ref.sessionFile, ref.permission) : (ref.permission || "sandbox"));
@@ -3544,7 +3600,10 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     }
     if (live) {
       const gathered: any = await gatherThread(live.bridge, live.getId(), live.permission);
-      const messages = remoteMessages(gathered.messages, ref.cwd, ref.sessionFile);
+      const messages = remoteMessages(gathered.messages, ref.cwd, ref.sessionFile, {
+        imageKeys: options.imageKeys,
+        threadId,
+      });
       // 快照生成即登记本会话引用过的附件（`attachment.fetch` 的作用域校验用）。
       rememberAttachmentNames(threadId, videoRefNamesInMessages(gathered.messages));
       const state = remoteState(!!gathered.isStreaming, messages.length > 0);
@@ -3583,7 +3642,10 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
       appendDiagLog(`remote history not on disk yet → empty (${threadId.slice(0, 12)})`);
       history = { cwd: null, sessionName: null, model: null, thinkingLevel: null, messages: [], branchMessages: [] };
     }
-    const messages = remoteMessages(history.messages, ref.cwd, ref.sessionFile);
+    const messages = remoteMessages(history.messages, ref.cwd, ref.sessionFile, {
+      imageKeys: options.imageKeys,
+      threadId,
+    });
     rememberAttachmentNames(threadId, videoRefNamesInMessages(history.messages));
     // 已打开的桥能直接给出真实用量与实时配置（不额外冷启动）。
     // 这里必须优先用桥的状态：否则手机切完模型后重新 subscribe（只走磁盘快照）

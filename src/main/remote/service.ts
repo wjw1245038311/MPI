@@ -22,7 +22,7 @@ import type { RemoteSubscription } from "./services";
 export interface RemoteBackend {
   listProjects(): Promise<unknown>;
   listThreads(projectId: string): Promise<unknown>;
-  getThread(threadId: string, options?: { live?: boolean; haveMessageId?: string }): Promise<RemoteThreadSnapshot>;
+  getThread(threadId: string, options?: { live?: boolean; haveMessageId?: string; imageKeys?: boolean }): Promise<RemoteThreadSnapshot>;
   createThread(projectId: string, name?: string, permission?: RemotePermission): Promise<RemoteThreadSnapshot>;
   setPermission(threadId: string, permission: RemotePermission): Promise<RemoteThreadSnapshot>;
   setModel(threadId: string, provider: string, modelId: string): Promise<RemoteThreadSnapshot>;
@@ -283,6 +283,7 @@ export class RemoteService {
         return responseFor(request, {
           snapshot: await this.backend.getThread(this.requiredThread(request), {
             haveMessageId: this.optionalString(payload, "haveMessageId"),
+            imageKeys: payload.imageKeys === true,
           }),
         });
       case "thread.resync": {
@@ -311,6 +312,8 @@ export class RemoteService {
             live: true,
             // 客户端本地已有到哪条：有就只回新增（增量快照，见 history-limit.ts）
             haveMessageId: this.optionalString(payload, "haveMessageId"),
+            // 请求级能力标记（image 块只发元数据、字节按需拉，见 remote/image-block.ts）
+            imageKeys: payload.imageKeys === true,
           }),
         });
       }
@@ -407,6 +410,10 @@ export class RemoteService {
         const snapshot = await this.backend.getThread(threadId, {
           // 开会话时若带着本地缓存锚点，主机只回新增（不会每次重传整段历史）
           haveMessageId: this.optionalString(payload, "haveMessageId"),
+          // 请求级能力标记：旧客户端不带 → 行为完全不变（仍内联缩略图）。
+          // 不用「设备能力注册表 + 版本门控」是因为请求级标记天然无状态：客户回滚旧版本、
+          // 换浏览器、清缓存都自动生效，主机不需要维护任何设备能力表。
+          imageKeys: payload.imageKeys === true,
         });
         // 但历史快照拿不到上下文用量（那是桥里的 pi 状态）。于是不阻塞响应地预热：
         // 桥就绪后主机推 context_usage，手机端的用量 chip 就有数了（此前一直是「—」）。
