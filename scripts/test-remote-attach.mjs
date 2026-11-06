@@ -332,3 +332,29 @@ console.log("ok 1 - attachment.fetch 已登记进协议请求白名单");
 }
 
 console.log("\nremote-attach: 全部通过");
+// --- 文档/代码里的示例不能被当成真附件（2026-11-06 真机） ---------------------------
+// 事故：工具结果里贴了 video-refs.ts 的注释示例（`<file … attach="video">`），主机照单全收
+// → 快照里凭空多出两个 video/mp4 块 → 手机点开报 `attachment.fetch NOT_FOUND`。
+{
+  const mod = await import("../src/main/remote/video-refs.ts");
+  const doc = [
+    ' *   <file name="video-….mp4" path="…" attach="video" poster="…-video-….mp4.poster.jpg" />',
+    "  return `\n\n<file name=\"${attr(name)}\" path=\"${attr(abs)}\" attach=\"video\" note=\"x\" />`;",
+  ].join("\n");
+  const parsed = mod.splitMediaRefs(doc);
+  if (parsed.refs.length !== 0) {
+    throw new Error(`文档示例不该被解析成附件，实际 ${parsed.refs.length} 条：${JSON.stringify(parsed.refs.map((r) => r.path))}`);
+  }
+  if (parsed.text !== doc) {
+    throw new Error("示例文本必须原样保留（别把用户/代码里的字吃掉）");
+  }
+
+  // 真引用（绝对路径）照旧要能剥出来
+  const real = 'hi\n\n<file name="abc123" label="a.mp4" path="C:\\tmp\\a.mp4" attach="media" kind="video" size="10" note="x" />';
+  const ok = mod.splitMediaRefs(real);
+  if (ok.refs.length !== 1 || ok.refs[0].kind !== "video") {
+    throw new Error(`真引用必须能解析：${JSON.stringify(ok.refs)}`);
+  }
+  if (ok.text !== "hi") throw new Error(`真引用要连标签一起剥掉，实际 ${JSON.stringify(ok.text)}`);
+  console.log("  ✓ 文档示例被忽略、真引用照常解析");
+}

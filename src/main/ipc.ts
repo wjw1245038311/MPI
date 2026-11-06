@@ -2904,8 +2904,13 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
           // `<file … attach="media" … />`）。不剥的话手机端会把整段 XML 当正文显示
           // （2026-11-04 真机：气泡里一大段 `name="07027e91…"`）。
           // 剥出来的引用由下面的 toolMediaRefs 统一转成 file 块（与用户/助手正文同语义）。
+          // 工具结果可能是**文档/代码片段**（例如把 video-refs.ts 的注释贴出来），里面会
+          // 出现 `<file … attach="video">` 这种示例。只收「路径真的存在」的，否则会给手机
+          // 生成打不开的假卡片（2026-11-06 真机：凭空冒出两个 video/mp4）。
           const splitResult = result?.text ? splitVideoRefs(result.text) : null;
-          if (splitResult?.refs.length) toolMediaRefs.push(...splitResult.refs);
+          if (splitResult?.refs.length) {
+            toolMediaRefs.push(...splitResult.refs.filter((ref) => existsSync(ref.path)));
+          }
           // `mpi_attach_file` 的新回执：正文是自然语言，附件信息藏在一行
           // `{"mpi_attachment":{name,label,size}}` 里（2026-11-04）。
           // 从这里取比台账可靠：台账是**异步**写入的（watch + 1s 轮询），而快照在工具

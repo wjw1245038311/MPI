@@ -251,6 +251,22 @@ export function mediaRefEnvelope(args: {
 }
 
 /**
+ * `path` 看起来是不是一个**真实存在过**的绝对路径。
+ *
+ * 为什么需要（2026-11-06 真机事故）：工具结果里可能只是**贴了段代码/文档**，里面有
+ * `<file … attach="video" poster="…" />` 这种示例。以前不看路径形状就照单全收，于是
+ * 示例里的占位符（`${attr(name)}`、`…`）被当成真附件，生成两个打不开的「视频」卡片
+ * （手机端报 `attachment.fetch NOT_FOUND`）。
+ *
+ * 真引用的 path 一定是绝对路径，且不含模板占位符；文档/代码示例几乎必然带 `${`、`…`、`<`。
+ */
+export function isPlausibleMediaPath(path: string): boolean {
+  if (!path) return false;
+  if (path.includes("${") || path.includes("…") || path.includes("<") || path.includes(">")) return false;
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/");
+}
+
+/**
  * 把文本里的媒体引用剥出来（`attach="video"` 或 `attach="media"`）。
  *
  * 实现从「一条巨长的正则」改成了「先括出 `<file … />` 标签，再逐个解析属性」：
@@ -268,6 +284,8 @@ export function splitMediaRefs(text: string): { text: string; refs: MediaRef[] }
     const name = attrs.name || "";
     const path = attrs.path || "";
     if (!name || !path) return all;
+    // 路径形状不像真的（文档/代码里的示例）→ 当成普通文本，不生成附件
+    if (!isPlausibleMediaPath(path)) return all;
     const declared = attrs.kind as MediaKind | undefined;
     const kind: MediaKind =
       attach === "video"
