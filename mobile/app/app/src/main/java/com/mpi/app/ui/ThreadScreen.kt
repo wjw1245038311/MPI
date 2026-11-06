@@ -2537,60 +2537,133 @@ private fun writeVideoCacheFile(context: Context, raw: String, mimeType: String?
  */
 @Composable
 private fun ImageBlock(block: MessageBlock) {
-    val bitmap = remember(block.data) {
-        runCatching {
-            val raw = block.data
-            if (raw.isNullOrEmpty()) return@runCatching null
-            val base64 = if (raw.startsWith("data:")) raw.substringAfter(',', raw) else raw
-            val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
-            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-        }.getOrNull()
+    val context = LocalContext.current
+    val fetcher = LocalVideoFetcher.current
+
+    // ① 老路径：内联 base64（旧主机 / 实时事件通道 / 没声明 imageKeys 的请求）
+    val inline = remember(block.data) { decodeInlineImageData(block.data) }
+    if (inline != null) {
+        ImageBubble(block = block, bitmap = inline.asImageBitmap(), thumbB64 = block.data.orEmpty())
+        return
     }
 
-    if (bitmap != null) {
-        // 这两个只能在 @Composable 上下文里读（clickable 的 lambda 不是）
-        val previewer = LocalImagePreviewer.current
-        val origins = LocalImageOrigins.current
-        val setViewerOpen = LocalImageViewerOpen.current
-        val key = block.mediaName
-        // 发送时那张图的本地 URI：有就打开它（原图），没有才退回放大缩略图。
-        //
-        // ⚠️ 这里**故意不用 `remember`**：图片是「乐观上屏」的，首次渲染时 `sentImageUris`
-        // 里还没有这个 key（要等上传完成），缓存住那个 null 就永远看不到原图了 ——
-        // 2026-10-10 真机就是这样（代码链看着全对，点开却总是缩略图）。map 查一次很便宜。
-        val localUri = key?.let { origins?.invoke(it) }
-        var showingOriginal by remember { mutableStateOf(false) }
-        Image(
-            bitmap = bitmap,
-            contentDescription = "图片（点击看原图）",
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                // 点击查看：本地原图优先（缩略图放大只会更糊——2026-10-10 用户实测的那个问题）。
-                // 不管有没有本地原图都进同一个查看器：它自己决定用原图还是缩略图，
-                // 并在左上角写出原因。以前分两条路，出问题时看不到任何提示（2026-10-10）。
-                .clickable {
-                    showingOriginal = true
-                    setViewerOpen?.invoke(true)
-                },
-            contentScale = ContentScale.Fit,
-        )
-        if (showingOriginal) {
-            ImagePreviewDialog(
-                localUri = localUri,
-                thumbB64 = block.data.orEmpty(),
-                mediaKey = key,
-                onDismiss = {
-                    showingOriginal = false
-                    setViewerOpen?.invoke(false)
-                },
+    // ② 新路径（2026-11-06）：快照只给 key/thumb/lqip，字节嵌到可见才拉。
+    // LazyColumn 只组合可见项 →「挂载即拉」在安卓上就等价于「可见即拉」，
+    // 不需要 PWA 那套 IntersectionObserver。
+    val thumbName = block.thumb?.takeIf { it.isNotBlank() } ?: block.mediaName
+    val lqip = remember(block.lqip) {
+        block.lqip?.takeIf { it.isNotBlank() }?.let(::decodeThumb)?.asImageBitmap()
+    }
+    if (thumbName.isNullOrEmpty()) {
+        if (lqip != null) {
+            ImageBubble(block = block, bitmap = lqip, thumbB64 = block.lqip.orEmpty())
+        } else {
+            Text(
+                text = "［图片未随本次同步下发］",
+                style = MaterialTheme.typography.labelSmall,
+                color = MpiTheme.colors.textFaint,
             )
         }
+        return
+    }
+
+    var fetched by remember(thumbName) { mutableStateOf<ImageBitmap?>(null) }
+    var failed by remember(thumbName) { mutableStateOf(false) }
+    var attempt by remember(thumbName) { mutableStateOf(0) }
+
+    LaunchedEffect(thumbName, attempt) {
+        val fetch = fetcher ?: return@LaunchedEffect
+        failed = false
+        // 磁盘缓存（imageCacheFile 按名字存，重进会话不再拉）：同一内容的 key 跨会话共用。
+        val file = withContext(Dispatchers.IO) { imageCacheFile(context, thumbName) }
+        val readyFile = withContext(Dispatchers.IO) { file.takeIf { it.length() > 0 } }
+            ?: run {
+                val ok = runCatching { fetch(thumbName, file) { _, _ -> } }.getOrNull() == true
+                if (!ok) null else withContext(Dispatchers.IO) { file.takeIf { it.length() > 0 } }
+            }
+        val decoded = readyFile?.let { withContext(Dispatchers.IO) { decodeFileSampled(it) } }
+        if (decoded != null) {
+            fetched = decoded.asImageBitmap()
+        } else {
+            failed = true
+        }
+    }
+
+    val shown = fetched ?: lqip
+    if (shown != null) {
+        // 拉原图期间先给 LQIP（模糊但有画面），拉到再换成缩略图。
+        ImageBubble(block = block, bitmap = shown, thumbB64 = block.lqip.orEmpty())
     } else {
-        Text(
-            text = "［图片无法显示${block.mimeType?.let { " · $it" } ?: ""}］",
-            style = MaterialTheme.typography.labelSmall,
-            color = MpiTheme.colors.textFaint,
+        // 灰块占位：有宽高就按比例撑（防滞动），没有就给一个稳定高度。
+        val ratio = block.width?.takeIf { it > 0 }?.let { w -> block.height?.takeIf { it > 0 }?.let { h -> w.toFloat() / h } }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (ratio != null) Modifier.aspectRatio(ratio) else Modifier.height(120.dp))
+                .clip(RoundedCornerShape(10.dp))
+                .background(MpiTheme.colors.control)
+                .clickable(enabled = failed) { attempt += 1 },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (failed) "图片加载失败 · 点按重试" else "正在加载图片…",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (failed) MaterialTheme.colorScheme.error else MpiTheme.colors.textFaint,
+            )
+        }
+    }
+}
+
+/** 内联图片（裸 base64 / data URL）→ Bitmap。数据截断/格式不支持 → null（不抛）。 */
+private fun decodeInlineImageData(raw: String?): android.graphics.Bitmap? = runCatching {
+    if (raw.isNullOrEmpty()) return@runCatching null
+    val base64 = if (raw.startsWith("data:")) raw.substringAfter(',', raw) else raw
+    val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+}.getOrNull()
+
+/**
+ * 图片气泡（老/新两条路径共用）：显示 + 点击进预览器。
+ *
+ * 预览器自己决定用本地原图、按 key 拉的原图还是传进去的缩略图，并在左上角写出原因；
+ * 新路径没有内联字节，所以 [thumbB64] 传 LQIP（先给模糊画面，原图拉到再替换）。
+ */
+@Composable
+private fun ImageBubble(block: MessageBlock, bitmap: ImageBitmap, thumbB64: String) {
+    val origins = LocalImageOrigins.current
+    val setViewerOpen = LocalImageViewerOpen.current
+    val key = block.mediaName
+    // 发送时那张图的本地 URI：有就打开它（原图），没有才退回放大缩略图。
+    //
+    // ⚠️ 这里**故意不用 `remember`**：图片是「乐观上屏」的，首次渲染时 `sentImageUris`
+    // 里还没有这个 key（要等上传完成），缓存住那个 null 就永远看不到原图了 ——
+    // 2026-10-10 真机就是这样（代码链看着全对，点开却总是缩略图）。map 查一次很便宜。
+    val localUri = key?.let { origins?.invoke(it) }
+    var showingOriginal by remember { mutableStateOf(false) }
+    Image(
+        bitmap = bitmap,
+        contentDescription = "图片（点击看原图）",
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            // 点击查看：本地原图优先（缩略图放大只会更糊——2026-10-10 用户实测的那个问题）。
+            // 不管有没有本地原图都进同一个查看器：它自己决定用原图还是缩略图，
+            // 并在左上角写出原因。以前分两条路，出问题时看不到任何提示（2026-10-10）。
+            .clickable {
+                showingOriginal = true
+                setViewerOpen?.invoke(true)
+            },
+        contentScale = ContentScale.Fit,
+    )
+    if (showingOriginal) {
+        ImagePreviewDialog(
+            localUri = localUri,
+            thumbB64 = thumbB64,
+            mediaKey = key,
+            onDismiss = {
+                showingOriginal = false
+                setViewerOpen?.invoke(false)
+            },
         )
     }
 }

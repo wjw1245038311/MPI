@@ -76,6 +76,17 @@ data class MessageBlock(
      * 老消息没这个字段 → 回落到 `name`。
      */
     val label: String? = null,
+    /**
+     * 图片按需拉取（2026-11-06，docs/MOBILE-IMAGE-KEY.md）：主机不再内联图片 base64，
+     * 只给内容地址与元数据。`data` 为空时：气泡先显示 `lqip`，再拉 `thumb`（没有就拉 `mediaName`）。
+     */
+    val thumb: String? = null,
+    /** 极低分辨率占位（长边 ≤40px，base64）。只为不闪白/不跳布局，读不了字。 */
+    val lqip: String? = null,
+    /** 原图像素尺寸与字节数：先撑好布局再加载（防滞动）。 */
+    val width: Int? = null,
+    val height: Int? = null,
+    val bytes: Long? = null,
     /** 工具调用 id —— 流式事件按它定位到具体块。 */
     val id: String? = null,
     /** 工具是否以失败结束。 */
@@ -213,6 +224,12 @@ internal data class BlockDto(
     val id: String? = null,
     /** 内容寻址的 key（主机一直在发，客户端以前没接）。用它找本地原图。 */
     val key: String? = null,
+    /** 图片元数据（2026-11-06）：data 为空时靠这几个字段按需拉。 */
+    val thumb: String? = null,
+    val lqip: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val bytes: Long? = null,
 )
 
 @Serializable
@@ -402,6 +419,11 @@ object ThreadModels {
             id = id,
             isError = isError == true,
             mediaName = key,
+            thumb = thumb,
+            lqip = lqip,
+            width = width,
+            height = height,
+            bytes = bytes,
         )
     }
 }

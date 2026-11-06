@@ -1205,6 +1205,9 @@ class ThreadSession(
             // 断线补发基线：主机能补回断线期间的事件时就不回快照（也就不会把正在
             // 流式的内容换掉）。设了“刚应用过快照/刚预热缓存”的场合 lastSeq 已置 null。
             if (!full) lastSeq?.let { put("sinceSeq", it) }
+            // 请求级能力标记（docs/MOBILE-IMAGE-KEY.md）：声明后主机把 image 块改成
+            // 「只发 key/thumb/lqip/尺寸」。不带这个字段的旧客户端行为完全不变。
+            put("imageKeys", true)
         }
 
     /**

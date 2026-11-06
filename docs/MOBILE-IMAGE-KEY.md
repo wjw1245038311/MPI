@@ -243,7 +243,19 @@ LQIP/灰块 ──可见──► 拉 thumb ──成功──► 清晰缩略�
 | `styles.css` | `.msg-image--lazy` / `--blank` / `--error` / `.msg-image-placeholder` |
 | `scripts/test-pwa-image-cache.mjs` | 命中零请求 / 并发只拉一次 / 双上限淘汰并 revoke / 空字节算失败 |
 
-**未做**：安卓端（下一条）、九宫格聚合、thumb/LQIP 预生成（第二阶段）。
+**未做**：九宫格聚合、thumb/LQIP 预生成（第二阶段）。
+
+### 8.2 已落地：安卓（2026-11-06）
+
+| 文件 | 做了什么 |
+| --- | --- |
+| `protocol/ThreadModels.kt` | `MessageBlock` + `BlockDto` 补 `thumb/lqip/width/height/bytes`；`key` 仍映射到 `mediaName`（点开看原图靠它） |
+| `data/ThreadSession.kt` | `threadIdPayload` 始终带 `imageKeys: true`（含 `full=true` 强制全量那条） |
+| `ui/ThreadScreen.kt` | `ImageBlock` 拆两条：内联 base64 走老路；元数据形态先显 `lqip`，再按 `thumb`（没有就 `key`）拉字节 → 落盘到 `imageCacheFile`（按名字缓存，重进会话不再拉）→ 采样解码；失败给「点按重试」占位。显示/点击/预览抽成 `ImageBubble`，预览器自己按 `mediaKey` 拉原图 |
+| `test/ImageKeyBlockTest.kt` | 元数据逐字段解出 / 老内联块照旧 / 什么都没有时是真占位 |
+
+**与 PWA 的行为差异（有意）**：安卓用 `LazyColumn` 的“只组合可见项”实现可见即拉，不需要
+IntersectionObserver；缩略图落盘在 `cacheDir`（系统可清），PWA 只在内存里 LRU。
 
 ---
 
