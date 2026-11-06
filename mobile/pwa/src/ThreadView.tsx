@@ -14,6 +14,7 @@ import { routeDroppedFiles } from "./lib/attach-route";
 import { extractVideoPoster, looksLikeVideo } from "./lib/video-attach";
 import { requestDirectPlaybackUrl, uploadVideoDirect } from "./lib/attachment-direct";
 import { loadImageUrl } from "./lib/image-cache";
+import { buildImageGrid, groupImageBlocks } from "./lib/image-grid";
 import { arrayBufferToBase64, VoiceRecorder } from "./lib/voice-input";
 import { languageLabel, parseSegments } from "./lib/markdown-lite";
 import { parseInline } from "./lib/inline";
@@ -517,7 +518,7 @@ function ToolGroupRow({ group }: { group: ToolGroup }) {
   );
 }
 
-function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceContext | null }) {
+function Block({ block, choiceCtx, grid = false }: { block: ViewBlock; choiceCtx?: ChoiceContext | null; grid?: boolean }) {
   if (block.type === "thinking") {
     return (
       <details className="msg-thinking">
@@ -536,7 +537,7 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
     // 已是完整 data URL 的原样使用。
     if (block.data) {
       const src = block.data.startsWith("data:") ? block.data : `data:${block.mimeType || "image/jpeg"};base64,${block.data}`;
-      return <img className="msg-image" src={src} alt={block.mimeType || "image"} />;
+      return <img className={`msg-image${grid ? " msg-image--grid" : ""}`} src={src} alt={block.mimeType || "image"} />;
     }
     // 2026-11-06：快照只发元数据（key/thumb/lqip），字节由客户端**可见时**拉。
     // 既无 data 也无 key = 真占位（历史遗留 / 附件已被清理）——不要把空块藏起来，
@@ -558,7 +559,7 @@ function Block({ block, choiceCtx }: { block: ViewBlock; choiceCtx?: ChoiceConte
     const ratio = block.width && block.height ? block.width / block.height : undefined;
     return (
       <img
-        className={`msg-image msg-image--lazy${lqipSrc ? "" : " msg-image--blank"}`}
+        className={`msg-image msg-image--lazy${lqipSrc ? "" : " msg-image--blank"}${grid ? " msg-image--grid" : ""}`}
         // LQIP（长边 ≤40px）立即上屏：模糊但有形，不闪白。真缩略图由容器上的
         // IntersectionObserver 替换 src（data-lazy-image 被读走后就不会再拉）。
         src={lqipSrc}
@@ -711,18 +712,62 @@ const ThinkingPlaceholder = memo(function ThinkingPlaceholder() {
  * - 手机：两指捏合（pointer events，touch-action:none 拦住原生手势）；
  * - 轻点（无拖动）：已放大 → 复位到 1x；未放大 → 关闭。Esc / × 任何时候直接关。
  */
-function ImagePreview({ src, onClose }: { src: string; onClose: () => void }) {
+function ImagePreview({
+  items,
+  index,
+  actions,
+  onIndex,
+  onClose,
+}: {
+  items: Array<{ src: string; name?: string; mime?: string }>;
+  index: number;
+  actions: ThreadActions | null;
+  onIndex: (index: number) => void;
+  onClose: () => void;
+}) {
   const [t, setT] = useState({ scale: 1, x: 0, y: 0 });
   const imgRef = useRef<HTMLImageElement | null>(null);
+  /** 按索引缓存的 objectURL（同一张翻回来不重拉）。 */
+  const [resolved, setResolved] = useState<Record<number, string>>({});
+  const item = items[index];
+  const src = resolved[index] ?? item?.src ?? "";
+  const hasMultiple = items.length > 1;
 
-  // Esc 关闭（覆盖层不是 dialog，浏览器没有返回键——自己接）。
+  // 当前这张还没字节（但有名字）→ 按需拉。九宫格打开时 src 是空的，字节靠这里来
+  // （图片缓存命中时几乎瞬时，所以翻页不卡）。
+  useEffect(() => {
+    const target = items[index];
+    if (!target || resolved[index] || target.src) return;
+    if (!target.name || !actions) return;
+    let cancelled = false;
+    void loadImageUrl(target.name, target.mime || "image/jpeg", { request: (name) => actions.fetchAttachmentBytes(name) })
+      .then((url) => {
+        if (!cancelled) setResolved((prev) => ({ ...prev, [index]: url }));
+      })
+      .catch(() => {
+        /* 保持空画面：用户可以左右切走，不弹错误打断看图 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [index, item?.name, item?.src, actions, resolved]);
+
+  // 换图后回到 1x：否则上一张的缩放/位移会带到下一张。
+  useEffect(() => {
+    setT({ scale: 1, x: 0, y: 0 });
+  }, [index]);
+
+  // Esc 关闭；← → 翻页（已放大时不抢方向键——那是在拖图）。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") return onClose();
+      if (t.scale > 1) return;
+      if (e.key === "ArrowLeft" && index > 0) onIndex(index - 1);
+      if (e.key === "ArrowRight" && index < items.length - 1) onIndex(index + 1);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, onIndex, index, items.length, t.scale]);
 
   // 滚轮缩放（触控板捏合也走 wheel + ctrlKey）。原生监听：React 的 onWheel 是 passive，
   // preventDefault 不生效，页面会跟着滚。
@@ -807,6 +852,38 @@ function ImagePreview({ src, onClose }: { src: string; onClose: () => void }) {
         alt="图片预览"
         style={{ transform: `translate(${t.x}px, ${t.y}px) scale(${t.scale})` }}
       />
+      {!src && <div className="image-preview-loading">加载中…</div>}
+      {hasMultiple && index > 0 && (
+        <button
+          type="button"
+          className="image-preview-nav prev"
+          aria-label="上一张"
+          onClick={(e) => {
+            e.stopPropagation();
+            onIndex(index - 1);
+          }}
+        >
+          ‹
+        </button>
+      )}
+      {hasMultiple && index < items.length - 1 && (
+        <button
+          type="button"
+          className="image-preview-nav next"
+          aria-label="下一张"
+          onClick={(e) => {
+            e.stopPropagation();
+            onIndex(index + 1);
+          }}
+        >
+          ›
+        </button>
+      )}
+      {hasMultiple && (
+        <div className="image-preview-count">
+          {index + 1} / {items.length}
+        </div>
+      )}
       <button
         type="button"
         className="image-preview-close"
@@ -888,12 +965,58 @@ function messageText(message: ViewMessage): string {
     .trim();
 }
 
+/**
+ * 多图九宫格：一条消息里**连续**的图片折成网格。
+ *
+ * 超过 9 张时只显示前 8 张，第 9 格是「+N」——点它从第 9 张开始翻（每组图片都整个
+ * 交给预览器，所以能左右滑着看完全部）。
+ */
+function ImageGrid({ blocks, onOpen }: { blocks: ViewBlock[]; onOpen: (index: number) => void }) {
+  const grid = useMemo(() => buildImageGrid(blocks), [blocks]);
+  if (!grid) return null;
+  return (
+    <div className="msg-image-grid" data-cols={grid.cols}>
+      {grid.visible.map((block, index) => (
+        <div
+          key={index}
+          className="msg-image-cell"
+          role="button"
+          tabIndex={0}
+          aria-label={`查看第 ${index + 1} 张图片`}
+          onClick={(e) => {
+            // 别让滚动容器上的单图点击委托再处理一次（会变成只看这一张）
+            e.stopPropagation();
+            onOpen(index);
+          }}
+        >
+          <Block block={block} grid />
+        </div>
+      ))}
+      {grid.hidden > 0 && (
+        <div
+          className="msg-image-cell msg-image-cell--more"
+          role="button"
+          tabIndex={0}
+          aria-label={`还有 ${grid.hidden} 张图片`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen(grid.visible.length);
+          }}
+        >
+          +{grid.hidden}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Message({
   message,
   onCopied,
   threadId,
   allMessages,
   onSendChoice,
+  onOpenImages,
 }: {
   message: ViewMessage;
   onCopied?: (ok: boolean) => void;
@@ -901,6 +1024,8 @@ function Message({
   threadId?: string;
   allMessages?: ViewMessage[];
   onSendChoice?: (text: string) => Promise<void>;
+  /** 多图九宫格点开：把**整组**图片交给预览器（所以能横向翻页，而不只是看被点的那张）。 */
+  onOpenImages?: (blocks: ViewBlock[], index: number) => void;
 }) {
   const isUser = message.role === "user";
   // 每个文本块在消息内的序号（choices 面板草稿的稳定键）。
@@ -951,9 +1076,11 @@ function Message({
           MPI{message.stopReason === "error" ? " · 出错" : ""}
         </div>
       )}
-      {groupToolBlocks(message.blocks).map((item, i) =>
+      {groupImageBlocks(groupToolBlocks(message.blocks)).map((item, i) =>
         item.kind === "toolGroup" ? (
           <ToolGroupRow key={`g${i}`} group={item.group} />
+        ) : item.kind === "imageGrid" ? (
+          <ImageGrid key={`ig${i}`} blocks={item.blocks} onOpen={(index) => onOpenImages?.(item.blocks, index)} />
         ) : (
           <Block
             key={`b${i}`}
@@ -1184,7 +1311,13 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
   const [transcribing, setTranscribing] = useState(false);
 
   // 图片全屏预览：当前放大的 data URL（null = 未打开）。
-  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  /**
+   * 当前预览器打开的东西。
+   *
+   * 单图与多图共用一套：`items` 里每一项要么已有 `src`（单图点开时的缩略图/原图），
+   * 要么只有 `name`（九宫格：把整组图交给预览器，字节由它按需拉）。`index` 指向当前张。
+   */
+  const [preview, setPreview] = useState<{ items: Array<{ src: string; name?: string; mime?: string }>; index: number } | null>(null);
   // 视频全屏预览（气泡里的播放器在竖屏手机上太小）。
   const [videoPreviewSrc, setVideoPreviewSrc] = useState<string | null>(null);
   // 大视频按需拉取（点开才拉）：进度 + 取消。null = 当前没有进行中的拉取。
@@ -1352,6 +1485,20 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
 
   /** 图片/视频点击 → 全屏预览。事件委托在滚动容器上：不用把回调穿进 Message/Block，
    *  以后任何地方再渲染 msg-image / msg-video 也自动生效。 */
+  /**
+   * 多图九宫格点开：把**整组**图交给预览器（所以能左右翻着看完全部）。
+   * 这里不带字节：预览器按 `name` 去拉（图片缓存命中时几乎瞬时）。
+   */
+  const openImageGrid = (blocks: ViewBlock[], startIndex: number) => {
+    const items = blocks.map((block) => ({
+      src: "",
+      name: block.thumb || block.key || "",
+      mime: block.thumb ? "image/jpeg" : block.mimeType || "image/jpeg",
+    }));
+    if (!items.length) return;
+    setPreview({ items, index: Math.max(0, Math.min(startIndex, items.length - 1)) });
+  };
+
   const handleImageClick = (e: React.MouseEvent) => {
     const target = e.target;
     if (target instanceof HTMLImageElement && target.classList.contains("msg-image")) {
@@ -1361,18 +1508,19 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
         return;
       }
       const fallback = target.currentSrc || target.src;
-      setPreviewSrc(fallback);
+      const originalName = target.dataset.lazyOriginal;
+      const originalMime = target.dataset.lazyOriginalMime || "image/jpeg";
+      setPreview({ items: [{ src: fallback, name: originalName, mime: originalMime }], index: 0 });
       // 点开 = 拉**原图**（气泡里是缩略图/LQIP）。原图故意不进 image-cache：一张几 MB，
       // 塞进去会把整屏缩略图挤掉；预览关掉后由浏览器回收。
-      const originalName = target.dataset.lazyOriginal;
       if (originalName && actions) {
         void actions
           .fetchAttachmentBytes(originalName)
           .then((bytes) => {
-            const url = URL.createObjectURL(
-              new Blob([bytes as BlobPart], { type: target.dataset.lazyOriginalMime || "image/jpeg" }),
+            const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: originalMime }));
+            setPreview((prev) =>
+              prev ? { ...prev, items: prev.items.map((item, i) => (i === 0 ? { ...item, src: url } : item)) } : prev,
             );
-            setPreviewSrc(url);
           })
           .catch(() => {
             /* 拉不到就留在缩略图上：已经有画面，不打断用户 */
@@ -2131,6 +2279,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                   allMessages={view.messages}
                   onSendChoice={sendChoice}
                   onCopied={(ok) => setToast(ok ? "已复制" : "复制失败")}
+                  onOpenImages={openImageGrid}
                 />
               ))}
               {view.streaming && <Message message={view.streaming} />}
@@ -2529,7 +2678,15 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       )}
 
       {/* 图片全屏预览（z-index 高于审批卡/抽屉——打开时它就是最上层） */}
-      {previewSrc && <ImagePreview src={previewSrc} onClose={() => setPreviewSrc(null)} />}
+      {preview && (
+        <ImagePreview
+          items={preview.items}
+          index={preview.index}
+          actions={actions}
+          onIndex={(index) => setPreview((prev) => (prev ? { ...prev, index } : prev))}
+          onClose={() => setPreview(null)}
+        />
+      )}
       {videoPreviewSrc && <VideoPreview src={videoPreviewSrc} onClose={() => setVideoPreviewSrc(null)} />}
 
       {/* S6.3 approval card (full-screen, above everything) */}

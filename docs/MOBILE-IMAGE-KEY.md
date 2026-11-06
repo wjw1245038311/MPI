@@ -240,10 +240,12 @@ LQIP/灰块 ──可见──► 拉 thumb ──成功──► 清晰缩略�
 | `lib/thread-session.ts` | `ViewBlock` 补 `key/thumb/lqip/width/height/bytes` 并映射；subscribe/resync 带 `imageKeys: true` |
 | `lib/image-cache.ts`（新） | 图片 objectURL 缓存：**张数 120 + 估算 24MB** 双上限、并发去重、淘汰必 revoke。刻意**不复用** `attachment-fetch` 的 urlCache（上限 2，给几十 MB 视频/文件定的，混用会互相挤掉） |
 | `ThreadView.tsx` | 新块形态渲染（LQIP 立即上屏 + 比例占位）；`IntersectionObserver`（root = 滚动容器，提前 400px）可见即拉；点开拉原图（不进缓存）；失败保留占位、点一下重试 |
-| `styles.css` | `.msg-image--lazy` / `--blank` / `--error` / `.msg-image-placeholder` |
+| `styles.css` | `.msg-image--lazy` / `--blank` / `--error` / `.msg-image-placeholder` / `.msg-image-grid*` / `.image-preview-nav` |
+| `lib/image-grid.ts`（新） | 九宫格聚合：连续图片合并、≤4 张 2 列 / ≥5 张 3 列、>9 张前 8 + 「+N」 |
+| `ThreadView.tsx` | 网格渲染 + 预览器多图化（← → / 左右按钮 / `n / N` 计数 / 换图重置缩放 / 按名字按需拉） |
 | `scripts/test-pwa-image-cache.mjs` | 命中零请求 / 并发只拉一次 / 双上限淘汰并 revoke / 空字节算失败 |
 
-**未做**：九宫格聚合、thumb/LQIP 预生成（第二阶段）。
+**未做**：thumb/LQIP 预生成（已由 §8.3 的 A2 补上）。
 
 ### 8.2 已落地：安卓（2026-11-06）
 
@@ -253,6 +255,7 @@ LQIP/灰块 ──可见──► 拉 thumb ──成功──► 清晰缩略�
 | `data/ThreadSession.kt` | `threadIdPayload` 始终带 `imageKeys: true`（含 `full=true` 强制全量那条） |
 | `ui/ThreadScreen.kt` | `ImageBlock` 拆两条：内联 base64 走老路；元数据形态先显 `lqip`，再按 `thumb`（没有就 `key`）拉字节 → 落盘到 `imageCacheFile`（按名字缓存，重进会话不再拉）→ 采样解码；失败给「点按重试」占位。显示/点击/预览抽成 `ImageBubble`，预览器自己按 `mediaKey` 拉原图 |
 | `test/ImageKeyBlockTest.kt` | 元数据逐字段解出 / 老内联块照旧 / 什么都没有时是真占位 |
+| `ui/ImageGrid.kt` + `test/ImageGridTest.kt` | 九宫格聚合纯函数（与网页版同规则）+ 多图翻页查看器（复用单图查看器，不套 Pager 以免与缩放手势打架） |
 
 **与 PWA 的行为差异（有意）**：安卓用 `LazyColumn` 的“只组合可见项”实现可见即拉，不需要
 IntersectionObserver；缩略图落盘在 `cacheDir`（系统可清），PWA 只在内存里 LRU。
@@ -339,7 +342,7 @@ agent 直接吐在 tool result / 正文里的图（ComfyUI 产物最典型）只
 | A2 | **内联图后台落库队列**（ComfyUI 直接吐在 tool result 里的 base64）+ thumb/LQIP 预生成 | 新增后台队列模块 + `image-block.ts` | 中 ✅ 2026-11-06 已落地（§8.3） |
 | B | PWA 客户端（解析 / 可见即拉 / 缓存 / 占位），先于 A 发布 | `mobile/pwa` 3–4 个文件 | 中 |
 | C | 安卓客户端（同上），先于 A 发布 | `mobile/app` 3–4 个文件 + 单测 | 中 |
-| D | 九宫格聚合 + 翻页查看器（可后置） | 两端 UI | 中 |
+| D | 九宫格聚合 + 翻页查看器 | 两端 UI | 中 ✅ 2026-11-06 已落地（§8.1/§8.2） |
 
 **发版顺序**：B/C → A → 观察 → D。
 

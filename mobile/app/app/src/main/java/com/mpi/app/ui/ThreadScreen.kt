@@ -1516,12 +1516,17 @@ private fun UserMessageRow(message: ThreadMessage, onRetry: (String) -> Unit, on
             ) {
                 Column {
                     // 用户消息也要渲染图片块（之前只滤 Text，自己发的图直接看不见——真机反馈）
-                    message.blocks.forEach { block ->
+                    message.blocks.forEachIndexed { index, block ->
                         when (block.type) {
                             // fillWidth=false：气泡 shrink-wrap 贴住文字（微信式右对齐小气泡）；
                             // 之前默认撑满 300dp，短消息变成「大块 + 居中文字」。
                             BlockType.Text -> MessageText(block.text.orEmpty(), color = MaterialTheme.colorScheme.onSurface, fillWidth = false)
-                            BlockType.Image -> ImageBlock(block)
+                            BlockType.Image -> {
+                                val group = imageGroupAt(message.blocks, index)
+                                if (group != null) {
+                                    if (group.size > 1) ImageGridRow(group) else ImageBlock(group.first())
+                                }
+                            }
                             BlockType.Video -> VideoBlock(block)
                             BlockType.Audio -> AudioBlock(block)
                             BlockType.File -> FileBlock(block)
@@ -1591,7 +1596,12 @@ private fun AssistantMessageRow(
                 when (block.type) {
                     BlockType.Tool -> ToolBlockRow(block, key = "${message.id}-tool-$index")
                     BlockType.Thinking -> ThinkingBlockRow(block, key = "${message.id}-think-$index")
-                    BlockType.Image -> ImageBlock(block)
+                    BlockType.Image -> {
+                        val group = imageGroupAt(message.blocks, index)
+                        if (group != null) {
+                            if (group.size > 1) ImageGridRow(group) else ImageBlock(group.first())
+                        }
+                    }
                     BlockType.Video -> VideoBlock(block)
                     BlockType.Audio -> AudioBlock(block)
                     BlockType.File -> FileBlock(block)
@@ -2536,14 +2546,14 @@ private fun writeVideoCacheFile(context: Context, raw: String, mimeType: String?
  * 解码失败（数据截断、格式不支持）时给一行明确提示，**不静默丢掉**。
  */
 @Composable
-private fun ImageBlock(block: MessageBlock) {
+private fun ImageBlock(block: MessageBlock, grid: Boolean = false, onOpen: (() -> Unit)? = null) {
     val context = LocalContext.current
     val fetcher = LocalVideoFetcher.current
 
     // ① 老路径：内联 base64（旧主机 / 实时事件通道 / 没声明 imageKeys 的请求）
     val inline = remember(block.data) { decodeInlineImageData(block.data) }
     if (inline != null) {
-        ImageBubble(block = block, bitmap = inline.asImageBitmap(), thumbB64 = block.data.orEmpty())
+        ImageBubble(block = block, bitmap = inline.asImageBitmap(), thumbB64 = block.data.orEmpty(), grid = grid, onOpen = onOpen)
         return
     }
 
@@ -2556,7 +2566,7 @@ private fun ImageBlock(block: MessageBlock) {
     }
     if (thumbName.isNullOrEmpty()) {
         if (lqip != null) {
-            ImageBubble(block = block, bitmap = lqip, thumbB64 = block.lqip.orEmpty())
+            ImageBubble(block = block, bitmap = lqip, thumbB64 = block.lqip.orEmpty(), grid = grid, onOpen = onOpen)
         } else {
             Text(
                 text = "［图片未随本次同步下发］",
@@ -2592,14 +2602,20 @@ private fun ImageBlock(block: MessageBlock) {
     val shown = fetched ?: lqip
     if (shown != null) {
         // 拉原图期间先给 LQIP（模糊但有画面），拉到再换成缩略图。
-        ImageBubble(block = block, bitmap = shown, thumbB64 = block.lqip.orEmpty())
+        ImageBubble(block = block, bitmap = shown, thumbB64 = block.lqip.orEmpty(), grid = grid, onOpen = onOpen)
     } else {
         // 灰块占位：有宽高就按比例撑（防滞动），没有就给一个稳定高度。
         val ratio = block.width?.takeIf { it > 0 }?.let { w -> block.height?.takeIf { it > 0 }?.let { h -> w.toFloat() / h } }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(if (ratio != null) Modifier.aspectRatio(ratio) else Modifier.height(120.dp))
+                .then(
+                    when {
+                        grid -> Modifier.aspectRatio(1f)
+                        ratio != null -> Modifier.aspectRatio(ratio)
+                        else -> Modifier.height(120.dp)
+                    },
+                )
                 .clip(RoundedCornerShape(10.dp))
                 .background(MpiTheme.colors.control)
                 .clickable(enabled = failed) { attempt += 1 },
@@ -2623,13 +2639,142 @@ private fun decodeInlineImageData(raw: String?): android.graphics.Bitmap? = runC
 }.getOrNull()
 
 /**
+ * 连续图片组的**组首**判定：只有组首负责渲染整组（组内其余块被跳过）。
+ *
+ * 返回 null = 不是组首（或不是图片块）。返回列表 = 从 index 开始连续的图片块。
+ * 与网页版 `groupImageBlocks` 同语义，但这里不改循环结构（每条消息两个渲染入口，
+ * 少动一处就少一份漏改的风险）。
+ */
+private fun imageGroupAt(blocks: List<MessageBlock>, index: Int): List<MessageBlock>? {
+    if (blocks.getOrNull(index)?.type != BlockType.Image) return null
+    if (index > 0 && blocks[index - 1].type == BlockType.Image) return null
+    return blocks.drop(index).takeWhile { it.type == BlockType.Image }
+}
+
+/**
+ * 多图九宫格（2026-11-06）：一条消息里连续图片折成网格。
+ *
+ * 超过 9 张只显示前 8 张，第 9 格是「+N」——点它从第 9 张开始翻（整组交给预览器，
+ * 所以能左右看完全部）。格子统一方形裁切：九宫格的意义就是「一样大、一眼扫完」；
+ * 否则竖图/长截图会把行高拉爆。
+ */
+@Composable
+private fun ImageGridRow(blocks: List<MessageBlock>) {
+    val grid = remember(blocks) { buildImageGrid(blocks) } ?: return
+    var previewIndex by remember(blocks) { mutableStateOf<Int?>(null) }
+    Column(
+        modifier = Modifier.widthIn(max = 320.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        grid.visible.indices.chunked(grid.cols).forEach { row ->
+            val showMore = grid.hidden > 0 && row.contains(grid.visible.lastIndex)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                row.forEach { i ->
+                    Box(Modifier.weight(1f)) {
+                        ImageBlock(grid.visible[i], grid = true, onOpen = { previewIndex = i })
+                    }
+                }
+                if (showMore) {
+                    Box(Modifier.weight(1f)) {
+                        // 第 9 格：先显示前 8 张，“+N”点开仍从第 9 张开始（索引 = visible.size）
+                        MoreCell(grid.hidden) { previewIndex = grid.visible.size }
+                    }
+                }
+                repeat(grid.cols - row.size - if (showMore) 1 else 0) {
+                    Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+    }
+    val index = previewIndex
+    if (index != null) {
+        ImagePreviewPager(blocks = blocks, startIndex = index, onClose = { previewIndex = null })
+    }
+}
+
+@Composable
+private fun MoreCell(hidden: Int, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.Black.copy(alpha = 0.55f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("+$hidden", color = Color.White, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+/**
+ * 全屏多图浏览：复用单图查看器（缩放/按 key 拉原图都在里面），外加左右翻页。
+ * 不用 HorizontalPager：查看器自己已接管缩放手势，套一层 Pager 会打架。
+ */
+@Composable
+private fun ImagePreviewPager(blocks: List<MessageBlock>, startIndex: Int, onClose: () -> Unit) {
+    var index by remember(blocks) { mutableStateOf(startIndex.coerceIn(0, blocks.lastIndex)) }
+    val block = blocks.getOrNull(index) ?: return
+    Box(Modifier.fillMaxSize()) {
+        ImagePreviewDialog(
+            localUri = null,
+            thumbB64 = block.lqip.orEmpty(),
+            mediaKey = block.mediaName,
+            onDismiss = onClose,
+        )
+        Row(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (index > 0) PagerArrow("‹") { index -= 1 } else Spacer(Modifier.size(44.dp))
+            if (index < blocks.lastIndex) PagerArrow("›") { index += 1 } else Spacer(Modifier.size(44.dp))
+        }
+        if (blocks.size > 1) {
+            Text(
+                text = "${index + 1} / ${blocks.size}",
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PagerArrow(label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = Color.White, style = MaterialTheme.typography.headlineSmall)
+    }
+}
+
+/**
  * 图片气泡（老/新两条路径共用）：显示 + 点击进预览器。
  *
  * 预览器自己决定用本地原图、按 key 拉的原图还是传进去的缩略图，并在左上角写出原因；
  * 新路径没有内联字节，所以 [thumbB64] 传 LQIP（先给模糊画面，原图拉到再替换）。
  */
 @Composable
-private fun ImageBubble(block: MessageBlock, bitmap: ImageBitmap, thumbB64: String) {
+private fun ImageBubble(
+    block: MessageBlock,
+    bitmap: ImageBitmap,
+    thumbB64: String,
+    grid: Boolean = false,
+    onOpen: (() -> Unit)? = null,
+) {
     val origins = LocalImageOrigins.current
     val setViewerOpen = LocalImageViewerOpen.current
     val key = block.mediaName
@@ -2644,16 +2789,20 @@ private fun ImageBubble(block: MessageBlock, bitmap: ImageBitmap, thumbB64: Stri
         bitmap = bitmap,
         contentDescription = "图片（点击看原图）",
         modifier = Modifier
-            .fillMaxWidth()
+            .then(if (grid) Modifier.aspectRatio(1f) else Modifier.fillMaxWidth())
             .clip(RoundedCornerShape(10.dp))
             // 点击查看：本地原图优先（缩略图放大只会更糊——2026-10-10 用户实测的那个问题）。
             // 不管有没有本地原图都进同一个查看器：它自己决定用原图还是缩略图，
             // 并在左上角写出原因。以前分两条路，出问题时看不到任何提示（2026-10-10）。
             .clickable {
-                showingOriginal = true
-                setViewerOpen?.invoke(true)
+                if (onOpen != null) {
+                    onOpen()
+                } else {
+                    showingOriginal = true
+                    setViewerOpen?.invoke(true)
+                }
             },
-        contentScale = ContentScale.Fit,
+        contentScale = if (grid) ContentScale.Crop else ContentScale.Fit,
     )
     if (showingOriginal) {
         ImagePreviewDialog(

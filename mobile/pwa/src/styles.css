@@ -610,6 +610,47 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .msg-image-placeholder em { font-style: normal; }
 
+/* 多图九宫格（2026-11-06）：一条消息里的**连续**图片折成网格。
+ * 超过 9 张显示前 8 张，第 9 格是「+N」；点任意一格打开整组（可左右翻页）。 */
+.msg-image-grid { display: grid; gap: 4px; width: min(320px, 100%); }
+.msg-image-grid[data-cols="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.msg-image-grid[data-cols="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.msg-image-cell {
+  position: relative; overflow: hidden; border-radius: 8px;
+  cursor: zoom-in; background: rgba(127, 127, 127, 0.12);
+}
+/* 格子里强制方形裁切：九宫格的意义就是「一样大、能一眼扫完」——
+ * 否则竖图/长截图会把行高拉爆。 */
+.msg-image-cell .msg-image--grid {
+  display: block; width: 100%; max-width: none; height: auto;
+  aspect-ratio: 1; object-fit: cover; min-height: 0; border-radius: 0;
+}
+.msg-image-cell--more {
+  aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.55); color: #fff;
+  font-size: 15px; font-weight: 600;
+}
+
+/* 图片预览：多图翻页（← → 或左右按钮；放大状态下不抢方向键）。 */
+.image-preview-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.45); color: #fff;
+  font-size: 26px; line-height: 1; cursor: pointer; z-index: 2;
+}
+.image-preview-nav.prev { left: 12px; }
+.image-preview-nav.next { right: 12px; }
+.image-preview-count {
+  position: absolute; top: calc(12px + env(safe-area-inset-top));
+  left: 50%; transform: translateX(-50%);
+  padding: 3px 10px; border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 12px;
+}
+.image-preview-loading {
+  position: absolute; color: rgba(255, 255, 255, 0.75); font-size: 13px;
+}
+
 /* ---- 视频附件（飞书式：气泡里只有一个视频框，点一下直接全屏）-------------- */
 .msg-video-card {
   position: relative;
