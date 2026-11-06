@@ -18,7 +18,10 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    验证方式：`npm run test:pwa-choice`（新增第 7 组：四种围栏写法该画、```json / 无标签不该画、
    中间漏括号、未闭合可修）、`npm test -- pwa`（21 套件全过，markdown-lite 是共用渲染基建）、
    `cd mobile/pwa && npx tsc --noEmit`、`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest :app:assembleDebug`（全绿）。
-   网页版已用 `npm run deploy-pwa` 同步到中继；**安卓 APK 本轮没有打包**（要发到手机更新通道需要你确认）。
+   网页版已用 `npm run deploy-pwa` 同步到中继（远端引用 `index-CAna6v3d.js`）；
+   安卓包 **v0.5.172**（versionCode 175）已走 `scripts/dev-publish-android.mjs` 出包 + 推 ECS 公网下载点，
+   清单 `mpi-android-native.json` 已更新；本地与远端 sha256 一致（`6d0108b9…`，32,460,286 字节），
+   与上一包 `0e6daa3a…` 不同 → 确认是新构建而不是旧包改名。
 
 ## v0.14.10（2026-11-06）
 
