@@ -18,13 +18,21 @@ export interface TextSegment {
   closed?: boolean;
 }
 
-const FENCE = /^```(.*)$/;
+/**
+ * 围栏行：三个以上反引号**或浪加号**，前面允许一个 markdown 列表符号。
+ * 两种宽忍都是模型的真实写法（2026-11-06：`~~~` 闭合、把提问写在 `- ` 列表项里），
+ * 与桌面端 choice-block 的 CHOICES_LIST_OPEN_RE / choiceCloseReFor 同一口径；
+ * 区别是这里是**全局**生效（所有代码块），因为切分只发生在这一层。
+ */
+const FENCE = /^(?:(?:[-*+]|\d+[.)])[ \t]+)?([`~]{3,})(.*)$/;
+/** 快速路径用：文本里到底有没有围栏行（没有就一个字不用改）。 */
+const HAS_FENCE = /^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?[`~]{3,}/m;
 
 export function parseSegments(raw: string): TextSegment[] {
   const text = typeof raw === "string" ? raw : "";
   if (!text) return [];
   // 没有围栏就不做任何加工（绝大多数消息走这条路）。
-  if (!/^[ \t]*```/m.test(text)) return [{ type: "text", text }];
+  if (!HAS_FENCE.test(text)) return [{ type: "text", text }];
 
   const lines = text.split("\n");
   const out: TextSegment[] = [];
@@ -45,7 +53,9 @@ export function parseSegments(raw: string): TextSegment[] {
       if (mode === "text") {
         flush();
         mode = "code";
-        lang = (match[1] || "").trim().toLowerCase();
+        // 整段信息串原样留着（choices 面板需要从里面取「与围栏同行的正文」），
+        // 展示名由 languageLabel 只取第一个词。
+        lang = (match[2] || "").trim().toLowerCase();
       } else {
         flush();
         mode = "text";
@@ -61,7 +71,8 @@ export function parseSegments(raw: string): TextSegment[] {
 
 /** 语言标记 → 展示名（Qoder 风格的首字母大写 + 常见别名）。 */
 export function languageLabel(lang?: string): string {
-  const key = (lang || "").trim().toLowerCase();
+  // 只取第一个词：`choices [{"title":…}]` 这种同行正文不能跟着当成标签显示。
+  const key = (lang || "").trim().split(/[\s[{(]/)[0].toLowerCase();
   if (!key) return "代码";
   const aliases: Record<string, string> = {
     py: "Python",

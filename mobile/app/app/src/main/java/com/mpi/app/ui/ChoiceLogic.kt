@@ -20,9 +20,26 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * 容错：模型常把闭合围栏粘在 JSON 行尾或干脆漏写（deepseek 系尤甚），
  * 所以解析走「严格 → 截第一个完整 JSON → JSON 修复链」三级降级，
- * [withChoiceSegments] 再补围栏级容错。修复链与桌面端/PWA 逐字对齐：
- * ① 字符串里未转义的英文双引号；② 结尾少括号；③ options 里丢了 `{}` 包裹的裸
- * `"label":…` 对（依据 2026-10 对全部历史会话的盘点：498 个围栏 / 5 个失败）。
+ * [withChoiceSegments] 再补围栏级容错。修复链与桌面端/PWA 同一套，现共九类
+ * （前八类只补标点，最后一类只丢真读不出的那一题）：
+ *   ① 串里未转义的英文双引号；② 结尾少括号；③ options 丢 `{}` 包裹的裸 `"label":…` 对；
+ *   ④ 键名漏了开头的 `"`；⑤ 对象里冒出无键成员；⑥ 顶层漏了 `[]`；⑦ 逐题兜底；
+ *   ⑧ **中间**漏一层闭合括号（`"options":["甲","乙"}`）→ completeBrackets 按层补；
+ *   ⑨ 整块**没有闭合围栏** → 允许走修复链（仅当正文以 [ / { 开头且真修好了才接管）。
+ * 围栏本身还宽忍三种写法（均以「标签含 choices」为前提）：`choices json`、浪加号闭合、
+ * 列表项前缀（见 MessageContent.parseSegments）、正文与围栏同行。
+ * ⚠️ 改动必须同步桌面端 src/renderer/src/lib/choice-block.ts 与 mobile/pwa（
+ *    TS 侧有逐字对账测试 `npm run test:choiceretry`）；本端用例在 ChoiceLogicTest.kt。
+ *
+ * 一处抹不平的运行时差异（已知，不用当 bug 改）：kotlinx 的 Json.parseToJsonElement
+ * 允许「值不加引号」（`{"title":乙题}` 在这边能读出来），V8 的 JSON.parse 不行。
+ * 所以同一段坏正文：桌面会丢掉那一题并计入「已截断 N 题」，本端会把它一同留下。
+ * 两端共同的要求只有一条：面板必须出得来、一题写坏不能拖死其它题（用例钉的是这条）。
+ *
+ * 一处**抹不平的运行时差异**（已知，别当 bug 改）：kotlinx 的 Json.parseToJsonElement
+ * 对「值不加引号」比 V8 宽松（`{"title":乙题}` 在这边能直接读出来），所以同一段坏正文：
+ * 桌面会丢掉那一题并计入「已截断 N 题」，本端会把它连同其它题一起留下。
+ * 两端共同的要求只有一条：面板必须出得来、一题写坏不能拖死其它题（用例钉的是这条）。
  */
 data class ChoiceOptionView(val label: String, val detail: String? = null)
 
@@ -238,12 +255,22 @@ private fun escapeStrayQuotes(src: String): String {
     return out.toString()
 }
 
-private fun closeOpenBrackets(src: String): String {
+/** 能补的括号上限：再多就不是「漏了一两个符号」，而是整段乱写了，直接不修。 */
+private const val MAX_REPAIR_BRACKETS = 24
+
+/** 补漏掉的闭合括号——**中间和末尾都补**（与桌面端 completeBrackets 同算法）。
+ * 旧版只往末尾追加，可真实会话里见过 `"options":["甲","乙"}` ——少的是**中间那一层的 `]`**，
+ * 末尾补多少都修不好。现在维护「应该出现哪个闭符号」的栈：遇到类型不符的先按层补齐，
+ * 栈里没这一层（多敲的）就丢掉，走完还剩没关的按内→外补全。 */
+private fun completeBrackets(src: String): String {
+    val out = StringBuilder(src.length + 16)
     val stack = ArrayDeque<Char>()
     var inStr = false
     var esc = false
+    var inserted = 0
     for (ch in src) {
         if (inStr) {
+            out.append(ch)
             when {
                 esc -> esc = false
                 ch == '\\' -> esc = true
@@ -251,15 +278,43 @@ private fun closeOpenBrackets(src: String): String {
             }
             continue
         }
-        when (ch) {
-            '"' -> inStr = true
-            '{' -> stack.addLast('}')
-            '[' -> stack.addLast(']')
-            '}', ']' -> stack.removeLastOrNull()
+        if (ch == '"') {
+            inStr = true
+            out.append(ch)
+            continue
         }
+        if (ch == '{') {
+            stack.addLast('}')
+            out.append(ch)
+            continue
+        }
+        if (ch == '[') {
+            stack.addLast(']')
+            out.append(ch)
+            continue
+        }
+        if (ch == '}' || ch == ']') {
+            // 正常情形：类型对得上，弹栈收下。
+            if (stack.lastOrNull() == ch) {
+                stack.removeLast()
+                out.append(ch)
+                continue
+            }
+            // 栈里根本没这一层 → 模型多敲了一个，丢掉（末尾多出的 `]` 就是这么来的）。
+            if (!stack.contains(ch)) continue
+            // 有这一层，但它上面还压着没关的 → 那一层忘了闭合：先补上再收下。
+            while (stack.isNotEmpty() && stack.last() != ch) {
+                out.append(stack.removeLast())
+                if (++inserted > MAX_REPAIR_BRACKETS) return src
+            }
+            stack.removeLast()
+            out.append(ch)
+            continue
+        }
+        out.append(ch)
     }
-    val out = StringBuilder(src)
     if (inStr) out.append('"')
+    if (stack.size > MAX_REPAIR_BRACKETS) return src
     while (stack.isNotEmpty()) out.append(stack.removeLast())
     return out.toString()
 }
@@ -368,8 +423,258 @@ private fun wrapBareLabelPairs(src: String): String {
     return out.toString()
 }
 
+/**
+ * ---- 下面五段与桌面端 choice-block.ts 同一套算法（2026-11-06 新增的四类「漏符号」修复）----
+ * ⚠️ 拷贝件：改这里必须同步 src/renderer/src/lib/choice-block.ts、
+ *    src/main/mpi-choice-retry-ext.ts 与 mobile/pwa/src/lib/choice-block.ts。
+ */
+
+/** 跳过一个以 start（'[' 或 '{'）开头的配平片段，返回其后的下标；不配平返回 -1。 */
+private fun skipBalanced(src: String, start: Int): Int {
+    val stack = ArrayDeque<Char>()
+    var inStr = false
+    var esc = false
+    for (i in start until src.length) {
+        val ch = src[i]
+        if (inStr) {
+            when {
+                esc -> esc = false
+                ch == '\\' -> esc = true
+                ch == '"' -> inStr = false
+            }
+            continue
+        }
+        when (ch) {
+            '"' -> inStr = true
+            '[' -> stack.addLast(']')
+            '{' -> stack.addLast('}')
+            ']', '}' -> {
+                if (stack.removeLastOrNull() != ch) return -1
+                if (stack.isEmpty()) return i + 1
+            }
+        }
+    }
+    return -1
+}
+
+/** 裸键名的形状（漏了引号之后剩下的就是它）。 */
+private val BARE_KEY_RE = Regex("[A-Za-z_\$][A-Za-z0-9_\$]*")
+
+private fun isBareKeyStart(c: Char): Boolean = c in 'a'..'z' || c in 'A'..'Z' || c == '_' || c == '\$'
+
+/** ④ 键名漏了开头的英文双引号 → 补引号。
+ * 实测两种写法：`,detail":"说明"}`（只漏开头，原文里那个引号是键名的收尾）和
+ * `{label:"甲"}`（两头都漏）。判定只看结构：不在字符串里、前一个有效字符是
+ * `{` 或 `,`、裸标识符后面（可跳空白）确实跟着 `:`。值位置一概不碰。 */
+private fun quoteBareKeys(src: String): String {
+    val out = StringBuilder(src.length + 16)
+    var inStr = false
+    var esc = false
+    var prevSig = '\u0000'
+    var i = 0
+    while (i < src.length) {
+        val ch = src[i]
+        if (inStr) {
+            out.append(ch)
+            when {
+                esc -> esc = false
+                ch == '\\' -> esc = true
+                ch == '"' -> inStr = false
+            }
+            i++
+            continue
+        }
+        if (ch.isWhitespace()) {
+            out.append(ch)
+            i++
+            continue
+        }
+        if (ch == '"') {
+            inStr = true
+            out.append(ch)
+            prevSig = '"'
+            i++
+            continue
+        }
+        if ((prevSig == '{' || prevSig == ',') && isBareKeyStart(ch)) {
+            val key = BARE_KEY_RE.find(src, i)?.value.orEmpty()
+            if (key.isNotEmpty()) {
+                var j = i + key.length
+                while (j < src.length && src[j].isWhitespace()) j++
+                if (src.getOrNull(j) == ':') {
+                    // label: → "label":
+                    out.append('"').append(key).append('"')
+                    i += key.length
+                    prevSig = '"'
+                    continue
+                }
+                if (src.getOrNull(j) == '"') {
+                    var k = j + 1
+                    while (k < src.length && src[k].isWhitespace()) k++
+                    if (src.getOrNull(k) == ':') {
+                        // detail": → "detail":（原文里那个引号本就是键名的收尾）
+                        out.append('"').append(src, i, j + 1)
+                        i = j + 1
+                        prevSig = '"'
+                        continue
+                    }
+                }
+            }
+        }
+        out.append(ch)
+        prevSig = ch
+        i++
+    }
+    return out.toString()
+}
+
+/** ⑤ 对象里冒出「没有键名」的成员——JSON 的键必须是字符串，这个位置出现 `[`/`{`
+ * 只能是漏了键。两种坏法分开处理（与桌面端逐字对齐）：
+ *   A. `"options":["甲","乙"],{"label":"丙"}]}` ——数组刚收尾就被逗号接上一个对象：
+ *      模型其实想把它当数组元素，多吃了一个 `]`。吃掉那个过早的 `]` 把数组重新
+ *      打开（后面的 `]` 正好收尾），**选项一个不丢**；
+ *   B. 其它形态（真的多了一个成员）→ 整段丢掉，剩下的照常渲染。
+ * 动手条件很窄：当前容器是**对象**、位置该放键名（前一个有效字符是 `{` 或 `,`）。 */
+private fun repairStrayMembers(src: String): String {
+    val out = StringBuilder(src.length + 16)
+    val stack = ArrayDeque<Char>()
+    var inStr = false
+    var esc = false
+    var prevSig = '\u0000'
+    var i = 0
+    while (i < src.length) {
+        val ch = src[i]
+        if (inStr) {
+            out.append(ch)
+            when {
+                esc -> esc = false
+                ch == '\\' -> esc = true
+                ch == '"' -> inStr = false
+            }
+            i++
+            continue
+        }
+        if (ch.isWhitespace()) {
+            out.append(ch)
+            i++
+            continue
+        }
+        if (ch == '"') {
+            inStr = true
+            out.append(ch)
+            prevSig = '"'
+            i++
+            continue
+        }
+        if ((ch == '[' || ch == '{') && stack.lastOrNull() == '}' && (prevSig == '{' || prevSig == ',')) {
+            // A. 紧跟在 `],` 后面：数组被提前关掉了，这个对象本该是它的元素。
+            if (prevSig == ',' && dropPrematureArrayClose(out)) {
+                stack.addLast(']') // 那个 `]` 被吃掉了，容器还在里层
+                continue // 不推进 i：当前括号按正常入栈处理（此时顶层已是数组）
+            }
+            // B. 真的多了一个成员：整段跳过（带它前面的逗号）。
+            val end = skipBalanced(src, i)
+            if (end > i) {
+                if (prevSig == ',') dropTrailingComma(out)
+                i = end
+                continue
+            }
+        }
+        when (ch) {
+            '[' -> stack.addLast(']')
+            '{' -> stack.addLast('}')
+            ']', '}' -> stack.removeLastOrNull()
+        }
+        out.append(ch)
+        prevSig = ch
+        i++
+    }
+    return out.toString()
+}
+
+/** 把缓冲区末尾的「],」改成「,」（吃掉数组那个过早的收尾）。能改返回 true。 */
+private fun dropPrematureArrayClose(out: StringBuilder): Boolean {
+    var i = out.length - 1
+    while (i >= 0 && out[i].isWhitespace()) i--
+    if (i < 0 || out[i] != ',') return false
+    var j = i - 1
+    while (j >= 0 && out[j].isWhitespace()) j--
+    if (j < 0 || out[j] != ']') return false
+    out.deleteCharAt(j)
+    return true
+}
+
+/** 吃掉缓冲区末尾那个逗号（丢掉无键成员后不能留下空逗号）。 */
+private fun dropTrailingComma(out: StringBuilder) {
+    var i = out.length - 1
+    while (i >= 0 && out[i].isWhitespace()) i--
+    if (i >= 0 && out[i] == ',') out.deleteCharAt(i)
+}
+
+/** ⑦ 「一道题」的起点：`{` 后面（可跳空白）就是 title 键。
+ * 用 title 当锚点而不是按括号配平切项——模型漏一个引号就会让后面所有引号成对
+ * 错位，跟着的括号计数一起乱；而结构校验本来也只认带 title 的对象。 */
+private val QUESTION_START_RE = Regex("""\{\s*"?\s*title\s*"?\s*:""", RegexOption.IGNORE_CASE)
+
+private fun questionStarts(src: String): List<Int> {
+    val out = mutableListOf<Int>()
+    for (m in QUESTION_START_RE.findAll(src)) {
+        out += m.range.first
+        if (out.size >= 12) break
+    }
+    return out
+}
+
+/** ⑦ 按锚点切成「一题一段」。段尾剪到最后一个右花括号（把逗号、外层数组的
+ * 右方括号这类尾巴剪掉）；本来就没写完的段落保留原样，交给 completeBrackets 收尾。 */
+private fun splitQuestionChunks(src: String): List<String> {
+    val starts = questionStarts(src)
+    // 少于两段就没有「逐题兜底」的必要（整块的候选已经把它试过一遍了）。
+    if (starts.size < 2) return emptyList()
+    val out = mutableListOf<String>()
+    for (k in starts.indices) {
+        val to = if (k + 1 < starts.size) starts[k + 1] else src.length
+        var piece = src.substring(starts[k], to)
+        val close = piece.lastIndexOf('}')
+        if (close > 0) piece = piece.substring(0, close + 1)
+        piece = piece.trim()
+        if (piece.isNotEmpty()) out += piece
+    }
+    return out
+}
+
+/** 解析不出的段落用这个空题占位：让结构校验计成「被截断的题」（面板下方有说明），绝不悄悄消失。 */
+private val EMPTY_QUESTION: JsonElement = Json.parseToJsonElement("""{"title":"","options":[]}""")
+
+/** 剪尾巴与原样两种都试：截到的右花括号可能属于内层对象，不是这一题的收尾。 */
+private fun chunkVariants(chunk: String): List<String> {
+    val cut = chunk.replace(Regex("""\}\s*$"""), "")
+    return listOf(chunk, repairChain(chunk), cut, repairChain(cut))
+}
+
+/** ⑦ 逐题兜底：整块修不好时一段一段各自解析，只保留救得回来的题。
+ * 一题写坏不该让其它题一起降级成代码块（与桌面端同）。 */
+private fun salvageQuestions(body: String): ChoiceBlockData? {
+    val chunks = splitQuestionChunks(body)
+    if (chunks.isEmpty()) return null
+    val kept = MutableList(chunks.size) { EMPTY_QUESTION }
+    chunks.forEachIndexed { idx, chunk ->
+        for (candidate in chunkVariants(chunk)) {
+            val parsed = runCatching { Json.parseToJsonElement(candidate) }.getOrNull() ?: continue
+            kept[idx] = parsed
+            break
+        }
+    }
+    return choiceDataFromJson(JsonArray(kept))
+}
+
+/** 修复组合。顺序有讲究：**先补键名漏掉的引号**（不先把键名补正，后面所有引号的成对
+ * 判定会跟着错位，裸引号修复会把好文本改坏）→ 转义串内裸引号 → 修无键成员 →
+ * 给裸 `"label":` 对补 `{}` 包裹 → 补结尾括号 → 去尾逗号。（与桌面端同序）*/
 private fun repairChain(src: String): String =
-    dropTrailingCommas(closeOpenBrackets(wrapBareLabelPairs(escapeStrayQuotes(src))))
+    dropTrailingCommas(
+        completeBrackets(wrapBareLabelPairs(repairStrayMembers(escapeStrayQuotes(quoteBareKeys(src))))),
+    )
 
 private fun repairCandidates(body: String): List<String> {
     val trimmed = body.trim()
@@ -378,10 +683,18 @@ private fun repairCandidates(body: String): List<String> {
     if (sliced != null) out += sliced
     out += repairChain(trimmed)
     if (sliced != null) out += repairChain(sliced)
+    // ⑥ 顶层漏了数组包裹：只写了一个对象，或 `{` 前面那个 `[` 被吐掉。
+    //    只补开头的 `[`——结尾交给链上的 completeBrackets 按实际层级补；
+    //    已以 `[` 开头的不试（包一层反而把合法正文弄坏）。
+    if (trimmed.isNotEmpty() && !trimmed.startsWith("[")) {
+        out += "[$trimmed]"
+        out += "[$trimmed"
+        out += repairChain("[$trimmed")
+    }
     return out.filter { it.isNotEmpty() }
 }
 
-/** 解析围栏正文（容错版）：严格 parse → 截出第一个完整 JSON → 修复链。 */
+/** 解析围栏正文（容错版）：严格 parse → 截出第一个完整 JSON → 修复链 → 逐题兜底。 */
 internal fun parseChoiceBodyEx(body: String): ChoiceBodyParse {
     parseChoiceBlockData(body.trim())?.let { return ChoiceBodyParse(it) }
 
@@ -392,6 +705,8 @@ internal fun parseChoiceBodyEx(body: String): ChoiceBodyParse {
         val data = choiceDataFromJson(parsed) ?: continue
         return ChoiceBodyParse(data, repaired = true)
     }
+    // 最后一道：逐题兜底（一块里有好几题时，只丢真读不出来的那题）。
+    salvageQuestions(body)?.let { return ChoiceBodyParse(it, repaired = true) }
     return ChoiceBodyParse(null, if (sawJson) ChoiceFailure.SHAPE else ChoiceFailure.SYNTAX)
 }
 
@@ -408,10 +723,16 @@ private fun parseChoiceBodyBoundary(body: String): ChoiceBlockData? {
 // ---- 与 parseSegments 的集成 -------------------------------------------------
 
 /** 行尾挂着 ≥3 个反引号的行（模型把闭合围栏粘在正文末尾时）；捕获反引号之前的正文。 */
-private val GLUED_CLOSE_RE = Regex("^(.*?)`{3,}\\s*$")
+private val GLUED_CLOSE_RE = Regex("^(.*?)(?:`{3,}|~{3,})\\s*$")
 
-/** 标准 choices info string（与桌面端 `CHOICES_INFO_RE` / PWA `CHOICES_LANG_RE` 同规则）。 */
-private val CHOICES_INFO_RE = Regex("^choices[^a-z0-9_-]*$", RegexOption.IGNORE_CASE)
+/** 正文与开围栏写在同一行（` ```choices [{…}] `）：只有以 [ 或 { 开头才算正文，
+ * 否则那是第二个语言标签（`choices json` 里的 json）。与桌面端 inlineBodyHead 同规则。 */
+private val INLINE_HEAD_RE = Regex("^\\S+[ \\t]+((\\[|\\{).*)$")
+
+/** 标准 choices info string：**以 choices 这个词开头**就行（后面不紧跟字母/数字），再往后的噪声
+ * 一律忍（`choices>` / `choices json` / 与围栏同行的正文）——与桌面端 `CHOICES_INFO_RE` /
+ * PWA `CHOICES_LANG_RE` 同一规则（2026-11-06 放宽；不含 choices 字样的 ```json 仍不算）。 */
+private val CHOICES_INFO_RE = Regex("^choices(?![a-z0-9])", RegexOption.IGNORE_CASE)
 
 /** 以 choices 开头的写歪标签（`choicesjson` 等）：只有正文严格解析通过才升级。 */
 private val CHOICES_LIKE_RE = Regex("^choices", RegexOption.IGNORE_CASE)
@@ -422,7 +743,7 @@ private val CHOICES_LIKE_RE = Regex("^choices", RegexOption.IGNORE_CASE)
  * 2026-10-19 真机：**同一段回复桌面/PWA 出面板、安卓只显示代码块** —— 安卓这里原先是
  * `code.lang != "choices"` 的精确比较，模型写成 `choices>` / `Choices` 就直接不认了。
  */
-internal fun isChoicesLang(lang: String?): Boolean = CHOICES_INFO_RE.matches((lang ?: "").trim())
+internal fun isChoicesLang(lang: String?): Boolean = CHOICES_INFO_RE.containsMatchIn((lang ?: "").trim())
 
 private fun isChoicesLikeLang(lang: String?): Boolean = CHOICES_LIKE_RE.containsMatchIn((lang ?: "").trim())
 
@@ -430,9 +751,10 @@ private fun isChoicesLikeLang(lang: String?): Boolean = CHOICES_LIKE_RE.contains
  * 把 [parseSegments] 的输出转成可渲染段：合法的 choices 围栏升级成面板。
  *
  * - finalized=false（流式中）：原样返回——围栏保持代码块，定稿后才变面板；
- * - finalized=true：对 lang=="choices" 的代码段做三级容错：
+ * - finalized=true：对 lang 以 choices 开头的代码段做四级容错：
  *   1) 正常闭合（含尾部垃圾）→ 面板；2) 未闭合但某行粘了闭合围栏 → 面板 + 剩余还原为正文；
- *   3) 漏写闭合围栏 → 整体当正文；4) 都不成 → 保持代码块（调用方可提示解析失败）。
+ *   3) 整块没有闭合围栏 → 正文以 [ / { 开头时允许走修复链，且只在真修好了才接管；
+ *   4) 都不成 → 保持代码块（调用方可提示解析失败）。
  */
 internal fun withChoiceSegments(segments: List<Segment>, finalized: Boolean): List<Segment> {
     if (!finalized) return segments
@@ -452,18 +774,23 @@ internal fun withChoiceSegments(segments: List<Segment>, finalized: Boolean): Li
             continue
         }
 
+        // 正文与开围栏写在同一行时（```choices [{…}]），parseSegments 把它当成了语言标记，
+        // 这里把它拼回正文首行（与桌面端 / PWA 同规则）。
+        val inlineHead = INLINE_HEAD_RE.find((code.lang ?: "").trim())?.groupValues?.get(1)?.trim().orEmpty()
+        val body = if (inlineHead.isEmpty()) code.text else "$inlineHead\n${code.text}"
+
         // 正文空白的 choices 围栏（如 ```choices> 后面没内容）：静默丢弃，
         // 不出空代码块 / 不给「格式不合法」警告（与桌面端/PWA 同一规则，2026-10-27 实证）。
-        if (code.text.isBlank()) continue
+        if (body.isBlank()) continue
 
         // 1) 已闭合：整体容错解析（严格 → 截第一个 JSON → 修复链）。
         if (code.closed) {
             if (like) {
-                val strict = parseChoiceBodyBoundary(code.text)
+                val strict = parseChoiceBodyBoundary(body)
                 out += if (strict != null) Segment.Choice(strict) else code
                 continue
             }
-            val r = parseChoiceBodyEx(code.text)
+            val r = parseChoiceBodyEx(body)
             out += if (r.data != null) {
                 Segment.Choice(r.data, r.repaired)
             } else {
@@ -472,8 +799,8 @@ internal fun withChoiceSegments(segments: List<Segment>, finalized: Boolean): Li
             continue
         }
 
-        // 2) 定稿了仍未闭合：粘行闭合扫描（只接受正文能解析成合法 JSON 的边界）。
-        val lines = code.text.split("\n")
+        // 2) 定稿了仍未闭合：粘行闭合扇描（只接受正文能解析成合法 JSON 的边界）。
+        val lines = body.split("\n")
         var glued = false
         for (k in lines.indices) {
             val m = GLUED_CLOSE_RE.matchEntire(lines[k]) ?: continue
@@ -487,9 +814,18 @@ internal fun withChoiceSegments(segments: List<Segment>, finalized: Boolean): Li
         }
         if (glued) continue
 
-        // 3) 漏写闭合围栏：整体当正文（剥掉可能的行尾反引号）。
-        //    这里必须用严格边界判定（不开修复链）——否则自动补括号会把普通正文误当成面板。
-        val data = parseChoiceBodyBoundary(code.text.replace(Regex("`{3,}\\s*$"), ""))
+        // 3) 漏写闭合围栏（模型写到正文里就停了——真实会话里很常见）。
+        //    与桌面端同规则：正文以 [ 或 { 开头才走修复链（这种形状不可能是散文），
+        //    且**只在真修好了才接管**；其余正文仍只允许严格解析，绝不把普通文字读成面板。
+        val tailText = body.replace(Regex("(?:`{3,}|~{3,})\\s*$"), "")
+        if (Regex("^\\s*(\\[|\\{)").containsMatchIn(tailText)) {
+            val r = parseChoiceBodyEx(tailText)
+            if (r.data != null) {
+                out += Segment.Choice(r.data, r.repaired)
+                continue
+            }
+        }
+        val data = parseChoiceBodyBoundary(tailText)
         out += when {
             data != null -> Segment.Choice(data)
             like -> code

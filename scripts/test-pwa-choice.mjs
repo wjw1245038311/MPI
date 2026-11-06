@@ -311,4 +311,40 @@ const QUESTIONS = [
   console.log("ok 6 - deriveChoicePanelState: pending / answered / superseded");
 }
 
+// ---- 7. 围栏写法容错 + 真实坏块形状（与桌面端 test-choice-block 同一批语料）----
+// 2026-11-06：用户提供的会话导出里，三条坏块的原因分别是「中间少一层 ]」与
+// 「整块没有闭合围栏」；本文把这些形状直接钉住，三端行为必须一致。
+{
+  const bodyOk = '[{"title":"题","options":["甲","乙"]}]';
+  const panelOf = (text) => withChoiceSegments(parseSegments(text), true).some((s) => s.kind === "choice");
+
+  const yes = [
+    ["标签带第二个词 choices json", "```choices json\n" + bodyOk + "\n```"],
+    ["浪加号围栏", "~~~choices\n" + bodyOk + "\n~~~"],
+    ["写在列表项里", "- ```choices\n" + bodyOk + "\n  ```"],
+    ["正文与开围栏同行", "```choices " + bodyOk],
+    // ⑧ 中间漏一层闭合括号（真实坏法："options":["甲","乙"}）
+    ["中间少一个 ]", '```choices\n[{"title":"题","options":["甲","乙"}]\n```'],
+    // ⑨ 整块没有闭合围栏（模型写到正文里就停了）+ 末尾缺 }]
+    ["没闭合 + 缺尾括号（真实样本）", '```choices\n[{"title":"先走哪一步？","options":["只做第 1 步","两个一起跑","都不是，我另有安排"]'],
+  ];
+  for (const [name, text] of yes) {
+    assert.equal(panelOf(text), true, `该画面板：${name}`);
+  }
+
+  const no = [
+    ["```json（保险丝）", "```json\n" + bodyOk + "\n```"],
+    ["无标签围栏", "```\n" + bodyOk + "\n```"],
+  ];
+  for (const [name, text] of no) {
+    assert.equal(panelOf(text), false, `不该画面板：${name}`);
+  }
+  // 未闭合但正文是散文 → 绝不能被补成面板
+  assert.equal(panelOf("```choices\n下面这段只是说明文字，不是 JSON。"), false, "散文不画面板");
+  // 流式中仍未闭合 → 原样（不提前抢面板）
+  assert.equal(withChoiceSegments(parseSegments("```choices\n[{\"title\":\"题\",\"options\":[\"甲\",\"乙\"]}"), false).some((s) => s.kind === "choice"), false, "流式不升级");
+
+  console.log("ok 7 - 围栏写法容错（choices json / 浪加号 / 列表项 / 同行）+ 中间漏括号 + 未闭合 + json 保险丝");
+}
+
 console.log("pwa choice tests passed");

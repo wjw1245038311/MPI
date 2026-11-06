@@ -4,6 +4,22 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## Unreleased
+
+1. **同步：把选择题解析的「围栏写法容错」补齐到网页版与安卓原生**（桌面端代码本轮**未改**，
+   所以不占小版本号；上一版只做到桌面 + 主进程判定）。
+   - 网页版 `mobile/pwa`：语言标签改成「以 choices 开头即可」（`choices json` / 同行正文都能认），
+     `markdown-lite.ts` 的围栏行支持浪加号与列表项前缀，「整块没闭合」也允许走修复链（只在真修好时接管）。
+   - 安卓原生 `ChoiceLogic.kt` + `MessageContent.kt`：同上九类修复 + 四种围栏写法全部对齐
+     （含 `completeBrackets` 按层补括号、未闭合围栏可修复）。
+   - 已知差异（写进代码注释，不当 bug 改）：kotlinx 的 JSON 解析器允许「值不加引号」，
+     V8 不行——同一段坏正文桌面会丢掉那一题并计入截断，安卓会留着；
+     两端共同的要求只有「面板必须出得来、一题写坏不能拖死其它题」，用例钉的是这条。
+   验证方式：`npm run test:pwa-choice`（新增第 7 组：四种围栏写法该画、```json / 无标签不该画、
+   中间漏括号、未闭合可修）、`npm test -- pwa`（21 套件全过，markdown-lite 是共用渲染基建）、
+   `cd mobile/pwa && npx tsc --noEmit`、`cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:testDebugUnitTest :app:assembleDebug`（全绿）。
+   网页版已用 `npm run deploy-pwa` 同步到中继；**安卓 APK 本轮没有打包**（要发到手机更新通道需要你确认）。
+
 ## v0.14.10（2026-11-06）
 
 1. **修：模型「写到围栏里就停了」与「中间少一层括号」这两种选择题永远出不来**。

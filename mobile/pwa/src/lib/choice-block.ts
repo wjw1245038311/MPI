@@ -677,11 +677,15 @@ function parseChoiceBodyBoundary(body: string): ChoiceBlockData | null {
 // ---- 与 parseSegments 的集成 -------------------------------------------------
 
 /** 行尾挂着 ≥3 个反引号的行（模型把闭合围栏粘在正文末尾时）；捕获反引号之前的正文。 */
-const GLUED_CLOSE_RE = /^(.*?)`{3,}\s*$/;
+const GLUED_CLOSE_RE = /^(.*?)(?:`{3,}|~{3,})\s*$/;
+/** 正文与开围栏写在同一行（形如 ` ```choices [{"title":…}] `）：只有以 [ 或 { 开头才算正文，
+ * 否则它是第二个语言标签（`choices json` 里的 json）。与桌面端 inlineBodyHead 同规则。 */
+const INLINE_HEAD_RE = /^\S+[ \t]+([[{].*)$/;
 
-/** 精确档 lang（markdown-lite 已 trim + 小写）：`choices` 或带尾随噪声的笔误
- *  （`choices>` / `choices:`）——与桌面端 isChoicesInfoString 同一规则。 */
-const CHOICES_LANG_RE = /^choices[^a-z0-9_-]*$/;
+/** 精确档 lang（markdown-lite 已 trim + 小写）：**以 choices 这个词开头**就行（后面不紧跟字母/数字），
+ * 再往后的噪声一律忍（`choices>` / `choices json` / 同行正文）——与桌面端 isChoicesInfoString
+ * 同一规则（放宽于 2026-11-06；不含 choices 字样的 ```json 仍不算，那是误伤文档示例的保险）。 */
+const CHOICES_LANG_RE = /^choices(?![a-z0-9])/;
 /** 疑似档：以 choices 开头的其它标签（choicesjson / choices_v2 等），
  *  只有正文严格解析通过才升级成面板（不开修复链）。 */
 const CHOICES_LIKE_RE = /^choices/;
@@ -727,8 +731,11 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
       out.push(toPlainSegment(seg));
       continue;
     }
+    // 正文写在开围栏同一行时，markdown-lite 把它当成了语言标记，这里拼回正文首行。
+    const inlineHead = INLINE_HEAD_RE.exec(lang)?.[1]?.trim() ?? "";
+    const body = inlineHead ? inlineHead + "\n" + seg.text : seg.text;
     // 疑似档（标签写歪）：正文严格解析不过就维持普通代码块，不抢普通 json 块。
-    if (like && !parseChoiceBodyBoundary(seg.text)) {
+    if (like && !parseChoiceBodyBoundary(body)) {
       out.push(toPlainSegment(seg));
       continue;
     }
@@ -737,8 +744,8 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
     if (seg.closed !== false) {
       // 正文空白的 choices 围栏（如 ```choices> 后面没内容）：静默丢弃，
       // 不出空代码块 / 不给「格式不合法」警告（与桌面端同一规则，2026-10-27 实证）。
-      if (!seg.text.trim()) continue;
-      const r = parseChoiceBodyEx(seg.text);
+      if (!body.trim()) continue;
+      const r = parseChoiceBodyEx(body);
       out.push(
         r.data
           ? { kind: "choice", data: r.data, ...(r.repaired ? { repaired: true } : {}) }
@@ -748,7 +755,7 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
     }
 
     // 2) 定稿了仍未闭合：粘行闭合扫描（只接受正文能解析成合法 JSON 的边界）。
-    const lines = seg.text.split("\n");
+    const lines = body.split("\n");
     let glued = false;
     for (let k = 0; k < lines.length && !glued; k++) {
       const m = GLUED_CLOSE_RE.exec(lines[k]);
@@ -762,9 +769,18 @@ export function withChoiceSegments(segments: TextSegment[], finalized: boolean):
     }
     if (glued) continue;
 
-    // 3) 漏写闭合围栏：整体当正文（剥掉可能的行尾反引号）。
-    //    这里必须用严格边界判定（不开修复链）——否则自动补括号会把一段普通正文误当成面板。
-    const data = parseChoiceBodyBoundary(lines.join("\n").replace(/`{3,}\s*$/, ""));
+    // 3) 漏写闭合围栏（模型写到正文里就停了——真实会话里很常见，v0.14.10 实测两条都是这种）。
+    //    与桌面端同规则：正文以 [ 或 { 开头才走修复链（这种形状不可能是散文），并且
+    //    只在真修好了才接管；其余正文仍只允许严格解析，绝不把普通文字读成面板。
+    const tailText = lines.join("\n").replace(/(?:`{3,}|~{3,})\s*$/, "");
+    if (/^\s*[[{]/.test(tailText)) {
+      const r = parseChoiceBodyEx(tailText);
+      if (r.data) {
+        out.push({ kind: "choice", data: r.data, ...(r.repaired ? { repaired: true } : {}) });
+        continue;
+      }
+    }
+    const data = parseChoiceBodyBoundary(tailText);
     out.push(
       data ? { kind: "choice", data } : { kind: "code", text: seg.text, lang: seg.lang, closed: false, choiceWarn: true },
     );

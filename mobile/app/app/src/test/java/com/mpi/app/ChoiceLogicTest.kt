@@ -126,6 +126,128 @@ class ChoiceLogicTest {
         assertEquals(com.mpi.app.ui.ChoiceFailure.SHAPE, shape.failReason)
     }
 
+    // ---- JSON 修复链·第二批（2026-11-06「漏符号」四类，与桌面端 / PWA 同语料）----
+
+    /** 跑完整解析链路取面板（没有面板就报错失败）。 */
+    private fun panelOf(raw: String): Segment.Choice =
+        withChoiceSegments(parseSegments("```choices\n$raw\n```"), finalized = true)
+            .filterIsInstance<Segment.Choice>().single()
+
+    @Test
+    fun `bare object keys get their quotes back`() {
+        // ④ 历史真实坏法：键名只漏了开头那个引号（原文里剩下的那个是键名的收尾）
+        val choice = panelOf("""[{"title":"走哪步？","options":[{"label":"甲"},{"label":"乙",detail":"一句说明"}]}]""")
+        assertTrue("应标为修复救回", choice.repaired)
+        assertEquals(listOf("甲", "乙"), choice.data.questions.first().options.map { it.label })
+        // 两头都漏
+        assertEquals(
+            listOf("甲", "乙"),
+            panelOf("""[{"title":"题","options":[{label:"甲"},{label:"乙"}]}]""").data.questions.first().options.map { it.label },
+        )
+    }
+
+    @Test
+    fun `a prematurely closed options array takes its element back`() {
+        // ⑤A `],{` ——模型其实是想把选项对象当数组元素，一个选项都不能丢
+        assertEquals(
+            listOf("甲", "乙", "丙"),
+            panelOf("""[{"title":"题","options":["甲","乙"],{"label":"丙","detail":"说明"}]}]""")
+                .data.questions.first().options.map { it.label },
+        )
+    }
+
+    @Test
+    fun `a keyless member is dropped instead of sinking the block`() {
+        // ⑤B 对象里真的多了一段：丢掉它，题目保留（丢内容比丢整个面板好）
+        assertEquals(
+            listOf("甲", "乙"),
+            panelOf("""[{"title":"题",{"x":1},"options":["甲","乙"]}]""")
+                .data.questions.first().options.map { it.label },
+        )
+    }
+
+    @Test
+    fun `missing top level array brackets are completed`() {
+        // ⑥ 只写了一个问题对象 / 一串对象没包外层 / 还写到一半就断
+        val single = panelOf("""{"title":"题","options":["甲","乙"]}""")
+        assertTrue(single.repaired)
+        assertEquals(listOf("甲", "乙"), single.data.questions.first().options.map { it.label })
+        assertEquals(
+            listOf("甲题", "乙题"),
+            panelOf("""{"title":"甲题","options":["1","2"]},{"title":"乙题","options":["3","4"]}""")
+                .data.questions.map { it.title },
+        )
+        assertEquals(
+            listOf("甲", "乙"),
+            panelOf("""{"title":"题","options":["甲","乙"]""").data.questions.first().options.map { it.label },
+        )
+    }
+
+    @Test
+    fun `one broken question no longer sinks the others`() {
+        // ⑦ 逐题兜底：中间一题坏掉，其余照常出面版。
+        // 已知两端差异（不是 bug，记在这里免得下次当回归改）：本端的
+        // kotlinx Json.parseToJsonElement **允许值不加引号**（上面那题的 `"title":乙题` 能直接读出来），
+        // 而浏览器/Node 的 JSON.parse 会报错 → 桌面的处理是「丢掉那题 + 计入截断」，本端能多留一题。
+        // 共同不变量：面板必须出来、写坏了的那题不能拖死其它题。
+        val choice = panelOf("""[{"title":"甲题","options":["1","2"]},{"title":乙题,"options":["3","4"]},{"title":"丙题","options":["5","6"]}]""")
+        val titles = choice.data.questions.map { it.title }
+        assertTrue(
+            "必须保住写好那两题，实际=$titles",
+            titles.containsAll(listOf("甲题", "丙题")),
+        )
+        assertTrue(titles.size in 2..3)
+    }
+
+    @Test
+    fun `missing middle brackets and unclosed fences are repaired`() {
+        // ⑧ 中间少一层 ]（真实坏法："options":["甲","乙"}）——只往末尾补是修不出来的
+        val mid = panelOfFence("""[{"title":"题","options":["甲","乙"}]
+```""")
+        assertEquals(listOf("甲", "乙"), mid.data.questions.first().options.map { it.label })
+        // ⑨ 整块没有闭合围栏（模型写到正文里就停了，stop_reason 仍是 stop）
+        val unclosed = panelOfFence("""[{"title":"先走哪一步？","options":["只做第 1 步","两个一起跑","都不是，我另有安排"]""")
+        assertTrue("未闭合也要画面板", unclosed.data.questions.first().options.size >= 2)
+        // 散文不会被补成面板（未闭合那一档的保险）
+        val prose = withChoiceSegments(parseSegments("```choices\n下面这段只是说明文字，不是 JSON。"), finalized = true)
+        assertTrue("散文不能变面板", prose.none { it is Segment.Choice })
+    }
+
+    @Test
+    fun `sloppy fence spellings still become a panel`() {
+        val body = """[{"title":"题","options":["甲","乙"]}]"""
+        // 标签带第二个词 / 浪加号闭合 / 写在列表项里 / 正文与围栏同行
+        val yes = listOf(
+            "```choices json\n$body\n```",
+            "~~~choices\n$body\n~~~",
+            "- ```choices\n$body\n  ```",
+            "```choices $body",
+        )
+        for (text in yes) {
+            assertTrue("该画面板：$text", withChoiceSegments(parseSegments(text), finalized = true).any { it is Segment.Choice })
+        }
+        // 保险丝：不含 choices 字样的 ```json / 无标签围栏一律不画面板（文档里的示例不算选择题）
+        for (text in listOf("```json\n$body\n```", "```\n$body\n```")) {
+            assertTrue("不该画面板：$text", withChoiceSegments(parseSegments(text), finalized = true).none { it is Segment.Choice })
+        }
+    }
+
+    /** 包一层正常开围栏（测末尾/中间缺括号的正文时用）。 */
+    private fun panelOfFence(body: String): Segment.Choice = panelOfFenceRaw("```choices\n$body")
+
+    private fun panelOfFenceRaw(text: String): Segment.Choice =
+        withChoiceSegments(parseSegments(text), finalized = true).filterIsInstance<Segment.Choice>().single()
+
+    @Test
+    fun `draft placeholders are not forced into a panel`() {
+        // 反例：没有 title / options 的草稿不能因为「能补标点」就硬拼个面板
+        val code = withChoiceSegments(
+            parseSegments("```choices\n[{下一步怎么走…}, {推不推…}]\n```"),
+            finalized = true,
+        ).single() as Segment.Code
+        assertTrue(code.choiceWarn)
+    }
+
     // ---- 围栏容错 ----
 
     @Test

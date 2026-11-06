@@ -290,9 +290,17 @@ internal fun clampedChoiceNote(clamped: ChoiceClampInfo): String {
     return "此面板已截断显示：${parts.joinToString(" 与 ")}超出上限（最多 6 题、每题最多 6 个选项）。"
 }
 
-/** 按 ``` 围栏切分；未闭合的围栏按正文处理（流式过程中很常见）。 */
+/** 围栏行：三个以上反引号**或浪加号**，前面允许一个 markdown 列表符号。
+ * 两种宽忍都是模型的真实写法（`~~~` 闭合、把提问写在 `- ` 列表项里），
+ * 与 PWA markdown-lite / 桌面端 choice-block 同一口径。 */
+private val FENCE_LINE_RE = Regex("^(?:(?:[-*+]|\\d+[.)])[ \\t]+)?([`~]{3,})(.*)$")
+
+/** 文本里到底有没有围栏行（没有就一个字都不用改）。 */
+private val HAS_FENCE_RE = Regex("(?m)^[ \\t]*(?:(?:[-*+]|\\d+[.)])[ \\t]+)?[`~]{3,}")
+
+/** 按围栏切分；未闭合的围栏按正文处理（流式过程中很常见）。 */
 internal fun parseSegments(text: String): List<Segment> {
-    if (!text.contains("```")) return listOf(Segment.Body(text))
+    if (!HAS_FENCE_RE.containsMatchIn(text)) return listOf(Segment.Body(text))
     val segments = mutableListOf<Segment>()
     val buffer = StringBuilder()
     var inCode = false
@@ -301,7 +309,8 @@ internal fun parseSegments(text: String): List<Segment> {
 
     for (line in text.split("\n")) {
         val trimmed = line.trimStart()
-        val isFence = trimmed.startsWith("```")
+        val fence = FENCE_LINE_RE.matchEntire(trimmed)
+        val isFence = fence != null
         when {
             isFence && !inCode -> {
                 if (buffer.isNotEmpty()) {
@@ -309,7 +318,8 @@ internal fun parseSegments(text: String): List<Segment> {
                     buffer.clear()
                 }
                 inCode = true
-                codeLang = trimmed.removePrefix("```").trim().takeIf { it.isNotEmpty() }
+                // 信息串原样留着（choices 需要从里面取「与围栏同行的正文」），展示只取第一个词。
+                codeLang = fence!!.groupValues[2].trim().takeIf { it.isNotEmpty() }
             }
 
             isFence && inCode -> {
