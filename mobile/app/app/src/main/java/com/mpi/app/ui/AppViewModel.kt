@@ -142,6 +142,29 @@ data class AccountUi(
     val loggedIn: Boolean get() = !identifier.isNullOrEmpty()
 }
 
+/**
+ * 「待处理后续」：回合进行中先攒下来、等本回合结束再自动发的那条消息。
+ *
+ * 为什么把附件也放进暂存（2026-11-06）：以前暂存**只支持文本**，带附件时只能立刻
+ * `followUp` 发出去——用户点发送后既没看到排队横幅，附件也当场发走了。现在文本与附件
+ * 一起暂存，回合结束整条投递（附件在投递时才开始上传，和正常发送同一条路径）。
+ */
+data class PendingFollowUp(
+    val text: String = "",
+    val attachments: List<Attachment> = emptyList(),
+) {
+    val isEmpty: Boolean get() = text.isEmpty() && attachments.isEmpty()
+}
+
+/** 草稿路由（纯函数，可单测）：运行中且没有暂存 → 暂存；否则直接发。 */
+internal enum class DraftRoute { Stage, SendFollowUp, SendPrompt }
+
+internal fun routeDraft(running: Boolean, hasPending: Boolean): DraftRoute = when {
+    !running -> DraftRoute.SendPrompt
+    hasPending -> DraftRoute.SendFollowUp
+    else -> DraftRoute.Stage
+}
+
 data class AppUiState(
     val initializing: Boolean = true,
     val pairings: List<PairingRecord> = emptyList(),
@@ -199,7 +222,7 @@ data class AppUiState(
      */
     val handoffStartedAt: Long? = null,
     /** 运行中发送 → 本地暂存为「待处理后续」（null = 无）；回合结束后自动投递。 */
-    val pendingFollowUp: String? = null,
+    val pendingFollowUp: PendingFollowUp? = null,
     /** 发送 / 停止失败文案（贴输入框显示，不静默失败）。 */
     val sendError: String? = null,
     /** 主机把本条回退成 followUp 排队时的说明（非错误，只是告知为什么气泡还在发送中）。 */
@@ -1200,35 +1223,41 @@ class AppViewModel(
      */
     fun sendDraft() {
         val text = _ui.value.draft.trim()
-        val hasAttachments = _ui.value.attachments.isNotEmpty()
-        if ((text.isEmpty() && !hasAttachments) || _ui.value.sending) return
+        val stagedAttachments = _ui.value.attachments
+        if ((text.isEmpty() && stagedAttachments.isEmpty()) || _ui.value.sending) return
         _ui.update { it.copy(sendError = null) }
-        if (_ui.value.thread?.running == true) {
-            // 暂存只支持文本；带附件时直接排队（避免附件在暂存态里丢失）
-            if (_ui.value.pendingFollowUp == null && !hasAttachments) {
-                _ui.value.openThreadId?.let { drafts[it] = "" }
-                _ui.update { it.copy(pendingFollowUp = text, draft = "") }
-                return
+        val route = routeDraft(running = _ui.value.thread?.running == true, hasPending = _ui.value.pendingFollowUp != null)
+        if (route == DraftRoute.Stage) {
+            // 文本 + 附件一起暂存（2026-11-06：以前带附件只能立刻发走，用户看不到排队横幅）
+            _ui.value.openThreadId?.let { drafts[it] = "" }
+            _ui.update {
+                it.copy(
+                    pendingFollowUp = PendingFollowUp(text = text, attachments = stagedAttachments),
+                    draft = "",
+                    // 附件从输入条挪进横幅：它已经属于这一条待发消息了
+                    attachments = emptyList(),
+                    attachmentError = null,
+                )
             }
-            send(text, SendMode.FollowUp)
             return
         }
-        send(text, SendMode.Prompt)
+        send(text, if (route == DraftRoute.SendFollowUp) SendMode.FollowUp else SendMode.Prompt)
     }
 
     /** ⚡「立即插入」：把暂存的后续打断当前回合马上发（steer）。 */
     fun steerPendingFollowUp() {
-        val text = _ui.value.pendingFollowUp ?: return
+        val staged = _ui.value.pendingFollowUp ?: return
         _ui.update { it.copy(pendingFollowUp = null) }
-        // 待处理后续只有文本：别把输入条上正给下一轮准备的附件抢走
-        send(text, SendMode.Steer, includeAttachments = false)
+        // 只发**这条暂存自己**的附件；输入条上给下一轮准备的附件不许动
+        send(staged.text, SendMode.Steer, includeAttachments = false, attachmentsOverride = staged.attachments)
     }
 
     /** ✎ 取回输入框重新编辑。 */
     fun reEditPendingFollowUp() {
-        val text = _ui.value.pendingFollowUp ?: return
-        _ui.value.openThreadId?.let { drafts[it] = text }
-        _ui.update { it.copy(pendingFollowUp = null, draft = text) }
+        val staged = _ui.value.pendingFollowUp ?: return
+        _ui.value.openThreadId?.let { drafts[it] = staged.text }
+        // 附件一并退回输入条（它本来就属于这条没发出去的消息）
+        _ui.update { it.copy(pendingFollowUp = null, draft = staged.text, attachments = staged.attachments + it.attachments) }
     }
 
     fun dismissSendError() = _ui.update { it.copy(sendError = null) }
@@ -1924,9 +1953,13 @@ class AppViewModel(
 
     /** 回合结束（running true→false）：自动投递暂存的「待处理后续」。 */
     private fun flushPendingFollowUp() {
-        val text = _ui.value.pendingFollowUp ?: return
+        val staged = _ui.value.pendingFollowUp ?: return
+        if (staged.isEmpty) {
+            _ui.update { it.copy(pendingFollowUp = null) }
+            return
+        }
         _ui.update { it.copy(pendingFollowUp = null) }
-        send(text, SendMode.Prompt, includeAttachments = false)
+        send(staged.text, SendMode.Prompt, includeAttachments = false, attachmentsOverride = staged.attachments)
     }
 
     /**
@@ -2135,13 +2168,15 @@ class AppViewModel(
         clearDraft: Boolean = true,
         retried: Boolean = false,
         includeAttachments: Boolean = true,
+        /** 显式指定要发哪些附件（「待处理后续」投递自己那份）；null = 按 [includeAttachments] 取输入条。 */
+        attachmentsOverride: List<Attachment>? = null,
     ) {
         val session = threadSession ?: return
         val actions = threadActions ?: return
         // 附件：图片与文件分别按协议形状打包（主机端会逐项校验）。
         // 图片（P3）：直连上传成功的是「key + 缩略图」，未成功的是内联 base64——由
         // imagePayloads 统一组装（纯函数，单测钉住了两种形状）。
-        val pending = if (includeAttachments) _ui.value.attachments else emptyList()
+        val pending = attachmentsOverride ?: if (includeAttachments) _ui.value.attachments else emptyList()
         val images = imagePayloads(pending)
         val files = pending.filterIsInstance<Attachment.File>().map { file ->
             kotlinx.serialization.json.buildJsonObject {
@@ -2240,8 +2275,8 @@ class AppViewModel(
                 _ui.update { state ->
                     state.copy(
                         sending = false,
-                        // 没带附件的那条（choices / 待处理后续 / steer）不能清输入条上的附件
-                        attachments = if (includeAttachments) emptyList() else state.attachments,
+                        // 只有「发的是输入条里那份」才清；带 override（暂存投递）或本来不带都不动输入条
+                        attachments = if (attachmentsOverride == null && includeAttachments) emptyList() else state.attachments,
                         sendNote = sendNoteOf(result, mode),
                     )
                 }
@@ -2252,7 +2287,14 @@ class AppViewModel(
                 if (!retried && mode != SendMode.FollowUp && isBusyError(raw)) {
                     session.prepareRetry(localId)
                     _ui.update { it.copy(sending = false) }
-                    send(text, SendMode.FollowUp, clearDraft = false, retried = true, includeAttachments = includeAttachments)
+                    send(
+                        text,
+                        SendMode.FollowUp,
+                        clearDraft = false,
+                        retried = true,
+                        includeAttachments = includeAttachments,
+                        attachmentsOverride = attachmentsOverride,
+                    )
                     return@launch
                 }
                 session.markSendFailed(localId, error.message ?: "发送失败")

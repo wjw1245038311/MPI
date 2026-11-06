@@ -221,7 +221,7 @@ fun ThreadScreen(
     /** 会话节点面板状态：**手势挂在消息区那个 Box 上**（判定区域 = 消息区，不含输入框），
      *  面板本体也在这里渲染与滚动定位。 */
     nodePanel: NodePanelState,
-    pendingFollowUp: String?,
+    pendingFollowUp: PendingFollowUp?,
     sendError: String?,
     /** 主机回退成排队时的说明（非错误；气泡仍会停在「发送中」直到 pi 投递）。 */
     sendNote: String?,
@@ -610,7 +610,7 @@ private fun Composer(
     onDismissVoiceError: () -> Unit,
     voiceChatActive: Boolean,
     onStopVoiceChat: () -> Unit,
-    pendingFollowUp: String?,
+    pendingFollowUp: PendingFollowUp?,
     sendError: String?,
     /** 主机回退成排队时的说明（非错误）。 */
     sendNote: String?,
@@ -760,7 +760,12 @@ private fun Composer(
         }
 
         if (pendingFollowUp != null) {
-            PendingFollowUpBanner(text = pendingFollowUp, onReEdit = onReEditPending, onSteer = onSteerPending)
+            PendingFollowUpBanner(
+                text = pendingFollowUp.text,
+                attachmentCount = pendingFollowUp.attachments.size,
+                onReEdit = onReEditPending,
+                onSteer = onSteerPending,
+            )
         }
 
 
@@ -941,7 +946,7 @@ private fun Composer(
  * 两个动作：✎ 取回输入框重编，⚡ 立即插入（steer，打断当前回合马上处理）。
  */
 @Composable
-private fun PendingFollowUpBanner(text: String, onReEdit: () -> Unit, onSteer: () -> Unit) {
+private fun PendingFollowUpBanner(text: String, attachmentCount: Int = 0, onReEdit: () -> Unit, onSteer: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -960,7 +965,7 @@ private fun PendingFollowUpBanner(text: String, onReEdit: () -> Unit, onSteer: (
                 fontWeight = FontWeight.Medium,
             )
             Text(
-                text = "· 当前任务完成后自动发送",
+                text = if (attachmentCount > 0) "· 含 $attachmentCount 个附件 · 完成后自动发送" else "· 当前任务完成后自动发送",
                 style = MaterialTheme.typography.labelSmall,
                 color = MpiTheme.colors.textFaint,
                 maxLines = 1,

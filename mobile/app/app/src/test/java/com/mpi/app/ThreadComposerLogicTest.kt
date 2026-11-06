@@ -5,6 +5,7 @@ import com.mpi.app.protocol.MessageBlock
 import com.mpi.app.protocol.ThreadMessage
 import com.mpi.app.ui.messageTextOf
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /** 批 2：消息复制取文本的口径（长按 / 复制按钮共用）。 */
@@ -109,6 +110,37 @@ class ThreadVisibilityLogicTest {
         val visible = com.mpi.app.ui.visibleMessages(messages, showToolCalls = false, showThinking = false)
         assertEquals(1, visible.size)
         assertEquals(listOf(BlockType.Text), visible.single().blocks.map { it.type })
+    }
+}
+
+/** 草稿路由：运行中 + 带附件也必须**先进暂存**（2026-11-06 真机：带图的新消息被直接发走了）。 */
+class DraftRouteTest {
+
+    @Test
+    fun `idle always sends immediately`() {
+        assertEquals(com.mpi.app.ui.DraftRoute.SendPrompt, com.mpi.app.ui.routeDraft(running = false, hasPending = false))
+        assertEquals(com.mpi.app.ui.DraftRoute.SendPrompt, com.mpi.app.ui.routeDraft(running = false, hasPending = true))
+    }
+
+    @Test
+    fun `running without a staged message stages instead of sending`() {
+        assertEquals(com.mpi.app.ui.DraftRoute.Stage, com.mpi.app.ui.routeDraft(running = true, hasPending = false))
+    }
+
+    @Test
+    fun `running with a staged message appends to the pi queue`() {
+        assertEquals(com.mpi.app.ui.DraftRoute.SendFollowUp, com.mpi.app.ui.routeDraft(running = true, hasPending = true))
+    }
+
+    @Test
+    fun `staged follow up carries its own attachments`() {
+        val staged = com.mpi.app.ui.PendingFollowUp(
+            text = "接着改",
+            attachments = listOf(com.mpi.app.data.Attachment.WorkspaceFile(name = "a.png", path = "/w/a.png", size = 1)),
+        )
+        assertEquals(1, staged.attachments.size)
+        assertFalse("有内容就不该算空", staged.isEmpty)
+        assertFalse(com.mpi.app.ui.PendingFollowUp().isEmpty.not())
     }
 }
 
