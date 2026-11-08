@@ -9,33 +9,26 @@ import org.junit.Test
 /**
  * 「回合完成要不要出声念」的判定表。
  *
- * 现场（2026-11，真机）：锁屏后完全没声音，回前台打开 App 才补提示，回合其实早就跑完了。
- * 直接原因是电池优化没豁免（Doze 掐网络，另案已修文案）；但**即使网络正常**，播报当时也
- * 挂着「只在当前打开会话 + 只念手机发起」两把锁——锁屏场景照样一声不出，而通知照发。
- * 这里把新口径（与通知同源）钉住。
+ * 两次真机教训（见 `TurnSpeechLogic` 顶部）：
+ * 1. 2026-10-30 前只念「手机发起 + 当前打开」的回合 → 锁屏、划走、电脑发起的全静默；
+ * 2. 2026-11 第一次修时顺手沿用了通知的「正在看就跳过」口径 → **前台看着也不念了**。
+ * 用户口径很明确：**只要开着播报，跑完就念**。这里把这条钉住，防止再被「优化」掉。
  */
 class TurnSpeechLogicTest {
 
     private fun decide(
         enabled: Boolean = true,
         voiceChatActive: Boolean = false,
-        watchingThread: Boolean = false,
         inCall: Boolean = false,
         allowDuringCall: Boolean = false,
-    ) = TurnSpeechLogic.decide(enabled, voiceChatActive, watchingThread, inCall, allowDuringCall)
+    ) = TurnSpeechLogic.decide(enabled, voiceChatActive, inCall, allowDuringCall)
 
     @Test
-    fun `锁屏没看着这个会话：要念（本次修复的核心场景）`() {
-        val d = decide(watchingThread = false)
+    fun `前台打开着会话、跑完就念（2026-11 回归点：不能被「正在看」跳过）`() {
+        // 判定里根本没有「watching」这个入参——这条测试同时钉住「别再把它加回来」。
+        val d = decide()
         assertTrue(d.speak)
         assertEquals("已播报", d.reason)
-    }
-
-    @Test
-    fun `前台但正在看这条会话：不念`() {
-        val d = decide(watchingThread = true)
-        assertFalse(d.speak)
-        assertEquals("跳过：正在看这个会话", d.reason)
     }
 
     @Test
@@ -68,15 +61,14 @@ class TurnSpeechLogicTest {
 
     @Test
     fun `优先级：设置关掉时盖过一切其它理由`() {
-        // 同时满足「语音模式开 + 通话中 + 正在看」——理由应该只报最外层的那条。
-        val d = decide(enabled = false, voiceChatActive = true, watchingThread = true, inCall = true)
+        val d = decide(enabled = false, voiceChatActive = true, inCall = true)
         assertFalse(d.speak)
         assertEquals("跳过：设置里已关闭语音播报", d.reason)
     }
 
     @Test
-    fun `优先级：语音模式盖过正在看与通话`() {
-        val d = decide(voiceChatActive = true, watchingThread = true, inCall = true)
+    fun `优先级：语音模式盖过通话中`() {
+        val d = decide(voiceChatActive = true, inCall = true)
         assertFalse(d.speak)
         assertEquals("跳过：语音对话模式自己会念", d.reason)
     }
