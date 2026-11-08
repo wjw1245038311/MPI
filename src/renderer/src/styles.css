@@ -2430,31 +2430,6 @@ body.sidebar-resizing * {
 .thinking-dots i:nth-child(2) { animation-delay: 0.2s; }
 .thinking-dots i:nth-child(3) { animation-delay: 0.4s; }
 
-/* 「等你回复」提示条（`lib/awaiting-reply.ts`）：回合已经停下、而末条回复正在提问时出现。
-   纯展示兜底，不拦截任何交互；误显示只是多一条弱提示。颜色全用 token（`--accent-soft`
-   / `--border` / `--accent` 均有暗色版，所以暗色自动跟随，不另写一套），三端视觉一致。 */
-.awaiting-reply {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  align-self: flex-start;
-  margin-top: -6px;
-  padding: 5px 11px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-dim);
-  background: var(--accent-soft);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-}
-.awaiting-reply-dot {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-
 /* ---------- composer ---------- */
 .composer-wrap {
   padding: 8px 28px 18px;

@@ -6,7 +6,28 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 ## Unreleased
 
-1. **改（安卓）：语音播报改成与「对话完成」通知同口径——锁屏/没打开该会话/电脑发起的回合都会念了**。
+1. **删：「等你回复 —— 上一轮停在这里，还没结束」提示条（桌面 / 网页版 / 安卓三端一起下掉）**。
+   这条是 2026-10-30（v0.13.6）加的纯展示兜底，起因是一次真实现场：模型干完活以正文
+   「…等你对第 4 条的意见」收尾，会话文件干净（`stopReason=stop`），界面与「做完」一模一样，
+   用户 7 小时后才发现任务停在等签字。当时的判据是启发式的——只看**末条回复尾部 400 字**：
+   以 `?` / `？` 结尾，或含「等你 / 待你 / 请确认 / let me know」等 11 个固定词，就显示提示。
+   真机用下来两个问题都坐实了：**该报的不报**（换个说法「需要我继续吗」就漏）、
+   **不该报的乱报**（正常汇报里带个问号语气就挂上），v0.14.1 为此还加过「点一下隐藏」，
+   仍然「出现时机没有规律」。而这条提示要兜的信息，现在已经被更可靠的信号覆盖：
+   「对话完成」通知 + 语音播报（上一轮刚统一口径，按快照轮询判定，不依赖回复文本的写法），
+   以及提示词侧要求「需要用户决策时用 choices 面板收尾」。
+   本次删除：桌面 `src/renderer/src/lib/awaiting-reply.ts` + `Chat.tsx` 里的判定与渲染 +
+   `styles.css` 的 `.awaiting-reply*`；网页版 `mobile/pwa/src/lib/awaiting-reply.ts` +
+   `ThreadView.tsx` + `styles.css` 同样三处；安卓 `ui/AwaitingReplyLogic.kt`、`AwaitingReplyLogicTest.kt`、
+   `ThreadScreen.kt` 的提示行与「可隐藏」状态（顺带把贴底计算里的尾部 item 计数还原成只剩思考占位）。
+   测试脚本 `scripts/test-awaiting-reply.mjs`（含三端 parity 断言）一并删除。
+   验证方式：`npm run typecheck` + `npm run build` + `cd mobile/pwa && npx tsc --noEmit` +
+   `cd mobile/app && JAVA_HOME=<MyWorkspace>/Software/jdk21 ./gradlew :app:compileDebugKotlin :app:testDebugUnitTest`
+   全绿；`rg "awaiting-reply|looksAwaitingReply"` 应无残留引用（changelog 历史条目除外）。
+   应用内：桌面 `Ctrl+R`、手机装新包后打开一个以问句收尾的历史会话 → 消息列底部不再出现该胶囊，
+   其余布局与贴底行为不变。
+
+2. **改（安卓）：语音播报改成与「对话完成」通知同口径——锁屏/没打开该会话/电脑发起的回合都会念了**。
    旧实现有两把锁，叠在一起就把「锁屏等结果」这个主场景完全排除在外：① 播报挂在**当前打开会话**
    的 `running true→false` 回调上（`AppViewModel` 的 `threadSession.view.collect`），锁屏 / 划走 /
    没打开那条会话就收不到；② 只念 `phoneTurnStarted` 为真的回合，电脑端发起的永远不念。
@@ -26,7 +47,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    ③ 长按麦克风进语音对话模式 → 该模式自己念，不会念两遍；④ 设置 → 诊断 →「完成通知」应同时
    写出通知与播报的判定理由。
 
-2. **修（安卓）：设置里「后台保活」文案读反——「已允许电池优化」其实表示已豁免，用户照着反向操作后锁屏播报全哑**。
+3. **修（安卓）：设置里「后台保活」文案读反——「已允许电池优化」其实表示已豁免，用户照着反向操作后锁屏播报全哑**。
    2026-11 用户实测：锁屏后完全没声音，回前台打开 App 才补提示（回合其实早就跑完），活跃状态正常。
    根因是系统侧把本应用**加进了**电池优化名单（Doze / App Standby 在后台推迟网络，`PARTIAL_WAKE_LOCK`
    也不豁免——见 `data/KeepAliveGuide.kt` 顶部注释的 2026-09-26 真机实测），连接被掐 → 收不到
