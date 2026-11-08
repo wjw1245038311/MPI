@@ -171,8 +171,8 @@ fun SettingsScreen(
                     },
                     onClick = { onAccountDialog(true) },
                 )
-                // 「对话完成」提醒：只在**后台/锁屏**且回合是**手机自己发起**时发。
-                // 前台盯着屏幕看回复时不打扰；桌面发起的回合也不响（用户确认的口径）。
+                // 「对话完成」提醒：只在**后台/锁屏**时发（判定见 Notifier.shouldNotifyTurnComplete）。
+                // 前台盯着屏幕看回复时不打扰；不区分回合是谁发起的（飞书已读口径）。
                 SettingsItem(
                     icon = IconCheck,
                     title = "对话完成后通知",
@@ -180,6 +180,7 @@ fun SettingsScreen(
                     onClick = { onNotifyOnTurnComplete(!settings.notifyOnTurnComplete) },
                 )
                 // 完成后出声念一句：固定语或回复摘要（见下一条）；
+                // 触发口径与上面的通知一致（没在看那条会话就叫），且语音对话模式自己会念时不重复。
                 // 引擎/中文语音包缺失时静默降级为「只发通知」。
                 SettingsItem(
                     icon = IconMic,

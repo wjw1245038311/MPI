@@ -90,15 +90,18 @@ data class AppSettings(
      * 手机发起的回合在**后台/锁屏**跑完时发系统通知。默认开。
      *
      * 手机上「发完就揣起来」是主场景，不给提示根本不知道跑完没有；
-     * 前台盯着屏幕看、以及桌面发起的回合都不打扰（判定见 `Notifier.shouldNotifyTurnComplete`）。
+     * 前台盯着屏幕看该会话时不打扰（判定见 `Notifier.shouldNotifyTurnComplete`）。
+     * 2026-11 起不区分回合是谁发起的（飞书已读口径）。
      */
     val notifyOnTurnComplete: Boolean = true,
     /**
      * 「对话完成」时**念一句**（系统 TTS；念什么由 [voiceSpeechContent] 决定）。默认开。
      *
-     * 触发条件与 [notifyOnTurnComplete] **不同**：通知走飞书已读口径（不区分谁发起，
-     * 只看有没有在看着该会话）；出声更打扰，所以语音只念**手机发起的回合**，且挂在
-     * 当前打开会话的 running→false 回调上。引擎缺失 / 中文语音包没装时静默降级为「只发通知」。
+     * 2026-11 起触发口径与 [notifyOnTurnComplete] **一致**：快照轮询发现回合跑完、
+     * 且用户没在看着该会话，就念（判定见 `TurnSpeechLogic`）。不再限定「手机发起的回合」、
+     * 也不再要求「该会话正打开着」——旧规则导致锁屏时一声不出（而通知照发）。
+     * 语音对话模式（长按麦克风）自己会播报回复，那时不重复念。
+     * 引擎缺失 / 中文语音包没装时静默降级为「只发通知」。
      */
     val speakTurnComplete: Boolean = true,
     /** 播报念什么：固定语 / 回复摘要（仅在 [speakTurnComplete] 开着时有意义）。 */

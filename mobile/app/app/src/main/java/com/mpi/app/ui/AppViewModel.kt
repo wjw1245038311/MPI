@@ -346,10 +346,11 @@ class AppViewModel(
     /** 是否有任务正在跑（决定入队时要不要拉起 drain）。 */
     private var uploadRunning = false
     /**
-     * 本回合是**手机自己发起**的吗？发送成功后置起，回合结束时消费掉。
-     * 「对话完成」通知只对手机发起的回合发——桌面发起的没必要响（见 [notifyTurnComplete]）。
+     * 本回合是否由**手机自己发起**（发送成功后置起）。
+     *
+     * 2026-11 起「对话完成」通知与语音播报都**不再看它**（改为飞书已读口径：没看着就叫），
+     * 保留仅作诊断/未来用途，避免又有人把旧语义写回来。
      */
-    /** 手机发起的回合（只给语音播报用：电脑端发起的回合不念）。 */
     private var phoneTurnStarted = false
 
     /** 上一轮各会话的状态：用来发现「刚跑完」的会话（见 [notifyFinishedTurns]）。 */
@@ -1068,7 +1069,8 @@ class AppViewModel(
                     // 判定里因「语音模式中」跳过，避免一句回复念两遍。
                     voiceSettle?.complete(Unit)
                     voiceSettle = null
-                    speakTurnComplete(view)
+                    // 语音播报**不在这里**：只覆盖「当前打开的会话」会漏掉锁屏/未打开的场景，
+                    // 统一挪到 notifyFinishedTurns（与通知同源，见 TurnSpeechLogic）。
                     // 回合结束：后台保活 wakelock 一并放掉（未持有时是 no-op）
                     turnWakeLock.release()
                     flushPendingFollowUp()
@@ -1963,28 +1965,14 @@ class AppViewModel(
     }
 
     /**
-     * 回合结束时的**语音播报**（完成通知不在这里了——它由列表轮询驱动，见 [notifyFinishedTurns]）。
+     * 回合结束时的语音播报**已挪到** [notifyFinishedTurns]（2026-11）。
      *
-     * 只念「手机发起的回合」：电脑端发起的回合在电脑前跑完，手机念一遍很吵
-     * （通知不设这个限制——没看着就该叫一下，但**出声念**更打扰，口径不同）。
+     * 旧实现在这里做两件判断，都已被证明会漏掉真实场景：
+     * ① 只挂在**当前打开会话**的 running→false 上 → 锁屏 / 划走 / 没打开那条会话就收不到；
+     * ② 只念**手机发起**的回合（`phoneTurnStarted`）→ 电脑发起的回合永远不念。
+     * 两条叠在一起，真机表现就是「锁屏后完全没声音，回前台才补」，而通知照发。
+     * 现口径与通知同源（见 [TurnSpeechLogic]），判定理由直接打到诊断页。
      */
-    private fun speakTurnComplete(view: ThreadView) {
-        val phoneInitiated = phoneTurnStarted
-        phoneTurnStarted = false
-        if (!phoneInitiated) return
-        if (_ui.value.voiceChat != null) return // 语音模式自己会播报回复
-        val settings = settingsStore.settings.value
-        if (!settings.speakTurnComplete) return
-        // 通话中（含微信 VoIP）系统会把 TTS 压掉，念了也是白念，还可能被通话对方听到 →
-        // 默认跳过；用户在设置里开了「通话中也播报」就照样试一把。
-        if (speaker.inCall() && !settings.speakDuringCall) return
-        val title = view.summary?.title
-        val reply = view.messages.lastOrNull { it.role == "assistant" }?.let { messageTextOf(it) }
-        speaker.speak(
-            Notifier.turnCompleteSpeech(settings.voiceSpeechContent, title, reply, settings.voiceFixedPhrase),
-            allowDuringCall = settings.speakDuringCall,
-        )
-    }
 
     /**
      * 「飞书已读」式的完成通知：**只看会话状态，不区分谁发起的回合**。
@@ -1996,6 +1984,10 @@ class AppViewModel(
      *
      * 现在看**主机列表快照**（连接在线时每 5 秒轮询一次）：上一轮还在 Running、这一轮不在了的
      * 会话就是「刚跑完」。正在看这个会话才不打扰（炨屏/锁屏也算离开，见 [AppVisibility]）。
+     *
+     * 2026-11 起**语音播报也走这里**：原先挂在当前打开会话的 running→false 回调上，
+     * 锁屏 / 没打开那条会话就一声不出（而通知照发），真机表现为「只有通知没声音」。
+     * 判定见 [TurnSpeechLogic]。
      */
     private fun notifyFinishedTurns(snapshot: HostSnapshot) {
         val states = snapshot.allThreads.associate { it.id to it.state }
@@ -2011,17 +2003,42 @@ class AppViewModel(
         val stamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
         finished.forEach { thread ->
             val watching = watchingThreadId == thread.id
-            val reason = when {
+            val notifyReason = when {
                 !settings.notifyOnTurnComplete -> "跳过：设置里已关闭"
                 watching -> "跳过：正在看这个会话"
                 else -> "已通知"
             }
-            _ui.update { it.copy(lastTurnNotify = "$reason（${AppVisibility.detail()} · $stamp）") }
+            // 出声念：与通知同口径（没看着就叫一声），但另受语音开关 / 语音对话模式 / 通话中约束
+            val speech = TurnSpeechLogic.decide(
+                enabled = settings.speakTurnComplete,
+                voiceChatActive = _ui.value.voiceChat != null,
+                watchingThread = watching,
+                inCall = speaker.inCall(),
+                allowDuringCall = settings.speakDuringCall,
+            )
+            // 诊断页留痕：通知与播报的判定合在一行——「设了却没声音」不用再猜是哪一环咽掉的
+            _ui.update {
+                val line = "$notifyReason · 播报${speech.reason}"
+                it.copy(lastTurnNotify = "$line（${AppVisibility.detail()} · $stamp）")
+            }
             if (Notifier.shouldNotifyTurnComplete(settings.notifyOnTurnComplete, watching)) {
                 notifier.notifyTurnComplete(
                     thread.id,
                     thread.title,
                     Notifier.turnCompleteText(thread.preview, null),
+                )
+            }
+            if (speech.speak) {
+                // 轮询里只能拿到列表摘要（没有完整回复正文），「回复摘要」模式就念它；
+                // 洗文本（去代码围栏、压平空白、截 60 字）与之前完全同一个函数。
+                speaker.speak(
+                    Notifier.turnCompleteSpeech(
+                        settings.voiceSpeechContent,
+                        thread.title,
+                        thread.preview,
+                        settings.voiceFixedPhrase,
+                    ),
+                    allowDuringCall = settings.speakDuringCall,
                 )
             }
         }
@@ -2292,8 +2309,7 @@ class AppViewModel(
             runCatching { session.ensureSubscribed() }
             try {
                 val result = actions.send(text + workspaceEnvelopes, mode, images, files, videos, media)
-                // 手机发起的回合：现在只影响「是否语音播报」（完成通知与谁发起无关，见
-                // notifyFinishedTurns 的飞书已读口径）。
+                // 手机发起的回合标记（播报/通知都已不看它，见 notifyFinishedTurns）
                 phoneTurnStarted = true
                 // 发送成功才清附件；失败要留在输入条上让用户重发，不能把附件吞掉
                 if (pending.isNotEmpty()) {
