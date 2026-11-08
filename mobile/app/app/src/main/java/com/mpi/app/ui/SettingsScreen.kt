@@ -217,10 +217,13 @@ fun SettingsScreen(
                 )
                 // 系统白名单：Doze/App Standby 会在后台推迟网络（连 wakelock 也不豁免），
                 // 只靠前台服务不够——这是「后台断连、回前台才补播报」的治本项。
+                // 文案不能写「已允许电池优化」——那读起来像「优化已开启」，正好是反的
+                // （2026-11 用户踩过：以为要把优化开着才算保活，结果锁屏后连接被 Doze 掐掉，
+                // 播报要回前台才补）。这里要表达的是「本应用已**豁免**优化」。
                 SettingsItem(
                     icon = null,
                     title = "后台保活（推荐开启）",
-                    trailing = if (batteryWhitelisted) "已允许电池优化" else "去设置",
+                    trailing = if (batteryWhitelisted) "已豁免电池优化" else "未豁免 · 去设置",
                     onClick = { keepAliveDialog = true },
                 )
                 // 「语言」条目已删：原生端全量中文硬编码，没有任何可选项，
@@ -386,8 +389,8 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        "菜单名随 ROM 版本略有不同。「忽略电池优化」只防 Doze（长时间锁屏），" +
-                            "对切后台就断这种情况无效，可以先不做。",
+                        "点「电池优化」按提示允许即可；若仍是「未豁免」，去系统设置里把本应用从" +
+                            "「受限 / 智能省电」名单里划掉。",
                         color = MpiTheme.colors.textFaint,
                     )
                 }
@@ -405,6 +408,8 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = {
                     keepAliveDialog = false
+                    // 未豁免 → 直接弹系统请求；已豁免 → 只能去列表页自己确认（列表页
+                    // 无权改本应用的开关，但能让人看清当前状态）。
                     val intent = if (batteryWhitelisted) {
                         KeepAliveGuide.batteryOptimizationSettings()
                     } else {
