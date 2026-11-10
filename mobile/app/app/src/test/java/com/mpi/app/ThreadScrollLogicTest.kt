@@ -1,6 +1,7 @@
 package com.mpi.app
 
 import com.mpi.app.ui.nextFollowing
+import com.mpi.app.ui.shouldKeepPinning
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -34,5 +35,26 @@ class ThreadScrollLogicTest {
     fun `programmatic forward scroll keeps the intent`() {
         assertEquals(true, nextFollowing(current = true, scrolling = true, scrolledBackward = false, canScrollForward = true))
         assertEquals(false, nextFollowing(current = false, scrolling = true, scrolledBackward = false, canScrollForward = true))
+    }
+
+    // ---- 贴底收敛（内容测量晚于滚动）-----------------------------------------
+
+    @Test
+    fun `pinning continues while there is still room below`() {
+        // 滚了一次仍有下滚余量（新块测量完才出现）→ 下一帧继续补，否则会停在半路
+        assertEquals(true, shouldKeepPinning(following = true, canScrollForward = true, framesLeft = 7))
+    }
+
+    @Test
+    fun `pinning stops at the real bottom`() {
+        assertEquals(false, shouldKeepPinning(following = true, canScrollForward = false, framesLeft = 7))
+    }
+
+    @Test
+    fun `pinning stops when the user takes over or the budget runs out`() {
+        // 用户往回滚 → following 变 false，必须立刻让位，不能把他拽回底部
+        assertEquals(false, shouldKeepPinning(following = false, canScrollForward = true, framesLeft = 7))
+        // 帧数上限：内容一直长也不能无限补（会吃满帧预算）
+        assertEquals(false, shouldKeepPinning(following = true, canScrollForward = true, framesLeft = 0))
     }
 }

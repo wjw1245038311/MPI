@@ -77,6 +77,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -299,14 +300,22 @@ fun ThreadScreen(
     // 只看最后一块的长度会漏掉「变的不是最后一块」（如工具结果回填）。
     val streamLength = view.streaming?.blocks?.sumOf { it.text?.length ?: 0 } ?: 0
     LaunchedEffect(display.size, streamLength, showThinkingPlaceholder) {
-        if (following && display.isNotEmpty()) {
-            // 必须用大 offset 真滚到底：scrollToItem(lastIndex) 只是把最后一条的“顶部”
-            // 对齐视口，最后一条很长时仍可下滚，atBottom 就永远为 false（按钮不消失）。
-            // 占位行是 display 之外的第 size 个 item，贴底得滚到它（尾部有几种就加几项）。
-            val tailItems = if (showThinkingPlaceholder) 1 else 0
-            val lastItem = if (tailItems > 0) display.size + tailItems - 1 else display.lastIndex
+        if (!following || display.isEmpty()) return@LaunchedEffect
+        // 必须用大 offset 真滚到底：scrollToItem(lastIndex) 只是把最后一条的“顶部”
+        // 对齐视口，最后一条很长时仍可下滚，atBottom 就永远为 false（按钮不消失）。
+        // 占位行是 display 之外的第 size 个 item，贴底得滚到它（尾部有几种就加几项）。
+        val tailItems = if (showThinkingPlaceholder) 1 else 0
+        val lastItem = if (tailItems > 0) display.size + tailItems - 1 else display.lastIndex
+        // 只滚一次会停在半路：新的内容块当帧还没测量，Int.MAX_VALUE 只能滚到「已知高度」的底，
+        // 测量完成后余量才出现 → 视觉上先停在上一条，等下一批 delta 才被拉下去
+        // （与桌面端「分段回跳」同一病根）。这里收敛：每次滚到底后等下一帧测量生效，
+        // 只要还在跟随且仍能往下滚就再补一次，直到到底 / 用户接管 / 到达帧数上限。
+        var frames = PIN_FRAMES
+        do {
             listState.scrollToItem(lastItem, Int.MAX_VALUE)
-        }
+            withFrameNanos { }
+            frames--
+        } while (shouldKeepPinning(following, listState.canScrollForward, frames))
     }
 
     // safeDrawingPadding：同时避让状态栏（截图里标题被时间压住）、手势条与键盘
@@ -1198,6 +1207,19 @@ internal fun nextFollowing(
     !canScrollForward -> true
     else -> current
 }
+
+/** 贴底收敛的帧数上限：一次内容变化最多补这么多帧（8 帧 ≈ 130ms @60fps）。 */
+internal const val PIN_FRAMES = 8
+
+/**
+ * 贴底收敛：这次滚完之后还要不要继续补。
+ *
+ * LazyColumn 的 `scrollToItem(last, Int.MAX_VALUE)` 只能滚到**已测量**的高度，新插入的内容块
+ * 当帧还没测量，所以单次调用会停在半路（视觉上「先停在上一条、下一批 delta 才被拉下去」）。
+ * 每帧滚一次、等一帧测量，直到真的到底、用户接管（following 被置 false）或到达帧数上限。
+ */
+internal fun shouldKeepPinning(following: Boolean, canScrollForward: Boolean, framesLeft: Int): Boolean =
+    following && canScrollForward && framesLeft > 0
 
 @Composable
 private fun ScrollToBottomButton(
