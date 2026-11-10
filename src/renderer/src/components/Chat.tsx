@@ -80,6 +80,8 @@ export function Chat() {
   const renameThread = useStore((s) => s.renameThread);
   const switchThreadFolder = useStore((s) => s.switchThreadFolder);
   const scrollRef = useRef<HTMLDivElement>(null);
+  /** transcript 容器（.messages）：贴底收敛用它观察高度变化，见下面的 ResizeObserver。 */
+  const messagesRef = useRef<HTMLDivElement>(null);
   const scrollPositionsRef = useRef<
     Map<string, { top: number; max: number; stick: boolean; anchor?: { key: string; index: number; delta: number } }>
   >(new Map());
@@ -333,6 +335,33 @@ export function Chat() {
   // Length of the last streaming block's content. blocks.length only changes
   // when a NEW block starts; without this, text/thinking deltas inside one
   // block never re-run the effect and long replies stop following the bottom.
+  // 贴底收敛（绘制前纠偏）：高度变化多半发生在 React 提交**之后**——
+  //   · content-visibility 从 420px 估算解析成真实高度（分段渲染 / 首帧布局）；
+  //   · 一段结束时 streaming 消息被 final 消息替换、锁定态解除，该组重排；
+  //   · Markdown / 代码高亮 / 图片增量布局。
+  // 以前只在提交时写一次 scrollTop，这些后续变化没人补：浏览器把 scrollTop 钳到
+  // 收缩后的新底部（视口退回上一条消息），下一段 delta 到达才被拉回底部——
+  // 用户看到的就是「每轮先退回上一个节点，再拉到最新」，轮次越多拉扯越多。
+  // ResizeObserver 回调在布局后、绘制前，能**同一帧**补齐，中间态不会被画出来。
+  useEffect(() => {
+    const host = messagesRef.current;
+    const scroller = scrollRef.current;
+    if (!host || !scroller) return;
+    const pin = () => {
+      // 阅读历史 / 正在滚动手势 / 切会话恢复期：一律让位，不抢位置。
+      if (!stickRef.current || isRestoring() || hasScrollGesture()) return;
+      const max = scroller.scrollHeight - scroller.clientHeight;
+      if (max - scroller.scrollTop <= 1) return;
+      scroller.scrollTop = max;
+      lastScrollTopRef.current = scroller.scrollTop; // 程序化写入：不算用户意图
+      setAtBottom(true);
+    };
+    const ro = new ResizeObserver(pin);
+    ro.observe(host);
+    return () => ro.disconnect();
+    // tuiMode 会在普通聊天区 / 终端之间整体替换 .messages，必须重挂观察器。
+  }, [activeThreadId, tuiMode]);
+
   const streamTailLen = (() => {
     const blocks = streaming?.blocks;
     if (!blocks || blocks.length === 0) return 0;
@@ -384,7 +413,9 @@ export function Chat() {
         stickRef.current = true;
         setAtBottom(true);
         const frame = requestAnimationFrame(() => {
-          el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+          // 直接贴底，不做平滑动画：这段动画与随后每段 delta 的即时写入抢同一个
+          // 滚动位置，两股力方向相反时正是「先退回上一节点、再拉到最新」。
+          el.scrollTop = el.scrollHeight;
         });
         return () => cancelAnimationFrame(frame);
       }
@@ -1114,9 +1145,15 @@ Right-click: switch working folder`
       ) : (
         <>
           <div className="chat-stage">
-            <div className="chat-scroll" ref={scrollRef} onScroll={handleUserScroll} onWheel={handleWheel}>
+            <div
+              className={`chat-scroll${atBottom ? " sticking" : ""}`}
+              ref={scrollRef}
+              onScroll={handleUserScroll}
+              onWheel={handleWheel}
+            >
           <div
             className={`messages${restoring ? " no-cv" : ""}`}
+            ref={messagesRef}
           >
             {headGroups.map((g) =>
               g.role === "compaction" ? (

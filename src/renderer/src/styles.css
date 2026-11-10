@@ -934,6 +934,14 @@ body.sidebar-resizing * {
   overflow-y: auto;
   padding: 22px 0 8px;
 }
+/* 贴底跟随时关掉浏览器滚动锚定（scroll anchoring）：锚定的补偿与「程序化贴底」
+   互相打架——上方内容（思考块 / 工具卡 / content-visibility 从估算高度变真实高度）
+   一变，锚定就把视口拽回上一条消息，随后贴底又把人拉回底部。用户看到的就是
+   「每轮先退回上一个节点、再拉到最新」。阅读历史（非贴底）时仍保留锚定，
+   免得长会话上方变高时位置漂移。 */
+.chat-scroll.sticking {
+  overflow-anchor: none;
+}
 .messages {
   /* No max-width — the message column follows the window width when
      stretched (same as .composer below). */
