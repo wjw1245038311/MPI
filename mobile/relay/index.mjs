@@ -40,7 +40,7 @@
  *   明文侧同样服务 `/ws` 与 `/download/*`，于是手机的「控制通道」和「更新下载」都不再依赖 Tailscale。
  */
 import { dirname, extname, join, resolve, sep } from "node:path";
-import { createAccountApi } from "./account.mjs";
+// account.mjs **不在这里静态 import**：可选模块缺文件会把整个进程拖死，见下面装载它的注释。
 import { fileURLToPath } from "node:url";
 import http from "node:http";
 import https from "node:https";
@@ -467,15 +467,32 @@ function readJsonBody(req, limit = 8 * 1024) {
  * 所以不需要新端口、不需要动安全组。
  *
  * 目录：RELAY_ACCOUNT_DIR（默认 /opt/mpi-account）。禁用：RELAY_ACCOUNT_DISABLED=1。
+ *
+ * **为什么是 `await import()` + try/catch，不是静态 import**（2026-11-12，minibox 报 v0.14.6
+ * 起的安装包里没有 account.mjs）：静态 import 的模块解析发生在任何代码执行之前，缺文件 =
+ * local-relay 启动即 ERR_MODULE_NOT_FOUND 退出，连既有的 RELAY_ACCOUNT_DISABLED 开关都救不了——
+ * 一个可选模块（账号同步）把主功能（配对 / 帧路由 / 附件下载）一起拖垮了。装载失败时只记一行
+ * 告警并把 `/acct/*` 退化为不挂载。构造同样要包住：AccountStore 会立刻 mkdirSync 数据目录，
+ * 目标目录不可写时也不该让中继起不来。
  */
-const accountApi = process.env.RELAY_ACCOUNT_DISABLED === "1"
-  ? null
-  : createAccountApi({
+async function loadAccountApi() {
+  if (process.env.RELAY_ACCOUNT_DISABLED === "1") return null;
+  try {
+    const { createAccountApi } = await import("./account.mjs");
+    return createAccountApi({
       dir: process.env.RELAY_ACCOUNT_DIR || "/opt/mpi-account",
       readBody: readJsonBody,
       clientIp,
       log,
     });
+  } catch (error) {
+    const reason = String(error?.code || error?.name || error || "unknown").slice(0, 60);
+    log(`WARN account api 未挂载（${reason}）——/acct/* 返回 404，其余功能不受影响`);
+    return null;
+  }
+}
+
+const accountApi = await loadAccountApi();
 
 /** 检查结果：ok / 拒因（调用方负责回错并断开）；`token` = 命中的授权码（空 = 开放模式）。 */
 function checkHostAuth(frame) {

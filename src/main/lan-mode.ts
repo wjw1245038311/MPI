@@ -204,6 +204,38 @@ export interface StartLocalRelayOptions {
 }
 
 /**
+ * 子进程输出 → 逐行应到应用日志。
+ *
+ * 为什么要专门写一个：以前是 `chunk.toString().trim().slice(0, 160)`——一次 data 事件里可能含多行，
+ * 而 Node 的错误（ERR_MODULE_NOT_FOUND）是一叠四行堆栈，整段截断正好把带文件名的那行腰砍；
+ * 并且 data 事件会在行中间断开，单行也可能被切坏。这里按换行切分、未完整的行暂存起来，
+ * 单行上限留到 2000（足够包含完整路径与错句）。
+ */
+export function makeChildLineLogger(
+  emit: (line: string) => void,
+  prefix: string,
+  lineLimit = 2_000,
+): ((chunk: unknown) => void) & { flush: () => void } {
+  let pending = "";
+  const logger = (chunk: unknown): void => {
+    const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk ?? "");
+    const parts = (pending + text).split(/\r?\n/);
+    pending = parts.pop() ?? "";
+    for (const raw of parts) {
+      const line = raw.trim();
+      if (line) emit(`${prefix} ${line.slice(0, lineLimit)}`);
+    }
+  };
+  // 进程退出时最后一行往往没得追的换行符，手动清尾，否则丢的正好是总结性的一句。
+  logger.flush = (): void => {
+    const line = pending.trim();
+    pending = "";
+    if (line) emit(`${prefix} ${line.slice(0, lineLimit)}`);
+  };
+  return logger;
+}
+
+/**
  * 起一个本机中继子进程。
  *
  * **TLS（2026-10-16 起可选）**：配了证书后，主监听改到 `tlsPort`（默认 9443，自签证书、绑 0.0.0.0，
@@ -279,9 +311,18 @@ export function startLocalRelay(options: StartLocalRelayOptions): LocalRelayHand
   } catch (error) {
     return { ...empty, status: { ...base, lastError: String((error as Error)?.message || error).slice(0, 120) } };
   }
-  child.stdout?.on("data", (chunk: Buffer) => log(`local-relay ${chunk.toString().trim().slice(0, 160)}`));
-  child.stderr?.on("data", (chunk: Buffer) => log(`local-relay ! ${chunk.toString().trim().slice(0, 160)}`));
-  child.on("exit", (code) => log(`local-relay exited code=${code}`));
+  // 子进程输出按**行**转发：Node 的 ERR_MODULE_NOT_FOUND 是一段四行堆栈，整段 slice 会把最关键的那行路径截成
+  // “Cannot find module 'C:\MyWorkspace\Agen”——minibox 只能靠比对安装目录前缀反推缺哪个文件（2026-11-05 来信）。
+  const relayLog = makeChildLineLogger(log, "local-relay");
+  const relayErrLog = makeChildLineLogger(log, "local-relay !");
+  child.stdout?.on("data", relayLog);
+  child.stderr?.on("data", relayErrLog);
+  child.on("exit", (code) => {
+    // 退出前把最后一行没有换行符的输出补上，否则最后一句日志会被静丢掉。
+    relayLog.flush();
+    relayErrLog.flush();
+    log(`local-relay exited code=${code}`);
+  });
 
   const url = advertiseLan && picked ? lanRelayUrl(picked.address, port) : null;
   log(

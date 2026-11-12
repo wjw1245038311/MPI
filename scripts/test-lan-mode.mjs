@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-const { LAN_ATTACHMENT_PORT, LAN_RELAY_PORT, lanAttachmentBase, lanRelayUrl, localRelayUrl, pickLanAddress, resolveLanRelayEntry, startLanRelay, startLocalRelay } =
+const { LAN_ATTACHMENT_PORT, LAN_RELAY_PORT, lanAttachmentBase, lanRelayUrl, localRelayUrl, makeChildLineLogger, pickLanAddress, resolveLanRelayEntry, startLanRelay, startLocalRelay } =
   await import("../src/main/lan-mode.ts");
 
 const iface = (name, address, internal = false) => [name, [{ address, family: "IPv4", internal, netmask: "255.255.255.0", mac: "00:00:00:00:00:00", cidr: `${address}/24` }]];
@@ -256,6 +256,48 @@ const ifaces = (...entries) => Object.fromEntries(entries);
     "本机中继的 VAPID 密钥必须落在 userData 下",
   );
   console.log("ok 7 - VAPID 密钥与静态目录：显式注入子进程，密钥落 userData");
+}
+
+// ---- 8. 子进程日志逐行转发（minibox 2026-11-05：报错被截成半句，缺哪个文件推不出来）----
+{
+  const lines = [];
+  const logger = makeChildLineLogger((line) => lines.push(line), "local-relay");
+
+  // ① 一个 chunk 里的多行必须全收到（尤其是 Node 的四行堆栈，带文件名的就是中间那行）
+  logger(Buffer.from("throw new ERR_MODULE_NOT_FOUND(\n      ^\n"));
+  logger(
+    Buffer.from(
+      "\nError [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\\MyWorkspace\\Agent\\MPI\\resources\\relay\\account.mjs' imported from C:\\MyWorkspace\\Agent\\MPI\\resources\\relay\\index.mjs\n",
+    ),
+  );
+  assert.equal(lines.length, 3, `三行都应该各记一条，实际 ${lines.length} 条`);
+  assert.match(
+    lines[2],
+    /account\.mjs' imported from/, 
+    "错句里的模块名与来源路径不得被截掉（旧写法 slice(0,160) 正好把它砍在中间）",
+  );
+
+  // ② 行被 data 事件切在中间也要拼回一行
+  const half = [];
+  const joiner = makeChildLineLogger((line) => half.push(line), "p");
+  joiner(Buffer.from("local-part-"));
+  assert.deepEqual(half, [], "没看到换行符前不应输出半行");
+  joiner(Buffer.from("tail\n"));
+  assert.deepEqual(half, ["p local-part-tail"], "半个行应该等下一段拼完");
+
+  // ③ flush：进程退出前最后一行常常没有换行符
+  joiner(Buffer.from("last words"));
+  joiner.flush();
+  assert.equal(half.at(-1), "p last words", "flush 应该把行尾残留补上");
+  joiner.flush();
+  assert.equal(half.length, 2, "flush 两次不应重复输出");
+
+  // ④ 空行不记，超宽单行仍然有上限（防止一个大栈倒进日志）
+  const trimmed = [];
+  const tight = makeChildLineLogger((line) => trimmed.push(line), "t", 20);
+  tight(Buffer.from(`\n\n${"x".repeat(200)}\n`));
+  assert.deepEqual(trimmed, [`t ${"x".repeat(20)}`], "空行丢掉、长行截到上限");
+  console.log("ok 8 - 子进程输出逐行转发：不截关键行、能拼回被切的行");
 }
 
 console.log("lan-mode tests passed");

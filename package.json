@@ -65,6 +65,7 @@
     "test:remote-files": "node --experimental-transform-types scripts/test-remote-files.mjs",
     "test:webpush": "node --experimental-transform-types scripts/test-webpush.mjs",
     "test:relay-tls-static": "node scripts/test-relay-tls-static.mjs",
+    "test:relay-pack": "node scripts/test-relay-pack.mjs",
     "test:app-update-feed": "node --experimental-strip-types scripts/test-app-update-feed.mjs",
     "deploy-pwa": "node scripts/deploy-pwa.mjs",
     "test:device-dedup": "node --experimental-strip-types scripts/test-remote-device-dedup.mjs",
@@ -272,6 +273,7 @@
         "to": "relay",
         "filter": [
           "index.mjs",
+          "account.mjs",
           "vapid.mjs",
           "README.md"
         ]
