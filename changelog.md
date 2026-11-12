@@ -4,6 +4,25 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## Unreleased
+
+1. **修：升级后「局域网直连」完全用不了——安装包里缺了中继的 `account.mjs`（v0.14.6 起，到本版共 8 个版本）**。
+   自 v0.14.6 起，安装包内 `resources/relay/` 的清单是**逐个列文件名的白名单**，新增 `account.mjs` 时没回头补这一行，
+   而 `index.mjs` 用的是静态 import——模块解析发生在任何代码执行之前，本机中继子进程**启动即** `ERR_MODULE_NOT_FOUND`
+   退出（既有的 `RELAY_ACCOUNT_DISABLED=1` 开关也救不了它）。表现是：面板里打开「局域网直连」也不出内网入口、
+   手机连不上这台电脑；挂在同一条监听上的 `/acct/*`（登录 / 配置同步）一并 404。开发态永远复现不出来，
+   因为 dev 直接跑仓库里那份文件齐全的 `mobile/relay/index.mjs`。三处改动：
+   - 打包清单补上 `account.mjs`（**根因**）。
+   - 中继改为**容错装载**账号模块（`await import()` + try/catch，加载与构造都包住——它会立即创建数据目录，
+     不可写同样会让进程死掉）：失败只记一行 `WARN account api 未挂载（原因）`，配对 / 消息转发 / 附件下载照旧。
+   - 子进程日志改为**逐行**转发。原来是把一次输出整段截到 160 字符，正好把 Node 四行堆栈里带文件名的那句
+     砍成 `Cannot find module 'C:\MyWorkspace\Agen'`；现在被切断的半行会拼回、退出前收尾，单行上限放到 2000。
+   验证方式：完全退出并重开 MPI →「远程」面板 → 「诊断」里打开「局域网直连」→ 顶部状态出现可复制的内网入口，
+   且 `%APPDATA%\MPI\logs\mpi-diag.log` 里有 `local-relay ready …`、不再出现 `ERR_MODULE_NOT_FOUND` /
+   `local-relay exited code=1`（只想确认账号接口：`curl -k https://<本机内网IP>:9443/acct/me` 应回 401 而不是 404）。
+   回归：`npm run typecheck` + `npm test -- relay`（新增 `test-relay-pack.mjs`：打包清单必须覆盖中继的全部相对依赖——
+   把 filter 里那一行删掉就会报红）+ `node scripts/test-lan-mode.mjs`（第 8 节钉逐行日志转发）。
+
 ## v0.15.2（2026-11-10）
 
 1. **修（桌面端 + 安卓 0.5.176）：多轮会话每进入下一段都会「先退回上一个节点、再拉到最新」，轮次越多拉扯越多**。
