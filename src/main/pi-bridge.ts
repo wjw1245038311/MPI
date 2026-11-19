@@ -355,6 +355,9 @@ export interface PiBridgeOptions {
    * task-mode extension as MPI_TASKMODE_DIR; it reads its own thread's file on
    * every turn and injects instructions/spec into the system prompt. */
   taskModeStateDir?: string;
+  /** userData 目录，供注入监测扩展落盘（MPI_INJECTION_WATCH_DIR）。
+   * 必须显式传：扩展侧没有可靠来源，早先回退到 process.cwd() 把 462 MB 抓包写进了仓库根。 */
+  userDataDir?: string;
   /**
    * 凭据注入（P1b，见 docs/CREDENTIALS-VAULT.md §4.2）：只含 `silent` 级凭据的值。
    * **值只能进 env，不得进日志/事件/快照** —— 主进程侧只记录 meta。
@@ -456,6 +459,7 @@ export class PiBridge {
     if (this.opts.choiceConfigFile) env.MPI_CHOICE_CONFIG = this.opts.choiceConfigFile;
     if (this.opts.smartCompactConfigFile) env.MPI_SMART_COMPACT_CONFIG = this.opts.smartCompactConfigFile;
     if (this.opts.taskModeStateDir) env.MPI_TASKMODE_DIR = this.opts.taskModeStateDir;
+    if (this.opts.userDataDir) env.MPI_INJECTION_WATCH_DIR = this.opts.userDataDir;
     if (this.opts.secretEnv && Object.keys(this.opts.secretEnv).length > 0) {
       // 值只进子进程环境；meta 只含名称与用途，扩展据此告诉模型有哪些可用。
       Object.assign(env, this.opts.secretEnv);

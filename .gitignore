@@ -24,6 +24,8 @@ resources/runtime-manifest.json
 .qa-user-data/
 # Relay runtime state (VAPID private key — never commit)
 mobile/relay/data/
+# 注入监测器的抓包落盘（调试取证用，单份可达 MB 级，绝不入库）
+injection-watch/
 .tmp-*/
 mpi-gates/
 

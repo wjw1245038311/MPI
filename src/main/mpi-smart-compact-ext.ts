@@ -10,6 +10,8 @@
  *     across compactions (merge rule: inherit all previous entries, append new, never drop)
  *   - Key Replies: the assistant answers given to the user, condensed (short ≈ verbatim, long → key points)
  *   - File lists (<read-files>/<modified-files>) merged from the previous summary + this span's ops
+ *   - 摘要不得写窗口/余额/百分比：摘要比它引用的计量活得久，下一个模型会把过期百分比当现状，
+ *     提前收工（实测 2026-11-10 / 11-19 共 3 例）。
  *
  * Env (set by pi-bridge at spawn):
  *   MPI_SMART_COMPACT_CONFIG  path to <userData>/config.json; reads optional `smartCompact` section:
@@ -412,7 +414,9 @@ Output EXACTLY these four sections (omit a section only if it has nothing):
 ### Files
 - [path] (read | modified)
 
-Be specific: preserve exact file paths, function names, error messages. No commentary.`;
+Be specific: preserve exact file paths, function names, error messages. No commentary.
+
+NEVER include context-window, token-budget, remaining-tokens or "% of context used" figures, even if the material mentions them. Those numbers go stale immediately and the next model will treat them as current facts.`;
 
 const ASSEMBLY_PROMPT = `You are updating a context checkpoint for an AI coding agent. The conversation has grown too large and was compacted: the material below replaces it. Produce the NEW complete checkpoint that another LLM will use to continue the work seamlessly.
 
@@ -429,6 +433,7 @@ RULES:
 - The "Key Replies" section: carry forward still-relevant replies from the previous summary (condensed) and add new ones from <key-replies>. Short answers ≈ verbatim; long answers → their conclusions/numbers/decisions only.
 - Next Steps item 1 MUST quote directly (in quotes) the exact words from the most recent exchange showing what was being worked on — no paraphrase, to prevent task drift.
 - File lists: union of the previous summary's <read-files>/<modified-files> and <file-ops>; append them at the very end in the same XML tags.
+- NEVER write context-window sizes, token budgets, remaining-token counts or "% of context used" anywhere in the checkpoint (including Critical Context), even if the material states them. A summary outlives the measurement it quotes: the next model reads a stale percentage as the present state and stops work early. Drop such figures entirely; if something about cost really matters, say "上下文已压缩过" without numbers.
 
 OUTPUT EXACTLY THIS FORMAT (nothing before or after):
 

@@ -149,6 +149,9 @@ import {
 } from "./choice-logic.ts";
 import { ensureTaskModeExtension } from "./taskmode-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
+import { ensureEditRecoveryExtension } from "./edit-recovery-extension";
+import { ensureContextFactExtension } from "./context-fact-extension";
+import { ensureInjectionWatchExtension } from "./injection-watch-extension";
 import { ensureCredentialsExtension } from "./credentials-extension";
 import { notePromptSource, lastPromptSource } from "./prompt-source";
 import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
@@ -761,6 +764,19 @@ function createHandle(
       // Shell-environment bridge: tells the model which shell its commands run
       // in (paired with the --exclude-tools powershell passed to this spawn).
       ensureShellEnvExtension(getConfigDir()),
+      // edit 失败恢复指引 bridge: edit 因「找不到 oldText」失败时，在错误信息里附上
+      // 文件中最接近的一段（带行号与逐行对照）。内置 edit 的匹配行为不动——
+      // pi 上游 issue #8654 至今未修（机器人自动关闭），而模型凭记忆写 oldText 是实测首要成因。
+      ensureEditRecoveryExtension(getConfigDir()),
+      // 压缩后上下文事实 bridge: 压缩完成时把真实窗口/压缩前占用告诉模型。
+      // pi 压缩后 contextUsage 返回 null，模型会在信息真空里自编「180k 预算」「不足 5%」——
+      // 两个会话实测（2026-11-10），注入的是 pi 自己算好的 tokensBefore 与模型定义的窗口。
+      ensureContextFactExtension(getConfigDir()),
+      // 注入监测 bridge: 在最终出口（before_provider_request）检查外来注入标签，
+      // 命中即把完整请求体落盘到 <userData>/injection-watch/。
+      // 起因：模型自称「系统说 exceeded 180k」、另一台设备收到 <system_context>…168000… 这类注入，
+      // 而 pi / MPI / strata 三方都查不到字面量。与其继续猜，不如在出口留证据。
+      ensureInjectionWatchExtension(getConfigDir()),
       // 凭据注入 bridge：把「有哪些凭据可用、如何引用、禁止打印」写进系统提示。
       // 值本身由 pi-bridge 注入进程环境（只含 silent 级，见 CREDENTIALS-VAULT.md §4.2）。
       ensureCredentialsExtension(getConfigDir()),
@@ -819,6 +835,8 @@ function createHandle(
     choiceConfigFile: join(getConfigDir(), "config.json"),
     smartCompactConfigFile: join(getConfigDir(), "config.json"),
     taskModeStateDir: join(getConfigDir(), "taskmodes"),
+    // 注入监测的抓包落盘目录（扩展侧唯一可信来源；不再回退到 cwd）。
+    userDataDir: getConfigDir(),
     channelInboxDir: isChannelSession ? ensureChannelCommandInbox() : undefined,
     // Keep pi's runtime in sync with the Plugins inventory, including the
     // singular `.pi/agent/skill` compatibility path and other local roots.
