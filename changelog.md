@@ -20,7 +20,22 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    验证方式：随便改一处启动期配置（如 `~/.pi/agent/models.json` 里某个 provider 的 `maxTokens`）→ 让 agent「重启一下 MPI 让配置生效」
    → 应用自动重启、会话重连 → 设置里确认新值已生效；`%APPDATA%\MPI\logs\mpi-diag.log` 里应出现
    `app-restart request id=… v<版本> reason=…`，且**没有** `app-update` 那几行（证明没走更新路径）。
+   （开发态例外，见下一条。）
    回归：`npm run typecheck` + `npm run test:update-cmd`（新增：restart 动作归一、未知 action 拒绝、reason 截断、重启回执文案不说「已更新」）。
+
+2. **修：开发态（`npm run dev`）调自重启会黑屏——现在直接拒绝并指向正确做法**。
+   上个条目刚做完就踩到了：dev 下 MPI 是 `electron-vite` 的**子进程**，`ELECTRON_RENDERER_URL` 只注入给
+   它自己拉起的进程；`app.relaunch()` 出来的新实例拿不到这个变量，于是退化成
+   `mainWindow.loadFile(out/renderer/index.html)`——而 dev 下那个目录是旧构建或压根不存在，**窗口全黑**。
+   现场极难判：主进程 / renderer / vite 全部健康，`boot window-ready-to-show` 正常打出，diag 里没有一行可疑，
+   只有 `localhost:6173 = 200` 而 `127.0.0.1:6173 = 000` 这种细节能指向“窗口加载的不是 dev server”。
+   两处各守一道（dev 下均拒绝，正式包不变）：
+   - agent 的 `mpi_update_app({restart:true})` → 回执 error，文案写明“填 `restart-dev.sh` 才是正确做法”；
+   - 设置页「立即重启 MPI」（`app:relaunch`）→ 返回 `{ok:false, reason:"dev-build"}`，按钮弹提示指向脚本。
+   设置页那个按钮在 dev 下**一直**有这个问题，只是没人点过；这次一并收了。
+   验证方式：`npm run dev` 下让 agent 「重启一下 MPI」→ 应回“dev build 不能自重启，请在终端跑 `bash scripts/restart-dev.sh`”
+   且**窗口不黑、不退出**；设置 → 关于 →「立即重启 MPI」同理应弹提示而不是黑屏。
+   回归：`npm run test:update-cmd`（新增：dev 拒绝回执必须指向 `restart-dev.sh`、不得混用成功文案）。
 
 ## v0.15.3（2026-11-12）
 

@@ -318,6 +318,24 @@ export function PiCoreUpdatePanel() {
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updatedTo, setUpdatedTo] = useState<string | null>(null);
 
+  /**
+   * dev 下不能 app.relaunch()：electron-vite 是父进程，它把 ELECTRON_RENDERER_URL 注入给
+   * 自己拉起的子进程；relaunch 出来的实例拿不到它，退化成 loadFile(out/renderer/index.html)
+   * → 窗口全黑（2026-11-20 实测，进程与日志全部正常）。所以按钮在 dev 下改成给出正确做法。
+   * 主进程侧 `app:relaunch` 也做了同样的拦截，两边各守一道。
+   */
+  const restartApp = async () => {
+    const res: any = await window.pi.app.relaunch();
+    if (res && res.ok === false && res.reason === "dev-build") {
+      pushToast(
+        "warning",
+        language === "zh"
+          ? "开发模式不能自重启：请在终端跑 bash scripts/restart-dev.sh（Ctrl+R 或自重启都会黑屏）"
+          : "Dev build cannot relaunch itself — run bash scripts/restart-dev.sh in a terminal (Ctrl+R and self-relaunch both end in a black window)",
+      );
+    }
+  };
+
   useEffect(() => {
     window.pi.settings.getDiagnostics().then((d: any) => setDiag(d)).catch(() => undefined);
     // Version check is network-bound; don't block first paint.
@@ -454,7 +472,7 @@ export function PiCoreUpdatePanel() {
           )}
         </button>
         {updatedTo && (
-          <button className="set-btn" style={{ marginLeft: 8 }} onClick={() => window.pi.app.relaunch()}>
+          <button className="set-btn" style={{ marginLeft: 8 }} onClick={() => void restartApp()}>
             立即重启 MPI
           </button>
         )}

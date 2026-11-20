@@ -6315,6 +6315,24 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     // ---- restart：只重启，没有版本检查、没有下载 ----
     if (request.action === "restart") {
       const current = app.getVersion();
+      // dev 下不能 app.relaunch()：electron-vite 是父进程，ELECTRON_RENDERER_URL 只注入给
+      // 它自己拉起的子进程；relaunch 出来的实例退化成 loadFile(out/renderer/index.html)，
+      // 而 dev 下那个目录是旧构建或不存在 → 窗口全黑（2026-11-20 实测，进程与日志全部正常）。
+      // 这里直接拒绝并给出正确做法，而不是让用户面对一个黑窗不知道干嘛。
+      if (!app.isPackaged) {
+        writeUpdateReceipt(updateDirs, {
+          id: request.id,
+          ok: false,
+          action: "restart",
+          state: "error",
+          current,
+          message:
+            "this is a dev build (electron-vite is the parent process, so a self-relaunch would lose ELECTRON_RENDERER_URL and show a black window); " +
+            "run `bash scripts/restart-dev.sh` from a terminal instead",
+        });
+        appendDiagLog(`app-restart refused id=${request.id.slice(0, 8)} reason=dev-build`);
+        return;
+      }
       const since = Date.now() - lastRestartAt;
       if (lastRestartAt > 0 && since < RESTART_COOLDOWN_MS) {
         writeUpdateReceipt(updateDirs, {
@@ -8472,8 +8490,18 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
   });
 
   ipcMain.handle("app:relaunch", () => {
+    // dev 下不能 app.relaunch()：electron-vite 是父进程，它把 ELECTRON_RENDERER_URL
+    // 注入给**自己拉起的子进程**。relaunch 出来的新实例拿不到这个变量，于是退化成
+    // mainWindow.loadFile(out/renderer/index.html)——dev 下那个目录是旧构建或不存在，
+    // 表现就是**窗口全黑**（2026-11-20 实测：主进程/renderer/vite 全部健康，日志无可疑行）。
+    // 正式包没有这层父进程，relaunch 是正常做法，所以只在 dev 拦下。
+    if (!app.isPackaged) {
+      appendDiagLog("app:relaunch refused reason=dev-build");
+      return { ok: false, reason: "dev-build" };
+    }
     app.relaunch();
     app.exit(0);
+    return { ok: true };
   });
 
   // ---- dev release (one-click publish, dev mode only) --------------------

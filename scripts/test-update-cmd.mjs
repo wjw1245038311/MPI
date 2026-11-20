@@ -89,6 +89,29 @@ const mod = await import("../src/main/update-request.ts");
   console.log("ok - restart 回执文案：不说「已更新」、失败不说成 update failed");
 }
 
+// ---- 2c. dev 下拒绝重启（2026-11-20 黑屏事故的回归锁） -------------------------
+{
+  // 事故：dev 模式（npm run dev）下 app.relaunch() 会起一个拿不到 ELECTRON_RENDERER_URL
+  // 的实例，退化成 loadFile(out/renderer/index.html)（dev 下没有这个产物）→ 窗口全黑。
+  // 主进程现在在 !app.isPackaged 时直接回执 error 并指向 scripts/restart-dev.sh。
+  // 这里钉两件事：① 回执必须把「怎么做」说清楚；② 不许被措辞成一次成功的重启。
+  const devRefusal = mod.updateReceiptText({
+    id: "r",
+    ok: false,
+    action: "restart",
+    state: "error",
+    current: "0.15.3",
+    message:
+      "this is a dev build (electron-vite is the parent process, so a self-relaunch would lose ELECTRON_RENDERER_URL and show a black window); " +
+      "run `bash scripts/restart-dev.sh` from a terminal instead",
+  });
+  assert.ok(/restart failed/i.test(devRefusal), "dev 拒绝也要走 restart failed 措辞");
+  assert.ok(/restart-dev\.sh/.test(devRefusal), "必须把正确做法（restart-dev.sh）告诉模型，否则它只能叫用户「再试一次」");
+  assert.ok(/black window/i.test(devRefusal), "要说清为什么重启会黑屏（不然下次又会以为是偶发）");
+  assert.ok(!/Nothing was installed/i.test(devRefusal), "拒绝重启不是「重启了但没装东西」，不能混用成功文案");
+  console.log("ok - dev 下拒绝重启：回执指向 restart-dev.sh，不含成功措辞");
+}
+
 // ---- 3. 收件箱巡检：只认合法 JSON，先删再执行 -----------------------------------
 {
   const dirs = mod.ensureUpdateDirs(ROOT);
