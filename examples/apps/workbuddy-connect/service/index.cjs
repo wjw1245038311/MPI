@@ -16,7 +16,7 @@
 
 const { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } = require("node:fs");
 const { homedir } = require("node:os");
-const { join } = require("node:path");
+const { isAbsolute, join } = require("node:path");
 
 const { readCredential } = require("./wb-auth.cjs");
 const { startProxy, upstreamBase } = require("./proxy.cjs");
@@ -48,6 +48,15 @@ function writeJsonAtomic(file, data) {
   const tmp = file + ".mpi-workbuddy.tmp";
   writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf8");
   renameSync(tmp, file);
+}
+
+/** 把配置里填的 WorkBuddy.exe 路径变成绝对路径（留空 = 自动查找）。 */
+function resolveExePath(raw, host) {
+  const s = String(raw || "").trim().replace(/^"|"$/g, "");
+  if (!s) return "";
+  if (isAbsolute(s) || s.includes(":") || s.startsWith("~")) return s;
+  // 相对路径按本应用安装目录解析（界面上提示的就是这个写法）
+  return join(host.app.dir, s);
 }
 
 /** 读账号目录（/v3/config）：每个模型带真实上下文/输出上限与工具能力。 */
@@ -165,12 +174,15 @@ async function activate(host) {
   const imageOverride = splitModels(fields.imageModels);
   const autoCheckin = (fields.autoCheckin || "on") !== "off";
   const maxConcurrency = Math.max(1, Math.min(8, Number(fields.maxConcurrency) || 4));
+  const exePath = resolveExePath(fields.workbuddyExe, host);
+  if (exePath) host.log(`WorkBuddy.exe 路径：${exePath}（配置指定）`);
 
   host.status("starting", "读取 WorkBuddy 登录态…");
-  let cached = { at: 0, cred: readCredential() };
+  const credOpts = { exePath, log: (line) => host.log(line) };
+  let cached = { at: 0, cred: readCredential(credOpts) };
   const credential = (opts = {}) => {
     if (!opts.force && Date.now() - cached.at < 60000) return cached.cred;
-    cached = { at: Date.now(), cred: readCredential() };
+    cached = { at: Date.now(), cred: readCredential(credOpts) };
     return cached.cred;
   };
   host.log(`已读取 WorkBuddy 登录态（${cached.cred.domain || "未知区域"}，uid ${cached.cred.uid ? "已获取" : "缺失"}）`);
