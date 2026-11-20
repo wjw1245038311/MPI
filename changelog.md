@@ -4,6 +4,24 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## Unreleased
+
+1. **新：`mpi_update_app` 多了一个「只重启、不更新」的用法（`restart=true`）——人在手机端也能让改过的配置生效**。
+   起因是设置里有一批值是**启动期才读**的（`models.json` 的 provider / `maxTokens`、应用与服务注册表、部分扩展注册），
+   改完必须重启才生效，而以前的工具只有「查更新→下载→安装→重启」这一条路：想让配置生效只能假装要更新，
+   在没有新版本时会得到「已是最新版」，白跑一圈。现在同一个工具接两个动作：
+   - `mpi_update_app()` —— 更新（行为不变）；
+   - `mpi_update_app({ restart: true })` —— 只 `app.relaunch()`，**不联网、不查版本、不装任何东西**。
+   主进程侧与设置页「立即重启 MPI」走同一条路（`before-quit` 里的草稿 flush / 记忆池释放 / 应用服务停掉照常执行）。
+   补齐了三件防误用的事：
+   - 未知 `action` 的请求**直接拒绝**，不回退成 update（否则一个「重启」请求会去装新版本）；
+   - 重启请求有 **10 秒冷却**，防止模型因为回执超时反复重试把自己关进重启循环；
+   - 回执文案分开写：「重启」明确说 *Nothing was installed*、失败说 *restart failed*，不让模型转述成「已更新」。
+   验证方式：随便改一处启动期配置（如 `~/.pi/agent/models.json` 里某个 provider 的 `maxTokens`）→ 让 agent「重启一下 MPI 让配置生效」
+   → 应用自动重启、会话重连 → 设置里确认新值已生效；`%APPDATA%\MPI\logs\mpi-diag.log` 里应出现
+   `app-restart request id=… v<版本> reason=…`，且**没有** `app-update` 那几行（证明没走更新路径）。
+   回归：`npm run typecheck` + `npm run test:update-cmd`（新增：restart 动作归一、未知 action 拒绝、reason 截断、重启回执文案不说「已更新」）。
+
 ## v0.15.3（2026-11-12）
 
 1. **修：升级后「局域网直连」完全用不了——安装包里缺了中继的 `account.mjs`（v0.14.6 起，到本版共 8 个版本）**。

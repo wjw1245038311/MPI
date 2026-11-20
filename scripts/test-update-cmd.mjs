@@ -18,10 +18,14 @@ const mod = await import("../src/main/update-request.ts");
 
 // ---- 1. 请求校验 -------------------------------------------------------------
 {
-  assert.deepEqual(mod.normalizeUpdateRequest({ id: "abc123", install: false }), { id: "abc123", install: false });
+  assert.deepEqual(mod.normalizeUpdateRequest({ id: "abc123", install: false }), {
+    id: "abc123",
+    action: "update",
+    install: false,
+  });
   assert.deepEqual(
     mod.normalizeUpdateRequest({ id: "abc123" }),
-    { id: "abc123", install: true },
+    { id: "abc123", action: "update", install: true },
     "缺 install 时应默认安装（用户要的是「自动更新」）",
   );
   assert.equal(mod.normalizeUpdateRequest({ id: "" }), null, "没有 id 的请求不能被执行");
@@ -29,6 +33,30 @@ const mod = await import("../src/main/update-request.ts");
   assert.equal(mod.normalizeUpdateRequest("nonsense"), null);
   assert.equal(mod.normalizeUpdateRequest({ id: "x".repeat(65) }), null, "超长 id 直接拒（防脏文件名）");
   console.log("ok - 请求校验：缺 id / 非对象 / 超长 id 一律拒绝，install 默认 true");
+}
+
+// ---- 1b. restart 动作（2026-11-20：只重启，不动版本） -------------------------
+{
+  assert.deepEqual(
+    mod.normalizeUpdateRequest({ id: "r1", action: "restart" }),
+    { id: "r1", action: "restart", install: true },
+    "restart 请求要被认出（install 字段对它无意义，但仍按惯例归一成 true）",
+  );
+  assert.deepEqual(
+    mod.normalizeUpdateRequest({ id: "r2", action: "update", install: false }),
+    { id: "r2", action: "update", install: false },
+  );
+  // 未知 action 必须拒绝，不能静默回退成 update——否则一个「重启」请求会去装新版本。
+  assert.equal(mod.normalizeUpdateRequest({ id: "r3", action: "relaunch" }), null, "未知 action 必须拒绝");
+  assert.equal(mod.normalizeUpdateRequest({ id: "r4", action: 1 }), null);
+  const withReason = mod.normalizeUpdateRequest({ id: "r5", action: "restart", reason: "models.json 改了 provider" });
+  assert.equal(withReason?.reason, "models.json 改了 provider", "reason 要透传（事后追溯用）");
+  assert.equal(
+    mod.normalizeUpdateRequest({ id: "r6", action: "restart", reason: "x".repeat(500) })?.reason?.length,
+    200,
+    "reason 要截断，别让它把回执文件撑大",
+  );
+  console.log("ok - restart 动作：能认出、未知 action 拒绝、reason 截断到 200");
 }
 
 // ---- 2. 回执文案（不许说谎） ---------------------------------------------------
@@ -46,6 +74,21 @@ const mod = await import("../src/main/update-request.ts");
   console.log("ok - 回执文案：五种状态各自准确，失败不含「已更新」措辞");
 }
 
+// ---- 2b. restart 回执文案 -----------------------------------------------------
+{
+  const restarting = mod.updateReceiptText({ id: "r", ok: true, action: "restart", state: "restarting", current: "0.15.3" });
+  assert.ok(/restarting/i.test(restarting), "重启回执要明确说在重启");
+  assert.ok(/0\.15\.3/.test(restarting), "重启回执带当前版本");
+  assert.ok(/Nothing was installed/i.test(restarting), "重启不是更新，必须说清没装任何东西（否则模型会说「已更新到最新」）");
+  assert.ok(/config files are re-read/i.test(restarting), "要让模型知道重启为什么有用（配置重读）");
+
+  const failed = mod.updateReceiptText({ id: "r", ok: false, action: "restart", state: "error", current: "0.15.3", message: "cooldown" });
+  assert.ok(/restart failed/i.test(failed), "重启失败要说 restart failed，不是 update failed");
+  assert.ok(/still running on the same version/i.test(failed), "失败时必须说清应用还在原版本上跑");
+  assert.ok(!/update failed/i.test(failed), "重启失败不能冒充更新失败");
+  console.log("ok - restart 回执文案：不说「已更新」、失败不说成 update failed");
+}
+
 // ---- 3. 收件箱巡检：只认合法 JSON，先删再执行 -----------------------------------
 {
   const dirs = mod.ensureUpdateDirs(ROOT);
@@ -58,7 +101,7 @@ const mod = await import("../src/main/update-request.ts");
 
   const handled = [];
   mod.ingestUpdateRequests({ ...dirs, onRequest: (request) => handled.push(request) });
-  assert.deepEqual(handled, [{ id: "good", install: true }], "只有合法请求被执行一次");
+  assert.deepEqual(handled, [{ id: "good", action: "update", install: true }], "只有合法请求被执行一次");
   assert.ok(!existsSync(join(dirs.inboxDir, "good.json")), "请求文件必须先删掉（否则下一轮巡检会再更新一次）");
   const left = readdirSync(dirs.inboxDir).sort();
   // noid.json 合法 JSON 但缺 id → 被拒并删除（留下它只会每轮都被拒）；半截 JSON 与

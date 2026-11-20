@@ -26,19 +26,35 @@ export function ensureUpdateDirs(userDataDir: string): UpdateDirs {
   return { inboxDir, outboxDir };
 }
 
+/**
+ * 请求动作。
+ *
+ * - `update`：查/下/装新版本（原来的唯一动作）。
+ * - `restart`：只重启进程，不动版本（2026-11-20 用户需求：「有时候需要自重启修改下配置」）。
+ *   动机是设置里有一批值只在启动期读取（models.json 的 provider、maxTokens、扩展注册表…），
+ *   改完必须重启才生效，而人在手机端时没法自己点「立即重启 MPI」。
+ */
+export type UpdateAction = "update" | "restart";
+
 /** 回执里可出现的状态（客户端只用来措辞，不参与判定）。 */
-export type UpdateState = "up-to-date" | "downloading" | "downloaded" | "installing" | "error";
+export type UpdateState = "up-to-date" | "downloading" | "downloaded" | "installing" | "restarting" | "error";
 
 export interface UpdateRequest {
   id: string;
-  /** 下完是否直接安装并重启（默认 true：用户要的是「自动更新」）。 */
+  /** 请求的动作（缺省 = update，兼容旧请求文件）。 */
+  action: UpdateAction;
+  /** 下完是否直接安装并重启（默认 true：用户要的是「自动更新」）。restart 动作下无意义。 */
   install: boolean;
+  /** 供执行方落日志/回执说明的可选理由（agent 转述用户意图时带上，便于事后追溯）。 */
+  reason?: string;
 }
 
 export interface UpdateReceipt {
   id: string;
   ok: boolean;
   state: UpdateState;
+  /** 执行的动作（缺省按 update 理解，兼容旧回执）。 */
+  action?: UpdateAction;
   /** 当前版本（总是有）。 */
   current?: string;
   /** 目标版本（有更新时才有）。 */
@@ -46,19 +62,30 @@ export interface UpdateReceipt {
   message?: string;
 }
 
-/** 请求校验：只认带 id 的对象，多余字段忽略（缺 install 视为 true）。 */
+/**
+ * 请求校验：只认带 id 的对象，多余字段忽略（缺 install 视为 true，缺 action 视为 update）。
+ *
+ * 未知的 action 一律**拒绝**而不是回退成 update——把一个「重启」请求当成「更新」执行，
+ * 会在用户没同意的时候真的去装新版本。
+ */
 export function normalizeUpdateRequest(raw: unknown): UpdateRequest | null {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
   const id = typeof value.id === "string" ? value.id.trim() : "";
   if (!id || id.length > 64) return null;
-  return { id, install: value.install !== false };
+  const rawAction = value.action;
+  if (rawAction !== undefined && rawAction !== "update" && rawAction !== "restart") return null;
+  const action: UpdateAction = rawAction === "restart" ? "restart" : "update";
+  const reason = typeof value.reason === "string" ? value.reason.slice(0, 200) : undefined;
+  return { id, action, install: value.install !== false, ...(reason ? { reason } : {}) };
 }
 
 /** 回执 → 给模型看的一句话（英文，与各工具的 agent 侧文案一致）。 */
 export function updateReceiptText(receipt: UpdateReceipt): string {
   const current = receipt.current ? ` (current v${receipt.current})` : "";
   switch (receipt.state) {
+    case "restarting":
+      return `MPI is restarting now${current}. Nothing was installed — this is a plain restart, so config files are re-read. The conversation reconnects on its own in a few seconds.`;
     case "up-to-date":
       return `MPI is already up to date${current}. Nothing to install.`;
     case "downloading":
@@ -68,6 +95,9 @@ export function updateReceiptText(receipt: UpdateReceipt): string {
     case "installing":
       return `MPI v${receipt.latest} is installed — the app is restarting now. The conversation reconnects on its own afterwards.`;
     case "error":
+      if (receipt.action === "restart") {
+        return `MPI restart failed${current}: ${receipt.message || "unknown error"}. The app is still running on the same version.`;
+      }
       return `MPI update failed${current}: ${receipt.message || "unknown error"}. Nothing was installed.`;
     default:
       return receipt.message || "MPI update finished.";

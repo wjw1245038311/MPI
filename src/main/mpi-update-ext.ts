@@ -34,11 +34,16 @@ const POLL_INTERVAL_MS = 200;
 interface Receipt {
   id: string;
   ok: boolean;
-  state: "up-to-date" | "downloading" | "downloaded" | "installing" | "error";
+  state: "up-to-date" | "downloading" | "downloaded" | "installing" | "restarting" | "error";
+  /** 主进程回写执行的动作（旧回执没有这个字段，视为 update）。 */
+  action?: "update" | "restart";
   current?: string;
   latest?: string;
   message?: string;
 }
+
+/** 与 update-request.ts 的 UpdateAction 保持一致（扩展不能 import 主进程模块）。 */
+type Action = "update" | "restart";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -69,6 +74,8 @@ async function waitForReceipt(id: string): Promise<Receipt | null> {
 function receiptText(receipt: Receipt): string {
   const current = receipt.current ? ` (current v${receipt.current})` : "";
   switch (receipt.state) {
+    case "restarting":
+      return `MPI is restarting now${current}. Nothing was installed — this is a plain restart, so config files are re-read. The conversation reconnects on its own in a few seconds.`;
     case "up-to-date":
       return `MPI is already up to date${current}. Nothing to install.`;
     case "downloading":
@@ -78,6 +85,9 @@ function receiptText(receipt: Receipt): string {
     case "installing":
       return `MPI v${receipt.latest} has been downloaded and is installing now — the app is restarting. The conversation reconnects on its own.`;
     case "error":
+      if (receipt.action === "restart") {
+        return `MPI restart failed${current}: ${receipt.message || "unknown error"}. The app is still running on the same version.`;
+      }
       return `MPI update failed${current}: ${receipt.message || "unknown error"}. Nothing was installed.`;
     default:
       return receipt.message || "MPI update finished.";
@@ -85,10 +95,22 @@ function receiptText(receipt: Receipt): string {
 }
 
 const Params = Type.Object({
+  restart: Type.Optional(
+    Type.Boolean({
+      description:
+        "Restart the MPI app instead of updating it (no version change, no network). Use it when a config change only takes effect after a restart — e.g. models.json providers, maxTokens, or an app/service registry edit — and the user cannot click “立即重启 MPI” themselves (phone, web client, automation).",
+    }),
+  ),
   install: Type.Optional(
     Type.Boolean({
       description:
-        "Install and restart after downloading (default true). Set false only to download without restarting — use it when the user wants to install manually later.",
+        "Install and restart after downloading (default true). Set false only to download without restarting — use it when the user wants to install manually later. Ignored when restart=true.",
+    }),
+  ),
+  reason: Type.Optional(
+    Type.String({
+      description:
+        "Optional one-line reason recorded in the diag log and echoed back (e.g. “models.json provider edited”). Keep it short; it is for the audit trail, not for the user.",
     }),
   ),
 });
@@ -96,13 +118,14 @@ const Params = Type.Object({
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "mpi_update_app",
-    label: "Update MPI",
+    label: "Update or restart MPI",
     description:
-      "Update the MPI desktop app **on the machine hosting this conversation**: check for a newer version, download it and (by default) install + restart. " +
-      "Use it whenever the user asks to update MPI / 更新这台设备 / 把这个版本的 MPI 升级一下 — including requests that come from a paired phone or the web client, which cannot reach this machine any other way. " +
-      "It only updates THIS host, never other machines: if the user mentions another device, ask them to switch to that device's conversation first. " +
-      "Do not call it for ordinary package installs or for updating other software. " +
-      "The install restarts the app, so the conversation reconnects afterwards.",
+      "Update or restart the MPI desktop app **on the machine hosting this conversation**.\n" +
+      "Two modes:\n" +
+      "· update (default): check for a newer version, download it and (by default) install + restart. Use it whenever the user asks to update MPI / 更新这台设备 / 把这个版本的 MPI 升级一下 — including requests from a paired phone or the web client, which cannot reach this machine any other way.\n" +
+      "· restart=true: only restart the app, no version change and no network. Use it when the user edited config that is read at startup (models.json providers / maxTokens / extension or app-service registry) and wants it to take effect — 重启一下 / 重启生效 / 让配置生效 / restart to apply. Do NOT use it for ordinary “my app hung” complaints before trying the smaller fixes, and do not restart while a long turn is mid-flight if the user only wanted the file edited.\n" +
+      "Both modes only affect THIS host, never other machines: if the user mentions another device, ask them to switch to that device's conversation first. " +
+      "The app restarts either way, so this conversation briefly disconnects and reconnects on its own. Always tell the user that the restart is happening and that they need to do nothing.",
     parameters: Params,
 
     async execute(_toolCallId, params) {
@@ -110,13 +133,21 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: "text", text: "MPI update bridge is not configured (missing MPI_UPDATE_INBOX_DIR / MPI_UPDATE_OUTBOX_DIR)." }] };
       }
       const id = randomUUID().replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32);
+      const action: Action = params?.restart === true ? "restart" : "update";
       const install = params?.install !== false;
+      const reason = typeof params?.reason === "string" ? params.reason.slice(0, 200) : undefined;
       try {
         mkdirSync(INBOX_DIR, { recursive: true });
-        writeFileSync(join(INBOX_DIR, `${id}.json`), JSON.stringify({ id, install }), "utf8");
+        writeFileSync(
+          join(INBOX_DIR, `${id}.json`),
+          JSON.stringify({ id, action, install, ...(reason ? { reason } : {}) }),
+          "utf8",
+        );
       } catch (error) {
         return {
-          content: [{ type: "text", text: `Failed to queue the update request: ${String(error instanceof Error ? error.message : error)}` }],
+          content: [
+            { type: "text", text: `Failed to queue the ${action} request: ${String(error instanceof Error ? error.message : error)}` },
+          ],
         };
       }
 
@@ -127,7 +158,7 @@ export default function (pi: ExtensionAPI) {
             {
               type: "text",
               text:
-                "Timed out waiting for MPI to answer the update request. Nothing is known about the update state — do not claim it succeeded; " +
+                `Timed out waiting for MPI to answer the ${action} request. Nothing is known about the outcome — do not claim it succeeded; ` +
                 "the user can retry, or check Settings → About for the current version.",
             },
           ],

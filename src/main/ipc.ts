@@ -6295,17 +6295,63 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   attachFilePoll.unref?.();
 
   /**
-   * 「更新这台设备」的巡检（mpi_update_app 的工具请求落在 inbox）。
+   * 「更新 / 重启这台设备」的巡检（mpi_update_app 的工具请求落在 inbox）。
    *
-   * 为什么由主进程执行：只有这里能碰 electron-updater（扩展跑在 pi 子进程里）。
-   * 时序注意：**先写回执再装**——安装会重启应用、连带杀掉这个 pi 进程，模型就再也
-   * 说不出话了；所以 installing 的回执写完，再延迟 1.5s 调 installAppUpdate()。
+   * 为什么由主进程执行：只有这里能碰 electron-updater，也只有这里能 app.relaunch()
+   * （扩展跑在 pi 子进程里）。
+   * 时序注意：**先写回执再动作**——安装/重启会退出进程、连带杀掉这个 pi 进程，模型就再也
+   * 说不出话了；所以回执写完，再延迟 1.5s 执行。
+   *
+   * 两个动作：
+   *   · update  —— 查/下/装新版本（原来唯一的路）。
+   *   · restart —— 只重启，不动版本、不联网。需求见 2026-11-20：「有时候需要自重启修改下配置」；
+   *     一批设置（models.json 的 provider/maxTokens、应用注册表…）只在启动期读。
    */
   const updateDirs = ensureUpdateDirs(getConfigDir());
-  const handleUpdateRequest = async (request: { id: string; install: boolean }) => {
+  /** 重启请求的冷却：10 秒。防止模型重复调用把自己关在一个重启循环里（回执超时→重试→重启…）。 */
+  let lastRestartAt = 0;
+  const RESTART_COOLDOWN_MS = 10_000;
+  const handleUpdateRequest = async (request: { id: string; action?: "update" | "restart"; install: boolean; reason?: string }) => {
+    // ---- restart：只重启，没有版本检查、没有下载 ----
+    if (request.action === "restart") {
+      const current = app.getVersion();
+      const since = Date.now() - lastRestartAt;
+      if (lastRestartAt > 0 && since < RESTART_COOLDOWN_MS) {
+        writeUpdateReceipt(updateDirs, {
+          id: request.id,
+          ok: false,
+          action: "restart",
+          state: "error",
+          current,
+          message: `a restart was already requested ${Math.round(since / 1000)}s ago; wait a moment before asking again`,
+        });
+        appendDiagLog(`app-restart request id=${request.id.slice(0, 8)} refused=cooldown since=${Math.round(since / 1000)}s`);
+        return;
+      }
+      lastRestartAt = Date.now();
+      // 先写回执再重启：重启会杀掉本进程与 pi 子进程。
+      writeUpdateReceipt(updateDirs, { id: request.id, ok: true, action: "restart", state: "restarting", current });
+      appendDiagLog(
+        `app-restart request id=${request.id.slice(0, 8)} v${current} reason=${request.reason ? request.reason.slice(0, 80) : "-"}`,
+      );
+      setTimeout(() => {
+        try {
+          // app.relaunch() 继承当前 argv；重启用 app.quit() 而**不是** app.exit(0)：
+          // exit() 不会触发 before-quit，子进程回收（killAllManagedProcesses）、草稿 flush、
+          // 应用服务停掉、记忆池句柄释放全部会被跳过。设置页那个「立即重启」用的是 exit(0)，
+          // 那是既有行为，不在本次改动范围内——但新代码别再学它。
+          app.relaunch();
+          app.quit();
+        } catch (error) {
+          appendDiagLog(`app-restart failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }, 1500);
+      return;
+    }
+
     try {
       const status = await checkForAppUpdate({ silent: false });
-      const base = { id: request.id, current: status.current, ...(status.latest ? { latest: status.latest } : {}) };
+      const base = { id: request.id, action: "update" as const, current: status.current, ...(status.latest ? { latest: status.latest } : {}) };
       if (status.error && !status.hasUpdate) {
         writeUpdateReceipt(updateDirs, { ...base, ok: false, state: "error", message: status.error });
         appendDiagLog(`app-update request id=${request.id.slice(0, 8)} check-error=${status.error}`);
@@ -6345,9 +6391,11 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         if (!installed.ok) appendDiagLog(`app-update install failed: ${installed.message}`);
       }, 1500);
     } catch (error) {
+      // 走到这里说明是 update 分支（restart 在上面已经 return）
       writeUpdateReceipt(updateDirs, {
         id: request.id,
         ok: false,
+        action: "update",
         state: "error",
         message: String(error instanceof Error ? error.message : error),
       });
