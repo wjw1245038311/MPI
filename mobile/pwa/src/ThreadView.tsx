@@ -95,7 +95,16 @@ function handoffPhaseLabel(phase?: string): string {
 
 const baseName = (path: string): string => path.split(/[\\/]/).pop() || path;
 
-/** 缓存快照的「多久以前」（与 App.tsx 里会话列表的写法一致）。 */
+/**
+ * 缓存快照的「多久以前」。只用于一处：本地缓存提示（「本地缓存（3 分钟前）」）。
+ *
+ * 这里**故意不用** `lib/relative-time.ts` 的 `sessionTimeLabel`：那个函数是为
+ * 「哪条会话是前几天的」设计的，超过一小时就给绝对时间；而缓存提示要的是新鲜度
+ * （11-21 14:02 回答不了「旧不旧」）。两者目的不同，不是同一口径的两份副本。
+ *
+ * 注：之前这里的注释写的是「与 App.tsx 里会话列表的写法一致」——App.tsx 那份已经
+ * 换成 relative-time.ts 了，那句已不成立，改成说明为何不复用。
+ */
 function relTime(ts: number): string {
   const diff = Date.now() - ts;
   if (diff < 45_000) return "刚刚";
