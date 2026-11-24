@@ -1435,14 +1435,21 @@ export default function App() {
                             }}
                           >
                             <span className={`badge badge-${thread.state}`}>{THREAD_STATE_LABELS[thread.state]}</span>
-                            <div style={{ flex: 1, minWidth: 0 }}>
+                            <div className="thread-body">
                               <div className="thread-title">
                                 {thread.pinned ? "置顶 · " : ""}
                                 {thread.title}
                               </div>
-                              {thread.preview && <div className="hint thread-preview">{thread.preview}</div>}
+                              <div className="thread-subline">
+                                {/* 预览与标题相同时不重复显示（会话的首条消息常被用作标题，
+                                   上一版抽屉里几乎每一行都是「同样的字写两遍」）。
+                                   规则：重复就删（docs/UI-SPEC.md 同源的界面文案规则）。 */}
+                                {thread.preview && thread.preview.trim() !== thread.title.trim() && (
+                                  <div className="hint thread-preview">{thread.preview}</div>
+                                )}
+                                <span className="thread-meta">{thread.messageCount} 条 · {relTime(thread.updatedAt)}</span>
+                              </div>
                             </div>
-                            <span className="hint">{thread.messageCount} 条 · {relTime(thread.updatedAt)}</span>
                             <span
                               role="button"
                               tabIndex={0}
