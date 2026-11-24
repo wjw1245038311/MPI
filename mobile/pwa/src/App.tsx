@@ -105,8 +105,15 @@ function UpdatePill() {
     </button>
   );
 }
-// 临时诊断标记：确认手机端加载的是哪一版构建（扫码排查用，稳定后移除）。
-const BUILD_TAG = "260923b";
+/**
+ * 页面上显示的构建标识 = 当前真正在运行的 bundle 文件名。
+ * 与 __mpi_build（安卓壳做版本对比用的就是它）、与中继 index.html 引用的名字三者同源，
+ * 所以手机上看到的内容可以直接和 curl 回来的产物名逐字对。
+ * 以前这里是硬编码的 "260923b"（注释写着「稳定后移除」）：它不随构建变化，
+ * 真机上根本判断不了加载的是哪一版，2026-11-24 排查缓存问题时正好踩到。
+ * 开发态没有带哈希的产物，取到 null，显式写成「开发态」而不是留空。
+ */
+const BUILD_TAG = currentBundleName() ?? "开发态";
 
 /** 安卓壳注入的桥（浏览器里不存在）——用来显示「扫码配对」并提供壳版本号。 */
 type ShellBridge = { scanPairQr: () => void; shellVersion?: () => string };
@@ -1432,8 +1439,8 @@ export default function App() {
                 {error && <span style={{ color: "var(--err)" }}> · {error}</span>}
               </div>
             )}
-            {/* 临时诊断：确认手机加载的是哪一版构建（扫码排查用，稳定后移除） */}
-            <p className="hint" style={{ marginTop: 10, marginBottom: 0 }}>build {BUILD_TAG}</p>
+            {/* 值就是文件名本身（不加装饰），方便与 curl 回来的 index.html 逐字对 */}
+            <p className="hint" style={{ marginTop: 10, marginBottom: 0 }}>构建 {BUILD_TAG}</p>
           </div>
         )}
       </main>
