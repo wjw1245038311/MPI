@@ -52,6 +52,16 @@ export const Folder = (p: P) => (
   </svg>
 );
 
+/** 交接新对话：文档 + 向右箭头（语义是「写一份交接文档，再开新会话」）。 */
+export const Handoff = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M13 4H7a1.8 1.8 0 0 0-1.8 1.8v12.4A1.8 1.8 0 0 0 7 20h2.2" />
+    <path d="M13 4l4 4v3" />
+    <path d="M13 4.8h3.2L17 8" />
+    <path d="M14.5 15.5h6M18 12.5l3 3-3 3" />
+  </svg>
+);
+
 export const NewChat = (p: P) => (
   <svg {...base(p)}>
     <path

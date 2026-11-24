@@ -5,7 +5,7 @@
  * S6 adds the send bar (prompt/steer + abort + sandbox/full toggle) and the
  * full-screen approval card (ui.request → ui.respond, §4.5 diff preview).
  */
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import type { RemotePermission, RemoteUiRequest } from "../../shared/protocol";
 import type { ThreadActions, SendMode } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
@@ -22,7 +22,9 @@ import { parseBlocks, type MdBlock } from "./lib/block-md";
 import { withChoiceSegments } from "./lib/choice-block";
 import type { ChoiceFailure } from "./lib/choice-block";
 import { ChoicePanel } from "./components/ChoicePanel";
+import { createPortal } from "react-dom";
 import { Popover } from "./components/Popover";
+import { Handoff } from "./components/icons";
 import { FileKindIcon } from "./components/FileKindIcon";
 import { groupToolBlocks, type ToolGroup } from "./lib/tool-groups";
 import { formatTokens, readContextUsage } from "./lib/context-usage";
@@ -1293,9 +1295,11 @@ export interface ThreadViewProps {
   /** 宽屏对话区宽度预设（工具条「列宽」面板）。 */
   /** 交接后切到主机新开的会话。 */
   onOpenThread?: (threadId: string) => void;
+  /** 顶栏右侧动作插槽（由 App 建、交给这里用 portal 填「交接新对话」）。 */
+  headerActionsRef?: RefObject<HTMLElement | null>;
 }
 
-export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop, onEnsureSubscribed, onOpenThread }: ThreadViewProps) {
+export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop, onEnsureSubscribed, onOpenThread, headerActionsRef }: ThreadViewProps) {
   const pendingUi = view.pendingUi;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1313,8 +1317,15 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
    * 环境/运行时两个锚定弹层（取代旧的底部抽屉）。
    * anchor 用 state 不用 ref：ref 赋值不触发重渲染，Popover 拿不到刚挂上的元素。
    * 权限/模式合成一个（composer 那颗 [模式·权限] chip 打开），
-   * 用量/模型/压缩/交结合成一个（[用量·模型] chip 打开）——412px 放不下四颗独立 chip。
+   * 用量/模型/压缩合成一个（[用量·模型] chip 打开）——412px 放不下四颗独立 chip。
+   * 交接不在这里：它是单一动作，做成顶栏右上角的图标按钮（见下面的 portal）。
    */
+  // 顶栏动作插槽：等整棵树提交完再取，渲染期 DOM 还不存在。
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setHeaderSlot(headerActionsRef?.current ?? null);
+  }, [headerActionsRef]);
+
   const [pop, setPop] = useState<null | "env" | "runtime">(null);
   const [popAnchor, setPopAnchor] = useState<HTMLElement | null>(null);
   const closePop = () => {
@@ -2328,42 +2339,6 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
               </div>
             )}
 
-            {/* 两颗聚合 chip 单独一行，放在输入框上方。
-               为什么不并进下面那一行：412px 时可用宽 ≈330（86vw 抽屉 − 24 内边距），
-               而 [模式·权限]≈120 + [用量·模型]≈180 + 三枚 32/36px 图标按钮 + 间距 ≈ 400，
-               一定溢出。桌面端同样把它们放在输入框上方的 .composer-project-row。
-               以前它们是顶部一整条 7 颗 chip——两份参照都不把环境开关放顶部。 */}
-            <div className="composer-config-row">
-              <button
-                type="button"
-                className={`cfg-chip${pop === "env" ? " open" : ""}`}
-                onClick={(event) => togglePop("env", event.currentTarget)}
-                aria-expanded={pop === "env"}
-                aria-haspopup="dialog"
-                title="任务模式与权限"
-              >
-                <IconSpark />
-                <span className="cfg-chip-fixed">{modeLabel}</span>
-                <span className="cfg-chip-sep" aria-hidden="true">·</span>
-                <IconLock />
-                <span className="cfg-chip-fixed">{view.summary?.permission === "sandbox" ? "沙盒" : "完整"}</span>
-              </button>
-              <button
-                type="button"
-                className={`cfg-chip ctx ${ctx.hasValue ? ctx.band : ""}${pop === "runtime" ? " open" : ""}`}
-                onClick={(event) => togglePop("runtime", event.currentTarget)}
-                aria-expanded={pop === "runtime"}
-                aria-haspopup="dialog"
-                title="上下文用量与模型"
-              >
-                <IconGauge />
-                <span className="cfg-chip-fixed">{ctxLabel}</span>
-                <span className="cfg-chip-sep" aria-hidden="true">·</span>
-                <IconModel />
-                <span className="cfg-chip-text">{modelBusy ? "切换中…" : modelLabel}</span>
-              </button>
-            </div>
-
             <textarea
               ref={inputRef}
               className="composer-input"
@@ -2406,6 +2381,38 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
                   <button type="button" onClick={() => pickFiles()}>📎 文件</button>
                 </div>
               )}
+                            <button
+                type="button"
+                className={`cfg-chip${pop === "env" ? " open" : ""}`}
+                onClick={(event) => togglePop("env", event.currentTarget)}
+                aria-expanded={pop === "env"}
+                aria-haspopup="dialog"
+                title="任务模式与权限"
+              >
+                <IconSpark />
+                <span className="cfg-chip-fixed">{modeLabel}</span>
+                <span className="cfg-chip-alt">
+                  <span className="cfg-chip-sep" aria-hidden="true">·</span>
+                  <IconLock />
+                  <span className="cfg-chip-fixed">{view.summary?.permission === "sandbox" ? "沙盒" : "完整"}</span>
+                </span>
+              </button>
+                            <button
+                type="button"
+                className={`cfg-chip ctx ${ctx.hasValue ? ctx.band : ""}${pop === "runtime" ? " open" : ""}`}
+                onClick={(event) => togglePop("runtime", event.currentTarget)}
+                aria-expanded={pop === "runtime"}
+                aria-haspopup="dialog"
+                title="上下文用量与模型"
+              >
+                <IconGauge />
+                <span className="cfg-chip-fixed">{ctxLabel}</span>
+                <span className="cfg-chip-alt">
+                  <span className="cfg-chip-sep" aria-hidden="true">·</span>
+                  <IconModel />
+                  <span className="cfg-chip-text">{modelBusy ? "切换中…" : modelLabel}</span>
+                </span>
+              </button>
               <span className="composer-spacer" />
               <button
                 type="button"
@@ -2579,16 +2586,26 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
             </div>
           )}
 
-          <div className="pop-title">交接新对话</div>
-          <p className="pop-note">用当前会话的模型写一份交接文档，再开一个新会话接着做。</p>
-          <div className="pop-list">
-            <button type="button" className="pop-item" onClick={() => void doHandoff()} disabled={handoffBusy}>
-              <span className="pop-item-main">{handoffBusy ? "交接中…" : "生成交接文档并开新会话"}</span>
-              {handoffBusy ? <span className="spinner" /> : null}
-            </button>
-          </div>
         </Popover>
       )}
+
+      {/* 交接新对话：按钮出现在顶栏右上角，但调用、handoffBusy、进度横幅仍然留在本组件。
+         用 portal 而不是把逻辑搬到 App：搬过去要复制 actions.handoff() + 成功/失败提示 +
+         打开新会话这一整套，两处维护同一个动作迟早分叉。 */}
+      {headerSlot &&
+        createPortal(
+          <button
+            type="button"
+            className="header-act"
+            onClick={() => void doHandoff()}
+            disabled={handoffBusy || !actions}
+            aria-label={handoffBusy ? "交接中…" : "交接新对话"}
+            title={handoffBusy ? "交接中…" : "用当前会话的模型写交接文档，并开一个新会话"}
+          >
+            {handoffBusy ? <span className="spinner" /> : <Handoff size={16} />}
+          </button>,
+          headerSlot,
+        )}
 
       {toast && <div className="toast">{toast}</div>}
 

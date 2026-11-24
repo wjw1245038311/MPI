@@ -1256,6 +1256,10 @@ export default function App() {
   /** 顶栏 ⋮ 弹层的锚点：同时当作开合状态用（null = 未开）。
    * 用 state 而不是 ref：ref 赋值不会重渲染，Popover 拿不到刚挂上的元素。 */
   const [headerMenuAnchor, setHeaderMenuAnchor] = useState<HTMLButtonElement | null>(null);
+  /** 顶栏右侧的动作插槽：由 ThreadView 用 portal 往里放「交接新对话」。
+   * 按钮出现在顶栏，但调用、handoffBusy、进度横幅仍然归 ThreadView——
+   * 搬到 App 重做一套就要复制 actions.handoff() + toast + 打开新会话的逻辑。 */
+  const headerActionsRef = useRef<HTMLSpanElement | null>(null);
 
   /**
    * 设备身份不再被认可（桌面端撤销过、手机端身份被重置）时，relay 会用 4001/AUTH_FAILED
@@ -1379,6 +1383,7 @@ export default function App() {
         </div>
         {/* 会话才能改名列宽，所以 ⋮ 只在会话视图出现。壳里不抢右上角：
            .app-header.in-shell 会多留 44px，让这个按钮落在壳的 ⋮ 左边。 */}
+        <span className="header-actions" ref={headerActionsRef} />
         {threadView?.summary && (
           <button
             type="button"
@@ -1458,6 +1463,7 @@ export default function App() {
             // 发送兜底：重连后主机按 connectionId 清过订阅，漏补的话事件全被丢弃。
             onEnsureSubscribed={() => threadSessionRef.current?.ensureSubscribed() ?? Promise.resolve()}
             onOpenThread={(id) => void openThread(id)}
+            headerActionsRef={headerActionsRef}
           />
         ) : view === "home" && hostId ? (
           <div className="chat-empty">

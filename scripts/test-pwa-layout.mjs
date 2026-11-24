@@ -76,10 +76,10 @@ has(".thread-scroll", "overflow-y", /auto/);
 // sticky 的按钮会占掉消息区底部一行，且贴在半空很难看。
 has(".to-bottom", "position", /^absolute/);
 
-// 配置行与输入框不许被压缩（曾经 chip 下半截被裁）。
-// 2026-11-24：环境 chip 从顶部工具条搬到 composer 上方，守的对象随之从
-// .thread-toolbar（已删）换成 .composer-config-row——这条规则本身没变。
-has(".composer-config-row", "flex", /^none/);
+// 输入框下方那一行（含环境 chip）与输入框本体不许被压缩（曾经 chip 下半截被裁）。
+// 2026-11-24 两次搬迁：.thread-toolbar（顶栏）→ .composer-config-row（输入框上方）
+// → 并入 .composer-row（与千问/桌面端同位）。规则本身没变，只是守的选择器跟着走。
+has(".composer-row", "flex", /^none/);
 has(".composer", "flex", /^none/);
 
 // 锁定弹层（替代底部抽屉）：必须是 fixed。写成 absolute 会被任何 overflow 容器裁掉

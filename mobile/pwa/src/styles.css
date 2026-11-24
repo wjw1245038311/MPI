@@ -93,7 +93,8 @@ html, body {
 .app-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  /* 6px 而不是 8px：右上角最多有两个图标按钮，412px 实测 8px 时标题只剩 146px 且被截断 */
+  gap: 6px;
   padding: 2px 4px 8px;
 }
 /* 壳（0.2.7+）右上角常驻它自己的 ⋮ 浮层：标题改成左对齐后不再需要等宽占位居中，
@@ -544,10 +545,12 @@ button:disabled { opacity: 0.5; cursor: default; }
   font-size: 16px;
   font-weight: 600;
   margin: 0;
-  /* 标题必须赢过旁边的徽章：412px 实测不锁时徽章要了 126px，标题只剩 139px 且被截断。
-     锁 55% 后徽章自己缩，标题拿到 162px 以上。 */
+  /* 标题必须赢过旁边的徽章。实测过程：不锁时徽章要 126px、标题只剩 139px（截断）；
+     锁 60% 时右上角加上第二个按钮后标题又回到 152px（仍截断）。
+     412px 分给「标题+徽章」的只有约 256px，所以要显式抬高标题下限、压低徽章上限——
+     项目名是次要信息，先让路的是它。 */
   flex: 1 1 auto;
-  min-width: 60%;
+  min-width: 72%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -563,7 +566,8 @@ button:disabled { opacity: 0.5; cursor: default; }
   gap: 3px;
   /* 硬上限而不是 vw：路径这种次要信息不能反过来顶掉标题。
      412px 实测：上限 120 时标题 157px、108px 给徽章；压到 96 后标题拿回 ~190px。 */
-  max-width: min(96px, 24vw);
+  flex-shrink: 20;
+  max-width: min(68px, 18vw);
   min-width: 0;
   padding: 2px 7px;
   border: 1px solid var(--border);
@@ -578,11 +582,20 @@ button:disabled { opacity: 0.5; cursor: default; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 会话操作入口（重命名 / 列宽）。与侧栏 ⋮ 同一字符，行为也一致：再点一次收起。 */
-.header-more {
+/* 顶栏右侧动作容器：由 ThreadView 用 portal 填入（交接新对话）。 */
+.header-actions {
   flex: none;
-  width: 34px;
-  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+/* 会话操作入口（重命名 / 列宽）与交接按钮共用一套尺寸与形态，
+   写成同一条规则是为了两个按钮永远对齐。⋮ 与侧栏 ⋮ 同一字符，再点一次收起。 */
+.header-more,
+.header-act {
+  flex: none;
+  width: 32px;
+  height: 32px;
   padding: 0;
   display: grid;
   place-items: center;
@@ -594,8 +607,11 @@ button:disabled { opacity: 0.5; cursor: default; }
   line-height: 1;
   cursor: pointer;
 }
-.header-more:hover { color: var(--text); background: var(--control-hover); }
-.header-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.header-more:hover:not(:disabled) { color: var(--text); background: var(--control-hover); }
+.header-more:focus-visible,
+.header-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.header-act:disabled { opacity: .55; cursor: default; }
+.header-act svg { width: 16px; height: 16px; }
 /* 双击顶栏标题 → 行内重命名（与 Android de62d5e 同语义）。 */
 .header-rename { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .header-rename input {
@@ -1181,7 +1197,17 @@ button:disabled { opacity: 0.5; cursor: default; }
 .pf-btn.steer:active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .composer-input { width: 100%; resize: none; max-height: 132px; overflow-y: auto; background: transparent; color: var(--text); border: none; padding: 4px 2px; font-size: 15px; line-height: 1.45; font-family: inherit; }
 .composer-input:focus { outline: none; }
-.composer-row { display: flex; align-items: center; gap: 4px; position: relative; }
+/* 输入框下方那一行：+ [模式·权限] [用量·模型] …… 🎤 ⏹ ↑
+   flex:none 是承重规则（同已删除的 .thread-toolbar：少一行就被消息区挤、chip 被裁半截）；
+   允许换行是保险：极端窄屏或超长模型名不会把发送按钮顶出可视区。 */
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  flex: none;
+  flex-wrap: wrap;
+}
 .icon-btn { flex: none; width: 32px; height: 32px; border-radius: 50%; border: none; background: transparent; color: var(--text-dim); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
 .icon-btn.active { background: var(--control); color: var(--text); }
 .icon-btn.busy { color: var(--accent); }
@@ -1261,15 +1287,17 @@ button:disabled { opacity: 0.5; cursor: default; }
 .ctx-pct.mid { color: #a5531b; }
 .ctx-pct.hi { color: #b3261e; }
 
-/* 环境 / 运行时聚合 chip（composer 输入框上方那一行）。 */
-.composer-config-row {
-  display: flex;
+/* 第二项值（权限、模型名）窄屏收起：412px 时 chips 合计 326px + 三枚图标按钮必然溢出，
+   收起后只留 ⚡基线 / ◔41%（约 134px），完整值在弹层里看。
+   与千问/桌面端同位：能力开关与发送在同一行，都在输入框下方。 */
+.cfg-chip-alt {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  /* 不被压缩：与已删除的 .thread-toolbar 同一条承重规则（当时真机反馈“chip 下半截被裁”）。
-     它在 .composer 这个 flex 列里，少了 flex:none 就会被消息区挤。 */
-  flex: none;
+}
+@media (max-width: 479px) {
+  .cfg-chip-alt { display: none; }
 }
 /* font-size 从 11.5px 改成 11px：11.5 不在字号档位里（10/11/12/13/14/16/22），
    改成档位内的同时宽度还省一点。高度固定 32px：与同一行的 .icon-btn 对齐，
