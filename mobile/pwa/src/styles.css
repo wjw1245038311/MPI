@@ -115,7 +115,11 @@ html, body {
 
 .hint { color: var(--muted); font-size: 13px; line-height: 1.5; }
 
-textarea, input[type="text"] {
+/* password / email / number 等带 type 的输入框同样套用上述样式。
+   2026-11-24：之前只写了 [type="text"]，账号卡的密码框因此退回浏览器原生
+   黑粗边框，与旁边的输入框完全不同形。改用属性选择器排除按钮类控件。 */
+textarea,
+input:not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
   width: 100%;
   background: var(--accent-soft);
   color: var(--text);
@@ -125,6 +129,12 @@ textarea, input[type="text"] {
   font-size: 14px;
   font-family: inherit;
   resize: vertical;
+}
+/* 焦点环：默认浏览器外框在深色下几乎不可见，统一成 accent 环。 */
+textarea:focus-visible,
+input:not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 button {
@@ -418,6 +428,11 @@ button:disabled { opacity: 0.5; cursor: default; }
 .drawer-head.plain {
   cursor: default;
   justify-content: space-between;
+  /* 二级抽屉的头部是个非交互块：.drawer-head 的 flex:1 是为一级抽屉里的横向
+     按钮留的，放在这里会让它在纵向 flex 容器里被拉到整列高（2026-11-24 实测 631px，
+     导致标题悬在中间、账号卡贴底）。这里把它固定成内容高。 */
+  flex: 0 0 auto;
+  padding: 4px 4px 10px;
 }
 .drawer-head-main {
   display: flex;
@@ -428,6 +443,55 @@ button:disabled { opacity: 0.5; cursor: default; }
 .drawer-head-title {
   font-size: 15px;
   font-weight: 700;
+}
+
+/* --- 账号同步卡（components/AccountCard.tsx）------------------------------
+   2026-11-24：该组件用了 .account-card / -head / -actions / -error 四个类名，
+   但 styles.css 里一条对应规则都没有——所有子元素退化成无间距的裸元素，
+   输入框与按钮首尾相接。这里补齐。 */
+.account-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+.account-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.account-card-head strong { font-size: 14px; font-weight: 600; }
+.account-card-head .hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 55%;
+}
+.account-card input {
+  width: 100%;
+  background: var(--surface);
+}
+.account-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.account-card-actions button { flex: none; }
+.account-card-actions input { flex: 1 1 auto; min-width: 0; }
+/* 密码 / 验证码切换是一对单选项，不是两个独立动作：做成同宽分段控件。 */
+.account-card-actions button:not(.ghost) {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+.account-card-error {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--err);
 }
 .badge-running { background: rgba(158, 206, 106, 0.15); color: var(--ok); }
 .badge-error { background: rgba(247, 118, 142, 0.15); color: var(--err); }

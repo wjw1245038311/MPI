@@ -112,10 +112,10 @@ const STAGE_LABELS: Record<string, string> = {
   connecting: "连接中继…",
   open: "已连接",
   closed: "已断开",
-  "waiting-challenge": "等待主机挑战…",
-  "waiting-approval": "等待桌面端批准…（在 Windows 的 RemotePanel 点「允许」）",
+  "waiting-challenge": "等待主机响应…",
+  "waiting-approval": "等待桌面端批准…（在 Windows 的「手机远程控制」点「允许」）",
   approved: "配对成功",
-  error: "出错",
+  error: "失败",
 };
 
 const THREAD_STATE_LABELS: Record<RemoteThreadState, string> = {
@@ -1328,7 +1328,7 @@ export default function App() {
         ) : (
           <div className="card">
             <p style={{ margin: "0 0 10px" }}>
-              {shellBridge() ? "扫码或粘贴桌面端生成的配对链接开始配对。" : "粘贴桌面端生成的配对链接（mpi://pair?…）开始配对。"}
+              {shellBridge() ? "扫码或粘贴桌面端生成的配对链接。" : "粘贴桌面端生成的配对链接（mpi://pair?…）。"}
             </p>
             {shellBridge() && (
               <button
@@ -1343,7 +1343,7 @@ export default function App() {
             <textarea rows={4} value={link} onChange={(e) => setLink(e.target.value)} placeholder="mpi://pair?payload=…" spellCheck={false} />
             <div style={{ marginTop: 10 }}>
               <button onClick={() => void startPairing()} disabled={!link.trim() || stage === "connecting" || stage === "waiting-challenge" || stage === "waiting-approval"}>
-                {stage === "waiting-approval" ? "等待批准…" : "连接并配对"}
+                {stage === "waiting-approval" ? "等待批准…" : "配对"}
               </button>
             </div>
             {(stage !== "idle" || error) && (
@@ -1532,7 +1532,7 @@ export default function App() {
             )}
           </>
         ) : (
-          <p className="hint">还没有绑定设备——先扫码或粘贴配对链接。</p>
+          <p className="hint">未绑定设备。先扫码或粘贴配对链接。</p>
         )}
       </aside>
 
@@ -1611,7 +1611,7 @@ export default function App() {
             ))}
           </div>
         ) : (
-          <p className="hint">还没有绑定设备。</p>
+          <p className="hint">暂无设备。</p>
         )}
         <button
           type="button"
@@ -1623,7 +1623,7 @@ export default function App() {
             closeAllDrawers();
           }}
         >
-          <Plus size={15} /> 添加设备（回到配对页）
+          <Plus size={15} /> 添加设备
         </button>
       </aside>
 
