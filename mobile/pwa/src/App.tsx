@@ -6,7 +6,14 @@
  * → projects → threads with state badges; data flows through HostSession over the
  * E2E-encrypted channel, polling while any thread is running.
  */
-import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import type { RemoteThreadSnapshot, RemoteThreadState } from "../../shared/protocol";
 import ThreadView from "./ThreadView";
 import { Check, ChevronRight, Close, Phone, Pin, Plus, Refresh } from "./components/icons";
@@ -258,6 +265,52 @@ export default function App() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [metaBusy, setMetaBusy] = useState(false);
   const [metaError, setMetaError] = useState<string | null>(null);
+
+  /**
+   * 长按行唤出操作菜单（= 安卓端 AppDrawer 的 combinedClickable(onLongClick)）。
+   * 上一轮把行尾 ⋮ 在触屏上隐藏了（常驻会形成一列噪声并挤掉标题宽度），
+   * 不补上长按就没有任何入口能打开重命名/置顶/删除。
+   * 全部用 ref：计时器与「这次 click 要不要吞掉」不参与渲染，不需要 state。
+   */
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const swallowClickRef = useRef(false);
+  const clearThreadLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    pressOriginRef.current = null;
+  };
+  const toggleThreadMenu = (id: string) => {
+    setMetaError(null);
+    setRenamingId(null);
+    setDeletingId(null);
+    // 函数式更新：长按是在 setTimeout 里跑的，那里的 menuThreadId 可能已经过期。
+    setMenuThreadId((current) => (current === id ? null : id));
+  };
+  const onThreadRowPointerDown = (event: ReactPointerEvent, id: string) => {
+    clearThreadLongPress();
+    // 鼠标有悬停显形的 ⋮，不抢它的交互；只给触摸/手写笔做长按。
+    if (event.pointerType === "mouse") return;
+    pressOriginRef.current = { x: event.clientX, y: event.clientY };
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      // 长按已经唤出菜单，抬手时浏览器还会补一次 click，不吞掉的话菜单刚开就被关掉抽屉。
+      swallowClickRef.current = true;
+      toggleThreadMenu(id);
+    }, 450);
+  };
+  const onThreadRowPointerMove = (event: ReactPointerEvent) => {
+    const origin = pressOriginRef.current;
+    if (longPressTimerRef.current === null || !origin) return;
+    // 竖向滚动不算长按（阈值 10px，与系统手势接近）。
+    if (Math.abs(event.clientX - origin.x) > 10 || Math.abs(event.clientY - origin.y) > 10) {
+      clearThreadLongPress();
+    }
+  };
+  useEffect(() => clearThreadLongPress, []);
+
   // 双击顶栏标题快速重命名（与 Android de62d5e 同语义）：编辑态 + 草稿。
   const [headerRenaming, setHeaderRenaming] = useState(false);
   const [headerRenameDraft, setHeaderRenameDraft] = useState("");
@@ -1486,7 +1539,17 @@ export default function App() {
                   </div>
                 )}
                 {flatSessions.length > 0 ? (
-                  <div className="sb-sessions">{flatSessions.map((thread) => {
+                  <div
+                    className="sb-sessions"
+                    // 点列表里菜单以外的任意位置关掉已展开的菜单（= 安卓 DropdownMenu 点外部消失）。
+                    // 捕获阶段只做关闭，不阻断冒泡，行的打开逻辑照走。
+                    onClickCapture={(event) => {
+                      if (swallowClickRef.current) return;
+                      if ((event.target as HTMLElement).closest(".thread-menu")) return;
+                      setMenuThreadId(null);
+                    }}
+                  >
+                    {flatSessions.map((thread) => {
                     // group / today 已在 flatSessions 里用同一个 now 算好（见上方派生）。
                     const { group, today: fresh } = thread;
                     return (
@@ -1495,52 +1558,56 @@ export default function App() {
                         <div className="thread-item">
                           <button
                             type="button"
-                            className={`thread-row${fresh ? " fresh" : ""}${threadView?.threadId === thread.id ? " active" : ""}`}
+                            className={`thread-row single${fresh ? " fresh" : ""}${threadView?.threadId === thread.id ? " active" : ""}`}
+                            onPointerDown={(event) => onThreadRowPointerDown(event, thread.id)}
+                            onPointerMove={onThreadRowPointerMove}
+                            onPointerUp={clearThreadLongPress}
+                            onPointerCancel={clearThreadLongPress}
                             onClick={() => {
+                              if (swallowClickRef.current) {
+                                swallowClickRef.current = false;
+                                return;
+                              }
                               void openThread(thread.id);
                               closeAllDrawers();
                             }}
                           >
-                            <div className="thread-body">
-                              <div className="thread-title">
-                                {/* 状态标记只在非空闲时出现（桌面端同样做法：空闲行不画任何东西）。
-                                   运行中用旋转小圆点，其余三种少见状态用文字胶囊。 */}
-                                {thread.state === "running" && <span className="thread-running" aria-hidden="true" />}
-                                {thread.state !== "idle" && thread.state !== "running" && (
-                                  <span className={`badge badge-${thread.state}`}>{THREAD_STATE_LABELS[thread.state]}</span>
-                                )}
-                                {thread.pinned && (
-                                  <span className="thread-pin" title={"已置顶"} aria-label="已置顶">
-                                    <Pin size={11} />
-                                  </span>
-                                )}
-                                <span className="tt-text">{thread.title}</span>
-                                <span className={`thread-time${fresh ? " today" : ""}`}>{sessionTimeLabel(thread.updatedAt, true)}</span>
-                              </div>
-                              {/* 副行：项目名 + 首条消息预览（= 桌面端 .srow-sub）。
-                                 项目名**无条件渲染**：同名会话全靠这行区分，
-                                 而且它保证每行都是两行结构，行与行自然分得开。 */}
-                              <div className="thread-sub">
-                                {thread.projectName}
-                                {thread.preview ? ` · ${thread.preview}` : ""}
-                              </div>
-                            </div>
-                            <span
-                              role="button"
-                              tabIndex={0}
-                              className="thread-more"
-                              aria-label="会话操作"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setMetaError(null);
-                                setMenuThreadId(menuThreadId === thread.id ? null : thread.id);
-                                setRenamingId(null);
-                                setDeletingId(null);
-                              }}
-                            >
-                              ⋮
-                            </span>
+                            {/* 一行只回答「这是哪一条」：状态点 + 图钉 + 标题，其余细节全部去掉。
+                               日期由分组标题给、同日内的先后由排序给（与安卓端 AppDrawer 同一取向）。
+                               状态点每行都画（= 安卓 StateDot）：空闲是默认态，不给读屏再念一遍；
+                               其余状态把中文标签作为点的可访问名——去掉文字胶囊不等于丢掉信息。 */}
+                            {thread.state === "idle" ? (
+                              <span className="thread-dot idle" aria-hidden="true" />
+                            ) : (
+                              <span
+                                className={`thread-dot ${thread.state}`}
+                                role="img"
+                                aria-label={THREAD_STATE_LABELS[thread.state]}
+                              />
+                            )}
+                            {thread.pinned && (
+                              <span className="thread-pin" title={"已置顶"} aria-label="已置顶">
+                                <Pin size={11} />
+                              </span>
+                            )}
+                            <span className="tt-text">{thread.title}</span>
                           </button>
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            className="thread-more"
+                            aria-label="会话操作"
+                            onClick={() => toggleThreadMenu(thread.id)}
+                            onKeyDown={(event) => {
+                              // role=button 的 span 不会自己把 Enter/空格变成 click，得手动接。
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                toggleThreadMenu(thread.id);
+                              }
+                            }}
+                          >
+                            ⋮
+                          </span>
                           {menuThreadId === thread.id && (
                             <div className="thread-menu" onClick={(event) => event.stopPropagation()}>
                               {metaError && <div className="thread-menu-error">{metaError}</div>}

@@ -13,6 +13,7 @@
   --accent: #2e7d52;
   --accent-soft: #e4f1e8;
   --send: #2b2d28;
+  --send-hover: #3a3d35; /* 与桌面端 :root 同值 */
   --send-fg: #ffffff;
   --control: #f3f3ee;
   --control-hover: #ecece7;
@@ -59,6 +60,7 @@
     --accent: #7bd6a1;
     --accent-soft: #214333;
     --send: #75c995;
+    --send-hover: #8cdda9; /* 与桌面端深色块同值 */
     --send-fg: #102015;
     --control: #273239;
     --control-hover: #33434a;
@@ -267,17 +269,29 @@ button:disabled { opacity: 0.5; cursor: default; }
   color: var(--text-dim);
   user-select: none;
 }
-/* 今天那一组：行左侧一条内嵌细条代替任何时间文字（= 桌面端 .thread.fresh）。
-   颜色用 accent 的 55% 混合，避免满饱和深绿看着像引用块。 */
-.thread-row.fresh {
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+/* 今天那一组：行左侧一条短直标代替任何时间文字（= 桌面端 .thread.fresh）。
+   颜色用 accent 的 55% 混合，避免满饱和深绿看着像引用块。
+   以前用的是 inset box-shadow：行高还是 56px 时它看起来是一条直边，
+   改成 44px 单行后会跟着 8px 圆角弯成「(」（用户截图里能看到），
+   所以换成独立元素，尺寸与圆角自己定，不受行圆角影响。
+   18px 高居中，避开上下 8px 的圆角区。 */
+.thread-row.fresh::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
 }
-.thread-row.fresh.active {
-  box-shadow: var(--shadow-sm), inset 2px 0 0 var(--accent);
+.thread-row.fresh.active::before {
+  background: var(--accent);
 }
-/* 会话行：圆角块，不画顶边线（桌面端 .thread 的做法）。 */
+/* 会话行：圆角块，不画顶边线（桌面端 .thread 的做法）。
+   两行行（项目 tab）用默认的块级流；单行行（会话 tab）见下面 .thread-row.single。 */
 .thread-row {
-  display: grid;
   position: relative;
   display: block;
   width: 100%;
@@ -297,6 +311,46 @@ button:disabled { opacity: 0.5; cursor: default; }
 .thread-row.active {
   background: var(--accent-soft);
   box-shadow: var(--shadow-sm);
+}
+
+/* 单行会话行：只看得到「状态点 + 图钉 + 标题」，项目名/预览/时间全部去掉。
+   日期由分组标题给、同日内的先后由排序给（与安卓端 AppDrawer 同一取向：
+   一行只回答「这是哪一条」）。标题拿满整行宽度，不再被时间列挤断。 */
+.thread-row.single {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 10px 8px;
+}
+.thread-row.single .tt-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+/* 行首状态点：照安卓端 AppDrawer.kt 的 StateDot（每行都画，直径 7dp）。
+   扫视时比文字快得多，也不必给 138/140 的「空闲」写一个字。
+   颜色沿用同一映射：running=ok、error=err、idle=borderStrong（灰）、
+   draft/disconnected=textFaint。 */
+.thread-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+}
+.thread-dot.running { background: var(--ok); animation: dot-pulse 1.4s ease-in-out infinite; }
+.thread-dot.error { background: var(--err); }
+.thread-dot.draft,
+.thread-dot.disconnected { background: var(--text-faint); }
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 /* 行内容器：右侧给绝对定位的 ⋮ 让出点击区（否则 ⋮ 会盖到文字上）。 */
@@ -334,8 +388,9 @@ button:disabled { opacity: 0.5; cursor: default; }
   line-height: 1.4;
   color: var(--text-faint);
 }
-/* 行内时间（= 桌面端 .srow-time）：与分组标题共存，不互斥。
-   分组告诉你「大概是哪天」，行内时间告诉你「同一天里哪个最新」。 */
+/* 行内时间（= 桌面端 .srow-time）：现在只给「项目」tab 的行用。
+   会话行已经按安卓端取向改成单行、不再显式时间：哪天由分组标题给，
+   同一天内的先后由排序给。 */
 .thread-time {
   flex: 0 0 auto;
   margin-left: auto;
@@ -344,10 +399,6 @@ button:disabled { opacity: 0.5; cursor: default; }
   font-weight: 400;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
-}
-.thread-time.today {
-  color: var(--accent);
-  font-weight: 600;
 }
 
 /* 置顶标记：图钉图标，颜色比标题淡一档（与桌面端 .thread-pin 一致：
@@ -361,23 +412,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .badge { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--control); color: var(--text-dim); }
 
-/* 侧栏会话行的状态标记。
-   桌面端只给「运行中」画一个旋转小圆点，空闲行什么都不显示
-   （src/renderer/src/styles.css 的 .thread-running + Sidebar.tsx 的 {running && …}）。
-   上一版 PWA 给每一行都挂一个文字胶囊，140 行里 138 个都是「空闲」——
-   那是整列噪声，不是信息。现在：idle 什么都不画，running 用桌面端同款旋转小圆点，
-   其余三种（草稿 / 出错 / 已断开）本来就少见，保留文字胶囊。 */
-.thread-running {
-  width: 11px;
-  height: 11px;
-  flex: none;
-  border: 2px solid var(--accent-soft);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
+/* 状态圆点的动效开关（上面 .thread-dot.running）。 */
 @media (prefers-reduced-motion: reduce) {
-  .thread-running { animation-duration: 2.4s; }
+  .thread-dot.running { animation: none; }
 }
 
 
@@ -1381,6 +1418,19 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .thread-more:hover { color: var(--text); background: var(--control-hover); }
 .thread-more:active { color: var(--text); }
+/* 触屏上没有悬停，⋮ 常驻会在每一行右侧留一列噪声，还把标题宽度挤掉 30px。
+   与安卓端一致改成长按唤出（见 App.tsx 的 onThreadRowPointerDown），
+   ⋮ 只在有指针的设备上悬停或键盘聚焦时显形。 */
+@media (hover: none) {
+  .thread-more { display: none; }
+}
+@media (hover: hover) {
+  .thread-more { opacity: 0; }
+  .thread-item:hover .thread-more,
+  .thread-item:focus-within .thread-more { opacity: 1; }
+  /* 显形时不压住标题结尾 */
+  .thread-row.single { padding-right: 40px; }
+}
 .thread-menu {
   display: flex;
   flex-direction: column;
