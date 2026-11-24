@@ -94,8 +94,12 @@ html, body {
   display: flex;
   align-items: center;
   gap: 8px;
-  /* 右侧留出壳的 ⋮ 浮层（0.2.7+ 常驻右上角），配合 .header-spacer 保证标题真正居中 */
   padding: 2px 4px 8px;
+}
+/* 壳（0.2.7+）右上角常驻它自己的 ⋮ 浮层：标题改成左对齐后不再需要等宽占位居中，
+   但自己的 ⋮ 要避开它——多留 44px 就落在壳的 ⋮ 左边。 */
+.app-header.in-shell {
+  padding-right: 48px;
 }
 
 .app-logo {
@@ -523,24 +527,77 @@ button:disabled { opacity: 0.5; cursor: default; }
   padding: 0;
   cursor: pointer;
 }
+/* 顶栏主体：一行左对齐（= 桌面端 .chat-head 的结构）。
+   以前 text-align:center + .header-spacer 补位是为了把标题真居中，
+   但居中标题不供任何信息，还把项目名挤到第二行。 */
 .header-main {
   min-width: 0;
   flex: 1;
-  text-align: center;
 }
-/* 与左侧头像等宽的占位，让居中标题真的居中（右侧被壳的 ⋮ 占用） */
-.header-spacer { width: 40px; flex: none; }
-.header-main h1 {
+.header-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.header-title {
   font-size: 16px;
+  font-weight: 600;
   margin: 0;
+  /* 标题必须赢过旁边的徽章：412px 实测不锁时徽章要了 126px，标题只剩 139px 且被截断。
+     锁 55% 后徽章自己缩，标题拿到 162px 以上。 */
+  flex: 1 1 auto;
+  min-width: 60%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   /* 双击（双触）重命名：禁掉浏览器双击缩放，dblclick 才能稳定触发 */
   touch-action: manipulation;
 }
+/* 项目名做成标题右边的小灰徒章（= 桌面端 .chat-head-folder）：
+   路径可能很长，给它自己的上限，不要把标题顶没。 */
+.header-folder {
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  /* 硬上限而不是 vw：路径这种次要信息不能反过来顶掉标题。
+     412px 实测：上限 120 时标题 157px、108px 给徽章；压到 96 后标题拿回 ~190px。 */
+  max-width: min(96px, 24vw);
+  min-width: 0;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.header-folder-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 会话操作入口（重命名 / 列宽）。与侧栏 ⋮ 同一字符，行为也一致：再点一次收起。 */
+.header-more {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.header-more:hover { color: var(--text); background: var(--control-hover); }
+.header-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 双击顶栏标题 → 行内重命名（与 Android de62d5e 同语义）。 */
-.header-rename { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; }
+.header-rename { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .header-rename input {
   flex: 1;
   min-width: 0;
@@ -774,15 +831,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .thread-view.drop-target { outline: 2px dashed var(--accent); outline-offset: -4px; background: color-mix(in srgb, var(--accent-soft) 50%, transparent); }
 
 /* 工具栏：返回 + 状态 + 权限/模式/模型 chip —— 紧贴顶部标题下方的一条，可横向滚动。 */
-.thread-toolbar { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 0 0; flex: none; }
-.thread-toolbar::-webkit-scrollbar { display: none; }
-.thread-toolbar .back-btn { width: 30px; height: 30px; font-size: 15px; }
-.thread-toolbar .badge { flex: none; }
 .thread-head { display: flex; align-items: center; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
 /* 「内容来自本地缓存」提示（Tier 1 内存快照 / Tier 2 持久缓存）：
    flex:none——高度链上不能是可伸缩项，否则会和消息区抢高度。 */
 .cached-hint { flex: none; margin: 0; }
-.back-btn { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 8px; width: 34px; height: 34px; padding: 0; font-size: 16px; flex: none; }
 
 .thread-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 4px 2px; min-height: 120px; }
 /* 消息区定位容器：只有它伸缩，滚动交给内层 .thread-scroll。 */
@@ -1209,24 +1261,85 @@ button:disabled { opacity: 0.5; cursor: default; }
 .ctx-pct.mid { color: #a5531b; }
 .ctx-pct.hi { color: #b3261e; }
 
-.cfg-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--surface-muted); border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px; font-size: 11.5px; padding: 4px 10px; cursor: pointer; }
-.cfg-chip:disabled { opacity: 0.6; }
-.cfg-chip:active { border-color: var(--accent); color: var(--text); }
+/* 环境 / 运行时聚合 chip（composer 输入框上方那一行）。 */
+.composer-config-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  /* 不被压缩：与已删除的 .thread-toolbar 同一条承重规则（当时真机反馈“chip 下半截被裁”）。
+     它在 .composer 这个 flex 列里，少了 flex:none 就会被消息区挤。 */
+  flex: none;
+}
+/* font-size 从 11.5px 改成 11px：11.5 不在字号档位里（10/11/12/13/14/16/22），
+   改成档位内的同时宽度还省一点。高度固定 32px：与同一行的 .icon-btn 对齐，
+   不然一行里元素高低不齐。 */
+.cfg-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 32px; padding: 0 11px;
+  max-width: 58%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: var(--surface-muted); border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: var(--radius-pill); font-size: 11px; cursor: pointer;
+}
+.cfg-chip:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
+.cfg-chip:active:not(:disabled) { border-color: var(--accent); color: var(--text); }
+/* 弹层开着：与侧栏选中行同一种“已展开”提示 */
+.cfg-chip.open { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.cfg-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cfg-chip:disabled { opacity: 0.6; cursor: default; }
+/* 一颗 chip 里两组值之间的分隔点：不写的话「基线 完整」会被读成一个长词。 */
+.cfg-chip-sep { flex: none; opacity: 0.55; }
+/* 模型名这种长文本要自己包一层才能正常省略：chip 本身是 flex 容器，
+   而 text-overflow 对 flex 容器里的直接文本子项不生效——
+   不这样做看到的是「12.5t 思」这种硬切，连省略号都没有（截图里拍到过）。 */
+.cfg-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 短而重要的读数（模式名、权限、百分比）不参与收缩：
+   一起可缩时会被挤成「4…」，该让位的只有模型名。 */
+.cfg-chip-fixed { flex: none; white-space: nowrap; }
+.cfg-chip > svg { flex: none; }
 
 /* ---- 底部抽屉（会话级配置） ------------------------------------------- */
-.sheet-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: flex-end; z-index: 110; }
-.sheet { width: 100%; max-height: 72dvh; overflow-y: auto; background: var(--panel); border-radius: 16px 16px 0 0; padding: 8px 12px calc(16px + env(safe-area-inset-bottom)); box-shadow: var(--shadow-md); animation: sheet-up 0.18s ease-out; }
-@keyframes sheet-up { from { transform: translateY(14px); opacity: 0.6; } to { transform: none; opacity: 1; } }
-.sheet-grip { width: 36px; height: 4px; border-radius: 999px; background: var(--border-strong); margin: 4px auto 10px; }
-.sheet-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
-.sheet-note { margin: 0 0 8px; font-size: 12px; color: var(--text-dim); }
-.sheet-list { display: flex; flex-direction: column; gap: 2px; max-height: 54dvh; overflow-y: auto; }
-.sheet-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; background: none; border: none; color: var(--text); font-size: 14px; padding: 12px 10px; border-radius: 10px; cursor: pointer; }
-.sheet-item:active { background: var(--control); }
-.sheet-item.on { color: var(--accent); }
-.sheet-item:disabled { opacity: 0.6; }
-.sheet-item-main { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sheet-tag { flex: none; font-style: normal; font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--control); color: var(--text-dim); }
+/* 锚定弹层（components/Popover.tsx）。替代原来的底部抽屉：
+   抽屉脱离触发点、宽屏退化成通栏白条、还给只读读数配了全屏模态。
+   left/top 由组件按触发元素 rect 算，这里只管外观。 */
+.pop {
+  position: fixed;
+  z-index: 110;
+  width: min(320px, calc(100vw - 16px));
+  max-height: min(56dvh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+/* 焦点已在组件里收到弹层上（Esc 才收得到），不要再画一圈焦点框 */
+.pop:focus { outline: none; }
+.pop + .pop { margin-top: 0; }
+.pop-title { font-size: 13px; font-weight: 700; color: var(--text); margin: 2px 2px 4px; }
+/* 第二个小节标题与上一节拉开一点 */
+.pop-title + .pop-note, .pop-list + .pop-title { margin-top: 10px; }
+.pop-note { margin: 0 2px 8px; font-size: 12px; line-height: 1.5; color: var(--text-dim); }
+.pop-list { display: flex; flex-direction: column; gap: 2px; }
+.pop-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; min-height: 44px; text-align: left;
+  /* border / border-radius 要显式清掉：通用规则 button{...} 会给每个按钮发一圈边与 9px 圆角 */
+  background: none; border: none; border-radius: var(--radius-sm); color: var(--text);
+  font-size: 14px; padding: 10px; cursor: pointer;
+}
+.pop-item:hover:not(:disabled) { background: var(--overlay-3); }
+.pop-item:active:not(:disabled) { background: var(--overlay-4); }
+.pop-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.pop-item.on { color: var(--accent); }
+.pop-item:disabled { opacity: 0.6; cursor: default; }
+.pop-item-main { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop-tag { flex: none; font-style: normal; font-size: 10px; padding: 1px 6px; border-radius: var(--radius-pill); background: var(--control); color: var(--text-dim); }
 
 /* ---- S6.3: approval card ------------------------------------------------ */
 .approval-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.65); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
@@ -1468,8 +1581,6 @@ button:disabled { opacity: 0.5; cursor: default; }
     grid-row: 1;
     padding: 12px 18px 10px;
   }
-  /* 40px 占位是给安卓壳右上角 ⋮ 用的，浏览器里纯属浪费 */
-  .header-spacer { display: none; }
   /* 头像按钮（开项目抽屉）在侧栏常驻后变得重复：侧栏已有可点的 drawer-head */
   .avatar-btn { display: none; }
 

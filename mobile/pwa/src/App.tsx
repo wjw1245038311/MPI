@@ -16,7 +16,8 @@ import {
 } from "react";
 import type { RemoteThreadSnapshot, RemoteThreadState } from "../../shared/protocol";
 import ThreadView from "./ThreadView";
-import { Check, ChevronRight, Close, NewChat, Phone, Pin, Plus, Refresh } from "./components/icons";
+import { Check, ChevronRight, Close, Folder, NewChat, Phone, Pin, Plus, Refresh } from "./components/icons";
+import { Popover } from "./components/Popover";
 import DbgOverlay from "./DbgOverlay";
 import { IdbKeyStore } from "./lib/keystore-idb";
 import { AccountCard } from "./components/AccountCard";
@@ -31,7 +32,7 @@ import { Requester } from "./lib/requester";
 import { ThreadActions } from "./lib/thread-actions";
 import { ThreadSession, type ThreadView as ThreadViewState } from "./lib/thread-session";
 import { SnapshotCache } from "./lib/snapshot-cache";
-import { columnCssVars, DEFAULT_COLUMN_PRESET, readColumnPreset, writeColumnPreset, type ColumnPreset } from "./lib/column-preset";
+import { COLUMN_PRESETS, COLUMN_PRESET_ORDER, columnCssVars, DEFAULT_COLUMN_PRESET, readColumnPreset, writeColumnPreset, type ColumnPreset } from "./lib/column-preset";
 import { dayBucket, groupLabelAt, sessionTimeLabel } from "./lib/relative-time";
 import { ThreadCache } from "./lib/thread-cache";
 import { IdbStore } from "./lib/thread-cache-idb";
@@ -1245,6 +1246,17 @@ export default function App() {
             : "连接中…"
       : "";
 
+  /** 会话视图下的项目名：做成标题右边的 dim 小徒章（= 桌面端 .chat-head-folder），
+   * 不再单独占一行。home 视图仍用 headerSubtitle 说连接状态。 */
+  const headerProjectName = threadView?.summary
+    ? snap?.projects.find((p) => p.id === threadView.summary?.projectId)?.name ?? ""
+    : "";
+  const headerThreadState = threadView?.summary?.state;
+
+  /** 顶栏 ⋮ 弹层的锚点：同时当作开合状态用（null = 未开）。
+   * 用 state 而不是 ref：ref 赋值不会重渲染，Popover 拿不到刚挂上的元素。 */
+  const [headerMenuAnchor, setHeaderMenuAnchor] = useState<HTMLButtonElement | null>(null);
+
   /**
    * 设备身份不再被认可（桌面端撤销过、手机端身份被重置）时，relay 会用 4001/AUTH_FAILED
    * 关掉连接。
@@ -1291,7 +1303,7 @@ export default function App() {
        列表页仍用 min-height + 整页滚动。 */
     <div className={`app${view === "home" && openThreadId ? " thread-open" : ""}`} style={columnCssVars(columnPreset) as CSSProperties}>
       <UpdatePill />
-      <header className="app-header">
+      <header className={`app-header${shellBridge() ? " in-shell" : ""}`}>
         <button
           type="button"
           className="avatar-btn"
@@ -1332,20 +1344,91 @@ export default function App() {
             </form>
           ) : (
             <>
-              <h1
-                onDoubleClick={() => startHeaderRename()}
-                title={threadView?.summary ? "双击重命名会话" : undefined}
-              >
-                {headerTitle}
-              </h1>
-              {headerSubtitle && <div className="hint">{headerSubtitle}</div>}
+              {/* 一行左对齐：标题 + 项目名小徒章 + 状态点（= 桌面端 .chat-head 的结构）。
+                 以前是居中两行（标题在上、项目名在下），还要下面那个 .header-spacer 补等宽占位
+                 才能真居中——居中标题本身不供信息，纯粹是模板痕迹。 */}
+              <div className="header-line">
+                <h1
+                  className="header-title"
+                  onDoubleClick={() => startHeaderRename()}
+                  title={threadView?.summary ? "双击重命名会话" : undefined}
+                >
+                  {headerTitle}
+                </h1>
+                {headerProjectName && (
+                  <span className="header-folder" title={headerProjectName}>
+                    <Folder size={11} />
+                    <span className="header-folder-path">{headerProjectName}</span>
+                  </span>
+                )}
+                {/* 状态不拿 badge 伪装成按钮：复用侧栏同一套 .thread-dot 颜色，
+                   空闲/草稿不画（默认态没信息量）。 */}
+                {headerThreadState && headerThreadState !== "idle" && headerThreadState !== "draft" && (
+                  <span
+                    className={`thread-dot ${headerThreadState}`}
+                    role="img"
+                    aria-label={THREAD_STATE_LABELS[headerThreadState]}
+                  />
+                )}
+              </div>
+              {/* home 视图的连接状态说明仍单独一行（它不是身份，是状态） */}
+              {!threadView?.summary && headerSubtitle && <div className="hint">{headerSubtitle}</div>}
             </>
           )}
           {headerRenaming && metaError && <div className="hint error-text header-rename-error">{metaError}</div>}
         </div>
-        {/* 占位：右侧被壳的 ⋮ 占用，补上等宽元素标题才能真居中 */}
-        <span className="header-spacer" aria-hidden="true" />
+        {/* 会话才能改名列宽，所以 ⋮ 只在会话视图出现。壳里不抢右上角：
+           .app-header.in-shell 会多留 44px，让这个按钮落在壳的 ⋮ 左边。 */}
+        {threadView?.summary && (
+          <button
+            type="button"
+            className="header-more"
+            aria-label="会话操作"
+            title="会话操作"
+            aria-expanded={headerMenuAnchor !== null}
+            onClick={(event) =>
+              setHeaderMenuAnchor((current) => (current === event.currentTarget ? null : event.currentTarget))
+            }
+          >
+            ⋮
+          </button>
+        )}
       </header>
+      {headerMenuAnchor && (
+        <Popover anchor={headerMenuAnchor} prefer="down" onClose={() => setHeaderMenuAnchor(null)} labelledBy="hdr-menu-title">
+          <div className="pop-title" id="hdr-menu-title">本会话</div>
+          <div className="pop-list">
+            <button
+              type="button"
+              className="pop-item"
+              onClick={() => {
+                setHeaderMenuAnchor(null);
+                startHeaderRename();
+              }}
+            >
+              <span className="pop-item-main">重命名</span>
+            </button>
+            {COLUMN_PRESET_ORDER.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={`pop-item${columnPreset === id ? " on" : ""}`}
+                onClick={() => {
+                  changeColumnPreset(id);
+                  setHeaderMenuAnchor(null);
+                }}
+              >
+                <span className="pop-item-main">
+                  {COLUMN_PRESETS[id].label}
+                  <em className="pop-tag">仅宽屏</em>
+                </span>
+                {columnPreset === id && <em className="pop-tag">当前</em>}
+              </button>
+            ))}
+          </div>
+          <p className="pop-note">对话区宽度只影响宽屏（≥1024px），手机端不变。</p>
+        </Popover>
+      )}
       {view === "home" && hostId && shellBridge() && !pushHintDismissed && (
         <div className="push-hint">
           <span>壳里收不到锁屏推送——在浏览器打开同一地址并配对，就能收到「MPI 需要批准」通知。</span>
@@ -1374,10 +1457,7 @@ export default function App() {
             onEchoDrop={(id) => threadSessionRef.current?.dropEcho(id)}
             // 发送兜底：重连后主机按 connectionId 清过订阅，漏补的话事件全被丢弃。
             onEnsureSubscribed={() => threadSessionRef.current?.ensureSubscribed() ?? Promise.resolve()}
-            // 宽屏对话区宽度（工具条上的「列宽」面板）
-            columnPreset={columnPreset}
             onOpenThread={(id) => void openThread(id)}
-            onColumnPreset={changeColumnPreset}
           />
         ) : view === "home" && hostId ? (
           <div className="chat-empty">

@@ -76,9 +76,15 @@ has(".thread-scroll", "overflow-y", /auto/);
 // sticky 的按钮会占掉消息区底部一行，且贴在半空很难看。
 has(".to-bottom", "position", /^absolute/);
 
-// 工具条与输入框不许被压缩（曾经 chip 下半截被裁）。
-has(".thread-toolbar", "flex", /^none/);
+// 配置行与输入框不许被压缩（曾经 chip 下半截被裁）。
+// 2026-11-24：环境 chip 从顶部工具条搬到 composer 上方，守的对象随之从
+// .thread-toolbar（已删）换成 .composer-config-row——这条规则本身没变。
+has(".composer-config-row", "flex", /^none/);
 has(".composer", "flex", /^none/);
+
+// 锁定弹层（替代底部抽屉）：必须是 fixed。写成 absolute 会被任何 overflow 容器裁掉
+// ——AGENTS.md 里已经写了这条硬规则，这里把它锁住。
+has(".pop", "position", /^fixed/);
 
 // --- DOM 链不能断：App 必须把 ThreadView 放在 .app-main 里 ---------------
 const mainIdx = appTsx.indexOf('className="app-main"');

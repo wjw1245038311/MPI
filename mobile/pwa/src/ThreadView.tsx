@@ -6,7 +6,7 @@
  * full-screen approval card (ui.request → ui.respond, §4.5 diff preview).
  */
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { RemotePermission, RemoteThreadState, RemoteUiRequest } from "../../shared/protocol";
+import type { RemotePermission, RemoteUiRequest } from "../../shared/protocol";
 import type { ThreadActions, SendMode } from "./lib/thread-actions";
 import type { ThreadView as ThreadViewState, ViewBlock, ViewMessage } from "./lib/thread-session";
 import { compressImageFile, type CompressedImage } from "./lib/image-attach";
@@ -22,8 +22,8 @@ import { parseBlocks, type MdBlock } from "./lib/block-md";
 import { withChoiceSegments } from "./lib/choice-block";
 import type { ChoiceFailure } from "./lib/choice-block";
 import { ChoicePanel } from "./components/ChoicePanel";
+import { Popover } from "./components/Popover";
 import { FileKindIcon } from "./components/FileKindIcon";
-import { COLUMN_PRESETS, COLUMN_PRESET_ORDER, type ColumnPreset } from "./lib/column-preset";
 import { groupToolBlocks, type ToolGroup } from "./lib/tool-groups";
 import { formatTokens, readContextUsage } from "./lib/context-usage";
 import { formatElapsed, shouldShowThinkingIndicator } from "./lib/thinking-indicator";
@@ -185,13 +185,6 @@ function IconX() {
 }
 
 /** 配置栏用：权限（锁）与模型（方框）。 */
-function IconWidth() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4" />
-    </svg>
-  );
-}
 
 function IconLock() {
   return (
@@ -466,13 +459,6 @@ function IconWave() {
   );
 }
 
-const STATE_LABELS: Record<RemoteThreadState, string> = {
-  draft: "草稿",
-  idle: "空闲",
-  running: "运行中",
-  error: "出错",
-  disconnected: "已断开",
-};
 
 /** §4.5 diff field shape (host attaches it to write/edit approval requests). */
 interface ApprovalDiffView {
@@ -1305,13 +1291,11 @@ export interface ThreadViewProps {
    * 主机会把本次回合的所有事件静默丢弃）。已订阅时零往返；出错不阻断发送。 */
   onEnsureSubscribed?: () => Promise<void>;
   /** 宽屏对话区宽度预设（工具条「列宽」面板）。 */
-  columnPreset?: ColumnPreset;
-  onColumnPreset?: (next: ColumnPreset) => void;
   /** 交接后切到主机新开的会话。 */
   onOpenThread?: (threadId: string) => void;
 }
 
-export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop, onEnsureSubscribed, columnPreset, onColumnPreset, onOpenThread }: ThreadViewProps) {
+export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi, onBack, onEcho, onEchoDrop, onEnsureSubscribed, onOpenThread }: ThreadViewProps) {
   const pendingUi = view.pendingUi;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1325,7 +1309,27 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
    *  注意：组件级状态，切走会话再回来会丢（v1 限制）。 */
   const [pendingFu, setPendingFu] = useState<{ text: string; images: CompressedImage[]; files: PickedFile[]; videos: PickedVideo[] } | null>(null);
   // 顶部配置抽屉（权限/模式/模型）与瞬时提示。
-  const [sheet, setSheet] = useState<null | "permission" | "mode" | "model" | "ctx" | "width">(null);
+  /**
+   * 环境/运行时两个锚定弹层（取代旧的底部抽屉）。
+   * anchor 用 state 不用 ref：ref 赋值不触发重渲染，Popover 拿不到刚挂上的元素。
+   * 权限/模式合成一个（composer 那颗 [模式·权限] chip 打开），
+   * 用量/模型/压缩/交结合成一个（[用量·模型] chip 打开）——412px 放不下四颗独立 chip。
+   */
+  const [pop, setPop] = useState<null | "env" | "runtime">(null);
+  const [popAnchor, setPopAnchor] = useState<HTMLElement | null>(null);
+  const closePop = () => {
+    setPop(null);
+    setPopAnchor(null);
+  };
+  /** 再点一次同一颗 chip = 收起（切换语义，与顶栏 ⋮ / 侧栏 ⋮ 一致）。 */
+  const togglePop = (id: "env" | "runtime", el: HTMLElement) => {
+    if (pop === id) {
+      closePop();
+      return;
+    }
+    setPop(id);
+    setPopAnchor(el);
+  };
   const [toast, setToast] = useState<string | null>(null);
   const [modelBusy, setModelBusy] = useState(false);
   const [handoffBusy, setHandoffBusy] = useState(false);
@@ -1382,7 +1386,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     setDraft(readDraft(view.threadId));
     setSendError(null);
     setAttachments([]);
-    setSheet(null);
+    closePop();
   }, [view.threadId]);
 
   // 首次挂载：读回本会话草稿。
@@ -2082,7 +2086,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     if (!actions || !view.summary) return;
     const next: RemotePermission = view.summary.permission === "sandbox" ? "full" : "sandbox";
     setSendError(null);
-    setSheet(null);
+    closePop();
     try {
       await actions.setPermission(next); // snapshot update flows back via ThreadSession events
     } catch (error) {
@@ -2098,7 +2102,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     setSendError(null);
     try {
       await actions.setModel(provider, modelId);
-      setSheet(null);
+      closePop();
       setToast("模型已切换");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2168,7 +2172,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
     setSendError(null);
     try {
       await actions.setMode(modeId);
-      setSheet(null);
+      closePop();
       setToast("模式已切换");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2212,60 +2216,7 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       onDrop={(e) => void onDropFiles(e)}
     >
       {/* 工具栏：会话级配置（权限/模式/模型）。返回改用顶部头像按钮，状态/权限文字已去重。 */}
-      <div className="thread-toolbar">
-        {view.summary && (
-          <>
-            <button
-              type="button"
-              className={`cfg-chip ${view.summary.permission === "sandbox" ? "sandbox" : "full"}`}
-              onClick={() => setSheet("permission")}
-            >
-              <IconLock />
-              {view.summary.permission === "sandbox" ? "沙盒" : "完整权限"}
-            </button>
-            <button type="button" className="cfg-chip" onClick={() => setSheet("mode")} disabled={modelBusy}>
-              <IconSpark />
-              {modeLabel}
-            </button>
-            <button type="button" className="cfg-chip" onClick={() => setSheet("model")} disabled={modelBusy}>
-              <IconModel />
-              {modelBusy ? "切换中…" : modelLabel}
-            </button>
-            {/* 上下文用量：手机端原来完全看不到，而这个数字决定要不要压缩。 */}
-            <button
-              type="button"
-              className={`cfg-chip ctx ${ctx.hasValue ? ctx.band : ""}`}
-              onClick={() => setSheet("ctx")}
-              aria-label="上下文用量"
-            >
-              <IconGauge />
-              {ctxLabel}
-            </button>
-            {/* 运行中/出错时才显示状态——平时“空闲”没有信息量 */}
-            {view.summary.state !== "idle" && view.summary.state !== "draft" && (
-              <span className={`badge badge-${view.summary.state}`}>{STATE_LABELS[view.summary.state]}</span>
-            )}
-          </>
-        )}
-        {/* 宽屏对话区宽度。放在工具条末尾：与权限/模式/模型同属「本会话的环境设置」。
-            文案带上「列宽」前缀——只写档位名（如「标准（默认）」）用户认不出这是什么（真机反馈）。 */}
-        {columnPreset && (
-          <button
-            type="button"
-            className="cfg-chip"
-            onClick={() => setSheet("width")}
-            title="对话区宽度（仅宽屏 ≥1024px 生效）"
-          >
-            <IconWidth />
-            列宽 · {COLUMN_PRESETS[columnPreset].chip}
-          </button>
-        )}
-        <button type="button" className="cfg-chip" onClick={() => void doHandoff()} disabled={handoffBusy} title="用当前会话的模型写交接文档，并开一个新会话">
-          {handoffBusy ? "交接中…" : "交接新对话"}
-        </button>
-      </div>
-
-      {/* 内容来自本地缓存时的提示（对齐原生 ThreadScreen「离线：显示本地缓存…」）：
+{/* 内容来自本地缓存时的提示（对齐原生 ThreadScreen「离线：显示本地缓存…」）：
           切回来不再白屏，但要知道这眼看到的是旧内容。 */}
       {view.cachedAt !== null && (
         <p className="hint cached-hint">本地缓存（{relTime(view.cachedAt)}）· 正在获取最新内容…</p>
@@ -2377,6 +2328,42 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
               </div>
             )}
 
+            {/* 两颗聚合 chip 单独一行，放在输入框上方。
+               为什么不并进下面那一行：412px 时可用宽 ≈330（86vw 抽屉 − 24 内边距），
+               而 [模式·权限]≈120 + [用量·模型]≈180 + 三枚 32/36px 图标按钮 + 间距 ≈ 400，
+               一定溢出。桌面端同样把它们放在输入框上方的 .composer-project-row。
+               以前它们是顶部一整条 7 颗 chip——两份参照都不把环境开关放顶部。 */}
+            <div className="composer-config-row">
+              <button
+                type="button"
+                className={`cfg-chip${pop === "env" ? " open" : ""}`}
+                onClick={(event) => togglePop("env", event.currentTarget)}
+                aria-expanded={pop === "env"}
+                aria-haspopup="dialog"
+                title="任务模式与权限"
+              >
+                <IconSpark />
+                <span className="cfg-chip-fixed">{modeLabel}</span>
+                <span className="cfg-chip-sep" aria-hidden="true">·</span>
+                <IconLock />
+                <span className="cfg-chip-fixed">{view.summary?.permission === "sandbox" ? "沙盒" : "完整"}</span>
+              </button>
+              <button
+                type="button"
+                className={`cfg-chip ctx ${ctx.hasValue ? ctx.band : ""}${pop === "runtime" ? " open" : ""}`}
+                onClick={(event) => togglePop("runtime", event.currentTarget)}
+                aria-expanded={pop === "runtime"}
+                aria-haspopup="dialog"
+                title="上下文用量与模型"
+              >
+                <IconGauge />
+                <span className="cfg-chip-fixed">{ctxLabel}</span>
+                <span className="cfg-chip-sep" aria-hidden="true">·</span>
+                <IconModel />
+                <span className="cfg-chip-text">{modelBusy ? "切换中…" : modelLabel}</span>
+              </button>
+            </div>
+
             <textarea
               ref={inputRef}
               className="composer-input"
@@ -2457,161 +2444,150 @@ export default function ThreadView({ view, actions, uiBusy, uiError, onRespondUi
       )}
 
       {/* 底部抽屉：权限 / 模型（会话级配置只在这里改，不占消息区）。 */}
-      {sheet && (
-        <div className="sheet-backdrop" onClick={() => setSheet(null)}>
-          <div className="sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-            <div className="sheet-grip" />
-            {sheet === "mode" ? (
-              <>
-                <div className="sheet-title">任务模式</div>
-                <p className="sheet-note">模式同时决定权限与思考等级，并可能注入行为指令（如迭代/调研）。</p>
-                {view.availableModes.length === 0 ? (
-                  <p className="sheet-note">主机未上报可选模式列表。</p>
-                ) : (
-                  <div className="sheet-list">
-                    <button
-                      type="button"
-                      className={`sheet-item ${view.taskMode ? "" : "on"}`}
-                      disabled={modelBusy}
-                      onClick={() => void chooseMode("")}
-                    >
-                      <span className="sheet-item-main">
-                        基线
-                        <em className="sheet-tag">不注入</em>
-                      </span>
-                      {view.taskMode ? null : <IconCheck />}
-                    </button>
-                    {view.availableModes.map((option) => {
-                      const active = view.taskMode === option.id;
-                      return (
-                        <button
-                          key={option.id}
-                          type="button"
-                          className={`sheet-item ${active ? "on" : ""}`}
-                          disabled={modelBusy}
-                          onClick={() => void chooseMode(option.id)}
-                        >
-                          <span className="sheet-item-main">
-                            {option.name}
-                            {option.summary && <em className="sheet-tag">{option.summary}</em>}
-                          </span>
-                          {active && <IconCheck />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
-            ) : sheet === "ctx" ? (
-              <>
-                <div className="sheet-title">上下文用量</div>
-                {ctx.hasValue ? (
-                  <>
-                    <div className={`ctx-bar ${ctx.band}`}>
-                      <span style={{ width: `${Math.max(2, ctx.percent)}%` }} />
-                    </div>
-                    <div className="ctx-numbers">
-                      <span>
-                        {formatTokens(ctx.used)} / {formatTokens(ctx.total)} tokens
-                      </span>
-                      <span className={`ctx-pct ${ctx.band}`}>{ctx.percent.toFixed(1)}%</span>
-                    </div>
-                    {ctx.isEstimate && <p className="sheet-note">压缩后的估算值——下次回复后更新为实际值。</p>}
-                  </>
-                ) : (
-                  <p className="sheet-note">主机还没上报这个会话的上下文用量（模型未知或会话太新）。</p>
-                )}
-                <p className="sheet-note">
-                  ≥60% 就该压缩：把早期对话总结成摘要，腾出窗口又不丢关键信息。
-                  {view.compacting ? "（正在压缩…）" : ""}
-                </p>
-                <button
-                  type="button"
-                  className="sheet-item"
-                  disabled={!actions || view.compacting || view.running}
-                  onClick={() => void doCompact()}
-                >
-                  <span className="sheet-item-main">
-                    {view.compacting ? "压缩中…" : "压缩上下文"}
-                    <em className="sheet-tag">
-                      {view.running ? "回合进行中" : view.compacting ? "请稍候" : "压缩后自动刷新用量"}
-                    </em>
-                  </span>
-                  {view.compacting ? <span className="spinner" /> : null}
-                </button>
-              </>
-            ) : sheet === "width" ? (
-              <>
-                <div className="sheet-title">对话区宽度</div>
-                <p className="sheet-note">
-                  只影响宽屏（≥1024px）；手机端不受影响。默认「标准」——左右留白对称。
-                </p>
-                <div className="sheet-list">
-                  {COLUMN_PRESET_ORDER.map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      className={`sheet-item${columnPreset === id ? " on" : ""}`}
-                      onClick={() => onColumnPreset?.(id)}
-                    >
-                      <span className="sheet-item-main">{COLUMN_PRESETS[id].label}</span>
-                      {columnPreset === id && <em className="sheet-tag">当前</em>}
-                    </button>
-                  ))}
-                </div>
-                {columnPreset && <p className="sheet-note">{COLUMN_PRESETS[columnPreset].note}</p>}
-              </>
-            ) : sheet === "permission" ? (
-              <>
-                <div className="sheet-title">权限级别</div>
-                <p className="sheet-note">沙盒：写文件/执行命令前需要你批准；完整：不再逐条询问。</p>
-                <button
-                  type="button"
-                  className={`sheet-item ${view.summary?.permission === "sandbox" ? "on" : ""}`}
-                  onClick={() => void togglePermission()}
-                >
-                  <span>沙盒（逐条批准）</span>
-                  {view.summary?.permission === "sandbox" && <IconCheck />}
-                </button>
-                <button
-                  type="button"
-                  className={`sheet-item ${view.summary?.permission === "full" ? "on" : ""}`}
-                  onClick={() => void togglePermission()}
-                >
-                  <span>完整权限（不询问）</span>
-                  {view.summary?.permission === "full" && <IconCheck />}
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="sheet-title">选择模型</div>                {view.availableModels.length === 0 ? (
-                  <p className="sheet-note">主机未上报可选模型列表。</p>
-                ) : (
-                  <div className="sheet-list">
-                    {view.availableModels.map((option) => {
-                      const active = view.model?.provider === option.provider && view.model?.id === option.id;
-                      return (
-                        <button
-                          key={`${option.provider}/${option.id}`}
-                          type="button"
-                          className={`sheet-item ${active ? "on" : ""}`}
-                          disabled={modelBusy}
-                          onClick={() => void chooseModel(option.provider, option.id)}
-                        >
-                          <span className="sheet-item-main">
-                            {option.name || option.id}
-                            {option.reasoning && <em className="sheet-tag">思考</em>}
-                          </span>
-                          {active && <IconCheck />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
-            )}
+      {/* 环境弹层：任务模式 + 权限。由 composer 的 [模式·权限] chip 打开。 */}
+      {pop === "env" && (
+        <Popover anchor={popAnchor} prefer="up" onClose={closePop} labelledBy="pop-env-title">
+          <div className="pop-title" id="pop-env-title">任务模式</div>
+          <p className="pop-note">模式同时决定权限与思考等级，并可能注入行为指令（如迭代/调研）。</p>
+          {view.availableModes.length === 0 ? (
+            <p className="pop-note">主机未上报可选模式列表。</p>
+          ) : (
+            <div className="pop-list">
+              <button
+                type="button"
+                className={`pop-item ${view.taskMode ? "" : "on"}`}
+                disabled={modelBusy}
+                onClick={() => void chooseMode("")}
+              >
+                <span className="pop-item-main">
+                  基线
+                  <em className="pop-tag">不注入</em>
+                </span>
+                {view.taskMode ? null : <IconCheck />}
+              </button>
+              {view.availableModes.map((option) => {
+                const active = view.taskMode === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`pop-item ${active ? "on" : ""}`}
+                    disabled={modelBusy}
+                    onClick={() => void chooseMode(option.id)}
+                  >
+                    <span className="pop-item-main">
+                      {option.name}
+                      {option.summary && <em className="pop-tag">{option.summary}</em>}
+                    </span>
+                    {active && <IconCheck />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="pop-title">权限级别</div>
+          <p className="pop-note">沙盒：写文件/执行命令前需要你批准；完整：不再逐条询问。</p>
+          <div className="pop-list">
+            <button
+              type="button"
+              className={`pop-item ${view.summary?.permission === "sandbox" ? "on" : ""}`}
+              onClick={() => void togglePermission()}
+            >
+              <span className="pop-item-main">沙盒（逐条批准）</span>
+              {view.summary?.permission === "sandbox" && <IconCheck />}
+            </button>
+            <button
+              type="button"
+              className={`pop-item ${view.summary?.permission === "full" ? "on" : ""}`}
+              onClick={() => void togglePermission()}
+            >
+              <span className="pop-item-main">完整权限（不询问）</span>
+              {view.summary?.permission === "full" && <IconCheck />}
+            </button>
           </div>
-        </div>
+        </Popover>
+      )}
+
+      {/* 运行时弹层：上下文用量 → 压缩 → 模型 → 交接，由 [用量·模型] chip 打开。
+         这四件事同一族（这个会话现在用什么、还剩多少），合成一个弹层；
+         模型列表可能十几项，Popover 自带 max-height + 内部滚动，不再铺满半屏。
+         「交接新对话」原来是一条顶部 chip，低频动作不配占首屏一行，收在这里。 */}
+      {pop === "runtime" && (
+        <Popover anchor={popAnchor} prefer="up" onClose={closePop} labelledBy="pop-runtime-title">
+          <div className="pop-title" id="pop-runtime-title">上下文用量</div>
+          {ctx.hasValue ? (
+            <>
+              <div className={`ctx-bar ${ctx.band}`}>
+                <span style={{ width: `${Math.max(2, ctx.percent)}%` }} />
+              </div>
+              <div className="ctx-numbers">
+                <span>
+                  {formatTokens(ctx.used)} / {formatTokens(ctx.total)} tokens
+                </span>
+                <span className={`ctx-pct ${ctx.band}`}>{ctx.percent.toFixed(1)}%</span>
+              </div>
+              {ctx.isEstimate && <p className="pop-note">压缩后的估算值——下次回复后更新为实际值。</p>}
+            </>
+          ) : (
+            <p className="pop-note">主机还没上报这个会话的上下文用量（模型未知或会话太新）。</p>
+          )}
+          <p className="pop-note">
+            ≥60% 就该压缩：把早期对话总结成摘要，腾出窗口又不丢关键信息。
+            {view.compacting ? "（正在压缩…）" : ""}
+          </p>
+          <div className="pop-list">
+            <button
+              type="button"
+              className="pop-item"
+              disabled={!actions || view.compacting || view.running}
+              onClick={() => void doCompact()}
+            >
+              <span className="pop-item-main">
+                {view.compacting ? "压缩中…" : "压缩上下文"}
+                <em className="pop-tag">
+                  {view.running ? "回合进行中" : view.compacting ? "请稍候" : "压缩后自动刷新用量"}
+                </em>
+              </span>
+              {view.compacting ? <span className="spinner" /> : null}
+            </button>
+          </div>
+
+          <div className="pop-title">选择模型</div>
+          {view.availableModels.length === 0 ? (
+            <p className="pop-note">主机未上报可选模型列表。</p>
+          ) : (
+            <div className="pop-list">
+              {view.availableModels.map((option) => {
+                const active = view.model?.provider === option.provider && view.model?.id === option.id;
+                return (
+                  <button
+                    key={`${option.provider}/${option.id}`}
+                    type="button"
+                    className={`pop-item ${active ? "on" : ""}`}
+                    disabled={modelBusy}
+                    onClick={() => void chooseModel(option.provider, option.id)}
+                  >
+                    <span className="pop-item-main">
+                      {option.name || option.id}
+                      {option.reasoning && <em className="pop-tag">思考</em>}
+                    </span>
+                    {active && <IconCheck />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="pop-title">交接新对话</div>
+          <p className="pop-note">用当前会话的模型写一份交接文档，再开一个新会话接着做。</p>
+          <div className="pop-list">
+            <button type="button" className="pop-item" onClick={() => void doHandoff()} disabled={handoffBusy}>
+              <span className="pop-item-main">{handoffBusy ? "交接中…" : "生成交接文档并开新会话"}</span>
+              {handoffBusy ? <span className="spinner" /> : null}
+            </button>
+          </div>
+        </Popover>
       )}
 
       {toast && <div className="toast">{toast}</div>}

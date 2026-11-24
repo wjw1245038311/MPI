@@ -45,6 +45,13 @@ export const Plus = (p: P) => (
  * 虚线在语义上正好：一个还没有内容的会话。
  * dasharray 按 24 viewBox 调：一段墨 ≈2.9、一段空 ≈2.4，16px 下能分辨出是虚线而不是缺笔画。
  */
+/** 项目目录（顶栏标题右边的路径徒章用，与桌面端 .chat-head-folder 的 Folder 同一图形）。 */
+export const Folder = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l1.8 2.2h9A1.5 1.5 0 0 1 21 9.7v8.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" />
+  </svg>
+);
+
 export const NewChat = (p: P) => (
   <svg {...base(p)}>
     <path
