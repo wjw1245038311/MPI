@@ -12,6 +12,10 @@
   --text-faint: #9aa096;
   --accent: #2e7d52;
   --accent-soft: #e4f1e8;
+  /* 实底 --accent 上的文字色。桌面端没有实底 accent 按钮，因此无同名 token 可镜像——
+     这是 PWA 新增的。值与 --send-fg 呰合，但不混用名字：
+     以后若主按钮换色，--send-fg 会跟着变，而 accent 上的字不该跟着变。 */
+  --accent-fg: #ffffff;
   --send: #2b2d28;
   --send-hover: #3a3d35; /* 与桌面端 :root 同值 */
   --send-fg: #ffffff;
@@ -59,6 +63,7 @@
     --text-faint: #8b98a0;
     --accent: #7bd6a1;
     --accent-soft: #214333;
+    --accent-fg: #102015;
     --send: #75c995;
     --send-hover: #8cdda9; /* 与桌面端深色块同值 */
     --send-fg: #102015;
@@ -443,34 +448,34 @@ button:disabled { opacity: 0.5; cursor: default; }
   margin: 0 -12px;
   pointer-events: none;
 }
-/* 胶囊本体：用主操作色（--send / --send-fg 就是设计系统里的「主按钮」），
-   不用安卓端的白底——安卓抽屉底是白的、列表是灰卡片，白胶囊能浮起来；
-   PWA 抽屉本身就是白的，白压白加一圈 #e7e7e1 的边，几乎看不出有个按钮。 */
+/* 胶囊本体：实底 --accent（这套界面自己的强调色）。
+   前两版都被否：白底压在白的抽屉上看不见（等于没有按钮）；
+   主按钮的 --send 在浅主题是 #2b2d28 近黑，悬浮在列表上就是一块黑斑。
+   accent 已经是这套界面里「这是可点的」信号（顶栏图标、选中 tab、今日行标记都用它）。 */
 .new-thread-btn {
   pointer-events: auto;
   display: inline-flex; align-items: center; justify-content: center; gap: 9px;
   padding: 14px 22px; border-radius: var(--radius-pill);
-  background: var(--send); color: var(--send-fg);
-  border: 1px solid var(--send);
-  /* 填色已经供了足够的对比，阴影只负责「浮起来」；--shadow-lg 是弹层用的，用在这里会发飘。 */
+  background: var(--accent); color: var(--accent-fg);
+  border: 1px solid var(--accent);
   box-shadow: var(--shadow-md);
   font-size: 15px; font-weight: 600;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
-.new-thread-btn:hover:not(:disabled) { background: var(--send-hover); border-color: var(--send-hover); }
-.new-thread-btn:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--shadow-md); }
-.new-thread-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* 不用 --send-hover：accent 没有现成的 hover 色，为一个悬浮胶囊临时发明两个色值不值得，
+   而且触屏根本没有悬停。反馈靠阴影与位移给。 */
+.new-thread-btn:hover:not(:disabled) { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
+.new-thread-btn:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--shadow-sm); }
+/* 描边与填充同为 accent 时，accent 颜色的焦点框看不见，改用文字色（画在胶囊外 3px） */
+.new-thread-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 .new-thread-btn:disabled { opacity: .5; cursor: default; box-shadow: var(--shadow-sm); }
-/* 背后的渐隐带：列表从胶囊下面滚过时，文字不会与胶囊糊在一起。
-   用抽屉自己的底色（--panel → --surface）做渐变，不是 --bg，否则深色下会发白。 */
-.new-thread-dock::before {
-  content: "";
-  position: absolute;
-  left: 0; right: 0; bottom: -18px;
-  height: 96px;
-  background: linear-gradient(to top, var(--panel) 52%, transparent);
-  z-index: -1;
-  pointer-events: none;
+@media (prefers-reduced-motion: reduce) {
+  .new-thread-btn { transition: none; }
+  .new-thread-btn:hover:not(:disabled) { transform: none; }
 }
+/* 不加背后的渐隐带：上一版用 96px linear-gradient 想让文字不与胶囊糊在一起，
+   但它会把从下面滚过的列表文字抹成“虚焦”一片（用户截图：HANDOFF.md 那行半透不透明），
+   比直接叠在一起更难看。填色对比已够区分，最后一条不被盖住靠列表底部 84px 留白保证。 */
 /* 多项目选择：在胶囊上方往上弹（= 安卓端的 DropdownMenu） */
 .project-picker {
   pointer-events: auto;
