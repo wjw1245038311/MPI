@@ -55,6 +55,10 @@
   --danger-soft-hover: rgba(192, 57, 43, 0.16);
   --danger-ring: rgba(192, 57, 43, 0.28);
   --danger-border: #ecc;
+  /* 告警（非错误）：中继未验证、tailnet 地址提醒等。新增于 2026-11-24，
+     以前这些地方写内联 #b26a00 / #c0392b（见 docs/DESIGN-TOKENS.md §1.2）。 */
+  --warn: #b26a00;
+  --warn-soft: rgba(178, 106, 0, 0.10);
   /* 半透明覆盖层（docs/DESIGN.md 附录 A）：浅色=黑透明，深色=白透明。 */
   --overlay-1: rgba(0, 0, 0, 0.02);
   --overlay-2: rgba(0, 0, 0, 0.045);
@@ -6899,6 +6903,74 @@ textarea.modal-input {
   line-height: 1.4;
   color: var(--text-dim);
 }
+/* 二维码生成失败态（docs/UI-SPEC.md §2.2）：三要素写进框里，并给重试。 */
+.set-pair-qr-error {
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  text-align: center;
+  border-style: solid;
+  border-color: var(--danger-border);
+  background: var(--danger-pale);
+  color: var(--text-dim);
+}
+.set-pair-qr-error strong {
+  font-size: 13px;
+  color: var(--danger);
+  font-weight: 600;
+}
+/* 告警行（非错误）：中继未验证 / tailnet 地址提醒。以前是内联 #b26a00。 */
+.set-hint-warn {
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+/* 设备列表骨架行：首轮 refresh 未落地且超 150ms 才显示，避免空态闪烁。 */
+.set-dev-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 0;
+}
+.set-dev-skeleton span {
+  display: block;
+  height: 14px;
+  border-radius: var(--radius-xs);
+  background: var(--overlay-3);
+}
+.set-dev-skeleton span:last-child {
+  width: 62%;
+}
+/* 设备列表空态 / 读失败态：说明 + 一个动作入口（以前只有一行灰字）。 */
+.set-dev-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 0;
+}
+.set-dev-empty-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+/* 诊断区的错误块：复用已有的 `.set-diag-err`（见下方同名规则），这里只补标题层级。 */
+.set-diag-err-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+}
+:root[data-theme="dark"] .set-hint-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+:root[data-theme="dark"] .set-dev-skeleton span {
+  background: var(--overlay-2);
+}
 .set-pair-side {
   flex: 1 1 260px;
   min-width: 220px;
@@ -6999,6 +7071,16 @@ textarea.modal-input {
   padding: 8px 10px;
   margin-bottom: 10px;
   font-size: 12px;
+}
+/* 带标题的错误块（RemotePanel 的中继/LAN 诊断）：正文转回常规文字色，标题才用危险色。 */
+.set-diag-err:has(.set-diag-err-title) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  word-break: break-word;
 }
 .set-tag-new {
   display: inline-block;
@@ -9505,6 +9587,8 @@ mark.hl {
   --danger-soft-hover: rgba(242, 114, 106, 0.20);
   --danger-ring: rgba(242, 114, 106, 0.32);
   --danger-border: rgba(242, 114, 106, 0.30);
+  --warn: #e08a3c;
+  --warn-soft: rgba(224, 138, 60, 0.14);
   --overlay-1: rgba(255, 255, 255, 0.04);
   --overlay-2: rgba(255, 255, 255, 0.07);
   --overlay-3: rgba(255, 255, 255, 0.10);

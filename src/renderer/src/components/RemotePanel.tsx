@@ -39,6 +39,9 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const zh = language === "zh";
   const openSettings = useStore((s) => s.openSettings);
   const pushToast = useStore((s) => s.pushToast);
+  const askConfirm = useStore((s) => s.askConfirm);
+  /** 空态的「去扫码」按钮要把视口带回二维码。 */
+  const qrRef = useRef<HTMLDivElement | null>(null);
 
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
@@ -68,12 +71,22 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const [diagOpen, setDiagOpen] = useState(false);
   /** 票据剩余时间每秒刷新。 */
   const [now, setNow] = useState(() => Date.now());
+  /** 首轮刷新是否已经落地 —— 没落地时设备列表处于「未知」而不是「空」，不能直接渲染空态。 */
+  const [loaded, setLoaded] = useState(false);
+  /** 读设备列表失败时的现象描述（UI-SPEC §1 empty/error 分支要求；只存人话，不存原始异常）。 */
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+  /** 二维码生成失败（以前是静默：finally 只把 busy 置回 false）。 */
+  const [qrError, setQrError] = useState(false);
 
   const refresh = async () => {
     try {
       setStatus((await window.pi.remote.getStatus()) as RemoteStatus);
+      setDevicesError(null);
     } catch {
-      // The panel can briefly outlive the Electron IPC bridge during reload.
+      // 面板可能在 reload 期间短暂活过 IPC 桥，这时不覆盖已有状态；但首轮失败要能看见。
+      setDevicesError(zh ? "没读到设备列表" : "Could not read the device list");
+    } finally {
+      setLoaded(true);
     }
     try {
       const relay = (await window.pi.remote.getRelayStatus()) as RelayStatus;
@@ -150,6 +163,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
 
   const createPairing = async () => {
     setBusy(true);
+    setQrError(false);
     try {
       // 票本身就是凭据（5 分钟过期 + 只能换一次设备身份），所以固定自动批准。
       const next = (await window.pi.remote.createPairing(true)) as Pairing;
@@ -160,6 +174,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
       setLocalScanUrl(localPageUrl ? pairingScanUrl(next, localPageUrl) : null);
       setNow(Date.now());
       setQr(await QRCode.toDataURL(url, { width: QR_SIZE, margin: 1, errorCorrectionLevel: "M" }));
+    } catch {
+      // UI-SPEC §1：不再静默失败——二维码是这一屏唯一出路，生成不出来必须说清并给重试。
+      setQr(null);
+      setQrError(true);
     } finally {
       setBusy(false);
     }
@@ -173,6 +191,20 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     void createPairing();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relayStatus]);
+
+  /**
+   * 骨架屏延迟显示（UI-SPEC §1.1 三档）：首轮 refresh 通常几十毫秒就回来，
+   * 直接渲染骨架反而会闪一下——闪得比空态还刺眼。150ms 内回来就不显示骨架。
+   */
+  const [skeletonVisible, setSkeletonVisible] = useState(false);
+  useEffect(() => {
+    if (loaded) {
+      setSkeletonVisible(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSkeletonVisible(true), 150);
+    return () => window.clearTimeout(timer);
+  }, [loaded]);
 
   const copyScanUrl = async () => {
     await copyLink(scanUrl, zh ? "链接已复制" : "Link copied");
@@ -214,6 +246,25 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
     return { tone: "error", text: zh ? "未就绪" : "Not ready" };
   })();
   const healthDetail = relayStatus?.state === "connected" ? "" : (relayStatus?.lastErrorText || "").trim();
+  /**
+   * UI-SPEC §1 error 三要素：「状态行」只放发生了什么（一行的位置放不下为什么/怎么办），
+   * 完整三要素在诊断里的 `.set-diag-err`。原始错误串**只留在诊断**——以前它被拼在状态行末尾
+   * 直接上屏，一行里塞进协议码。
+   */
+  const healthSummary =
+    relayStatus?.state === "connected"
+      ? ""
+      : relayStatus?.state === "connecting"
+        ? zh
+          ? "正在连服务器"
+          : "Connecting to the server"
+        : relayStatus?.state === "error" && healthDetail
+          ? zh
+            ? "连不上服务器"
+            : "Cannot reach the server"
+          : "";
+  /** 状态行不进诊断时的兜底说明：中继自己会指数退避重连（relay-uplink.ts），所以只需指向诊断。 */
+  const healthNeedsDiag = relayStatus?.state === "error";
   const sourceLabel = relaySource === "builtin" ? (zh ? "内置服务器" : "built-in server") : zh ? "自定义中继" : "custom relay";
 
   const devices = status?.devices ?? [];
@@ -224,6 +275,36 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
   const superseded = devices.filter((device) => !device.authenticated && device.superseded);
   const pending = status?.pendingPairings ?? [];
 
+  /**
+   * 移除设备（危险操作）。UI-SPEC §3：当前主进程的 `revokeDevice` 只返回 boolean，
+   * 没有撤销通道（令牌直接从 identity 里删掉并落盘），所以**做不到「立即执行 + 撤销」**，
+   * 只能走次选方案「带去后果说明的确认框」。
+   *
+   * 文案按 §1.1 error 三要素写：发生了什么 / 为什么不可撤销 / 以后怎么办。
+   * 以前这里是一个无确认、同款 ghost 按钮，点一下手机令牌就永久没了。
+   */
+  const askRemoveDevice = (deviceId: string, name: string) => {
+    askConfirm({
+      title: zh ? `移除「${name}」` : `Remove "${name}"`,
+      body: zh
+        ? `该设备需重新配对，此操作不可撤销。\n\n仅需断开连接时，可在手机上操作。`
+        : `The device must pair again. This cannot be undone.\n\nTo disconnect only, do it on the phone.`,
+      confirmLabel: zh ? "移除" : "Remove",
+      cancelLabel: zh ? "保留" : "Keep it",
+      danger: true,
+      onConfirm: async () => {
+        try {
+          const ok = await window.pi.remote.revokeDevice(deviceId);
+          await refresh();
+          if (ok) pushToast("success", zh ? `已移除「${name}」` : `Removed "${name}"`);
+          else pushToast("info", zh ? "设备已不存在" : "Device no longer exists");
+        } catch {
+          pushToast("error", zh ? `没移除掉「${name}」，设备列表可能没变。再试一次？` : `Could not remove "${name}". Try again?`);
+        }
+      },
+    });
+  };
+
   return (
     <div className="set-remote-stack">
       {/* ---- 状态：一行，不是卡片（"配好之后"的唯一常驻信息） ---- */}
@@ -231,8 +312,12 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         <span className={`set-remote-status-value ${statusClass(relayStatus?.state || "disabled")}`}>
           <span className="set-remote-status-dot" aria-hidden="true" />
           {health.text} · {sourceLabel}
-          {healthDetail ? ` · ${healthDetail}` : ""}
         </span>
+        {healthNeedsDiag && healthSummary && (
+          <span className="set-hint" style={{ marginTop: 0, marginRight: "auto" }}>
+            {healthSummary} · {zh ? "详见「诊断」" : "see Details"}
+          </span>
+        )}
         <button className="set-btn ghost set-btn-sm" onClick={() => setDiagOpen((open) => !open)}>
           {diagOpen ? (zh ? "收起诊断" : "Hide details") : zh ? "诊断" : "Details"}
         </button>
@@ -243,7 +328,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
           <div className="set-hint" style={{ wordBreak: "break-all" }}>
             {zh ? "手机将连接：" : "Phone connects to: "}
             {relaySource === "builtin" ? (
-              <span>{zh ? "内置服务器（地址含在配对链接里）" : "Built-in server (address is inside the pairing link)"}</span>
+              <span>{zh ? "内置服务器" : "Built-in server"}</span>
             ) : (
               <code>{phoneRelayUrl || "—"}</code>
             )}
@@ -253,10 +338,23 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
             {lanMode?.urls?.length ? (
               lanMode.urls.map((url) => <div key={url}><code>{url}</code></div>)
             ) : (
-              <span>{zh ? "未开启（同一 Wi-Fi 下的手机会走服务器）" : "off (phones on the same Wi-Fi go through the server)"}</span>
+              <span>{zh ? "未开启（手机走服务器）" : "off (phones go through the server)"}</span>
+            )}
+            {localPageUrl && (
+              <div style={{ marginTop: 2 }}>
+                {zh ? "地址变更会新增一条设备记录，旧记录可移除。" : "A changed address adds a new device entry; remove the old one."}
+              </div>
             )}
           </div>
-          {lanMode?.lastError && <div className="set-hint" style={{ color: "#c0392b" }}>{lanMode.lastError}</div>}
+          {lanMode?.lastError && (
+            <div className="set-diag-err">
+              <div className="set-diag-err-title">{zh ? "局域网直连未启动" : "LAN direct did not start"}</div>
+              <div>{lanMode.lastError}</div>
+              <div className="set-hint" style={{ marginTop: 4 }}>
+                {zh ? "修复后重试；也可不开启。" : "Retry after fixing, or leave it off."}
+              </div>
+            </div>
+          )}
           <div className="set-remote-toggle-row">
             <div className="set-remote-toggle-copy">
               <span className="set-remote-toggle-label">{zh ? "局域网直连" : "LAN direct"}</span>
@@ -284,16 +382,24 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
                 await window.pi.app.setConfig({ remoteReplaceSameNameOffline: next });
               }}
             />
-            <span>{zh ? "同名且离线的旧设备在配对时被替换" : "Replace same-named offline device on pairing"}</span>
+            <span>{zh ? "配对时替换同名离线设备" : "Replace same-named offline device on pairing"}</span>
           </label>
-          {healthDetail && <div className="set-hint" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{healthDetail}</div>}
+          {healthDetail && (
+            <div className="set-diag-err">
+              <div className="set-diag-err-title">{zh ? "中继连接失败" : "Relay unreachable"}</div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{healthDetail}</div>
+              <div className="set-hint" style={{ marginTop: 4 }}>
+                {zh ? "检查转发设置中的服务器与授权码。" : "Check the server and access code in Relay settings."}
+              </div>
+            </div>
+          )}
           <div className="set-diag-btns" style={{ marginTop: 10 }}>
             <button className="set-btn ghost" onClick={() => openSettings("server")}>
               <Cloud size={13} style={{ verticalAlign: "-2px", marginRight: 6 }} />
-              {zh ? "转发设置（服务器 / 授权码）" : "Relay settings (server / access code)"}
+              {zh ? "转发设置" : "Relay settings"}
             </button>
             <button className="set-btn ghost" onClick={() => void copyMpiUri()} disabled={!pairing || expired}>
-              {zh ? "复制 mpi:// 链接（粘贴进 App）" : "Copy mpi:// link (paste into app)"}
+              {zh ? "复制 mpi:// 链接" : "Copy mpi:// link"}
             </button>
           </div>
         </div>
@@ -307,9 +413,21 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         </div>
 
         <div className="set-pair-body">
-          <div className={`set-pair-qr${expired ? " faded" : ""}`}>
+          <div className={`set-pair-qr${expired ? " faded" : ""}`} ref={qrRef}>
             {qr ? (
               <img src={qr} alt={zh ? "配对二维码" : "Pairing QR code"} width={QR_SIZE} height={QR_SIZE} />
+            ) : qrError ? (
+              /* UI-SPEC §1 error：发生了什么 + 为什么 + 怎么办（二维码是这一屏唯一出路，不能静默）。 */
+              <div className="set-pair-qr-skeleton set-pair-qr-error">
+                <strong>{zh ? "二维码没生成出来" : "Could not build the QR code"}</strong>
+                <span>{zh ? "生成失败，扫码配对待用。" : "Generation failed — scanning is unavailable."}</span>
+                <button className="set-btn ghost set-btn-sm" onClick={() => void createPairing()} disabled={busy}>
+                  {busy ? (zh ? "重试中…" : "Retrying…") : zh ? "重试" : "Retry"}
+                </button>
+                <span className="set-hint" style={{ marginTop: 0 }}>
+                  {zh ? "可改用下方「另一台电脑」链接" : "Use the link under \"Another computer\" instead"}
+                </span>
+              </div>
             ) : (
               <div className="set-pair-qr-skeleton">{busy ? (zh ? "生成中…" : "Generating…") : "—"}</div>
             )}
@@ -318,7 +436,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
           <div className="set-pair-side">
             <div className="set-pair-row">
               <span className="set-pair-k">{zh ? "手机" : "Phone"}</span>
-              <div className="set-pair-v">{zh ? "扫码即可，无需再点确认" : "Scan it — nothing else to confirm"}</div>
+              <div className="set-pair-v">{zh ? "扫描即完成，无需额外确认" : "Scan it — nothing else to confirm"}</div>
             </div>
 
             <div className="set-pair-row">
@@ -344,8 +462,8 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
                     )}
                     <div className="set-hint" style={{ marginTop: 4 }}>
                       {zh
-                        ? "粘贴到那台电脑的浏览器即可；首次会有证书提示，点「继续访问」"
-                        : "Paste it into that computer's browser; accept the certificate warning on first open"}
+                        ? "粘贴到目标电脑的浏览器。首次打开会有证书提示，选「继续访问」。"
+                        : "Paste into a browser on the target computer. Accept the certificate warning on first open."}
                       {localCaFile && (
                         <>
                           {" · "}
@@ -356,25 +474,25 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
                               void window.pi.settings.openPath(localCaFile);
                             }}
                           >
-                            {zh ? "装一次根证书可免提示" : "install the root cert once"}
+                            {zh ? "安装根证书可免除提示" : "install the root cert to skip it"}
                           </a>
                         </>
                       )}
                       {localPageUrl && (
                         <div style={{ marginTop: 2 }}>
-                          {zh ? "（本机入口换了网络就打不开，也不要频繁换：每换一个地址就是一台新设备）" : "(the local entry only works on that network — and every new address means a new device)"}
+                          {zh ? "（本机入口仅在该网络内有效；地址变更会将该设备视为新设备）" : "(the local entry works on that network only; a new address counts as a new device)"}
                         </div>
                       )}
                       {!pageVerified && (
-                        <div style={{ color: "#b26a00", marginTop: 2 }}>
-                          {zh ? "中继暂未响应，上面的中继入口未验证" : "Relay not responding — the any-network entry is unverified"}
+                        <div className="set-hint-warn" style={{ marginTop: 2 }}>
+                          {zh ? "中继无响应，该入口可能不可用" : "Relay not responding — this entry may not work"}
                         </div>
                       )}
                     </div>
                   </>
                 ) : (
                   <span className="set-hint">
-                    {zh ? "暂不可用：还没配中继服务器（去「诊断」里打开转发设置）" : "Unavailable: no relay configured (open Relay settings under Details)"}
+                    {zh ? "不可用：未配置中继服务器（在「诊断」中打开转发设置）" : "Unavailable: no relay configured (open Relay settings under Details)"}
                   </span>
                 )}
               </div>
@@ -385,7 +503,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
               <div className="set-pair-v">
                 {pairing ? (
                   <span className="set-pair-countdown">
-                    {expired ? (zh ? "已过期，请重新生成" : "Expired — generate again") : countdown}
+                    {expired ? (zh ? "已过期，需重新生成" : "Expired — generate again") : countdown}
                   </span>
                 ) : (
                   <span className="set-hint">—</span>
@@ -398,7 +516,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
 
             {phoneApp?.ok && (phoneApp.url || phoneApp.github) && (
               <div className="set-hint" style={{ marginTop: 2 }}>
-                {zh ? "还没装 App？" : "No app yet? "}
+                {zh ? "未安装 App？" : "No app yet? "}
                 {phoneApp.url && (
                   <a href={phoneApp.url} target="_blank" rel="noreferrer">
                     {zh ? "下载安卓安装包" : "Download the Android app"}
@@ -414,10 +532,10 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
             )}
 
             {relaySource === "custom" && unreachableForPhone(phoneRelayUrl) && (
-              <div className="set-hint" style={{ color: "#c0392b" }}>
+              <div className="set-hint-warn">
                 {zh
-                  ? "⚠ 当前是 tailnet / 内网地址，外网设备连不上。"
-                  : "⚠ This is a tailnet/private address — devices outside that network cannot reach it."}
+                  ? "当前为 tailnet / 内网地址，外网设备无法访问。"
+                  : "This is a tailnet/private address — devices outside that network cannot reach it."}
               </div>
             )}
           </div>
@@ -441,7 +559,7 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         {pending.length > 0 && (
           <div className="set-dev-pending">
             <div className="set-hint" style={{ marginBottom: 6 }}>
-              {zh ? "待批准（有人在扫你的码）" : "Waiting for approval"}
+              {zh ? "待批准" : "Waiting for approval"}
             </div>
             {pending.map((device) => (
               <div className="set-dev-row" key={device.connectionId}>
@@ -475,9 +593,40 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
         )}
 
         {devices.length === 0 ? (
-          pending.length === 0 && (
-            <div className="set-hint">{zh ? "还没有配对任何设备。用上面的二维码配一台。" : "No devices yet — pair one with the code above."}</div>
-          )
+          pending.length === 0 &&
+          /* UI-SPEC §1 empty：说明现状 + **一个主操作入口**（以前只有一行灰字，没入口）。
+             骨架延迟 150ms：首轮 refresh 很快时不闪。 */
+          (skeletonVisible ? (
+            <div className="set-dev-skeleton" aria-hidden="true">
+              <span />
+              <span />
+            </div>
+          ) : devicesError ? (
+            <div className="set-dev-empty">
+              <div className="set-dev-empty-title">{devicesError}</div>
+              <div className="set-hint">{zh ? "面板可能刚刷新。重试一次？" : "The panel may have just reloaded."}</div>
+              <button className="set-btn ghost set-btn-sm" onClick={() => void refresh()}>
+                {zh ? "重试" : "Retry"}
+              </button>
+            </div>
+          ) : (
+            <div className="set-dev-empty">
+              <div className="set-dev-empty-title">
+                {zh ? "尚无已配对设备" : "No devices paired yet"}
+              </div>
+              <div className="set-hint" style={{ marginTop: 0 }}>
+                {zh
+                  ? "扫描上方二维码完成配对；已配对设备在此列出，可单独移除。"
+                  : "Scan the code above to pair; paired devices are listed here and can be removed individually."}
+              </div>
+              <button
+                className="set-btn ghost set-btn-sm"
+                onClick={() => qrRef.current?.scrollIntoView({ block: "center", behavior: "smooth" })}
+              >
+                {zh ? "前往扫码" : "Go to the code"}
+              </button>
+            </div>
+          ))
         ) : (
           [...online, ...offline, ...superseded].map((device) => (
             <div className={`set-dev-row${device.superseded ? " set-dev-superseded" : ""}`} key={device.deviceId}>
@@ -499,11 +648,9 @@ export function RemotePanel({ language }: { language: "en" | "zh" }) {
                 </span>
               </span>
               <button
-                className="set-btn ghost set-btn-sm"
-                onClick={async () => {
-                  await window.pi.remote.revokeDevice(device.deviceId);
-                  await refresh();
-                }}
+                className="set-btn danger set-btn-sm"
+                aria-label={zh ? `移除设备 ${device.name}` : `Remove device ${device.name}`}
+                onClick={() => askRemoveDevice(device.deviceId, device.name)}
               >
                 {zh ? "移除" : "Remove"}
               </button>
