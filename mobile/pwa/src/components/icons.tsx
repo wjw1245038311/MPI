@@ -86,3 +86,12 @@ export const Close = (p: P) => (
     <path d="M6 6l12 12M18 6 6 18" />
   </svg>
 );
+
+/** 置顶标记：与桌面端 icons.tsx 的 Pin 同一形状（侧栏会话行用）。 */
+export const Pin = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M7 4h10" />
+    <path d="M9.5 4v5l-2 4h9l-2-4V4" />
+    <path d="M12 13v7" />
+  </svg>
+);

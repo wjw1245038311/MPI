@@ -22,6 +22,12 @@
   --shadow-md: 0 1px 2px rgba(20, 22, 18, 0.06), 0 10px 30px rgba(20, 22, 18, 0.08);
   --radius: 12px;
   --radius-sm: 8px;
+  --radius-md: 10px;
+  /* 半透明覆盖层与细分隔线：与桌面端同名同值，抽屉里的行悬停/选中与缩进竖线用。 */
+  --overlay-1: rgba(0, 0, 0, 0.02);
+  --overlay-3: rgba(0, 0, 0, 0.06);
+  --overlay-4: rgba(0, 0, 0, 0.085);
+  --hairline: rgba(103, 111, 100, 0.2);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
   --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, "Liberation Mono", monospace;
 
@@ -61,6 +67,10 @@
     --code-bg: #151c20;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
     --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.28), 0 14px 36px rgba(0, 0, 0, 0.32);
+    --overlay-1: rgba(255, 255, 255, 0.04);
+    --overlay-3: rgba(255, 255, 255, 0.10);
+    --overlay-4: rgba(255, 255, 255, 0.14);
+    --hairline: rgba(170, 194, 174, 0.22);
     --ok: #7bd6a1;
     --err: #f7768e;
   }
@@ -177,67 +187,111 @@ button:disabled { opacity: 0.5; cursor: default; }
 .home-card { display: flex; flex-direction: column; gap: 10px; }
 .host-row { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 
-.project {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--surface);
-}
+/* 侧栏的项目与会话行——照搬桌面端 Sidebar 的语言（src/renderer/src/styles.css
+   的 .project-head / .thread-list / .thread）：
+   · 不画卡片边框、不画行间分隔线——层级靠「缩进 + 一条竖线」表达；
+   · 行本身是圆角块，悬停/按下只改底色；当前会话用 --accent-soft。
+   桌面端本来就是这样，上一版 PWA 自创了一套「卡片 + 逐行分隔线」，看上去重得多。 */
 .project-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  padding: 11px 12px;
-  background: var(--surface-muted);
+  padding: 7px 8px;
+  background: none;
   border: none;
-  border-bottom: 1px solid var(--border); /* 必须在 border:none 之后，否则会被简写重置掉 */
+  border-radius: var(--radius-sm);
   color: var(--text);
   font-size: 14px;
+  font-weight: 600;
   text-align: left;
   cursor: pointer;
 }
-.project-row:hover { background: var(--control-hover); }
+.project-row:hover { background: var(--overlay-3); }
+.project-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.project-row .hint {
+  flex: none;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+/* 自然日分组标题（= 桌面端 .thread-group）。 */
+.thread-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 4px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  user-select: none;
+}
+/* 今天那一组：行左侧一条内嵌细条代替任何时间文字（= 桌面端 .thread.fresh）。
+   颜色用 accent 的 55% 混合，避免满饱和深绿看着像引用块。 */
+.thread-row.fresh {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.thread-row.fresh.active {
+  box-shadow: var(--shadow-sm), inset 2px 0 0 var(--accent);
+}
+/* 会话列表：左边一条竖线 + 缩进（= 桌面端 .thread-list）。 */
+.project-threads {
+  margin: 1px 0 6px 6px;
+  border-left: 1px solid var(--hairline);
+  padding-left: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
 
-/* 会话行：状态胶囊 | 内容（弹性）。
-   2026-11-24 重排：原来把标题、预览、元信息、⋮ 四方挤在同一条水平线上，
-   实测标题只剩 98px（四个汉字就截断），且 .thread-row 是 <button> 继承浏览器
-   默认 text-align:center，标题与预览都居中——既挤又没对齐。
-   现在：元信息从水平列换成标题右侧的内联小字（与标题同一行、不占独立列），
-   预览单占一行；⋮ 绝对定位到右侧。 */
+/* 会话行：圆角块，不画顶边线（桌面端 .thread 的做法）。 */
 .thread-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
+  position: relative;
+  display: block;
   width: 100%;
-  padding: 10px 12px;
+  padding: 7px 8px;
   border: none;
-  border-top: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text);
   text-align: left;
+  font-size: 13px;
   cursor: pointer;
 }
-/* 项目头已经有 border-bottom，第一条会话行不要再画顶边（否则两条 1px 线看上去像一条粗线）。 */
-.project-row + .thread-item .thread-row { border-top: none; }
-.thread-row:hover { background: var(--control-hover); }
+.thread-row:hover { background: var(--overlay-3); }
+.thread-row:active { background: var(--overlay-4); }
 .thread-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 当前正在看的会话：与桌面端 .thread.active 一致。 */
+.thread-row.active {
+  background: var(--accent-soft);
+  box-shadow: var(--shadow-sm);
+}
 
 /* 行内容器：右侧给绝对定位的 ⋮ 让出点击区（否则 ⋮ 会盖到文字上）。 */
 .thread-body {
   min-width: 0;
-  padding-right: 34px;
+  padding-right: 32px;
 }
-/* 主信息：标题独占一行、取满可用宽。 */
+/* 主信息：标题行。状态标记放在标题前面（与桌面端 .thread-title 同一做法：
+   display:flex + gap，而不是单开一列——没有标记时不会留下空白缩进）。 */
 .thread-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
   font-size: 14px;
   font-weight: 500;
   line-height: 1.35;
+}
+.thread-title .tt-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* 次行：预览（可截断）+ 元信息（不截断，靠右）。 */
 .thread-subline {
@@ -256,16 +310,37 @@ button:disabled { opacity: 0.5; cursor: default; }
   font-size: 12px;
   line-height: 1.4;
 }
-/* 元信息：宽度固定不被压，数字用等宽对齐。 */
-.thread-meta {
+
+/* 置顶标记：图钉图标，颜色比标题淡一档（与桌面端 .thread-pin 一致：
+   置顶多了也不会堆一排名黑图标）。 */
+.thread-pin {
+  display: inline-flex;
+  align-items: center;
   flex: none;
-  white-space: nowrap;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 
 .badge { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--control); color: var(--text-dim); }
+
+/* 侧栏会话行的状态标记。
+   桌面端只给「运行中」画一个旋转小圆点，空闲行什么都不显示
+   （src/renderer/src/styles.css 的 .thread-running + Sidebar.tsx 的 {running && …}）。
+   上一版 PWA 给每一行都挂一个文字胶囊，140 行里 138 个都是「空闲」——
+   那是整列噪声，不是信息。现在：idle 什么都不画，running 用桌面端同款旋转小圆点，
+   其余三种（草稿 / 出错 / 已断开）本来就少见，保留文字胶囊。 */
+.thread-running {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border: 2px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-running { animation-duration: 2.4s; }
+}
+
 
 /* P5-3：壳内推送提示条（WebView 无 PushManager，引导去浏览器配对收通知） */
 .push-hint {

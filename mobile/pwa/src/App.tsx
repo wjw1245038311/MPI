@@ -6,10 +6,10 @@
  * → projects → threads with state badges; data flows through HostSession over the
  * E2E-encrypted channel, polling while any thread is running.
  */
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { RemoteThreadSnapshot, RemoteThreadState } from "../../shared/protocol";
 import ThreadView from "./ThreadView";
-import { Check, ChevronRight, Close, Phone, Plus, Refresh } from "./components/icons";
+import { Check, ChevronRight, Close, Phone, Pin, Plus, Refresh } from "./components/icons";
 import DbgOverlay from "./DbgOverlay";
 import { IdbKeyStore } from "./lib/keystore-idb";
 import { AccountCard } from "./components/AccountCard";
@@ -25,6 +25,7 @@ import { ThreadActions } from "./lib/thread-actions";
 import { ThreadSession, type ThreadView as ThreadViewState } from "./lib/thread-session";
 import { SnapshotCache } from "./lib/snapshot-cache";
 import { columnCssVars, DEFAULT_COLUMN_PRESET, readColumnPreset, writeColumnPreset, type ColumnPreset } from "./lib/column-preset";
+import { dayBucket, groupLabelAt, sessionTimeLabel } from "./lib/relative-time";
 import { ThreadCache } from "./lib/thread-cache";
 import { IdbStore } from "./lib/thread-cache-idb";
 import { ensureBrowserPush } from "./lib/webpush";
@@ -125,15 +126,6 @@ const THREAD_STATE_LABELS: Record<RemoteThreadState, string> = {
   error: "出错",
   disconnected: "已断开",
 };
-
-/** Compact relative time for list rows. */
-function relTime(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 45_000) return "刚刚";
-  if (diff < 3_600_000) return `${Math.max(1, Math.round(diff / 60_000))} 分钟前`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} 小时前`;
-  return `${Math.round(diff / 86_400_000)} 天前`;
-}
 
 /** hostId 是 30+ 位不透明串，列表里只显示前 6 位。 */
 function shortId(hostId: string): string {
@@ -1417,38 +1409,56 @@ export default function App() {
               snap.projects.map((project) => {
                 const expanded = expandedProjectId === project.id;
                 const threads = snap.threadsByProject[project.id] ?? [];
+                // 同一个项目的所有行共用一个 now 取分组：逐行 Date.now() 不必需，
+                // 而且跨零点时同一次渲染会出现相邻两行归到不同桶的怪事。
+                const groupNow = Date.now();
                 return (
                   <div key={project.id} className="project">
                     <button type="button" className="project-row" onClick={() => setExpandedProjectId(expanded ? null : project.id)}>
                       <span style={{ fontWeight: 600 }}>{project.name}</span>
-                      <span className="hint">{project.threadCount} 会话 · {relTime(project.updatedAt)}</span>
+                      <span className="hint">{project.threadCount} 会话 · {sessionTimeLabel(project.updatedAt, true)}</span>
                     </button>
                     {expanded && (
-                      threads.length > 0 ? threads.map((thread) => (
-                        <div key={thread.id} className="thread-item">
+                      threads.length > 0 ? <div className="project-threads">{threads.map((thread, threadIndex) => {
+                        // 时间靠「今天 / 昨天 / 本周 / 更早」分组表达，行内不再放时间——
+                        // 与桌面端侧栏同一做法（Sidebar.tsx 的 recentGroupLabel）。
+                        const group = groupLabelAt(threads, threadIndex, groupNow, true);
+                        // 今天那一组用行左侧的内嵌细条标记（= 桌面端 .thread.fresh），不用时间文字。
+                        const fresh = dayBucket(thread.updatedAt, groupNow) === "today";
+                        return (
+                        <Fragment key={thread.id}>
+                        {group && <div className="thread-group">{group}</div>}
+                        <div className="thread-item">
                           <button
                             type="button"
-                            className="thread-row"
+                            className={`thread-row${fresh ? " fresh" : ""}${threadView?.threadId === thread.id ? " active" : ""}`}
                             onClick={() => {
                               void openThread(thread.id);
                               closeAllDrawers();
                             }}
                           >
-                            <span className={`badge badge-${thread.state}`}>{THREAD_STATE_LABELS[thread.state]}</span>
                             <div className="thread-body">
                               <div className="thread-title">
-                                {thread.pinned ? "置顶 · " : ""}
-                                {thread.title}
-                              </div>
-                              <div className="thread-subline">
-                                {/* 预览与标题相同时不重复显示（会话的首条消息常被用作标题，
-                                   上一版抽屉里几乎每一行都是「同样的字写两遍」）。
-                                   规则：重复就删（docs/UI-SPEC.md 同源的界面文案规则）。 */}
-                                {thread.preview && thread.preview.trim() !== thread.title.trim() && (
-                                  <div className="hint thread-preview">{thread.preview}</div>
+                                {/* 状态标记只在非空闲时出现（桌面端同样做法：空闲行不画任何东西）。
+                                   运行中用旋转小圆点，其余三种少见状态用文字胶囊。 */}
+                                {thread.state === "running" && <span className="thread-running" aria-hidden="true" />}
+                                {thread.state !== "idle" && thread.state !== "running" && (
+                                  <span className={`badge badge-${thread.state}`}>{THREAD_STATE_LABELS[thread.state]}</span>
                                 )}
-                                <span className="thread-meta">{thread.messageCount} 条 · {relTime(thread.updatedAt)}</span>
+                                {thread.pinned && (
+                                  <span className="thread-pin" title={"已置顶"} aria-label="已置顶">
+                                    <Pin size={11} />
+                                  </span>
+                                )}
+                                <span className="tt-text">{thread.title}</span>
                               </div>
+                              {/* 预览与标题相同时不重复显示（首条消息常被用作标题，
+                                 上一版几乎每行都是「同样的字写两遍」）。规则：重复就删。 */}
+                              {thread.preview && thread.preview.trim() !== thread.title.trim() && (
+                                <div className="thread-subline">
+                                  <div className="hint thread-preview">{thread.preview}</div>
+                                </div>
+                              )}
                             </div>
                             <span
                               role="button"
@@ -1527,7 +1537,9 @@ export default function App() {
                             </div>
                           )}
                         </div>
-                      )) : (
+                        </Fragment>
+                        );
+                      })}</div> : (
                         <div className="hint" style={{ padding: "6px 12px" }}>暂无会话</div>
                       )
                     )}
@@ -1594,7 +1606,7 @@ export default function App() {
                   )}
                   <div className="hint">
                     {relayHostOf(item.relayUrl)}
-                    {item.lastSeenAt ? ` · 最近 ${relTime(item.lastSeenAt)}` : " · 未连接过"}
+                    {item.lastSeenAt ? ` · 最近 ${sessionTimeLabel(item.lastSeenAt, true)}` : " · 未连接过"}
                   </div>
                 </div>
                 {item.hostId === hostId ? (
