@@ -12,7 +12,29 @@ GitHub 只让 CI 异步出 Release 附件（不轮询、不等待），**且只�
 
 ## UI 改动（`src/renderer/**`）
 
-先读 **`docs/DESIGN.md`**（桌面端 UI 规范：token / 组件 / 布局 / Do-Don't）。硬要求：颜色只用变量（错误/危险用 `--danger*` 家族），新样式同时给暗色（`:root[data-theme="dark"]`），浮层不要塞进 `overflow: auto` 容器（用 portal + fixed）。
+**三份文档，各有分工，按顺序读**：
+
+| 改什么 | 先读 | 管什么 |
+|---|---|---|
+| 样式 / 颜色 / 圆角 / 字号 | **`docs/DESIGN-TOKENS.md`** | 值是什么 + 什么算违规（含 `strict` 禁止清单，**先看这段**） |
+| 组件外观 / 布局 / 设计取向 | `docs/DESIGN.md` | 为什么这样设计 |
+| **交互 / 状态 / 文案 / 验收** | **`docs/UI-SPEC.md`** | 五态基线 + 状态矩阵 + 防错可逆 + 打回话术 |
+
+硬要求（违规即打回）：
+
+- 颜色只用变量 —— **不写裸 hex / 裸 rgba**（错误/危险用 `--danger*`，半透明用 `--overlay-1…8`）
+- 字号只取 7 档（10/11/12/13/14/16/22）；圆角只取 6 档（4/8/10/12/16/999）
+- 新样式同时给暗色（`:root[data-theme="dark"]`）
+- 浮层不要塞进 `overflow: auto` 容器（用 `createPortal(document.body)` + `position: fixed`）
+- **交互组件必须给全状态**：hover / focus-visible / active / disabled / loading，并在 `UI-SPEC.md` §2 的状态矩阵里登记
+- **危险操作不能只配确认弹窗**（可撤销优先）。现成组件：`useStore.askConfirm()` / `components/ConfirmDialog.tsx`
+
+自查命令（DESIGN-TOKENS.md §3 有完整版）：
+
+```bash
+grep -rnoE 'style=\{\{[^}]*#[0-9a-fA-F]{3,8}' src/renderer/src/components/*.tsx | grep -v FileTypeIcon
+grep -cE "font-size: *(10\.5|11\.5|12\.5|13\.5|15)px" src/renderer/src/styles.css
+```
 
 ## 常用命令
 

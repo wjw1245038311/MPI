@@ -1,8 +1,11 @@
 # MPI 桌面端 UI 设计规范（DESIGN.md）
 
 > 面向：改 `src/renderer/**` 的任何人和 agent。
-> 事实来源：`src/renderer/src/styles.css`（11,994 行，2026-10-27 扫描）、`src/main/index.ts`（窗口尺寸）。
+> 事实来源：`src/renderer/src/styles.css`（12,499 行，2026-11-24 扫描）、`src/main/index.ts`（窗口尺寸）。
 > 移动端另有 `docs/MOBILE-DESIGN.md` / `docs/MOBILE-NATIVE-DESIGN.md`，本文只管桌面渲染层。
+>
+> **本文是「为什么 + 怎么用」；值以 `docs/DESIGN-TOKENS.md` 为准（那里有可校验的 strict 规则块）。**
+> 交互状态、防错与验收见 `docs/UI-SPEC.md`。三份冲突时：值看 TOKENS，交互看 UI-SPEC，本文只管取向与外观。
 >
 > **三条硬规则**：① 颜色/圆角/阴影优先用变量，不写裸 hex；② 新增样式必须同时给暗色（`:root[data-theme="dark"]`）；③ 浮层不要塞进 `overflow: auto` 容器里。
 
@@ -146,7 +149,8 @@
 
 ## 9. Agent Prompt Guide（改 UI 时按这个顺序）
 
-1. **读本文第 2/4/5 节**，确认要用的 token 与同类组件。
+1. **读 `docs/DESIGN-TOKENS.md` 的 `strict` 块**（禁止清单），再读本文第 2/4/5 节。
+2. 若这次改动涉及交互（点击/状态/表单/危险操作）→ **同时读 `docs/UI-SPEC.md`**，按状态矩阵填全五态。
 2. `grep` 现有类名，优先复用；新增类名以组件语义命名（`.user-message-nav-tip`，不要 `.green-box`）。
 3. 颜色/圆角/阴影只用第 5 节的档位与变量；需要新变量时**成对**加到浅色与深色块。
 4. 写完立刻检查三件事：深色下是否成立、焦点在哪、窄窗会不会被裁。
@@ -178,7 +182,7 @@
 
 | 项 | 值 |
 |---|---|
-| CSS 规模 | 12,000+ 行，65 个唯一变量名（含各主题/preset 覆盖） |
+| CSS 规模 | 12,499 行（2026-11-24 实测），65 个唯一变量名（含各主题/preset 覆盖） |
 | 主题 | 浅色默认 / `data-theme="dark"`；`color-scheme: dark` |
 | 强调色预设 | 7 组（default / green / red / blue / white / lightgray / darkgray），每组浅+深 |
 | 唯一断点 | `@media (max-width: 760px)`（仅 skills-hub） |
