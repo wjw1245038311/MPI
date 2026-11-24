@@ -23,11 +23,9 @@
   --radius: 12px;
   --radius-sm: 8px;
   --radius-md: 10px;
-  /* 半透明覆盖层与细分隔线：与桌面端同名同值，抽屉里的行悬停/选中与缩进竖线用。 */
-  --overlay-1: rgba(0, 0, 0, 0.02);
+  /* 半透明覆盖层：与桌面端同名同值，抽屉里的行悬停/按下用。 */
   --overlay-3: rgba(0, 0, 0, 0.06);
   --overlay-4: rgba(0, 0, 0, 0.085);
-  --hairline: rgba(103, 111, 100, 0.2);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
   --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, "Liberation Mono", monospace;
 
@@ -67,10 +65,8 @@
     --code-bg: #151c20;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
     --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.28), 0 14px 36px rgba(0, 0, 0, 0.32);
-    --overlay-1: rgba(255, 255, 255, 0.04);
     --overlay-3: rgba(255, 255, 255, 0.10);
     --overlay-4: rgba(255, 255, 255, 0.14);
-    --hairline: rgba(170, 194, 174, 0.22);
     --ok: #7bd6a1;
     --err: #f7768e;
   }
@@ -187,35 +183,70 @@ button:disabled { opacity: 0.5; cursor: default; }
 .home-card { display: flex; flex-direction: column; gap: 10px; }
 .host-row { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 
-/* 侧栏的项目与会话行——照搬桌面端 Sidebar 的语言（src/renderer/src/styles.css
-   的 .project-head / .thread-list / .thread）：
-   · 不画卡片边框、不画行间分隔线——层级靠「缩进 + 一条竖线」表达；
-   · 行本身是圆角块，悬停/按下只改底色；当前会话用 --accent-soft。
-   桌面端本来就是这样，上一版 PWA 自创了一套「卡片 + 逐行分隔线」，看上去重得多。 */
-.project-row {
+/* 侧栏的会话与项目行——照搬桌面端 Sidebar 的语言（src/renderer/src/styles.css
+   的 .sb-sessions / .srow / .thread-group）：
+   · 行本身是圆角块，悬停/按下只改底色；当前会话用 --accent-soft；
+   · 不画卡片边框——行与行的分隔靠「标题 + 副行」的两行结构与内边距，
+     而不是线（上一版副行被去重规则杀掉了，只剩单行，看起来密到糊成一片）。
+   容器 .sb-sessions：拉平列表不缩进——层级由分组标题与副行的项目名表达。 */
+.sb-sessions {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 8px;
-  background: none;
-  border: none;
+  flex-direction: column;
+  gap: 2px;
+}
+/* 抽屉顶部的 tab 栏（= 桌面端 .sb-tabs / .sb-tab，侧栏的「会话 / 项目 / 文件」）。
+   手机端只做「会话 / 项目」两个：文件树不跨中继下发，PWA 也没有文件视图。 */
+.sb-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 0 8px;
+}
+.sb-tab {
+  flex: 1;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
+  padding: 7px 5px;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+.sb-tab:hover { background: var(--overlay-3); color: var(--text); }
+.sb-tab.active {
+  background: var(--accent-soft);
   color: var(--text);
-  font-size: 14px;
+  border-color: var(--border);
   font-weight: 600;
-  text-align: left;
-  cursor: pointer;
 }
-.project-row:hover { background: var(--overlay-3); }
-.project-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.project-row .hint {
+.sb-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* 筛选状态条：从「项目」tab 点迚某个项目后，「会话」tab 只列它，并给一条可清除的提示。 */
+.filter-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.filter-chip strong {
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.filter-chip button {
   flex: none;
-  font-size: 11px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
+  padding: 3px 8px;
+  font-size: 12px;
 }
+
 /* 自然日分组标题（= 桌面端 .thread-group）。 */
 .thread-group {
   display: flex;
@@ -237,16 +268,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .thread-row.fresh.active {
   box-shadow: var(--shadow-sm), inset 2px 0 0 var(--accent);
 }
-/* 会话列表：左边一条竖线 + 缩进（= 桌面端 .thread-list）。 */
-.project-threads {
-  margin: 1px 0 6px 6px;
-  border-left: 1px solid var(--hairline);
-  padding-left: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
 /* 会话行：圆角块，不画顶边线（桌面端 .thread 的做法）。 */
 .thread-row {
   display: grid;
@@ -293,22 +314,33 @@ button:disabled { opacity: 0.5; cursor: default; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 次行：预览（可截断）+ 元信息（不截断，靠右）。 */
-.thread-subline {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-/* 预览：价值最低的一档，先让位给它截断。 */
-.thread-preview {
-  flex: 1 1 auto;
-  min-width: 0;
+/* 副行：项目名 + 首条消息预览（= 桌面端 .srow-sub）。
+   这一行**必须无条件渲染**：同名会话（同一个「接收邮件」、同一个「交接-2…」）
+   全靠它区分，上一版按「preview 与标题相同就删整行」处理，
+   把项目名也删掉了 → 行高从 56px 塌到 33px，整片看起来又密又分不出边界。
+   字号比桌面端（11px）大一号用 12px：手机上 11px 读得太累。 */
+.thread-sub {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
   line-height: 1.4;
+  color: var(--text-faint);
+}
+/* 行内时间（= 桌面端 .srow-time）：与分组标题共存，不互斥。
+   分组告诉你「大概是哪天」，行内时间告诉你「同一天里哪个最新」。 */
+.thread-time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.thread-time.today {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* 置顶标记：图钉图标，颜色比标题淡一档（与桌面端 .thread-pin 一致：
@@ -1339,8 +1371,8 @@ button:disabled { opacity: 0.5; cursor: default; }
   .app {
     display: grid;
     /* 侧栏宽度：随视口按比例（26%），钳在 260–360px。
-       不能用 max-content —— .thread-preview 的 40ch（≈260px）会把轨道钉死在 505px，
-       且与视口无关（1024 下占 49%）。 */
+       不能用 max-content —— 会话行的标题与副行都是 nowrap + ellipsis，
+       它们的自然宽度会把轨道顶到一个与视口无关的固定值（1024 下能占掉 49%）。 */
     grid-template-columns: clamp(260px, 26vw, 360px) minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     max-width: none;

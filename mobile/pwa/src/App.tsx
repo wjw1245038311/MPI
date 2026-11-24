@@ -324,7 +324,10 @@ export default function App() {
     setMetaError(null);
   };
 
-  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
+  /** 抽屉顶部 tab（= 桌面端侧栏的「会话 / 项目」）。默认看会话。 */
+  const [drawerTab, setDrawerTab] = useState<"sessions" | "projects">("sessions");
+  /** 只看某个项目的会话（从「项目」tab 点进来）；null = 全部项目。 */
+  const [projectFilter, setProjectFilter] = useState<string | null>(null);
   // P1：新建会话——thread.create 需要 projectId；多项目时先在抽屉里内联选项目。
   const [creatingThread, setCreatingThread] = useState(false);
   const [pickingProject, setPickingProject] = useState(false);
@@ -967,7 +970,8 @@ export default function App() {
     setHostId(null);
     setStage("idle");
     setError(null);
-    setExpandedProjectId(null);
+    setDrawerTab("sessions");
+    setProjectFilter(null);
     setOpenThreadId(null);
     setHeaderRenaming(false);
     setThreadSession(null);
@@ -1191,6 +1195,36 @@ export default function App() {
    */
   const needsRepair = !!connErr && /AUTH_FAILED|4001|REVOKED|4002/i.test(connErr);
 
+  /**
+   * 「会话」tab 的数据：把各项目已缓存的会话**拉平成一个按活动排序的列表**，
+   * 每条带上所属项目名——与桌面端侧栏的「会话」tab 同一形态（它也是拉平的，
+   * 副行写「项目名 · 首条消息」，靠这行区分同名会话）。
+   *
+   * 数据不需要新的协议：session.ts 已经把每个项目的 threads.list 都拉过了，
+   * thread.projectId 与 projects[].name 都在本地。
+   */
+  const projectNameById = new Map((snap?.projects ?? []).map((project) => [project.id, project.name]));
+  /**
+   * 整张列表用**同一个 now** 算分组与「今天」标记：逐行 Date.now() 不必需，
+   * 而且跨零点时同一次渲染会出现相邻两行归到不同桶的怪事。
+   * 分组标题在这里一次性算好（按排序后的邻行判断），渲染时只读不算。
+   */
+  const listNow = Date.now();
+  const flatSessions = (() => {
+    const sorted = (snap?.projects ?? [])
+      .flatMap((project) =>
+        (snap?.threadsByProject[project.id] ?? []).map((thread) => ({ ...thread, projectName: project.name })),
+      )
+      .filter((thread) => !projectFilter || thread.projectId === projectFilter)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return sorted.map((thread, index) => ({
+      ...thread,
+      group: groupLabelAt(sorted, index, listNow, true),
+      today: dayBucket(thread.updatedAt, listNow) === "today",
+    }));
+  })();
+  const filteredProjectName = projectFilter ? projectNameById.get(projectFilter) ?? null : null;
+
   return (
     /* thread-open：会话视图必须是**确定高度**（100dvh）且不整体滚动，
        否则长对话会把输入框顶到屏幕外（"标题和输入框不能共存"）。
@@ -1392,40 +1426,81 @@ export default function App() {
             )}
             {snap?.error && <p className="hint error-text">数据刷新失败：{snap.error}</p>}
 
-            <button type="button" className="new-thread-btn" onClick={onNewThreadClick} disabled={!snap || creatingThread || snap.projects.length === 0}>
-              <Plus size={15} /> {creatingThread ? "创建中…" : "新建会话"}
-            </button>
-            {pickingProject && !creatingThread && snap && snap.projects.length > 1 && (
-              <div className="project-picker">
-                {snap.projects.map((project) => (
-                  <button key={project.id} type="button" className="project-picker-row" onClick={() => void createThreadIn(project.id)}>
-                    {project.name}
-                  </button>
-                ))}
-              </div>
-            )}
+            {/* 抽屉顶部 tab：会话 / 项目（= 桌面端侧栏 .sb-tabs）。
+               放在最上面：它切换的是整个面板，不能被面板自己的动作（新建会话）压在下边。 */}
+            <div className="sb-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={drawerTab === "sessions"}
+                className={`sb-tab${drawerTab === "sessions" ? " active" : ""}`}
+                onClick={() => setDrawerTab("sessions")}
+              >
+                会话
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={drawerTab === "projects"}
+                className={`sb-tab${drawerTab === "projects" ? " active" : ""}`}
+                onClick={() => setDrawerTab("projects")}
+              >
+                项目
+              </button>
+            </div>
 
-            {snap && snap.projects.length > 0 ? (
-              snap.projects.map((project) => {
-                const expanded = expandedProjectId === project.id;
-                const threads = snap.threadsByProject[project.id] ?? [];
-                // 同一个项目的所有行共用一个 now 取分组：逐行 Date.now() 不必需，
-                // 而且跨零点时同一次渲染会出现相邻两行归到不同桶的怪事。
-                const groupNow = Date.now();
-                return (
-                  <div key={project.id} className="project">
-                    <button type="button" className="project-row" onClick={() => setExpandedProjectId(expanded ? null : project.id)}>
-                      <span style={{ fontWeight: 600 }}>{project.name}</span>
-                      <span className="hint">{project.threadCount} 会话 · {sessionTimeLabel(project.updatedAt, true)}</span>
+            {drawerTab === "projects" ? (
+              snap && snap.projects.length > 0 ? (
+                <div className="sb-sessions">
+                  {snap.projects.map((project) => (
+                    <button
+                      type="button"
+                      key={project.id}
+                      className="thread-row"
+                      onClick={() => {
+                        // 点项目 = 到「会话」tab 只看它。抽屉不关闭，马上就能看到结果。
+                        setProjectFilter(project.id);
+                        setDrawerTab("sessions");
+                      }}
+                    >
+                      <div className="thread-body" style={{ paddingRight: 0 }}>
+                        <div className="thread-title">
+                          <span className="tt-text">{project.name}</span>
+                          <span className="thread-time">{sessionTimeLabel(project.updatedAt, true)}</span>
+                        </div>
+                        <div className="thread-sub">{project.threadCount} 个会话</div>
+                      </div>
                     </button>
-                    {expanded && (
-                      threads.length > 0 ? <div className="project-threads">{threads.map((thread, threadIndex) => {
-                        // 时间靠「今天 / 昨天 / 本周 / 更早」分组表达，行内不再放时间——
-                        // 与桌面端侧栏同一做法（Sidebar.tsx 的 recentGroupLabel）。
-                        const group = groupLabelAt(threads, threadIndex, groupNow, true);
-                        // 今天那一组用行左侧的内嵌细条标记（= 桌面端 .thread.fresh），不用时间文字。
-                        const fresh = dayBucket(thread.updatedAt, groupNow) === "today";
-                        return (
+                  ))}
+                </div>
+              ) : (
+                !snap?.error && <p className="hint">{connState === "open" ? (snap ? "这台桌面还没有项目——先在桌面端建一个。" : "加载项目列表…") : "等待连接…"}</p>
+              )
+            ) : (
+              <>
+                <button type="button" className="new-thread-btn" onClick={onNewThreadClick} disabled={!snap || creatingThread || snap.projects.length === 0}>
+                  <Plus size={15} /> {creatingThread ? "创建中…" : "新建会话"}
+                </button>
+                {pickingProject && !creatingThread && snap && snap.projects.length > 1 && (
+                  <div className="project-picker">
+                    {snap.projects.map((project) => (
+                      <button key={project.id} type="button" className="project-picker-row" onClick={() => void createThreadIn(project.id)}>
+                        {project.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {filteredProjectName && (
+                  <div className="filter-chip">
+                    只看 <strong>{filteredProjectName}</strong>
+                    <button type="button" className="ghost" onClick={() => setProjectFilter(null)}>全部项目</button>
+                  </div>
+                )}
+                {flatSessions.length > 0 ? (
+                  <div className="sb-sessions">{flatSessions.map((thread) => {
+                    // group / today 已在 flatSessions 里用同一个 now 算好（见上方派生）。
+                    const { group, today: fresh } = thread;
+                    return (
                         <Fragment key={thread.id}>
                         {group && <div className="thread-group">{group}</div>}
                         <div className="thread-item">
@@ -1451,14 +1526,15 @@ export default function App() {
                                   </span>
                                 )}
                                 <span className="tt-text">{thread.title}</span>
+                                <span className={`thread-time${fresh ? " today" : ""}`}>{sessionTimeLabel(thread.updatedAt, true)}</span>
                               </div>
-                              {/* 预览与标题相同时不重复显示（首条消息常被用作标题，
-                                 上一版几乎每行都是「同样的字写两遍」）。规则：重复就删。 */}
-                              {thread.preview && thread.preview.trim() !== thread.title.trim() && (
-                                <div className="thread-subline">
-                                  <div className="hint thread-preview">{thread.preview}</div>
-                                </div>
-                              )}
+                              {/* 副行：项目名 + 首条消息预览（= 桌面端 .srow-sub）。
+                                 项目名**无条件渲染**：同名会话全靠这行区分，
+                                 而且它保证每行都是两行结构，行与行自然分得开。 */}
+                              <div className="thread-sub">
+                                {thread.projectName}
+                                {thread.preview ? ` · ${thread.preview}` : ""}
+                              </div>
                             </div>
                             <span
                               role="button"
@@ -1539,15 +1615,20 @@ export default function App() {
                         </div>
                         </Fragment>
                         );
-                      })}</div> : (
-                        <div className="hint" style={{ padding: "6px 12px" }}>暂无会话</div>
-                      )
-                    )}
-                  </div>
-                );
-              })
-            ) : (
-              !snap?.error && <p className="hint">{connState === "open" ? (snap ? "这台桌面还没有项目——先在桌面端建一个。" : "加载项目列表…") : "等待连接…"}</p>
+                      })}</div>
+                ) : (
+                  // 空态：分两种情冴说清楚（筛选后为空 ≠ 真的没有会话）。
+                  <p className="hint">
+                    {projectFilter
+                      ? "这个项目还没有会话。"
+                      : connState === "open"
+                        ? snap
+                          ? "还没有会话。点上面的「新建会话」开一个。"
+                          : "加载会话列表…"
+                        : "等待连接…"}
+                  </p>
+                )}
+              </>
             )}
           </>
         ) : (
