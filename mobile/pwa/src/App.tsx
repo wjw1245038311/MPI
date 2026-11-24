@@ -1451,7 +1451,8 @@ export default function App() {
 
             {drawerTab === "projects" ? (
               snap && snap.projects.length > 0 ? (
-                <div className="sb-sessions">
+                // 项目 tab 没有悬浮胶囊，不留底部空位
+                <div className="sb-sessions no-dock">
                   {snap.projects.map((project) => (
                     <button
                       type="button"
@@ -1478,18 +1479,6 @@ export default function App() {
               )
             ) : (
               <>
-                <button type="button" className="new-thread-btn" onClick={onNewThreadClick} disabled={!snap || creatingThread || snap.projects.length === 0}>
-                  <Plus size={15} /> {creatingThread ? "创建中…" : "新建会话"}
-                </button>
-                {pickingProject && !creatingThread && snap && snap.projects.length > 1 && (
-                  <div className="project-picker">
-                    {snap.projects.map((project) => (
-                      <button key={project.id} type="button" className="project-picker-row" onClick={() => void createThreadIn(project.id)}>
-                        {project.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
                 {filteredProjectName && (
                   <div className="filter-chip">
                     只看 <strong>{filteredProjectName}</strong>
@@ -1623,11 +1612,27 @@ export default function App() {
                       ? "这个项目还没有会话。"
                       : connState === "open"
                         ? snap
-                          ? "还没有会话。点上面的「新建会话」开一个。"
+                          ? "还没有会话。"
                           : "加载会话列表…"
                         : "等待连接…"}
                   </p>
                 )}
+                {/* 底部悬浮胶囊（= 安卓端 NewThreadPill）：单项目直接新建，
+                   多项目先在上方弹一层项目选择。sticky 在抽屉底部，不随列表滚走。 */}
+                <div className="new-thread-dock">
+                  {pickingProject && !creatingThread && snap && snap.projects.length > 1 && (
+                    <div className="project-picker">
+                      {snap.projects.map((project) => (
+                        <button key={project.id} type="button" className="project-picker-row" onClick={() => void createThreadIn(project.id)}>
+                          {project.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button type="button" className="new-thread-btn" onClick={onNewThreadClick} disabled={!snap || creatingThread || snap.projects.length === 0}>
+                    <Plus size={18} /> {creatingThread ? "新建中…" : "新建会话"}
+                  </button>
+                </div>
               </>
             )}
           </>

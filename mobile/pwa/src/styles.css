@@ -23,6 +23,7 @@
   --radius: 12px;
   --radius-sm: 8px;
   --radius-md: 10px;
+  --radius-pill: 999px;
   /* 半透明覆盖层：与桌面端同名同值，抽屉里的行悬停/按下用。 */
   --overlay-3: rgba(0, 0, 0, 0.06);
   --overlay-4: rgba(0, 0, 0, 0.085);
@@ -193,6 +194,12 @@ button:disabled { opacity: 0.5; cursor: default; }
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* 底部留空：最后一条会话不能被悬浮胶囊压住（安卓端同样用 92dp 底部留白）。
+     只在有悬浮层时留——项目 tab 没有胶囊，不留这块空白。 */
+  padding-bottom: 84px;
+}
+.sb-sessions.no-dock {
+  padding-bottom: 0;
 }
 /* 抽屉顶部的 tab 栏（= 桌面端 .sb-tabs / .sb-tab，侧栏的「会话 / 项目 / 文件」）。
    手机端只做「会话 / 项目」两个：文件树不跨中继下发，PWA 也没有文件视图。 */
@@ -383,19 +390,49 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .push-hint button { flex: none; }
 
-/* P1：新建会话入口（抽屉顶部）+ 多项目时的内联项目选择 */
-.new-thread-btn {
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 9px 12px; border-radius: var(--radius-sm);
-  background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 14px;
+/* 新建会话：底部悬浮胶囊（与安卓端 AppDrawer.kt 的 NewThreadPill 同一形态——
+   顶部那条「新建会话」条在安卓端已经去掉，改到底部悬浮，列表底部留空位避免被压住）。
+   用 sticky 而不是 fixed：抽屉在窄屏是 fixed 浮层、在宽屏是 grid 首列，
+   sticky 能自适应两种宽度与两种宽度值，不用写两套定位。 */
+.new-thread-dock {
+  position: sticky;
+  bottom: 18px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  /* 抵消 .drawer 的 12px 横向内边距，让胶囊在整个面板宽度里真居中 */
+  margin: 0 -12px;
+  pointer-events: none;
 }
-.new-thread-btn:hover:not(:disabled) { background: var(--accent-soft); filter: brightness(0.96); }
-.project-picker { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-muted); }
+.new-thread-btn {
+  pointer-events: auto;
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  padding: 13px 20px; border-radius: var(--radius-pill);
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  font-size: 14px; font-weight: 500;
+}
+.new-thread-btn:hover:not(:disabled) { background: var(--surface-muted); }
+.new-thread-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.new-thread-btn:disabled { opacity: .55; cursor: default; }
+/* 多项目选择：在胶囊上方往上弹（= 安卓端的 DropdownMenu） */
+.project-picker {
+  pointer-events: auto;
+  width: min(260px, 78vw);
+  border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden;
+  background: var(--surface); box-shadow: var(--shadow-md);
+}
 .project-picker-row {
-  display: block; width: 100%; padding: 9px 12px; border-top: 1px solid var(--border);
-  background: none; color: var(--text); font-size: 13.5px; text-align: left; cursor: pointer;
+  display: block; width: 100%; padding: 11px 12px; border-top: 1px solid var(--border);
+  background: none; color: var(--text); font-size: 14px; text-align: left; cursor: pointer;
+  /* 项目名可能是长路径：截断，不折行（折行会把选择面板撑得高低不一） */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .project-picker-row:first-child { border-top: none; }
+.project-picker-row:hover { background: var(--overlay-3); }
 
 /* 多设备列表（阶段 C 会整块搬进二级抽屉） */
 .device-list {
@@ -1427,6 +1464,16 @@ button:disabled { opacity: 0.5; cursor: default; }
     box-shadow: none;
     padding: 12px 10px 16px;
     min-height: 0;
+  }
+  /* 侧栏在这个断点是 grid 静态列、不自己滚（页面整体滚），sticky 会退化成「内容末尾」而
+     钉不住（实测 top 跑到视口外）。改用 fixed，程度只靠侧栏宽度算中心，
+     不去改上面那条高度链（那里有「承重规则」的注释，动它风险大）。 */
+  .new-thread-dock {
+    position: fixed;
+    bottom: 18px;
+    left: calc(clamp(260px, 26vw, 360px) / 2);
+    transform: translateX(-50%);
+    margin: 0;
   }
   .drawer-backdrop { display: none; }
 
