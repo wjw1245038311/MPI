@@ -16,7 +16,7 @@ import {
 } from "react";
 import type { RemoteThreadSnapshot, RemoteThreadState } from "../../shared/protocol";
 import ThreadView from "./ThreadView";
-import { Check, ChevronRight, Close, Phone, Pin, Plus, Refresh } from "./components/icons";
+import { Check, ChevronRight, Close, NewChat, Phone, Pin, Plus, Refresh } from "./components/icons";
 import DbgOverlay from "./DbgOverlay";
 import { IdbKeyStore } from "./lib/keystore-idb";
 import { AccountCard } from "./components/AccountCard";
@@ -1452,16 +1452,41 @@ export default function App() {
             </span>
           </button>
           {view === "home" && hostId && (
-            <button
-              type="button"
-              className={`drawer-refresh${refreshing ? " spinning" : ""}`}
-              aria-label="刷新当前内容"
-              title="刷新"
-              disabled={refreshing}
-              onClick={() => void refreshNow()}
-            >
-              <Refresh size={16} />
-            </button>
+            <>
+              {/* 新建会话：头部图标按钮，与刷新同尺寸成组。
+                 上一版是列表底部的悬浮胶囊：在抽屉这种窄面板里无论换什么颜色都很突兀，
+                 还要 extra 写 sticky / fixed 两套定位 + 列表底部 84px 留白。放到头部就没这些问题。 */}
+              <button
+                type="button"
+                className="drawer-new"
+                aria-label={creatingThread ? "新建中…" : "新建会话"}
+                title="新建会话"
+                disabled={!snap || creatingThread || snap.projects.length === 0}
+                onClick={onNewThreadClick}
+              >
+                <NewChat size={16} />
+              </button>
+              <button
+                type="button"
+                className={`drawer-refresh${refreshing ? " spinning" : ""}`}
+                aria-label="刷新当前内容"
+                title="刷新"
+                disabled={refreshing}
+                onClick={() => void refreshNow()}
+              >
+                <Refresh size={16} />
+              </button>
+              {/* 多项目选择：从头部往下弹（原来在悬浮胶囊上方往上弹） */}
+              {pickingProject && !creatingThread && snap && snap.projects.length > 1 && (
+                <div className="project-picker">
+                  {snap.projects.map((project) => (
+                    <button key={project.id} type="button" className="project-picker-row" onClick={() => void createThreadIn(project.id)}>
+                      {project.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -1505,7 +1530,7 @@ export default function App() {
             {drawerTab === "projects" ? (
               snap && snap.projects.length > 0 ? (
                 // 项目 tab 没有悬浮胶囊，不留底部空位
-                <div className="sb-sessions no-dock">
+                <div className="sb-sessions">
                   {snap.projects.map((project) => (
                     <button
                       type="button"
@@ -1684,22 +1709,6 @@ export default function App() {
                         : "等待连接…"}
                   </p>
                 )}
-                {/* 底部悬浮胶囊（= 安卓端 NewThreadPill）：单项目直接新建，
-                   多项目先在上方弹一层项目选择。sticky 在抽屉底部，不随列表滚走。 */}
-                <div className="new-thread-dock">
-                  {pickingProject && !creatingThread && snap && snap.projects.length > 1 && (
-                    <div className="project-picker">
-                      {snap.projects.map((project) => (
-                        <button key={project.id} type="button" className="project-picker-row" onClick={() => void createThreadIn(project.id)}>
-                          {project.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <button type="button" className="new-thread-btn" onClick={onNewThreadClick} disabled={!snap || creatingThread || snap.projects.length === 0}>
-                    <Plus size={18} /> {creatingThread ? "新建中…" : "新建会话"}
-                  </button>
-                </div>
               </>
             )}
           </>

@@ -12,12 +12,7 @@
   --text-faint: #9aa096;
   --accent: #2e7d52;
   --accent-soft: #e4f1e8;
-  /* 实底 --accent 上的文字色。桌面端没有实底 accent 按钮，因此无同名 token 可镜像——
-     这是 PWA 新增的。值与 --send-fg 呰合，但不混用名字：
-     以后若主按钮换色，--send-fg 会跟着变，而 accent 上的字不该跟着变。 */
-  --accent-fg: #ffffff;
   --send: #2b2d28;
-  --send-hover: #3a3d35; /* 与桌面端 :root 同值 */
   --send-fg: #ffffff;
   --control: #f3f3ee;
   --control-hover: #ecece7;
@@ -63,9 +58,7 @@
     --text-faint: #8b98a0;
     --accent: #7bd6a1;
     --accent-soft: #214333;
-    --accent-fg: #102015;
     --send: #75c995;
-    --send-hover: #8cdda9; /* 与桌面端深色块同值 */
     --send-fg: #102015;
     --control: #273239;
     --control-hover: #33434a;
@@ -201,12 +194,6 @@ button:disabled { opacity: 0.5; cursor: default; }
   display: flex;
   flex-direction: column;
   gap: 2px;
-  /* 底部留空：最后一条会话不能被悬浮胶囊压住（安卓端同样用 92dp 底部留白）。
-     只在有悬浮层时留——项目 tab 没有胶囊，不留这块空白。 */
-  padding-bottom: 84px;
-}
-.sb-sessions.no-dock {
-  padding-bottom: 0;
 }
 /* 抽屉顶部的 tab 栏（= 桌面端 .sb-tabs / .sb-tab，侧栏的「会话 / 项目 / 文件」）。
    手机端只做「会话 / 项目」两个：文件树不跨中继下发，PWA 也没有文件视图。 */
@@ -432,64 +419,39 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .push-hint button { flex: none; }
 
-/* 新建会话：底部悬浮胶囊（与安卓端 AppDrawer.kt 的 NewThreadPill 同一形态——
-   顶部那条「新建会话」条在安卓端已经去掉，改到底部悬浮，列表底部留空位避免被压住）。
-   用 sticky 而不是 fixed：抽屉在窄屏是 fixed 浮层、在宽屏是 grid 首列，
-   sticky 能自适应两种宽度与两种宽度值，不用写两套定位。 */
-.new-thread-dock {
-  position: sticky;
-  bottom: 18px;
-  z-index: 3;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  /* 抵消 .drawer 的 12px 横向内边距，让胶囊在整个面板宽度里真居中 */
-  margin: 0 -12px;
-  pointer-events: none;
-}
-/* 胶囊本体：实底 --accent（这套界面自己的强调色）。
-   前两版都被否：白底压在白的抽屉上看不见（等于没有按钮）；
-   主按钮的 --send 在浅主题是 #2b2d28 近黑，悬浮在列表上就是一块黑斑。
-   accent 已经是这套界面里「这是可点的」信号（顶栏图标、选中 tab、今日行标记都用它）。 */
-.new-thread-btn {
-  pointer-events: auto;
-  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
-  padding: 14px 22px; border-radius: var(--radius-pill);
-  background: var(--accent); color: var(--accent-fg);
-  border: 1px solid var(--accent);
-  box-shadow: var(--shadow-md);
-  font-size: 15px; font-weight: 600;
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
-}
-/* 不用 --send-hover：accent 没有现成的 hover 色，为一个悬浮胶囊临时发明两个色值不值得，
-   而且触屏根本没有悬停。反馈靠阴影与位移给。 */
-.new-thread-btn:hover:not(:disabled) { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
-.new-thread-btn:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--shadow-sm); }
-/* 描边与填充同为 accent 时，accent 颜色的焦点框看不见，改用文字色（画在胶囊外 3px） */
-.new-thread-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
-.new-thread-btn:disabled { opacity: .5; cursor: default; box-shadow: var(--shadow-sm); }
-@media (prefers-reduced-motion: reduce) {
-  .new-thread-btn { transition: none; }
-  .new-thread-btn:hover:not(:disabled) { transform: none; }
-}
-/* 不加背后的渐隐带：上一版用 96px linear-gradient 想让文字不与胶囊糊在一起，
-   但它会把从下面滚过的列表文字抹成“虚焦”一片（用户截图：HANDOFF.md 那行半透不透明），
-   比直接叠在一起更难看。填色对比已够区分，最后一条不被盖住靠列表底部 84px 留白保证。 */
-/* 多项目选择：在胶囊上方往上弹（= 安卓端的 DropdownMenu） */
+/* 新建会话已改成头部图标按钮（.drawer-new），底部悬浮胶囊整块删除。
+   走过三版配色都不对：白底看不见、--send 近黑是块黑斑、accent 绿在这种窄面板里格格不入。
+   而且它需要两套定位（窄屏 sticky；宽屏侧栏是 grid 静态列、sticky 会退化成内容末尾，实测 top 跑到视口外，只能改 fixed），
+   还要给列表底部留 84px 避免压住最后一条——放进头部后这些额外开销全部不需要。 */
+/* 多项目选择：从头部的新建按钮下方往下弹（= 安卓端的 DropdownMenu）。
+   锚点是 .drawer-head-wrap（下面已给它 position: relative），右对齐到面板内侧。 */
 .project-picker {
-  pointer-events: auto;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 4;
   width: min(260px, 78vw);
   border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden;
   background: var(--surface); box-shadow: var(--shadow-md);
 }
 .project-picker-row {
-  display: block; width: 100%; padding: 11px 12px; border-top: 1px solid var(--border);
+  /* 用 block + line-height 居中，不用 flex：项目名是长绝对路径，必须靠
+     text-overflow: ellipsis 截断，而 ellipsis 在 flex 容器上不生效（文本会被包成
+     匿名 flex item，省略号无处可加）。44px 触控高 = 上内边距 11 + 行高 22 + 下内边距 11。 */
+  display: block;
+  min-height: 44px;
+  line-height: 22px;
+  width: 100%; padding: 11px 12px;
+  /* border 与 border-radius 必须写满：通用规则 button{border:1px solid var(--border-strong);border-radius:9px}
+     会给每一个 <button> 发一圈边与圆角，而本类原来只声明了 border-top——
+     其余三条边落回通用规则，实测每行变成两个带圆角的独立框子（行与行之间还能看到空隙），
+     而不是一个整块弹层。分隔线改用 + 选择器。 */
+  border: none; border-radius: 0;
   background: none; color: var(--text); font-size: 14px; text-align: left; cursor: pointer;
   /* 项目名可能是长路径：截断，不折行（折行会把选择面板撑得高低不一） */
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.project-picker-row:first-child { border-top: none; }
+.project-picker-row + .project-picker-row { border-top: 1px solid var(--border); }
 .project-picker-row:hover { background: var(--overlay-3); }
 
 /* 多设备列表（阶段 C 会整块搬进二级抽屉） */
@@ -661,6 +623,8 @@ button:disabled { opacity: 0.5; cursor: default; }
   align-items: center;
   gap: 6px;
   border-bottom: 1px solid var(--border);
+  /* 多项目选择层（.project-picker）的锚点 */
+  position: relative;
 }
 .drawer-head {
   display: flex;
@@ -676,7 +640,10 @@ button:disabled { opacity: 0.5; cursor: default; }
   text-align: left;
   cursor: pointer;
 }
-/* 会话列表刷新（放在设备卡右侧）：转圈用 --loading 状态（snap.loading）驱动。 */
+/* 头部的两个图标按钮：新建会话 + 刷新。写成同一条规则是为了尺寸永远一致
+   （分头维护过一版：两个按钮的 width/border 微差在浅底上看得出来）。
+   刷新转圈只有 .drawer-refresh 有。 */
+.drawer-new,
 .drawer-refresh {
   flex: none;
   display: grid;
@@ -691,11 +658,18 @@ button:disabled { opacity: 0.5; cursor: default; }
   cursor: pointer;
   transition: background .12s ease, color .12s ease, border-color .12s ease;
 }
+.drawer-new:hover:not(:disabled),
 .drawer-refresh:hover:not(:disabled) {
   background: var(--control-hover);
   color: var(--text);
   border-color: var(--border-strong);
 }
+.drawer-new:focus-visible,
+.drawer-refresh:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.drawer-new:disabled,
 .drawer-refresh:disabled {
   opacity: .6;
   cursor: default;
@@ -1535,18 +1509,6 @@ button:disabled { opacity: 0.5; cursor: default; }
     box-shadow: none;
     padding: 12px 10px 16px;
     min-height: 0;
-  }
-  /* 侧栏在这个断点是 grid 静态列、不自己滚（页面整体滚），sticky 会退化成「内容末尾」而
-     钉不住（实测 top 跑到视口外）。改用 fixed，程度只靠侧栏宽度算中心，
-     不去改上面那条高度链（那里有「承重规则」的注释，动它风险大）。 */
-  /* 宽度取侧栏同宽、从左边对齐：这样 align-items:center 自然就居中，
-     背后的渐隐带也能铺满整条侧栏（fixed 元素宽度会缩到内容宽，渐隐带会只剩胶囊那段）。 */
-  .new-thread-dock {
-    position: fixed;
-    bottom: 18px;
-    left: 0;
-    width: clamp(260px, 26vw, 360px);
-    margin: 0;
   }
   .drawer-backdrop { display: none; }
 

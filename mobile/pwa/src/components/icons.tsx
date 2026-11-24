@@ -40,6 +40,20 @@ export const Plus = (p: P) => (
   </svg>
 );
 
+/**
+ * 新建会话：虚线对话气泡（用户给的目标形状就是一个 dashed 气泡 + 左下小尾巴）。
+ * 虚线在语义上正好：一个还没有内容的会话。
+ * dasharray 按 24 viewBox 调：一段墨 ≈2.9、一段空 ≈2.4，16px 下能分辨出是虚线而不是缺笔画。
+ */
+export const NewChat = (p: P) => (
+  <svg {...base(p)}>
+    <path
+      strokeDasharray="2.9 2.4"
+      d="M20.5 14.6a2.4 2.4 0 0 1-2.4 2.4H7.9L3.5 21V5.4A2.4 2.4 0 0 1 5.9 3h12.2a2.4 2.4 0 0 1 2.4 2.4z"
+    />
+  </svg>
+);
+
 export const Refresh = (p: P) => (
   <svg {...base(p)}>
     <path d="M20 11a8 8 0 1 0-2.3 5.7" />
