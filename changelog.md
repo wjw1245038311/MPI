@@ -4,7 +4,7 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
-## Unreleased
+## v0.16.0（2026-11-25）
 
 1. **运行时：内置 Pi 从 `1.5.0` 升到 `1.6.0`**——`package.json` 的 `piRuntimeVersion` 改钉 1.6.0，并重打运行时归档
    （`MPI-Runtime-1.6.0-win-x64.tar.gz`，46.3 MiB；归档与 `resources/runtime-manifest.json` 都在 `.gitignore` 里，不入库）。
