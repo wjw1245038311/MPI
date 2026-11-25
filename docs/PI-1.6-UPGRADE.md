@@ -87,7 +87,9 @@ node <cli> --provider basalt --model "Qwen3.8-Flash-Next UD-IQ4_XS" \
 - 1.5.0 用现成运行时 `…/MPI Dev/runtime/versions/1.5.0/pi/dist/bundle/cli.js`；1.6.0 用上表解包安装的那份。
 - 探针：`cap.js`（`before_provider_request` 的 role 分布 + 生命周期事件计数）、`cap2.js`（默认 system prompt 全文落盘）、
   `rpc-drive.js`（复刻 `pi-bridge.ts` 的 `{id,type,…}` + LF 帧格式跑会话命令）、`smoke-ext.js`（加载全部生成扩展起 RPC）。
-- 文件与数据都在 `Work/tempfile/pi-160/`（约 158 MB，可随时清除）。
+- 探针脚本与原始捕获数据留在 `Work/tempfile/pi-160/`（57 KB：`cap.js` / `cap2.js` / `rpc-drive.js` / `smoke-ext.js`
+  与 `out/*.jsonl`、`out/sys-*.txt`）；158 MB 的 1.6.0 包与临时会话目录已清。重跑需先重建隔离配置：
+  `mkdir -p Work/tempfile/pi-160/cfg && cp ~/.pi/agent/models.json Work/tempfile/pi-160/cfg/`（`settings.json` 写 `{"defaultProvider":"basalt"}` 就够）。
 
 ### 5.1 系统提示是否生效（4 组合）
 
@@ -148,8 +150,10 @@ mv "$RT/.staging-manual/extracted" "$RT/versions/1.6.0"                # 布局 
 | 装机后的 RPC 冒烟 | 用 `versions/1.6.0` 那份 node+cli 加载 17 个生成扩展 → `get_state.success=true`，stderr 0 行 |
 | 当前进程的运行时 | **仍是 1.5.0**。`resolvePiRuntime()` 的结果按进程缓存（`pi-bridge.ts:195`）→ 要重启 dev 实例才换 |
 
-旧树 `versions/1.5.0`（164 MB）本次没被删，但**下一次启动会被删**：`index.ts:520` 无条件在启动时调
-`cleanupOldRuntimes()` → `cleanupRuntimeVersions()`（只保留 active 版本，dev 也一样）。回滚方法见 §7。
+旧树 `versions/1.5.0`（164 MB）当时没被删，但**下一次启动会被删**：`index.ts:520` 无条件在启动时调
+`cleanupOldRuntimes()` → `cleanupRuntimeVersions()`（只保留 active 版本，dev 也一样）。
+同批已清：`runtime-release/MPI-Runtime-1.5.0-win-x64.tar.gz`（46 MB）与取包用的 `Work/tempfile/pi-160/`（158 MB → 保留 57 KB
+探针与原始捕获数据）。回滚方法见 §7。
 
 ## 6. 遗留风险与待办
 
@@ -166,12 +170,17 @@ mv "$RT/.staging-manual/extracted" "$RT/versions/1.6.0"                # 布局 
 
 本机（dev）：`cp "$APPDATA/MPI Dev/runtime/current.json.bak-1.5.0" "$APPDATA/MPI Dev/runtime/current.json"` 后重启 dev 即可（
 `versions/1.5.0` 未删）。注意 `cleanupRuntimeVersions()` 会删掉所有非 active 版本目录（`index.ts:520` 启动时调），
-所以一旦用 1.6.0 启过一次应用，`versions/1.5.0` 就没了 —— 回滚需要重新解压：
+所以一旦用 1.6.0 启过一次应用，`versions/1.5.0` 就没了；而 `runtime-release/` 里的 1.5.0 归档也已清掉 ——
+回滚要重新拉一份再解压：
 
 ```bash
-/c/Windows/System32/tar.exe -xzf runtime-release/MPI-Runtime-1.5.0-win-x64.tar.gz -C <目标>
-# 解出 node/ npm/ pi/ → 放到 runtime/versions/1.5.0/，再把 current.json 指回 1.5.0
+npm pack @earendil-works/pi-coding-agent@1.5.0 && tar -xzf earendil-works-pi-coding-agent-1.5.0.tgz
+cd package && npm install --omit=dev        # 依赖必须落在包自己的 node_modules
+cd .. && /c/Windows/System32/tar.exe -czf /tmp/MPI-Runtime-1.5.0-win-x64.tar.gz package   # 或直接摆目录
+# 目标布局 node/ npm/ pi/ → 放到 runtime/versions/1.5.0/，再把 current.json 指回 1.5.0
 ```
+
+要省掉这段麻烦，就在启动清理之前先 `cp -r "$RT/versions/1.5.0" /e/MyWorkspace/Work/tempfile/runtime-1.5.0-backup`。
 
 仓库侧：`package.json` 的 `piRuntimeVersion` 改回 `1.5.0` + `PI_PACKAGE_DIR=<1.5.0 包> npm run bundle`。
 设备侧（发行版）：`ensureEmbeddedRuntimeCurrent()` 只在**内置严格更新**时自动换（`src/shared/runtime-version.ts`），
