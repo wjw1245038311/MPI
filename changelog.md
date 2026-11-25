@@ -4,6 +4,36 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## v0.15.6（2026-11-25）
+
+1. **修：「先停在上一条、再被拉下来」的真正成因——贴底被「滚轮归因窗口」挡掉**。
+   v0.15.5 加的容器观察器经实测**不是**本因：取证日志（`mpi-diag.log`，167 条 `scroll-pin`）
+   显示 `clientHeight` 全程恒定 616，内容 `scrollHeight` 逐帧增长——是内容变高触发的，
+   容器没变矮。真正卡住的是这一形态：
+
+   ```
+   stick=true  gesture=true  gap=11342  →  skipped:"gesture"
+   ```
+
+   `stick=true` 表示用户意图是跟随，却被 200ms 的滚轮归因窗口每帧挡掉；窗口到期后
+   `handleUserScroll` 把那段位移当「布局无手势噪声」处理（按设计不重新贴底），于是视口
+   留在半路，直到下一段内容提交再被拉下去——正是「先停在上一条、再被拉下来」。
+   在流式高频输出时（日志里单帧 `scrollHeight` +18~+60px），200ms 累积差距能到几千像素。
+
+   **改法**：贴底意图的唯一事实源 = `stick`。手势窗口的职责是「把一次 `scrollTop` 位移
+   归因为用户意图」，这个结论已经写进 `stick`；`pin()` 再用手势挡一次是第二套判定，会造出
+   `stick=true + gesture=true` 这种自相矛盾的中间态。现在 `pin()` / `pinScroller()` 只保留
+   `stick` 与「切会话恢复期」两个让位条件。参照物：DSH（TanStack Virtual）的贴底判定
+   `followOnAppend && isAtEnd(1px)` 完全不含时间窗口——只有瞬时几何条件。
+
+   验证方式：`npm run test:chat-scroll`（12 项，新增反向护栏「pin() 不得引用 hasScrollGesture」，
+   已实测把 gesture 加回去会立刻报红；同时钉住「手势归因函数本身不能删」，因为
+   `handleUserScroll` 与恢复期让位仍在用它）。应用内：`bash scripts/restart-dev.sh` → 发一个
+   连续「思考 → 工具 → 思考」的多步任务并拉到最底 → 每进入下一段应直接跟随，不再停在上面；
+   中途上翻阅读时内容增长仍不得把你拽回底部（`stick` 已被手势置 false）。
+   若仍有回跳，`rg '"scroll-pin"' <userData>/logs/mpi-diag.log | tail -40` 里应不再出现
+   `skipped:"gesture"`；出现别的 `skipped` 值说明是另一条路径，按 `source` 再定位。
+
 ## v0.15.5（2026-11-25）
 
 1. **修：应用商店里已启用的应用改完配置**没有任何保存出口**——改了从不写盘**。

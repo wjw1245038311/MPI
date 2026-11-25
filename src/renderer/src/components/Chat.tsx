@@ -343,7 +343,19 @@ export function Chat() {
   // 以前只在提交时写一次 scrollTop，这些后续变化没人补：浏览器把 scrollTop 钳到
   // 收缩后的新底部（视口退回上一条消息），下一段 delta 到达才被拉回底部——
   // 用户看到的就是「每轮先退回上一个节点，再拉到最新」，轮次越多拉扯越多。
-  // ResizeObserver 回调在布局后、绘制前，能**同一帧**补齐，中间态不会被画出来。
+  // 贴底意图的唯一事实源 = stickRef。
+  //
+  // 2026-11-25 取证（mpi-diag.log 的 scroll-pin，167 帧）：`stick=true` 却卡在
+  // `skipped:"gesture"` 的帧才是真凶——滚轮归因窗口（wheelScrollUntilRef，200ms）在
+  // 流式高频输出时比内容增长慢得多，窗口内每帧贴底全被挡；窗口到期后
+  // handleUserScroll 把那段位移当「布局噪声」，不会重新贴底，于是视口留在半路。
+  // 日志里那帧是 gap=11342（≈18 屏），而容器 clientHeight 恒定 616——不是
+  // 容器变矮，也不是观察对象选错。
+  //
+  // 结论：手势窗口的职责是「把某个 scrollTop 位移归因为用户意图」（见
+  // handleUserScroll / handleWheel），它已经通过 stick 表达了结果。在 stick
+  // 已经为 true 时再用手势挡一次，是第二套判定，会产生自相矛盾的中间态。
+  // 所以这里只看 stick，外加「切会话恢复期」（那段位置由另一套机制负责）。
   useEffect(() => {
     const host = messagesRef.current;
     const scroller = scrollRef.current;
@@ -374,10 +386,10 @@ export function Chat() {
     };
 
     const pin = () => {
-      // 阅读历史 / 正在滚动手势 / 切会话恢复期：一律让位，不抢位置。
+      // stick 已包含用户意图（手势会把 stick 置 false，滚回底部附近会重新武装）。
+      // 只剩恢复期需要让位：那时位置由 applySavedScroll 负责，插一脚会把它拽到底。
       if (!stickRef.current) return sample("ro-content", "not-stick");
       if (isRestoring()) return sample("ro-content", "restoring");
-      if (hasScrollGesture()) return sample("ro-content", "gesture");
       const max = scroller.scrollHeight - scroller.clientHeight;
       if (max - scroller.scrollTop <= 1) return;
       const gapBefore = max - scroller.scrollTop;
@@ -395,7 +407,6 @@ export function Chat() {
     const pinScroller = () => {
       if (!stickRef.current) return sample("ro-scroller", "not-stick");
       if (isRestoring()) return sample("ro-scroller", "restoring");
-      if (hasScrollGesture()) return sample("ro-scroller", "gesture");
       const max = scroller.scrollHeight - scroller.clientHeight;
       if (max - scroller.scrollTop <= 1) return;
       const gapBefore = max - scroller.scrollTop;

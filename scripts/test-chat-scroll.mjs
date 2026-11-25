@@ -29,7 +29,8 @@ const roBody = chat.slice(roStart, roAnchor + 40);
 assert.ok(roBody.includes("new ResizeObserver("), "贴底收敛必须由 ResizeObserver 驱动（布局后、绘制前纠正）");
 assert.ok(roBody.includes("stickRef.current"), "ResizeObserver 贴底必须受 stick 意图约束（阅读历史时不许拽回）");
 assert.ok(roBody.includes("isRestoring()"), "ResizeObserver 贴底必须让位给切会话恢复期");
-assert.ok(roBody.includes("hasScrollGesture()"), "ResizeObserver 贴底必须让位给用户滚动手势");
+// 2026-11-25 取证后**反向**：贴底不得再被手势窗口挡掉（见该行下方 ①d 的说明）。
+assert.ok(!/const pin = \(\) => \{[\s\S]*?hasScrollGesture\(\)[\s\S]*?\};/.test(roBody), "pin() 不得再用手势窗口挡贴底——stick 已是唯一事实源（2026-11-25 scroll-pin 日志实证）");
 assert.ok(roBody.includes("lastScrollTopRef.current"), "程序化写入必须同步 lastScrollTopRef，否则会被误判成用户上滚");
 assert.ok(roBody.includes("ro.observe(host)"), "ResizeObserver 必须观察 transcript 容器（.messages）");
 assert.ok(roBody.includes("[activeThreadId, tuiMode]"), "ResizeObserver effect 依赖必须含 tuiMode（TUI 模式整体替换聊天区）");// 观察目标必须真的挂到 .messages 上，否则观察器永远收不到高度变化。
@@ -43,6 +44,26 @@ assert.ok(/<div\s+className=\{`messages[^`]*`\}\s+ref=\{messagesRef\}/.test(chat
 assert.ok(roBody.includes("roScroller.observe(scroller)"), "必须同时观察滚动容器（scroller），否则容器变矮导致的钳制无人补");
 assert.ok(/const roScroller = new ResizeObserver\(/.test(roBody), "容器必须有独立的 ResizeObserver 回调");
 assert.ok(roBody.includes("roScroller.disconnect()"), "容器观察器必须在 effect 清理时断开");
+
+// --- ①d stick 是唯一事实源（2026-11-25 取证结论）--------------------------------
+//
+// mpi-diag.log 的 167 条 scroll-pin 里，148 条 ro-content 全部卡在
+// `stick=true` + `skipped:"gesture"`：滚轮归因窗口（200ms）比流式内容增长慢，
+// 窗口内每帧贴底被挡；窗口到期后 handleUserScroll 把那段位移当布局噪声，
+// 不再补位 → 视口留在半路（实测 gap=11342，约 18 屏）。
+//
+// 所以贴底只能由 stick（+ 切会话恢复期）决定。手势窗口的职责是「归因」，
+// 它已经把结论写进 stick 了；再挡一次就是第二套判定。
+{
+  const pinBody = chat.slice(chat.indexOf("const pin = () => {"), chat.indexOf("const ro = new ResizeObserver(pin)"));
+  assert.ok(pinBody.includes("stickRef.current"), "pin() 必须看 stick");
+  assert.ok(pinBody.includes("isRestoring()"), "pin() 必须让位给切会话恢复期（那段位置由 applySavedScroll 负责）");
+  assert.ok(!pinBody.includes("hasScrollGesture"), "pin() 不得引用手势判定——stick 已包含该结论");
+  const pinScrollerBody = chat.slice(chat.indexOf("const pinScroller = () => {"), chat.indexOf("const roScroller = new ResizeObserver"));
+  assert.ok(!pinScrollerBody.includes("hasScrollGesture"), "容器观察器的贴底同样不得被手势挡掉");
+  // 反向护栏：手势归因本身不能删——handleUserScroll / handleWheel 仍靠它区分用户意图与布局位移。
+  assert.ok(chat.includes("const hasScrollGesture = ()"), "手势归因函数必须保留（handleUserScroll / 恢复期让位仍在用）");
+}
 
 // --- ①c 取证埋点：贴底被让位 / 补了还有差距时要留下证据 -------------------------
 //
