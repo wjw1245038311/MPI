@@ -126,6 +126,31 @@ node <cli> --provider basalt --model "Qwen3.8-Flash-Next UD-IQ4_XS" \
 `get_state.success=true`、**stderr 0 行**。注意：用的是最小 settings（不含 `settings.packages`），
 1.5 记录提到的用户安装包 `typebox` peerDependencies 警告属另一条路径，本次未覆盖。
 
+### 5.6 本机采纳（dev 实例，2026-11-25 15:50）
+
+dev 模式下 `embeddedRuntimeArchivePath()` 会直接抛 `embedded Pi runtime is only available in a packaged app`
+（`src/main/runtime-package.ts:206`），所以上述“启动时静默采纳”在开发实例里不可用，按 1.5 记录同样的手工流程：
+
+```bash
+RT="$APPDATA/MPI Dev/runtime"
+cp -p "$RT/current.json" "$RT/current.json.bak-1.5.0"                 # 备份旧指针
+mkdir -p "$RT/.staging-manual/extracted"
+/c/Windows/System32/tar.exe -xzf runtime-release/MPI-Runtime-1.6.0-win-x64.tar.gz -C "$RT/.staging-manual/extracted"
+mv "$RT/.staging-manual/extracted" "$RT/versions/1.6.0"                # 布局 node/ npm/ pi/，与 1.5.0 一致
+# 写 current.json：{"schema":1,"version":"1.6.0"}（与 activateRuntimeRoot 的格式一致）
+```
+
+| 检查 | 结果 |
+| --- | --- |
+| 归档完整性 | size 48 529 259 一致；sha512（base64）与 `resources/runtime-manifest.json` 相等 |
+| 目录布局 | `versions/1.6.0/{node,node.exe}` + `pi/dist/cli.js` 均在（等价 `isUsableRuntimeRoot`），162 MB |
+| 自带 node 自检 | `versions/1.6.0/node/node.exe -v` → v24.19.0；用它跑 `pi/dist/cli.js --version` → 1.6.0 |
+| 装机后的 RPC 冒烟 | 用 `versions/1.6.0` 那份 node+cli 加载 17 个生成扩展 → `get_state.success=true`，stderr 0 行 |
+| 当前进程的运行时 | **仍是 1.5.0**。`resolvePiRuntime()` 按进程缓存（`pi-bridge.ts:186-190`），`resolvePiRuntime` 只在首调用时解析一次 → 要重启 dev 实例才换 |
+
+旧树 `versions/1.5.0`（164 MB）本次**没被删**：`cleanupRuntimeVersions()` 只在 `core-updater.ts:319` 的
+`cleanupOldRuntimes()` 里调（应用内更新与发行版启动清理路径），dev 手工采纳不触发。
+
 ## 6. 遗留风险与待办
 
 | 项 | 说明 |
@@ -133,12 +158,21 @@ node <cli> --provider basalt --model "Qwen3.8-Flash-Next UD-IQ4_XS" \
 | `cacheWarming` 默认变 `idle` | 本地端点的空闲 GPU 抢占需观察一轮再决定显式配置 |
 | 会话中途 system 消息 | 本机配置下不触发，未测 |
 | `fork` 命令本身 | 本次 entryId 取法不对，两版行为一致（都拒绝），严格讲未执行成功 |
-| `scripts/test-devmail-app.mjs:127,263` | 硬编码 `runtime/versions/1.5.0/pi`。设备侧采纳 1.6.0 后 `cleanupRuntimeVersions()` 只保留 active 版本，该目录会被清 → **需要改成从 `package.json` 推导或指向新目录**，否则 `npm test -- devmail` 会红 |
+| ~~`scripts/test-devmail-app.mjs`~~ | **已修**：`resolveManagedPiRuntimeDir()` 改为先按 `piRuntimeVersion` 定位 `<userData>/runtime/versions/<版本>/pi`，退到本机最高可用版本，都没有时报错开带指引。实测解析到 `versions/1.6.0/pi`，`npm run test:devmail` 25 项全绿 |
 | RPC stderr 诊断不进界面 | 建议：把子进程 stderr 按行落日志面板（独立小改动） |
 | 长会话压缩 / MCP 工具入参 / 交互 TUI | 仍需人工在应用里过一遍（1.5 记录同样未覆盖） |
 
 ## 7. 回滚
 
-1. `package.json` 的 `piRuntimeVersion` 改回 `1.5.0` + `PI_PACKAGE_DIR=<1.5.0 包> npm run bundle`；
-2. 设备侧若 `runtime/versions/1.5.0` 已被清理，需重新解压归档到该目录并把 `current.json` 指过去——
-   `ensureEmbeddedRuntimeCurrent()` 只在**内置严格更新**时自动换（`src/shared/runtime-version.ts`），不会自动降级。
+本机（dev）：`cp "$APPDATA/MPI Dev/runtime/current.json.bak-1.5.0" "$APPDATA/MPI Dev/runtime/current.json"` 后重启 dev 即可（
+`versions/1.5.0` 未删）。注意 `cleanupRuntimeVersions()` 会删掉所有非 active 版本目录（`index.ts:520` 启动时调），
+所以一旦用 1.6.0 启过一次应用，`versions/1.5.0` 就没了 —— 回滚需要重新解压：
+
+```bash
+/c/Windows/System32/tar.exe -xzf runtime-release/MPI-Runtime-1.5.0-win-x64.tar.gz -C <目标>
+# 解出 node/ npm/ pi/ → 放到 runtime/versions/1.5.0/，再把 current.json 指回 1.5.0
+```
+
+仓库侧：`package.json` 的 `piRuntimeVersion` 改回 `1.5.0` + `PI_PACKAGE_DIR=<1.5.0 包> npm run bundle`。
+设备侧（发行版）：`ensureEmbeddedRuntimeCurrent()` 只在**内置严格更新**时自动换（`src/shared/runtime-version.ts`），
+不会自动降级，所以必须靠装旧版 MPI 或手工解压。

@@ -22,6 +22,13 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
    应指向 `runtime/versions/1.6.0`；再跑一轮带工具调用的对话和一次长会话压缩。CLI 级实测（4 个 provider 组合、
    RPC 事件计数、17 个生成扩展加载）的命令与数据在 `docs/PI-1.6-UPGRADE.md` §5。
 
+2. **修（测试工具）：`npm test -- devmail` 不再依赖写死的运行时路径**。`scripts/test-devmail-app.mjs` 原来直接写
+   `…/runtime/versions/1.5.0/pi`：换设备必红，而且运行时升版后启动清理（`cleanupRuntimeVersions()`）会把旧目录
+   删掉，这个测试跟着红。现在按 `package.json` 的 `piRuntimeVersion` 定位 `<userData>/runtime/versions/<版本>/pi`，
+   鼓有就退到本机最高可用版本，都没有时报错并给出解决指引（先启动一次应用，或设 `MPI_USER_DATA_DIR`）。
+
+   验证方式：`npm run test:devmail`（25 项）；已实测解析到 `versions/1.6.0/pi` 并全绿。
+
 ## v0.15.6（2026-11-25）
 
 1. **修：「先停在上一条、再被拉下来」的真正成因——贴底被「滚轮归因窗口」挡掉**。

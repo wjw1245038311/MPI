@@ -33,6 +33,48 @@ function ok(name) {
   console.log(`PASS ${name}`);
 }
 
+/**
+ * 解析「应用自带的 pi 运行时」目录：`<userData>/runtime/versions/<版本>/pi`。
+ *
+ * 为什么不再写死路径（2026-11-25）：原来这两处硬编码了本机的 `versions/1.5.0`，
+ * 一是换设备必红，二是内置运行时一升，启动时的 `cleanupRuntimeVersions()` 会把旧目录删掉，
+ * 于是 `npm test -- devmail` 跟着红。现在先按 `package.json` 的 `piRuntimeVersion` 找，
+ * 再退到本机最高可用版本（这里只用到 jiti 与 typebox，不涉版本特定行为）。
+ */
+function resolveManagedPiRuntimeDir() {
+  const want = JSON.parse(readFileSync(join(HERE, "..", "package.json"), "utf8")).piRuntimeVersion;
+  const roots = [];
+  const appData = process.env.APPDATA?.trim();
+  if (appData) for (const name of ["MPI", "MPI Dev"]) roots.push(join(appData, name, "runtime", "versions"));
+  for (const key of ["MPI_USER_DATA_DIR", "MPI_CONFIG_DIR"]) {
+    const dir = process.env[key]?.trim();
+    if (dir) roots.push(join(dir, "runtime", "versions"));
+  }
+  // 只要 jiti（加载 .ts 扩展）与 dist/index.js（typebox 的宿主解析点）在就够了
+  const usable = (dir) =>
+    existsSync(join(dir, "node_modules", "jiti", "lib", "jiti.mjs")) && existsSync(join(dir, "dist", "index.js"));
+  for (const root of roots) {
+    const exact = join(root, want, "pi");
+    if (usable(exact)) return exact;
+  }
+  for (const root of roots) {
+    let versions = [];
+    try {
+      versions = readdirSync(root).sort();
+    } catch {
+      continue; // 这台设备没装过应用运行时，看下一个根
+    }
+    for (const v of versions.reverse()) {
+      const candidate = join(root, v, "pi");
+      if (usable(candidate)) return candidate;
+    }
+  }
+  throw new Error(
+    `没找到可用的 pi 运行时（期望版本 ${want}）。查找过：${roots.join(" | ")}。` +
+      "先启动一次 MPI 让它解压内置运行时，或把 MPI_USER_DATA_DIR 指到含 runtime/versions 的目录。",
+  );
+}
+
 /** 建一个临时共享根 + 空信箱。 */
 function makeShare(devices = ["thinkbook16p", "workstation"]) {
   const root = mkdtempSync(join(tmpdir(), "devmail-share-"));
@@ -124,7 +166,7 @@ function writeMail(share, device, name, fields) {
   // 从**安装后**的目录加载扩展：验证 ../lib/core.cjs 这类相对导入在
   // <userData>/apps/devmail/pi/ 下能解析（源码树里能跑不代表装完能跑）。
   {
-    const PI_RUNTIME = "C:/Users/Administrator/AppData/Roaming/MPI Dev/runtime/versions/1.5.0/pi";
+    const PI_RUNTIME = resolveManagedPiRuntimeDir();
     const { createRequire: cr } = await import("node:module");
     const { createJiti } = await import(pathToFileURL(join(PI_RUNTIME, "node_modules/jiti/lib/jiti.mjs")).href);
     const reqPi = cr(join(PI_RUNTIME, "dist/index.js"));
@@ -260,7 +302,7 @@ function writeMail(share, device, name, fields) {
 
 // —— 6. pi 扩展：注册三个工具 + 播报只做一次 ——
 {
-  const PI_RUNTIME = "C:/Users/Administrator/AppData/Roaming/MPI Dev/runtime/versions/1.5.0/pi";
+  const PI_RUNTIME = resolveManagedPiRuntimeDir();
   const { createJiti } = await import(pathToFileURL(join(PI_RUNTIME, "node_modules/jiti/lib/jiti.mjs")).href);
   const reqPi = createRequire(join(PI_RUNTIME, "dist/index.js"));
   const jiti = createJiti(join(PI_RUNTIME, "dist/index.js"), {
