@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, watch, writeFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, watch, writeFileSync, rmSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { homedir, hostname, networkInterfaces } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, safeStorage, shell } from "electron";
 import WebSocket from "ws";
 import { checkForAppUpdate, clearAppUpdateSkip, downloadAppUpdate, installAppUpdate, skipAppUpdateVersion, startAppUpdateAutoCheck } from "./app-updater";
 import { cachedPostCompactionEstimate, postCompactionEstimateFromEntries } from "./context-estimate";
@@ -122,7 +122,7 @@ import {
   installAppFromZip,
   listApps,
   restartAppService,
-  saveAppConfig,
+  saveAppConfigAndRestart,
   setAppEnabled,
   testAppVoice,
   uninstallApp,
@@ -445,6 +445,40 @@ interface Attachment {
 
 const CLIPBOARD_FILE_MAX_BYTES = 50_000_000;
 const CLIPBOARD_FILE_DIR = "mpi-clipboard";
+
+/**
+ * 把对象库里的副本（`<userData>/chat-attachments/objects/<前两位>/<hash>.<ext>`）
+ * 以便于识别的原名临时链接到一个展示目录，返回要 showItemInFolder 的路径。
+ *
+ * 为什么需要：内容寻址后落盘名是 64 位哈希，资源管理器里只看得到一串乱码，
+ * 也无法直接双击用对应用打开。建硬链接（同盘、瞬时、不占额外空间），不复制。
+ * 任何一步失败都退回原件——右键只为了看一眼，不该因此报错。
+ */
+function revealUnderReadableName(absPath: string, label: string): string {
+  try {
+    if (!label || !existsSync(absPath)) return absPath;
+    const dir = join(getConfigDir(), "attachment-reveal");
+    mkdirSync(dir, { recursive: true });
+    const ext = extname(absPath);
+    const safe = basename(label).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(0, 80) || "attachment";
+    const withExt = ext && !safe.toLowerCase().endsWith(ext.toLowerCase()) ? `${safe}${ext}` : safe;
+    const target = join(dir, withExt);
+    // 每次先删旧的：同名不同内容的附件不能让人看到上一份。
+    try {
+      if (existsSync(target)) unlinkSync(target);
+    } catch {
+      /* 被占用（正在预览）→ 直接用带序号的名字 */
+    }
+    try {
+      linkSync(absPath, target); // 硬链接：同盘、瞬时、不占额外空间
+    } catch {
+      copyFileSync(absPath, target); // 跨盘或文件系统不支持 → 退回复制
+    }
+    return target;
+  } catch {
+    return absPath;
+  }
+}
 const CLIPBOARD_MIME_EXT: Record<string, string> = {
   "text/plain": ".txt",
   "text/csv": ".csv",
@@ -6683,6 +6717,51 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     return { ok: true };
   });
 
+  /**
+   * 对话里的附件卡片右键。
+   *
+   * 附件有两个来源，路径处理不同：
+   *   - 本机原文件（`path`）：直接定位到那一份；
+   *   - 只存在于对象库里的副本（手机发来的、或 agent 逆交的）：名字是 64 位
+   *     内容哈希，没有可读文件名，也没扩展名——先解析成真实落盘路径（带扩展名），
+   *     再用它构造一条「<可读名>」的临时硬链接放进去资源管理器。不直接
+   *     showItemInFolder 哈希名，否则用户看到一个看不懂的长串。
+   */
+  ipcMain.handle("app:showAttachmentContextMenu", (event, args: { path?: string; name?: string; label?: string }) => {
+    const { path: rawPath, name, label } = args || {};
+    const language = getConfig().language;
+
+    // 真实可定位的地址：优先本机原文件，否则解析对象库里的副本。
+    const existing = rawPath && existsSync(rawPath) ? rawPath : null;
+    if (!existing && !name) return { ok: false, error: "Attachment not found" };
+    const objectPath = existing ? null : resolveChatAttachment(String(name || ""));
+    if (!existing && !objectPath) return { ok: false, error: "Attachment file is missing on disk" };
+    const absPath = existing || (objectPath as string);
+
+    const items: Electron.MenuItemConstructorOptions[] = [
+      {
+        label: language === "zh" ? "在资源管理器中显示" : "Show in File Explorer",
+        click: () => {
+          // 有可读名就临时链接成「原名」；链接失败（跨盘/无权限）退回原件。
+          const revealPath = existing
+            ? existing
+            : revealUnderReadableName(absPath, String(label || "").trim());
+          shell.showItemInFolder(revealPath);
+        },
+      },
+    ];
+    // 对象副本直接改默认应用打开意义不大（extension 是推出来的），但仍有用；
+    // 原文件则是最常用的一条。两者都保留，菜单项按有无原文件排前。
+    if (existing) {
+      items.push({ label: language === "zh" ? "使用默认应用打开" : "Open with Default App", click: () => void shell.openPath(existing) });
+    }
+    items.push({ type: "separator" }, { label: language === "zh" ? "复制文件路径" : "Copy File Path", click: () => clipboard.writeText(absPath) });
+
+    const menu = Menu.buildFromTemplate(items);
+    menu.popup({ window: BrowserWindow.fromWebContents(event.sender) || undefined });
+    return { ok: true };
+  });
+
   ipcMain.handle("app:revealFileInExplorer", (_e, absPath: string) => {
     if (!absPath || !existsSync(absPath)) throw new Error("File not found: " + absPath);
     shell.showItemInFolder(absPath);
@@ -7048,7 +7127,7 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
   ipcMain.handle("app:savePreviewHtml", (_e, args: { absPath?: string; projectRoot?: string; html?: string }) => {
     return writePreviewHtml(args?.absPath || "", args?.projectRoot, args?.html || "");
   });
-  ipcMain.handle("app:showFileContextMenu", (event, absPath: string, ctx?: { cwd?: string; rel?: string }) => {
+  ipcMain.handle("app:showFileContextMenu", (event, absPath: string, ctx?: { cwd?: string; rel?: string; copyPath?: boolean }) => {
     if (!absPath || !existsSync(absPath)) return { ok: false, error: "File not found" };
     const language = getConfig().language;
     let isDir = false;
@@ -7067,6 +7146,17 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
         click: () => void shell.openPath(absPath),
       },
     ];
+    // 附件卡片右键（ctx.copyPath）：资源管理器/默认应用之外，最常用的是把路径
+    // 贴进输入框——对话里的附件常常是哈希名的对象副本，手拼路径不现实。
+    if (ctx?.copyPath) {
+      items.push(
+        { type: "separator" },
+        {
+          label: language === "zh" ? "复制文件路径" : "Copy File Path",
+          click: () => clipboard.writeText(absPath),
+        },
+      );
+    }
     // The file tree caches listings (lazy, per folder) and only auto-refreshes
     // after an agent turn settles — files copied in manually stay invisible.
     // Directories get a manual refresh; the renderer reloads that key.
@@ -7132,8 +7222,10 @@ function remoteSafeEventValue(value: unknown, depth = 0, maskPaths = true): unkn
     setAppEnabled(String(args?.id || ""), !!args?.enabled),
   );
   ipcMain.handle("apps:getConfig", (_e, id: string) => getAppConfig(String(id || "")));
+  // 保存表单值；已启用的应用顺带重启服务，让新值立刻生效
+  // （否则要等下次重启 MPI——2026-11-25 thinkbook16p 踩到）。
   ipcMain.handle("apps:saveConfig", (_e, args: { id?: string; values?: Record<string, unknown> }) =>
-    saveAppConfig(String(args?.id || ""), (args?.values as Record<string, unknown>) || {}),
+    saveAppConfigAndRestart(String(args?.id || ""), (args?.values as Record<string, unknown>) || {}),
   );
   // v2: rolling service log of an installed app (used by the detail view).
   ipcMain.handle("apps:logs", (_e, id: string) => getAppLogs(String(id || "")));

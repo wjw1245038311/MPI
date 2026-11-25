@@ -21,17 +21,36 @@ const css = readFileSync(new URL("../src/renderer/src/styles.css", import.meta.u
 
 const roStart = chat.indexOf("const pin = () => {");
 assert.ok(roStart > 0, "Chat.tsx 必须用 ResizeObserver 做贴底收敛（找不到贴底收敛函数 pin）");
-const roBody = chat.slice(roStart, roStart + 1200);
+// 窗口拉到整段 effect（含新增的容器观察器），因为 pin 到依赖数组的距离
+// 随代码增长而变化——固定的字符数不是不变量。
+const roAnchor = chat.indexOf("}, [activeThreadId, tuiMode]);", roStart);
+assert.ok(roAnchor > roStart, "找不到 ResizeObserver effect 的依赖数组 [activeThreadId, tuiMode]");
+const roBody = chat.slice(roStart, roAnchor + 40);
 assert.ok(roBody.includes("new ResizeObserver("), "贴底收敛必须由 ResizeObserver 驱动（布局后、绘制前纠正）");
 assert.ok(roBody.includes("stickRef.current"), "ResizeObserver 贴底必须受 stick 意图约束（阅读历史时不许拽回）");
 assert.ok(roBody.includes("isRestoring()"), "ResizeObserver 贴底必须让位给切会话恢复期");
 assert.ok(roBody.includes("hasScrollGesture()"), "ResizeObserver 贴底必须让位给用户滚动手势");
 assert.ok(roBody.includes("lastScrollTopRef.current"), "程序化写入必须同步 lastScrollTopRef，否则会被误判成用户上滚");
 assert.ok(roBody.includes("ro.observe(host)"), "ResizeObserver 必须观察 transcript 容器（.messages）");
-// 观察目标必须真的挂到 .messages 上，否则观察器永远收不到高度变化。
+assert.ok(roBody.includes("[activeThreadId, tuiMode]"), "ResizeObserver effect 依赖必须含 tuiMode（TUI 模式整体替换聊天区）");// 观察目标必须真的挂到 .messages 上，否则观察器永远收不到高度变化。
 assert.ok(/<div\s+className=\{`messages[^`]*`\}\s+ref=\{messagesRef\}/.test(chat), ".messages 必须挂 ref={messagesRef}");
-// tuiMode 会整体替换聊天区，观察器必须跟着重建。
-assert.ok(roBody.includes("[activeThreadId, tuiMode]"), "ResizeObserver effect 依赖必须含 tuiMode（TUI 模式整体替换聊天区）");
+
+// --- ①b 容器自身也要观察（v0.15.2 漏掉的那一侧）--------------------------------
+//
+// 滚动容器变矮（窗口高变化 / 输入框长高 / 兄弟元素出现）时 max 变小、scrollTop 被钳到
+// 新底部，而 .messages 的尺寸没变 → 只观察内容收不到这次变化。少了这条，多轮会话里
+// 「先停在上一条」仍然会出现（2026-11-25 复现）。
+assert.ok(roBody.includes("roScroller.observe(scroller)"), "必须同时观察滚动容器（scroller），否则容器变矮导致的钳制无人补");
+assert.ok(/const roScroller = new ResizeObserver\(/.test(roBody), "容器必须有独立的 ResizeObserver 回调");
+assert.ok(roBody.includes("roScroller.disconnect()"), "容器观察器必须在 effect 清理时断开");
+
+// --- ①c 取证埋点：贴底被让位 / 补了还有差距时要留下证据 -------------------------
+//
+// 没有样本就只能继续猜。每次都写会刷屏，所以实现里按几何去重——但采样调用必须存在。
+assert.ok(chat.includes("logScrollPin("), "贴底收敛必须上报诊断样本（否则下次复现仍然只能猜）");
+for (const source of ["ro-content", "ro-scroller"]) {
+  assert.ok(chat.includes(`"${source}"`), `诊断样本必须区分触发源：${source}`);
+}
 
 // --- ② 贴底态关闭滚动锚定 ---------------------------------------------------
 
@@ -53,4 +72,4 @@ assert.ok(!turnEndBody.includes('behavior: "smooth"'), "回合结束的贴底不
 // 反向护栏：用户显式点「跳转到最新」仍可平滑滚动（那是用户的主动操作，不是跟随）。
 assert.ok(/jump-latest[\s\S]{0,600}behavior: "smooth"/.test(chat), "「跳转到最新」按钮应保留平滑滚动");
 
-console.log("chat-scroll: 8 项通过（贴底收敛 / 锚定 / 段末贴底 / 显式跳转）");
+console.log("chat-scroll: 12 项通过（贴底收敛 / 容器变矮 / 取证埋点 / 锚定 / 段末贴底 / 显式跳转）");

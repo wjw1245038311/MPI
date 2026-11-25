@@ -19,7 +19,8 @@ import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
 import { splitChoiceSegments } from "../lib/choice-block";
 import type { ChoiceClampInfo, ChoiceFailure, ChoiceSplitStats } from "../lib/choice-block";
-import { logChoiceFenceDuplicate, logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRender, logChoiceFenceRepaired } from "../lib/diag-watch";
+import { logChoiceFenceDuplicate, logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRender, logChoiceFenceRepaired, logScrollPin } from "../lib/diag-watch";
+import type { ScrollPinSample } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { fileCategory } from "../../../shared/file-kind";
@@ -347,18 +348,69 @@ export function Chat() {
     const host = messagesRef.current;
     const scroller = scrollRef.current;
     if (!host || !scroller) return;
+
+    /** 采样一次几何；只在「本该贴底却不在底」时写诊断（避免刷屏）。 */
+    const sample = (source: string, skipped?: ScrollPinSample["skipped"], gapBefore = NaN) => {
+      if (!activeThreadId) return;
+      const max = scroller.scrollHeight - scroller.clientHeight;
+      const gapAfter = max - scroller.scrollTop;
+      // 已经贴底且没有让位：这次没什么可记的。
+      if (!skipped && gapAfter <= 1) return;
+      if (skipped === "already-bottom") return;
+      logScrollPin({
+        source,
+        threadId: activeThreadId,
+        gapBefore: Number.isFinite(gapBefore) ? Math.round(gapBefore) : Math.round(gapAfter),
+        gapAfter: Math.round(gapAfter),
+        scrollTop: Math.round(scroller.scrollTop),
+        max: Math.round(max),
+        clientHeight: Math.round(scroller.clientHeight),
+        scrollHeight: Math.round(scroller.scrollHeight),
+        stick: stickRef.current,
+        restoring: isRestoring(),
+        gesture: hasScrollGesture(),
+        ...(skipped ? { skipped } : {}),
+      });
+    };
+
     const pin = () => {
       // 阅读历史 / 正在滚动手势 / 切会话恢复期：一律让位，不抢位置。
-      if (!stickRef.current || isRestoring() || hasScrollGesture()) return;
+      if (!stickRef.current) return sample("ro-content", "not-stick");
+      if (isRestoring()) return sample("ro-content", "restoring");
+      if (hasScrollGesture()) return sample("ro-content", "gesture");
       const max = scroller.scrollHeight - scroller.clientHeight;
       if (max - scroller.scrollTop <= 1) return;
+      const gapBefore = max - scroller.scrollTop;
       scroller.scrollTop = max;
       lastScrollTopRef.current = scroller.scrollTop; // 程序化写入：不算用户意图
       setAtBottom(true);
+      sample("ro-content", undefined, gapBefore);
     };
     const ro = new ResizeObserver(pin);
     ro.observe(host);
-    return () => ro.disconnect();
+
+    // 容器自身变矮（窗口高变化、输入框长高、侧栏兄弟元素出现）时 max 变小，
+    // scrollTop 被钳到新底部，内容和容器尺寸都没变 → 上面那个观察器收不到。
+    // 这是 v0.15.2 没覆盖的那一侧：容器也要观察。
+    const pinScroller = () => {
+      if (!stickRef.current) return sample("ro-scroller", "not-stick");
+      if (isRestoring()) return sample("ro-scroller", "restoring");
+      if (hasScrollGesture()) return sample("ro-scroller", "gesture");
+      const max = scroller.scrollHeight - scroller.clientHeight;
+      if (max - scroller.scrollTop <= 1) return;
+      const gapBefore = max - scroller.scrollTop;
+      scroller.scrollTop = max;
+      lastScrollTopRef.current = scroller.scrollTop;
+      setAtBottom(true);
+      sample("ro-scroller", undefined, gapBefore);
+    };
+    const roScroller = new ResizeObserver(pinScroller);
+    roScroller.observe(scroller);
+
+    return () => {
+      ro.disconnect();
+      roScroller.disconnect();
+    };
     // tuiMode 会在普通聊天区 / 终端之间整体替换 .messages，必须重挂观察器。
   }, [activeThreadId, tuiMode]);
 
@@ -1886,9 +1938,18 @@ function MessageGroupInner({
                       className="msg-user-file"
                       key={`${attachment.name}-${index}`}
                       disabled={!attachment.path}
-                      title={attachment.path ? language === "zh" ? "在 MPI 中查看附件" : "View attachment in MPI" : `attachment.label || attachment.name}`}
+                      title={attachment.path ? language === "zh" ? "在 MPI 中查看附件（右键：在资源管理器中显示）" : "View attachment in MPI (right-click to show in File Explorer)" : `attachment.label || attachment.name}`}
                       aria-label={attachment.path ? `${language === "zh" ? "查看附件" : "View attachment"}: ${attachment.label || attachment.name}` : attachment.label || attachment.name}
                       onClick={() => void openAttachment(attachment)}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void window.pi.app.showAttachmentContextMenu({
+                          path: attachment.path,
+                          name: attachment.name,
+                          label: attachment.label || attachment.name,
+                        });
+                      }}
                     >
                       <span className="msg-user-file-icon" aria-hidden="true">
                         <FileTypeIcon cat={fileCategory(attachment.label || attachment.name)} size={16} />
@@ -2364,6 +2425,11 @@ function AgentToolAttachCards({
               onClick={() => {
                 if (card.path) void openPreview(card.path, cwd);
               }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void window.pi.app.showAttachmentContextMenu({ path: card.path, name: card.name, label: card.label });
+              }}
             >
               <img className="msg-user-img" src={chatAttachmentUrl(card.name)} alt={card.label} />
             </button>
@@ -2386,6 +2452,15 @@ function AgentToolAttachCards({
             aria-label={`${language === "zh" ? "查看附件" : "View attachment"}: ${card.label}`}
             onClick={() => {
               if (card.path) void openPreview(card.path, cwd);
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void window.pi.app.showAttachmentContextMenu({
+                path: card.path,
+                name: card.name,
+                label: card.label,
+              });
             }}
           >
             <span className="msg-user-file-icon" aria-hidden="true">

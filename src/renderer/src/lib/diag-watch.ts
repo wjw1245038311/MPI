@@ -213,3 +213,58 @@ export function logChoiceFenceInfoString(detail: {
     len: detail.raw.length,
   });
 }
+
+// ---- 聊天区贴底跟随（「先停在上一条、再被拉下来」） ---------------------------
+//
+// 2026-11-25 桌面端复现：多轮会话里每进入下一段，视图会先停在/退回上一条，
+// 随后才被拉到最新。v0.15.2 的贴底收敛只补「还能往下滚」那一侧，无法解释
+// 全部场景——所以先取证，再改。
+//
+// 每个被丢弃的贴底机会记一行，带上足够判定的上下文：
+//   · 谁触发的（ResizeObserver / 提交后 effect / 段末 / 恢复期）
+//   · 当时的几何（scrollTop / max / 容器高 / 内容高），以及**观察对象**——
+//     容器（.chat-scroll）变矮与内容（.messages）变高是两种不同的病。
+//   · 是否被「让位」条件挡掉（stick / 恢复期 / 滚动手势），挡掉时到底是哪一条。
+//
+// 只在异常帧写日志：几何一致（已经在底）时不写，避免刷屏。
+
+export interface ScrollPinSample {
+  /** 触发源：ro-content / ro-scroller / commit / turn-end / restore。 */
+  source: string;
+  threadId: string;
+  /** 写完后仍然「不在底」的差距（px）。0 = 这次补到了底。 */
+  gapAfter: number;
+  /** 写入前的差距（px）。 */
+  gapBefore: number;
+  scrollTop: number;
+  max: number;
+  clientHeight: number;
+  scrollHeight: number;
+  stick: boolean;
+  restoring: boolean;
+  gesture: boolean;
+  /** 让位原因（空 = 真的尝试贴底了）。 */
+  skipped?: "not-stick" | "restoring" | "gesture" | "already-bottom";
+}
+
+const loggedPinFrames = new Set<string>();
+
+/**
+ * 记一帧贴底样本。同一 (source, 几何) 只记一次——一次回跳会在同一几何上
+ * 反复触发（每帧一次），不去重会把日志刷满、反而看不出模式。
+ */
+export function logScrollPin(sample: ScrollPinSample): void {
+  const key = [
+    sample.source,
+    sample.threadId,
+    Math.round(sample.scrollTop),
+    Math.round(sample.max),
+    Math.round(sample.clientHeight),
+    Math.round(sample.scrollHeight),
+    sample.skipped || "pinned",
+  ].join(":");
+  if (loggedPinFrames.has(key)) return;
+  if (loggedPinFrames.size > 400) loggedPinFrames.clear();
+  loggedPinFrames.add(key);
+  send("scroll-pin", { ...sample });
+}

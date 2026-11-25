@@ -367,8 +367,39 @@ try {
   const rr = await store.restartAppService("plugin-demo");
   assert.equal(rr.enabled, true);
   assert.equal(rr.status.state, "ready");
-  await store.uninstallApp("plugin-demo");
   ok("service: restart re-activates the service and reports ready");
+
+  // 已启用应用改配置必须重启服务，否则新值要等到下次重启 MPI 才生效
+  //（2026-11-25 thinkbook16p：“开关打开了但没生效”——值停在了 config.json 里）。
+  await store.setAppEnabled("plugin-demo", true);
+  const activationsBefore = store.getAppLogs("plugin-demo").filter((l) => l.includes("demo activating")).length;
+  const saved = await store.saveAppConfigAndRestart("plugin-demo", {
+    ...store.getAppConfig("plugin-demo"),
+    baseUrl: "http://127.0.0.1:8888/v1",
+  });
+  assert.equal(saved.restarted, true, "已启用的应用保存配置必须重启服务");
+  assert.equal(saved.error, undefined);
+  // 「重新 activate」的直接证据：服务的日志行又多了一条（activate 里 host.log）。
+  const actLines = store.getAppLogs("plugin-demo").filter((l) => l.includes("demo activating")).length;
+  assert.ok(actLines > activationsBefore, "保存后必须重新 activate（否则扩展/服务读到的还是旧值）");
+  assert.equal(store.getAppConfig("plugin-demo").baseUrl, "http://127.0.0.1:8888/v1");
+  assert.equal(store.listApps().find((a) => a.id === "plugin-demo").status.state, "ready");
+  ok("service: saving config on an enabled app restarts the service (new values take effect)");
+
+  // 未启用的应用：保存只写盘，不应拉起服务（那是用户没要求的副作用）。
+  await store.setAppEnabled("plugin-demo", false);
+  const activationsDisabled = store.getAppLogs("plugin-demo").filter((l) => l.includes("demo activating")).length;
+  const savedOff = await store.saveAppConfigAndRestart("plugin-demo", {
+    ...store.getAppConfig("plugin-demo"),
+    baseUrl: "http://127.0.0.1:7777/v1",
+  });
+  assert.equal(savedOff.restarted, false, "未启用的应用保存配置不应重启服务");
+  const offLines = store.getAppLogs("plugin-demo").filter((l) => l.includes("demo activating")).length;
+  assert.equal(offLines, activationsDisabled, "未启用时不得 activate");
+  assert.equal(store.getAppConfig("plugin-demo").baseUrl, "http://127.0.0.1:7777/v1", "值仍要写盘");
+  ok("service: saving config on a disabled app only persists (no service spawn)");
+
+  await store.uninstallApp("plugin-demo");
 
   console.log(`\napp-store: all ${passed} checks passed`);
 } finally {

@@ -337,6 +337,36 @@ export function saveAppConfig(id: string, rawValues: Record<string, unknown>): R
   return out;
 }
 
+/**
+ * 保存配置后重新激活已启用的服务——否则新值要等到下次重启 MPI 才生效。
+ *
+ * 为什么需要（2026-11-25 thinkbook16p 实打实踩到）：pi 扩展与服务模块是两个进程，
+ * 扩展只读 dataDir 里的 config.json。服务模块只在 activate 时写这份文件，而
+ * `saveAppConfig` 只写 configs/<id>.json（表单值），**不重新 activate**。
+ * 于是用户的真实体验是：面板上把开关改成「开启」→ 看着是开的 → 实际扩展读到的
+ * 还是旧值 → 表现为「开关打开了但没生效」，而且界面上没有任何提示。
+ *
+ * 只重启已启用的应用：未启用的应用激活会拉起服务、写 config，那是用户没要求的副作用。
+ * 重启失败不动表单值（配置已经存住了），把错误交给调用方提示。
+ */
+export async function saveAppConfigAndRestart(
+  id: string,
+  rawValues: Record<string, unknown>,
+): Promise<{ values: Record<string, string>; restarted: boolean; error?: string }> {
+  const values = saveAppConfig(id, rawValues);
+  const manifest = loadManifest(id);
+  const entry = readRegistry().apps?.[id];
+  // 没服务模块 / 没启用 → 没什么可重启的（下次启用时会读到新值）。
+  if (!manifest?.service || !entry?.enabled) return { values, restarted: false };
+  try {
+    await deactivateService(runtimeHooks(id, manifest));
+    await activateService(runtimeHooks(id, manifest));
+    return { values, restarted: true };
+  } catch (err) {
+    return { values, restarted: false, error: String((err as Error)?.message || err) };
+  }
+}
+
 /** Apply an app's declarative template plus its service module's returned patch. */
 async function enableApp(id: string, manifest: AppManifest): Promise<void> {
   const template = manifest.integrations?.voiceStt;

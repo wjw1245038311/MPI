@@ -1,6 +1,6 @@
 {
   "name": "mpi",
-  "version": "0.15.4",
+  "version": "0.15.5",
   "piRuntimeVersion": "1.5.0",
   "private": true,
   "license": "MIT",
@@ -126,6 +126,7 @@
     "test:trustedtools": "node --experimental-strip-types scripts/test-trusted-tools.mjs",
     "test:appstore": "node --experimental-strip-types scripts/test-app-store.mjs",
     "test:appruntime": "node --experimental-strip-types scripts/test-app-runtime.mjs",
+    "test:devmail": "node --experimental-strip-types scripts/test-devmail-app.mjs",
     "test:test-registry": "node --experimental-strip-types scripts/test-test-registry.mjs",
     "test:searchmark": "node scripts/test-search-mark.mjs",
     "test:shellev": "node --experimental-strip-types scripts/test-shell-env-ext.mjs",

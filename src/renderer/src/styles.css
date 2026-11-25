@@ -7751,10 +7751,75 @@ mark.hl {
 }
 .appstore-empty {
   flex: 1;
-  display: grid;
-  place-items: center;
-  color: var(--text-faint);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 0 4px;
+  color: var(--text-dim);
   font-size: 13px;
+  max-width: 520px;
+}
+.appstore-empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.appstore-empty-text {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.appstore-empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+.appstore-empty-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+/* 骨架屏：用布局形状占位，不用转圈（§1.1 loading）。 */
+.appstore-skeleton {
+  pointer-events: none;
+  cursor: default;
+}
+.appstore-sk-block {
+  display: block;
+  border-radius: var(--radius-xs);
+  background: var(--overlay-2);
+  animation: appstore-sk-pulse 1.4s ease-in-out infinite;
+}
+.appstore-sk-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  flex: 0 0 auto;
+}
+.appstore-sk-title {
+  height: 12px;
+  width: 42%;
+  margin-left: 2px;
+}
+.appstore-sk-line {
+  height: 10px;
+  width: 100%;
+}
+.appstore-sk-line.short {
+  width: 64%;
+}
+@keyframes appstore-sk-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
 }
 .appstore-card {
   display: flex;
@@ -7763,13 +7828,13 @@ mark.hl {
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-elev, rgba(0, 0, 0, 0.02));
+  background: var(--surface-muted);
   cursor: pointer;
   transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 .appstore-card:hover {
   border-color: var(--accent);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
 .appstore-card.enabled {
@@ -7835,11 +7900,11 @@ mark.hl {
   font-weight: 600;
 }
 .appstore-install-btn {
-  padding: 5px 12px;
+  padding: 6px 12px;
   font-size: 12px;
 }
 .appstore-import-btn {
-  padding: 5px 12px;
+  padding: 6px 12px;
   font-size: 12px;
   white-space: nowrap;
 }
@@ -7847,7 +7912,7 @@ mark.hl {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
-  background: var(--bg-soft, rgba(127, 127, 127, 0.05));
+  background: var(--surface-muted);
 }
 .appstore-caps-list {
   margin: 6px 0 0;
@@ -7897,7 +7962,7 @@ mark.hl {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px 14px;
-  background: var(--bg-elev, rgba(0, 0, 0, 0.02));
+  background: var(--surface-muted);
 }
 .appstore-guide-title {
   display: flex;
@@ -7924,7 +7989,7 @@ mark.hl {
 .appstore-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
 }
 .appstore-field-label {
   font-size: 12px;
@@ -7947,14 +8012,14 @@ mark.hl {
 .appstore-test-result {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   font-size: 12px;
 }
 .appstore-test-result.ok {
   color: var(--accent);
 }
 .appstore-test-result.fail {
-  color: #d0453e;
+  color: var(--danger);
 }
 .appstore-muted {
   font-size: 12px;
@@ -7966,6 +8031,11 @@ mark.hl {
   gap: 10px;
   padding-top: 4px;
 }
+/* 有未保存修改时就地提示（不清屏、不弹窗）；与按钮同一行，不至被忽视。 */
+.appstore-dirty {
+  font-size: 12px;
+  color: var(--warn);
+}
 .appstore-uninstall {
   margin-left: auto;
 }
@@ -7976,7 +8046,7 @@ mark.hl {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-soft, rgba(127, 127, 127, 0.05));
+  background: var(--surface-muted);
 }
 .appstore-status-head {
   display: flex;
@@ -7992,13 +8062,13 @@ mark.hl {
   background: var(--text-faint);
 }
 .appstore-status-dot.ready {
-  background: #35c26b;
+  background: var(--accent);
 }
 .appstore-status-dot.starting {
-  background: #e0a13a;
+  background: var(--warn);
 }
 .appstore-status-dot.error {
-  background: #e05555;
+  background: var(--danger);
 }
 .appstore-status-text {
   color: var(--text);
@@ -8026,8 +8096,8 @@ mark.hl {
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   background: var(--overlay-6);
-  color: #cfe3d6;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-dim);
+  font-family: var(--mono);
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;

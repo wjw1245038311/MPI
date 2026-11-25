@@ -19,6 +19,12 @@ function categoryLabel(category: string, zh: boolean): string {
   switch (category) {
     case "voice":
       return zh ? "语音" : "Voice";
+    case "model":
+      return zh ? "模型" : "Model";
+    case "agent":
+      return zh ? "Agent" : "Agent";
+    case "collab":
+      return zh ? "协作" : "Collaboration";
     default:
       return category;
   }
@@ -92,6 +98,9 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  /** 已保存过的表单值——用来判断「有没有未保存的修改」。 */
+  const [savedValues, setSavedValues] = useState<Record<string, string>>({});
   const [logs, setLogs] = useState<string[]>([]);
   const [showLogs, setShowLogs] = useState(false);
 
@@ -122,13 +131,19 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
     window.pi.apps
       .getConfig(entry.id)
       .then((v) => {
-        if (!cancelled) setValues(v);
+        if (!cancelled) {
+          setValues(v);
+          setSavedValues(v);
+        }
       })
       .catch(() => {
         // fall back to manifest defaults below
         const fallback: Record<string, string> = {};
         for (const f of entry.config.fields) fallback[f.key] = f.default ?? "";
-        if (!cancelled) setValues(fallback);
+        if (!cancelled) {
+          setValues(fallback);
+          setSavedValues(fallback);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingCfg(false);
@@ -158,6 +173,48 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
 
   const hasVoiceIntegration = !!entry.integrations?.voiceStt;
 
+  const dirty = entry.config.fields.some((f) => (values[f.key] ?? "") !== (savedValues[f.key] ?? ""));
+
+  /**
+   * 保存表单值（已启用的应用会顺带重启服务）。
+   *
+   * 这个入口以前不存在：`saveConfig` 只在 enable() 里调，而那个按钮只在**未启用**时
+   * 渲染。于是已启用的应用改完配置没有任何出口——看着像生效，其实从未写盘
+   * （2026-11-25 thinkbook16p：“开关打开了但没生效”）。
+   */
+  const save = async (opts?: { silent?: boolean }) => {
+    setSaving(true);
+    try {
+      const res = await window.pi.apps.saveConfig(entry.id, values);
+      // 主进程返回 {values, restarted, error}；未启用 / 无服务模块时 restarted=false。
+      const restarted = res?.restarted;
+      const error = res?.error;
+      setSavedValues(res?.values || values);
+      if (error) {
+        pushToast(
+          "error",
+          zh
+            ? `设置已保存，但服务没重启成功：${error}。点「重启服务」再试一次。`
+            : `Settings saved, but the service did not restart: ${error}. Try “Restart service”.`,
+        );
+      } else if (!opts?.silent) {
+        pushToast(
+          "success",
+          restarted
+            ? zh ? "已保存，服务已重启——新设置立即生效" : "Saved; service restarted — the new settings are live"
+            : zh ? "已保存" : "Saved",
+        );
+      }
+      await refreshLogs();
+      return true;
+    } catch (e: any) {
+      pushToast("error", zh ? `没保存成功：${String(e?.message || e)}` : `Could not save: ${String(e?.message || e)}`);
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const runTest = async () => {
     setTesting(true);
     setTestResult(null);
@@ -181,7 +238,9 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
   const enable = async () => {
     setBusy(true);
     try {
+      // 先把表单值存住（已启用时 save() 还会重启服务；这里还没启用，只是写盘）。
       await window.pi.apps.saveConfig(entry.id, values);
+      setSavedValues(values);
       await setAppEnabled(entry.id, true);
       await refreshLogs();
     } catch {
@@ -370,17 +429,25 @@ function AppDetail({ entry, zh, onBack }: DetailProps) {
             </button>
           )}
           {entry.installed && entry.enabled && (
-            <button type="button" className="set-btn ghost" onClick={() => void disable()} disabled={busy}>
+            <button type="button" className="set-btn primary" onClick={() => void save()} disabled={saving || !dirty || loadingCfg}>
+              {saving ? (zh ? "保存中…" : "Saving…") : zh ? "保存设置" : "Save settings"}
+            </button>
+          )}
+          {entry.installed && entry.enabled && dirty && !saving && (
+            <span className="appstore-dirty">{zh ? "有未保存的修改" : "Unsaved changes"}</span>
+          )}
+          {entry.installed && entry.enabled && (
+            <button type="button" className="set-btn ghost" onClick={() => void disable()} disabled={busy || saving}>
               {zh ? "停用（还原设置）" : "Disable (restore settings)"}
             </button>
           )}
           {entry.installed && entry.enabled && hasService && (
-            <button type="button" className="set-btn ghost" onClick={() => void restart()} disabled={busy}>
+            <button type="button" className="set-btn ghost" onClick={() => void restart()} disabled={busy || saving}>
               <Refresh size={13} /> {status?.state === "error" ? (zh ? "重试" : "Retry") : zh ? "重启服务" : "Restart"}
             </button>
           )}
           {entry.installed && (
-            <button type="button" className="set-btn danger appstore-uninstall" onClick={uninstall}>
+            <button type="button" className="set-btn danger appstore-uninstall" onClick={uninstall} disabled={saving}>
               <Trash size={13} /> {zh ? "卸载" : "Uninstall"}
             </button>
           )}
@@ -484,12 +551,41 @@ export function AppStorePanel() {
             </header>
 
             {loading && entries.length === 0 ? (
-              <div className="appstore-empty">{zh ? "加载中…" : "Loading…"}</div>
+              // §1.1 loading：>0.1s 就不该只给干字。骨架屏给形状，不让人以为卡死。
+              <div className="appstore-grid" aria-busy="true" aria-label={zh ? "正在加载应用列表" : "Loading app list"}>
+                {[0, 1].map((i) => (
+                  <div className="appstore-card appstore-skeleton" key={`sk-${i}`}>
+                    <div className="appstore-card-head">
+                      <span className="appstore-sk-block appstore-sk-icon" />
+                      <span className="appstore-sk-block appstore-sk-title" />
+                    </div>
+                    <span className="appstore-sk-block appstore-sk-line" />
+                    <span className="appstore-sk-block appstore-sk-line short" />
+                  </div>
+                ))}
+              </div>
             ) : entries.length === 0 ? (
+              // §1.1 空态三问：这里是干嘛的 / 我现在能做什么（主操作入口）/ 做出来什么样
               <div className="appstore-empty">
-                {zh
-                  ? "还没有应用。点击右上角「从 zip 安装」加载应用包，或用「加载目录」调试未打包的应用。"
-                  : "No apps yet. Use “Install zip” (top right) to load a package, or “Load folder” to debug an unpacked app."}
+                <div className="appstore-empty-title">{zh ? "还没有安装任何应用" : "No apps installed yet"}</div>
+                <p className="appstore-empty-text">
+                  {zh
+                    ? "应用能把外部能力接进 MPI：接本地模型、跨设备收发消息、把语音服务换成本地模型。装好、启用，它在会话里就能用。"
+                    : "Apps plug outside capabilities into MPI: local models, cross-device messaging, a local speech service. Install and enable one and it works inside conversations."}
+                </p>
+                <div className="appstore-empty-actions">
+                  <button className="set-btn primary" onClick={installZip}>
+                    {zh ? "从 zip 安装" : "Install from zip"}
+                  </button>
+                  <button className="set-btn ghost" onClick={installDir}>
+                    {zh ? "加载未打包目录" : "Load unpacked folder"}
+                  </button>
+                </div>
+                <p className="appstore-empty-hint">
+                  {zh
+                    ? "应用包是一个带 mpi-app.json 的 zip。装完默认不启用 —— 先看清它声明要什么权限，再自己按「启用应用」。"
+                    : "A package is a zip with an mpi-app.json inside. Newly installed apps stay disabled — check what they declare access to, then press “Enable app” yourself."}
+                </p>
               </div>
             ) : (
               <div className="appstore-grid">

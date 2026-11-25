@@ -128,8 +128,11 @@ const api = {
     readPreview: (absPath: string, projectRoot?: string) => ipcRenderer.invoke("app:readPreview", absPath, projectRoot),
     savePreviewHtml: (args: { absPath: string; projectRoot?: string; html: string }) =>
       ipcRenderer.invoke("app:savePreviewHtml", args),
-    showFileContextMenu: (absPath: string, ctx?: { cwd?: string; rel?: string }) =>
+    showFileContextMenu: (absPath: string, ctx?: { cwd?: string; rel?: string; copyPath?: boolean }) =>
       ipcRenderer.invoke("app:showFileContextMenu", absPath, ctx),
+    /** 对话里附件卡片的右键菜单（资源管理器 / 默认应用 / 复制路径）。 */
+    showAttachmentContextMenu: (args: { path?: string; name?: string; label?: string }) =>
+      ipcRenderer.invoke("app:showAttachmentContextMenu", args),
     // Right-click on empty space in the file tree → native menu with 刷新文件列表.
     showTreeMenu: (cwd: string) => ipcRenderer.invoke("app:showTreeMenu", cwd),
     updatePi: () => ipcRenderer.invoke("app:updatePi"),
@@ -592,7 +595,11 @@ const api = {
     setEnabled: (id: string, enabled: boolean): Promise<AppStoreEntry> =>
       ipcRenderer.invoke("apps:setEnabled", { id, enabled }),
     getConfig: (id: string): Promise<Record<string, string>> => ipcRenderer.invoke("apps:getConfig", id),
-    saveConfig: (id: string, values: Record<string, string>): Promise<Record<string, string>> =>
+    /** 保存表单值。已启用的应用会顺带重启服务，返回是否重启成功。 */
+    saveConfig: (
+      id: string,
+      values: Record<string, string>,
+    ): Promise<{ values: Record<string, string>; restarted: boolean; error?: string }> =>
       ipcRenderer.invoke("apps:saveConfig", { id, values }),
     /** Draft STT probe with unsaved form values (no config write). */
     testVoice: (id: string, values: Record<string, string>): Promise<AppVoiceTestResult> =>
