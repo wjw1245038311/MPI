@@ -4,6 +4,24 @@ MPI —— 基于 Pi coding agent 的桌面客户端。本文件记录近期各�
 
 **维护约定**：每次提交更新后，将改动追加到下方 `Unreleased` 小节；打包发版时把 `## Unreleased` 整体改名为 `## vX.Y.Z（日期）`（**不要留下空的 Unreleased 小节**——`scripts/test-manual-sync.mjs` 要求每个存在的分节至少 1 条；下一次改动再新建 Unreleased）。每个功能/优化条目附一段独立换行的「验证方式：」，写清如何在应用里操作确认该条生效（供安装后逐条实测）。**已发布的小节不允许再改写**；后续修正写进新的小节（如「修：上一版引入的 X」）——历史版本是给人回溯用的，改它等于造假。
 
+## Unreleased
+
+1. **运行时：内置 Pi 从 `1.5.0` 升到 `1.6.0`**——`package.json` 的 `piRuntimeVersion` 改钉 1.6.0，并重打运行时归档
+   （`MPI-Runtime-1.6.0-win-x64.tar.gz`，46.3 MiB；归档与 `resources/runtime-manifest.json` 都在 `.gitignore` 里，不入库）。
+   跳版本影响、静态核查与逐项实测记录写在 `docs/PI-1.6-UPGRADE.md`。摘要：
+   - 上游唯一一条 breaking（扩展组件 `render()` 返回 `readonly string[]`）本仓没有相关用法；一并接收的 1.5.1
+     两条 breaking（grep 自定义 context 读取、工具全禁用时不再发 `"tools": []`）也未命中本仓代码。
+   - **本地模型无感知**：basalt / workbuddy 四个组合的系统提示与请求体（role 序列、顶层字段）与 1.5.0 逐字段一致；
+     连 pi 默认系统提示的正文都一致（只差内嵌的文档路径）。
+   - **RPC 会话替换不再重复触发 `session_start` / `resources_discover`**（实测 9 次 → 5 次）；
+     记忆池捕获本来就有游标幂等，快照仍是一条，行为不变。
+   - 需要留意的默认值：`cacheWarming` 默认从 `streaming` 变 `idle`（空闲期也会向端点发保温请求，对本地模型
+     是额外的 GPU 占用）、`find` 的 glob 改为相对搜索目录。两者本次都**未改本机配置**，先观察。
+
+   验证方式：`bash scripts/restart-dev.sh` 后新建线程，`rg "runtime resolved" logs/dev-run.log | tail -1`
+   应指向 `runtime/versions/1.6.0`；再跑一轮带工具调用的对话和一次长会话压缩。CLI 级实测（4 个 provider 组合、
+   RPC 事件计数、17 个生成扩展加载）的命令与数据在 `docs/PI-1.6-UPGRADE.md` §5。
+
 ## v0.15.6（2026-11-25）
 
 1. **修：「先停在上一条、再被拉下来」的真正成因——贴底被「滚轮归因窗口」挡掉**。

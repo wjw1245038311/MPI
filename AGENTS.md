@@ -102,8 +102,10 @@ npm run test:zhiya   # 等价的单套件入口，名字见 package.json 的 scr
 
 ### 打包时的两个坑（`npm run dist`）
 
-- **`PI_PACKAGE_DIR` 必须指向与 `package.json` 的 `piRuntimeVersion` 一致的 pi 包。**（当前是 `1.5.0`；改动版本时跟着改。）
+- **`PI_PACKAGE_DIR` 必须指向与 `package.json` 的 `piRuntimeVersion` 一致的 pi 包。**（当前是 `1.6.0`；改动版本时跟着改，
+  并按 `docs/PI-1.6-UPGRADE.md` 的流程做：静态核查 breaking → 冒烟 → 重打归档 → 记升级记录。）
   `scripts/bundle-runtime.mjs` 会校验，不符直接抛 `PI_PACKAGE_DIR must contain Pi v<期望>; found v<实际>`——
   别指向全局 npm 装的那份（版本常比期望新一档）。兜底查找顺序：`PI_PACKAGE_DIR` → 全局安装 → `<userData>/runtime/versions/<版本>/pi`。
+  现取一份合格的包：`npm pack @earendil-works/pi-coding-agent@<版本>` → 解包 → 在包目录内 `npm install --omit=dev`（依赖必须落在该包自己的 `node_modules`，否则 `cpSync` 报 ENOENT）。
 - **发行版在跑时没法起第二个实例做冒烟**：`src/main/index.ts` 有 `app.requestSingleInstanceLock()`，第二个实例会直接退出。冒烟前先彻底退出已运行的 MPI。
 
