@@ -146,10 +146,10 @@ mv "$RT/.staging-manual/extracted" "$RT/versions/1.6.0"                # 布局 
 | 目录布局 | `versions/1.6.0/{node,node.exe}` + `pi/dist/cli.js` 均在（等价 `isUsableRuntimeRoot`），162 MB |
 | 自带 node 自检 | `versions/1.6.0/node/node.exe -v` → v24.19.0；用它跑 `pi/dist/cli.js --version` → 1.6.0 |
 | 装机后的 RPC 冒烟 | 用 `versions/1.6.0` 那份 node+cli 加载 17 个生成扩展 → `get_state.success=true`，stderr 0 行 |
-| 当前进程的运行时 | **仍是 1.5.0**。`resolvePiRuntime()` 按进程缓存（`pi-bridge.ts:186-190`），`resolvePiRuntime` 只在首调用时解析一次 → 要重启 dev 实例才换 |
+| 当前进程的运行时 | **仍是 1.5.0**。`resolvePiRuntime()` 的结果按进程缓存（`pi-bridge.ts:195`）→ 要重启 dev 实例才换 |
 
-旧树 `versions/1.5.0`（164 MB）本次**没被删**：`cleanupRuntimeVersions()` 只在 `core-updater.ts:319` 的
-`cleanupOldRuntimes()` 里调（应用内更新与发行版启动清理路径），dev 手工采纳不触发。
+旧树 `versions/1.5.0`（164 MB）本次没被删，但**下一次启动会被删**：`index.ts:520` 无条件在启动时调
+`cleanupOldRuntimes()` → `cleanupRuntimeVersions()`（只保留 active 版本，dev 也一样）。回滚方法见 §7。
 
 ## 6. 遗留风险与待办
 
