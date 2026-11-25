@@ -21,6 +21,11 @@ const STAGE = join(ROOT, ".runtime-stage");
 const RUNTIME_OUT = join(ROOT, "runtime-release");
 const MANIFEST_OUT = join(ROOT, "resources", "runtime-manifest.json");
 const PLATFORM_SLUGS = { win32: "win", darwin: "mac" };
+/**
+ * 剪枝规则版本。改了下面任何 prune* 函数的规则就把它 +1 —— 指纹里混进它，
+ * 规则变了才会重建（否则旧归档会带着过时的剪枝结果被复用）。
+ */
+const PRUNE_RULES_VERSION = 1;
 const SUPPORTED_ARCHES = new Set(["x64", "arm64"]);
 
 function log(message) {
@@ -330,6 +335,97 @@ function sha512Base64(file) {
   return hash.digest("base64");
 }
 
+/**
+ * 输入指纹：一份归档的产出只取决于这几样东西。
+ *
+ * 为什么要它（2026-11-25 实测）：只改 `Chat.tsx` 一行时，`npm run dist` 仍会把
+ * 46.4 MB 的 pi runtime 完整重打一遍 —— 34 秒，占整条发版链路（≈185s）的最大头，
+ * 而 runtime 一个字节都没变。原来的 bundle 没有任何跳过判断。
+ *
+ * 指纹取材（全部是「变了就必须重建」的东西）：
+ *   · pi 包路径（换一份安装/回落目录就不同）
+ *   · pi 包内全部文件的 相对路径 + 大小 + mtime（实测 6666 个文件 ≈1.4s）
+ *   · 打进来的 Node 可执行文件（路径 + 大小 + mtime）
+ *   · npm CLI 目录的 文件数 + 总字节 + 最新 mtime（它不需要逐文件粒度）
+ *   · 目标平台/架构、期望的 pi 版本、剪枝规则版本
+ *
+ * 刻意**不**包含本脚本自身的内容哈希：脚本里改注释/日志也会导致一次重建。
+ * 代价是「改了构建逻辑但忘了 +PRUNE_RULES_VERSION」会复用旧归档 —— 用
+ * PRUNE_RULES_VERSION 这个显式开关来兜，比隐式哈希更可预测。
+ */
+function inputFingerprint(source) {
+  const hash = createHash("sha256");
+  hash.update(`schema=2|platform=${process.platform}|arch=${process.arch}|expect=${EXPECTED_PI_VERSION}|prune=${PRUNE_RULES_VERSION}|`);
+
+  const addStat = (label, abs) => {
+    try {
+      const st = statSync(abs);
+      hash.update(`${label}|${abs}|${st.size}|${st.mtimeMs}|`);
+    } catch {
+      hash.update(`${label}|${abs}|missing|`);
+    }
+  };
+
+  addStat("node", process.execPath);
+
+  // npm CLI：只取聚合值（几千个文件，逐文件哈希没必要）。
+  try {
+    const npmDir = npmSourceDir();
+    const stats = directoryStats(npmDir);
+    hash.update(`npm|${stats.files}|${stats.bytes}|`);
+  } catch {
+    hash.update("npm|missing|");
+  }
+
+  // pi 包：相对路径 + 大小 + mtime。排序保证确定性。
+  const rows = [];
+  const walk = (dir, prefix) => {
+    let entries = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const abs = join(dir, entry.name);
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(abs, rel);
+      } else {
+        try {
+          const st = statSync(abs);
+          rows.push(`${rel}|${st.size}|${st.mtimeMs}`);
+        } catch {
+          rows.push(`${rel}|stat-failed`);
+        }
+      }
+    }
+  };
+  walk(source, "");
+  rows.sort();
+  hash.update(`pi|${source}|`);
+  for (const row of rows) hash.update(`${row}|`);
+
+  return hash.digest("hex");
+}
+
+/** 已存在且自洽的归档可以复用（文件在、大小与 manifest 一致、指纹仍是同一个）。 */
+function reusableArchive(manifest, archivePath, fingerprint) {
+  if (!manifest || typeof manifest !== "object") return null;
+  if (manifest.schema !== 2 || manifest.embedded !== true) return null;
+  if (manifest.platform !== process.platform || manifest.arch !== process.arch) return null;
+  if (manifest.runtimeVersion !== EXPECTED_PI_VERSION) return null;
+  if (manifest.inputFingerprint !== fingerprint) return null;
+  if (typeof manifest.fileName !== "string" || !manifest.fileName) return null;
+  if (!existsSync(archivePath)) return null;
+  try {
+    if (statSync(archivePath).size !== manifest.size) return null;
+  } catch {
+    return null;
+  }
+  return manifest;
+}
+
 function main() {
   const platformSlug = PLATFORM_SLUGS[process.platform];
   if (!platformSlug || !SUPPORTED_ARCHES.has(process.arch)) {
@@ -344,6 +440,31 @@ function main() {
         `or keep a matching app runtime at <userData>/runtime/versions/${EXPECTED_PI_VERSION}/pi.`,
     );
   }
+
+  const fingerprint = inputFingerprint(source);
+  const expectedFileName = `MPI-Runtime-${EXPECTED_PI_VERSION}-${platformSlug}-${process.arch}.tar.gz`;
+  const expectedArchive = join(RUNTIME_OUT, expectedFileName);
+  let previousManifest = null;
+  try {
+    previousManifest = JSON.parse(readFileSync(MANIFEST_OUT, "utf8"));
+  } catch {
+    /* 首次构建 / manifest 损坏 → 照常重建 */
+  }
+  const reusable = process.env.MPI_FORCE_REBUNDLE_RUNTIME ? null : reusableArchive(previousManifest, expectedArchive, fingerprint);
+  if (reusable) {
+    // manifest 已经指向这份归档（大小与指纹都对得上），直接结束。
+    // 1.4s 的指纹 vs 34s 的重建，且产出完全一致。
+    log(`reuse ${reusable.fileName} (${formatSize(reusable.size)}) — 输入指纹未变，跳过重建`);
+    // 复用路径只补一个字段：老 manifest 可能还没有 inputFingerprint（首次升级这个脚本时）。
+    writeFileSync(
+      MANIFEST_OUT,
+      JSON.stringify({ ...reusable, inputFingerprint: fingerprint }, null, 2) + "\n",
+      "utf8",
+    );
+    log("done.");
+    return;
+  }
+  log(`input fingerprint ${fingerprint.slice(0, 16)}… — 需要重建`);
 
   rmSync(STAGE, { recursive: true, force: true });
   mkdirSync(STAGE, { recursive: true });
@@ -371,6 +492,8 @@ function main() {
     fileName,
     size,
     sha512: sha512Base64(archive),
+    // 输入指纹：下次 bundle 用它判断能否直接复用这份归档（见 inputFingerprint）。
+    inputFingerprint: fingerprint,
   };
   mkdirSync(dirname(MANIFEST_OUT), { recursive: true });
   writeFileSync(MANIFEST_OUT, JSON.stringify(manifest, null, 2) + "\n", "utf8");

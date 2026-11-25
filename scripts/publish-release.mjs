@@ -407,12 +407,18 @@ async function mirrorToRelay(rel) {
  * 实测记录（`scripts/deploy-pwa.mjs` 文件头）：2026-10-16 ECS 上那份还是 10-09 的构建。
  * 构建 + 上传 + 远端校验全交给 deploy-pwa.mjs（它还会清掉旧 bundle 并验证 index.html 引用一致）。
  *
- * 跳过条件：`--no-pwa`，或在 CI 里跑（GitHub Actions 没有这台机器的 SSH 凭据）。
+ * 跳过条件：`--no-pwa`、在 CI 里跑（GitHub Actions 没有这台机器的 SSH 凭据），
+ * 以及 **PWA 源码与产物都没变**（2026-11-25 起：传 `--if-changed`，实测能省 ~20s 构建）。
+ * 为什么可以跳：桌面端改动与 PWA 是两条完全独立的构建链，只改渲染层/主进程时
+ * PWA 产物字节不变，重传一遍纯浪费；而 `--if-changed` 先比远端 index.html 引用的
+ * 入口 JS 名（按内容哈希命名），同名即证明同一份产物。
  */
 function syncPwaToRelay() {
   console.log('\nPWA 同步 → 中继（网页版入口，与本次桌面端同版本）');
   const script = path.join(REPO_ROOT, 'scripts', 'deploy-pwa.mjs');
   const args = [script];
+  // --if-changed：远端已引用同一份入口 chunk 时整段跳过（不构建、不上传）。
+  args.push('--if-changed');
   if (process.env.MPI_PWA_NO_BUILD === '1') args.push('--no-build');
   if (process.env.MPI_RELAY_HOST) args.push('--host', process.env.MPI_RELAY_HOST);
   if (process.env.MPI_RELAY_PWA_DIR) args.push('--dir', process.env.MPI_RELAY_PWA_DIR);

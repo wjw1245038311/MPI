@@ -208,18 +208,18 @@ function writeMail(share, device, name, fields) {
   assert.equal(header.from, "workstation");
   ok("收信：未读计数与信头解析正确");
 
-  // 归档进 _processed
+  // 归档进 _processed/<device>
   const arch = core.archiveMessages(peer, snap.names);
   assert.deepEqual(arch.failed, []);
   assert.equal(core.snapshot(peer).count, 0);
-  assert.deepEqual(readdirSync(join(share, "inbox", "mail", "_processed")), [snap.names[0]]);
-  ok("归档：移入 _processed，信箱归零");
+  assert.deepEqual(readdirSync(join(share, "inbox", "mail", "_processed", "thinkbook16p")), [snap.names[0]]);
+  ok("归档：移入 _processed/<本机设备>/，信箱归零");
 
   // 同名再归档一次（-ReadAll 跑两遍 / 老信重发）不能覆盖已有归档
   writeMail(share, "thinkbook16p", snap.names[0], { title: "同名的第二封" });
   const arch2 = core.archiveMessages(peer, [snap.names[0]]);
   assert.deepEqual(arch2.failed, []);
-  const processed = readdirSync(join(share, "inbox", "mail", "_processed")).sort();
+  const processed = readdirSync(join(share, "inbox", "mail", "_processed", "thinkbook16p")).sort();
   assert.equal(processed.length, 2, `归档被覆盖了：${processed.join(", ")}`);
   assert.ok(processed.some((n) => n.includes("-1.md")), `没有加后缀避让：${processed.join(", ")}`);
   ok("归档：同名时加 -1 后缀，绝不覆盖历史归档");

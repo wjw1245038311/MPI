@@ -48,7 +48,40 @@ function referencedAssets(html) {
   return [...names];
 }
 
+/** 远端 index.html 当前引用的 JS 名（拿不到就返空串）。 */
+function remoteReferencedJs() {
+  try {
+    return execFileSync("ssh", [...SSH_OPTS, HOST, `grep -o 'assets/index-[A-Za-z0-9_-]*\\.js' ${DIR}/index.html | head -1`], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .trim()
+      .replace(/^assets\//, "");
+  } catch {
+    return "";
+  }
+}
+
 function main() {
+  /** 允许 --if-changed：产物与远端一致时整段跳过（不构建、不上传）。 */
+  const onlyIfChanged = flag("--if-changed");
+
+  if (onlyIfChanged) {
+    // 先看远端引用：如果本地**现有产物**的入口 JS 与远端同名，就没有传的必要。
+    // 这一步不构建（构建要 ~20s，而结果很可能跟上次一模一样）。
+    const localIndex = join(DIST, "index.html");
+    if (existsSync(localIndex)) {
+      const localAssets = referencedAssets(readFileSync(localIndex, "utf8"));
+      const localJs = localAssets.find((name) => /\.js$/.test(name)) || "";
+      const remoteJs = remoteReferencedJs();
+      if (localJs && remoteJs && localJs === remoteJs) {
+        log(`跳过：远端已引用 ${remoteJs}（产物未变，--if-changed）`);
+        return;
+      }
+      log(`远端 ${remoteJs || "(未知)"} ≠ 本地 ${localJs || "(无)"} —— 需要重新构建与上传`);
+    }
+  }
+
   if (!flag("--no-build")) {
     log("构建 PWA（npm run build）…");
     execFileSync("npm", ["run", "build"], { cwd: PWA_DIR, stdio: "inherit", shell: process.platform === "win32" });
@@ -58,6 +91,16 @@ function main() {
   const html = readFileSync(indexPath, "utf8");
   const assets = referencedAssets(html);
   if (!assets.length) throw new Error("index.html 里没有 assets/ 引用，产物看起来不完整");
+  // 必须校验引用到的文件真的在 dist 里：2026-11-25 踩过 —— 手工改错 index.html 的内容哈希后
+  // 配合 --no-build 直接把远端指到一个不存在的 JS，同时清理逻辑又把旧的真实产物删了，
+  // 网页版当场 404。上传前的存在性检查能挡住这一类（不用记得带不带 --no-build）。
+  const missing = assets.filter((name) => !existsSync(join(DIST, "assets", name)));
+  if (missing.length) {
+    throw new Error(
+      `index.html 引用了不存在的产物：${missing.join(", ")}。` +
+        "先跑 npm run build 重建（或还原 index.html）；远端未做任何改动。",
+    );
+  }
   log(`产物：${assets.join(", ")}`);
 
   // 逐项 scp（不用 -r，避免把旧 bundle 一起带上去覆盖掉不该覆盖的东西）

@@ -12,7 +12,9 @@
  *   B2 假失败：rename 抛错但目标内容已一致 → 判定成功、不抛、tmp 清理
  *   B3 真失败：一直抛错且目标不一致 → 重试 attempts 次后抛错、tmp 清理
  *   B4 第一次抛错、第二次成功 → 成功且无异常
- *   B5 真机 soak：写 600 条，全部无异常且内容逐字一致（修前会偶发抛错）
+ *   B5 真机 soak：写 200 条，全部无异常且内容逐字一致（修前会偶发抛错）
+ *      注：600→200（2026-11-25）。Windows 原子写单条实测 ~103ms，600 条 soak 单独占 62s，
+ *      而它要抓的是 1.9% 假失败率 —— 200 条期望约 3.8 次，仍能可靠触发；断言含义不变。
  *
  * 运行：npm run test:poolwrite
  */
@@ -106,7 +108,9 @@ const mkEntry = (pool, text) => decideIngest(pool, cand(text), () => 0).entry;
 // ---------------------------------------------------------------------------
 {
   const pool = fresh("b5");
-  const N = 600;
+  // 600→200（2026-11-25）：单条 ~103ms，600 条单独占 62s；200 条期望约 3.8 次假失败，
+  // 仍足以触发「修前约 1.9% 抛错」这条覆盖意图，断言不变。
+  const N = 200;
   const texts = [];
   let thrown = 0;
   for (let i = 0; i < N; i++) {
@@ -252,7 +256,9 @@ function collectTmp(dir) {
 
   const pool2 = fresh("a4-seq");
   const tSeq = Date.now();
-  const M = 300;
+  // 300→150（2026-11-25）：对照组只是用来「推算 872 条要多慢」，150 条的 49ms/条
+  // 已经足够稳定地得出同一个结论，省约 7s。
+  const M = 150;
   for (let i = 0; i < M; i++) decideIngest(pool2, cand(texts[i]), lexicalSimilarity);
   const msSeq = Date.now() - tSeq;
   const perSeq = msSeq / M;
@@ -264,7 +270,7 @@ function collectTmp(dir) {
   assert.ok(msBatch < 8000, `批量 ${N} 条应 < 8s，实际 ${(msBatch / 1000).toFixed(2)}s`);
   const landed = listEntries(pool).entries.length;
   assert.ok(landed >= N * 0.95, `大部分应独立落盘（实际 ${landed}/${N}）——语料若被大量判重说明夹具问题`);
-  ok(`A4 规模：批量 ${N} 条 ${(msBatch / 1000).toFixed(2)}s（< 5s 门槛）；逐条对照推算 ${((perSeq * N) / 1000).toFixed(0)}s`);
+  ok(`A4 规模：批量 ${N} 条 ${(msBatch / 1000).toFixed(2)}s（< 8s 门槛）；逐条对照推算 ${((perSeq * N) / 1000).toFixed(0)}s`);
 }
 
 console.log(`\ntest:poolwrite 全部通过（${n} 项）`);
