@@ -291,6 +291,8 @@ export interface AutomationTask {
   verify?: VerifyRule[];
   /** 前置门控：不满足时记 skipped。缺省 = 不门控。 */
   gate?: TaskGate;
+  /** 可写路径白名单（相对 cwd 的 glob 或绝对路径）。空 = 不放宽。 */
+  writeAllow?: string[];
   /** 上次处理到的槽位（本地时刻，`2026-11-26T09:00`）。 */
   lastSlot?: string;
   /** 旧版按日历天的去重键，仅读取、新代码不再写入。 */

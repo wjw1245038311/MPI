@@ -21,6 +21,7 @@ import { isRetriableFailure } from "./automation-retry-policy";
 import { ingestScheduleInbox } from "./schedule-inbox";
 import { runVerifyRules } from "./automation-verify";
 import { evaluateGate } from "./automation-gate";
+import { createWriteAllowFile, removeWriteAllowFile } from "./gate-write-allow";
 import type { AutomationResultNotification } from "./system-notifications";
 import { getAgentDir } from "./session-store";
 import { buildAppendSystemPrompt } from "./append-prompt";
@@ -652,6 +653,8 @@ async function runOnce(
   let sessionFile: string | undefined;
   /** 本次尝试的工作目录（校验规则以它为基准）。 */
   let startedCwd = task.cwd;
+  /** 本次尝试的可写白名单文件（任务配了 writeAllow 时才创建）。 */
+  let gateWriteAllowFile: string | null = null;
 
   await new Promise<void>((resolve, reject) => {
     let done = false;
@@ -690,7 +693,12 @@ async function runOnce(
     // Same shell resolution as interactive threads: unattended runs are
     // exactly where a `No bash shell found` failure is hardest to notice.
     const shell = prepareShellForSpawn(join(getAgentDir(), "settings.json"), runCwd);
+    // 任务级可写白名单：只在任务显式配置时创建；交互会话拿不到这个 env，行为不变。
+    if (Array.isArray(task.writeAllow) && task.writeAllow.length) {
+      gateWriteAllowFile = createWriteAllowFile(getConfigDir(), task.id, task.writeAllow);
+    }
     bridge = new PiBridge({
+      gateWriteAllowFile: gateWriteAllowFile ?? undefined,
       cwd: runCwd,
       piCliPath: getConfig().piCliPath,
       // Same 知芽 Zhiya injection as interactive sessions. Scheduled runs
@@ -803,6 +811,7 @@ async function runOnce(
       if (taskBridges && taskBridges.size === 0) activeBridgesByTask.delete(task.id);
     }
     if (gateModeFile) removeGateModeFile(gateModeFile);
+    removeWriteAllowFile(gateWriteAllowFile);
   });
 
   return { sessionFile, cwd: startedCwd };

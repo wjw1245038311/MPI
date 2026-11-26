@@ -443,6 +443,102 @@ function isRecursiveDeletion(segment: string): boolean {
   return /(?:^|\s)-[a-z]*r[a-z]*(?:\s|$)/i.test(masked) || RECURSIVE_DELETE.test(masked) || /\b(?:remove-item|clear-item)\b[^;&|<>]*-(?:recurse|recursive)\b/i.test(masked);
 }
 
+/* ---------------------------------------------------------------------- *
+ * 可写路径白名单（automation 任务级）。
+ *
+ * 只有定时任务会拿到 MPI_GATE_WRITE_ALLOW_FILE；交互会话没有这个环境变量，
+ * 行为与以前完全一致。白名单只回答一个问题：「这个路径可以写吗」，
+ * 不回答「这个命令安全吗」——所以它只在写目标越界这一类判定里生效，
+ * HARD_RISK / 网络 / 命令替换 / 敏感路径 / 无法解析的引号都排在它前面。
+ * ---------------------------------------------------------------------- */
+const WRITE_ALLOW_FILE = process.env.MPI_GATE_WRITE_ALLOW_FILE || "";
+const ALWAYS_DENY_PATTERNS = [
+  /(^|[\\/])\.git([\\/]|$)/i,
+  /(^|[\\/])\.ssh([\\/]|$)/i,
+  /(^|[\\/])\.aws([\\/]|$)/i,
+  /(^|[\\/])\.gnupg([\\/]|$)/i,
+  /(^|[\\/])\.env(\..*)?$/i,
+  /(^|[\\/])(id_rsa|id_ed25519|id_ecdsa)(\.pub)?$/i,
+  /\.(pem|pfx|p12|key|keystore)$/i,
+  /(^|[\\/])(credentials|secrets?)(\.[a-z0-9]+)?$/i,
+  /^[a-z]:[\\/](windows|program files|program files \(x86\)|programdata)([\\/]|$)/i,
+  /(^|[\\/])system32([\\/]|$)/i,
+];
+
+/** 读一次白名单并缓存（按 mtime 失效；任务运行期间不会变）。 */
+let writeAllowCache: { mtimeMs: number; patterns: string[] } | null = null;
+function writeAllowPatterns(): string[] {
+  if (!WRITE_ALLOW_FILE) return [];
+  try {
+    const st = statSync(WRITE_ALLOW_FILE);
+    if (writeAllowCache && writeAllowCache.mtimeMs === st.mtimeMs) return writeAllowCache.patterns;
+    const parsed = JSON.parse(readFileSync(WRITE_ALLOW_FILE, "utf8")) as { patterns?: unknown };
+    const patterns = Array.isArray(parsed?.patterns)
+      ? parsed.patterns.filter((x): x is string => typeof x === "string" && x.length > 0)
+      : [];
+    writeAllowCache = { mtimeMs: st.mtimeMs, patterns };
+    return patterns;
+  } catch {
+    return [];
+  }
+}
+
+function globToRegExpLocal(pattern: string): RegExp {
+  const p = pattern.replace(/\\/g, "/");
+  let out = "^";
+  for (let i = 0; i < p.length; i++) {
+    const ch = p[i];
+    if (ch === "*") {
+      if (p[i + 1] === "*") {
+        out += ".*";
+        i++;
+        if (p[i + 1] === "/") i++;
+      } else {
+        out += "[^/]*";
+      }
+    } else if (ch === "?") {
+      out += "[^/]";
+    } else if ("\\^$.|+()[]{}".includes(ch)) {
+      out += "\\" + ch;
+    } else {
+      out += ch;
+    }
+  }
+  try {
+    return new RegExp(out + "$", "i");
+  } catch {
+    return /(?!)/;
+  }
+}
+
+/** 该路径是否被任务白名单明确允许（敏感路径一律不放行）。 */
+function writeAllowCovers(path: string, cwd: string): boolean {
+  const patterns = writeAllowPatterns();
+  if (!patterns.length) return false;
+  let absTarget: string;
+  try {
+    absTarget = resolve(path).replace(/\\/g, "/");
+  } catch {
+    return false;
+  }
+  if (ALWAYS_DENY_PATTERNS.some((re) => re.test(absTarget))) return false;
+  const absCwd = resolve(cwd).replace(/\\/g, "/");
+  for (const pattern of patterns) {
+    const normalized = pattern.replace(/\\/g, "/");
+    const isAbs = /^[a-z]:\//i.test(normalized) || normalized.startsWith("/");
+    const target = isAbs ? resolve(normalized).replace(/\\/g, "/") : join(absCwd, normalized).replace(/\\/g, "/");
+    if (globToRegExpLocal(target).test(absTarget)) return true;
+  }
+  return false;
+}
+
+/** 一组写目标是否**全部**被白名单覆盖。部分覆盖不算——那会让「写 A 和 B」里
+ *  的 B 悄悄越过白名单。 */
+function writeAllowCoversAll(paths: string[], cwd: string): boolean {
+  if (!paths.length) return false;
+  return paths.every((p) => writeAllowCovers(p, cwd));
+}
+
 function projectScriptDecision(segment: string, cwd: string): ShellDecision | null {
   const words = splitShellWords(segment);
   if (!words?.length) return null;
@@ -480,18 +576,29 @@ function projectScriptDecision(segment: string, cwd: string): ShellDecision | nu
       reasonZh: "脚本路径位于项目外，或指向敏感/无法确认的位置。",
     };
   }
+  // 先把所有可疑参数收集起来：只要有一个不在白名单里就整条拒绝（部分覆盖不成立）。
+  const outsideArguments: string[] = [];
   for (const argument of words.slice(scriptIndex + 1)) {
     const inlinePath = argument.match(/^--?(?:output|out|path|file|dir|destination|dest|input|config)=(.+)$/i)?.[1];
     const candidate = inlinePath || (!isOption(argument) && looksLikePathArgument(argument) ? argument : "");
     if (!candidate) continue;
     const argumentScope = pathScope(candidate, cwd);
-    if (argumentScope === "sensitive" || argumentScope === "outside" || argumentScope === "ambiguous") {
+    if (argumentScope === "sensitive" || argumentScope === "ambiguous") {
       return {
         risk: "always",
-        reason: "A script argument points to a sensitive, outside-project, or ambiguous path.",
-        reasonZh: "脚本参数指向敏感位置、项目外路径，或无法可靠确认。",
+        reason: "A script argument points to a sensitive or ambiguous path.",
+        reasonZh: "脚本参数指向敏感位置，或无法可靠确认。",
       };
     }
+    if (argumentScope === "outside") outsideArguments.push(candidate);
+  }
+  // 项目外路径：只有任务白名单**明确允许**时放行（写目标全在名单内）。
+  if (outsideArguments.length && !writeAllowCoversAll(outsideArguments, cwd)) {
+    return {
+      risk: "always",
+      reason: "A script argument points to a path outside the project that this task's write allowlist does not cover.",
+      reasonZh: "脚本参数指向项目外路径，且不在本任务的可写白名单内。",
+    };
   }
   if (DANGEROUS_SCRIPT_NAME.test(script)) {
     return {

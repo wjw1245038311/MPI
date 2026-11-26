@@ -521,6 +521,10 @@ export interface AutomationTask {
   /** 前置门控：不满足时记 skipped（不算失败、不告警）。缺省 = 不门控。
    * 用于「这个时间点是否适用」由外部数据决定的场景（日期清单或一条判断命令）。 */
   gate?: import("./automation-gate").TaskGate;
+  /** 可写路径白名单（相对 cwd 的 glob 或绝对路径）。空 = 不放宽。
+   * 只回答「这个路径可以写」，不回答「这个命令安全」：HARD_RISK / 网络 /
+   * 命令替换 / 敏感路径一律不豁免。越界只拦那一次操作，不整任务失败。 */
+  writeAllow?: string[];
   /** 上次已处理到的槽位（本地时刻，`2026-11-26T09:00`）。取代旧版按日历天的
    * lastRunSlot：改时间/频率后槽位 id 自然不同，因此当天仍会重新触发。 */
   lastSlot?: string;
@@ -625,6 +629,25 @@ function sanitizeGate(raw: unknown): import("./automation-gate").TaskGate | unde
     }
   }
   return out.precondition || out.skipDates ? out : undefined;
+}
+
+/** 写白名单的规整：去空、去重、限长限量、拒 `..` 与 `~`。敏感路径由门禁再拦。 */
+function sanitizeWriteAllow(raw: unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw.slice(0, 50)) {
+    if (typeof item !== "string") continue;
+    const clean = item.trim();
+    if (!clean || clean.length > 300) continue;
+    const normalized = clean.replace(/\\/g, "/");
+    if (normalized.includes("\0")) continue;
+    if (/^~(\/|$)/.test(normalized)) continue;
+    if (normalized.split("/").some((seg) => seg === "..")) continue;
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
 }
 
 /** The task's explicit model choice, or null when it should follow pi's default. */
@@ -1218,6 +1241,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
         ...(t.draft === true ? { draft: true } : {}),
         ...(Array.isArray(t.verify) ? { verify: sanitizeVerifyRules(t.verify) } : {}),
         ...(t.gate ? { gate: sanitizeGate(t.gate) } : {}),
+        ...(Array.isArray(t.writeAllow) ? { writeAllow: sanitizeWriteAllow(t.writeAllow) } : {}),
         ...(typeof t.lastSlot === "string" ? { lastSlot: t.lastSlot } : {}),
         ...(typeof t.lastRunSlot === "string" ? { lastRunSlot: t.lastRunSlot } : {}),
         ...(typeof t.firstSeenAt === "number" ? { firstSeenAt: t.firstSeenAt } : {}),

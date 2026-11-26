@@ -343,6 +343,9 @@ export interface PiBridgeOptions {
   scheduleInboxDir?: string;
   /** 当前会话的权限档（sandbox / full）—— 扩展据此禁止 agent 自我升权。 */
   schedulePermission?: "sandbox" | "full";
+  /** 定时任务的可写路径白名单文件（门禁扩展按它放行项目外写目标）。
+   * 只有 automation 会传；交互会话没有这个值，门禁行为完全不变。 */
+  gateWriteAllowFile?: string;
   /** Pool dir (file truth source) — the `/memory` command reads it directly. */
   memoryPoolDir?: string;
   /** 端点信息文件（url + token）——扩展每次现读它来调主进程做语义召回。 */
@@ -445,6 +448,9 @@ export class PiBridge {
       env.MPI_UPDATE_OUTBOX_DIR = this.opts.updatePaths.outboxDir;
       // MPI_WORKSPACE_ROOT (which widens the no-approval area past the session cwd)
       // is inherited straight from the app environment — no per-bridge plumbing.
+    }
+    if (this.opts.gateWriteAllowFile) {
+      env.MPI_GATE_WRITE_ALLOW_FILE = this.opts.gateWriteAllowFile;
     }
     if (this.opts.scheduleInboxDir) {
       env.MPI_SCHEDULE_INBOX_DIR = this.opts.scheduleInboxDir;

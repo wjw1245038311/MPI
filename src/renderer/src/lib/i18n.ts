@@ -269,6 +269,15 @@ const exact: Record<string, string> = {
   "隔离工作树": "Worktree",
   "待确认": "Draft",
   "产物校验": "Verify outputs",
+  "可写路径": "Writable paths",
+  "未配置：任务只能写工作目录内（项目内写入在沙盒下已经放行）。要写项目外的文件才需要在这里列出。":
+    "Not configured: the task can write inside its working folder (in-project writes already pass under sandbox). List paths here only when it must write outside.",
+  "移除这条路径": "Remove path",
+  "＋ 添加路径": "+ Add path",
+  "支持 glob：reports/** 跨层、reports/*.md 单层。相对路径以任务工作目录为基准，也可填绝对路径。":
+    "Glob supported: reports/** matches across folders, reports/*.md one level. Relative paths resolve against the task folder; absolute paths also work.",
+  "⚠ 白名单是无人值守下的持久授权：列在这里的路径，任务每次运行都能写。敏感路径（.git、.env、密钥、系统目录）与磁盘/仓库级危险命令不在此列豁免，永远需要人工授权。越界只会拦那一次操作，任务本身继续执行。":
+    "⚠ An allowlist is a standing grant for unattended runs: listed paths are writable on every run. Sensitive paths (.git, .env, keys, system folders) and disk/repo-level dangerous commands are never exempted and always need approval. An out-of-scope operation is blocked for that call only; the run itself continues.",
   "前置门控": "Precondition",
   "启用门控": "Enable gate",
   "关闭门控": "Disable gate",
