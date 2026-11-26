@@ -5,10 +5,10 @@
 // 「worktree add 成功」证明不了真实 git 会接受我们的参数顺序。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { register } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 register(new URL("./electron-stub-loader.mjs", import.meta.url));
 const { loadConfig } = await import("../src/main/config.ts");
@@ -56,6 +56,33 @@ if (!gitOk) {
     git(repoDir, ["commit", "-q", "-m", "init"]);
 
     assert.equal(wt.isGitRepoRoot(repoDir), true, ok("isGitRepoRoot 对仓库根返回 true"));
+
+    // 路径的**写法**不能影响判定。旧实现拿 `--show-toplevel` 的输出与入参比字符串，
+    // 而 git 会把符号链接 / 8.3 短名解析成真实路径——CI runner 的 TMP 正是短名形式，
+    // 这条在 CI 上就红了（run #44）。用指向仓库根的链接复现同一机制。
+    const linkDir = join(dirname(repoDir), `${basename(repoDir)}-link`);
+    let linkMade = false;
+    try {
+      symlinkSync(repoDir, linkDir, process.platform === "win32" ? "junction" : "dir");
+      linkMade = true;
+      assert.equal(
+        wt.isGitRepoRoot(linkDir),
+        true,
+        ok("指向仓库根的链接也判为仓库根（不做路径字符串比对）"),
+      );
+    } catch (err) {
+      if (err instanceof assert.AssertionError) throw err;
+      console.log(`  （链接用例跳过：本机无法创建符号链接 —— ${(err && err.code) || err}）`);
+    } finally {
+      if (linkMade) {
+        // rmdir 只移除链接本身，不动目标内容（rmSync recursive 对 junction 会进到目标里）
+        try {
+          rmdirSync(linkDir);
+        } catch {
+          rmSync(linkDir, { force: true });
+        }
+      }
+    }
     // 子目录不是仓库根
     const sub = join(repoDir, "sub");
     mkdirSync(sub);

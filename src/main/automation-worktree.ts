@@ -50,14 +50,20 @@ function git(cwd: string, args: string[], timeoutMs = 20_000): { ok: boolean; ou
   };
 }
 
-/** 该目录是否是某个 git 工作树的根（而不是子目录里）。 */
+/**
+ * 该目录是否是某个 git 工作树的根（而不是仓库的子目录）。
+ *
+ * 不用「拿 `--show-toplevel` 的输出与入参比字符串」：git 会把符号链接与 8.3 短名解析成
+ * 真实路径，而入参常常就是那种形式（CI runner 的 TMP 是 `C:\Users\RUNNER~1\…`，git 回的是
+ * 长路径）→ 字符串必不相等 → 把真仓库误判为「不是 git 仓库」，工作树隔离被无理由地拒绝。
+ * 改成直接问 git 自己在不在根上：`--show-prefix` 在仓库根输出空串，在子目录输出 `sub/`。
+ */
 export function isGitRepoRoot(dir: string): boolean {
   if (!existsSync(dir)) return false;
-  const probe = git(dir, ["rev-parse", "--show-toplevel"]);
-  if (!probe.ok) return false;
-  // --show-toplevel 在子目录里会返回上层根；只有两者等价才算「工作目录就是仓库根」。
-  const normalize = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-  return normalize(probe.out) === normalize(dir);
+  const inside = git(dir, ["rev-parse", "--is-inside-work-tree"]);
+  if (!inside.ok || inside.out !== "true") return false;
+  const prefix = git(dir, ["rev-parse", "--show-prefix"]);
+  return prefix.ok && prefix.out === "";
 }
 
 /** 仓库是否干净（有未提交改动时开工作树会让人困惑，但不阻止，只提示）。 */
