@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import type { AutomationRunSummary, AutomationTask, ModelsFile, ScheduleFrequency, TaskSchedule } from "../lib/types";
+import type { AutomationRunSummary, AutomationTask, ModelsFile, ScheduleFrequency, TaskSchedule, VerifyRule } from "../lib/types";
 import { Plus, Clock, Folder, Play } from "./icons";
 import { SidePanel } from "./SidePanel";
 
@@ -22,6 +22,59 @@ function toDatetimeLocal(value: string | undefined): string {
 /** `<input type="datetime-local">` 的值 → schedule.onceAt（原样，格式一致）。 */
 function fromDatetimeLocal(value: string): string {
   return value.trim();
+}
+
+/** 校验规则类型的中英名称。 */
+const VERIFY_KIND_LABELS: Record<VerifyRule["kind"], { zh: string; en: string }> = {
+  exitCode: { zh: "退出码", en: "Exit code" },
+  fileExists: { zh: "文件存在", en: "File exists" },
+  fileNewerThan: { zh: "文件本次有更新", en: "File updated this run" },
+  fileContains: { zh: "文件包含内容", en: "File contains" },
+  minBytes: { zh: "文件大小下限", en: "Min file size" },
+  command: { zh: "命令成功", en: "Command succeeds" },
+};
+
+/** 新增规则时的默认值：给出「能立刻用」的路径提示，避免空串校验永远失败。 */
+function newVerifyRule(kind: VerifyRule["kind"], draft: AutomationTask): VerifyRule | null {
+  switch (kind) {
+    case "exitCode":
+      return { kind: "exitCode", expected: 0 };
+    case "fileExists":
+      return { kind: "fileExists", path: `reports/` };
+    case "fileNewerThan":
+      return { kind: "fileNewerThan", path: `reports/` };
+    case "fileContains":
+      return { kind: "fileContains", path: `reports/`, text: "" };
+    case "minBytes":
+      return { kind: "minBytes", path: `reports/`, bytes: 1024 };
+    case "command":
+      return { kind: "command", command: "", args: [] };
+    default:
+      return null;
+  }
+}
+
+/** 与主进程 describeVerifyRule 同义的描述（渲染层不能 import 主进程模块）。 */
+function describeVerifyRuleLocal(rule: VerifyRule, language: "en" | "zh"): string {
+  const zh = language === "zh";
+  switch (rule.kind) {
+    case "exitCode":
+      return zh ? `退出码 = ${rule.expected}` : `exit code = ${rule.expected}`;
+    case "fileExists":
+      return rule.path;
+    case "fileNewerThan":
+      return rule.path;
+    case "fileContains":
+      return `${rule.path} — 「${rule.text}」`;
+    case "minBytes":
+      return `${rule.path} — ≥ ${rule.bytes} B`;
+    case "command": {
+      const args = Array.isArray(rule.args) && rule.args.length ? ` ${rule.args.join(" ")}` : "";
+      return `${rule.command}${args}`;
+    }
+    default:
+      return zh ? "未知规则" : "unknown rule";
+  }
 }
 
 /** 频率按钮的文案（五档）。放在组件外避免每次渲染重建。 */
@@ -700,6 +753,59 @@ export function AutomationPanel() {
                     {language === "zh"
                       ? "开启后任务在 git 工作树副本里跑，项目工作区不动；跑完保留分支与目录，由你决定查看 diff、合并还是丢弃。仅 git 仓库生效，非 git 目录会直接报错。"
                       : "When enabled the run happens in a git worktree copy; your project workspace is untouched. The branch and directory are kept so you can review the diff, merge, or discard. Git repositories only — a non-git folder fails instead of silently running in place."}
+                  </div>
+                </div>
+              </div>
+
+              <div className="set-row wide">
+                <label className="set-label">{language === "zh" ? "产物校验" : "Verify outputs"}</label>
+                <div className="set-control">
+                  <div className="auto-verify-list">
+                    {(draft.verify ?? []).length === 0 && (
+                      <div className="set-hint">
+                        {language === "zh"
+                          ? "未配置：只要模型正常说完就算成功。「脚本退出码 0 但什么都没写」也会被记成完成——无人值守时建议至少加一条。"
+                          : "Not configured: a run succeeds as long as the model finishes normally — a script that exits 0 without writing anything still counts. Add at least one rule for unattended runs."}
+                      </div>
+                    )}
+                    {(draft.verify ?? []).map((rule, i) => (
+                      <div className="auto-verify-row" key={i}>
+                        <span className="auto-verify-kind">{VERIFY_KIND_LABELS[rule.kind][language]}</span>
+                        <span className="auto-verify-desc" title={describeVerifyRuleLocal(rule, language)}>
+                          {describeVerifyRuleLocal(rule, language)}
+                        </span>
+                        <button
+                          className="set-iconbtn danger"
+                          title={language === "zh" ? "移除这条规则" : "Remove rule"}
+                          onClick={() => patch({ verify: (draft.verify ?? []).filter((_, j) => j !== i) })}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="auto-verify-add">
+                    <select
+                      className="set-select"
+                      value=""
+                      onChange={(e) => {
+                        const kind = e.target.value as VerifyRule["kind"] | "";
+                        if (!kind) return;
+                        const rule = newVerifyRule(kind, draft);
+                        if (rule) patch({ verify: [...(draft.verify ?? []), rule] });
+                        e.target.value = "";
+                      }}
+                    >
+                      <option value="">{language === "zh" ? "＋ 添加校验规则…" : "+ Add a rule…"}</option>
+                      {(Object.keys(VERIFY_KIND_LABELS) as VerifyRule["kind"][]).map((k) => (
+                        <option key={k} value={k}>{VERIFY_KIND_LABELS[k][language]}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="set-hint">
+                    {language === "zh"
+                      ? "全部规则都要通过才算成功；任一条不过即记失败并写明原因。路径相对任务的工作目录（开了工作树隔离时是工作树）。"
+                      : "All rules must pass; any failure marks the run failed with the reason. Paths are relative to the task working folder (the worktree when isolation is on)."}
                   </div>
                 </div>
               </div>

@@ -19,6 +19,7 @@ import { deleteRunsForTask, startRun, updateRun } from "./automation-runs-store"
 import { createAutomationWorktree, discardAutomationWorktree, type AutomationWorktree } from "./automation-worktree";
 import { isRetriableFailure } from "./automation-retry-policy";
 import { ingestScheduleInbox } from "./schedule-inbox";
+import { runVerifyRules } from "./automation-verify";
 import type { AutomationResultNotification } from "./system-notifications";
 import { getAgentDir } from "./session-store";
 import { buildAppendSystemPrompt } from "./append-prompt";
@@ -539,7 +540,7 @@ async function execute(task: AutomationTask, trigger: AutomationTrigger = "sched
             return prepared.worktree.path;
           }
           return task.cwd;
-        });
+        }, startedRunAt);
         sessionFile = attemptResult.sessionFile;
         if (taskStillExists(task.id)) {
           patchTask(task.id, {
@@ -624,10 +625,14 @@ async function runOnce(
   runId: string,
   model: { provider: string; modelId: string } | null,
   resolveCwd: () => string,
-): Promise<{ sessionFile?: string }> {
+  /** 本次运行开始时刻：校验 fileNewerThan 的基准。 */
+  runStartedAt: number | undefined,
+): Promise<{ sessionFile?: string; cwd: string }> {
   let bridge: PiBridge | null = null;
   let gateModeFile: string | null = null;
   let sessionFile: string | undefined;
+  /** 本次尝试的工作目录（校验规则以它为基准）。 */
+  let startedCwd = task.cwd;
 
   await new Promise<void>((resolve, reject) => {
     let done = false;
@@ -662,6 +667,7 @@ async function runOnce(
       return;
     }
     const runCwd = resolveCwd();
+    startedCwd = runCwd;
     // Same shell resolution as interactive threads: unattended runs are
     // exactly where a `No bash shell found` failure is hardest to notice.
     const shell = prepareShellForSpawn(join(getAgentDir(), "settings.json"), runCwd);
@@ -708,8 +714,21 @@ async function runOnce(
             return;
           }
           const failure = getAssistantFailure(lastAssistantMessage);
-          if (failure) reject(new Error(failure));
-          else resolve();
+          if (failure) {
+            reject(new Error(failure));
+            return;
+          }
+          // 产物校验：模型「正常说完」只是必要条件。以前到这一步就直接 resolve，
+          // 于是「脚本退出码 0 但什么都没写」也被记成成功（minibox 2026-11-26 邮件实证）。
+          const rules = Array.isArray(task.verify) ? task.verify : [];
+          if (rules.length) {
+            const outcome = runVerifyRules(rules, { cwd: startedCwd, startedAt: runStartedAt });
+            if (!outcome.ok) {
+              reject(new Error(`产物校验未通过：${outcome.reason || "未知原因"}`));
+              return;
+            }
+          }
+          resolve();
         });
       },
       onExtUi: (r: any) => extUi.handle(r),
@@ -767,7 +786,7 @@ async function runOnce(
     if (gateModeFile) removeGateModeFile(gateModeFile);
   });
 
-  return { sessionFile };
+  return { sessionFile, cwd: startedCwd };
 }
 
 /** 需要在 runOnce 收尾时清理的 bridge（跨函数传递用）。 */

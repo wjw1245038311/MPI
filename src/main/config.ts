@@ -515,6 +515,9 @@ export interface AutomationTask {
   isolation?: "none" | "worktree";
   /** agent 起草但用户尚未确认的任务（落盘时 enabled 恒为 false）。 */
   draft?: boolean;
+  /** 产物校验规则（全部 AND）。空/缺省 = 不校验。
+   * 无人值守场景下建议至少配一条：模型回一句「跑完了」不等于产物真的写了。 */
+  verify?: import("./automation-verify").VerifyRule[];
   /** 上次已处理到的槽位（本地时刻，`2026-11-26T09:00`）。取代旧版按日历天的
    * lastRunSlot：改时间/频率后槽位 id 自然不同，因此当天仍会重新触发。 */
   lastSlot?: string;
@@ -530,6 +533,64 @@ export interface AutomationTask {
   lastMissedAt?: number;
   lastStatus?: "ok" | "error" | "missed";
   lastError?: string;
+}
+
+/**
+ * 校验规则的白名单化：只接受已知 kind 且字段齐全的规则。
+ *
+ * 为什么要过一遍：verify.command 会真的执行一条进程。备份导入 / agent 起草
+ * 都可能带来任意命令，所以这里把「形状不对的直接丢弃」而不是让下游 try/catch。
+ */
+function sanitizeVerifyRules(raw: unknown[]): import("./automation-verify").VerifyRule[] {
+  const out: import("./automation-verify").VerifyRule[] = [];
+  const isInt = (v: unknown) => typeof v === "number" && Number.isInteger(v);
+  const isNonNeg = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  for (const item of raw.slice(0, 20)) {
+    if (!item || typeof item !== "object") continue;
+    const r = item as Record<string, unknown>;
+    switch (r.kind) {
+      case "exitCode":
+        if (isInt(r.expected)) out.push({ kind: "exitCode", expected: r.expected as number });
+        break;
+      case "fileExists": {
+        const p1 = str(r.path);
+        if (p1) out.push({ kind: "fileExists", path: p1 });
+        break;
+      }
+      case "fileNewerThan": {
+        const p2 = str(r.path);
+        if (p2) out.push({ kind: "fileNewerThan", path: p2 });
+        break;
+      }
+      case "fileContains": {
+        const p3 = str(r.path);
+        const text = str(r.text);
+        if (p3 && text) out.push({ kind: "fileContains", path: p3, text });
+        break;
+      }
+      case "minBytes": {
+        const p4 = str(r.path);
+        if (p4 && isNonNeg(r.bytes)) out.push({ kind: "minBytes", path: p4, bytes: r.bytes as number });
+        break;
+      }
+      case "command": {
+        const command = str(r.command);
+        if (!command) break;
+        const args = Array.isArray(r.args) ? r.args.filter((a): a is string => typeof a === "string") : undefined;
+        out.push({
+          kind: "command",
+          command,
+          ...(args && args.length ? { args: args.slice(0, 20) } : {}),
+          ...(isNonNeg(r.timeoutMs) ? { timeoutMs: r.timeoutMs as number } : {}),
+        });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return out;
 }
 
 /** The task's explicit model choice, or null when it should follow pi's default. */
@@ -1121,6 +1182,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
         })(),
         ...(t.isolation === "worktree" ? { isolation: "worktree" as const } : {}),
         ...(t.draft === true ? { draft: true } : {}),
+        ...(Array.isArray(t.verify) ? { verify: sanitizeVerifyRules(t.verify) } : {}),
         ...(typeof t.lastSlot === "string" ? { lastSlot: t.lastSlot } : {}),
         ...(typeof t.lastRunSlot === "string" ? { lastRunSlot: t.lastRunSlot } : {}),
         ...(typeof t.firstSeenAt === "number" ? { firstSeenAt: t.firstSeenAt } : {}),

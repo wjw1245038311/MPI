@@ -249,6 +249,15 @@ export interface TaskSchedule {
   onceAt?: string;
 }
 
+/** 产物校验规则（与主进程 automation-verify.ts 的 VerifyRule 一致）。 */
+export type VerifyRule =
+  | { kind: "exitCode"; expected: number }
+  | { kind: "fileExists"; path: string }
+  | { kind: "fileNewerThan"; path: string }
+  | { kind: "fileContains"; path: string; text: string }
+  | { kind: "minBytes"; path: string; bytes: number }
+  | { kind: "command"; command: string; args?: string[]; timeoutMs?: number };
+
 export interface AutomationTask {
   id: string;
   name: string;
@@ -271,6 +280,8 @@ export interface AutomationTask {
   isolation?: "none" | "worktree";
   /** agent 起草但用户尚未确认（enabled 恒为 false）。 */
   draft?: boolean;
+  /** 产物校验规则（全部 AND）；空/缺省 = 不校验。 */
+  verify?: VerifyRule[];
   /** 上次处理到的槽位（本地时刻，`2026-11-26T09:00`）。 */
   lastSlot?: string;
   /** 旧版按日历天的去重键，仅读取、新代码不再写入。 */
