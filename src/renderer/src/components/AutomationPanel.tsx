@@ -132,8 +132,13 @@ export function AutomationPanel() {
                       </span>
                     )}
                     {t.lastStatus === "error" && (
-                      <span className="plugins-off" title={t.lastError}>
+                      <span className="plugins-off warn" title={t.lastError}>
                         {language === "zh" ? "上次失败" : "Last run failed"}
+                      </span>
+                    )}
+                    {t.lastRunAt && (
+                      <span className="muted auto-last" title={new Date(t.lastRunAt).toLocaleString()}>
+                        {new Date(t.lastRunAt).toLocaleString()}
                       </span>
                     )}
                   </div>
@@ -142,7 +147,6 @@ export function AutomationPanel() {
                   </div>
                   <div className="plugins-row-sub auto-prompt">{t.prompt}</div>
                   <div className="plugins-row-actions">
-                    {t.lastRunAt && <span className="muted auto-last">{new Date(t.lastRunAt).toLocaleString()}</span>}
                     <button
                       className="set-iconbtn"
                       title={language === "zh" ? "立即运行" : "Run now"}

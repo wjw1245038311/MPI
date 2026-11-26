@@ -240,6 +240,10 @@ const exact: Record<string, string> = {
   "选择": "Select",
   "要执行的指令，可调用技能，例如：\n/standup 生成今日 standup 报告并写入 docs/": "Instructions to run. Skills are supported, for example:\n/standup Create today's standup report in docs/",
   "触发时在该文件夹新建一个 pi 会话执行，完成后保存为可查看的会话。": "Each run starts a new Pi session in this folder and is saved as a viewable session.",
+  "留空则使用 pi 的默认模型。所选模型后来被删除时，任务会运行失败并提示（不会静默换模型）。":
+    "Leave empty to use pi's default model. If the chosen model is removed later, runs fail with a clear error (no silent fallback).",
+  "定时任务无法等待授权。沙盒会阻止需要确认的操作；完全权限仅用于你明确信任的任务。":
+    "Automations cannot wait for approval. Sandbox blocks operations that require confirmation; use Full access only for explicitly trusted tasks.",
   // Automation panel: these labels now render through `language === "zh" ? … : …`
   // pairs. Every pair needs an entry here as well — the DOM language bridge stores
   // whatever text it first sees as the node's original, so a missing entry during a

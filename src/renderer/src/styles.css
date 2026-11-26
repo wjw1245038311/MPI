@@ -8210,10 +8210,17 @@ mark.hl {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  /* 徽标多的时候本该换行，不能把任务名挤到宽 0（2026-11-26 实测：
+     任务名被模型徽标 + 失败徽标一起吃光，整行看不见名字） */
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 .plugins-row-name {
   font-weight: 600;
   font-size: 13px;
+  /* 与徽标竞争空间时保留一部分宽度，再溢出省略号 */
+  flex: 0 1 auto;
+  min-width: 5em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8249,6 +8256,11 @@ mark.hl {
   border-radius: var(--radius-xs);
   padding: 1px 6px;
   flex: 0 0 auto;
+}
+/* 「上次失败」是告警不是错误：用红底会和删除按钮同色，读起来像危险操作。 */
+.plugins-off.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
 }
 
 /* ---- extensions panel v2: module tabs + my-skills master-detail -------- */
@@ -9260,6 +9272,12 @@ mark.hl {
 .auto-last {
   font-size: 11px;
   white-space: nowrap;
+  /* 行右侧是固定宽度的三个按钮 + 开关：时间戳是最该先让位的那个，
+     否则它会被挤出卡片（2026-11-26 实测截断） */
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .auto-editor {
   background: #fff;
