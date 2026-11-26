@@ -19,6 +19,14 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v6
 
+      # Runner 上文件的属主与运行用户不同，git 会以 "detected dubious ownership" 拒绝
+      # 执行。影响面不只本次 checkout：test-automation-worktree 会在临时目录 git init
+      # 一个新仓库，isGitRepoRoot() 靠 `git rev-parse --show-toplevel` 判断，在 CI 上
+      # 因此返回 false（本地跑不出来，本机不存在属主差异）。
+      - name: Let git trust runner directories
+        shell: bash
+        run: git config --global --add safe.directory '*'
+
       - name: Set up native Node.js
         uses: actions/setup-node@v7
         with:
@@ -27,6 +35,13 @@ jobs:
 
       - name: Install project dependencies
         run: npm ci
+
+      # mobile/pwa 是独立子包（自己的 package-lock）。L1 里的 PWA 用例会直接 import
+      # mobile/pwa/src/**，缺依赖就有 8 项报 ERR_MODULE_NOT_FOUND: @noble/curves
+      # （e2e-crypto / webpush / pwa-*）。只跑根目录的 npm ci 不够。
+      - name: Install PWA sub-package dependencies
+        shell: bash
+        run: npm ci --prefix mobile/pwa
 
       - name: L0 — Typecheck
         run: npm run typecheck
