@@ -9279,6 +9279,32 @@ mark.hl {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 「上次运行」二次信息：比「下次运行」更弱，避免两段时间戳抢注意力。 */
+.auto-last-run {
+  opacity: 0.75;
+}
+/* 运行中的行内指示（UI-SPEC §2.1：loading 必须能看出在动，且防重复提交）。 */
+.auto-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.auto-spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1.6px solid var(--overlay-4);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .auto-spinner {
+    animation-duration: 2.4s;
+  }
+}
 .auto-editor {
   background: #fff;
   border: 1px solid var(--border);

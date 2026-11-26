@@ -37,6 +37,20 @@ function summarize(s: TaskSchedule, language: "en" | "zh"): string {
   return `每周 ${days || "—"} ${s.time || "00:00"}`;
 }
 
+/** 「下次运行」的短描述：今天/明天只显示时刻，更远补上日期。 */
+function formatNextRun(ts: number | undefined, language: "en" | "zh"): string | null {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return null;
+  const when = new Date(ts);
+  const now = new Date();
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOfDay(when) - startOfDay(now)) / 86_400_000);
+  const hhmm = `${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`;
+  if (days === 0) return language === "zh" ? `下次 ${hhmm}` : `Next ${hhmm}`;
+  if (days === 1) return language === "zh" ? `下次明天 ${hhmm}` : `Next tomorrow ${hhmm}`;
+  const mmdd = `${when.getMonth() + 1}/${when.getDate()}`;
+  return language === "zh" ? `下次 ${mmdd} ${hhmm}` : `Next ${mmdd} ${hhmm}`;
+}
+
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <button type="button" className={`set-toggle ${checked ? "on" : ""}`} aria-checked={checked} role="switch" onClick={() => onChange(!checked)}>
@@ -136,8 +150,35 @@ export function AutomationPanel() {
                         {language === "zh" ? "上次失败" : "Last run failed"}
                       </span>
                     )}
-                    {t.lastRunAt && (
-                      <span className="muted auto-last" title={new Date(t.lastRunAt).toLocaleString()}>
+                    {t.lastStatus === "missed" && (
+                      <span
+                        className="plugins-off warn"
+                        title={
+                          typeof t.lastMissedAt === "number"
+                            ? `${language === "zh" ? "错过计划时刻" : "Missed scheduled slot"}: ${new Date(t.lastMissedAt).toLocaleString()}`
+                            : undefined
+                        }
+                      >
+                        {language === "zh" ? "已错过" : "Missed"}
+                      </span>
+                    )}
+                    {t.isRunning ? (
+                      <span className="auto-freq auto-running">
+                        <span className="auto-spinner" aria-hidden="true" />
+                        {language === "zh" ? "运行中" : "Running"}
+                      </span>
+                    ) : (
+                      (() => {
+                        const next = formatNextRun(t.nextRunAt ?? undefined, language);
+                        return next ? <span className="muted auto-last">{next}</span> : null;
+                      })()
+                    )}
+                    {t.lastRunAt && !t.isRunning && (
+                      <span
+                        className="muted auto-last auto-last-run"
+                        title={`${language === "zh" ? "上次运行" : "Last run"}: ${new Date(t.lastRunAt).toLocaleString()}`}
+                      >
+                        {language === "zh" ? "上次 " : "Last "}
                         {new Date(t.lastRunAt).toLocaleString()}
                       </span>
                     )}
@@ -149,10 +190,16 @@ export function AutomationPanel() {
                   <div className="plugins-row-actions">
                     <button
                       className="set-iconbtn"
-                      title={language === "zh" ? "立即运行" : "Run now"}
+                      disabled={t.isRunning}
+                      aria-busy={t.isRunning || undefined}
+                      title={
+                        t.isRunning
+                          ? language === "zh" ? "正在运行，完成后可再次触发" : "Running; available again when it finishes"
+                          : language === "zh" ? "立即运行" : "Run now"
+                      }
                       onClick={() => runTaskNow(t.id)}
                     >
-                      <Play size={14} />
+                      {t.isRunning ? <span className="auto-spinner" aria-hidden="true" /> : <Play size={14} />}
                     </button>
                     <Toggle checked={t.enabled} onChange={(v) => saveTask({ ...t, enabled: v })} />
                     <button

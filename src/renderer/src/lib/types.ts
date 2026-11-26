@@ -257,10 +257,24 @@ export interface AutomationTask {
    * Both halves are required together (see resolveTaskModel in main/config.ts). */
   provider?: string;
   modelId?: string;
-  lastRunAt?: number;
+  /** 补跑窗口（分钟）；0 = 不补跑，缺省按 120 分钟。 */
+  catchUpMinutes?: number;
+  /** 上次处理到的槽位（本地时刻，`2026-11-26T09:00`）。 */
+  lastSlot?: string;
+  /** 旧版按日历天的去重键，仅读取、新代码不再写入。 */
   lastRunSlot?: string;
-  lastStatus?: "ok" | "error";
+  /** 调度器首次看到该任务的时刻。 */
+  firstSeenAt?: number;
+  lastRunAt?: number;
+  lastAttemptAt?: number;
+  lastSuccessAt?: number;
+  /** 上次因超出补跑窗口而未执行的计划时刻。 */
+  lastMissedAt?: number;
+  lastStatus?: "ok" | "error" | "missed";
   lastError?: string;
+  /** 以下两个字段仅存在于 `automation:getTasksSnapshot` 的返回里（主进程实时计算，不落盘）。 */
+  nextRunAt?: number | null;
+  isRunning?: boolean;
 }
 
 export interface ModelInfo {

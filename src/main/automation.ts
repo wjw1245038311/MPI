@@ -1,4 +1,11 @@
-import { getConfig, getConfigDir, reloadConfig, resolveTaskModel, updateConfig, type AutomationTask, type TaskSchedule } from "./config";
+import { getConfig, getConfigDir, reloadConfig, resolveTaskModel, updateConfig, type AutomationTask } from "./config";
+import {
+  DEFAULT_CATCH_UP_MINUTES,
+  decideDueSlot,
+  nextRunAfter,
+  nextTickDelay,
+  slotId,
+} from "./automation-schedule";
 import { autoAnswerModelSelect, createWebSearchFlow, type WebSearchFlow } from "./web-search-config";
 import { createAutomationExtUiHandler } from "./automation-ext-ui";
 import { PiBridge } from "./pi-bridge";
@@ -7,6 +14,7 @@ import { ensureTodoExtension } from "./todo-extension";
 import { ensureSmartCompactExtension } from "./compaction-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
 import { prepareShellForSpawn } from "./shell-bootstrap";
+import { appendDiagLog } from "./diag-log";
 import { getAgentDir } from "./session-store";
 import { buildAppendSystemPrompt } from "./append-prompt";
 import { join, resolve } from "node:path";
@@ -27,7 +35,7 @@ import { ensureInboxDir, todosFilePath } from "./todo-store";
  */
 
 export interface AutomationNotify {
-  type: "start" | "done";
+  type: "start" | "done" | "missed";
   taskId: string;
   name: string;
   ok?: boolean;
@@ -50,6 +58,16 @@ const activeBridges = new Set<PiBridge>();
 const activeBridgesByTask = new Map<string, Set<PiBridge>>();
 let notify: ((p: AutomationNotify) => void) | null = null;
 
+/** 兜底重判间隔。
+ *
+ * 为什么不是 20 秒：链式定时器的价值就是「按下次触发时刻精确排队」，而 20 秒
+ * 上限会把所有远于 20 秒的触发都拉回成 20 秒轮询，等于回到了旧实现（只多了
+ * 补偿判断）。
+ * 为什么不干脆不设上限：时钟被 NTP / 用户改系统时间拨动时，事先排好的长定时器
+ * 会偏移；调度非法（算不出下次时刻）时也需要一个定期重判。5 分钟是这两者的折中
+ * ——远于 5 分钟的槽位每 5 分钟校一次，近的就精确到秒。 */
+const MAX_TICK_DELAY_MS = 5 * 60 * 1000;
+
 // "扩展自动选模" — same web-search.json sync as interactive threads so an
 // unattended run's web searches also skip the browser popup and summarize with
 // the run's own model. Lazy (config dir must be initialized).
@@ -62,23 +80,6 @@ function refreshAutomationWebSearchFlow(bridge: PiBridge): void {
     .getState()
     .then((s: any) => flow.sync(s?.model ?? null))
     .catch(() => {});
-}
-
-const pad = (n: number) => String(n).padStart(2, "0");
-
-function matches(schedule: TaskSchedule, d: Date): boolean {
-  const hhmm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  if (schedule.frequency === "hourly") return d.getMinutes() === (schedule.minute ?? 0);
-  if (schedule.frequency === "daily") return hhmm === (schedule.time || "00:00");
-  if (schedule.frequency === "weekly") return (schedule.days || []).includes(d.getDay()) && hhmm === (schedule.time || "00:00");
-  return false;
-}
-
-/** A dedup key for the current slot so a task fires at most once per slot. */
-function slotKey(schedule: TaskSchedule, d: Date): string {
-  const day = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-  if (schedule.frequency === "hourly") return `${day}-h${d.getHours()}`;
-  return day; // daily / weekly: once per calendar day
 }
 
 function persist(tasks: AutomationTask[]): void {
@@ -100,21 +101,156 @@ function patchTask(id: string, patch: Partial<AutomationTask>): boolean {
   return true;
 }
 
+/** 任务补跑窗口（分钟）。缺省/非法值按 DEFAULT_CATCH_UP_MINUTES。 */
+function catchUpMinutesOf(task: AutomationTask): number {
+  const raw = task.catchUpMinutes;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULT_CATCH_UP_MINUTES;
+  return Math.max(0, Math.min(1440, Math.round(raw)));
+}
+
+/**
+ * 任务的「上次处理到的槽位」：
+ *   1. 新版 lastSlot（精确时刻）；
+ *   2. 旧版 lastRunSlot 是日历天粒度，无法还原到分钟，不回退使用；
+ *   3. 两者都没有时退回 lastRunAt（历史运行时间戳），否则以 firstSeenAt 为准。
+ * 这样升级到批次 A 后，旧任务不会在首次 tick 把当天早些时候的槽位全部补一遍。
+ */
+function lastSlotOf(task: AutomationTask): Date | null {
+  if (typeof task.lastSlot === "string") {
+    const t = new Date(task.lastSlot);
+    if (!Number.isNaN(t.getTime())) return t;
+  }
+  if (typeof task.lastRunAt === "number" && Number.isFinite(task.lastRunAt)) return new Date(task.lastRunAt);
+  return null;
+}
+
+function firstSeenAtOf(task: AutomationTask): Date | null {
+  if (typeof task.firstSeenAt === "number" && Number.isFinite(task.firstSeenAt)) return new Date(task.firstSeenAt);
+  return null;
+}
+
+/** 面板「下次运行」显示用：不落盘，实时算。
+ *
+ * 基准直接用 `now`：已到点但还没处理的槽位会在几秒内被 tick 领走（那之后
+ * 「下次」自然变成下一个槽位）；用旧 lastSlot 做基准会在任务长期未跑时
+ * 算出已经过去的时刻，面板上显示成「下次 昨天 09:00」。 */
+export function nextRunAtOf(task: AutomationTask, now: Date = new Date()): number | null {
+  const next = nextRunAfter(task.schedule, now);
+  return next ? next.getTime() : null;
+}
+
+/** 正在运行的任务 id（面板据此显示 loading/disabled）。 */
+export function runningTaskIds(): string[] {
+  return [...running];
+}
+
 function tick(): void {
   const now = new Date();
   // The renderer normally deletes through this process, but another MPI
   // process or an older build may have written config.json. Re-read before
   // every tick so a deleted task cannot continue from a stale memory snapshot.
   const tasks = persistedTasks();
-  for (const task of tasks) {
-    if (!task.enabled || running.has(task.id)) continue;
-    if (!matches(task.schedule, now)) continue;
-    const slot = slotKey(task.schedule, now);
-    if (task.lastRunSlot === slot) continue;
-    // Claim the slot before awaiting so a re-entrant tick can't double-fire.
-    patchTask(task.id, { lastRunSlot: slot, lastRunAt: now.getTime() });
-    void execute(task);
+
+  // 首次被调度器看到的任务：批量写 firstSeenAt（基准时刻），避免把「装好前
+  // 已经过去的槽位」全部补一遍。逐任务写会让 config.json 被重写 N 次。
+  const unseen = tasks.filter((t) => t.enabled && typeof t.firstSeenAt !== "number");
+  if (unseen.length) {
+    const ids = new Set(unseen.map((t) => t.id));
+    persist(tasks.map((t) => (ids.has(t.id) ? { ...t, firstSeenAt: now.getTime() } : t)));
   }
+
+  for (const task of persistedTasks()) {
+    if (!task.enabled) continue;
+
+    const decision = decideDueSlot({
+      schedule: task.schedule,
+      lastSlot: lastSlotOf(task),
+      firstSeenAt: firstSeenAtOf(task),
+      now,
+      catchUpMinutes: catchUpMinutesOf(task),
+    });
+
+    if (decision.kind === "run") {
+      // 同任务已在跑（多见于手动「立即运行」未结束时到了计划时刻）：本轮不占位，
+      // 等它跑完后的下一次 tick 再判定，宁可晚跑也不并发两个 pi 进程。
+      if (running.has(task.id)) continue;
+      // 占位必须在 await 之前写：re-entrant tick 不能重复触发同一个槽位。
+      patchTask(task.id, {
+        lastSlot: slotId(decision.slot),
+        lastAttemptAt: now.getTime(),
+        lastRunAt: now.getTime(),
+      });
+      void execute(task);
+      continue;
+    }
+
+    if (decision.kind === "missed") {
+      // 超出补跑窗口：不执行，但要留下痕迹，面板能看出「该跑没跑」。
+      // 槽位推进到被错过的那个时刻，否则下一次 tick 会反复判定同一个槽位。
+      patchTask(task.id, {
+        lastSlot: slotId(decision.slot),
+        lastMissedAt: decision.slot.getTime(),
+        lastStatus: "missed",
+        lastError: undefined,
+      });
+      notify?.({ type: "missed", taskId: task.id, name: task.name });
+    }
+  }
+}
+
+/** 调度器是否已启动。不能拿 `timer` 当这个标志：boot 阶段只挂了 `bootTimer`，
+ * `timer` 还是 null，用它做卫兵会让链式调度在第一步就 return——
+ * 实测后果是「启动 4 秒后只 tick 一次，之后永不 tick」。 */
+let schedulerActive = false;
+
+/** 链式 setTimeout：按「距最近一次触发」排队，睡眠/唤醒后立刻补判。 */
+function scheduleNextTick(): void {
+  if (!schedulerActive) return;
+  if (timer) clearTimeout(timer);
+  const now = new Date();
+  // pending：该任务此刻「有已到点但未被领走的槽位」。两种情况：
+  //   1. 上一轮还在跑（running），本轮 tick 跳过了它；
+  //   2. 刚才 tick 没来得及处理（重入 / 异常）。
+  // 必须尽快重判，否则要等到下一个计划时刻。
+  const entries = persistedTasks()
+    .filter((task) => task.enabled)
+    .map((task) => ({
+      enabled: true,
+      schedule: task.schedule,
+      pending:
+        !running.has(task.id) &&
+        decideDueSlot({
+          schedule: task.schedule,
+          lastSlot: lastSlotOf(task),
+          firstSeenAt: firstSeenAtOf(task),
+          now,
+          catchUpMinutes: catchUpMinutesOf(task),
+        }).kind === "run",
+      // 同任务正在跑时，pending 不成立（tick 会主动跳过）；但仍要按它的下一个
+      // 计划时刻排队，所以 schedule 照传。
+    }));
+  const delay = nextTickDelay(entries, now, MAX_TICK_DELAY_MS, (schedule, at) => nextRunAfter(schedule, at));
+  // 一行诊断：事后能从前一次与后一次的时间戳判断「调度器是不是还活着」。
+  appendDiagLog(
+    `auto-tick next in ${Math.round(delay / 1000)}s (tasks=${entries.length}, pending=${entries.filter((e) => e.pending).length})`,
+  );
+  timer = setTimeout(() => {
+    timer = null;
+    tick();
+    scheduleNextTick();
+  }, delay);
+}
+
+/** 从睡眠/待机恢复后立即补判（不依赖定时器是否被系统暂停）。 */
+export function wakeScheduler(): void {
+  if (!schedulerActive) return;
+  tick();
+  scheduleNextTick();
+}
+
+/** 任务被新建/修改/删除后重排一次：把「刚改成 1 分钟后」的任务立刻排上。 */
+export function rescheduleScheduler(): void {
+  scheduleNextTick();
 }
 
 /** Remove a task and stop a run that was already spawned for it. */
@@ -143,13 +279,20 @@ export function removeAutomationTask(id: string): void {
 
 export function startScheduler(send: (p: AutomationNotify) => void): void {
   notify = send;
-  if (timer) return;
-  timer = setInterval(tick, 20_000);
-  bootTimer = setTimeout(tick, 4_000);
+  if (schedulerActive) return;
+  schedulerActive = true;
+  // 先立即判一次（应用刚启动时要补上「启动瞬间已到点」的任务），再按下一次
+  // 触发时刻链式排队。旧实现是固定 20s setInterval，漏了睡眠期间的全部触发。
+  bootTimer = setTimeout(() => {
+    bootTimer = null;
+    tick();
+    scheduleNextTick();
+  }, 4_000);
 }
 
 export function stopScheduler(): void {
-  if (timer) clearInterval(timer);
+  schedulerActive = false;
+  if (timer) clearTimeout(timer);
   if (bootTimer) clearTimeout(bootTimer);
   timer = null;
   bootTimer = null;
@@ -171,6 +314,14 @@ export function stopAutomations(): Promise<void> {
 }
 
 const RUN_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** 全局并发上限：同一分钟多个任务时，超出的排队而不是齐开一堆 pi 进程。
+ * 每个 pi 子进程约 100–300MB，不设上限在内存紧张的机器上会直接卡死。 */
+export function maxConcurrentAutomationRuns(): number {
+  const raw = (getConfig() as { maxConcurrentAutomationRuns?: unknown }).maxConcurrentAutomationRuns;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 2;
+  return Math.max(1, Math.min(8, Math.round(raw)));
+}
 
 function textValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -324,7 +475,7 @@ async function execute(task: AutomationTask): Promise<void> {
         .catch((e) => finish(() => reject(e)));
     });
     if (taskStillExists(task.id)) {
-      patchTask(task.id, { lastStatus: "ok", lastError: undefined });
+      patchTask(task.id, { lastStatus: "ok", lastError: undefined, lastSuccessAt: Date.now() });
       notify?.({ type: "done", taskId: task.id, name: task.name, ok: true });
     }
   } catch (e: any) {

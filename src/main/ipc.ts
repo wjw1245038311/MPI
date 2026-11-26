@@ -236,7 +236,7 @@ import {
 import { getSkillDetails, getSkillsHubLeaderboard, installSkillFromHub, searchSkillsHub } from "./skills-hub";
 import { getMcpMarketDetail, searchMcpMarket } from "./mcp-market";
 import { getNpmReadme, searchNpmPackages } from "./npm-registry";
-import { hasActiveAutomationBridge, removeAutomationTask, runTaskNow, startScheduler } from "./automation";
+import { hasActiveAutomationBridge, nextRunAtOf, removeAutomationTask, rescheduleScheduler, runTaskNow, runningTaskIds, startScheduler } from "./automation";
 import { cancelAppRegistration, startAppRegistration } from "./messaging/app-registration";
 import { getMessagingState, initMessaging, messagingSetConfig, sanitizeFeishuConfig } from "./messaging/service";
 import type { FeishuChannelConfig, WeChatChannelConfig } from "./messaging/types";
@@ -8433,19 +8433,40 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
 
   // ---- automation (scheduled tasks) --------------------------------------
   ipcMain.handle("automation:getTasks", () => reloadConfig().automationTasks);
+  // 面板首屏用的快照：带「下次运行时间」与「正在运行的任务」。两者都是实时
+  // 计算/内存值，不写盘（写盘会让每次 tick 都重写整份 config.json）。
+  ipcMain.handle("automation:getTasksSnapshot", () => {
+    const now = new Date();
+    const runningIds = new Set(runningTaskIds());
+    return reloadConfig().automationTasks.map((task) => ({
+      ...task,
+      nextRunAt: nextRunAtOf(task, now),
+      isRunning: runningIds.has(task.id),
+    }));
+  });
   ipcMain.handle("automation:saveTask", (_e, task: AutomationTask) => {
     const tasks = reloadConfig().automationTasks;
     const idx = tasks.findIndex((t) => t.id === task.id);
     const next = idx >= 0 ? tasks.map((t) => (t.id === task.id ? { ...t, ...task } : t)) : [...tasks, task];
     updateConfig({ automationTasks: next });
+    // 新建/改动后重排：刚把时刻改成「1 分钟后」的任务要立刻排上，不能等
+    // 上一次链式定时器到期（最长 20 秒）才被看到。
+    rescheduleScheduler();
     return { ok: true };
   });
   ipcMain.handle("automation:deleteTask", (_e, id: string) => {
     removeAutomationTask(typeof id === "string" ? id : "");
+    rescheduleScheduler();
     return { ok: true };
   });
-  ipcMain.handle("automation:runNow", async (_e, id: string) => {
-    await runTaskNow(id);
+  // 立即运行：不 await 整个执行过程。原来的写法会让 IPC 挂到任务结束（最长 30
+  // 分钟）才回渲染层，期间面板无法刷新、按钮也看不出状态；进度改走
+  // pi:automation 的 start/done 事件与 runningTaskIds 快照。
+  ipcMain.handle("automation:runNow", (_e, id: string) => {
+    void runTaskNow(id).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.error(`[automation] runNow failed: ${e?.message || e}`);
+    });
     return { ok: true };
   });
 

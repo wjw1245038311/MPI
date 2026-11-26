@@ -371,6 +371,8 @@ const api = {
   },
   automation: {
     getTasks: () => ipcRenderer.invoke("automation:getTasks"),
+    /** 带 nextRunAt（实时计算）与 runningTaskIds 的快照，面板首屏用这个。 */
+    getTasksSnapshot: () => ipcRenderer.invoke("automation:getTasksSnapshot"),
     saveTask: (task: unknown) => ipcRenderer.invoke("automation:saveTask", task),
     deleteTask: (id: string) => ipcRenderer.invoke("automation:deleteTask", id),
     runNow: (id: string) => ipcRenderer.invoke("automation:runNow", id),
@@ -688,7 +690,7 @@ const api = {
       };
       origin: "desktop" | "remote" | "agent";
     }) => void) => on("pi:thread-config-changed", cb),
-    automation: (cb: (p: { type: "start" | "done"; taskId: string; name: string; ok?: boolean; error?: string }) => void) =>
+    automation: (cb: (p: { type: "start" | "done" | "missed"; taskId: string; name: string; ok?: boolean; error?: string }) => void) =>
       on("pi:automation", cb),
     messaging: (cb: (p: {
       status: "off" | "connecting" | "connected" | "reconnecting" | "error";

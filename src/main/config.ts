@@ -497,9 +497,23 @@ export interface AutomationTask {
    * a lone value is dropped at load time and resolveTaskModel returns null. */
   provider?: string;
   modelId?: string;
-  lastRunAt?: number;
+  /** 补跑窗口（分钟）：计划时刻错过但未超过该窗口时补跑一次。0 = 不补跑。
+   * 缺省 undefined 按 DEFAULT_CATCH_UP_MINUTES 处理。 */
+  catchUpMinutes?: number;
+  /** 上次已处理到的槽位（本地时刻，`2026-11-26T09:00`）。取代旧版按日历天的
+   * lastRunSlot：改时间/频率后槽位 id 自然不同，因此当天仍会重新触发。 */
+  lastSlot?: string;
+  /** 旧版字段：按日历天去重（`2026-11-26` 或 `2026-11-26-h9`）。仅保留读取，
+   * 新代码不再写入；迁移时用来推断 lastSlot 的下限。 */
   lastRunSlot?: string;
-  lastStatus?: "ok" | "error";
+  /** 任务首次被调度器看到的时刻，用于「装好后第一次启动」不把历史全补一遍。 */
+  firstSeenAt?: number;
+  lastRunAt?: number;
+  lastAttemptAt?: number;
+  lastSuccessAt?: number;
+  /** 上次因超出补跑窗口而未能执行的计划时刻。 */
+  lastMissedAt?: number;
+  lastStatus?: "ok" | "error" | "missed";
   lastError?: string;
 }
 
@@ -791,6 +805,9 @@ export function loadConfig(userDataDir: string): AppConfig {
             delete task.provider;
             delete task.modelId;
           }
+          // 旧版按日历天去重（`2026-11-26` / `2026-11-26-h9`）。新版槽位是精确到
+          // 分钟的本地时刻，无法从旧格式可靠推断「上一次跑到哪一分钟」，因此不猜；
+          // 保留 lastRunSlot 原值不删，新调度器在首次 tick 时用 lastRunAt 兜底。
           return task;
         }),
         feishuChannel: sanitizeFeishuChannel(parsed.feishuChannel),
@@ -1058,6 +1075,21 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
         },
         enabled: typeof t.enabled === "boolean" ? t.enabled : true,
         permission: t.permission === "full" ? "full" : "sandbox",
+        // 批次 A 新增字段：导入旧备份时缺值即跳过，不写 undefined。
+        ...(typeof t.catchUpMinutes === "number" && Number.isFinite(t.catchUpMinutes)
+          ? { catchUpMinutes: Math.max(0, Math.min(1440, Math.round(t.catchUpMinutes))) }
+          : {}),
+        ...(typeof t.lastSlot === "string" ? { lastSlot: t.lastSlot } : {}),
+        ...(typeof t.lastRunSlot === "string" ? { lastRunSlot: t.lastRunSlot } : {}),
+        ...(typeof t.firstSeenAt === "number" ? { firstSeenAt: t.firstSeenAt } : {}),
+        ...(typeof t.lastRunAt === "number" ? { lastRunAt: t.lastRunAt } : {}),
+        ...(typeof t.lastAttemptAt === "number" ? { lastAttemptAt: t.lastAttemptAt } : {}),
+        ...(typeof t.lastSuccessAt === "number" ? { lastSuccessAt: t.lastSuccessAt } : {}),
+        ...(typeof t.lastMissedAt === "number" ? { lastMissedAt: t.lastMissedAt } : {}),
+        ...(t.lastStatus === "ok" || t.lastStatus === "error" || t.lastStatus === "missed"
+          ? { lastStatus: t.lastStatus }
+          : {}),
+        ...(typeof t.lastError === "string" ? { lastError: t.lastError } : {}),
       });
     }
     out.automationTasks = tasks;

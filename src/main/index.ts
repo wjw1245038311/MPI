@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import { app, BrowserWindow, dialog, Menu, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, Menu, powerMonitor, shell, Tray } from "electron";
 import { loadConfig, getConfig, updateConfig } from "./config";
 import { flushDrafts } from "./draft-store";
 import { runPendingDataMigrations } from "./data-migration";
@@ -32,6 +32,7 @@ import {
 } from "./crash-guard";
 import { closeSplashWindow, createSplashWindow } from "./splash";
 import { registerIpc, stopAllBridges, stopRemoteHost } from "./ipc";
+import { wakeScheduler } from "./automation";
 
 /**
  * 启动耗时基线（2026-10-18）。用户反馈「每次打开要 10 来秒」，但日志里看不出卡在哪。
@@ -520,6 +521,15 @@ if (!gotLock) {
     void runtimeAdopt.finally(() => cleanupOldRuntimes());
     registerIpc(getWin);
     bootMark("ipc-registered");
+    // 睡眠 / 待机恢复后立即补判定时任务：系统睡眠期间主进程定时器可能被整体暂停，
+    // 只靠 setTimeout 无法保证在唤醒后赶上那一刻。两个事件都接：resume 是系统唤醒，
+    // user-did-become-active 是用户回到本机（笔记本合盖场景常只发后者）。
+    try {
+      powerMonitor.on("resume", () => wakeScheduler());
+      powerMonitor.on("user-did-become-active", () => wakeScheduler());
+    } catch (e) {
+      console.warn("[automation] powerMonitor hooks unavailable:", e);
+    }
     // One-time backfill of the observed-tools registry from historical session
     // files so the trusted-tools picker is populated on first open. Background,
     // byte-budgeted, best effort.

@@ -3851,7 +3851,9 @@ Then pick up from its "Next steps" section; ask me if something is unclear.`;
   closeAutomation: () => set({ automationOpen: false, sidePanelExpanded: false }),
   loadTasks: async () => {
     try {
-      const tasks = await window.pi.automation.getTasks();
+      // 快照带 nextRunAt（下次运行）与 isRunning（正在运行），两者都是主进程
+      // 实时算出，不落盘。旧接口 getTasks 仍在，供其它调用方使用。
+      const tasks = await window.pi.automation.getTasksSnapshot();
       set({ tasks });
     } catch (e: any) {
       get().pushToast("error", "加载任务失败：" + (e?.message || e));
@@ -3875,10 +3877,11 @@ Then pick up from its "Next steps" section; ask me if something is unclear.`;
   },
   runTaskNow: async (id) => {
     try {
-      get().pushToast("info", "任务已开始执行…");
+      // 主进程 fire-and-forget：runNow 立即返回，执行进度靠 start/done 事件
+      // 与下次 loadTasks 的 isRunning 快照反映。旧实现要等任务跑完（最长 30
+      // 分钟）才返回，面板在此期间无法反映运行中状态。
       await window.pi.automation.runNow(id);
       await get().loadTasks();
-      await get().refreshProjects();
     } catch (e: any) {
       get().pushToast("error", "执行失败：" + (e?.message || e));
     }
