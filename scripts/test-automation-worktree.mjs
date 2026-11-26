@@ -5,7 +5,7 @@
 // 「worktree add 成功」证明不了真实 git 会接受我们的参数顺序。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { register } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -101,7 +101,47 @@ if (!gitOk) {
     assert.ok(existsSync(tree.path), ok("工作树目录存在"));
     assert.ok(existsSync(join(tree.path, "a.txt")), ok("工作树里有 HEAD 的文件内容"));
     assert.equal(tree.branch, "mpi-auto/task-abc/run-xyz", ok("分支名带上任务与运行 id"));
-    assert.equal(tree.repo.replace(/\\/g, "/").toLowerCase(), repoDir.replace(/\\/g, "/").toLowerCase(), ok("记录源仓库路径"));
+    // 比「是不是同一个目录」，不比字符串：产品侧拿 git 的 --show-toplevel 记录源仓库，
+    // 而 git 会把 8.3 短名 / 符号链接解析成真实路径（CI runner 的 TMP 就是
+    // `C:\Users\RUNNER~1\…`，回的是 `…\runneradmin\…`）——归一化分隔符仍拦不住这种差异。
+    const sameDir = (a, b) => {
+      const key = (p) => {
+        let q = p;
+        try {
+          q = realpathSync(p);
+        } catch {
+          /* 拿不到真实路径就退回原值 */
+        }
+        return q.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+      };
+      return key(a) === key(b);
+    };
+    assert.ok(sameDir(tree.repo, repoDir), ok("记录源仓库路径（按真实路径比对，不受短名/链接形式影响）"));
+
+    // 保证“入参写成链接形式”时也能开工作树、并且记录的仍是同一个仓库。
+    // 注意：这条**不是** CI 那个短名问题的本地复现——本机目录本就是真实路径，
+    // 把 sameDir 换回字符串比对它也照过。短名差异只存在于 runner（唯一证据是 run #45 的
+    // actual `…runneradmin…` vs expected `…runner~1…`），因此它靠本次 CI 结果来验。
+    const viaLink = join(dirname(repoDir), `${basename(repoDir)}-rec`);
+    let recMade = false;
+    try {
+      symlinkSync(repoDir, viaLink, process.platform === "win32" ? "junction" : "dir");
+      recMade = true;
+      const via = wt.createAutomationWorktree(viaLink, "task-link", "run-link");
+      assert.equal(via.ok, true, `通过链接路径入参也能开工作树${via.ok ? "" : "：" + via.reason}`);
+      assert.ok(sameDir(via.worktree.repo, repoDir), ok("链接/短名形式的入参不会被当成另一个仓库"));
+    } catch (err) {
+      if (err instanceof assert.AssertionError) throw err;
+      console.log(`  （短名复现用例跳过：${(err && err.code) || err}）`);
+    } finally {
+      if (recMade) {
+        try {
+          rmdirSync(viaLink);
+        } catch {
+          rmSync(viaLink, { force: true });
+        }
+      }
+    }
 
     // 工作树是独立检出：在里面改文件不影响原仓库
     writeFileSync(join(tree.path, "a.txt"), "modified-in-worktree\n", "utf8");
