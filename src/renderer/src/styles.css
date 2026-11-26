@@ -1158,9 +1158,13 @@ body.sidebar-resizing * {
   content-visibility: auto;
   contain-intrinsic-size: auto 420px;
 }
-/* 恢复阅读位置期间临时关掉高度估算：视口外消息按 420px 估算，会让锚点一直追变形中的布局。
-   只有切会话的那 1~5 秒生效，恢复完成后恢复 content-visibility。 */
-.messages.no-cv > .msg.assistant {
+/* 恢复阅读位置期间临时关掉高度估算：视口外消息按固定值估算（assistant 420px / custom 96px），
+   会让锚点（resolveAnchorNode + getBoundingClientRect）一直追变形中的布局，算出的 delta 是错的
+   ——恢复完落在一个「中间某处」（2026-11-25 实测：同一 scrollTop 39463 在 23 条日志里反复被写回）。
+   只有切会话的那 1~5 秒生效，恢复完成后恢复 content-visibility。
+   ⚠ 两类块都要覆盖：只写 .assistant 时，锚点落在 .msg.custom（用户消息 / 工具结果）上仍然是估算高度。 */
+.messages.no-cv > .msg.assistant,
+.messages.no-cv > .msg.custom {
   content-visibility: visible;
 }
 .msg-avatar {

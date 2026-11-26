@@ -73,6 +73,37 @@ for (const source of ["ro-content", "ro-scroller"]) {
   assert.ok(chat.includes(`"${source}"`), `诊断样本必须区分触发源：${source}`);
 }
 
+// --- ①e 恢复期间的 content-visibility 必须覆盖两类块 -----------------------
+//
+// 2026-11-25「偶尔跳到中间某个地方」取证：同一个 scrollTop 39463 在 23 条日志里被反复写回，
+// 而 max 在持续增长。恢复期的锚点算法是
+//   el.scrollTop += node.getBoundingClientRect().top - el.top - mem.anchor.delta
+// 它依赖锚点节点的**真实**位置。视口外块若仍是 content-visibility:auto（按
+// contain-intrinsic-size 估算：assistant 420px / custom 96px），算出的 delta 就是错的，
+// 落点自然不在原处。
+//
+// 原 CSS 只写了 `.messages.no-cv > .msg.assistant`，漏了 `.msg.custom`（用户消息 / 工具结果）——
+// 锚点一旦落在 custom 块上，恢复位置就不对。这条护栏钉住两类块都要覆盖。
+{
+  const noCv = css.match(/\.messages\.no-cv[^{]*\{([^}]*)\}/g) || [];
+  const joined = noCv.join("\n");
+  assert.ok(/\.messages\.no-cv[^{]*\.msg\.assistant/.test(joined), ".no-cv 必须覆盖 .msg.assistant（否则锚点在 assistant 块上算错）");
+  assert.ok(/\.messages\.no-cv[^{]*\.msg\.custom/.test(joined), ".no-cv 必须覆盖 .msg.custom —— 只覆盖 assistant 时，锚点落在用户消息/工具结果上会用估算高度，恢复落点偏移（2026-11-25 实测）");
+  assert.ok(/content-visibility:\s*visible/.test(joined), ".no-cv 覆盖必须设 content-visibility: visible");
+}
+
+// --- ①f 写入者标记：scrollTop 是多点写入的，日志要能区分「谁写的」---------
+//
+// 上面那个 bug 卡了一整轮就是因为日志只能看到结果（同一个 top 反复出现），看不出是谁写回去的。
+// 9 处写入点都要打标记，采样时带上 lastWriter。
+{
+  assert.ok(chat.includes("markScrollWriter("), "Chat.tsx 必须在 scrollTop 写入点调用 markScrollWriter()");
+  for (const writer of ["pin-content", "pin-scroller", "commit-stick", "turn-end", "restore-anchor", "restore-pixels"]) {
+    assert.ok(chat.includes(`markScrollWriter("${writer}")`), `写入点缺少标记：${writer}`);
+  }
+  assert.ok(chat.includes("lastScrollWriterInfo()"), "采样时必须读 lastScrollWriterInfo() 并写进样本");
+}
+
 // --- ② 贴底态关闭滚动锚定 ---------------------------------------------------
 
 assert.ok(/className=\{`chat-scroll\$\{atBottom \? " sticking" : ""\}`\}/.test(chat), ".chat-scroll 必须按贴底态加 sticking 类");
@@ -93,4 +124,4 @@ assert.ok(!turnEndBody.includes('behavior: "smooth"'), "回合结束的贴底不
 // 反向护栏：用户显式点「跳转到最新」仍可平滑滚动（那是用户的主动操作，不是跟随）。
 assert.ok(/jump-latest[\s\S]{0,600}behavior: "smooth"/.test(chat), "「跳转到最新」按钮应保留平滑滚动");
 
-console.log("chat-scroll: 12 项通过（贴底收敛 / 容器变矮 / 取证埋点 / 锚定 / 段末贴底 / 显式跳转）");
+console.log("chat-scroll: 全部通过（贴底收敛 / 容器变矮 / no-cv 覆盖两类块 / 写入者标记 / 取证埋点 / 锚定 / 段末贴底 / 显式跳转）");

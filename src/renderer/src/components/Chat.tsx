@@ -19,7 +19,7 @@ import { ExtUiPromptCard } from "./ExtUiPromptCard";
 import { choiceOptions, parseChoiceOutcome } from "../lib/choice";
 import { splitChoiceSegments } from "../lib/choice-block";
 import type { ChoiceClampInfo, ChoiceFailure, ChoiceSplitStats } from "../lib/choice-block";
-import { logChoiceFenceDuplicate, logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRender, logChoiceFenceRepaired, logScrollPin } from "../lib/diag-watch";
+import { lastScrollWriterInfo, logChoiceFenceDuplicate, logChoiceFenceFailure, logChoiceFenceInTool, logChoiceFenceInfoString, logChoiceFenceRender, logChoiceFenceRepaired, logScrollPin, markScrollWriter } from "../lib/diag-watch";
 import type { ScrollPinSample } from "../lib/diag-watch";
 import { ChoicePanel } from "./ChoicePanel";
 import { FileTypeIcon } from "./FileTypeIcon";
@@ -364,6 +364,7 @@ export function Chat() {
     /** 采样一次几何；只在「本该贴底却不在底」时写诊断（避免刷屏）。 */
     const sample = (source: string, skipped?: ScrollPinSample["skipped"], gapBefore = NaN) => {
       if (!activeThreadId) return;
+      const written = lastScrollWriterInfo();
       const max = scroller.scrollHeight - scroller.clientHeight;
       const gapAfter = max - scroller.scrollTop;
       // 已经贴底且没有让位：这次没什么可记的。
@@ -381,6 +382,7 @@ export function Chat() {
         stick: stickRef.current,
         restoring: isRestoring(),
         gesture: hasScrollGesture(),
+        ...(written ? { lastWriter: written.writer, sinceWriterMs: Date.now() - written.at } : {}),
         ...(skipped ? { skipped } : {}),
       });
     };
@@ -394,6 +396,7 @@ export function Chat() {
       if (max - scroller.scrollTop <= 1) return;
       const gapBefore = max - scroller.scrollTop;
       scroller.scrollTop = max;
+      markScrollWriter("pin-content");
       lastScrollTopRef.current = scroller.scrollTop; // 程序化写入：不算用户意图
       setAtBottom(true);
       sample("ro-content", undefined, gapBefore);
@@ -411,6 +414,7 @@ export function Chat() {
       if (max - scroller.scrollTop <= 1) return;
       const gapBefore = max - scroller.scrollTop;
       scroller.scrollTop = max;
+      markScrollWriter("pin-scroller");
       lastScrollTopRef.current = scroller.scrollTop;
       setAtBottom(true);
       sample("ro-scroller", undefined, gapBefore);
@@ -446,6 +450,7 @@ export function Chat() {
     // they scroll back into the near-bottom band (handleUserScroll).
     if (!switchedThread && stickRef.current && !isRestoring()) {
       el.scrollTop = el.scrollHeight;
+      markScrollWriter("commit-stick");
       rememberScrollPosition();
     } else if (!switchedThread && activeThreadId && !scrollPositionsRef.current.has(activeThreadId)) {
       // Capture the initial position too, including an intentional scroll at
@@ -479,6 +484,7 @@ export function Chat() {
           // 直接贴底，不做平滑动画：这段动画与随后每段 delta 的即时写入抢同一个
           // 滚动位置，两股力方向相反时正是「先退回上一节点、再拉到最新」。
           el.scrollTop = el.scrollHeight;
+          markScrollWriter("turn-end");
         });
         return () => cancelAnimationFrame(frame);
       }
@@ -514,6 +520,7 @@ export function Chat() {
       // 只信 stick：不要用 top≈max 判断「当时在底部」（流式时 top 恰好等于当时的 max）。
       if (mem.stick) {
         el.scrollTop = max;
+        markScrollWriter("restore-stick");
       } else if (mem.anchor) {
         // 关键：按「顶部那条消息」定位，而不是按像素偏移。每一帧重算它相对视口的位置，
         // 上方内容（图片/工具输出/content-visibility）长高多少就补多少。
@@ -521,11 +528,14 @@ export function Chat() {
         if (node) {
           const deltaNow = node.getBoundingClientRect().top - el.getBoundingClientRect().top;
           el.scrollTop = Math.min(Math.max(0, el.scrollTop + deltaNow - mem.anchor.delta), max);
+          markScrollWriter("restore-anchor");
         } else {
           el.scrollTop = Math.min(mem.top, max);
+          markScrollWriter("restore-pixels");
         }
       } else {
         el.scrollTop = Math.min(mem.top, max);
+        markScrollWriter("restore-pixels");
       }
       expected = el.scrollTop;
       lastScrollTopRef.current = el.scrollTop; // programmatic: not user intent
@@ -648,6 +658,7 @@ export function Chat() {
         // Follow mode: pin straight to the new bottom (see the long comment
         // about content-visibility intermediate positions in git history).
         el.scrollTop = el.scrollHeight;
+        markScrollWriter("commit-stick");
         lastScrollTopRef.current = el.scrollTop; // programmatic: not user intent
         setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < nearBottomPx(el));
         scrollPositionsRef.current.set(activeThreadId, { top: el.scrollTop, max: el.scrollHeight - el.clientHeight, stick: true });

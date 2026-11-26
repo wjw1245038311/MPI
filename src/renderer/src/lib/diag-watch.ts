@@ -245,6 +245,41 @@ export interface ScrollPinSample {
   gesture: boolean;
   /** 让位原因（空 = 真的尝试贴底了）。 */
   skipped?: "not-stick" | "restoring" | "gesture" | "already-bottom";
+  /**
+   * 上一次是谁写的 scrollTop（写入者标记）。
+   *
+   * 为什么要它：`scrollTop` 的写入点有 9 处（贴底收敛 / 提交后 effect / 段末 / 恢复时的锚点
+   * 与像素回放…），只看几何无法区分「贴底没跟上」与「有人把旧位置写回去了」——而这两者的
+   * 修法完全不同。2026-11-25 的「跳到中间某处」就卡在这里：同一个 39463 被反复写回，
+   * 但日志只能看到结果，看不出来源。
+   */
+  lastWriter?: ScrollWriter;
+  /** 写完之后到采样时的毫秒差（越小越可能是刚被写的）。 */
+  sinceWriterMs?: number;
+}
+
+/** scrollTop 的写入者。新增写入点时把它传给 markScrollWriter()。 */
+export type ScrollWriter =
+  | "pin-content"
+  | "pin-scroller"
+  | "commit-stick"
+  | "turn-end"
+  | "restore-stick"
+  | "restore-anchor"
+  | "restore-pixels"
+  | "jump-latest"
+  | "jump-nav";
+
+let lastScrollWriter: { writer: ScrollWriter; at: number } | null = null;
+
+/** 记录「刚才是谁写的 scrollTop」——由写入点自己调用。 */
+export function markScrollWriter(writer: ScrollWriter): void {
+  lastScrollWriter = { writer, at: Date.now() };
+}
+
+/** 读出上一个写入者（供 scroll-pin 采样）。 */
+export function lastScrollWriterInfo(): { writer: ScrollWriter; at: number } | null {
+  return lastScrollWriter;
 }
 
 const loggedPinFrames = new Set<string>();
