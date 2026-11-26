@@ -13,7 +13,7 @@ import { readJsonRaw, writeJsonAtomic } from "./json-store";
  * 约束（每任务 30 条 / 全局 500 条），淘汰按 startedAt 从旧到新。
  */
 
-export type AutomationRunStatus = "ok" | "error" | "missed" | "aborted" | "skipped";
+export type AutomationRunStatus = "ok" | "error" | "missed" | "aborted" | "skipped" | "queued";
 export type AutomationRunTrigger = "schedule" | "catchup" | "manual";
 
 export interface AutomationRun {
@@ -22,6 +22,10 @@ export interface AutomationRun {
   trigger: AutomationRunTrigger;
   status: AutomationRunStatus;
   startedAt: number;
+  /** 拿到并发名额、真正开始执行的时刻（缺省 = startedAt，无排队）。 */
+  startedRunAt?: number;
+  /** 排队等待耗时（毫秒）。 */
+  queuedMs?: number;
   finishedAt?: number;
   /** 失败原因（status=error/aborted 时有值）。 */
   error?: string;
@@ -31,6 +35,8 @@ export interface AutomationRun {
   model?: string;
   /** 失败重试记录（批次 C 用，先留字段）。 */
   attempts?: { at: number; error: string }[];
+  /** 本次运行使用的工作树路径（仅 isolation=worktree 时存在）。 */
+  worktreePath?: string;
   /** 用户是否已查看过这次结果。失败未查看 = 需在侧栏提示。 */
   reviewed?: boolean;
 }
@@ -66,13 +72,20 @@ function sanitizeRun(raw: unknown): AutomationRun | null {
   if (typeof r.id !== "string" || !r.id) return null;
   if (typeof r.taskId !== "string" || !r.taskId) return null;
   const status: AutomationRunStatus =
-    r.status === "ok" || r.status === "error" || r.status === "missed" || r.status === "aborted" || r.status === "skipped"
+    r.status === "ok" ||
+    r.status === "error" ||
+    r.status === "missed" ||
+    r.status === "aborted" ||
+    r.status === "skipped" ||
+    r.status === "queued"
       ? r.status
       : "error";
   const trigger: AutomationRunTrigger =
     r.trigger === "schedule" || r.trigger === "catchup" || r.trigger === "manual" ? r.trigger : "schedule";
   const startedAt = typeof r.startedAt === "number" && Number.isFinite(r.startedAt) ? r.startedAt : Date.now();
   const out: AutomationRun = { id: r.id, taskId: r.taskId, trigger, status, startedAt };
+  if (typeof r.startedRunAt === "number" && Number.isFinite(r.startedRunAt)) out.startedRunAt = r.startedRunAt;
+  if (typeof r.queuedMs === "number" && Number.isFinite(r.queuedMs)) out.queuedMs = r.queuedMs;
   if (typeof r.finishedAt === "number" && Number.isFinite(r.finishedAt)) out.finishedAt = r.finishedAt;
   if (typeof r.error === "string" && r.error) out.error = r.error.slice(0, 4000);
   if (typeof r.sessionFile === "string" && r.sessionFile) out.sessionFile = r.sessionFile;

@@ -9365,7 +9365,8 @@ mark.hl {
   font-family: var(--mono);
 }
 .auto-run-trigger,
-.auto-run-dur {
+.auto-run-dur,
+.auto-run-queued {
   flex: 0 0 auto;
   opacity: 0.8;
 }

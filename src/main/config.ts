@@ -212,6 +212,9 @@ export interface AppConfig {
    * workflow/summaryModel in ~/.pi/web-search.json (shared with terminal pi).
    * Absent = enabled — the per-search popup is exactly what this removes. */
   extAutoPickModel?: boolean;
+  /** 定时任务同时运行的上限（1–8，缺省 2）。每个 pi 子进程约 100–300MB，
+   * 不设上限在内存紧张的机器上会直接卡死；超出的运行排队等待。 */
+  maxConcurrentAutomationRuns?: number;
   /** “问答方式” (Settings → Conversation). "inline" (default): multiple-choice
    * questions are emitted as ```choices fences that MPI renders as a clickable
    * inline panel; selections come back as one user message. "manual": the agent
@@ -500,6 +503,12 @@ export interface AutomationTask {
   /** 补跑窗口（分钟）：计划时刻错过但未超过该窗口时补跑一次。0 = 不补跑。
    * 缺省 undefined 按 DEFAULT_CATCH_UP_MINUTES 处理。 */
   catchUpMinutes?: number;
+  /** 单次运行超时（分钟，默认 30、上限 180）。无人值守任务卡死时不能无限占进程。 */
+  timeoutMinutes?: number;
+  /** 失败重试：attempts 总尝试次数（1 = 不重试），backoffMinutes 间隔。 */
+  retry?: { attempts: number; backoffMinutes: number };
+  /** 工作树隔离：仅对 git 仓库生效。none = 直接在工作目录跑（默认）。 */
+  isolation?: "none" | "worktree";
   /** 上次已处理到的槽位（本地时刻，`2026-11-26T09:00`）。取代旧版按日历天的
    * lastRunSlot：改时间/频率后槽位 id 自然不同，因此当天仍会重新触发。 */
   lastSlot?: string;
@@ -1047,6 +1056,9 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
   // machine-local paths (checkouts / vault dirs) that would dangle on the target
   // machine. Each machine re-detects or re-sets them on first launch.
   if (typeof p.extAutoPickModel === "boolean") out.extAutoPickModel = p.extAutoPickModel;
+  if (typeof p.maxConcurrentAutomationRuns === "number" && Number.isFinite(p.maxConcurrentAutomationRuns)) {
+    out.maxConcurrentAutomationRuns = Math.max(1, Math.min(8, Math.round(p.maxConcurrentAutomationRuns)));
+  }
   if (p.qaMode === "inline" || p.qaMode === "manual") out.qaMode = p.qaMode;
   if (typeof p.handoffPrompt === "string") out.handoffPrompt = p.handoffPrompt;
   if (typeof p.lastThreadCwd === "string" && p.lastThreadCwd) out.lastThreadCwd = p.lastThreadCwd;
@@ -1079,6 +1091,17 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
         ...(typeof t.catchUpMinutes === "number" && Number.isFinite(t.catchUpMinutes)
           ? { catchUpMinutes: Math.max(0, Math.min(1440, Math.round(t.catchUpMinutes))) }
           : {}),
+        ...(typeof t.timeoutMinutes === "number" && Number.isFinite(t.timeoutMinutes)
+          ? { timeoutMinutes: Math.max(1, Math.min(180, Math.round(t.timeoutMinutes))) }
+          : {}),
+        ...(() => {
+          const retry = t.retry;
+          if (!retry || typeof retry !== "object") return {};
+          const attempts = Math.max(1, Math.min(3, Math.round(Number(retry.attempts) || 1)));
+          const backoff = Math.max(0, Math.min(60, Math.round(Number(retry.backoffMinutes) || 0)));
+          return attempts > 1 ? { retry: { attempts, backoffMinutes: backoff } } : {};
+        })(),
+        ...(t.isolation === "worktree" ? { isolation: "worktree" as const } : {}),
         ...(typeof t.lastSlot === "string" ? { lastSlot: t.lastSlot } : {}),
         ...(typeof t.lastRunSlot === "string" ? { lastRunSlot: t.lastRunSlot } : {}),
         ...(typeof t.firstSeenAt === "number" ? { firstSeenAt: t.firstSeenAt } : {}),

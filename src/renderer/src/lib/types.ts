@@ -259,6 +259,12 @@ export interface AutomationTask {
   modelId?: string;
   /** 补跑窗口（分钟）；0 = 不补跑，缺省按 120 分钟。 */
   catchUpMinutes?: number;
+  /** 单次运行超时（分钟，默认 30、上限 180）。 */
+  timeoutMinutes?: number;
+  /** 失败重试：attempts = 总尝试次数（1 = 不重试）。 */
+  retry?: { attempts: number; backoffMinutes: number };
+  /** 工作树隔离（仅 git 仓库）。 */
+  isolation?: "none" | "worktree";
   /** 上次处理到的槽位（本地时刻，`2026-11-26T09:00`）。 */
   lastSlot?: string;
   /** 旧版按日历天的去重键，仅读取、新代码不再写入。 */
@@ -286,10 +292,16 @@ export interface AutomationRunSummary {
   trigger: "schedule" | "catchup" | "manual";
   status: "ok" | "error" | "missed" | "aborted" | "skipped";
   startedAt: number;
+  /** 拿到并发名额后真正开始的时刻（缺省 = 无排队）。 */
+  startedRunAt?: number;
+  /** 排队等待毫秒数。 */
+  queuedMs?: number;
   finishedAt?: number;
   error?: string;
   sessionFile?: string;
   model?: string;
+  /** 本次运行使用的工作树路径（仅 isolation=worktree 时存在）。 */
+  worktreePath?: string;
   reviewed?: boolean;
 }
 
@@ -673,6 +685,8 @@ export interface AppConfig {
    * current conversation's model without popping up; web searches skip the
    * browser curation window. Absent = enabled. */
   extAutoPickModel?: boolean;
+  /** 定时任务同时运行上限（1–8，缺省 2）；超出上限的运行排队等待。 */
+  maxConcurrentAutomationRuns?: number;
   /** “问答方式” (Settings → Conversation). "inline" (default): multiple-choice
    * questions render as a clickable inline panel in the chat; "manual": numbered
    * plain-text questions answered by typing. Absent = inline. */

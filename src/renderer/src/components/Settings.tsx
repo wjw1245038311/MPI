@@ -2131,6 +2131,15 @@ export function Settings() {
     }
   };
 
+  const changeMaxConcurrentRuns = async (value: number) => {
+    try {
+      const next = await window.pi.app.setConfig({ maxConcurrentAutomationRuns: value });
+      useStore.setState({ config: next });
+    } catch (e: any) {
+      pushToast("error", "保存定时任务并发上限失败：" + (e?.message || e));
+    }
+  };
+
   // ---- Voice system handlers -------------------------------------------------
   // Edited as a draft (like permissions/data/system) and flushed by the
   // “保存对话设置” button; the voice test flushes first so it acts on exactly
@@ -2720,6 +2729,26 @@ export function Settings() {
                     <input type="checkbox" checked={config?.extAutoPickModel !== false} onChange={(e) => void changeExtAutoPickModel(e.target.checked)} />
                     <span>{language === "zh" ? "扩展自动使用当前会话的模型（不弹窗）" : "Extensions auto-use this conversation's model (no popups)"}</span>
                   </label>
+                </Field>
+                <Field
+                  label={language === "zh" ? "定时任务并发" : "Concurrent scheduled tasks"}
+                  hint={
+                    language === "zh"
+                      ? "同时运行的定时任务上限（1–8，缺省 2）。每个 pi 子进程约 100–300MB，超出上限的任务会排队而不是齐开。"
+                      : "How many scheduled tasks may run at once (1–8, default 2). Each Pi process uses roughly 100–300 MB; extra runs queue instead of all starting together."
+                  }
+                >
+                  <select
+                    className="set-select"
+                    value={String(config?.maxConcurrentAutomationRuns ?? 2)}
+                    onChange={(e) => void changeMaxConcurrentRuns(Number(e.target.value))}
+                  >
+                    {[1, 2, 3, 4, 6, 8].map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
                 </Field>
                 <Field
                   label={language === "zh" ? "Diff 显示" : "Diff view"}

@@ -16,6 +16,8 @@ import { ensureShellEnvExtension } from "./shellenv-extension";
 import { prepareShellForSpawn } from "./shell-bootstrap";
 import { appendDiagLog } from "./diag-log";
 import { deleteRunsForTask, startRun, updateRun } from "./automation-runs-store";
+import { createAutomationWorktree, discardAutomationWorktree, type AutomationWorktree } from "./automation-worktree";
+import { isRetriableFailure } from "./automation-retry-policy";
 import type { AutomationResultNotification } from "./system-notifications";
 import { getAgentDir } from "./session-store";
 import { buildAppendSystemPrompt } from "./append-prompt";
@@ -333,7 +335,9 @@ export function stopAutomations(): Promise<void> {
   return Promise.all(stops).then(() => undefined);
 }
 
-const RUN_TIMEOUT_MS = 30 * 60 * 1000;
+/** 默认单次运行超时（分钟）。任务可用 timeoutMinutes 覆盖，上限 180。 */
+const DEFAULT_RUN_TIMEOUT_MINUTES = 30;
+const MAX_RUN_TIMEOUT_MINUTES = 180;
 
 /** 全局并发上限：同一分钟多个任务时，超出的排队而不是齐开一堆 pi 进程。
  * 每个 pi 子进程约 100–300MB，不设上限在内存紧张的机器上会直接卡死。 */
@@ -341,6 +345,56 @@ export function maxConcurrentAutomationRuns(): number {
   const raw = (getConfig() as { maxConcurrentAutomationRuns?: unknown }).maxConcurrentAutomationRuns;
   if (typeof raw !== "number" || !Number.isFinite(raw)) return 2;
   return Math.max(1, Math.min(8, Math.round(raw)));
+}
+
+/** 任务级超时（分钟）。 */
+function timeoutMinutesOf(task: AutomationTask): number {
+  const raw = task.timeoutMinutes;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULT_RUN_TIMEOUT_MINUTES;
+  return Math.max(1, Math.min(MAX_RUN_TIMEOUT_MINUTES, Math.round(raw)));
+}
+
+/** 失败重试配置：attempts = 总尝试次数（1 = 不重试）。 */
+function retryOf(task: AutomationTask): { attempts: number; backoffMinutes: number } {
+  const r = task.retry;
+  if (!r || typeof r !== "object") return { attempts: 1, backoffMinutes: 0 };
+  const attempts = Math.max(1, Math.min(3, Math.round(Number(r.attempts) || 1)));
+  const backoffMinutes = Math.max(0, Math.min(60, Math.round(Number(r.backoffMinutes) || 0)));
+  return { attempts, backoffMinutes };
+}
+
+/**
+ * 并发信号量：正在跑的任务数到达上限时，新请求排队等待而不是齐开。
+ * 用简单计数 + 等待队列（FIFO），因为：
+ *   - 任务数少（单位数），不需要公平调度器；
+ *   - 必须先「占位」再启动子进程，否则两个并发 tick 会同时越过上限。
+ */
+let activeRuns = 0;
+const runWaiters: Array<() => void> = [];
+
+function acquireRunSlot(): Promise<void> {
+  const limit = maxConcurrentAutomationRuns();
+  if (activeRuns < limit) {
+    activeRuns++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    runWaiters.push(() => {
+      activeRuns++;
+      resolve();
+    });
+  });
+}
+
+function releaseRunSlot(): void {
+  activeRuns = Math.max(0, activeRuns - 1);
+  const next = runWaiters.shift();
+  if (next) next();
+}
+
+/** 当前正在跑的任务数 / 排队数（面板与诊断用）。 */
+export function runSlotStats(): { active: number; waiting: number; limit: number } {
+  return { active: activeRuns, waiting: runWaiters.length, limit: maxConcurrentAutomationRuns() };
 }
 
 function textValue(value: unknown): string {
@@ -376,169 +430,296 @@ function formatProcessExit(info: { code: number | null; signal: NodeJS.Signals |
   return `Pi 进程在任务完成前退出（code=${code}${signal}）${detail}`;
 }
 
+/**
+ * 跑一次任务。`trigger` 写进运行历史，用于区分「按时 / 补跑 / 手动」。
+ *
+ * 三层保护（批次 C）：
+ *   1. 并发信号量：全局同时运行数受 maxConcurrentAutomationRuns 限制，
+ *      超出的排队而不是齐开一堆 pi 子进程（每个约 100–300MB）；
+ *   2. 任务级超时：默认 30 分钟，可用 timeoutMinutes 覆盖（上限 180）；
+ *   3. 失败重试：retry.attempts > 1 时按 backoffMinutes 退避重试，
+ *      仅重试「基础设施类」失败（进程退出 / 网络错误），业务失败不重试
+ *      ——无人值守下重复跑一个已经确定失败的任务只会浪费额度。
+ */
 async function execute(task: AutomationTask, trigger: AutomationTrigger = "schedule"): Promise<void> {
   // A tick may have queued execute() just before the task was deleted. Do not
   // create a new Pi process for a task that no longer exists on disk.
   if (!taskStillExists(task.id)) return;
   running.add(task.id);
   patchTask(task.id, { lastStatus: undefined, lastError: undefined });
-  notify?.({ type: "start", taskId: task.id, name: task.name });
 
-  // 运行历史：先占一条，成功/失败再回填。会话文件要等 pi 子进程起来后才有，
-  // 所以在 start() 之后单独补写（见下面的 sessionFile 赋值）。
   const model = resolveTaskModel(task);
+  const retry = retryOf(task);
+  // 运行历史：排队阶段就写一条（面板能看到「排队中」）。
+  // 注意 startedAt 记的是「入队时刻」，排队耗时另记 queuedMs；实际执行时长
+  // 要用 finishedAt - startedAtAtRun（拿到名额后才写），否则并发排队的时间会
+  // 被算进任务耗时（2026-11-26 实测：B 任务看起来跑了 23s，其中 18s 在排队）。
   const run = startRun({
     taskId: task.id,
     trigger,
     startedAt: Date.now(),
     model: model ? `${model.provider}/${model.modelId}` : undefined,
+    status: "queued",
   });
 
-  let bridge: PiBridge | null = null;
-  let gateModeFile: string | null = null;
-  /** pi 子进程起的会话文件，供运行历史里的「打开会话」用。 */
-  let sessionFile: string | undefined;
-  try {
-    await new Promise<void>((resolve, reject) => {
-      let done = false;
-      let lastAssistantMessage: AssistantMessageSummary | null = null;
-      const extUi = createAutomationExtUiHandler({
-        respondExtUi: (id, payload) => {
-          bridge?.respondExtUi(id, payload);
-        },
-        autoPickModel: getConfig().extAutoPickModel !== false,
-        answerModelSelect: (r) => autoAnswerModelSelect(bridge!, r),
-      });
-      const finish = (fn: () => void) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timeout);
-        fn();
-      };
-      const timeout = setTimeout(() => {
-        finish(() => reject(new Error("运行超时（30 分钟），任务已停止")));
-        try {
-          void bridge?.stopGraceful();
-        } catch {
-          /* cleanup in finally */
-        }
-      }, RUN_TIMEOUT_MS);
+  const stats = runSlotStats();
+  if (stats.active >= stats.limit) {
+    appendDiagLog(`auto-queue ${task.name} (active=${stats.active} waiting=${stats.waiting} limit=${stats.limit})`);
+  }
+  // 必须先占位再启动子进程：两个并发 tick 不能同时越过上限。
+  await acquireRunSlot();
 
-      const permission = task.permission === "full" ? "full" : "sandbox";
-      gateModeFile = createGateModeFile(getConfigDir(), permission);
-      if (!taskStillExists(task.id)) {
-        finish(() => resolve());
+  // 排队期间任务可能被删。不跑，但要归还名额。
+  if (!taskStillExists(task.id)) {
+    releaseRunSlot();
+    updateRun(run.id, { status: "skipped", finishedAt: Date.now() });
+    running.delete(task.id);
+    return;
+  }
+
+  // 拿到名额：从这一刻起才是真正执行，历史里单独记 startedRunAt。
+  const startedRunAt = Date.now();
+  const queuedMs = startedRunAt - run.startedAt;
+  if (queuedMs >= 1000) appendDiagLog(`auto-start ${task.name} queued=${Math.round(queuedMs / 1000)}s`);
+  updateRun(run.id, { startedRunAt, queuedMs });
+
+  notify?.({ type: "start", taskId: task.id, name: task.name });
+
+  /** 会话文件（成功/失败都可能有）。 */
+  let sessionFile: string | undefined;
+  /** 本次隔离工作树（仅 isolation=worktree 且确为 git 仓库时非空）。
+   * 用持有对象而非裸变量：赋值发生在 runOnce 的回调里，TS 的控制流分析
+   * 看不到闭包内赋值，裸变量会被收窄成 null → 后续取 .path 报 never。 */
+  const worktreeSlot: { current: AutomationWorktree | null } = { current: null };
+  const attempts: { at: number; error: string }[] = [];
+
+  try {
+    for (let attempt = 1; attempt <= retry.attempts; attempt++) {
+      if (attempt > 1) {
+        const waitMin = retry.backoffMinutes;
+        appendDiagLog(`auto-retry ${task.name} attempt=${attempt}/${retry.attempts} wait=${waitMin}m`);
+        updateRun(run.id, { status: "queued", error: undefined, attempts: [...attempts] });
+        if (waitMin > 0) await sleep(waitMin * 60_000);
+        // 退避期间任务可能被删或被停用。
+        if (!taskStillExists(task.id)) break;
+      }
+
+      try {
+        const attemptResult = await runOnce(task, run.id, model, () => {
+          // 隔离工作树按「每次尝试」创建：上一次尝试的半成品不该污染下一次。
+          if (task.isolation === "worktree") {
+            const prepared = createAutomationWorktree(task.cwd, task.id, run.id);
+            if (!prepared.ok) throw new Error(`无法创建工作树：${prepared.reason}`);
+            worktreeSlot.current = prepared.worktree;
+            appendDiagLog(`auto-worktree ${task.name} -> ${prepared.worktree.path}`);
+            return prepared.worktree.path;
+          }
+          return task.cwd;
+        });
+        sessionFile = attemptResult.sessionFile;
+        if (taskStillExists(task.id)) {
+          patchTask(task.id, { lastStatus: "ok", lastError: undefined, lastSuccessAt: Date.now() });
+          updateRun(run.id, {
+            status: "ok",
+            finishedAt: Date.now(),
+            sessionFile,
+            worktreePath: worktreeSlot.current?.path,
+            ...(attempts.length ? { attempts } : {}),
+          });
+          notify?.({ type: "done", taskId: task.id, name: task.name, ok: true, sessionFile });
+          notifyAutomationResult?.({
+            language: getConfig().language === "zh" ? "zh" : "en",
+            name: task.name,
+            ok: true,
+            sessionFile,
+          });
+        }
+        return; // 成功：结束整个 execute
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        attempts.push({ at: Date.now(), error: msg });
+        const isLast = attempt >= retry.attempts;
+        const retriable = isRetriableFailure(msg);
+        if (!isLast && retriable) {
+          // 清掉上一次尝试的工作树（半成品不跨尝试复用）。
+          if (worktreeSlot.current) {
+            discardAutomationWorktree(worktreeSlot.current);
+            worktreeSlot.current = null;
+          }
+          continue;
+        }
+        // 不再重试：落最终状态。
+        const status = /超时|被中止|aborted/i.test(msg) ? "aborted" : "error";
+        if (taskStillExists(task.id)) {
+          patchTask(task.id, { lastStatus: "error", lastError: msg });
+          // eslint-disable-next-line no-console
+          console.error(`[automation] ${task.name}: ${msg}`);
+          updateRun(run.id, {
+            status,
+            finishedAt: Date.now(),
+            error: msg,
+            sessionFile,
+            worktreePath: worktreeSlot.current?.path,
+            attempts,
+          });
+          notify?.({ type: "done", taskId: task.id, name: task.name, ok: false, error: msg, sessionFile });
+          notifyAutomationResult?.({
+            language: getConfig().language === "zh" ? "zh" : "en",
+            name: task.name,
+            ok: false,
+            error: msg,
+            sessionFile,
+          });
+        }
         return;
       }
-      // Same shell resolution as interactive threads: unattended runs are
-      // exactly where a `No bash shell found` failure is hardest to notice.
-      const shell = prepareShellForSpawn(join(getAgentDir(), "settings.json"), task.cwd);
-      bridge = new PiBridge({
-        cwd: task.cwd,
-        piCliPath: getConfig().piCliPath,
-        // Same 知芽 Zhiya injection as interactive sessions. Scheduled runs
-        // are never chat-channel sessions, so the mpi_channel_* bridge is not
-        // loaded (desktop/automation sessions don't pay for its tools).
-        appendSystemPrompt: buildAppendSystemPrompt(),
-        shellInfo: shell.info,
-        toolFlags: shell.toolFlags,
-        extensions: [
-          ensureGateExtension(getConfigDir()),
-          ensureTodoExtension(getConfigDir()),
-          ensureShellEnvExtension(getConfigDir()),
-          // Smart-compaction bridge (same as interactive threads): takes over HOW
-          // pi summarizes context on compaction; falls back to pi's built-in.
-          ensureSmartCompactExtension(getConfigDir()),
-        ],
-        // Live paths so a customized todo data location is honored.
-        todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
-        smartCompactConfigFile: join(getConfigDir(), "config.json"),
-        gateModeFile,
-        name: automationSessionName(task.name, getConfig().language),
-        onEvent: (e: any) => {
-          if (e?.type === "agent_start") {
-            refreshAutomationWebSearchFlow(bridge!);
-            return;
-          }
-          if (e?.type === "message_end" && e.message?.role === "assistant") {
-            lastAssistantMessage = {
-              stopReason: e.message.stopReason,
-              errorMessage: e.message.errorMessage,
-            };
-            return;
-          }
-          if (e?.type !== "agent_settled") return;
-
-          finish(() => {
-            const cancelled = extUi.cancelledMethod();
-            if (cancelled) {
-              reject(new Error(`定时任务需要人工交互（${cancelled}），无人值守运行已停止`));
-              return;
-            }
-            const failure = getAssistantFailure(lastAssistantMessage);
-            if (failure) reject(new Error(failure));
-            else resolve();
-          });
-        },
-        onExtUi: (r: any) => extUi.handle(r),
-        onExit: (info) => finish(() => reject(new Error(formatProcessExit(info)))),
-        onError: (err) => finish(() => reject(err)),
-      });
-      activeBridges.add(bridge);
-      let taskBridges = activeBridgesByTask.get(task.id);
-      if (!taskBridges) {
-        taskBridges = new Set<PiBridge>();
-        activeBridgesByTask.set(task.id, taskBridges);
-      }
-      taskBridges.add(bridge);
-
-      const model = resolveTaskModel(task);
-      bridge
-        .start()
-        .then(async () => {
-          // 会话文件要等 pi 子进程起来后才有。取不到不影响执行，只是历史里
-          // 少一个「打开会话」入口，所以失败静默。
-          try {
-            const state: any = await bridge!.getState();
-            const sf = typeof state?.sessionFile === "string" ? state.sessionFile : "";
-            if (sf) {
-              sessionFile = sf;
-              updateRun(run.id, { sessionFile: sf });
-            }
-          } catch {
-            /* 历史里缺会话链接可以接受 */
-          }
-          if (model) {
-            // Explicit task-level model choice. If the model no longer exists,
-            // fail with a clear error instead of silently falling back to pi's
-            // default — an unattended result produced by the wrong model is
-            // worse than no result at all.
-            await bridge!.setModel(model.provider, model.modelId);
-          }
-          return bridge!.prompt(task.prompt);
-        })
-        .catch((e) => finish(() => reject(e)));
-    });
-    if (taskStillExists(task.id)) {
-      patchTask(task.id, { lastStatus: "ok", lastError: undefined, lastSuccessAt: Date.now() });
-      updateRun(run.id, { status: "ok", finishedAt: Date.now() });
-      notify?.({ type: "done", taskId: task.id, name: task.name, ok: true, sessionFile });
-      notifyAutomationResult?.({ language: getConfig().language === "zh" ? "zh" : "en", name: task.name, ok: true, sessionFile });
-    }
-  } catch (e: any) {
-    const msg = e?.message || String(e);
-    // 超时/被停 → aborted，其余算 error；两者都视为「需用户关注」。
-    const status = /超时|被中止|aborted/i.test(msg) ? "aborted" : "error";
-    if (taskStillExists(task.id)) {
-      patchTask(task.id, { lastStatus: "error", lastError: msg });
-      // Keep failures visible in the main-process log as well as the settings UI.
-      // eslint-disable-next-line no-console
-      console.error(`[automation] ${task.name}: ${msg}`);
-      updateRun(run.id, { status, finishedAt: Date.now(), error: msg });
-      notify?.({ type: "done", taskId: task.id, name: task.name, ok: false, error: msg, sessionFile });
-      notifyAutomationResult?.({ language: getConfig().language === "zh" ? "zh" : "en", name: task.name, ok: false, error: msg, sessionFile });
     }
   } finally {
+    releaseRunSlot();
+    running.delete(task.id);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    t.unref?.();
+  });
+}
+
+/** 单次尝试：起 pi 子进程、发 prompt、等到 settle。 */
+async function runOnce(
+  task: AutomationTask,
+  runId: string,
+  model: { provider: string; modelId: string } | null,
+  resolveCwd: () => string,
+): Promise<{ sessionFile?: string }> {
+  let bridge: PiBridge | null = null;
+  let gateModeFile: string | null = null;
+  let sessionFile: string | undefined;
+
+  await new Promise<void>((resolve, reject) => {
+    let done = false;
+    let lastAssistantMessage: AssistantMessageSummary | null = null;
+    const extUi = createAutomationExtUiHandler({
+      respondExtUi: (id, payload) => {
+        bridge?.respondExtUi(id, payload);
+      },
+      autoPickModel: getConfig().extAutoPickModel !== false,
+      answerModelSelect: (r) => autoAnswerModelSelect(bridge!, r),
+    });
+    const finish = (fn: () => void) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      fn();
+    };
+    const timeoutMinutes = timeoutMinutesOf(task);
+    const timeout = setTimeout(() => {
+      finish(() => reject(new Error(`运行超时（${timeoutMinutes} 分钟），任务已停止`)));
+      try {
+        void bridge?.stopGraceful();
+      } catch {
+        /* cleanup in finally */
+      }
+    }, timeoutMinutes * 60_000);
+
+    const permission = task.permission === "full" ? "full" : "sandbox";
+    gateModeFile = createGateModeFile(getConfigDir(), permission);
+    if (!taskStillExists(task.id)) {
+      finish(() => resolve());
+      return;
+    }
+    const runCwd = resolveCwd();
+    // Same shell resolution as interactive threads: unattended runs are
+    // exactly where a `No bash shell found` failure is hardest to notice.
+    const shell = prepareShellForSpawn(join(getAgentDir(), "settings.json"), runCwd);
+    bridge = new PiBridge({
+      cwd: runCwd,
+      piCliPath: getConfig().piCliPath,
+      // Same 知芽 Zhiya injection as interactive sessions. Scheduled runs
+      // are never chat-channel sessions, so the mpi_channel_* bridge is not
+      // loaded (desktop/automation sessions don't pay for its tools).
+      appendSystemPrompt: buildAppendSystemPrompt(),
+      shellInfo: shell.info,
+      toolFlags: shell.toolFlags,
+      extensions: [
+        ensureGateExtension(getConfigDir()),
+        ensureTodoExtension(getConfigDir()),
+        ensureShellEnvExtension(getConfigDir()),
+        // Smart-compaction bridge (same as interactive threads): takes over HOW
+        // pi summarizes context on compaction; falls back to pi's built-in.
+        ensureSmartCompactExtension(getConfigDir()),
+      ],
+      // Live paths so a customized todo data location is honored.
+      todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
+      smartCompactConfigFile: join(getConfigDir(), "config.json"),
+      gateModeFile,
+      name: automationSessionName(task.name, getConfig().language),
+      onEvent: (e: any) => {
+        if (e?.type === "agent_start") {
+          refreshAutomationWebSearchFlow(bridge!);
+          return;
+        }
+        if (e?.type === "message_end" && e.message?.role === "assistant") {
+          lastAssistantMessage = {
+            stopReason: e.message.stopReason,
+            errorMessage: e.message.errorMessage,
+          };
+          return;
+        }
+        if (e?.type !== "agent_settled") return;
+
+        finish(() => {
+          const cancelled = extUi.cancelledMethod();
+          if (cancelled) {
+            reject(new Error(`定时任务需要人工交互（${cancelled}），无人值守运行已停止`));
+            return;
+          }
+          const failure = getAssistantFailure(lastAssistantMessage);
+          if (failure) reject(new Error(failure));
+          else resolve();
+        });
+      },
+      onExtUi: (r: any) => extUi.handle(r),
+      onExit: (info) => finish(() => reject(new Error(formatProcessExit(info)))),
+      onError: (err) => finish(() => reject(err)),
+    });
+    activeBridges.add(bridge);
+    let taskBridges = activeBridgesByTask.get(task.id);
+    if (!taskBridges) {
+      taskBridges = new Set<PiBridge>();
+      activeBridgesByTask.set(task.id, taskBridges);
+    }
+    taskBridges.add(bridge);
+    bridgesToCleanup.add(bridge);
+
+    bridge
+      .start()
+      .then(async () => {
+        // 会话文件要等 pi 子进程起来后才有。取不到不影响执行，只是历史里
+        // 少一个「打开会话」入口，所以失败静默。
+        try {
+          const state: any = await bridge!.getState();
+          const sf = typeof state?.sessionFile === "string" ? state.sessionFile : "";
+          if (sf) {
+            sessionFile = sf;
+            updateRun(runId, { sessionFile: sf });
+          }
+        } catch {
+          /* 历史里缺会话链接可以接受 */
+        }
+        if (model) {
+          // Explicit task-level model choice. If the model no longer exists,
+          // fail with a clear error instead of silently falling back to pi's
+          // default — an unattended result produced by the wrong model is
+          // worse than no result at all.
+          await bridge!.setModel(model.provider, model.modelId);
+        }
+        return bridge!.prompt(task.prompt);
+      })
+      .catch((e) => finish(() => reject(e)));
+  }).finally(() => {
     const b = bridge as PiBridge | null;
     try {
       void b?.stopGraceful();
@@ -547,14 +728,19 @@ async function execute(task: AutomationTask, trigger: AutomationTrigger = "sched
     }
     if (b) {
       activeBridges.delete(b);
+      bridgesToCleanup.delete(b);
       const taskBridges = activeBridgesByTask.get(task.id);
       taskBridges?.delete(b);
       if (taskBridges && taskBridges.size === 0) activeBridgesByTask.delete(task.id);
     }
     if (gateModeFile) removeGateModeFile(gateModeFile);
-    running.delete(task.id);
-  }
+  });
+
+  return { sessionFile };
 }
+
+/** 需要在 runOnce 收尾时清理的 bridge（跨函数传递用）。 */
+const bridgesToCleanup = new Set<PiBridge>();
 
 /** Run a task immediately (the "Run now" button), bypassing the schedule. */
 export async function runTaskNow(id: string): Promise<void> {

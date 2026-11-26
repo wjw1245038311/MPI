@@ -247,6 +247,7 @@ import {
   startScheduler,
 } from "./automation";
 import { latestRunsByTask, listRuns, markRunsReviewed, unreviewedFailureCount } from "./automation-runs-store";
+import { pruneWorktrees } from "./automation-worktree";
 import { cancelAppRegistration, startAppRegistration } from "./messaging/app-registration";
 import { getMessagingState, initMessaging, messagingSetConfig, sanitizeFeishuConfig } from "./messaging/service";
 import type { FeishuChannelConfig, WeChatChannelConfig } from "./messaging/types";
@@ -2123,6 +2124,12 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   // 定时任务无人值守：结束/失败走系统通知。窗口在前台时 show() 内部直接抑制
   // （面板里的 toast 已经能看到），所以不需要在这里判前台。
   setAutomationNotifier((details) => systemNotifications?.notifyAutomationResult(details));
+  // 回收上次崩溃留下的僵尸工作树登记（目录已丢失但 git worktree list 还记着）。
+  try {
+    pruneWorktrees();
+  } catch (e) {
+    console.warn('[automation] pruneWorktrees failed:', e);
+  }
   // 后台检查应用更新（启动 30s 后 + 每 6h）——只发通知，不自动下载。
   // dev 实例查不到（not packaged），但启动也毫无意义，所以只在安装版启动。
   if (app.isPackaged) {

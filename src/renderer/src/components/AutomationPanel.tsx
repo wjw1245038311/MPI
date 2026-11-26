@@ -75,8 +75,10 @@ function runTriggerLabel(run: AutomationRunSummary, language: "en" | "zh"): stri
 
 /** 运行耗时：不足 1 分钟给秒，否则分秒。 */
 function runDuration(run: AutomationRunSummary): string | null {
-  if (typeof run.finishedAt !== "number" || run.finishedAt <= run.startedAt) return null;
-  const sec = Math.round((run.finishedAt - run.startedAt) / 1000);
+  // 用真正开始执行的时刻算耗时，排队时间单独显示（否则并发排队会被算进任务耗时）。
+  const from = run.startedRunAt ?? run.startedAt;
+  if (typeof run.finishedAt !== "number" || run.finishedAt <= from) return null;
+  const sec = Math.round((run.finishedAt - from) / 1000);
   if (sec < 60) return `${sec}s`;
   return `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, "0")}s`;
 }
@@ -337,9 +339,20 @@ export function AutomationPanel() {
                             <span className="auto-run-when">{new Date(run.startedAt).toLocaleString()}</span>
                             <span className="auto-run-trigger">{runTriggerLabel(run, language)}</span>
                             {runDuration(run) && <span className="auto-run-dur">{runDuration(run)}</span>}
+                            {typeof run.queuedMs === "number" && run.queuedMs >= 1000 && (
+                              <span className="auto-run-queued" title={language === "zh" ? "并发上限导致的等待" : "Waited for a concurrency slot"}>
+                                +{Math.round(run.queuedMs / 1000)}s
+                                {language === "zh" ? " 排队" : " queued"}
+                              </span>
+                            )}
                             {run.status === "error" && run.error && (
                               <span className="auto-run-err" title={run.error}>
                                 {run.error.slice(0, 60)}
+                              </span>
+                            )}
+                            {run.worktreePath && (
+                              <span className="auto-run-worktree" title={run.worktreePath}>
+                                {language === "zh" ? "隔离工作树" : "Worktree"}
                               </span>
                             )}
                             {run.sessionFile ? (
@@ -449,10 +462,9 @@ export function AutomationPanel() {
               </div>
 
               <div className="set-row wide">
-                <label className="set-label">{language === "zh" ? "重复" : "Repeat"}</label>
+                <label className="set-label">{language === "zh" ? "运行权限" : "Run permission"}</label>
                 <div className="set-control">
                   <div className="auto-permission-block">
-                    <strong>{language === "zh" ? "运行权限" : "Run permission"}</strong>
                     <div className="auto-freq-tabs">
                       <button
                         className={`set-btn ${draft.permission !== "full" ? "primary" : "ghost"}`}
@@ -473,6 +485,12 @@ export function AutomationPanel() {
                         : "Automations cannot wait for approval. Sandbox blocks operations that require confirmation; use Full access only for explicitly trusted tasks."}
                     </div>
                   </div>
+                </div>
+              </div>
+
+              <div className="set-row wide">
+                <label className="set-label">{language === "zh" ? "重复" : "Repeat"}</label>
+                <div className="set-control">
                   <div className="auto-freq-tabs">
                     {(["hourly", "daily", "weekly"] as ScheduleFrequency[]).map((f) => (
                       <button key={f} className={`set-btn ${draft.schedule.frequency === f ? "primary" : "ghost"}`} onClick={() => setFreq(f)}>
@@ -521,6 +539,95 @@ export function AutomationPanel() {
                       ))}
                     </div>
                   )}
+                </div>
+              </div>
+
+              <div className="set-row wide">
+                <label className="set-label">{language === "zh" ? "超时" : "Timeout"}</label>
+                <div className="set-control">
+                  <div className="auto-sched-line">
+                    <input
+                      className="set-input num"
+                      type="number"
+                      min={1}
+                      max={180}
+                      style={{ width: 80 }}
+                      value={draft.timeoutMinutes ?? 30}
+                      onChange={(e) => patch({ timeoutMinutes: Math.max(1, Math.min(180, Number(e.target.value) || 30)) })}
+                    />
+                    <span>{language === "zh" ? "分钟未完成则停止（上限 180）" : "minutes, then stop (max 180)"}</span>
+                  </div>
+                  <div className="set-hint">
+                    {language === "zh"
+                      ? "无人值守任务卡住时会占着一个 pi 进程；超时后按中止（aborted）记录。"
+                      : "A stuck unattended run would hold a Pi process; on timeout it is recorded as aborted."}
+                  </div>
+                </div>
+              </div>
+
+              <div className="set-row wide">
+                <label className="set-label">{language === "zh" ? "失败重试" : "Retry on failure"}</label>
+                <div className="set-control">
+                  <div className="auto-sched-line">
+                    <select
+                      className="set-select"
+                      style={{ width: 150 }}
+                      value={String(draft.retry?.attempts ?? 1)}
+                      onChange={(e) => {
+                        const attempts = Number(e.target.value);
+                        patch({ retry: attempts > 1 ? { attempts, backoffMinutes: draft.retry?.backoffMinutes ?? 5 } : undefined });
+                      }}
+                    >
+                      <option value="1">{language === "zh" ? "不重试" : "No retry"}</option>
+                      <option value="2">{language === "zh" ? "再试 1 次" : "1 more try"}</option>
+                      <option value="3">{language === "zh" ? "再试 2 次" : "2 more tries"}</option>
+                    </select>
+                    {draft.retry && draft.retry.attempts > 1 && (
+                      <>
+                        <span>{language === "zh" ? "间隔" : "backoff"}</span>
+                        <input
+                          className="set-input num"
+                          type="number"
+                          min={0}
+                          max={60}
+                          style={{ width: 70 }}
+                          value={draft.retry.backoffMinutes}
+                          onChange={(e) => patch({ retry: { attempts: draft.retry!.attempts, backoffMinutes: Math.max(0, Math.min(60, Number(e.target.value) || 0)) } })}
+                        />
+                        <span>{language === "zh" ? "分钟" : "min"}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="set-hint">
+                    {language === "zh"
+                      ? "只重试网络 / 进程退出这类抖动失败；模型不存在、需要人工交互、超时都不重试。"
+                      : "Only transient failures (network, process exit) are retried; missing models, approval prompts and timeouts are not."}
+                  </div>
+                </div>
+              </div>
+
+              <div className="set-row wide">
+                <label className="set-label">{language === "zh" ? "工作树隔离" : "Worktree isolation"}</label>
+                <div className="set-control">
+                  <div className="auto-freq-tabs">
+                    <button
+                      className={`set-btn ${(draft.isolation ?? "none") === "none" ? "primary" : "ghost"}`}
+                      onClick={() => patch({ isolation: undefined })}
+                    >
+                      {language === "zh" ? "直接在工作目录跑" : "Run in place"}
+                    </button>
+                    <button
+                      className={`set-btn ${draft.isolation === "worktree" ? "primary" : "ghost"}`}
+                      onClick={() => patch({ isolation: "worktree" })}
+                    >
+                      {language === "zh" ? "独立工作树" : "Separate worktree"}
+                    </button>
+                  </div>
+                  <div className="set-hint">
+                    {language === "zh"
+                      ? "开启后任务在 git 工作树副本里跑，项目工作区不动；跑完保留分支与目录，由你决定查看 diff、合并还是丢弃。仅 git 仓库生效，非 git 目录会直接报错。"
+                      : "When enabled the run happens in a git worktree copy; your project workspace is untouched. The branch and directory are kept so you can review the diff, merge, or discard. Git repositories only — a non-git folder fails instead of silently running in place."}
+                  </div>
                 </div>
               </div>
 
