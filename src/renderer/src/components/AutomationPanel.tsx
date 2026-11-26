@@ -10,6 +10,30 @@ const DAY_NAMES = {
 } as const;
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Mon..Sun
 
+
+/** `YYYY-MM-DDTHH:MM` → `<input type="datetime-local">` 接受的值（同格式，缺省给明天此时）。 */
+function toDatetimeLocal(value: string | undefined): string {
+  if (value && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return value;
+  const at = new Date(Date.now() + 24 * 3600_000);
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${p2(at.getMonth() + 1)}-${p2(at.getDate())}T${p2(at.getHours())}:${p2(at.getMinutes())}`;
+}
+
+/** `<input type="datetime-local">` 的值 → schedule.onceAt（原样，格式一致）。 */
+function fromDatetimeLocal(value: string): string {
+  return value.trim();
+}
+
+/** 频率按钮的文案（五档）。放在组件外避免每次渲染重建。 */
+const FREQ_LABELS: Record<ScheduleFrequency, { zh: string; en: string }> = {
+  hourly: { zh: "按小时", en: "Hourly" },
+  daily: { zh: "每天", en: "Daily" },
+  weekly: { zh: "每周", en: "Weekly" },
+  interval: { zh: "按间隔", en: "Interval" },
+  once: { zh: "只跑一次", en: "Once" },
+};
+
+
 const uid = () => `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
 function newTask(): AutomationTask {
@@ -179,8 +203,21 @@ export function AutomationPanel() {
   };
 
   const setFreq = (frequency: ScheduleFrequency) => {
-    if (frequency === "hourly") patchSchedule({ frequency, minute: draft?.schedule.minute ?? 0 });
-    else patchSchedule({ frequency, time: draft?.schedule.time || "09:00", days: draft?.schedule.days || (frequency === "weekly" ? [1] : undefined) });
+    if (frequency === "hourly") {
+      patchSchedule({ frequency, minute: draft?.schedule.minute ?? 0 });
+    } else if (frequency === "interval") {
+      patchSchedule({ frequency, intervalMinutes: draft?.schedule.intervalMinutes ?? 30 });
+    } else if (frequency === "once") {
+      // 默认给「明天此时」：一次性任务最常见的用法就是「明天这个点跑一次」。
+      const at = new Date(Date.now() + 24 * 3600_000);
+      const p2 = (n: number) => String(n).padStart(2, "0");
+      const local =
+        `${at.getFullYear()}-${p2(at.getMonth() + 1)}-${p2(at.getDate())}` +
+        `T${p2(at.getHours())}:${p2(at.getMinutes())}`;
+      patchSchedule({ frequency, onceAt: draft?.schedule.onceAt || local });
+    } else {
+      patchSchedule({ frequency, time: draft?.schedule.time || "09:00", days: draft?.schedule.days || (frequency === "weekly" ? [1] : undefined) });
+    }
   };
 
   return (
@@ -226,6 +263,11 @@ export function AutomationPanel() {
                     {t.provider && t.modelId && (
                       <span className="auto-freq auto-model-badge" title={`${t.provider}/${t.modelId}`}>
                         🤖 {t.modelId}
+                      </span>
+                    )}
+                    {t.draft && (
+                      <span className="auto-freq auto-draft" title={language === "zh" ? "智能体起草，尚未启用" : "Drafted by the agent, not enabled yet"}>
+                        {language === "zh" ? "待确认" : "Draft"}
                       </span>
                     )}
                     {t.lastStatus === "error" && (
@@ -492,13 +534,9 @@ export function AutomationPanel() {
                 <label className="set-label">{language === "zh" ? "重复" : "Repeat"}</label>
                 <div className="set-control">
                   <div className="auto-freq-tabs">
-                    {(["hourly", "daily", "weekly"] as ScheduleFrequency[]).map((f) => (
+                    {(["hourly", "daily", "weekly", "interval", "once"] as ScheduleFrequency[]).map((f) => (
                       <button key={f} className={`set-btn ${draft.schedule.frequency === f ? "primary" : "ghost"}`} onClick={() => setFreq(f)}>
-                        {f === "hourly"
-                          ? language === "zh" ? "按小时" : "Hourly"
-                          : f === "daily"
-                            ? language === "zh" ? "每天" : "Daily"
-                            : language === "zh" ? "每周" : "Weekly"}
+                        {FREQ_LABELS[f][language]}
                       </button>
                     ))}
                   </div>
@@ -519,7 +557,42 @@ export function AutomationPanel() {
                     </div>
                   )}
 
-                  {draft.schedule.frequency !== "hourly" && (
+                  {draft.schedule.frequency === "interval" && (
+                    <div className="auto-sched-line">
+                      <span>{language === "zh" ? "每" : "Every"}</span>
+                      <input
+                        className="set-input num"
+                        type="number"
+                        min={15}
+                        max={1440}
+                        style={{ width: 80 }}
+                        value={draft.schedule.intervalMinutes ?? 30}
+                        onChange={(e) =>
+                          patchSchedule({ intervalMinutes: Math.max(15, Math.min(1440, Number(e.target.value) || 30)) })
+                        }
+                      />
+                      <span>{language === "zh" ? "分钟（最小 15）" : "minutes (min 15)"}</span>
+                    </div>
+                  )}
+
+                  {draft.schedule.frequency === "once" && (
+                    <div className="auto-sched-line">
+                      <span>{language === "zh" ? "执行时刻" : "Run at"}</span>
+                      <input
+                        className="set-input"
+                        type="datetime-local"
+                        value={toDatetimeLocal(draft.schedule.onceAt)}
+                        onChange={(e) => patchSchedule({ onceAt: fromDatetimeLocal(e.target.value) })}
+                      />
+                      <span className="muted">
+                        {language === "zh" ? "跑完自动停用" : "auto-disables after it runs"}
+                      </span>
+                    </div>
+                  )}
+
+                  {draft.schedule.frequency !== "hourly" &&
+                    draft.schedule.frequency !== "interval" &&
+                    draft.schedule.frequency !== "once" && (
                     <div className="auto-sched-line">
                       <span>{language === "zh" ? "时刻" : "Time"}</span>
                       <input className="set-input" type="time" style={{ width: 130 }} value={draft.schedule.time || "09:00"} onChange={(e) => patchSchedule({ time: e.target.value })} />

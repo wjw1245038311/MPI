@@ -44,6 +44,12 @@ export function usePiEvents() {
     });
     const u5 = window.pi.on.automation((p) => {
       const st = useStore.getState();
+      if (p.type === "draft") {
+        // agent 起草了一个定时任务（未启用）。刷新列表让它出现在面板里，并提示用户确认。
+        st.loadTasks();
+        st.pushToast("info", `智能体起草了定时任务：${p.name}（待确认）`);
+        return;
+      }
       if (p.type === "done") {
         st.refreshProjects();
         st.loadTasks();

@@ -156,6 +156,8 @@ import { ensureCredentialsExtension } from "./credentials-extension";
 import { notePromptSource, lastPromptSource } from "./prompt-source";
 import { prepareShellForSpawn, recheckShell } from "./shell-bootstrap";
 import { ensureTodoExtension } from "./todo-extension";
+import { ensureScheduleExtension } from "./schedule-extension";
+import { ensureScheduleInboxDir } from "./schedule-inbox";
 // 附件下行（agent → 客户端）：扩展桥 + 收件箱 + 引用 mime 推断。
 import { ensureAttachFileExtension } from "./attach-file-extension";
 import { ensureUpdateExtension } from "./update-extension";
@@ -797,6 +799,10 @@ function createHandle(
     extensions: [
       ensureGateExtension(getConfigDir()),
       ensureTodoExtension(getConfigDir()),
+      // 定时任务起草 bridge: mpi_schedule_task 只往 inbox 丢草稿，主进程消费后落成
+      // **未启用** 的任务；用户必须在面板里点开开关。仅交互会话加载——
+      // 无人值守的定时任务不该给自己排活。
+      ensureScheduleExtension(getConfigDir()),
       // 附件下行 bridge: mpi_attach_file hands a real file to the conversation (the
       // desktop shows a card, paired phones/PWA can download it). Loaded for every
       // thread — an agent that cannot offer "I'll send it to you" is the whole point.
@@ -852,6 +858,8 @@ function createHandle(
     // Live paths so a customized todo data location (Settings → 数据管理) is
     // honored from the next spawned bridge on.
     todoPaths: { file: todosFilePath(), inboxDir: ensureInboxDir() },
+    scheduleInboxDir: ensureScheduleInboxDir(getConfigDir()),
+    schedulePermission: permission === "full" ? "full" : "sandbox",
     attachFilePaths: { ...ensureAttachFileDirs(getConfigDir()), configFile: join(getConfigDir(), "config.json") },
     updatePaths: ensureUpdateDirs(getConfigDir()),
     memoryInboxDir: ensureMemoryCandidateInbox(getConfigDir()),

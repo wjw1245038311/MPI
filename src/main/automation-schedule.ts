@@ -32,7 +32,25 @@ export function slotId(date: Date): string {
   return `${day}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** 解析 `HH:MM`；非法值返回 null（不静默当成 00:00，否则任务会在半夜跑）。 */
+/** 解析「一次性」时刻（本地 `YYYY-MM-DDTHH:MM`）；过去/非法返回 null。 */
+export function parseOnceAt(value: unknown, now: Date = new Date()): Date | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})$/.exec(value.trim());
+  if (!m) return null;
+  const [, y, mo, d, h, mi] = m;
+  const year = Number(y);
+  const month = Number(mo);
+  const day = Number(d);
+  const hour = Number(h);
+  const minute = Number(mi);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null;
+  const at = new Date(year, month - 1, day, hour, minute, 0, 0);
+  // Date 会把 2 月 31 日滚到 3 月，用回读校验挡掉这种「名义合法实际溢出」的值。
+  if (at.getMonth() !== month - 1 || at.getDate() !== day) return null;
+  return at;
+}
+
+/** 解析「HH:MM」；非法值返回 null（不静默当成 00:00，否则任务会在半夜跑）。 */
 export function parseTimeOfDay(time: unknown): { hour: number; minute: number } | null {
   if (typeof time !== "string") return null;
   const m = /^(\d{1,2}):(\d{2})$/.exec(time.trim());
@@ -72,6 +90,27 @@ export function nextSlotAfter(schedule: TaskSchedule, after: Date): Date | null 
     candidate.setMinutes(minute);
     if (candidate.getTime() <= from.getTime()) candidate.setHours(candidate.getHours() + 1);
     return candidate;
+  }
+
+  if (schedule.frequency === "interval") {
+    const step = schedule.intervalMinutes ?? 0;
+    if (!Number.isInteger(step) || step < MIN_INTERVAL_MINUTES) return null;
+    // 锚定到自然日的整点倍数（如每 15 分钟 → :00/:15/:30/:45），而不是锚定到
+    // 「上一次运行」：后者会随每次运行漂移累积，且重启后基准丢失。
+    const candidate = new Date(from);
+    candidate.setSeconds(0, 0);
+    candidate.setMilliseconds(0);
+    const minutesOfDay = candidate.getHours() * 60 + candidate.getMinutes();
+    const nextMinutes = (Math.floor(minutesOfDay / step) + 1) * step;
+    candidate.setHours(0, 0, 0, 0);
+    candidate.setMinutes(nextMinutes);
+    return candidate;
+  }
+
+  if (schedule.frequency === "once") {
+    const at = parseOnceAt(schedule.onceAt);
+    if (!at) return null;
+    return at.getTime() > from.getTime() ? at : null;
   }
 
   const tod = parseTimeOfDay(schedule.time);
@@ -211,7 +250,8 @@ export function nextTickDelay(
   return Math.max(0, delay);
 }
 
-/** 人类可读的调度描述（面板与单测共用，避免两处各写一套）。 */export function describeSchedule(schedule: TaskSchedule, language: "en" | "zh"): string {
+/** 人类可读的调度描述（面板与单测共用，避免两处各写一套）。 */
+export function describeSchedule(schedule: TaskSchedule, language: "en" | "zh"): string {
   const dayNames = language === "zh"
     ? ["日", "一", "二", "三", "四", "五", "六"]
     : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -219,6 +259,19 @@ export function nextTickDelay(
   if (schedule.frequency === "hourly") {
     const minute = schedule.minute ?? 0;
     return language === "zh" ? `每小时 第 ${minute} 分钟` : `Hourly at minute ${minute}`;
+  }
+
+  if (schedule.frequency === "interval") {
+    const step = schedule.intervalMinutes ?? 0;
+    return language === "zh" ? `每 ${step} 分钟` : `Every ${step} minutes`;
+  }
+
+  if (schedule.frequency === "once") {
+    const at = parseOnceAt(schedule.onceAt);
+    const when = at
+      ? `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`
+      : schedule.onceAt || "—";
+    return language === "zh" ? `一次：${when}` : `Once at ${when}`;
   }
 
   const tod = parseTimeOfDay(schedule.time);

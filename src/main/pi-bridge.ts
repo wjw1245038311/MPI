@@ -337,6 +337,12 @@ export interface PiBridgeOptions {
   memoryInboxDir?: string;
   /** Project name stamped onto captured memories (usually the session cwd name). */
   memoryProject?: string;
+  /** Inbox dir for the 定时任务起草 bridge (mpi-schedule-ext): the extension drops
+   * one draft JSON per task here; the main process ingests them as **disabled**
+   * drafts (it is the single writer of config.json). */
+  scheduleInboxDir?: string;
+  /** 当前会话的权限档（sandbox / full）—— 扩展据此禁止 agent 自我升权。 */
+  schedulePermission?: "sandbox" | "full";
   /** Pool dir (file truth source) — the `/memory` command reads it directly. */
   memoryPoolDir?: string;
   /** 端点信息文件（url + token）——扩展每次现读它来调主进程做语义召回。 */
@@ -439,6 +445,10 @@ export class PiBridge {
       env.MPI_UPDATE_OUTBOX_DIR = this.opts.updatePaths.outboxDir;
       // MPI_WORKSPACE_ROOT (which widens the no-approval area past the session cwd)
       // is inherited straight from the app environment — no per-bridge plumbing.
+    }
+    if (this.opts.scheduleInboxDir) {
+      env.MPI_SCHEDULE_INBOX_DIR = this.opts.scheduleInboxDir;
+      env.MPI_SCHEDULE_PERMISSION = this.opts.schedulePermission === 'full' ? 'full' : 'sandbox';
     }
     if (this.opts.memoryInboxDir) {
       env.MPI_MEMORY_INBOX_DIR = this.opts.memoryInboxDir;

@@ -18,6 +18,7 @@ import { appendDiagLog } from "./diag-log";
 import { deleteRunsForTask, startRun, updateRun } from "./automation-runs-store";
 import { createAutomationWorktree, discardAutomationWorktree, type AutomationWorktree } from "./automation-worktree";
 import { isRetriableFailure } from "./automation-retry-policy";
+import { ingestScheduleInbox } from "./schedule-inbox";
 import type { AutomationResultNotification } from "./system-notifications";
 import { getAgentDir } from "./session-store";
 import { buildAppendSystemPrompt } from "./append-prompt";
@@ -39,7 +40,7 @@ import { ensureInboxDir, todosFilePath } from "./todo-store";
  */
 
 export interface AutomationNotify {
-  type: "start" | "done" | "missed";
+  type: "start" | "done" | "missed" | "draft";
   taskId: string;
   name: string;
   ok?: boolean;
@@ -162,7 +163,30 @@ export function runningTaskIds(): string[] {
   return [...running];
 }
 
+/**
+ * 消费 agent 起草的定时任务（inbox → config，落地为未启用的草稿）。
+ *
+ * 放在 tick 之前：每 5 分钟兜底重判时顺带扫一次，面板里的「待确认草稿」
+ * 就会在下一次刷新时出现。不用 fs.watch —— inbox 只在 agent 主动调用工具时
+ * 才有文件写入，5 分钟延迟对「以后每天帮我做某事」这类需求完全够用，
+ * 而 watch 会在这个目录上留一个长期句柄。
+ */
+function ingestScheduleDrafts(): void {
+  try {
+    const result = ingestScheduleInbox(getConfigDir(), persistedTasks());
+    if (!result.added.length) return;
+    persist([...persistedTasks(), ...result.added]);
+    appendDiagLog(`schedule-drafts added=${result.added.length}`);
+    for (const draft of result.added) {
+      notify?.({ type: "draft", taskId: draft.id, name: draft.name });
+    }
+  } catch (e: any) {
+    appendDiagLog(`schedule-drafts ingest failed: ${e?.message || e}`);
+  }
+}
+
 function tick(): void {
+  ingestScheduleDrafts();
   const now = new Date();
   // The renderer normally deletes through this process, but another MPI
   // process or an older build may have written config.json. Re-read before
@@ -518,7 +542,14 @@ async function execute(task: AutomationTask, trigger: AutomationTrigger = "sched
         });
         sessionFile = attemptResult.sessionFile;
         if (taskStillExists(task.id)) {
-          patchTask(task.id, { lastStatus: "ok", lastError: undefined, lastSuccessAt: Date.now() });
+          patchTask(task.id, {
+            lastStatus: "ok",
+            lastError: undefined,
+            lastSuccessAt: Date.now(),
+            // 一次性任务跑完就自己停用：否则它会留着「下次：—」的僵尸行，
+            // 用户还得手动关一遍。
+            ...(task.schedule.frequency === "once" ? { enabled: false } : {}),
+          });
           updateRun(run.id, {
             status: "ok",
             finishedAt: Date.now(),

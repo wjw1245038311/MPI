@@ -474,7 +474,7 @@ export const BUILT_IN_REMOTE_STUN_URLS = [
   "stun:stun.cloudflare.com:3478",
 ] as const;
 
-export type ScheduleFrequency = "hourly" | "daily" | "weekly";
+export type ScheduleFrequency = "hourly" | "daily" | "weekly" | "interval" | "once";
 
 export interface TaskSchedule {
   frequency: ScheduleFrequency;
@@ -484,6 +484,10 @@ export interface TaskSchedule {
   time?: string;
   /** weekly: days of week, 0=Sun .. 6=Sat. */
   days?: number[];
+  /** interval: 间隔分钟数（≥ 15，锢位在 automation-schedule 里）。 */
+  intervalMinutes?: number;
+  /** once: 一次性触发的本地时刻，`YYYY-MM-DDTHH:MM`；跑完自动停用。 */
+  onceAt?: string;
 }
 
 export interface AutomationTask {
@@ -509,6 +513,8 @@ export interface AutomationTask {
   retry?: { attempts: number; backoffMinutes: number };
   /** 工作树隔离：仅对 git 仓库生效。none = 直接在工作目录跑（默认）。 */
   isolation?: "none" | "worktree";
+  /** agent 起草但用户尚未确认的任务（落盘时 enabled 恒为 false）。 */
+  draft?: boolean;
   /** 上次已处理到的槽位（本地时刻，`2026-11-26T09:00`）。取代旧版按日历天的
    * lastRunSlot：改时间/频率后槽位 id 自然不同，因此当天仍会重新触发。 */
   lastSlot?: string;
@@ -1071,7 +1077,15 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
       if (typeof t.name !== "string" || typeof t.cwd !== "string" || typeof t.prompt !== "string") continue;
       const schedule = t.schedule;
       if (!schedule || typeof schedule !== "object") continue;
-      if (schedule.frequency !== "hourly" && schedule.frequency !== "daily" && schedule.frequency !== "weekly") continue;
+      if (
+        schedule.frequency !== "hourly" &&
+        schedule.frequency !== "daily" &&
+        schedule.frequency !== "weekly" &&
+        schedule.frequency !== "interval" &&
+        schedule.frequency !== "once"
+      ) {
+        continue;
+      }
       tasks.push({
         id: t.id,
         name: t.name,
@@ -1084,6 +1098,10 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
           ...(Array.isArray(schedule.days) && schedule.days.every((d: unknown) => typeof d === "number")
             ? { days: schedule.days as number[] }
             : {}),
+          ...(typeof schedule.intervalMinutes === "number" && Number.isFinite(schedule.intervalMinutes)
+            ? { intervalMinutes: Math.max(15, Math.min(1440, Math.round(schedule.intervalMinutes))) }
+            : {}),
+          ...(typeof schedule.onceAt === "string" ? { onceAt: schedule.onceAt } : {}),
         },
         enabled: typeof t.enabled === "boolean" ? t.enabled : true,
         permission: t.permission === "full" ? "full" : "sandbox",
@@ -1102,6 +1120,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
           return attempts > 1 ? { retry: { attempts, backoffMinutes: backoff } } : {};
         })(),
         ...(t.isolation === "worktree" ? { isolation: "worktree" as const } : {}),
+        ...(t.draft === true ? { draft: true } : {}),
         ...(typeof t.lastSlot === "string" ? { lastSlot: t.lastSlot } : {}),
         ...(typeof t.lastRunSlot === "string" ? { lastRunSlot: t.lastRunSlot } : {}),
         ...(typeof t.firstSeenAt === "number" ? { firstSeenAt: t.firstSeenAt } : {}),

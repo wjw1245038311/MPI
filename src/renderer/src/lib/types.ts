@@ -233,7 +233,7 @@ export interface NpmPackage {
   repository?: string;
 }
 
-export type ScheduleFrequency = "hourly" | "daily" | "weekly";
+export type ScheduleFrequency = "hourly" | "daily" | "weekly" | "interval" | "once";
 
 export interface TaskSchedule {
   frequency: ScheduleFrequency;
@@ -243,6 +243,10 @@ export interface TaskSchedule {
   time?: string;
   /** weekly: days of week, 0=Sun .. 6=Sat. */
   days?: number[];
+  /** interval: 间隔分钟数（≥ 15）。 */
+  intervalMinutes?: number;
+  /** once: 一次性触发的本地时刻，`YYYY-MM-DDTHH:MM`；跑完自动停用。 */
+  onceAt?: string;
 }
 
 export interface AutomationTask {
@@ -265,6 +269,8 @@ export interface AutomationTask {
   retry?: { attempts: number; backoffMinutes: number };
   /** 工作树隔离（仅 git 仓库）。 */
   isolation?: "none" | "worktree";
+  /** agent 起草但用户尚未确认（enabled 恒为 false）。 */
+  draft?: boolean;
   /** 上次处理到的槽位（本地时刻，`2026-11-26T09:00`）。 */
   lastSlot?: string;
   /** 旧版按日历天的去重键，仅读取、新代码不再写入。 */

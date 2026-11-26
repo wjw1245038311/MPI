@@ -139,6 +139,7 @@
     "test:automation-runs": "node --experimental-strip-types scripts/test-automation-runs.mjs",
     "test:automation-worktree": "node --experimental-strip-types scripts/test-automation-worktree.mjs",
     "test:automation-retry": "node --experimental-strip-types scripts/test-automation-retry.mjs",
+    "test:automation-inbox": "node --experimental-strip-types scripts/test-automation-inbox.mjs",
     "test:sigurl": "node --experimental-strip-types scripts/test-signaling-url-migration.mjs",
     "test:memorypool": "node --experimental-strip-types scripts/test-memorypool.mjs",
     "memory:list": "node --experimental-strip-types scripts/memory-cli.mjs list",

@@ -287,4 +287,40 @@ assert.equal(multiDelay2, 61_000, ok("多任务：60s 后才是当前最近触�
   assert.ok(delay < 5 * 60_000, "近距离触发不得被兜底上限截断");
 }
 
+// ---- interval（每 N 分钟）----------------------------------------------
+const every15 = { frequency: "interval", intervalMinutes: 15 };
+assert.deepEqual(nextRunAfter(every15, at(2026, 11, 26, 9, 7)), at(2026, 11, 26, 9, 15), ok("interval: 09:07 → 09:15"));
+assert.deepEqual(nextRunAfter(every15, at(2026, 11, 26, 9, 15)), at(2026, 11, 26, 9, 30), ok("interval: 恰好等于则下一格"));
+assert.deepEqual(nextRunAfter(every15, at(2026, 11, 26, 9, 59)), at(2026, 11, 26, 10, 0), ok("interval: 跨小时"));
+assert.deepEqual(nextRunAfter(every15, at(2026, 11, 26, 23, 50)), at(2026, 11, 27, 0, 0), ok("interval: 跨天"));
+// 锚定自然日整点倍数，不是「上次运行 + N」——后者会随运行漂移，重启后基准也丢
+assert.deepEqual(nextRunAfter(every15, at(2026, 11, 26, 9, 8)), at(2026, 11, 26, 9, 15), ok("interval: 锚定到 :00/:15/:30/:45"));
+const every20 = { frequency: "interval", intervalMinutes: 20 };
+assert.deepEqual(nextRunAfter(every20, at(2026, 11, 26, 9, 5)), at(2026, 11, 26, 9, 20), ok("interval: 每 20 分钟"));
+assert.deepEqual(nextRunAfter(every20, at(2026, 11, 26, 9, 25)), at(2026, 11, 26, 9, 40), ok("interval: 每 20 分钟（不整除 60）"));
+assert.equal(nextRunAfter({ frequency: "interval", intervalMinutes: 5 }, at(2026, 11, 26, 9, 0)), null, ok("interval: 小于 15 分钟拒绝（防失控任务）"));
+assert.equal(nextRunAfter({ frequency: "interval" }, at(2026, 11, 26, 9, 0)), null, ok("interval: 缺 intervalMinutes 返回 null"));
+const span15 = slotsBetween(every15, at(2026, 11, 26, 9, 0), at(2026, 11, 26, 10, 0));
+assert.equal(span15.length, 4, ok("interval: 一小时内 4 个槽位（09:15/30/45/10:00）"));
+
+// ---- once（一次性）-----------------------------------------------------
+const onceSched = { frequency: "once", onceAt: "2026-12-01T15:30" };
+assert.deepEqual(nextRunAfter(onceSched, at(2026, 11, 26, 9, 0)), at(2026, 12, 1, 15, 30), ok("once: 返回指定时刻"));
+assert.equal(nextRunAfter(onceSched, at(2026, 12, 1, 15, 30)), null, ok("once: 已到点后不再排"));
+assert.equal(nextRunAfter(onceSched, at(2026, 12, 2, 0, 0)), null, ok("once: 过去之后返回 null"));
+assert.equal(nextRunAfter({ frequency: "once", onceAt: "2026-02-31T10:00" }, at(2026, 11, 26, 9, 0)), null, ok("once: 2/31 溢出日期被拒"));
+assert.equal(nextRunAfter({ frequency: "once", onceAt: "垃圾" }, at(2026, 11, 26, 9, 0)), null, ok("once: 非法格式返回 null"));
+assert.equal(nextRunAfter({ frequency: "once" }, at(2026, 11, 26, 9, 0)), null, ok("once: 缺 onceAt 返回 null"));
+assert.deepEqual(
+  nextRunAfter({ frequency: "once", onceAt: "2028-02-29T08:00" }, at(2026, 11, 26, 9, 0)),
+  at(2028, 2, 29, 8, 0),
+  ok("once: 闰日 2/29 合法"),
+);
+
+// ---- describeSchedule 新增档位 ------------------------------------------
+assert.equal(describeSchedule(every15, "zh"), "每 15 分钟", ok("描述：中文 interval"));
+assert.equal(describeSchedule(every15, "en"), "Every 15 minutes", ok("描述：英文 interval"));
+assert.equal(describeSchedule(onceSched, "zh"), "一次：2026-12-01 15:30", ok("描述：中文 once"));
+assert.equal(describeSchedule(onceSched, "en"), "Once at 2026-12-01 15:30", ok("描述：英文 once"));
+
 console.log(`automation-schedule ok (${checks} 项断言通过)`);
