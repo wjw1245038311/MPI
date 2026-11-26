@@ -560,28 +560,131 @@ When previewing an HTML file, a "Select an HTML element and reference it in the 
 
 ## 11. Automations (Scheduled Tasks)
 
-The clock icon in the sidebar opens the "Automations" panel. Note: scheduling only happens while MPI is running; nothing executes while the app is closed.
+Run something on a schedule by itself: produce a daily report, pull data once a day, run a script and write the result to a file. Every run ends up as a **session you can open**, so you can see exactly what happened.
 
-### 11.1 Creating a task
+Open it from the clock icon in the sidebar → "Automations".
 
-Click `+` and fill in:
+Scheduling only happens while MPI is running. Nothing runs while your laptop sleeps or the app is closed — when it comes back, a missed run is caught up (see 11.5).
+
+### 11.1 When this is the right tool
+
+Good fit:
+
+- a report at the same time every morning;
+- tidying a folder on a schedule and writing the result to a fixed file;
+- running a script you already have, and making sure it really produced output.
+
+Bad fit:
+
+- anything that needs your decision on the spot — it never waits; when a task needs a human choice or approval, it fails instead;
+- anything that must run while the app is off — it can only catch up after the app is back.
+
+### 11.2 Creating a task
+
+Click `+` in the panel and fill in:
 
 | Field          | Notes                                                                                                                                                                                      |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Task name      | e.g. "Daily morning report".                                                                                                                                                               |
 | Working folder | The project directory where the task runs (Pi works inside it).                                                                                                                            |
 | Prompt         | The full instruction to execute on schedule; installed skills can be used.                                                                                                                 |
-| Repeat         | Hourly (at minute N) / Daily (HH:mm) / Weekly (check weekdays + HH:mm).                                                                                                                    |
+| Repeat         | Hourly (at minute N) / Daily (HH:mm) / Weekly (check weekdays + HH:mm) / Interval (every N minutes) / Once (a specific date and time).                                                                                                                    |
 | Run permission | Sandbox (default, operations needing confirmation are blocked) or Full. Automations can't wait for human approval; grant Full only to tasks you explicitly trust.                          |
 | Model          | Optional. Empty = use the current default model; filling it pins this task to that provider/model, which suits "a cheap model for mechanical work". List rows show a model badge per task. |
 
-> Automations run unattended, so anything requiring human interaction counts as a failure instead of waiting forever; only notification-type operations are always allowed.
+About "Interval" and "Once":
 
-### 11.2 Managing tasks
+- "Interval" accepts 15 minutes or more and always snaps to whole slots (every 15 minutes means :00 / :15 / :30 / :45), so it never drifts run after run;
+- "Once" disables itself after it runs, so you don't end up with a dead row you have to turn off by hand.
 
-Each row shows name, schedule summary, last status (failures in red with the reason on hover), and an enable switch. "Run now" triggers one manual run; "Edit" modifies and saves; delete asks for confirmation.
+Each row shows when the task will run next ("Next 09:00"), so you can tell at a glance whether it is scheduled. If you move the time, the task still runs the same day at the **new** time — you don't lose that day.
 
-Task results appear as standalone sessions under the corresponding project, prefixed "Automation: xxx" (older "Automations: xxx" names created by previous versions are still recognized and localized with the UI language). Completion/failure shows a toast notification.
+Other actions: "Run now" starts one manual run (the button goes disabled while it runs and the row shows "Running"); "Edit" saves changes; deleting asks for confirmation.
+
+### 11.3 Don't let "it said it's done" count as done (Verify outputs)
+
+The model saying "done" is not evidence. A script can write nothing, reply "completed", and be recorded as a success.
+
+Add conditions under **"Verify outputs"** — **all of them must hold** for the run to count as successful. The three you'll use most:
+
+| Condition                                    | When to use it                                    |
+| -------------------------------------------- | ------------------------------------------------- |
+| File exists / file was written in this run  | You need a new file to have actually appeared     |
+| File contains specific text                  | Confirm the result is there, not placeholder text |
+| File is at least N bytes                     | Guards against an empty file passing              |
+
+Two more for advanced use: a required exit code, and "run a command and it must return 0" (handy when you already have a checking script).
+
+Example: the task must write `reports/daily.md` → tick "file was written in this run" plus "at least 2 KB". If nothing was written, the run is recorded as a failure with "output verification failed: file does not exist: …".
+
+Paths are relative to the task's "Working folder", so just use relative paths.
+
+### 11.4 Don't run on days that don't apply (Precondition)
+
+Some days simply shouldn't run (weekends, holidays, upstream data not there yet). Telling the model to decide is unreliable — and either way it was still recorded as a run. "Precondition" gives you two independent gates:
+
+| Switch                    | Behaviour                                                                                              |
+| ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Condition                 | Runs a command; the task runs only if it returns 0. Perfect for "ask my script whether today is a trading day". |
+| Skip dates                | The dates to skip. Type them in, or point it at a file (one `2026-01-01` per line, `#` starts a comment).   |
+
+When a gate blocks the task the status is **"Skipped"**, not failed: no notification, it doesn't count toward the unread badge, and it isn't retried — "not applicable today" and "broke today" have to stay distinguishable.
+
+The app **ships no holiday calendar on purpose**: what counts as an off day is yours to define in a file or a command, so your rules can change without waiting for an update, and nothing silently goes stale year by year.
+
+### 11.5 What happens if a run is missed
+
+If the app wasn't running at the scheduled time (shutdown, lid closed, or simply not started), after it comes back:
+
+1. still inside the **catch-up window** (2 hours by default) → it runs once, marked **"Catch-up"** in the run history;
+2. past the window → it doesn't run, but the row shows **"Missed"**, so you can see that day never happened.
+
+The length of that window is currently only changeable in the configuration (see 11.10) — **there's no field for it in the panel yet**.
+
+### 11.6 Seeing results: run history, notifications, the badge
+
+Click the menu button on a task row to open **"Run history"**: time, whether it was scheduled / catch-up / manual, status, duration, failure reason, and **"Open session"** — including for failed runs, so you can read what it actually did.
+
+When something fails you also get:
+
+- a system notification that **doesn't dismiss itself** when MPI is in the background (clicking it opens that session);
+- a number on the clock icon, and "N failures to review" at the top of the panel; it clears once you've looked.
+
+Waiting in a queue is normal too: when several tasks are due at once, later ones wait, and the queue time is shown separately instead of being counted as the task's duration.
+
+### 11.7 Keep it out of your working copy
+
+| Option                | What it does                                                                                                                                                     | Default                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| Worktree isolation    | Runs the edits in a separate working copy; your project directory stays untouched. After the run the result is kept so you can review / merge / discard. Git folders only — a non-git folder is rejected outright, never silently downgraded | Off                            |
+| Timeout               | How long a single task may run                                                                     | 30 minutes (up to 180)         |
+| Retry on failure      | Only retried for flaky failures (network, unexpected process exit); a missing model, needing a human, or a timeout are **never** retried                            | No retries                     |
+| Writable paths        | Lets the task write **outside** the project (only listed paths are allowed)                                                                                        | Empty                          |
+
+"Writable paths" is needed in exactly one case: writing **inside** the project is already allowed, and only "run a script that writes outside the project" gets blocked. And when it is blocked, only that one operation is refused — the task itself doesn't fail.
+
+How many tasks may run at once is in **Settings → automation concurrency** (default 2).
+
+### 11.8 Let the agent set the task up for you
+
+Say "every day at 9am, generate a report" in a chat and the agent will prepare the task — but **it won't enable it**: a row marked "Draft" appears in the panel, and nothing runs until you switch it on. Delete it if you don't want it.
+
+In a read-only (sandbox) session it can't draft a task with full access.
+
+### 11.9 If it doesn't happen
+
+1. **Check whether the row shows a "Next …" time.** If not → is the switch off? "Once" tasks disable themselves after running, which is expected.
+2. **It didn't run at the time.** The app wasn't running or the machine slept → it should catch up after that; beyond the window you'll only see "Missed".
+3. **It ran and failed.** Open the session and read what it did; "output verification failed" means the thing you asked for was never written.
+4. **Status says "Skipped".** A gate stopped it — hover the row for the reason.
+5. **The project's own MCP servers or config aren't loaded.** Tasks run unattended, and **an untrusted project's project-level configuration is not loaded**; make this machine trust that folder first.
+
+### 11.10 Advanced (leave these alone)
+
+- Each run is a standalone session under the project, named with the "Automation: xxx" prefix (sessions created under older wording are still recognized and localized).
+- Catch-up window: the `catchUpMinutes` setting (minutes, `0` = never catch up, max 1440). There's no field for it in the panel, so change it in the configuration.
+- Run history keeps the last 30 runs per task and 500 overall, dropping the oldest. It is **not** part of "Settings → Backup & restore" — after moving to another machine the tasks come with you, the history doesn't.
+- Permissions follow section 9: writing inside the project is allowed by default; use "Writable paths" only for writes outside it, and "Full access" only for genuinely riskier operations.
 
 ---
 
