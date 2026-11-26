@@ -104,14 +104,14 @@ export function AutomationPanel() {
   };
 
   return (
-    <SidePanel title={language === "zh" ? "定时任务" : "Scheduled tasks"} icon={<Clock size={15} />} onClose={close}>
+    <SidePanel title={language === "zh" ? "定时任务" : "Automations"} icon={<Clock size={15} />} onClose={close}>
       <div className="plugins-body">
           {!draft && (
             <>
               <div className="plugins-install">
                 <span className="muted">{language === "zh" ? `共 ${tasks.length} 个任务` : `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}`}</span>
                 <button className="set-btn primary" onClick={() => setDraft(newTask())}>
-                  <Plus size={14} /> 新建任务
+                  <Plus size={14} /> {language === "zh" ? "新建任务" : "New task"}
                 </button>
               </div>
 
@@ -119,7 +119,9 @@ export function AutomationPanel() {
               {tasks.map((t) => (
                 <div className="plugins-row auto-task" key={t.id}>
                   <div className="plugins-row-main">
-                    <span className="plugins-row-name">{t.name || "未命名任务"}</span>
+                    <span className="plugins-row-name">
+                      {t.name || (language === "zh" ? "未命名任务" : "Untitled task")}
+                    </span>
                     <span className="auto-freq">{summarize(t.schedule, language)}</span>
                     <span className={`auto-freq ${t.permission === "full" ? "plugins-off" : ""}`}>
                       {t.permission === "full" ? (language === "zh" ? "完全权限" : "Full access") : language === "zh" ? "沙盒" : "Sandbox"}
@@ -129,7 +131,11 @@ export function AutomationPanel() {
                         🤖 {t.modelId}
                       </span>
                     )}
-                    {t.lastStatus === "error" && <span className="plugins-off" title={t.lastError}>上次失败</span>}
+                    {t.lastStatus === "error" && (
+                      <span className="plugins-off" title={t.lastError}>
+                        {language === "zh" ? "上次失败" : "Last run failed"}
+                      </span>
+                    )}
                   </div>
                   <div className="plugins-row-sub" title={t.cwd}>
                     📁 {t.cwd}
@@ -137,21 +143,29 @@ export function AutomationPanel() {
                   <div className="plugins-row-sub auto-prompt">{t.prompt}</div>
                   <div className="plugins-row-actions">
                     {t.lastRunAt && <span className="muted auto-last">{new Date(t.lastRunAt).toLocaleString()}</span>}
-                    <button className="set-iconbtn" title="立即运行" onClick={() => runTaskNow(t.id)}>
+                    <button
+                      className="set-iconbtn"
+                      title={language === "zh" ? "立即运行" : "Run now"}
+                      onClick={() => runTaskNow(t.id)}
+                    >
                       <Play size={14} />
                     </button>
                     <Toggle checked={t.enabled} onChange={(v) => saveTask({ ...t, enabled: v })} />
-                    <button className="set-iconbtn" title="编辑" onClick={() => setDraft({ ...t })}>
+                    <button
+                      className="set-iconbtn"
+                      title={language === "zh" ? "编辑" : "Edit"}
+                      onClick={() => setDraft({ ...t })}
+                    >
                       ✎
                     </button>
                     <button
                       className="set-iconbtn danger"
-                      title="删除"
+                      title={language === "zh" ? "删除" : "Delete"}
                       onClick={() => {
                         const zh = language === "zh";
                         useStore.getState().askConfirm({
                           title: zh ? "删除定时任务" : "Delete automation",
-                          body: zh ? `删除任务 “${t.name}”？以调度配置一并丢失。` : `Delete task “${t.name}”? Its schedule goes with it.`,
+                          body: zh ? `删除任务 “${t.name}”？其调度配置会一并删除。` : `Delete task “${t.name}”? Its schedule is deleted too.`,
                           danger: true,
                           confirmLabel: zh ? "删除" : "Delete",
                           onConfirm: () => deleteTask(t.id),
@@ -169,19 +183,19 @@ export function AutomationPanel() {
           {draft && (
             <div className="auto-editor">
               <div className="set-row wide">
-                <label className="set-label">任务名称</label>
+                <label className="set-label">{language === "zh" ? "任务名称" : "Task name"}</label>
                 <div className="set-control">
                   <input className="set-input" placeholder="例如：每日晨报" value={draft.name} onChange={(e) => patch({ name: e.target.value })} />
                 </div>
               </div>
 
               <div className="set-row wide">
-                <label className="set-label">工作文件夹</label>
+                <label className="set-label">{language === "zh" ? "工作文件夹" : "Working folder"}</label>
                 <div className="set-control">
                   <div className="auto-folder">
                     <input className="set-input" placeholder="选择任务运行的项目目录" value={draft.cwd} onChange={(e) => patch({ cwd: e.target.value })} />
                     <button className="set-btn" onClick={pickFolder}>
-                      <Folder size={14} /> 选择
+                      <Folder size={14} /> {language === "zh" ? "选择" : "Select"}
                     </button>
                   </div>
                 </div>
@@ -199,7 +213,11 @@ export function AutomationPanel() {
                     value={draft.prompt}
                     onChange={(e) => patch({ prompt: e.target.value })}
                   />
-                  <div className="set-hint">触发时在该文件夹新建一个 pi 会话执行，完成后保存为可查看的会话。</div>
+                  <div className="set-hint">
+                    {language === "zh"
+                      ? "触发时在该文件夹新建一个 pi 会话执行，完成后保存为可查看的会话。"
+                      : "Each run starts a new Pi session in this folder and is saved as a viewable session."}
+                  </div>
                 </div>
               </div>
 
@@ -243,7 +261,7 @@ export function AutomationPanel() {
               </div>
 
               <div className="set-row wide">
-                <label className="set-label">重复</label>
+                <label className="set-label">{language === "zh" ? "重复" : "Repeat"}</label>
                 <div className="set-control">
                   <div className="auto-permission-block">
                     <strong>{language === "zh" ? "运行权限" : "Run permission"}</strong>
@@ -270,14 +288,18 @@ export function AutomationPanel() {
                   <div className="auto-freq-tabs">
                     {(["hourly", "daily", "weekly"] as ScheduleFrequency[]).map((f) => (
                       <button key={f} className={`set-btn ${draft.schedule.frequency === f ? "primary" : "ghost"}`} onClick={() => setFreq(f)}>
-                        {f === "hourly" ? "按小时" : f === "daily" ? "每天" : "每周"}
+                        {f === "hourly"
+                          ? language === "zh" ? "按小时" : "Hourly"
+                          : f === "daily"
+                            ? language === "zh" ? "每天" : "Daily"
+                            : language === "zh" ? "每周" : "Weekly"}
                       </button>
                     ))}
                   </div>
 
                   {draft.schedule.frequency === "hourly" && (
                     <div className="auto-sched-line">
-                      <span>每小时第</span>
+                      <span>{language === "zh" ? "每小时第" : "At minute"}</span>
                       <input
                         className="set-input num"
                         type="number"
@@ -287,13 +309,13 @@ export function AutomationPanel() {
                         value={draft.schedule.minute ?? 0}
                         onChange={(e) => patchSchedule({ minute: Math.max(0, Math.min(59, Number(e.target.value) || 0)) })}
                       />
-                      <span>分钟执行</span>
+                      <span>{language === "zh" ? "分钟执行" : "of every hour"}</span>
                     </div>
                   )}
 
                   {draft.schedule.frequency !== "hourly" && (
                     <div className="auto-sched-line">
-                      <span>时刻</span>
+                      <span>{language === "zh" ? "时刻" : "Time"}</span>
                       <input className="set-input" type="time" style={{ width: 130 }} value={draft.schedule.time || "09:00"} onChange={(e) => patchSchedule({ time: e.target.value })} />
                     </div>
                   )}
@@ -316,10 +338,10 @@ export function AutomationPanel() {
 
               <div className="auto-editor-actions">
                 <button className="set-btn ghost" onClick={() => setDraft(null)}>
-                  取消
+                  {language === "zh" ? "取消" : "Cancel"}
                 </button>
                 <button className="set-btn primary" onClick={save}>
-                  保存任务
+                  {language === "zh" ? "保存任务" : "Save task"}
                 </button>
               </div>
             </div>

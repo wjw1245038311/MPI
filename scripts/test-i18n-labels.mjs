@@ -56,4 +56,28 @@ assert.equal(
   `${failures}/${pairs.length} Sidebar conditional labels lack an i18n.ts exact entry (stale-English-original bug)`
 );
 
-console.log(`i18n-labels ok (${pairs.length} Sidebar pairs covered by ${Object.keys(dict).length}-entry dictionary)`);
+// Same trap, same check, for the automation panel. It is not mounted at t=0, but a
+// language switch while the panel is open re-renders the pairs under the running
+// bridge — a missing reverse entry strands the label in the previous language.
+const automationSrc = readFileSync(path.join(root, "src/renderer/src/components/AutomationPanel.tsx"), "utf8");
+const autoPairs = [...automationSrc.matchAll(/language === "(zh|en)" \? "((?:[^"\\]|\\.)*)" : "((?:[^"\\]|\\.)*)"/g)];
+assert.ok(autoPairs.length > 0, "AutomationPanel.tsx: no conditional labels found — pattern drift?");
+
+let autoFailures = 0;
+for (const [, dir, a, b] of autoPairs) {
+  const zh = dir === "zh" ? a : b;
+  const en = dir === "zh" ? b : a;
+  if (dict[zh] !== en) {
+    autoFailures++;
+    console.error(`MISSING i18n entry (AutomationPanel): "${zh}" -> "${en}"`);
+  }
+}
+assert.equal(
+  autoFailures,
+  0,
+  `${autoFailures}/${autoPairs.length} AutomationPanel conditional labels lack an i18n.ts exact entry`
+);
+
+console.log(
+  `i18n-labels ok (${pairs.length} Sidebar + ${autoPairs.length} AutomationPanel pairs covered by ${Object.keys(dict).length}-entry dictionary)`
+);

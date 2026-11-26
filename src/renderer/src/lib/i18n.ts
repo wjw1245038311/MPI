@@ -235,13 +235,24 @@ const exact: Record<string, string> = {
   "上次失败": "Last run failed",
   "立即运行": "Run now",
   "编辑": "Edit",
-  "任务名称": "Task name",
   "例如：每日晨报": "For example: Daily briefing",
-  "工作文件夹": "Working folder",
   "选择任务运行的项目目录": "Choose the project folder for this task",
   "选择": "Select",
-  "要执行的指令，可调用 skill，例如：\n/standup 生成今日 standup 报告并写入 docs/": "Instructions to run. Skills are supported, for example:\n/standup Create today's standup report in docs/",
-  "触发时在该文件夹新建一个 pi 会话执行，完成后保存为可查看的会话。": "When triggered, a new Pi session runs in this folder and is saved as a viewable session.",
+  "要执行的指令，可调用技能，例如：\n/standup 生成今日 standup 报告并写入 docs/": "Instructions to run. Skills are supported, for example:\n/standup Create today's standup report in docs/",
+  "触发时在该文件夹新建一个 pi 会话执行，完成后保存为可查看的会话。": "Each run starts a new Pi session in this folder and is saved as a viewable session.",
+  // Automation panel: these labels now render through `language === "zh" ? … : …`
+  // pairs. Every pair needs an entry here as well — the DOM language bridge stores
+  // whatever text it first sees as the node's original, so a missing entry during a
+  // language switch leaves the label stuck in the other language.
+  "删除定时任务": "Delete automation",
+  "任务名称": "Task name",
+  "工作文件夹": "Working folder",
+  "提示词": "Prompt",
+  "模型（可选）": "Model (optional)",
+  "跟随默认模型": "Follow default model",
+  "选择模型…": "Choose a model…",
+  "运行权限": "Run permission",
+  "沙盒": "Sandbox",
   "重复": "Repeat",
   "按小时": "Hourly",
   "每天": "Daily",
