@@ -20,6 +20,7 @@ import { createAutomationWorktree, discardAutomationWorktree, type AutomationWor
 import { isRetriableFailure } from "./automation-retry-policy";
 import { ingestScheduleInbox } from "./schedule-inbox";
 import { runVerifyRules } from "./automation-verify";
+import { evaluateGate } from "./automation-gate";
 import type { AutomationResultNotification } from "./system-notifications";
 import { getAgentDir } from "./session-store";
 import { buildAppendSystemPrompt } from "./append-prompt";
@@ -41,7 +42,7 @@ import { ensureInboxDir, todosFilePath } from "./todo-store";
  */
 
 export interface AutomationNotify {
-  type: "start" | "done" | "missed" | "draft";
+  type: "start" | "done" | "missed" | "draft" | "skipped";
   taskId: string;
   name: string;
   ok?: boolean;
@@ -507,6 +508,24 @@ async function execute(task: AutomationTask, trigger: AutomationTrigger = "sched
   const queuedMs = startedRunAt - run.startedAt;
   if (queuedMs >= 1000) appendDiagLog(`auto-start ${task.name} queued=${Math.round(queuedMs / 1000)}s`);
   updateRun(run.id, { startedRunAt, queuedMs });
+
+  // 前置门控：不满足时记为跳过（不是失败、不告警）。
+  // 放在这里而不是 tick 里：门控可能要跑一条命令（有耗时甚至副作用），
+  // 而 tick 是同步的、每 5 分钟一次；放在 execute 里也不占着 pi 进程。
+  const gateDecision = evaluateGate(task.gate, { cwd: task.cwd, now: new Date() });
+  if (gateDecision.kind === "skip") {
+    releaseRunSlot();
+    running.delete(task.id);
+    // 面板行要能看到「已跳过」+ 原因，所以 task 上的 lastStatus 也要写；
+    // 只看运行历史的话，任务行会显示成「从没跑过」。
+    if (taskStillExists(task.id)) {
+      patchTask(task.id, { lastStatus: "skipped", lastError: gateDecision.reason, lastAttemptAt: Date.now() });
+    }
+    updateRun(run.id, { status: "skipped", finishedAt: Date.now(), error: gateDecision.reason });
+    notify?.({ type: "skipped", taskId: task.id, name: task.name, error: gateDecision.reason });
+    appendDiagLog(`auto-skip ${task.name}: ${gateDecision.reason}`);
+    return;
+  }
 
   notify?.({ type: "start", taskId: task.id, name: task.name });
 

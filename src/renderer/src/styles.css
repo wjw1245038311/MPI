@@ -9407,6 +9407,31 @@ mark.hl {
     animation-duration: 2.4s;
   }
 }
+/* ---- 前置门控编辑区 ------------------------------------------------------ */
+.auto-gate-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.auto-gate-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.auto-gate-label {
+  flex: 0 0 96px;
+  padding-top: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.auto-gate-row .set-input,
+.auto-gate-row .set-json,
+.auto-gate-row .set-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* ---- 产物校验规则列表（minibox 2026-11-26 邮件第 2 条）----------------- */
 .auto-verify-list {
   display: flex;

@@ -50,6 +50,11 @@ export function usePiEvents() {
         st.pushToast("info", `智能体起草了定时任务：${p.name}（待确认）`);
         return;
       }
+      if (p.type === "skipped") {
+        // 门控跳过：不是失败，不弹错误提示、不进待查看。只刷新列表让面板显示状态。
+        st.loadTasks();
+        return;
+      }
       if (p.type === "done") {
         st.refreshProjects();
         st.loadTasks();

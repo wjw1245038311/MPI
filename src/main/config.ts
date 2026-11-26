@@ -518,6 +518,9 @@ export interface AutomationTask {
   /** 产物校验规则（全部 AND）。空/缺省 = 不校验。
    * 无人值守场景下建议至少配一条：模型回一句「跑完了」不等于产物真的写了。 */
   verify?: import("./automation-verify").VerifyRule[];
+  /** 前置门控：不满足时记 skipped（不算失败、不告警）。缺省 = 不门控。
+   * 用于「这个时间点是否适用」由外部数据决定的场景（日期清单或一条判断命令）。 */
+  gate?: import("./automation-gate").TaskGate;
   /** 上次已处理到的槽位（本地时刻，`2026-11-26T09:00`）。取代旧版按日历天的
    * lastRunSlot：改时间/频率后槽位 id 自然不同，因此当天仍会重新触发。 */
   lastSlot?: string;
@@ -531,7 +534,7 @@ export interface AutomationTask {
   lastSuccessAt?: number;
   /** 上次因超出补跑窗口而未能执行的计划时刻。 */
   lastMissedAt?: number;
-  lastStatus?: "ok" | "error" | "missed";
+  lastStatus?: "ok" | "error" | "missed" | "skipped";
   lastError?: string;
 }
 
@@ -591,6 +594,37 @@ function sanitizeVerifyRules(raw: unknown[]): import("./automation-verify").Veri
     }
   }
   return out;
+}
+
+/**
+ * 门控的白名单化。precondition.command 会真的执行进程，所以只接受形状正确的值；
+ * skipDates 只接受合法日期串与相对/绝对路径，非法源直接丢弃（不是整条 gate 丢弃）。
+ */
+function sanitizeGate(raw: unknown): import("./automation-gate").TaskGate | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const g = raw as Record<string, unknown>;
+  const out: import("./automation-gate").TaskGate = {};
+  const pre = g.precondition as Record<string, unknown> | undefined;
+  if (pre && typeof pre === "object" && typeof pre.command === "string" && pre.command.trim()) {
+    const args = Array.isArray(pre.args) ? pre.args.filter((a): a is string => typeof a === "string") : undefined;
+    out.precondition = {
+      command: pre.command.trim(),
+      ...(args && args.length ? { args: args.slice(0, 20) } : {}),
+      ...(typeof pre.timeoutMs === "number" && Number.isFinite(pre.timeoutMs)
+        ? { timeoutMs: Math.max(1000, Math.min(300_000, Math.round(pre.timeoutMs))) }
+        : {}),
+    };
+  }
+  const sd = g.skipDates as Record<string, unknown> | undefined;
+  if (sd && typeof sd === "object") {
+    if (sd.kind === "inline" && Array.isArray(sd.dates)) {
+      const dates = sd.dates.filter((d): d is string => typeof d === "string").slice(0, 400);
+      if (dates.length) out.skipDates = { kind: "inline", dates };
+    } else if (sd.kind === "file" && typeof sd.path === "string" && sd.path.trim()) {
+      out.skipDates = { kind: "file", path: sd.path.trim() };
+    }
+  }
+  return out.precondition || out.skipDates ? out : undefined;
 }
 
 /** The task's explicit model choice, or null when it should follow pi's default. */
@@ -1183,6 +1217,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
         ...(t.isolation === "worktree" ? { isolation: "worktree" as const } : {}),
         ...(t.draft === true ? { draft: true } : {}),
         ...(Array.isArray(t.verify) ? { verify: sanitizeVerifyRules(t.verify) } : {}),
+        ...(t.gate ? { gate: sanitizeGate(t.gate) } : {}),
         ...(typeof t.lastSlot === "string" ? { lastSlot: t.lastSlot } : {}),
         ...(typeof t.lastRunSlot === "string" ? { lastRunSlot: t.lastRunSlot } : {}),
         ...(typeof t.firstSeenAt === "number" ? { firstSeenAt: t.firstSeenAt } : {}),
@@ -1190,7 +1225,7 @@ export function sanitizeImportedConfig(parsed: unknown): Partial<AppConfig> {
         ...(typeof t.lastAttemptAt === "number" ? { lastAttemptAt: t.lastAttemptAt } : {}),
         ...(typeof t.lastSuccessAt === "number" ? { lastSuccessAt: t.lastSuccessAt } : {}),
         ...(typeof t.lastMissedAt === "number" ? { lastMissedAt: t.lastMissedAt } : {}),
-        ...(t.lastStatus === "ok" || t.lastStatus === "error" || t.lastStatus === "missed"
+        ...(t.lastStatus === "ok" || t.lastStatus === "error" || t.lastStatus === "missed" || t.lastStatus === "skipped"
           ? { lastStatus: t.lastStatus }
           : {}),
         ...(typeof t.lastError === "string" ? { lastError: t.lastError } : {}),

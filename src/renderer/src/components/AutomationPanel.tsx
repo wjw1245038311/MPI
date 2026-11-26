@@ -273,6 +273,9 @@ export function AutomationPanel() {
     }
   };
 
+  // 门控编辑区的窄化值：TS 在 JSX 里不保留 draft.gate 的窄化
+  const gate = draft?.gate ?? null;
+
   return (
     <SidePanel title={language === "zh" ? "定时任务" : "Automations"} icon={<Clock size={15} />} onClose={close}>
       <div className="plugins-body">
@@ -321,6 +324,11 @@ export function AutomationPanel() {
                     {t.draft && (
                       <span className="auto-freq auto-draft" title={language === "zh" ? "智能体起草，尚未启用" : "Drafted by the agent, not enabled yet"}>
                         {language === "zh" ? "待确认" : "Draft"}
+                      </span>
+                    )}
+                    {t.lastStatus === "skipped" && (
+                      <span className="auto-freq" title={t.lastError}>
+                        {language === "zh" ? "已跳过" : "Skipped"}
                       </span>
                     )}
                     {t.lastStatus === "error" && (
@@ -754,6 +762,145 @@ export function AutomationPanel() {
                       ? "开启后任务在 git 工作树副本里跑，项目工作区不动；跑完保留分支与目录，由你决定查看 diff、合并还是丢弃。仅 git 仓库生效，非 git 目录会直接报错。"
                       : "When enabled the run happens in a git worktree copy; your project workspace is untouched. The branch and directory are kept so you can review the diff, merge, or discard. Git repositories only — a non-git folder fails instead of silently running in place."}
                   </div>
+                </div>
+              </div>
+
+              <div className="set-row wide">
+                <label className="set-label">{language === "zh" ? "前置门控" : "Precondition"}</label>
+                <div className="set-control">
+                  <div className="auto-freq-tabs">
+                    <button
+                      className={`set-btn ${gate ? "primary" : "ghost"}`}
+                      onClick={() => patch({ gate: gate ?? { precondition: { command: "", args: [] } } })}
+                    >
+                      {language === "zh" ? "启用门控" : "Enable gate"}
+                    </button>
+                    {gate && (
+                      <button className="set-btn ghost" onClick={() => patch({ gate: undefined })}>
+                        {language === "zh" ? "关闭门控" : "Disable gate"}
+                      </button>
+                    )}
+                  </div>
+
+                  {gate && (
+                    <div className="auto-gate-body">
+                      <div className="auto-gate-row">
+                        <span className="auto-gate-label">{language === "zh" ? "条件命令" : "Condition"}</span>
+                        <input
+                          className="set-input"
+                          placeholder={
+                            language === "zh"
+                              ? "退出 0 才执行，例如 scripts/should-run.sh"
+                              : "Runs only when this exits 0, e.g. scripts/should-run.sh"
+                          }
+                          value={gate.precondition?.command ?? ""}
+                          onChange={(e) =>
+                            patch({
+                              gate: {
+                                ...gate,
+                                precondition: {
+                                  ...gate.precondition,
+                                  command: e.target.value,
+                                  args: gate.precondition?.args ?? [],
+                                },
+                              },
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="auto-gate-row">
+                        <span className="auto-gate-label">
+                          {language === "zh" ? "参数（空格分隔）" : "Arguments (space-separated)"}
+                        </span>
+                        <input
+                          className="set-input"
+                          placeholder="--today"
+                          value={(gate.precondition?.args ?? []).join(" ")}
+                          onChange={(e) =>
+                            patch({
+                              gate: {
+                                ...gate,
+                                precondition: {
+                                  ...gate.precondition,
+                                  command: gate.precondition?.command ?? "",
+                                  args: e.target.value.split(/\s+/).filter(Boolean),
+                                },
+                              },
+                            })
+                          }
+                        />
+                      </div>
+
+                      <div className="auto-gate-row">
+                        <span className="auto-gate-label">{language === "zh" ? "跳过日期" : "Skip dates"}</span>
+                        <select
+                          className="set-select"
+                          value={gate.skipDates?.kind ?? ""}
+                          onChange={(e) => {
+                            const kind = e.target.value;
+                            patch({
+                              gate: {
+                                ...gate,
+                                skipDates:
+                                  kind === "inline"
+                                    ? { kind: "inline" as const, dates: [] }
+                                    : kind === "file"
+                                      ? { kind: "file" as const, path: "" }
+                                      : undefined,
+                              },
+                            });
+                          }}
+                        >
+                          <option value="">{language === "zh" ? "不按日期跳过" : "Do not skip by date"}</option>
+                          <option value="inline">{language === "zh" ? "手动填写日期" : "Enter dates"}</option>
+                          <option value="file">{language === "zh" ? "读取日期文件" : "Read dates from a file"}</option>
+                        </select>
+                      </div>
+
+                      {gate.skipDates?.kind === "inline" && (
+                        <div className="auto-gate-row">
+                          <span className="auto-gate-label">
+                            {language === "zh" ? "日期（每行一个）" : "Dates (one per line)"}
+                          </span>
+                          <textarea
+                            className="set-json"
+                            style={{ minHeight: 70 }}
+                            placeholder={"2026-12-01\n2026-12-02"}
+                            value={gate.skipDates.dates.join("\n")}
+                            onChange={(e) => {
+                              const dates = e.target.value
+                                .split(/\r?\n/)
+                                .map((x) => x.trim())
+                                .filter(Boolean);
+                              patch({ gate: { ...gate, skipDates: { kind: "inline", dates } } });
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {gate.skipDates?.kind === "file" && (
+                        <div className="auto-gate-row">
+                          <span className="auto-gate-label">{language === "zh" ? "文件路径" : "File path"}</span>
+                          <input
+                            className="set-input"
+                            placeholder={
+                              language === "zh"
+                                ? "相对任务工作目录，每行一个 YYYY-MM-DD"
+                                : "Relative to the task folder; one YYYY-MM-DD per line"
+                            }
+                            value={gate.skipDates.path}
+                            onChange={(e) => patch({ gate: { ...gate, skipDates: { kind: "file", path: e.target.value } } })}
+                          />
+                        </div>
+                      )}
+
+                      <div className="set-hint">
+                        {language === "zh"
+                          ? "条件不满足或日期命中时记为「跳过」：不算失败、不弹通知、不进待查看。条件命令无法执行也算跳过——无人值守不硬闯。"
+                          : "When the condition fails or the date matches, the run is recorded as skipped: not a failure, no notification, no unreviewed badge. A condition that cannot run also skips — unattended runs do not force their way through."}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -696,7 +696,7 @@ const api = {
       };
       origin: "desktop" | "remote" | "agent";
     }) => void) => on("pi:thread-config-changed", cb),
-    automation: (cb: (p: { type: "start" | "done" | "missed" | "draft"; taskId: string; name: string; ok?: boolean; error?: string }) => void) =>
+    automation: (cb: (p: { type: "start" | "done" | "missed" | "draft" | "skipped"; taskId: string; name: string; ok?: boolean; error?: string }) => void) =>
       on("pi:automation", cb),
     messaging: (cb: (p: {
       status: "off" | "connecting" | "connected" | "reconnecting" | "error";

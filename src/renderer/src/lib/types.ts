@@ -258,6 +258,13 @@ export type VerifyRule =
   | { kind: "minBytes"; path: string; bytes: number }
   | { kind: "command"; command: string; args?: string[]; timeoutMs?: number };
 
+/** 前置门控（与主进程 automation-gate.ts 的 TaskGate 一致）。 */
+export type TaskGate = {
+  /** 退出 0 才执行；非 0 记为跳过。 */
+  precondition?: { command: string; args?: string[]; timeoutMs?: number };
+  /** 跳过日期来源（`YYYY-MM-DD`）。 */
+  skipDates?: { kind: "inline"; dates: string[] } | { kind: "file"; path: string };
+};
 export interface AutomationTask {
   id: string;
   name: string;
@@ -282,6 +289,8 @@ export interface AutomationTask {
   draft?: boolean;
   /** 产物校验规则（全部 AND）；空/缺省 = 不校验。 */
   verify?: VerifyRule[];
+  /** 前置门控：不满足时记 skipped。缺省 = 不门控。 */
+  gate?: TaskGate;
   /** 上次处理到的槽位（本地时刻，`2026-11-26T09:00`）。 */
   lastSlot?: string;
   /** 旧版按日历天的去重键，仅读取、新代码不再写入。 */
@@ -293,7 +302,7 @@ export interface AutomationTask {
   lastSuccessAt?: number;
   /** 上次因超出补跑窗口而未执行的计划时刻。 */
   lastMissedAt?: number;
-  lastStatus?: "ok" | "error" | "missed";
+  lastStatus?: "ok" | "error" | "missed" | "skipped";
   lastError?: string;
   /** 以下两个字段仅存在于 `automation:getTasksSnapshot` 的返回里（主进程实时计算，不落盘）。 */
   nextRunAt?: number | null;
