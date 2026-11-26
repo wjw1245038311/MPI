@@ -464,7 +464,7 @@ function writeMail(share, device, name, fields) {
   rmSync(box, { recursive: true, force: true });
 }
 
-// —— 8. 设备字面量不泄漏到接口 + bodyFile + 标题截断告警 ——
+// —— 9. 设备字面量不泄漏到接口 + bodyFile + 标题截断告警 ——
 // 对应 minibox 2026-11-26《设备字面量泄漏审计》的 A/B/C 三条。
 {
   const PI_RUNTIME = resolveManagedPiRuntimeDir();
@@ -549,6 +549,179 @@ function writeMail(share, device, name, fields) {
     else writeFileSync(join(dataDir, "config.json"), backup);
     rmSync(share, { recursive: true, force: true });
   }
+}
+
+// —— 10. 设备名「从哪一级来的」可报出来（maxbox 第三条）——
+{
+  const core = require(join(APP, "lib", "core.cjs"));
+  const dataDir = mkdtempSync(join(tmpdir(), "devmail-src-"));
+  const prevEnv = process.env.DEVMAIL_DEVICE;
+  const prevHome = process.env.HOME;
+  const prevProfile = process.env.USERPROFILE;
+  const prevName = process.env.COMPUTERNAME;
+  try {
+    // 1) 配置优先
+    core.writeConfig(dataDir, { deviceName: "maxbox" });
+    delete process.env.DEVMAIL_DEVICE;
+    assert.deepEqual(core.resolveDeviceSource(core.readConfig(dataDir)), { name: "maxbox", source: "config" });
+
+    // 2) 环境变量
+    core.writeConfig(dataDir, { deviceName: "" });
+    process.env.DEVMAIL_DEVICE = "minibox";
+    assert.equal(core.resolveDeviceSource(core.readConfig(dataDir)).source, "env");
+    delete process.env.DEVMAIL_DEVICE;
+
+    // 3) ~/.devmail-device
+    const fakeHome = mkdtempSync(join(tmpdir(), "devmail-home-"));
+    writeFileSync(join(fakeHome, ".devmail-device"), "thinkbook16p\n");
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+    assert.equal(core.resolveDeviceSource(core.readConfig(dataDir)).source, "file");
+
+    // 4) 启发式（名字在四台里）
+    rmSync(join(fakeHome, ".devmail-device"));
+    process.env.COMPUTERNAME = "MINI-BOX";
+    const hit = core.resolveDeviceSource(core.readConfig(dataDir));
+    assert.deepEqual(hit, { name: "minibox", source: "heuristic" });
+
+    // 5) 启发式落空（thinkbook16p 与 maxbox 的 WJW 就落在这）——名字仍给出来，但 source 说清是猜的
+    process.env.COMPUTERNAME = "WJW";
+    const miss = core.resolveDeviceSource(core.readConfig(dataDir));
+    assert.equal(miss.name, "wjw");
+    assert.equal(miss.source, "unknown");
+    assert.ok(!core.DEVICES.includes(miss.name), "WJW 不应该被当成四台里的任何一台");
+    assert.ok(core.DEVICE_SOURCE_LABELS[miss.source].includes("猜"), "落空时的中文描述要说清是猜的");
+
+    ok("设备名解析：每一级都能报出来源，落空时标 unknown 不乱贴");
+    rmSync(fakeHome, { recursive: true, force: true });
+  } finally {
+    if (prevEnv === undefined) delete process.env.DEVMAIL_DEVICE;
+    else process.env.DEVMAIL_DEVICE = prevEnv;
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevProfile;
+    if (prevName === undefined) delete process.env.COMPUTERNAME;
+    else process.env.COMPUTERNAME = prevName;
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
+// —— 11. 信箱里的 .md 附件不再冒充未读（maxbox 第四条）——
+{
+  const core = require(join(APP, "lib", "core.cjs"));
+  const share = makeShare(["workstation"]);
+  const cfg = { shareRoot: share, deviceName: "workstation" };
+  const inbox = join(share, "inbox", "mail", "workstation");
+
+  // 名字合约定的信 → 算未读
+  writeMail(share, "workstation", "20261126-1000-minibox-a.md", { title: "合约定的信" });
+  // 名字不合约定、但带信头（手写的）→ 仍算未读
+  writeMail(share, "workstation", "随手写的一封.md", { title: "没按约定命名" });
+  // 名字与信头都不合（maxbox 碰到的就是这种）→ 归非消息文件
+  writeFileSync(join(inbox, "strata-iq3_s.sample-20261028.README.md"), "# 附件说明\n\n这是随信带的样本说明。\n");
+  // 非 .md 附件→照旧归非消息文件
+  writeFileSync(join(inbox, "config.bak.json"), "{}");
+
+  assert.ok(core.isMessageFileName("20261126-1000-minibox-a.md"), "合约定的名字应判为消息");
+  assert.ok(!core.isMessageFileName("随手写的一封.md"), "不合约定的名字不应判为消息");
+
+  const res = core.listInbox(cfg);
+  assert.ok(res.ok);
+  const names = res.files.map((f) => f.name).sort();
+  assert.deepEqual(names, ["20261126-1000-minibox-a.md", "随手写的一封.md"], `未读只应包含真消息：${JSON.stringify(names)}`);
+  assert.ok(res.others.includes("strata-iq3_s.sample-20261028.README.md"), ".md 附件应计入非消息文件");
+  assert.ok(res.others.includes("config.bak.json"), "非 .md 附件仍计入非消息文件");
+  assert.equal(core.snapshot(cfg).count, 2, "未读计数不应把附件算进去");
+  ok("列未读：名字或信头认一个，两头都不沾的只计数不占未读");
+
+  rmSync(share, { recursive: true, force: true });
+}
+
+// —— 12. 表单空值不抹掉手写的设备名，并且旧 config 留 bak ——
+{
+  const svc = require(join(APP, "service", "index.cjs"));
+  const core = require(join(APP, "lib", "core.cjs"));
+  const dataDir = mkdtempSync(join(tmpdir(), "devmail-sync-"));
+  const share = makeShare(["maxbox"]);
+
+  // 手动装：只写了 config.json，面板从没打开过 → 表单递过来的是清单默认值
+  core.writeConfig(dataDir, { shareRoot: share, deviceName: "maxbox", pollMinutes: "0", notifyOnSessionStart: false });
+  const logs = [];
+  const statuses = [];
+  // 表单与手写 config 只在一项上不同（pollMinutes），这样同时能测到「内容真变了才留 bak」
+  const host = {
+    app: { id: "devmail", dir: APP, dataDir, version: "1.0.3" },
+    getFieldValues: () => ({ deviceName: "", shareRoot: share, pollMinutes: "15", notifyOnSessionStart: "off" }),
+    status: (s, d) => statuses.push([s, d]),
+    log: (l) => logs.push(l),
+  };
+  await svc.activate(host);
+  await svc.deactivate();
+
+  const written = JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8"));
+  assert.equal(written.deviceName, "maxbox", "表单留空不应抹掉手写的设备名");
+  assert.equal(written.pollMinutes, "15", "表单给了值就用表单的");
+  assert.ok(logs.some((l) => /沿用 config.json 现值/.test(l)), "保留时应记一行日志");
+  const bak = readFileSync(join(dataDir, "config.json.bak"), "utf8");
+  assert.ok(bak.includes('"deviceName": "maxbox"') && bak.includes('"pollMinutes": "0"'), `旧内容应完整留在 .bak：${bak}`);
+  // 其余项仍表单优先（shareRoot 留空 = 用内置默认，这是标签里写明的语义）
+  assert.equal(written.shareRoot, share, "shareRoot 仍表单优先");
+  assert.equal(written.notifyOnSessionStart, false, "开关项没有「未填」这种取值，仍表单优先");
+  assert.equal(core.resolveShareRoot({ shareRoot: "" }), core.DEFAULT_SHARE_ROOT, "shareRoot 空串等价于内置默认");
+  ok("service：设备名为空时保留现值并留 bak，其余项表单优先");
+
+  // 用户在面板里填了 → 以表单为准（能改得动）
+  const host2 = {
+    app: { id: "devmail", dir: APP, dataDir, version: "1.0.3" },
+    getFieldValues: () => ({ deviceName: "workstation", shareRoot: share, pollMinutes: "0", notifyOnSessionStart: "off" }),
+    status: (s, d) => statuses.push([s, d]),
+    log: (l) => logs.push(l),
+  };
+  await svc.activate(host2);
+  await svc.deactivate();
+  assert.equal(JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8")).deviceName, "workstation", "表单填了就应该生效");
+  ok("service：面板填了设备名仍以表单为准（保留只限空值）");
+
+  // 名字不在四台里 → 状态里给出可操作的下一步（不是只问一句“填错了？”）
+  const host3 = {
+    app: { id: "devmail", dir: APP, dataDir, version: "1.0.3" },
+    // shareRoot 给临时共享：这一段只测「设备名落空时的提示」，不去碰真网络
+    getFieldValues: () => ({ deviceName: "", shareRoot: share, pollMinutes: "0", notifyOnSessionStart: "off" }),
+    status: (s, d) => statuses.push([s, d]),
+    log: (l) => logs.push(l),
+  };
+  core.writeConfig(dataDir, { shareRoot: share, deviceName: "" });
+  // 把三级兜底都掉空：环境变量、~/.devmail-device（本机真有这份文件，必须换掉 HOME）、启发式落空
+  const prevEnv = process.env.DEVMAIL_DEVICE;
+  const prevHome = process.env.HOME;
+  const prevProfile = process.env.USERPROFILE;
+  const prevName = process.env.COMPUTERNAME;
+  const emptyHome = mkdtempSync(join(tmpdir(), "devmail-nohome-"));
+  delete process.env.DEVMAIL_DEVICE;
+  process.env.HOME = emptyHome;
+  process.env.USERPROFILE = emptyHome;
+  process.env.COMPUTERNAME = "WJW";
+  try {
+    await svc.activate(host3);
+    await svc.deactivate();
+  } finally {
+    if (prevEnv === undefined) delete process.env.DEVMAIL_DEVICE;
+    else process.env.DEVMAIL_DEVICE = prevEnv;
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevProfile;
+    if (prevName === undefined) delete process.env.COMPUTERNAME;
+    else process.env.COMPUTERNAME = prevName;
+    rmSync(emptyHome, { recursive: true, force: true });
+  }
+  const hint = statuses.filter(([, d]) => /手填设备名|应用设置/.test(d));
+  assert.ok(hint.length > 0, `名字不对时应说清该改哪儿：${JSON.stringify(statuses.slice(-3))}`);
+  ok("service：设备名不是四台里时，状态文案直接指向「该改哪儿」");
+
+  rmSync(dataDir, { recursive: true, force: true });
+  rmSync(share, { recursive: true, force: true });
 }
 
 console.log(`\n${passed} checks passed`);
