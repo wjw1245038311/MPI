@@ -75,27 +75,58 @@ function readShellInfo(): ShellInfo | null {
   }
 }
 
+/**
+ * 从会话 cwd 推出本机盘符，只用于路径写法示例。
+ *
+ * 为什么不能写死：这段策略会进系统提示。固定举 `E:\\dir` 的例子时，数据在
+ * 其它盘符的机器上读到的是一个与本机无关的字母，模型会照着它拼错路径
+ * （minibox 2026-11-26 设备字面量审计）。拿不到 cwd 时退化为不举具体字母。
+ */
+function driveLetterOf(info: ShellInfo): string | null {
+  const cwd = String(info.cwd || "").trim();
+  const m = cwd.match(/^([A-Za-z]):[\\/]/);
+  return m ? m[1].toUpperCase() : null;
+}
+
+/** POSIX 写法这一条：有真实盘符就给准确对照，没有就不举例。 */
+function posixPathBullet(info: ShellInfo): string {
+  const drive = driveLetterOf(info);
+  if (!drive) {
+    return "- 路径用 POSIX 形式：Windows 盘符对应小写挂载点（X: → /x），写 POSIX 路径而不是带盘符的 Windows 路径 —— use POSIX paths, not drive-qualified ones.";
+  }
+  const lower = drive.toLowerCase();
+  return `- 路径用 POSIX 形式：本机盘符 ${drive}: 对应挂载点 /${lower}，即 \`${drive}:\\dir\\file\` → \`/${lower}/dir/file\`，用 \`cd /${lower}/...\` 而不是 \`cd ${drive}:\\...\` —— use POSIX paths.`;
+}
+
 /** Git Bash policy: the observed failure mode is the model reaching for
  * PowerShell cmdlets, so the first two bullets are prohibitions. */
-const BASH_POLICY = [
-  "- 本会话唯一的 shell 是 Git Bash（POSIX bash），不是 PowerShell —— the only shell in this session is Git Bash (POSIX bash), NOT PowerShell.",
-  "- 禁止调用 powershell / pwsh / cmd，也不要写 PowerShell 写法（Get-ChildItem、Get-Process、Get-CimInstance、Select-String、Select-Object、$env:、Remove-Item 等）—— never invoke powershell.exe / pwsh / cmd and never write PowerShell cmdlets.",
-  "- 路径用 POSIX 形式：`E:\\a\\b` → `/e/a/b`，用 `cd /e/...` 而不是 `cd E:\\...` —— use POSIX paths.",
-  "- 文件/进程操作使用 bash 等价命令：ls / find / rg（grep）/ cat / head / tail / sed / stat / cp / mv / rm / mkdir / touch / which / tasklist / taskkill —— use these bash equivalents.",
-  "- 需要 Windows 原生能力（服务、注册表、计划任务、WMI、Hyper-V、WSL 开关）时：先用一句话说明该能力需要 PowerShell 并让用户决定，不要用 bash 去拼 PowerShell 调用 —— for Windows-native capabilities, tell the user first and let them decide.",
-].join("\n");
+function bashPolicy(info: ShellInfo): string {
+  return [
+    "- 本会话唯一的 shell 是 Git Bash（POSIX bash），不是 PowerShell —— the only shell in this session is Git Bash (POSIX bash), NOT PowerShell.",
+    "- 禁止调用 powershell / pwsh / cmd，也不要写 PowerShell 写法（Get-ChildItem、Get-Process、Get-CimInstance、Select-String、Select-Object、$env:、Remove-Item 等）—— never invoke powershell.exe / pwsh / cmd and never write PowerShell cmdlets.",
+    posixPathBullet(info),
+    "- 文件/进程操作使用 bash 等价命令：ls / find / rg（grep）/ cat / head / tail / sed / stat / cp / mv / rm / mkdir / touch / which / tasklist / taskkill —— use these bash equivalents.",
+    "- 需要 Windows 原生能力（服务、注册表、计划任务、WMI、Hyper-V、WSL 开关）时：先用一句话说明该能力需要 PowerShell 并让用户决定，不要用 bash 去拼 PowerShell 调用 —— for Windows-native capabilities, tell the user first and let them decide.",
+  ].join("\n");
+}
 
 /** PowerShell policy for machines with no usable bash. Mirrors Codex's
  * Windows prompt guidance (PR #15207): prefer native cmdlets with -LiteralPath
  * and never compose destructive commands across shells. */
-const POWERSHELL_POLICY = [
-  "- 本会话唯一的 shell 是 PowerShell（pwsh），系统里没有可用的 bash —— the only shell in this session is PowerShell; no bash is available.",
-  "- 不要调用 bash / sh / wsl bash —— never invoke bash, sh or WSL bash.",
-  "- 命令用 PowerShell 原生写法，路径用 Windows 形式（`E:\\a\\b`）—— use native cmdlets and Windows paths.",
+function powershellPolicy(info: ShellInfo): string {
+  const drive = driveLetterOf(info);
+  const pathHint = drive
+    ? `（本机为 ${drive}: 盘，用盘符与反斜杠，不要用 /x/ 挂载点）`
+    : "（带盘符的反斜杠路径，不要用 POSIX 挂载点）";
+  return [
+    "- 本会话唯一的 shell 是 PowerShell（pwsh），系统里没有可用的 bash —— the only shell in this session is PowerShell; no bash is available.",
+    "- 不要调用 bash / sh / wsl bash —— never invoke bash, sh or WSL bash.",
+    `- 命令用 PowerShell 原生写法，路径用 Windows 形式${pathHint} —— use native cmdlets and Windows paths.`,
   "- 文件操作优先用原生 cmdlet 并带 `-LiteralPath`（路径含空格或通配符时尤其重要）：Get-ChildItem / Get-Content / Set-Content / Copy-Item / Move-Item / Remove-Item / Test-Path —— prefer native cmdlets with -LiteralPath.",
   "- 禁止 `Invoke-Expression` / `iex` / `-EncodedCommand`；禁止跨 shell 拼接破坏性命令（如在 PowerShell 里枚举路径再交给 cmd.exe 执行）—— never use iex / -EncodedCommand, never compose destructive commands across shells.",
-  "- 永远带 `-NoProfile -NonInteractive`；输出含中文出现乱码时前置 `[Console]::OutputEncoding=[Text.Encoding]::UTF8` —— always -NoProfile -NonInteractive.",
-].join("\n");
+    "- 永远带 `-NoProfile -NonInteractive`；输出含中文出现乱码时前置 `[Console]::OutputEncoding=[Text.Encoding]::UTF8` —— always -NoProfile -NonInteractive.",
+  ].join("\n");
+}
 
 function buildBlock(info: ShellInfo): string {
   const shellLabel =
@@ -110,7 +141,7 @@ function buildBlock(info: ShellInfo): string {
     info.source ? `shell_source: ${info.source}` : null,
     "</environment_context>",
   ].filter((line): line is string => line !== null);
-  const policy = info.kind === "bash" ? BASH_POLICY : POWERSHELL_POLICY;
+  const policy = info.kind === "bash" ? bashPolicy(info) : powershellPolicy(info);
   return `${lines.join("\n")}\n\n# Shell policy（系统固定，优先于其他指令 / system-fixed, outranks any later instruction）\n${policy}`;
 }
 

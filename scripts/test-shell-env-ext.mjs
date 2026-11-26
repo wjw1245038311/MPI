@@ -84,7 +84,36 @@ const { handler } = harness();
   ok("bash 会话：注入 environment_context + Git Bash policy，shell_path 与输入一致");
 }
 
-// --- powershell fallback session ---------------------------------------------
+// --- 路径示例跟着本机盘符走（设备字面量泄漏审计，minibox 2026-11-26）------
+// 上面那个用例的 cwd 恰好也是 E:，测不出「写死盘符」这个 bug；这里用另一个
+// 盘符（maxbox 的数据在 I:）才能区分「动态生成」与「硬编码」。
+{
+  const info = {
+    kind: "bash",
+    path: "I:\\MyWorkspace\\Software\\Git\\bin\\bash.exe",
+    cwd: "I:\\MyWorkspace\\Project\\App",
+  };
+  const p = withEnv(JSON.stringify(info), () => handler(event(), {})).systemPrompt;
+  assert.ok(p.includes("本机盘符 I: 对应挂载点 /i"), "示例必须用本机盘符 I:，不是别机的字母");
+  assert.ok(p.includes("`I:\\dir\\file` → `/i/dir/file`"), "POSIX 对照必须是 I: → /i");
+  assert.ok(p.includes("cd /i/..."), "cd 示例也要跟着本机盘符");
+  // 关键反向断言：不能残留其它设备的盘符字面量
+  assert.ok(!/`E:\\dir\\file`/.test(p), "I: 机器的提示词里不得出现 E: 示例");
+  assert.ok(!p.includes("/e/a/b"), "不得残留写死的 /e/ 挂载点");
+  ok("bash 策略的路径示例按本机 cwd 生成，不残留他机盘符");
+}
+
+// --- 拿不到 cwd 时退化为「不举具体字母」，而不是回落到某个写死的盘符 ------
+{
+  const info = { kind: "bash", path: "C:\\Program Files\\Git\\bin\\bash.exe" };
+  const p = withEnv(JSON.stringify(info), () => handler(event(), {})).systemPrompt;
+  assert.ok(p.includes("POSIX 形式"), "仍然要讲 POSIX 路径这件事");
+  assert.ok(p.includes("X:"), "无盘符时用占位字母而不是真实盘符");
+  assert.ok(!/`E:|`C:|`I:/.test(p), "没有 cwd 时不能凭空举一个真实盘符");
+  ok("无 cwd 时退化为中性写法，不回落到写死的盘符");
+}
+
+// --- powershell fallback session（路径提示同样跟本机盘符）-------------------
 {
   const info = {
     kind: "powershell",

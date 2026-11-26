@@ -206,7 +206,7 @@ async function waitForReceipt(id: string): Promise<Receipt | null> {
 const Params = Type.Object({
   path: Type.String({
     description:
-      "File to hand over. Absolute (E:/a/b.pdf or Git Bash /e/a/b.pdf) or relative to this session's working directory.",
+      "File to hand over. An absolute path, or relative to this session's working directory. The accepted path dialect follows this machine's shell (see the environment block), not a fixed drive letter.",
   }),
   label: Type.Optional(
     Type.String({ description: "Display name shown in the conversation card (defaults to the file name)." }),
@@ -223,7 +223,7 @@ export default function (pi: ExtensionAPI) {
       "Use when the user asks you to hand something over (a report, an archive, audio, an installer) and may be " +
       "reading on a phone or another device — desktop shows a clickable card, paired phones/PWA can download it. " +
       "Prefer this over pasting a path when the user will not have access to this machine. " +
-      "Files inside the project folder, Work/tempfile and Share go straight through; anything else asks the user first. " +
+      "Files inside the session working folder and this app's configured scratch/shared areas are sent without prompting; anything outside them asks the user first. Which areas those are is decided by the app configuration — if a send is refused, the error names the directories actually allowed on this machine. " +
       "Calling this tool IS the send action: MPI stores the file, attaches the card and syncs it to every paired " +
       "device on its own. You only need the file's name/path to call it — after it returns, just continue the " +
       "conversation normally. Never write any file reference markup (<file … />) or base64 into your reply; " +
@@ -260,13 +260,18 @@ export default function (pi: ExtensionAPI) {
       // Outside the no-approval area we need one explicit yes. Without UI (automation,
       // unattended run) there is nobody to ask → refuse rather than assume consent.
       let approved = true;
-      if (!isWithinRoots(abs, allowedRoots(cwd))) {
+      const roots = allowedRoots(cwd);
+      if (!isWithinRoots(abs, roots)) {
         if (!ctx?.hasUI) {
           return {
             content: [
               {
                 type: "text",
-                text: `Refused: ${abs} is outside this session's workspace and there is no UI to ask for approval. Move the file into the project folder, Work/tempfile or Share first.`,
+                // 这里给真实路径而不是布局说明：同一段文案在四台设备上必须指向不同的地方，
+                // 写死「Work/tempfile、Share」在别的设备上是误导（minibox 2026-11-26 审计）。
+                text:
+                  `Refused: ${abs} is outside this session's workspace and there is no UI to ask for approval. ` +
+                  `Move the file under one of these directories, or pass a path inside them: ${roots.join(", ")}.`,
               },
             ],
           };

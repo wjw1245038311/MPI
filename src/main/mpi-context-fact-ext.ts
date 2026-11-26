@@ -53,6 +53,9 @@ export function buildFactText(tokensBefore: number, contextWindow: number): stri
   if (!(contextWindow > 0)) {
     return `[系统事实] 刚才发生过一次上下文压缩（压缩前约 ${fmt(tokensBefore)} tokens）。本会话模型未声明窗口大小，请不要自行推算上下文余量；是否该收工只以「系统宣布已压缩」或「工具调用真的失败」为准。`;
   }
+  // 这里**不要**写引擎日志路径（曾写过一条指向本机引擎日志的 grep 提示）：那是
+  // 特定设备上的特定版本目录，其它机器上不存在，模型会白跑一次工具调用；而且这段
+  // 注入的价值全在上面三句（窗口、压缩前占用、不要自行估算），日志提示是附属。
   // 压缩后的真实占用由 pi 在新的 usage 到来前无法给出，但「窗口」是确定的，
   // 而模型真正缺的是「上限是多少、我压完还剩多少」这两个数。
   const usedPct = Math.min(100, (tokensBefore / contextWindow) * 100);
@@ -62,7 +65,6 @@ export function buildFactText(tokensBefore: number, contextWindow: number): stri
     `压缩后历史已被摘要替换，当前实际占用会显著低于压缩前。`,
     `请不要自行估算上下文余量，也不要因为「快到上限了」而提前停止任务——`,
     `是否该收工只以「系统明确宣布已压缩」或「工具调用真的失败」为准。`,
-    `如需精确值，可运行：grep "prompt .* tokens" F:/Strata-0.2.7/strata-8090.log | tail -5（引擎侧真值）。`,
   ].join("\n");
 }
 

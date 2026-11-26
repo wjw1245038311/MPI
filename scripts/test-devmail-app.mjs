@@ -464,4 +464,91 @@ function writeMail(share, device, name, fields) {
   rmSync(box, { recursive: true, force: true });
 }
 
+// —— 8. 设备字面量不泄漏到接口 + bodyFile + 标题截断告警 ——
+// 对应 minibox 2026-11-26《设备字面量泄漏审计》的 A/B/C 三条。
+{
+  const PI_RUNTIME = resolveManagedPiRuntimeDir();
+  const { createJiti } = await import(pathToFileURL(join(PI_RUNTIME, "node_modules/jiti/lib/jiti.mjs")).href);
+  const reqPi = createRequire(join(PI_RUNTIME, "dist/index.js"));
+  const jiti = createJiti(join(PI_RUNTIME, "dist/index.js"), {
+    moduleCache: false,
+    virtualModules: { typebox: reqPi("typebox"), "@earendil-works/pi-coding-agent": {} },
+  });
+  const factory = await jiti.import(join(APP, "pi", "extension.ts"), { default: true });
+
+  const tools = [];
+  factory({ registerTool: (t) => tools.push(t), on: () => {} });
+
+  // A：工具描述与参数描述里不得出现盘符，也不得写死某一设备的目录布局。
+  // 同一句描述在四台设备上必须同样成立，否则 agent 会去本地翻一个不存在的目录。
+  {
+    const texts = [];
+    for (const t of tools) {
+      texts.push(`${t.name}: ${t.description}`);
+      const schema = JSON.stringify(t.parameters ?? {});
+      texts.push(`${t.name}(params): ${schema}`);
+    }
+    const joined = texts.join("\n");
+    assert.ok(!/[A-Za-z]:[\\/]/.test(joined), `工具描述里不应出现盘符字面量：${joined.match(/[A-Za-z]:[\\/][^\s,"]*/g)?.[0]}`);
+    assert.ok(!/Share\/inbox|inbox\/mail/.test(joined), "描述不应写死信箱目录布局");
+    ok("接口描述：无盘符、无写死的信箱目录布局（审计 A）");
+  }
+
+  const dataDir = join(APP, "..", "data", "devmail");
+  mkdirSync(dataDir, { recursive: true });
+  const share = makeShare(["workstation"]);
+  const backup = existsSync(join(dataDir, "config.json")) ? readFileSync(join(dataDir, "config.json"), "utf8") : null;
+
+  try {
+    writeFileSync(
+      join(dataDir, "config.json"),
+      JSON.stringify({ shareRoot: share, deviceName: "thinkbook16p", notifyOnSessionStart: "off" }),
+    );
+    const send = tools.find((t) => t.name === "mail_send");
+
+    // C：标题超 24 字符→ 必须告警，不能静默截断
+    const longSubject = "这是一个明显超过二十四个字符上限的长标题，应当被截断并告警";
+    const r1 = await send.execute("t", { to: "workstation", subject: longSubject, body: "正文" });
+    assert.match(r1.content[0].text, /已投递 1 封/);
+    assert.match(r1.content[0].text, /⚠.*标题超过 24 字符/, "标题被截时必须告警（审计 C）");
+    ok("发信：标题超 24 字符时告警，不静默截断");
+
+    // 短标题不该误告警
+    const r2 = await send.execute("t", { to: "workstation", subject: "短标题", body: "正文" });
+    assert.doesNotMatch(r2.content[0].text, /⚠/, "短标题不应出现截断告警");
+    ok("发信：未超限的标题不误告警");
+
+    // B：bodyFile——长正文不需要在上下文里重复一遍
+    const bodyFile = join(tmpdir(), `devmail-body-${Date.now()}.md`);
+    writeFileSync(bodyFile, "# 完整主题\n\n这段正文是从文件读进来的。\n", "utf8");
+    const r3 = await send.execute("t", { to: "workstation", subject: "带文件的信", bodyFile });
+    assert.match(r3.content[0].text, /已投递 1 封/);
+    const inboxDir = join(share, "inbox", "mail", "workstation");
+    const landed = readdirSync(inboxDir).find((f) => f.includes("带文件的信"));
+    assert.ok(landed, "bodyFile 发的信应落进对方信箱");
+    assert.match(readFileSync(join(inboxDir, landed), "utf8"), /这段正文是从文件读进来的/);
+    rmSync(bodyFile, { force: true });
+    ok("发信：bodyFile 能读到文件内容（审计 B）");
+
+    // body 与 bodyFile 同时给 → 报错而不是静默丢一个
+    const r4 = await send.execute("t", { to: "workstation", subject: "两个都给", body: "A", bodyFile: bodyFile });
+    assert.match(r4.content[0].text, /只能给一个/);
+    ok("发信：body 与 bodyFile 互斥，两者都给时报错");
+
+    // bodyFile 不存在 → 可读错误
+    const r5 = await send.execute("t", { to: "workstation", subject: "文件不存在", bodyFile: join(tmpdir(), "nope-devmail-body.md") });
+    assert.match(r5.content[0].text, /读不到正文文件/);
+    ok("发信：bodyFile 不存在时给可读错误");
+
+    // 两个正文都为空 → 不能发出一封空信
+    const r6 = await send.execute("t", { to: "workstation", subject: "空正文", body: "   " });
+    assert.match(r6.content[0].text, /正文为空/);
+    ok("发信：空正文被拒（body 不再是必填，需要自己守住）");
+  } finally {
+    if (backup === null) rmSync(join(dataDir, "config.json"), { force: true });
+    else writeFileSync(join(dataDir, "config.json"), backup);
+    rmSync(share, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n${passed} checks passed`);

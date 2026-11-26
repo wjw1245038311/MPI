@@ -72,9 +72,20 @@ ok("百分比不会超过 100%（异常 tokensBefore 的兜底）", () => {
   assert.equal(pct, 100, "超限时应夹到 100%");
 });
 
-ok("给出引擎侧真值的获取方式", () => {
+// 这段注入文本进的是模型上下文，四台设备共用一份。
+// 以前这里断言的是「应包含 strata-8090.log」——等于把设备字面量泄漏写成了契约：
+// 那段路径只在一台机器的某个版本目录下存在，模型在其它机器上会照着去 grep 一个
+// 不存在的文件，白跑一次工具调用（minibox 2026-11-26 设备字面量审计）。
+// 现在按正确契约断言：不得出现盘符或具体日志路径。
+ok("注入文本不含设备路径", () => {
   const text = buildFactText(SESSION_A, REAL_WINDOW);
-  assert.ok(text.includes("strata-8090.log"), "应指引去读引擎日志");
+  assert.ok(!/[A-Za-z]:[\\/]/.test(text), `不应出现盘符字面量：${text.match(/[A-Za-z]:[\\/][^\s，。）]*/)?.[0]}`);
+  assert.ok(!/\.log/.test(text), "不应指向具体日志文件");
+  assert.ok(!/strata/i.test(text), "不应写死引擎名（各设备网关不一定同名）");
+  // 删掉日志指引不能连带削弱主体：这三句才是这段注入的价值所在
+  assert.ok(/上下文窗口\s*=/.test(text), "仍要给窗口大小");
+  assert.ok(/压缩前占用/.test(text), "仍要给压缩前占用");
+  assert.ok(/不要自行估算/.test(text), "仍要禁止自行估算余量");
 });
 
 console.log(`\ncontext-fact: ${pass} 项全部通过`);
