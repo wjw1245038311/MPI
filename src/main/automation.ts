@@ -15,6 +15,8 @@ import { ensureSmartCompactExtension } from "./compaction-extension";
 import { ensureShellEnvExtension } from "./shellenv-extension";
 import { prepareShellForSpawn } from "./shell-bootstrap";
 import { appendDiagLog } from "./diag-log";
+import { deleteRunsForTask, startRun, updateRun } from "./automation-runs-store";
+import type { AutomationResultNotification } from "./system-notifications";
 import { getAgentDir } from "./session-store";
 import { buildAppendSystemPrompt } from "./append-prompt";
 import { join, resolve } from "node:path";
@@ -40,7 +42,12 @@ export interface AutomationNotify {
   name: string;
   ok?: boolean;
   error?: string;
+  /** 本次运行的会话文件（done 事件携带，用于「点击通知 → 打开会话」）。 */
+  sessionFile?: string;
 }
+
+/** 本次运行的触发来源。 */
+export type AutomationTrigger = "schedule" | "catchup" | "manual";
 
 interface AssistantMessageSummary {
   stopReason?: unknown;
@@ -57,6 +64,15 @@ const running = new Set<string>();
 const activeBridges = new Set<PiBridge>();
 const activeBridgesByTask = new Map<string, Set<PiBridge>>();
 let notify: ((p: AutomationNotify) => void) | null = null;
+
+/** 系统通知钩子：由 ipc 注入（notification center 在那里创建，本模块不 direct 依赖 Electron 窗口）。
+ * 定时任务无人值守，窗口在后台时 toast 看不到，失败必须走系统通知。 */
+let notifyAutomationResult: ((details: AutomationResultNotification) => void) | null = null;
+
+/** 注册系统通知回调（重复调用以最后一次为准）。 */
+export function setAutomationNotifier(fn: (details: AutomationResultNotification) => void): void {
+  notifyAutomationResult = fn;
+}
 
 /** 兜底重判间隔。
  *
@@ -180,7 +196,9 @@ function tick(): void {
         lastAttemptAt: now.getTime(),
         lastRunAt: now.getTime(),
       });
-      void execute(task);
+      // catchup：计划时刻已过但在补跑窗口内，与「准时」区分开写进历史。
+      const lateMin = (now.getTime() - decision.slot.getTime()) / 60_000;
+      void execute(task, lateMin >= 1 ? "catchup" : "schedule");
       continue;
     }
 
@@ -265,6 +283,8 @@ export function hasActiveAutomationBridge(cwd: string): boolean {
 export function removeAutomationTask(id: string): void {
   const tasks = persistedTasks();
   if (tasks.some((task) => task.id === id)) persist(tasks.filter((task) => task.id !== id));
+  // 任务删掉后它的运行历史也没意义，一并清掉（否则文件与红点会留着孤儿记录）。
+  deleteRunsForTask(id);
 
   const bridges = activeBridgesByTask.get(id);
   if (!bridges) return;
@@ -356,15 +376,28 @@ function formatProcessExit(info: { code: number | null; signal: NodeJS.Signals |
   return `Pi 进程在任务完成前退出（code=${code}${signal}）${detail}`;
 }
 
-async function execute(task: AutomationTask): Promise<void> {
+async function execute(task: AutomationTask, trigger: AutomationTrigger = "schedule"): Promise<void> {
   // A tick may have queued execute() just before the task was deleted. Do not
   // create a new Pi process for a task that no longer exists on disk.
   if (!taskStillExists(task.id)) return;
   running.add(task.id);
   patchTask(task.id, { lastStatus: undefined, lastError: undefined });
   notify?.({ type: "start", taskId: task.id, name: task.name });
+
+  // 运行历史：先占一条，成功/失败再回填。会话文件要等 pi 子进程起来后才有，
+  // 所以在 start() 之后单独补写（见下面的 sessionFile 赋值）。
+  const model = resolveTaskModel(task);
+  const run = startRun({
+    taskId: task.id,
+    trigger,
+    startedAt: Date.now(),
+    model: model ? `${model.provider}/${model.modelId}` : undefined,
+  });
+
   let bridge: PiBridge | null = null;
   let gateModeFile: string | null = null;
+  /** pi 子进程起的会话文件，供运行历史里的「打开会话」用。 */
+  let sessionFile: string | undefined;
   try {
     await new Promise<void>((resolve, reject) => {
       let done = false;
@@ -463,6 +496,18 @@ async function execute(task: AutomationTask): Promise<void> {
       bridge
         .start()
         .then(async () => {
+          // 会话文件要等 pi 子进程起来后才有。取不到不影响执行，只是历史里
+          // 少一个「打开会话」入口，所以失败静默。
+          try {
+            const state: any = await bridge!.getState();
+            const sf = typeof state?.sessionFile === "string" ? state.sessionFile : "";
+            if (sf) {
+              sessionFile = sf;
+              updateRun(run.id, { sessionFile: sf });
+            }
+          } catch {
+            /* 历史里缺会话链接可以接受 */
+          }
           if (model) {
             // Explicit task-level model choice. If the model no longer exists,
             // fail with a clear error instead of silently falling back to pi's
@@ -476,16 +521,22 @@ async function execute(task: AutomationTask): Promise<void> {
     });
     if (taskStillExists(task.id)) {
       patchTask(task.id, { lastStatus: "ok", lastError: undefined, lastSuccessAt: Date.now() });
-      notify?.({ type: "done", taskId: task.id, name: task.name, ok: true });
+      updateRun(run.id, { status: "ok", finishedAt: Date.now() });
+      notify?.({ type: "done", taskId: task.id, name: task.name, ok: true, sessionFile });
+      notifyAutomationResult?.({ language: getConfig().language === "zh" ? "zh" : "en", name: task.name, ok: true, sessionFile });
     }
   } catch (e: any) {
     const msg = e?.message || String(e);
+    // 超时/被停 → aborted，其余算 error；两者都视为「需用户关注」。
+    const status = /超时|被中止|aborted/i.test(msg) ? "aborted" : "error";
     if (taskStillExists(task.id)) {
       patchTask(task.id, { lastStatus: "error", lastError: msg });
       // Keep failures visible in the main-process log as well as the settings UI.
       // eslint-disable-next-line no-console
       console.error(`[automation] ${task.name}: ${msg}`);
-      notify?.({ type: "done", taskId: task.id, name: task.name, ok: false, error: msg });
+      updateRun(run.id, { status, finishedAt: Date.now(), error: msg });
+      notify?.({ type: "done", taskId: task.id, name: task.name, ok: false, error: msg, sessionFile });
+      notifyAutomationResult?.({ language: getConfig().language === "zh" ? "zh" : "en", name: task.name, ok: false, error: msg, sessionFile });
     }
   } finally {
     const b = bridge as PiBridge | null;
@@ -511,5 +562,5 @@ export async function runTaskNow(id: string): Promise<void> {
   if (!task) throw new Error("Task not found");
   if (running.has(id)) return;
   patchTask(id, { lastRunAt: Date.now() });
-  await execute(task);
+  await execute(task, "manual");
 }

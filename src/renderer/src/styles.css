@@ -318,6 +318,20 @@ body.sidebar-resizing * {
   text-align: center;
   opacity: 0.8;
 }
+/* 定时任务有失败未查看时的计数徽标：数字比红点能传达「有几条」。 */
+.sb-nav-badge {
+  margin-left: auto;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--danger);
+  color: var(--surface);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .sb-section-head {
   display: flex;
   align-items: center;
@@ -9290,6 +9304,89 @@ mark.hl {
   gap: 5px;
   color: var(--accent);
   background: var(--accent-soft);
+}
+/* ---- 运行历史（批次 B）----------------------------------------------- */
+/* 顶部「N 条失败待查看」条：可一键标为已读。 */
+.auto-unreviewed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 12px;
+}
+/* 历史区：挂在任务卡片下方，左侧缩进对齐内容而不是挤在按钮列下面。 */
+.auto-history {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.auto-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.auto-run-status {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  font-size: 10px;
+  background: var(--overlay-3);
+  color: var(--text-dim);
+}
+.auto-run-status.ok {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.auto-run-status.error,
+.auto-run-status.aborted {
+  background: var(--danger-pale-strong);
+  color: var(--danger);
+}
+.auto-run-status.missed {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.auto-run-when {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+}
+.auto-run-trigger,
+.auto-run-dur {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+.auto-run-err {
+  flex: 1 1 120px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger);
+}
+.auto-run-open {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.auto-run-nosession {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 11px;
 }
 .auto-spinner {
   width: 12px;

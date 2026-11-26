@@ -373,6 +373,12 @@ const api = {
     getTasks: () => ipcRenderer.invoke("automation:getTasks"),
     /** 带 nextRunAt（实时计算）与 runningTaskIds 的快照，面板首屏用这个。 */
     getTasksSnapshot: () => ipcRenderer.invoke("automation:getTasksSnapshot"),
+    /** 某任务的完整运行历史（最新在前）+ 全局未查看失败数。 */
+    getRuns: (taskId: string, limit?: number) => ipcRenderer.invoke("automation:getRuns", taskId, limit),
+    /** 标记已查看。不传 ids = 全部未查看的失败。 */
+    markReviewed: (ids?: string[]) => ipcRenderer.invoke("automation:markReviewed", ids),
+    /** 只读未查看失败数（侧栏红点用）。 */
+    unreviewed: () => ipcRenderer.invoke("automation:unreviewed"),
     saveTask: (task: unknown) => ipcRenderer.invoke("automation:saveTask", task),
     deleteTask: (id: string) => ipcRenderer.invoke("automation:deleteTask", id),
     runNow: (id: string) => ipcRenderer.invoke("automation:runNow", id),

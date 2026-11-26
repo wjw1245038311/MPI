@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import type { AutomationTask, ModelsFile, ScheduleFrequency, TaskSchedule } from "../lib/types";
+import type { AutomationRunSummary, AutomationTask, ModelsFile, ScheduleFrequency, TaskSchedule } from "../lib/types";
 import { Plus, Clock, Folder, Play } from "./icons";
 import { SidePanel } from "./SidePanel";
 
@@ -51,6 +51,36 @@ function formatNextRun(ts: number | undefined, language: "en" | "zh"): string | 
   return language === "zh" ? `下次 ${mmdd} ${hhmm}` : `Next ${mmdd} ${hhmm}`;
 }
 
+/** 运行历史一行的简短描述（面板展开区用）。 */
+function runStatusLabel(run: AutomationRunSummary, language: "en" | "zh"): string {
+  switch (run.status) {
+    case "ok":
+      return language === "zh" ? "成功" : "OK";
+    case "error":
+      return language === "zh" ? "失败" : "Failed";
+    case "aborted":
+      return language === "zh" ? "已中止" : "Aborted";
+    case "missed":
+      return language === "zh" ? "已错过" : "Missed";
+    default:
+      return language === "zh" ? "未完成" : "Incomplete";
+  }
+}
+
+function runTriggerLabel(run: AutomationRunSummary, language: "en" | "zh"): string {
+  if (run.trigger === "manual") return language === "zh" ? "手动" : "Manual";
+  if (run.trigger === "catchup") return language === "zh" ? "补跑" : "Catch-up";
+  return language === "zh" ? "按时" : "Scheduled";
+}
+
+/** 运行耗时：不足 1 分钟给秒，否则分秒。 */
+function runDuration(run: AutomationRunSummary): string | null {
+  if (typeof run.finishedAt !== "number" || run.finishedAt <= run.startedAt) return null;
+  const sec = Math.round((run.finishedAt - run.startedAt) / 1000);
+  if (sec < 60) return `${sec}s`;
+  return `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, "0")}s`;
+}
+
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <button type="button" className={`set-toggle ${checked ? "on" : ""}`} aria-checked={checked} role="switch" onClick={() => onChange(!checked)}>
@@ -71,6 +101,40 @@ export function AutomationPanel() {
   const [draft, setDraft] = useState<AutomationTask | null>(null);
   // Configured providers/models for the optional task-level model picker.
   const [models, setModels] = useState<ModelsFile | null>(null);
+  /** 展开中的任务 id → 它的运行历史（undefined = 未加载）。 */
+  const [runsByTask, setRunsByTask] = useState<Record<string, AutomationRunSummary[]>>({});
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [unreviewed, setUnreviewed] = useState(0);
+
+  // 未查看失败数：面板关着时也要刷新（侧栏红点依赖同一来源）。
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => {
+      window.pi.automation
+        .unreviewed()
+        .then((n: number) => {
+          if (alive) setUnreviewed(n);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    // 打开面板时与任务事件后各刷一次；窗口重新获得焦点时也刷（后台跑完回来）。
+    window.addEventListener("focus", refresh);
+    return () => {
+      alive = false;
+      window.removeEventListener("focus", refresh);
+    };
+  }, [open, tasks]);
+
+  const loadRuns = async (taskId: string) => {
+    try {
+      const res = await window.pi.automation.getRuns(taskId);
+      setRunsByTask((prev) => ({ ...prev, [taskId]: res.runs }));
+      setUnreviewed(res.unreviewed);
+    } catch {
+      /* 历史是辅助信息，读失败不影响主流程 */
+    }
+  };
 
   useEffect(() => {
     if (!draft) return;
@@ -130,6 +194,23 @@ export function AutomationPanel() {
               </div>
 
               {tasks.length === 0 && <div className="set-empty">尚无定时任务。点“新建任务”创建一个。</div>}
+              {unreviewed > 0 && (
+                <div className="auto-unreviewed">
+                  <span>
+                    {language === "zh"
+                      ? `${unreviewed} 条失败待查看`
+                      : `${unreviewed} failed ${unreviewed === 1 ? "run" : "runs"} to review`}
+                  </span>
+                  <button
+                    className="set-btn ghost"
+                    onClick={() => {
+                      void window.pi.automation.markReviewed().then((res: { unreviewed: number }) => setUnreviewed(res.unreviewed));
+                    }}
+                  >
+                    {language === "zh" ? "全部标为已读" : "Mark all reviewed"}
+                  </button>
+                </div>
+              )}
               {tasks.map((t) => (
                 <div className="plugins-row auto-task" key={t.id}>
                   <div className="plugins-row-main">
@@ -204,6 +285,25 @@ export function AutomationPanel() {
                     <Toggle checked={t.enabled} onChange={(v) => saveTask({ ...t, enabled: v })} />
                     <button
                       className="set-iconbtn"
+                      aria-expanded={expanded === t.id}
+                      title={language === "zh" ? "运行历史" : "Run history"}
+                      onClick={() => {
+                        const next = expanded === t.id ? null : t.id;
+                        setExpanded(next);
+                        // 展开时重新拉一次（可能刚刚跑过），并顺手把已看过该任务
+                        // 失败结果的标记成已查看。
+                        if (next) {
+                          void loadRuns(next).then(() => {
+                            const seen = runsByTask[next]?.filter((r) => r.status === "error" || r.status === "aborted").map((r) => r.id);
+                            if (seen?.length) void window.pi.automation.markReviewed(seen).then((res: { unreviewed: number }) => setUnreviewed(res.unreviewed));
+                          });
+                        }
+                      }}
+                    >
+                      ☰
+                    </button>
+                    <button
+                      className="set-iconbtn"
                       title={language === "zh" ? "编辑" : "Edit"}
                       onClick={() => setDraft({ ...t })}
                     >
@@ -226,6 +326,43 @@ export function AutomationPanel() {
                       ×
                     </button>
                   </div>
+                  {expanded === t.id && (
+                    <div className="auto-history">
+                      {(runsByTask[t.id] ?? []).length === 0 ? (
+                        <div className="set-hint">{language === "zh" ? "还没有运行记录。" : "No runs yet."}</div>
+                      ) : (
+                        (runsByTask[t.id] ?? []).map((run) => (
+                          <div className="auto-history-row" key={run.id}>
+                            <span className={`auto-run-status ${run.status}`}>{runStatusLabel(run, language)}</span>
+                            <span className="auto-run-when">{new Date(run.startedAt).toLocaleString()}</span>
+                            <span className="auto-run-trigger">{runTriggerLabel(run, language)}</span>
+                            {runDuration(run) && <span className="auto-run-dur">{runDuration(run)}</span>}
+                            {run.status === "error" && run.error && (
+                              <span className="auto-run-err" title={run.error}>
+                                {run.error.slice(0, 60)}
+                              </span>
+                            )}
+                            {run.sessionFile ? (
+                              <button
+                                className="set-btn ghost auto-run-open"
+                                onClick={() => {
+                                  const st = useStore.getState();
+                                  void st.openThread(t.cwd, run.sessionFile!);
+                                  st.closeAutomation();
+                                }}
+                              >
+                                {language === "zh" ? "打开会话" : "Open session"}
+                              </button>
+                            ) : (
+                              <span className="muted auto-run-nosession">
+                                {language === "zh" ? "无会话" : "No session"}
+                              </span>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </>

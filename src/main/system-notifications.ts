@@ -11,8 +11,20 @@ export interface TaskCompletionNotification {
 export interface SystemNotificationCenter {
   notifySandboxApproval(threadId: string, language: NotificationLanguage, operation?: string): void;
   notifyTaskComplete(threadId: string, details: TaskCompletionNotification): void;
+  /** 定时任务结束（无人值守）：窗口不在前台时弹系统通知，失败用 persistent。 */
+  notifyAutomationResult(details: AutomationResultNotification): void;
   /** 后台检查发现新版本（2026-11-03）：点击只把 MPI 窗口带到前台，不自动下载。 */
   notifyAppUpdate(version: string, language: NotificationLanguage): void;
+}
+
+export interface AutomationResultNotification {
+  language: NotificationLanguage;
+  /** 任务名。 */
+  name: string;
+  ok: boolean;
+  error?: string;
+  /** 本次运行的会话文件；点击通知后由渲染层按它打开会话。 */
+  sessionFile?: string;
 }
 
 type WindowGetter = () => BrowserWindow | null;
@@ -107,6 +119,40 @@ export function createSystemNotificationCenter(getWindow: WindowGetter): SystemN
     notification.show();
   };
 
+  /** 定时任务的通知点击时不是「聚焦某个已在内存里的 threadId」，而是「打开某份会话文件」。 */
+  const showAutomation = (
+    sessionFile: string | undefined,
+    language: NotificationLanguage,
+    options: { title: string; subtitle?: string; body: string; persistent?: boolean },
+  ) => {
+    if (!Notification.isSupported()) return;
+    const window = getWindow();
+    if (window && !window.isDestroyed() && window.isFocused()) return;
+
+    let notification: Notification;
+    try {
+      notification = new Notification({
+        title: options.title,
+        subtitle: options.subtitle,
+        body: options.body,
+        silent: false,
+        timeoutType: options.persistent ? "never" : "default",
+      });
+    } catch {
+      return;
+    }
+
+    active.add(notification);
+    notification.once("click", () => revealAppWindow(getWindow));
+    notification.once("close", () => active.delete(notification));
+    notification.once("failed", (_event, error) => {
+      active.delete(notification);
+      // eslint-disable-next-line no-console
+      console.warn(`[notification] native notification failed: ${error}`);
+    });
+    notification.show();
+  };
+
   return {
     notifySandboxApproval(threadId, language, operation) {
       const label = truncateNotificationText(operation || (language === "zh" ? "命令行" : "Shell"), 80);
@@ -142,6 +188,26 @@ export function createSystemNotificationCenter(getWindow: WindowGetter): SystemN
         title: language === "zh" ? "MPI · 任务完成" : "MPI · Task completed",
         subtitle: prompt || undefined,
         body,
+      });
+    },
+    notifyAutomationResult(details) {
+      const language = details.language;
+      const name = truncateNotificationText(details.name, 60);
+      const body = details.ok
+        ? language === "zh"
+          ? "定时任务已完成，点击查看结果会话。"
+          : "The scheduled task finished. Click to open its session."
+        : language === "zh"
+          ? `定时任务失败：${truncateNotificationText(details.error, 160) || "未知原因"}`
+          : `The scheduled task failed: ${truncateNotificationText(details.error, 160) || "unknown reason"}`;
+      // 失败用 persistent（不自动消失）：无人值守的失败很容易被漏看。
+      showAutomation(details.sessionFile, language, {
+        title: details.ok
+          ? language === "zh" ? "MPI · 定时任务完成" : "MPI · Scheduled task finished"
+          : language === "zh" ? "MPI · 定时任务失败" : "MPI · Scheduled task failed",
+        subtitle: name || undefined,
+        body,
+        persistent: !details.ok,
       });
     },
   };

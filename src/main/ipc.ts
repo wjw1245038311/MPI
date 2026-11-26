@@ -236,7 +236,17 @@ import {
 import { getSkillDetails, getSkillsHubLeaderboard, installSkillFromHub, searchSkillsHub } from "./skills-hub";
 import { getMcpMarketDetail, searchMcpMarket } from "./mcp-market";
 import { getNpmReadme, searchNpmPackages } from "./npm-registry";
-import { hasActiveAutomationBridge, nextRunAtOf, removeAutomationTask, rescheduleScheduler, runTaskNow, runningTaskIds, startScheduler } from "./automation";
+import {
+  hasActiveAutomationBridge,
+  nextRunAtOf,
+  removeAutomationTask,
+  rescheduleScheduler,
+  runTaskNow,
+  runningTaskIds,
+  setAutomationNotifier,
+  startScheduler,
+} from "./automation";
+import { latestRunsByTask, listRuns, markRunsReviewed, unreviewedFailureCount } from "./automation-runs-store";
 import { cancelAppRegistration, startAppRegistration } from "./messaging/app-registration";
 import { getMessagingState, initMessaging, messagingSetConfig, sanitizeFeishuConfig } from "./messaging/service";
 import type { FeishuChannelConfig, WeChatChannelConfig } from "./messaging/types";
@@ -2110,6 +2120,9 @@ export function registerIpc(getWin: () => BrowserWindow | null): void {
   idleSweepTimer.unref?.();
   app.once("before-quit", () => clearInterval(idleSweepTimer));
   systemNotifications = createSystemNotificationCenter(getWin);
+  // 定时任务无人值守：结束/失败走系统通知。窗口在前台时 show() 内部直接抑制
+  // （面板里的 toast 已经能看到），所以不需要在这里判前台。
+  setAutomationNotifier((details) => systemNotifications?.notifyAutomationResult(details));
   // 后台检查应用更新（启动 30s 后 + 每 6h）——只发通知，不自动下载。
   // dev 实例查不到（not packaged），但启动也毫无意义，所以只在安装版启动。
   if (app.isPackaged) {
@@ -8438,12 +8451,26 @@ const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
   ipcMain.handle("automation:getTasksSnapshot", () => {
     const now = new Date();
     const runningIds = new Set(runningTaskIds());
+    const latest = latestRunsByTask();
     return reloadConfig().automationTasks.map((task) => ({
       ...task,
       nextRunAt: nextRunAtOf(task, now),
       isRunning: runningIds.has(task.id),
+      // 摘要只用最新一条；完整历史走 automation:getRuns。
+      lastRun: latest[task.id] ?? null,
     }));
   });
+  // 完整运行历史（最新在前）+ 全局未查看失败数（侧栏红点）。
+  ipcMain.handle("automation:getRuns", (_e, taskId: string, limit?: number) => ({
+    runs: listRuns(typeof taskId === "string" ? taskId : "", typeof limit === "number" ? limit : undefined),
+    unreviewed: unreviewedFailureCount(),
+  }));
+  ipcMain.handle("automation:markReviewed", (_e, ids?: string[]) => ({
+    changed: markRunsReviewed(Array.isArray(ids) ? ids : undefined),
+    unreviewed: unreviewedFailureCount(),
+  }));
+  // 只读计数（侧栏红点与面板顶部提示用）。
+  ipcMain.handle("automation:unreviewed", () => unreviewedFailureCount());
   ipcMain.handle("automation:saveTask", (_e, task: AutomationTask) => {
     const tasks = reloadConfig().automationTasks;
     const idx = tasks.findIndex((t) => t.id === task.id);

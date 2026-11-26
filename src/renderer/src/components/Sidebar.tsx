@@ -116,6 +116,26 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
   const activeThreadId = useStore((s) => s.activeThreadId);
   const sidebarTab = useStore((s) => s.sidebarTab);
   const language = useStore((s) => s.config?.language || "en");
+  // 定时任务失败未查看数（侧栏红点）。tasks 变化即重算：并行运行完成/标记已读都会改变它。
+  const automationTasks = useStore((s) => s.tasks);
+  const [automationUnreviewed, setAutomationUnreviewed] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => {
+      window.pi.automation
+        .unreviewed()
+        .then((n: number) => {
+          if (alive) setAutomationUnreviewed(n);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      alive = false;
+      window.removeEventListener("focus", refresh);
+    };
+  }, [automationTasks]);
   // 会话分组 / 行内相对时间的基准。每次渲染重算：跨零点或列表刷新时分组会自己跟着变。
   const now = Date.now();
   const zhiyaOpen = useStore((s) => s.zhiyaOpen);
@@ -643,6 +663,14 @@ export function Sidebar({ onOpenRemote, remoteOpen = false }: { onOpenRemote: ()
               <Clock size={15} />
             </span>
             定时任务
+            {automationUnreviewed > 0 && (
+              <span
+                className="sb-nav-badge"
+                title={`${automationUnreviewed} 条定时任务失败待查看`}
+              >
+                {automationUnreviewed > 99 ? "99+" : automationUnreviewed}
+              </span>
+            )}
           </button>
           <button
             className="sb-nav-item"

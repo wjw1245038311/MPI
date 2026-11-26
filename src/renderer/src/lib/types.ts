@@ -275,6 +275,22 @@ export interface AutomationTask {
   /** 以下两个字段仅存在于 `automation:getTasksSnapshot` 的返回里（主进程实时计算，不落盘）。 */
   nextRunAt?: number | null;
   isRunning?: boolean;
+  /** 最新一条运行记录（快照携带，用于行内显示上次结果）。 */
+  lastRun?: AutomationRunSummary | null;
+}
+
+/** 运行历史的一条记录（与主进程 automation-runs-store.ts 的 AutomationRun 对应）。 */
+export interface AutomationRunSummary {
+  id: string;
+  taskId: string;
+  trigger: "schedule" | "catchup" | "manual";
+  status: "ok" | "error" | "missed" | "aborted" | "skipped";
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
+  sessionFile?: string;
+  model?: string;
+  reviewed?: boolean;
 }
 
 export interface ModelInfo {
